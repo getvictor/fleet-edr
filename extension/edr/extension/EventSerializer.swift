@@ -1,5 +1,8 @@
 import Foundation
 import IOKit
+import os.log
+
+private let logger = Logger(subsystem: "com.fleet.edr.extension", category: "EventSerializer")
 
 // MARK: - Payload types
 
@@ -111,6 +114,7 @@ final class EventSerializer: Sendable {
         do {
             return try encoder.encode(envelope)
         } catch {
+            logger.error("Failed to encode \(eventType) event: \(error.localizedDescription)")
             return nil
         }
     }

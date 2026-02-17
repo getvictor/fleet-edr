@@ -6,24 +6,27 @@ private let logger = Logger(subsystem: "com.fleet.edr.extension", category: "ESF
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
-final class ESFSubscriber: @unchecked Sendable {
-    private var client: OpaquePointer?
+final class ESFSubscriber: Sendable {
+    private nonisolated(unsafe) var client: OpaquePointer!
     private let serializer = EventSerializer()
+    nonisolated(unsafe) var onEvent: ((Data) -> Void)?
 
-    func start() {
-        var client: OpaquePointer?
+    init() {
+        var rawClient: OpaquePointer?
 
-        let result = es_new_client(&client) { [weak self] _, message in
+        let result = es_new_client(&rawClient) { [weak self] _, message in
             self?.handleMessage(message)
         }
 
-        guard result == ES_NEW_CLIENT_RESULT_SUCCESS else {
+        guard result == ES_NEW_CLIENT_RESULT_SUCCESS, let rawClient else {
             logger.error("Failed to create ES client: \(result.rawValue)")
             exit(EXIT_FAILURE)
         }
 
-        self.client = client
+        self.client = rawClient
+    }
 
+    func start() {
         let events: [es_event_type_t] = [
             ES_EVENT_TYPE_NOTIFY_EXEC,
             ES_EVENT_TYPE_NOTIFY_FORK,
@@ -31,7 +34,7 @@ final class ESFSubscriber: @unchecked Sendable {
             ES_EVENT_TYPE_NOTIFY_OPEN,
         ]
 
-        let subResult = es_subscribe(client!, events, UInt32(events.count))
+        let subResult = es_subscribe(client, events, UInt32(events.count))
         guard subResult == ES_RETURN_SUCCESS else {
             logger.error("Failed to subscribe to events: \(subResult.rawValue)")
             exit(EXIT_FAILURE)
@@ -41,11 +44,8 @@ final class ESFSubscriber: @unchecked Sendable {
     }
 
     func stop() {
-        if let client = client {
-            es_unsubscribe_all(client)
-            es_delete_client(client)
-            self.client = nil
-        }
+        es_unsubscribe_all(client)
+        es_delete_client(client)
     }
 
     private func handleMessage(_ message: UnsafePointer<es_message_t>) {
@@ -83,7 +83,7 @@ final class ESFSubscriber: @unchecked Sendable {
             ppid: ppid,
             path: path,
             args: args,
-            cwd: "",
+            cwd: "", // es_process_t has no cwd member on macOS 26 SDK
             uid: uid,
             gid: gid,
             codeSigning: codeSigning,
@@ -92,7 +92,7 @@ final class ESFSubscriber: @unchecked Sendable {
 
         if let data = serializer.serialize(eventType: "exec", payload: payload) {
             logger.debug("exec pid=\(pid) path=\(path)")
-            _ = data // Will be sent over XPC when wired.
+            onEvent?(data)
         }
     }
 
@@ -104,7 +104,7 @@ final class ESFSubscriber: @unchecked Sendable {
 
         if let data = serializer.serialize(eventType: "fork", payload: payload) {
             logger.debug("fork parent=\(parentPid) child=\(childPid)")
-            _ = data
+            onEvent?(data)
         }
     }
 
@@ -116,7 +116,7 @@ final class ESFSubscriber: @unchecked Sendable {
 
         if let data = serializer.serialize(eventType: "exit", payload: payload) {
             logger.debug("exit pid=\(pid) code=\(exitCode)")
-            _ = data
+            onEvent?(data)
         }
     }
 
@@ -129,7 +129,7 @@ final class ESFSubscriber: @unchecked Sendable {
 
         if let data = serializer.serialize(eventType: "open", payload: payload) {
             logger.debug("open pid=\(pid) path=\(path)")
-            _ = data
+            onEvent?(data)
         }
     }
 
@@ -143,24 +143,17 @@ final class ESFSubscriber: @unchecked Sendable {
         return args
     }
 
-    private func extractCodeSigning(from process: es_process_t) -> CodeSigning {
-        let teamID: String
-        if let tid = process.team_id.data {
-            teamID = String(cString: tid)
-        } else {
-            teamID = ""
-        }
+    private func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
+        let teamID = process.team_id.data.map { String(cString: $0) }
+        let signingID = process.signing_id.data.map { String(cString: $0) }
 
-        let signingID: String
-        if let sid = process.signing_id.data {
-            signingID = String(cString: sid)
-        } else {
-            signingID = ""
+        guard teamID != nil || signingID != nil else {
+            return nil
         }
 
         return CodeSigning(
-            teamID: teamID,
-            signingID: signingID,
+            teamID: teamID ?? "",
+            signingID: signingID ?? "",
             flags: process.codesigning_flags,
             isPlatformBinary: process.is_platform_binary
         )

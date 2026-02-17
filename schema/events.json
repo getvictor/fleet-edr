@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EDR Event Envelope",
+  "type": "object",
+  "required": ["event_id", "host_id", "timestamp_ns", "event_type", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique event identifier"
+    },
+    "host_id": {
+      "type": "string",
+      "description": "Host machine identifier"
+    },
+    "timestamp_ns": {
+      "type": "integer",
+      "description": "Event timestamp in nanoseconds since Unix epoch"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": ["exec", "fork", "exit", "open"],
+      "description": "Type of endpoint security event"
+    },
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/definitions/exec_payload" },
+        { "$ref": "#/definitions/fork_payload" },
+        { "$ref": "#/definitions/exit_payload" },
+        { "$ref": "#/definitions/open_payload" }
+      ]
+    }
+  },
+  "definitions": {
+    "code_signing": {
+      "type": "object",
+      "required": ["team_id", "signing_id", "flags", "is_platform_binary"],
+      "properties": {
+        "team_id": { "type": "string" },
+        "signing_id": { "type": "string" },
+        "flags": { "type": "integer" },
+        "is_platform_binary": { "type": "boolean" }
+      }
+    },
+    "exec_payload": {
+      "type": "object",
+      "required": ["pid", "ppid", "path", "args", "cwd", "uid", "gid"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "ppid": { "type": "integer" },
+        "path": { "type": "string" },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cwd": { "type": "string" },
+        "uid": { "type": "integer" },
+        "gid": { "type": "integer" },
+        "code_signing": { "$ref": "#/definitions/code_signing" },
+        "sha256": { "type": "string" }
+      }
+    },
+    "fork_payload": {
+      "type": "object",
+      "required": ["child_pid", "parent_pid"],
+      "properties": {
+        "child_pid": { "type": "integer" },
+        "parent_pid": { "type": "integer" }
+      }
+    },
+    "exit_payload": {
+      "type": "object",
+      "required": ["pid", "exit_code"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "exit_code": { "type": "integer" }
+      }
+    },
+    "open_payload": {
+      "type": "object",
+      "required": ["pid", "path", "flags"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": { "type": "string" },
+        "flags": { "type": "integer" }
+      }
+    }
+  }
+}
