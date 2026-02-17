@@ -1,0 +1,9 @@
+.claude
+claude-plans
+tmp
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/

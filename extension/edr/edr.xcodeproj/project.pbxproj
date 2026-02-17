@@ -1,0 +1,491 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		57B10CFC2F43BC89007F4B27 /* libEndpointSecurity.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */; };
+		57B10D042F43BC89007F4B27 /* com.fleet.edr.extension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		57B10D022F43BC89007F4B27 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B10CC32F43BBBF007F4B27 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 57B10CF82F43BC89007F4B27;
+			remoteInfo = extension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		57B10D092F43BC89007F4B27 /* Embed System Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(SYSTEM_EXTENSIONS_FOLDER_PATH)";
+			dstSubfolderSpec = 16;
+			files = (
+				57B10D042F43BC89007F4B27 /* com.fleet.edr.extension.systemextension in Embed System Extensions */,
+			);
+			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		57B10CCB2F43BBBF007F4B27 /* edr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = edr.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.fleet.edr.extension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libEndpointSecurity.tbd; path = usr/lib/libEndpointSecurity.tbd; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		57B10D052F43BC89007F4B27 /* Exceptions for "extension" folder in "extension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 57B10CF82F43BC89007F4B27 /* extension */;
+		};
+		57B10D0A2F43BC89007F4B27 /* Exceptions for "edr" folder in "edr" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 57B10CCA2F43BBBF007F4B27 /* edr */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		57B10CCD2F43BBBF007F4B27 /* edr */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				57B10D0A2F43BC89007F4B27 /* Exceptions for "edr" folder in "edr" target */,
+			);
+			path = edr;
+			sourceTree = "<group>";
+		};
+		57B10CFD2F43BC89007F4B27 /* extension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				57B10D052F43BC89007F4B27 /* Exceptions for "extension" folder in "extension" target */,
+			);
+			path = extension;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		57B10CC82F43BBBF007F4B27 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57B10CF62F43BC89007F4B27 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				57B10CFC2F43BC89007F4B27 /* libEndpointSecurity.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		57B10CC22F43BBBF007F4B27 = {
+			isa = PBXGroup;
+			children = (
+				57B10CCD2F43BBBF007F4B27 /* edr */,
+				57B10CFD2F43BC89007F4B27 /* extension */,
+				57B10CFA2F43BC89007F4B27 /* Frameworks */,
+				57B10CCC2F43BBBF007F4B27 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		57B10CCC2F43BBBF007F4B27 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				57B10CCB2F43BBBF007F4B27 /* edr.app */,
+				57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		57B10CFA2F43BC89007F4B27 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		57B10CCA2F43BBBF007F4B27 /* edr */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 57B10CEC2F43BBC0007F4B27 /* Build configuration list for PBXNativeTarget "edr" */;
+			buildPhases = (
+				57B10CC72F43BBBF007F4B27 /* Sources */,
+				57B10CC82F43BBBF007F4B27 /* Frameworks */,
+				57B10CC92F43BBBF007F4B27 /* Resources */,
+				57B10D092F43BC89007F4B27 /* Embed System Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				57B10D032F43BC89007F4B27 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				57B10CCD2F43BBBF007F4B27 /* edr */,
+			);
+			name = edr;
+			packageProductDependencies = (
+			);
+			productName = edr;
+			productReference = 57B10CCB2F43BBBF007F4B27 /* edr.app */;
+			productType = "com.apple.product-type.application";
+		};
+		57B10CF82F43BC89007F4B27 /* extension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 57B10D062F43BC89007F4B27 /* Build configuration list for PBXNativeTarget "extension" */;
+			buildPhases = (
+				57B10CF52F43BC89007F4B27 /* Sources */,
+				57B10CF62F43BC89007F4B27 /* Frameworks */,
+				57B10CF72F43BC89007F4B27 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				57B10CFD2F43BC89007F4B27 /* extension */,
+			);
+			name = extension;
+			packageProductDependencies = (
+			);
+			productName = extension;
+			productReference = 57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		57B10CC32F43BBBF007F4B27 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					57B10CCA2F43BBBF007F4B27 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					57B10CF82F43BC89007F4B27 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+				};
+			};
+			buildConfigurationList = 57B10CC62F43BBBF007F4B27 /* Build configuration list for PBXProject "edr" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 57B10CC22F43BBBF007F4B27;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 57B10CCC2F43BBBF007F4B27 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				57B10CCA2F43BBBF007F4B27 /* edr */,
+				57B10CF82F43BC89007F4B27 /* extension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		57B10CC92F43BBBF007F4B27 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57B10CF72F43BC89007F4B27 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		57B10CC72F43BBBF007F4B27 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57B10CF52F43BC89007F4B27 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		57B10D032F43BC89007F4B27 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 57B10CF82F43BC89007F4B27 /* extension */;
+			targetProxy = 57B10D022F43BC89007F4B27 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		57B10CEA2F43BBC0007F4B27 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		57B10CEB2F43BBC0007F4B27 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		57B10CED2F43BBC0007F4B27 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = edr/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		57B10CEE2F43BBC0007F4B27 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = edr/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		57B10D072F43BC89007F4B27 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = extension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = extension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lbsm";
+				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.extension;
+				PRODUCT_NAME = "$(inherited)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		57B10D082F43BC89007F4B27 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = extension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = extension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lbsm";
+				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.extension;
+				PRODUCT_NAME = "$(inherited)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		57B10CC62F43BBBF007F4B27 /* Build configuration list for PBXProject "edr" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57B10CEA2F43BBC0007F4B27 /* Debug */,
+				57B10CEB2F43BBC0007F4B27 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		57B10CEC2F43BBC0007F4B27 /* Build configuration list for PBXNativeTarget "edr" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57B10CED2F43BBC0007F4B27 /* Debug */,
+				57B10CEE2F43BBC0007F4B27 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		57B10D062F43BC89007F4B27 /* Build configuration list for PBXNativeTarget "extension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57B10D072F43BC89007F4B27 /* Debug */,
+				57B10D082F43BC89007F4B27 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 57B10CC32F43BBBF007F4B27 /* Project object */;
+}
