@@ -2,12 +2,12 @@
 package ingest
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/fleetdm/edr/server/store"
 )
@@ -43,14 +43,14 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	var events []store.Event
 	if err := json.Unmarshal(body, &events); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	// Validate required fields.
 	for i, e := range events {
 		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
-			http.Error(w, "event at index "+itoa(i)+" missing required fields", http.StatusBadRequest)
+			http.Error(w, "event at index "+strconv.Itoa(i)+" missing required fields", http.StatusBadRequest)
 			return
 		}
 	}
@@ -75,9 +75,10 @@ func (h *Handler) authorize(r *http.Request) bool {
 		return true // No key configured — allow all.
 	}
 	auth := r.Header.Get("Authorization")
-	return strings.TrimPrefix(auth, "Bearer ") == h.apiKey
-}
-
-func itoa(i int) string {
-	return strconv.Itoa(i)
+	const prefix = "Bearer "
+	if len(auth) < len(prefix) {
+		return false
+	}
+	token := auth[len(prefix):]
+	return subtle.ConstantTimeCompare([]byte(token), []byte(h.apiKey)) == 1
 }

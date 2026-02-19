@@ -36,7 +36,8 @@ final class XPCServer {
             guard let self else { return }
             let msg = xpc_dictionary_create_empty()
             data.withUnsafeBytes { buf in
-                xpc_dictionary_set_data(msg, "data", buf.baseAddress!, buf.count)
+                guard let baseAddress = buf.baseAddress else { return }
+                xpc_dictionary_set_data(msg, "data", baseAddress, buf.count)
             }
             for peer in self.peers {
                 xpc_connection_send_message(peer.connection, msg)
@@ -55,7 +56,10 @@ final class XPCServer {
             xpc_connection_set_event_handler(event) { [weak self] peerEvent in
                 let peerType = xpc_get_type(peerEvent)
                 if peerType == XPC_TYPE_ERROR {
-                    self?.removePeer(peer)
+                    self?.queue.async {
+                        self?.peers.remove(peer)
+                        logger.info("Peer disconnected (total: \(self?.peers.count ?? 0))")
+                    }
                 }
             }
 
@@ -63,11 +67,6 @@ final class XPCServer {
         } else if type == XPC_TYPE_ERROR {
             logger.error("Listener error")
         }
-    }
-
-    private func removePeer(_ peer: XPCPeer) {
-        peers.remove(peer)
-        logger.info("Peer disconnected (total: \(self.peers.count))")
     }
 }
 

@@ -68,16 +68,16 @@ func (u *Uploader) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			// Drain remaining events on shutdown.
-			u.drainOnce()
+			u.drainOnce(ctx)
 			return ctx.Err()
 		case <-ticker.C:
-			u.drainOnce()
+			u.drainOnce(ctx)
 		}
 	}
 }
 
 // drainOnce uploads one batch from the queue.
-func (u *Uploader) drainOnce() {
+func (u *Uploader) drainOnce(ctx context.Context) {
 	batch, err := u.queue.DequeueBatch(u.cfg.BatchSize)
 	if err != nil {
 		log.Printf("uploader: dequeue error: %v", err)
@@ -101,7 +101,7 @@ func (u *Uploader) drainOnce() {
 		return
 	}
 
-	if err := u.uploadWithRetry(body); err != nil {
+	if err := u.uploadWithRetry(ctx, body); err != nil {
 		log.Printf("uploader: upload failed after retries: %v", err)
 		return
 	}
@@ -111,25 +111,46 @@ func (u *Uploader) drainOnce() {
 	}
 }
 
-func (u *Uploader) uploadWithRetry(body []byte) error {
+func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 	url := u.cfg.ServerURL + "/api/v1/events"
 
 	for attempt := range u.cfg.MaxRetries {
-		err := u.doUpload(url, body)
+		err := u.doUpload(ctx, url, body)
 		if err == nil {
 			return nil
 		}
 
+		// Don't retry client errors (4xx) — only server/network errors are retryable.
+		if clientErr, ok := err.(*clientError); ok {
+			return clientErr
+		}
+
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * 100 * time.Millisecond
 		log.Printf("uploader: attempt %d failed: %v, retrying in %v", attempt+1, err, backoff)
-		time.Sleep(backoff)
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	return fmt.Errorf("all %d attempts failed", u.cfg.MaxRetries)
 }
 
-func (u *Uploader) doUpload(url string, body []byte) error {
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+// clientError represents a non-retryable HTTP 4xx response.
+type clientError struct {
+	statusCode int
+}
+
+func (e *clientError) Error() string {
+	return fmt.Sprintf("server returned %d", e.statusCode)
+}
+
+func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -147,6 +168,10 @@ func (u *Uploader) doUpload(url string, body []byte) error {
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
+	}
+
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return &clientError{statusCode: resp.StatusCode}
 	}
 
 	return fmt.Errorf("server returned %d", resp.StatusCode)

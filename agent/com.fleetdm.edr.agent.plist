@@ -9,7 +9,7 @@
 	<array>
 		<string>/usr/local/bin/fleet-edr-agent</string>
 		<string>-xpc-service</string>
-		<string>com.fleetdm.edr.extension</string>
+		<string>com.fleet.edr.extension</string>
 		<string>-db</string>
 		<string>/var/db/fleet-edr/events.db</string>
 		<string>-server-url</string>

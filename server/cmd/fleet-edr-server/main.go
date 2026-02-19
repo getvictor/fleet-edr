@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/store"
@@ -23,6 +25,11 @@ func main() {
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
+	if *apiKey == "" {
+		log.Println("WARNING: no API key configured, all requests will be accepted")
+	}
+
 	log.Printf("fleet-edr-server starting on %s", *addr)
 
 	s, err := store.New(*dsn)
@@ -35,14 +42,24 @@ func main() {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	srv := &http.Server{Addr: *addr, Handler: mux}
+	srv := &http.Server{
+		Addr:         *addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("shutting down")
-		srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
 	}()
 
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {

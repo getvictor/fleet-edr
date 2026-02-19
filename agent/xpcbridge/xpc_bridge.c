@@ -28,6 +28,7 @@ int xpc_bridge_connect(
         service_name, g_queue, 0 /* client, not listener */
     );
     if (g_connection == NULL) {
+        dispatch_release(g_queue);
         g_queue = NULL;
         return -1;
     }
@@ -84,6 +85,7 @@ int xpc_bridge_connect(
     xpc_object_t hello = xpc_dictionary_create_empty();
     xpc_dictionary_set_string(hello, "type", "hello");
     xpc_connection_send_message(g_connection, hello);
+    xpc_release(hello);
 
     return 0;
 }
@@ -93,8 +95,8 @@ void xpc_bridge_disconnect(void) {
         xpc_connection_cancel(g_connection);
         g_connection = NULL;
     }
-    // dispatch_release is not needed for queues created with
-    // dispatch_queue_create under ARC-compatible C code on modern macOS;
-    // setting to NULL is sufficient for our purposes.
-    g_queue = NULL;
+    if (g_queue != NULL) {
+        dispatch_release(g_queue);
+        g_queue = NULL;
+    }
 }

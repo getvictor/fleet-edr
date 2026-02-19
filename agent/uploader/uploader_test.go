@@ -53,7 +53,7 @@ func TestUploadBatch(t *testing.T) {
 	cfg.BatchSize = 10
 
 	u := New(q, cfg)
-	u.drainOnce()
+	u.drainOnce(t.Context())
 
 	if len(received) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(received))
@@ -89,7 +89,7 @@ func TestUploadRetry(t *testing.T) {
 	cfg.MaxRetries = 5
 
 	u := New(q, cfg)
-	u.drainOnce()
+	u.drainOnce(t.Context())
 
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("expected 3 attempts, got %d", got)
@@ -118,7 +118,7 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	cfg.MaxRetries = 3
 
 	u := New(q, cfg)
-	u.drainOnce()
+	u.drainOnce(t.Context())
 
 	// Event should still be in queue since upload failed.
 	depth, _ := q.Depth()
