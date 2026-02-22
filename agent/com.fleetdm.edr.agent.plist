@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.fleetdm.edr.agent</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/fleet-edr-agent</string>
+		<string>-xpc-service</string>
+		<string>com.fleet.edr.extension</string>
+		<string>-db</string>
+		<string>/var/db/fleet-edr/events.db</string>
+		<string>-server-url</string>
+		<string>https://edr.example.com</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>/var/log/fleet-edr-agent.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>/var/log/fleet-edr-agent.log</string>
+
+	<key>WorkingDirectory</key>
+	<string>/var/db/fleet-edr</string>
+</dict>
+</plist>
