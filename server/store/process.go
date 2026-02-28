@@ -51,7 +51,11 @@ func (s *Store) InsertProcess(p Process) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("insert process: %w", err)
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("insert process last id: %w", err)
+	}
+	return id, nil
 }
 
 // UpdateProcessExec updates an existing process record with exec-time metadata.

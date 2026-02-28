@@ -57,7 +57,20 @@ func main() {
 		logger.Error("embed ui", "err", err)
 		os.Exit(1)
 	}
-	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(uiDist))))
+	// Serve static assets; fall back to index.html for React BrowserRouter.
+	fileServer := http.FileServer(http.FS(uiDist))
+	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
+		// Strip prefix and try serving the file.
+		path := r.URL.Path[len("/ui/"):]
+		if path == "" {
+			path = "index.html"
+		}
+		if _, err := fs.Stat(uiDist, path); err != nil {
+			// File not found — serve index.html for client-side routing.
+			r.URL.Path = "/ui/"
+		}
+		http.StripPrefix("/ui/", fileServer).ServeHTTP(w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})

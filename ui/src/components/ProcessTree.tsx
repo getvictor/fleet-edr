@@ -41,7 +41,11 @@ export function ProcessTreeView() {
   }, [fetchTree]);
 
   useEffect(() => {
-    if (!svgRef.current || roots.length === 0) return;
+    if (!svgRef.current) return;
+    if (roots.length === 0) {
+      d3.select(svgRef.current).selectAll("*").remove();
+      return;
+    }
     renderTree(svgRef.current, roots, setSelectedNode);
   }, [roots]);
 

@@ -3,7 +3,9 @@ package graph
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/fleetdm/edr/server/store"
 )
@@ -22,21 +24,37 @@ func NewBuilder(s *store.Store, logger *slog.Logger) *Builder {
 // ProcessBatch processes a batch of events, updating the processes table for
 // fork, exec, and exit events. Other event types are ignored.
 func (b *Builder) ProcessBatch(events []store.Event) error {
-	for _, evt := range events {
+	// Sort by timestamp so fork always precedes exec/exit for the same PID.
+	sorted := make([]store.Event, len(events))
+	copy(sorted, events)
+	slices.SortStableFunc(sorted, func(a, b store.Event) int {
+		if a.TimestampNs < b.TimestampNs {
+			return -1
+		}
+		if a.TimestampNs > b.TimestampNs {
+			return 1
+		}
+		return 0
+	})
+
+	var failCount int
+	for _, evt := range sorted {
+		var err error
 		switch evt.EventType {
 		case "fork":
-			if err := b.handleFork(evt); err != nil {
-				b.logger.Warn("fork event failed", "event_id", evt.EventID, "err", err)
-			}
+			err = b.handleFork(evt)
 		case "exec":
-			if err := b.handleExec(evt); err != nil {
-				b.logger.Warn("exec event failed", "event_id", evt.EventID, "err", err)
-			}
+			err = b.handleExec(evt)
 		case "exit":
-			if err := b.handleExit(evt); err != nil {
-				b.logger.Warn("exit event failed", "event_id", evt.EventID, "err", err)
-			}
+			err = b.handleExit(evt)
 		}
+		if err != nil {
+			failCount++
+			b.logger.Warn("event processing failed", "event_id", evt.EventID, "type", evt.EventType, "err", err)
+		}
+	}
+	if failCount > 0 {
+		return fmt.Errorf("graph: %d event(s) failed to process", failCount)
 	}
 	return nil
 }

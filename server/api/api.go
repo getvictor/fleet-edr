@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/server/graph"
@@ -115,7 +116,7 @@ func (h *Handler) authorize(r *http.Request) bool {
 	}
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
-	if len(auth) < len(prefix) {
+	if !strings.HasPrefix(auth, prefix) {
 		return false
 	}
 	token := auth[len(prefix):]

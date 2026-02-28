@@ -41,7 +41,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         {node.args && (
           <>
             <dt>Args</dt>
-            <dd style={{ wordBreak: "break-all" }}>{JSON.parse(JSON.stringify(node.args)).join(" ")}</dd>
+            <dd style={{ wordBreak: "break-all" }}>{node.args.join(" ")}</dd>
           </>
         )}
         {node.uid !== undefined && (

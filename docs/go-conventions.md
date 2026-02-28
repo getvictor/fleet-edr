@@ -37,6 +37,7 @@ err := sqlx.SelectContext(ctx, db, &procs, "SELECT * FROM processes WHERE host_i
 
 // IN clauses
 query, args, err := sqlx.In("SELECT * FROM processes WHERE id IN (?)", ids)
+// handle err
 err = sqlx.SelectContext(ctx, db, &procs, query, args...)
 ```
 

@@ -167,6 +167,9 @@ func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, pt
 			switch errCode {
 			case receiver.ErrorConnectionInvalid, receiver.ErrorConnectionInterrupted, receiver.ErrorTerminated:
 				return true
+			default:
+				log.Printf("unknown xpc error code %d, reconnecting", errCode)
+				return true
 			}
 		}
 	}
@@ -175,8 +178,9 @@ func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, pt
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid
 // without fully parsing the payload.
 type eventHeader struct {
-	EventType string          `json:"event_type"`
-	Payload   json.RawMessage `json:"payload"`
+	EventType   string          `json:"event_type"`
+	TimestampNs int64           `json:"timestamp_ns"`
+	Payload     json.RawMessage `json:"payload"`
 }
 
 type execFields struct {
@@ -203,8 +207,9 @@ func updateProcTable(pt *proctable.Table, data []byte) {
 			return
 		}
 		pt.Update(fields.PID, proctable.ProcessInfo{
-			Path: fields.Path,
-			UID:  fields.UID,
+			Path:      fields.Path,
+			UID:       fields.UID,
+			StartTime: hdr.TimestampNs,
 		})
 	case "exit":
 		var fields exitFields

@@ -1,10 +1,6 @@
 package graph
 
-import (
-	"encoding/json"
-
-	"github.com/fleetdm/edr/server/store"
-)
+import "github.com/fleetdm/edr/server/store"
 
 // ProcessNode is a process with its children and associated network events, used for tree responses.
 type ProcessNode struct {
@@ -56,8 +52,8 @@ func (q *Query) GetDetail(hostID string, pid int, atTimeNs int64) (*ProcessDetai
 	if proc.ExitTimeNs != nil {
 		tr.ToNs = *proc.ExitTimeNs
 	} else {
-		// Process still running — use a far-future bound.
-		tr.ToNs = proc.ForkTimeNs + 86400_000_000_000 // +24h
+		// Process still running — use a 30-day bound.
+		tr.ToNs = proc.ForkTimeNs + 30*86400_000_000_000
 	}
 
 	netEvents, err := q.store.GetNetworkEventsForProcess(hostID, pid, tr)
@@ -79,40 +75,53 @@ func (q *Query) ListHosts() ([]store.HostSummary, error) {
 }
 
 // buildForest constructs a tree from a flat list of processes by matching ppid → pid.
+// Uses Process.ID as map key to handle PID reuse correctly, and builds parent-child
+// links via pointers before converting to value tree so grandchildren aren't lost.
 func buildForest(procs []store.Process) []ProcessNode {
-	nodeMap := make(map[int]*ProcessNode, len(procs))
-	var roots []ProcessNode
+	// Key by Process.ID (unique DB row) to handle PID reuse within a time range.
+	nodeMap := make(map[int64]*ProcessNode, len(procs))
 
-	// Create nodes.
-	for _, p := range procs {
-		node := ProcessNode{Process: p}
-		nodeMap[p.PID] = &node
-	}
+	// Map PID → latest Process.ID so we can find parents by their OS PID.
+	// When multiple records share a PID (reuse), the latest fork wins.
+	pidToID := make(map[int]int64, len(procs))
 
-	// Build parent-child links.
-	for _, p := range procs {
-		parent, hasParent := nodeMap[p.PPID]
-		if hasParent {
-			parent.Children = append(parent.Children, *nodeMap[p.PID])
-		} else {
-			roots = append(roots, *nodeMap[p.PID])
+	for i := range procs {
+		p := &procs[i]
+		nodeMap[p.ID] = &ProcessNode{Process: *p}
+		if existing, ok := pidToID[p.PID]; !ok || p.ForkTimeNs > nodeMap[existing].ForkTimeNs {
+			pidToID[p.PID] = p.ID
 		}
 	}
 
+	// Build parent-child links. Track children as IDs so we can resolve after all links are built.
+	childIDs := make(map[int64][]int64) // parentID → child IDs
+	var rootIDs []int64
+	for _, node := range nodeMap {
+		parentDBID, parentFound := pidToID[node.PPID]
+		if parentFound {
+			if _, ok := nodeMap[parentDBID]; ok && parentDBID != node.ID {
+				childIDs[parentDBID] = append(childIDs[parentDBID], node.ID)
+				continue
+			}
+		}
+		rootIDs = append(rootIDs, node.ID)
+	}
+
+	// Recursively build value tree from the pointer map.
+	var build func(id int64) ProcessNode
+	build = func(id int64) ProcessNode {
+		node := *nodeMap[id]
+		for _, childID := range childIDs[id] {
+			node.Children = append(node.Children, build(childID))
+		}
+		return node
+	}
+
+	roots := make([]ProcessNode, 0, len(rootIDs))
+	for _, id := range rootIDs {
+		roots = append(roots, build(id))
+	}
 	return roots
-}
-
-// hasNetworkActivity checks if a process PID appears in any network event payload.
-func hasNetworkActivity(events []store.Event, pid int) bool {
-	for _, e := range events {
-		var payload struct {
-			PID int `json:"pid"`
-		}
-		if json.Unmarshal(e.Payload, &payload) == nil && payload.PID == pid {
-			return true
-		}
-	}
-	return false
 }
 
 func filterByType(events []store.Event, eventType string) []store.Event {

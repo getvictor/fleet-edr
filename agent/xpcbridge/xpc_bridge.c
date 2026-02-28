@@ -2,6 +2,8 @@
 
 #include <xpc/xpc.h>
 #include <dispatch/dispatch.h>
+#include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +15,7 @@ typedef struct {
 } xpc_bridge_slot;
 
 static xpc_bridge_slot g_slots[XPC_BRIDGE_MAX_CONNECTIONS];
+static pthread_mutex_t g_slots_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int xpc_bridge_connect(
     const char *service_name,
@@ -21,13 +24,16 @@ int xpc_bridge_connect(
     xpc_bridge_error_fn on_error
 ) {
     // Find a free slot.
+    pthread_mutex_lock(&g_slots_mutex);
     int handle = -1;
     for (int i = 0; i < XPC_BRIDGE_MAX_CONNECTIONS; i++) {
         if (!g_slots[i].in_use) {
             handle = i;
+            g_slots[i].in_use = 1; // Reserve immediately.
             break;
         }
     }
+    pthread_mutex_unlock(&g_slots_mutex);
     if (handle < 0) {
         return -1; // All slots in use.
     }
@@ -38,6 +44,9 @@ int xpc_bridge_connect(
 
     dispatch_queue_t queue = dispatch_queue_create(label, DISPATCH_QUEUE_SERIAL);
     if (queue == NULL) {
+        pthread_mutex_lock(&g_slots_mutex);
+        g_slots[handle].in_use = 0;
+        pthread_mutex_unlock(&g_slots_mutex);
         return -1;
     }
 
@@ -46,6 +55,9 @@ int xpc_bridge_connect(
     );
     if (conn == NULL) {
         dispatch_release(queue);
+        pthread_mutex_lock(&g_slots_mutex);
+        g_slots[handle].in_use = 0;
+        pthread_mutex_unlock(&g_slots_mutex);
         return -1;
     }
 
@@ -102,7 +114,6 @@ int xpc_bridge_connect(
 
     g_slots[handle].connection = conn;
     g_slots[handle].queue = queue;
-    g_slots[handle].in_use = 1;
 
     return handle;
 }
@@ -111,17 +122,25 @@ void xpc_bridge_disconnect(int handle) {
     if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS) {
         return;
     }
+
+    pthread_mutex_lock(&g_slots_mutex);
     if (!g_slots[handle].in_use) {
+        pthread_mutex_unlock(&g_slots_mutex);
         return;
     }
 
-    if (g_slots[handle].connection != NULL) {
-        xpc_connection_cancel(g_slots[handle].connection);
-        g_slots[handle].connection = NULL;
-    }
-    if (g_slots[handle].queue != NULL) {
-        dispatch_release(g_slots[handle].queue);
-        g_slots[handle].queue = NULL;
-    }
+    xpc_connection_t conn = g_slots[handle].connection;
+    dispatch_queue_t queue = g_slots[handle].queue;
+    g_slots[handle].connection = NULL;
+    g_slots[handle].queue = NULL;
     g_slots[handle].in_use = 0;
+    pthread_mutex_unlock(&g_slots_mutex);
+
+    if (conn != NULL) {
+        xpc_connection_cancel(conn);
+        xpc_release(conn);
+    }
+    if (queue != NULL) {
+        dispatch_release(queue);
+    }
 }

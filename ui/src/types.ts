@@ -4,6 +4,13 @@ export interface HostSummary {
   last_seen_ns: number;
 }
 
+// Note: nanosecond timestamp fields (fork_time_ns, etc.) may lose precision
+// beyond Number.MAX_SAFE_INTEGER (~9.007e15 ns ≈ ~104 days from epoch).
+// Current wall-clock nanoseconds (~1.7e18) exceed this limit. The timestamps
+// are still usable for display (ms-level precision is preserved) and for
+// passing back to the API as opaque values, but arithmetic on them may be
+// slightly imprecise. If exact ns precision is needed, switch to string
+// representation.
 export interface Process {
   id: number;
   host_id: string;

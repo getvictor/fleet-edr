@@ -7,7 +7,6 @@ private let logger = Logger(subsystem: "com.fleet.edr.networkextension", categor
 /// NetworkFilter captures outbound network connections and DNS queries,
 /// attributing them to the source process via audit token.
 final class NetworkFilter: NEFilterDataProvider {
-    nonisolated(unsafe) var onEvent: ((Data) -> Void)?
     private let serializer = NetworkEventSerializer()
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
@@ -38,9 +37,9 @@ final class NetworkFilter: NEFilterDataProvider {
         if let token = flow.sourceAppAuditToken {
             token.withUnsafeBytes { buf in
                 guard buf.count >= MemoryLayout<audit_token_t>.size else { return }
-                let auditToken = buf.load(as: audit_token_t.self)
-                pid = audit_token_to_pid(auditToken)
-                uid = audit_token_to_euid(auditToken)
+                let ptr = buf.baseAddress!.assumingMemoryBound(to: audit_token_t.self)
+                pid = audit_token_to_pid(ptr.pointee)
+                uid = audit_token_to_euid(ptr.pointee)
             }
         }
 
@@ -51,7 +50,7 @@ final class NetworkFilter: NEFilterDataProvider {
         switch socketFlow.socketProtocol {
         case 6: proto = "tcp"
         case 17: proto = "udp"
-        default: proto = "other"
+        default: proto = "ip-\(socketFlow.socketProtocol)"
         }
 
         // Extract remote endpoint.
@@ -93,7 +92,7 @@ final class NetworkFilter: NEFilterDataProvider {
         )
 
         if let data = serializer.serialize(eventType: "network_connect", payload: payload) {
-            onEvent?(data)
+            XPCServer.shared.send(data: data)
         }
 
         return .filterDataVerdict(withFilterInbound: isDNSFlow(proto: proto, port: remotePort),
@@ -110,9 +109,9 @@ final class NetworkFilter: NEFilterDataProvider {
             if let token = flow.sourceAppAuditToken {
                 token.withUnsafeBytes { buf in
                     guard buf.count >= MemoryLayout<audit_token_t>.size else { return }
-                    let auditToken = buf.load(as: audit_token_t.self)
-                    pid = audit_token_to_pid(auditToken)
-                    uid = audit_token_to_euid(auditToken)
+                    let ptr = buf.baseAddress!.assumingMemoryBound(to: audit_token_t.self)
+                    pid = audit_token_to_pid(ptr.pointee)
+                    uid = audit_token_to_euid(ptr.pointee)
                 }
             }
 
@@ -127,7 +126,7 @@ final class NetworkFilter: NEFilterDataProvider {
             )
 
             if let data = serializer.serialize(eventType: "dns_query", payload: payload) {
-                onEvent?(data)
+                XPCServer.shared.send(data: data)
             }
         }
 

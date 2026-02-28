@@ -78,7 +78,12 @@ final class NetworkEventSerializer: Sendable {
     private let hostID: String
 
     init() {
-        self.hostID = Self.getHardwareUUID() ?? "unknown"
+        if let uuid = Self.getHardwareUUID() {
+            self.hostID = uuid
+        } else {
+            logger.warning("Hardware UUID not available, events will have empty host_id")
+            self.hostID = ""
+        }
     }
 
     func serialize<P: Codable & Sendable>(eventType: String, payload: P) -> Data? {

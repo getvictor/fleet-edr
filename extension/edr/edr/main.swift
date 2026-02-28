@@ -10,6 +10,7 @@ private let netExtensionID = "com.fleet.edr.networkextension"
 final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     private let action: String
     private var pendingCount = 0
+    private var hadFailure = false
 
     init(action: String) {
         self.action = action
@@ -62,7 +63,9 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
 
         pendingCount -= 1
         if pendingCount <= 0 {
-            if action != "deactivate" {
+            if hadFailure {
+                exit(EXIT_FAILURE)
+            } else if action != "deactivate" {
                 enableContentFilter()
             } else {
                 exit(EXIT_SUCCESS)
@@ -75,6 +78,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         didFailWithError error: Error
     ) {
         logger.error("\(self.action) failed for \(request.identifier): \(error.localizedDescription)")
+        hadFailure = true
         pendingCount -= 1
         if pendingCount <= 0 {
             exit(EXIT_FAILURE)

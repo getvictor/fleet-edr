@@ -7,6 +7,8 @@ private let logger = Logger(subsystem: "com.fleet.edr.networkextension", categor
 /// Network events are broadcast to all connected peers as XPC dictionaries
 /// with a "data" key containing raw JSON bytes.
 final class XPCServer {
+    static let shared = XPCServer(serviceName: "com.fleet.edr.networkextension")
+
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
