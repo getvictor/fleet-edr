@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// These tests require a PostgreSQL instance.
-// Set EDR_TEST_DSN to run them (e.g., "postgres://localhost/edr_test?sslmode=disable").
+// These tests require a MySQL 8.0.45 instance.
+// Set EDR_TEST_DSN to run them (e.g., "root@tcp(127.0.0.1:3306)/edr_test").
 
 func TestInsertAndCount(t *testing.T) {
 	s := openTestStore(t)
@@ -29,17 +32,12 @@ func TestInsertAndCount(t *testing.T) {
 		},
 	}
 
-	if err := s.InsertEvents(events); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
+	err := s.InsertEvents(events)
+	require.NoError(t, err)
 
 	count, err := s.CountEvents()
-	if err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count < 2 {
-		t.Fatalf("expected at least 2 events, got %d", count)
-	}
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, count, int64(2))
 }
 
 func TestInsertDuplicateIsIdempotent(t *testing.T) {
@@ -53,14 +51,12 @@ func TestInsertDuplicateIsIdempotent(t *testing.T) {
 		Payload:     json.RawMessage(`{"pid":1}`),
 	}
 
-	if err := s.InsertEvents([]Event{event}); err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
+	err := s.InsertEvents([]Event{event})
+	require.NoError(t, err)
 
 	// Insert again — should not error.
-	if err := s.InsertEvents([]Event{event}); err != nil {
-		t.Fatalf("duplicate insert: %v", err)
-	}
+	err = s.InsertEvents([]Event{event})
+	require.NoError(t, err)
 }
 
 func openTestStore(t *testing.T) *Store {
@@ -68,13 +64,11 @@ func openTestStore(t *testing.T) *Store {
 
 	dsn := os.Getenv("EDR_TEST_DSN")
 	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping PostgreSQL tests")
+		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
 
 	s, err := New(dsn)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { s.Close() })
 	return s
 }

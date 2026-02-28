@@ -1,7 +1,7 @@
 package receiver
 
 // This file contains the //export functions that CGo exposes to C.
-// They are called by bridgeOnEvent/bridgeOnError in callbacks.c.
+// They are called from the XPC bridge event handler via function pointers.
 
 /*
 #include <stddef.h>
@@ -11,11 +11,13 @@ import "C"
 import "unsafe"
 
 //export bridgeOnEvent
-func bridgeOnEvent(_ unsafe.Pointer, data *C.uint8_t, length C.size_t) {
-	onEvent(unsafe.Pointer(data), int(length))
+func bridgeOnEvent(ctx unsafe.Pointer, data *C.uint8_t, length C.size_t) {
+	id := int(uintptr(ctx))
+	onEvent(id, unsafe.Pointer(data), int(length))
 }
 
 //export bridgeOnError
-func bridgeOnError(_ unsafe.Pointer, errorCode C.int) {
-	onError(int(errorCode))
+func bridgeOnError(ctx unsafe.Pointer, errorCode C.int) {
+	id := int(uintptr(ctx))
+	onError(id, int(errorCode))
 }

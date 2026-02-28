@@ -1,10 +1,11 @@
-// fleet-edr-agent is the Go daemon that receives ESF events from the system
-// extension over XPC, queues them in SQLite, and uploads them to the cloud
-// ingestion server.
+// fleet-edr-agent is the Go daemon that receives ESF and network events from
+// system extensions over XPC, queues them in SQLite, and uploads them to the
+// cloud ingestion server.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/uploader"
@@ -19,13 +21,14 @@ import (
 
 func main() {
 	var (
-		xpcService = flag.String("xpc-service", "com.fleet.edr.extension", "XPC Mach service name")
-		dbPath     = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
-		serverURL  = flag.String("server-url", "http://localhost:8080", "Ingestion server URL")
-		apiKey     = flag.String("api-key", "", "API key for ingestion server")
-		batchSize  = flag.Int("batch-size", 100, "Upload batch size")
-		interval   = flag.Duration("interval", time.Second, "Upload interval")
-		pruneAge   = flag.Duration("prune-age", 24*time.Hour, "Prune uploaded events older than this")
+		xpcService    = flag.String("xpc-service", "com.fleet.edr.extension", "ESF extension XPC Mach service name")
+		netXPCService = flag.String("net-xpc-service", "com.fleet.edr.networkextension", "Network extension XPC Mach service name")
+		dbPath        = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
+		serverURL     = flag.String("server-url", "http://localhost:8080", "Ingestion server URL")
+		apiKey        = flag.String("api-key", "", "API key for ingestion server")
+		batchSize     = flag.Int("batch-size", 100, "Upload batch size")
+		interval      = flag.Duration("interval", time.Second, "Upload interval")
+		pruneAge      = flag.Duration("prune-age", 24*time.Hour, "Prune uploaded events older than this")
 	)
 	flag.Parse()
 
@@ -38,6 +41,9 @@ func main() {
 		log.Fatalf("open queue: %v", err)
 	}
 	defer q.Close()
+
+	// In-memory PID table populated from ESF exec/exit events.
+	pidTable := proctable.New()
 
 	// Create the uploader.
 	cfg := uploader.Config{
@@ -53,8 +59,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Start receiver → queue pipeline with automatic reconnect.
-	go runReceiverLoop(ctx, *xpcService, q)
+	// Start ESF receiver → queue pipeline with PID table updates.
+	go runReceiverLoop(ctx, *xpcService, q, pidTable, true)
+
+	// Start network receiver → queue pipeline (reads PID table but doesn't write).
+	if *netXPCService != "" {
+		go runReceiverLoop(ctx, *netXPCService, q, pidTable, false)
+	}
 
 	// Start uploader.
 	go func() {
@@ -93,10 +104,9 @@ func main() {
 	os.Exit(0)
 }
 
-// runReceiverLoop connects to the XPC service and reconnects with exponential
-// backoff when the connection is interrupted or invalidated (e.g. the system
-// extension restarts).
-func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue) {
+// runReceiverLoop connects to an XPC service and reconnects with exponential
+// backoff when the connection is interrupted or invalidated.
+func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue, pt *proctable.Table, updateTable bool) {
 	const (
 		initialBackoff = time.Second
 		maxBackoff     = 30 * time.Second
@@ -112,7 +122,7 @@ func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue) {
 		recv := receiver.New(xpcService, 4096)
 
 		if err := recv.Connect(); err != nil {
-			log.Printf("receiver connect: %v (retrying in %v)", err, backoff)
+			log.Printf("receiver(%s) connect: %v (retrying in %v)", xpcService, err, backoff)
 			if !sleepCtx(ctx, backoff) {
 				return
 			}
@@ -120,17 +130,17 @@ func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue) {
 			continue
 		}
 
-		log.Println("receiver: connected to XPC service")
-		backoff = initialBackoff // Reset backoff on successful connect.
+		log.Printf("receiver(%s): connected", xpcService)
+		backoff = initialBackoff
 
-		reconnect := pipeEvents(ctx, recv, q)
+		reconnect := pipeEvents(ctx, recv, q, pt, updateTable)
 		recv.Disconnect()
 
 		if !reconnect {
-			return // Context cancelled.
+			return
 		}
 
-		log.Printf("receiver: connection lost, reconnecting in %v", initialBackoff)
+		log.Printf("receiver(%s): connection lost, reconnecting in %v", xpcService, initialBackoff)
 		if !sleepCtx(ctx, initialBackoff) {
 			return
 		}
@@ -138,14 +148,17 @@ func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue) {
 }
 
 // pipeEvents reads from the receiver and enqueues events until the context is
-// cancelled or the XPC connection is lost. Returns true if reconnect should be
-// attempted, false if shutdown.
-func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue) bool {
+// cancelled or the XPC connection is lost. When updateTable is true, exec and
+// exit events update the PID table.
+func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, pt *proctable.Table, updateTable bool) bool {
 	for {
 		select {
 		case <-ctx.Done():
 			return false
 		case evt := <-recv.Events():
+			if updateTable {
+				updateProcTable(pt, evt.Data)
+			}
 			if err := q.Enqueue(evt.Data); err != nil {
 				log.Printf("enqueue: %v", err)
 			}
@@ -153,14 +166,56 @@ func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue) bo
 			log.Printf("xpc error: %d", errCode)
 			switch errCode {
 			case receiver.ErrorConnectionInvalid, receiver.ErrorConnectionInterrupted, receiver.ErrorTerminated:
-				return true // Reconnect.
+				return true
 			}
 		}
 	}
 }
 
+// eventHeader is a minimal struct for peeking at event_type, pid, path, and uid
+// without fully parsing the payload.
+type eventHeader struct {
+	EventType string          `json:"event_type"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+type execFields struct {
+	PID  int32  `json:"pid"`
+	Path string `json:"path"`
+	UID  uint32 `json:"uid"`
+}
+
+type exitFields struct {
+	PID int32 `json:"pid"`
+}
+
+// updateProcTable parses just enough of the event to maintain the PID table.
+func updateProcTable(pt *proctable.Table, data []byte) {
+	var hdr eventHeader
+	if err := json.Unmarshal(data, &hdr); err != nil {
+		return
+	}
+
+	switch hdr.EventType {
+	case "exec":
+		var fields execFields
+		if err := json.Unmarshal(hdr.Payload, &fields); err != nil {
+			return
+		}
+		pt.Update(fields.PID, proctable.ProcessInfo{
+			Path: fields.Path,
+			UID:  fields.UID,
+		})
+	case "exit":
+		var fields exitFields
+		if err := json.Unmarshal(hdr.Payload, &fields); err != nil {
+			return
+		}
+		pt.Remove(fields.PID)
+	}
+}
+
 // sleepCtx sleeps for the given duration or until the context is cancelled.
-// Returns true if the sleep completed, false if the context was cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

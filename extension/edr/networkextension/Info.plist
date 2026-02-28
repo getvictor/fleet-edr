@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>MachServices</key>
+	<dict>
+		<key>com.fleet.edr.networkextension</key>
+		<true/>
+	</dict>
+	<key>NEProviderClasses</key>
+	<dict>
+		<key>com.apple.networkextension.filter-data</key>
+		<string>$(PRODUCT_MODULE_NAME).NetworkFilter</string>
+	</dict>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>Fleet EDR monitors network connections for threat detection.</string>
+</dict>
+</plist>
