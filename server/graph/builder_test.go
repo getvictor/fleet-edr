@@ -112,6 +112,80 @@ func TestProcessBatchPIDReuse(t *testing.T) {
 	assert.Equal(t, "/usr/bin/second", proc.Path)
 }
 
+func TestProcessBatchOutOfOrderEvents(t *testing.T) {
+	s := openTestStore(t)
+	b := NewBuilder(s, slog.Default())
+
+	// Events arrive in reverse order (exit, exec, fork). ProcessBatch should
+	// sort by TimestampNs internally and produce the correct result.
+	events := []store.Event{
+		{
+			EventID: "ooo-exit", HostID: "host-ooo", TimestampNs: 3000,
+			EventType: "exit",
+			Payload:   json.RawMessage(`{"pid": 400, "exit_code": 0}`),
+		},
+		{
+			EventID: "ooo-exec", HostID: "host-ooo", TimestampNs: 2000,
+			EventType: "exec",
+			Payload:   json.RawMessage(`{"pid": 400, "ppid": 1, "path": "/usr/bin/whoami", "args": ["whoami"], "uid": 501, "gid": 20}`),
+		},
+		{
+			EventID: "ooo-fork", HostID: "host-ooo", TimestampNs: 1000,
+			EventType: "fork",
+			Payload:   json.RawMessage(`{"child_pid": 400, "parent_pid": 1}`),
+		},
+	}
+
+	err := s.InsertEvents(events)
+	require.NoError(t, err)
+	err = b.ProcessBatch(events)
+	require.NoError(t, err)
+
+	proc, err := s.GetProcessByPID("host-ooo", 400, 2500)
+	require.NoError(t, err)
+	require.NotNil(t, proc)
+	assert.Equal(t, "/usr/bin/whoami", proc.Path)
+	require.NotNil(t, proc.ExitTimeNs)
+	assert.Equal(t, int64(3000), *proc.ExitTimeNs)
+}
+
+func TestProcessBatchPartialFailure(t *testing.T) {
+	s := openTestStore(t)
+	b := NewBuilder(s, slog.Default())
+
+	events := []store.Event{
+		{
+			EventID: "good-fork", HostID: "host-partial", TimestampNs: 1000,
+			EventType: "fork",
+			Payload:   json.RawMessage(`{"child_pid": 500, "parent_pid": 1}`),
+		},
+		{
+			// Valid JSON but wrong types — will fail unmarshalling into forkPayload.
+			EventID: "bad-fork", HostID: "host-partial", TimestampNs: 2000,
+			EventType: "fork",
+			Payload:   json.RawMessage(`{"child_pid": "not_a_number", "parent_pid": "also_bad"}`),
+		},
+		{
+			EventID: "good-exec", HostID: "host-partial", TimestampNs: 3000,
+			EventType: "exec",
+			Payload:   json.RawMessage(`{"pid": 500, "ppid": 1, "path": "/usr/bin/echo", "args": ["echo"], "uid": 0, "gid": 0}`),
+		},
+	}
+
+	err := s.InsertEvents(events)
+	require.NoError(t, err)
+
+	err = b.ProcessBatch(events)
+	require.Error(t, err, "expected error from partial failure")
+	assert.Contains(t, err.Error(), "1 event(s) failed")
+
+	// The good events should still have been processed.
+	proc, err := s.GetProcessByPID("host-partial", 500, 3000)
+	require.NoError(t, err)
+	require.NotNil(t, proc, "good events should still be processed despite partial failure")
+	assert.Equal(t, "/usr/bin/echo", proc.Path)
+}
+
 func openTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	dsn := os.Getenv("EDR_TEST_DSN")
@@ -121,5 +195,10 @@ func openTestStore(t *testing.T) *store.Store {
 	s, err := store.New(dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { s.Close() })
+	// Truncate tables to ensure no stale data from previous test runs.
+	_, err = s.DB().Exec("TRUNCATE TABLE processes")
+	require.NoError(t, err)
+	_, err = s.DB().Exec("TRUNCATE TABLE events")
+	require.NoError(t, err)
 	return s
 }

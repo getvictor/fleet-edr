@@ -1,8 +1,20 @@
+import Darwin
 import Foundation
 import NetworkExtension
 import os.log
 
 private let logger = Logger(subsystem: "com.fleet.edr.networkextension", category: "NetworkFilter")
+
+/// Returns the executable path for a given PID using proc_pidpath, or "unknown" on failure.
+private func processPath(for pid: pid_t) -> String {
+    guard pid > 0 else { return "unknown" }
+    let bufferSize = 4 * Int(MAXPATHLEN)
+    let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+    let result = proc_pidpath(pid, buffer, UInt32(bufferSize))
+    guard result > 0 else { return "unknown" }
+    return String(cString: buffer)
+}
 
 /// NetworkFilter captures outbound network connections and DNS queries,
 /// attributing them to the source process via audit token.
@@ -43,7 +55,7 @@ final class NetworkFilter: NEFilterDataProvider {
             }
         }
 
-        let path = flow.sourceAppIdentifier ?? "unknown"
+        let path = processPath(for: pid)
 
         // Determine protocol.
         let proto: String
@@ -117,7 +129,7 @@ final class NetworkFilter: NEFilterDataProvider {
 
             let payload = DNSQueryPayload(
                 pid: pid,
-                path: flow.sourceAppIdentifier ?? "unknown",
+                path: processPath(for: pid),
                 uid: uid,
                 queryName: query.name,
                 queryType: query.type,

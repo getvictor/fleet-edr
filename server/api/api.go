@@ -159,5 +159,7 @@ func parseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("writeJSON encode failed", "err", err)
+	}
 }

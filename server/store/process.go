@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,22 +10,66 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// NullRawJSON is a json.RawMessage that correctly scans NULL from MySQL JSON columns.
+// json.RawMessage alone fails because the MySQL driver returns nil for NULL JSON,
+// and database/sql doesn't know how to assign nil to the named type json.RawMessage.
+type NullRawJSON json.RawMessage
+
+func (n *NullRawJSON) Scan(value any) error {
+	if value == nil {
+		*n = nil
+		return nil
+	}
+	b, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("NullRawJSON.Scan: unsupported type %T", value)
+	}
+	// Copy the bytes — the MySQL driver may reuse the underlying buffer for subsequent rows.
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	*n = NullRawJSON(cp)
+	return nil
+}
+
+func (n NullRawJSON) Value() (driver.Value, error) {
+	if len(n) == 0 || string(n) == "null" {
+		return nil, nil
+	}
+	return []byte(n), nil
+}
+
+func (n NullRawJSON) MarshalJSON() ([]byte, error) {
+	if n == nil {
+		return []byte("null"), nil
+	}
+	return json.RawMessage(n).MarshalJSON()
+}
+
+func (n *NullRawJSON) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*n = nil
+		return nil
+	}
+	*n = NullRawJSON(data)
+	return nil
+}
+
 // Process represents a materialized process record built from fork/exec/exit events.
 type Process struct {
-	ID          int64           `db:"id" json:"id"`
-	HostID      string          `db:"host_id" json:"host_id"`
-	PID         int             `db:"pid" json:"pid"`
-	PPID        int             `db:"ppid" json:"ppid"`
-	Path        string          `db:"path" json:"path"`
-	Args        json.RawMessage `db:"args" json:"args,omitempty"`
-	UID         *int            `db:"uid" json:"uid,omitempty"`
-	GID         *int            `db:"gid" json:"gid,omitempty"`
-	CodeSigning json.RawMessage `db:"code_signing" json:"code_signing,omitempty"`
-	SHA256      *string         `db:"sha256" json:"sha256,omitempty"`
-	ForkTimeNs  int64           `db:"fork_time_ns" json:"fork_time_ns"`
-	ExecTimeNs  *int64          `db:"exec_time_ns" json:"exec_time_ns,omitempty"`
-	ExitTimeNs  *int64          `db:"exit_time_ns" json:"exit_time_ns,omitempty"`
-	ExitCode    *int            `db:"exit_code" json:"exit_code,omitempty"`
+	ID          int64       `db:"id" json:"id"`
+	HostID      string      `db:"host_id" json:"host_id"`
+	PID         int         `db:"pid" json:"pid"`
+	PPID        int         `db:"ppid" json:"ppid"`
+	Path        string      `db:"path" json:"path"`
+	Args        NullRawJSON `db:"args" json:"args,omitempty"`
+	UID         *int        `db:"uid" json:"uid,omitempty"`
+	GID         *int        `db:"gid" json:"gid,omitempty"`
+	CodeSigning NullRawJSON `db:"code_signing" json:"code_signing,omitempty"`
+	SHA256      *string     `db:"sha256" json:"sha256,omitempty"`
+	ForkTimeNs  int64       `db:"fork_time_ns" json:"fork_time_ns"`
+	ExecTimeNs  *int64      `db:"exec_time_ns" json:"exec_time_ns,omitempty"`
+	ExitTimeNs  *int64      `db:"exit_time_ns" json:"exit_time_ns,omitempty"`
+	ExitCode    *int        `db:"exit_code" json:"exit_code,omitempty"`
 }
 
 // HostSummary provides an overview of a host's event activity.
@@ -45,8 +90,8 @@ func (s *Store) InsertProcess(p Process) (int64, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO processes (host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, fork_time_ns, exec_time_ns, exit_time_ns, exit_code)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.HostID, p.PID, p.PPID, p.Path, nullJSON(p.Args), p.UID, p.GID,
-		nullJSON(p.CodeSigning), p.SHA256, p.ForkTimeNs, p.ExecTimeNs, p.ExitTimeNs, p.ExitCode,
+		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
+		p.CodeSigning, p.SHA256, p.ForkTimeNs, p.ExecTimeNs, p.ExitTimeNs, p.ExitCode,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert process: %w", err)
@@ -60,12 +105,12 @@ func (s *Store) InsertProcess(p Process) (int64, error) {
 
 // UpdateProcessExec updates an existing process record with exec-time metadata.
 func (s *Store) UpdateProcessExec(hostID string, pid int, execTimeNs int64,
-	path string, args json.RawMessage, uid, gid *int, codeSigning json.RawMessage, sha256 *string) error {
+	path string, args NullRawJSON, uid, gid *int, codeSigning NullRawJSON, sha256 *string) error {
 	_, err := s.db.Exec(`
 		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, exec_time_ns = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
-		path, nullJSON(args), uid, gid, nullJSON(codeSigning), sha256, execTimeNs,
+		path, args, uid, gid, codeSigning, sha256, execTimeNs,
 		hostID, pid,
 	)
 	return err
@@ -188,11 +233,4 @@ func (s *Store) ListHosts() ([]HostSummary, error) {
 // that need transactional access (e.g., the graph builder).
 func (s *Store) DB() *sqlx.DB {
 	return s.db
-}
-
-func nullJSON(data json.RawMessage) any {
-	if len(data) == 0 || string(data) == "null" {
-		return nil
-	}
-	return []byte(data)
 }

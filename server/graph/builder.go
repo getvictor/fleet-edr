@@ -89,14 +89,14 @@ func (b *Builder) handleFork(evt store.Event) error {
 }
 
 type execPayload struct {
-	PID         int             `json:"pid"`
-	PPID        int             `json:"ppid"`
-	Path        string          `json:"path"`
-	Args        json.RawMessage `json:"args"`
-	UID         *int            `json:"uid"`
-	GID         *int            `json:"gid"`
-	CodeSigning json.RawMessage `json:"code_signing"`
-	SHA256      *string         `json:"sha256"`
+	PID         int               `json:"pid"`
+	PPID        int               `json:"ppid"`
+	Path        string            `json:"path"`
+	Args        store.NullRawJSON `json:"args"`
+	UID         *int              `json:"uid"`
+	GID         *int              `json:"gid"`
+	CodeSigning store.NullRawJSON `json:"code_signing"`
+	SHA256      *string           `json:"sha256"`
 }
 
 func (b *Builder) handleExec(evt store.Event) error {

@@ -17,6 +17,12 @@ import (
 
 func TestListHostsEmpty(t *testing.T) {
 	s := openTestStore(t)
+	// Truncate tables to ensure no stale data from other test runs.
+	_, truncErr := s.DB().Exec("TRUNCATE TABLE processes")
+	require.NoError(t, truncErr)
+	_, truncErr = s.DB().Exec("TRUNCATE TABLE events")
+	require.NoError(t, truncErr)
+
 	q := graph.NewQuery(s)
 	h := New(q, "", slog.Default())
 
@@ -96,6 +102,29 @@ func TestAuthRequired(t *testing.T) {
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
+}
+
+func TestAuthWrongPrefix(t *testing.T) {
+	s := openTestStore(t)
+	q := graph.NewQuery(s)
+	h := New(q, "secret-key", slog.Default())
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	// "Token" prefix instead of "Bearer" should be rejected.
+	req := httptest.NewRequest("GET", "/api/v1/hosts", nil)
+	req.Header.Set("Authorization", "Token secret-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// "Basic" prefix should also be rejected.
+	req = httptest.NewRequest("GET", "/api/v1/hosts", nil)
+	req.Header.Set("Authorization", "Basic secret-key")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
 func openTestStore(t *testing.T) *store.Store {
