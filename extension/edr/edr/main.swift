@@ -59,6 +59,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
             logger.info("\(self.action) will complete after reboot for \(request.identifier)")
         @unknown default:
             logger.error("Unknown result for \(request.identifier): \(result.rawValue)")
+            hadFailure = true
         }
 
         pendingCount -= 1

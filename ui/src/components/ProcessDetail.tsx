@@ -26,7 +26,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     <div style={{ border: "1px solid #ddd", borderRadius: 4, padding: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
         <strong>Process detail</strong>
-        <button onClick={onClose} style={{ cursor: "pointer" }}>
+        <button onClick={onClose} aria-label="Close" style={{ cursor: "pointer" }}>
           &times;
         </button>
       </div>

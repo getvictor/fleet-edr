@@ -25,6 +25,9 @@ type Handler struct {
 // New creates an ingestion Handler. The graph builder processes fork/exec/exit
 // events into the processes table after each batch insert.
 func New(s *store.Store, apiKey string, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Handler{store: s, builder: graph.NewBuilder(s, logger), apiKey: apiKey, logger: logger}
 }
 

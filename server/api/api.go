@@ -23,6 +23,9 @@ type Handler struct {
 
 // New creates an API handler.
 func New(q *graph.Query, apiKey string, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Handler{query: q, apiKey: apiKey, logger: logger}
 }
 
@@ -49,7 +52,7 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		hosts = []store.HostSummary{}
 	}
 
-	writeJSON(w, hosts)
+	h.writeJSON(w, hosts)
 }
 
 func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +80,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		roots = []graph.ProcessNode{}
 	}
 
-	writeJSON(w, map[string]any{"roots": roots})
+	h.writeJSON(w, map[string]any{"roots": roots})
 }
 
 func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +110,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, detail)
+	h.writeJSON(w, detail)
 }
 
 func (h *Handler) authorize(r *http.Request) bool {
@@ -157,9 +160,9 @@ func parseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
 	return v
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+func (h *Handler) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("writeJSON encode failed", "err", err)
+		h.logger.Error("writeJSON encode failed", "err", err)
 	}
 }

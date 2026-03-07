@@ -18,6 +18,9 @@ type Builder struct {
 
 // NewBuilder creates a graph builder backed by the given store.
 func NewBuilder(s *store.Store, logger *slog.Logger) *Builder {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Builder{store: s, logger: logger}
 }
 
@@ -76,9 +79,12 @@ func (b *Builder) handleFork(evt store.Event) error {
 	}
 
 	// Inherit parent's path for the new process (fork-without-exec case).
-	parentPath, _ := b.store.GetParentPath(evt.HostID, p.ParentPID)
+	parentPath, err := b.store.GetParentPath(evt.HostID, p.ParentPID)
+	if err != nil {
+		b.logger.Warn("failed to get parent path", "host_id", evt.HostID, "parent_pid", p.ParentPID, "err", err)
+	}
 
-	_, err := b.store.InsertProcess(store.Process{
+	_, err = b.store.InsertProcess(store.Process{
 		HostID:     evt.HostID,
 		PID:        p.ChildPID,
 		PPID:       p.ParentPID,
