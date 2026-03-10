@@ -21,18 +21,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  vulncheck:
-    name: govulncheck
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        module: [agent, server]
+  vulncheck-agent:
+    name: govulncheck (agent)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Create UI dist placeholder for embed
-        if: matrix.module == 'server'
-        run: mkdir -p server/ui/dist
 
       - uses: actions/setup-go@v5
         with:
@@ -42,5 +35,25 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        working-directory: ${{ matrix.module }}
+        working-directory: agent
+        run: govulncheck ./...
+
+  vulncheck-server:
+    name: govulncheck (server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create UI dist placeholder for embed
+        run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        working-directory: server
         run: govulncheck ./...

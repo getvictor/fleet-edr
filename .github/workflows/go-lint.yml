@@ -34,7 +34,7 @@ jobs:
 
       - name: Create UI dist placeholder for embed
         if: matrix.module == 'server'
-        run: mkdir -p server/ui/dist
+        run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
 
       - uses: actions/setup-go@v5
         with:
