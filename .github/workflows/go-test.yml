@@ -57,10 +57,11 @@ jobs:
       - name: Install MySQL 8.4
         run: brew install mysql@8.4
 
-      - name: Start MySQL
+      - name: Initialize and start MySQL
         run: |
           MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
           echo "${MYSQL_PREFIX}/bin" >> "$GITHUB_PATH"
+          "${MYSQL_PREFIX}/bin/mysqld" --initialize-insecure --datadir="${MYSQL_PREFIX}/data"
           "${MYSQL_PREFIX}/bin/mysqld_safe" --datadir="${MYSQL_PREFIX}/data" &
 
       - name: Wait for MySQL
