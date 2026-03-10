@@ -19,10 +19,12 @@ var schemaStatements = []string{
 		timestamp_ns BIGINT       NOT NULL,
 		event_type   VARCHAR(64)  NOT NULL,
 		payload      JSON         NOT NULL,
+		processed    TINYINT(1)   NOT NULL DEFAULT 0,
 		created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_events_host_id (host_id),
 		INDEX idx_events_type (event_type),
-		INDEX idx_events_timestamp (timestamp_ns)
+		INDEX idx_events_timestamp (timestamp_ns),
+		INDEX idx_events_processed (processed, created_at)
 	)`,
 	`CREATE TABLE IF NOT EXISTS processes (
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -87,7 +89,24 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		}
 	}
 
+	// Run idempotent migrations for schema changes to existing tables.
+	for _, m := range migrations {
+		if _, err := db.ExecContext(ctx, m); err != nil {
+			// Ignore "Duplicate column" errors for already-applied migrations.
+			if !strings.Contains(err.Error(), "Duplicate column") && !strings.Contains(err.Error(), "Duplicate key name") {
+				db.Close()
+				return nil, fmt.Errorf("migration: %w", err)
+			}
+		}
+	}
+
 	return &Store{db: db}, nil
+}
+
+// migrations are idempotent ALTER TABLE statements applied after initial schema creation.
+var migrations = []string{
+	`ALTER TABLE events ADD COLUMN processed TINYINT(1) NOT NULL DEFAULT 0`,
+	`ALTER TABLE events ADD INDEX idx_events_processed (processed, created_at)`,
 }
 
 // Close closes the database connection.
@@ -134,4 +153,35 @@ func (s *Store) CountEvents(ctx context.Context) (int64, error) {
 	var count int64
 	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events")
 	return count, err
+}
+
+// FetchUnprocessed returns up to limit events that have not yet been processed by the graph builder.
+// Events are ordered by host_id and timestamp to ensure correct per-host ordering.
+func (s *Store) FetchUnprocessed(ctx context.Context, limit int) ([]Event, error) {
+	var events []Event
+	err := s.db.SelectContext(ctx, &events, `
+		SELECT event_id, host_id, timestamp_ns, event_type, payload
+		FROM events
+		WHERE processed = 0
+		ORDER BY host_id, timestamp_ns
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetch unprocessed: %w", err)
+	}
+	return events, nil
+}
+
+// MarkProcessed marks the given events as processed by the graph builder.
+func (s *Store) MarkProcessed(ctx context.Context, eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In("UPDATE events SET processed = 1 WHERE event_id IN (?)", eventIDs)
+	if err != nil {
+		return fmt.Errorf("mark processed build query: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("mark processed: %w", err)
+	}
+	return nil
 }

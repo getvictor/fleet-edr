@@ -120,7 +120,7 @@ func TestIngestLargeBatchNearLimit(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "large batch should be accepted")
 }
 
-func TestIngestGraphBuilderErrorDoesNotFailIngest(t *testing.T) {
+func TestIngestDoesNotProcessEvents(t *testing.T) {
 	dsn := os.Getenv("EDR_TEST_DSN")
 	if dsn == "" {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
@@ -129,24 +129,19 @@ func TestIngestGraphBuilderErrorDoesNotFailIngest(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 
+	// Truncate to start clean.
+	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
+	require.NoError(t, err)
+
 	h := New(s, "", slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	// Send a batch with a valid event and one with a malformed fork payload.
-	// The malformed event will cause graph builder to return an error, but
-	// the HTTP response should still be 200 (events stored successfully).
 	events := []store.Event{
 		{
-			EventID: "gb-good", HostID: "host-gb", TimestampNs: 1000,
-			EventType: "exec",
-			Payload:   json.RawMessage(`{"pid": 700, "ppid": 1, "path": "/bin/sh", "args": [], "uid": 0, "gid": 0}`),
-		},
-		{
-			// Valid JSON that stores fine but fails when graph builder unmarshals into forkPayload.
-			EventID: "gb-bad", HostID: "host-gb", TimestampNs: 2000,
+			EventID: "noproc-1", HostID: "host-noproc", TimestampNs: 1000,
 			EventType: "fork",
-			Payload:   json.RawMessage(`{"child_pid": "not_a_number"}`),
+			Payload:   json.RawMessage(`{"child_pid": 700, "parent_pid": 1}`),
 		},
 	}
 	body, _ := json.Marshal(events) //nolint:errcheck // test helper
@@ -154,10 +149,10 @@ func TestIngestGraphBuilderErrorDoesNotFailIngest(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code, "ingest should succeed even if graph builder fails")
+	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Verify events were stored.
-	count, err := s.CountEvents(t.Context())
+	// Events should be stored but NOT processed (processed = 0).
+	unprocessed, err := s.FetchUnprocessed(t.Context(), 100)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, count, int64(2))
+	assert.Len(t, unprocessed, 1, "ingested events should remain unprocessed")
 }
