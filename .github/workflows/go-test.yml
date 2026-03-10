@@ -12,6 +12,7 @@ on:
       - "agent/**"
       - "server/**"
       - ".github/workflows/go-test.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

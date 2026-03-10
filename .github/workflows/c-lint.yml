@@ -14,6 +14,7 @@ on:
       - "agent/**/*.h"
       - ".clang-tidy"
       - ".github/workflows/c-lint.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

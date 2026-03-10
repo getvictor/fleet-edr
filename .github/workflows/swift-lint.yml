@@ -12,6 +12,7 @@ on:
       - "extension/**"
       - ".swiftlint.yml"
       - ".github/workflows/swift-lint.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
