@@ -18,9 +18,9 @@ import (
 func TestListHostsEmpty(t *testing.T) {
 	s := openTestStore(t)
 	// Truncate tables to ensure no stale data from other test runs.
-	_, truncErr := s.DB().Exec("TRUNCATE TABLE processes")
+	_, truncErr := s.DB().ExecContext(t.Context(), "TRUNCATE TABLE processes")
 	require.NoError(t, truncErr)
-	_, truncErr = s.DB().Exec("TRUNCATE TABLE events")
+	_, truncErr = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
 	require.NoError(t, truncErr)
 
 	q := graph.NewQuery(s)
@@ -29,7 +29,7 @@ func TestListHostsEmpty(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest("GET", "/api/v1/hosts", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -49,7 +49,7 @@ func TestProcessTreeEmpty(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest("GET", "/api/v1/hosts/nonexistent/tree?from=0&to=999999999999999999", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts/nonexistent/tree?from=0&to=999999999999999999", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -73,7 +73,7 @@ func TestProcessDetailNotFound(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest("GET", "/api/v1/hosts/nonexistent/processes/999?at=1000", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts/nonexistent/processes/999?at=1000", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -89,14 +89,14 @@ func TestAuthRequired(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	t.Run("no auth header", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/v1/hosts", nil)
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
 	t.Run("valid auth", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/v1/hosts", nil)
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
 		req.Header.Set("Authorization", "Bearer secret-key")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
@@ -113,14 +113,14 @@ func TestAuthWrongPrefix(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	// "Token" prefix instead of "Bearer" should be rejected.
-	req := httptest.NewRequest("GET", "/api/v1/hosts", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
 	req.Header.Set("Authorization", "Token secret-key")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 
 	// "Basic" prefix should also be rejected.
-	req = httptest.NewRequest("GET", "/api/v1/hosts", nil)
+	req = httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
 	req.Header.Set("Authorization", "Basic secret-key")
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -133,8 +133,8 @@ func openTestStore(t *testing.T) *store.Store {
 	if dsn == "" {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
-	s, err := store.New(dsn)
+	s, err := store.New(t.Context(), dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }

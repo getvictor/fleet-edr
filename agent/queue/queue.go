@@ -2,6 +2,7 @@
 package queue
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -32,7 +33,7 @@ type Queue struct {
 }
 
 // Open creates or opens a SQLite queue at the given path.
-func Open(dbPath string) (*Queue, error) {
+func Open(ctx context.Context, dbPath string) (*Queue, error) {
 	// Set busy_timeout via DSN so it applies to every connection in the pool.
 	dsn := dbPath + "?_pragma=busy_timeout%3d5000&_pragma=journal_mode%3dwal"
 	db, err := sql.Open("sqlite", dsn)
@@ -44,7 +45,7 @@ func Open(dbPath string) (*Queue, error) {
 	// avoids SQLITE_BUSY contention between pooled connections.
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.ExecContext(ctx, schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
@@ -58,8 +59,8 @@ func (q *Queue) Close() error {
 }
 
 // Enqueue inserts an event into the queue.
-func (q *Queue) Enqueue(eventJSON []byte) error {
-	_, err := q.db.Exec(
+func (q *Queue) Enqueue(ctx context.Context, eventJSON []byte) error {
+	_, err := q.db.ExecContext(ctx,
 		"INSERT INTO events (event_json, created_at) VALUES (?, ?)",
 		string(eventJSON), time.Now().UnixNano(),
 	)
@@ -67,8 +68,8 @@ func (q *Queue) Enqueue(eventJSON []byte) error {
 }
 
 // DequeueBatch reads up to limit events that have not been uploaded, ordered by id.
-func (q *Queue) DequeueBatch(limit int) ([]QueuedEvent, error) {
-	rows, err := q.db.Query(
+func (q *Queue) DequeueBatch(ctx context.Context, limit int) ([]QueuedEvent, error) {
+	rows, err := q.db.QueryContext(ctx,
 		"SELECT id, event_json, created_at FROM events WHERE uploaded = 0 ORDER BY id LIMIT ?",
 		limit,
 	)
@@ -91,25 +92,25 @@ func (q *Queue) DequeueBatch(limit int) ([]QueuedEvent, error) {
 }
 
 // MarkUploaded marks the given event IDs as uploaded.
-func (q *Queue) MarkUploaded(ids []int64) error {
+func (q *Queue) MarkUploaded(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
-	tx, err := q.db.Begin()
+	tx, err := q.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
-	stmt, err := tx.Prepare("UPDATE events SET uploaded = 1 WHERE id = ?")
+	stmt, err := tx.PrepareContext(ctx, "UPDATE events SET uploaded = 1 WHERE id = ?")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, id := range ids {
-		if _, err := stmt.Exec(id); err != nil {
+		if _, err := stmt.ExecContext(ctx, id); err != nil {
 			return err
 		}
 	}
@@ -118,9 +119,9 @@ func (q *Queue) MarkUploaded(ids []int64) error {
 }
 
 // Prune deletes uploaded events older than the given duration.
-func (q *Queue) Prune(olderThan time.Duration) (int64, error) {
+func (q *Queue) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan).UnixNano()
-	result, err := q.db.Exec(
+	result, err := q.db.ExecContext(ctx,
 		"DELETE FROM events WHERE uploaded = 1 AND created_at < ?",
 		cutoff,
 	)
@@ -131,8 +132,8 @@ func (q *Queue) Prune(olderThan time.Duration) (int64, error) {
 }
 
 // Depth returns the number of events that have not been uploaded.
-func (q *Queue) Depth() (int64, error) {
+func (q *Queue) Depth(ctx context.Context) (int64, error) {
 	var count int64
-	err := q.db.QueryRow("SELECT COUNT(*) FROM events WHERE uploaded = 0").Scan(&count)
+	err := q.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE uploaded = 0").Scan(&count)
 	return count, err
 }

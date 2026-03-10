@@ -42,9 +42,10 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hosts, err := h.query.ListHosts()
+	ctx := r.Context()
+	hosts, err := h.query.ListHosts(ctx)
 	if err != nil {
-		h.logger.Error("list hosts", "err", err)
+		h.logger.ErrorContext(ctx, "list hosts", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -52,7 +53,7 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		hosts = []store.HostSummary{}
 	}
 
-	h.writeJSON(w, hosts)
+	h.writeJSON(w, r, hosts)
 }
 
 func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
@@ -70,9 +71,10 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	tr := parseTimeRange(r)
 	limit := parseIntParam(r, "limit", 500)
 
-	roots, err := h.query.BuildTree(hostID, tr, limit)
+	ctx := r.Context()
+	roots, err := h.query.BuildTree(ctx, hostID, tr, limit)
 	if err != nil {
-		h.logger.Error("build tree", "host_id", hostID, "err", err)
+		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -80,7 +82,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		roots = []graph.ProcessNode{}
 	}
 
-	h.writeJSON(w, map[string]any{"roots": roots})
+	h.writeJSON(w, r, map[string]any{"roots": roots})
 }
 
 func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
@@ -99,9 +101,10 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 
 	atTime := parseInt64Param(r, "at", time.Now().UnixNano())
 
-	detail, err := h.query.GetDetail(hostID, pid, atTime)
+	ctx := r.Context()
+	detail, err := h.query.GetDetail(ctx, hostID, pid, atTime)
 	if err != nil {
-		h.logger.Error("get process detail", "host_id", hostID, "pid", pid, "err", err)
+		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -110,7 +113,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeJSON(w, detail)
+	h.writeJSON(w, r, detail)
 }
 
 func (h *Handler) authorize(r *http.Request) bool {
@@ -160,9 +163,9 @@ func parseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
 	return v
 }
 
-func (h *Handler) writeJSON(w http.ResponseWriter, v any) {
+func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		h.logger.Error("writeJSON encode failed", "err", err)
+		h.logger.ErrorContext(r.Context(), "writeJSON encode failed", "err", err)
 	}
 }

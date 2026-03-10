@@ -63,24 +63,27 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.store.InsertEvents(events); err != nil {
-		h.logger.Error("insert error", "err", err)
+	ctx := r.Context()
+	if err := h.store.InsertEvents(ctx, events); err != nil {
+		h.logger.ErrorContext(ctx, "insert error", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	// Update the processes table from fork/exec/exit events.
-	if err := h.builder.ProcessBatch(events); err != nil {
-		h.logger.Error("graph builder error", "err", err)
+	if err := h.builder.ProcessBatch(ctx, events); err != nil {
+		h.logger.ErrorContext(ctx, "graph builder error", "err", err)
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]int{"accepted": len(events)})
+	if err := json.NewEncoder(w).Encode(map[string]int{"accepted": len(events)}); err != nil {
+		h.logger.ErrorContext(ctx, "encode response", "err", err)
+	}
 }
 
-func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	_, _ = w.Write([]byte("ok"))
 }
 
 func (h *Handler) authorize(r *http.Request) bool {

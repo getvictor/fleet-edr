@@ -15,13 +15,14 @@ import (
 
 func TestUploadBatch(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
 	events := []string{
 		`{"event_id":"aaa","event_type":"exec"}`,
 		`{"event_id":"bbb","event_type":"fork"}`,
 	}
 	for _, e := range events {
-		if err := q.Enqueue([]byte(e)); err != nil {
+		if err := q.Enqueue(ctx, []byte(e)); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -53,14 +54,14 @@ func TestUploadBatch(t *testing.T) {
 	cfg.BatchSize = 10
 
 	u := New(q, cfg)
-	u.drainOnce(t.Context())
+	u.drainOnce(ctx)
 
 	if len(received) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(received))
 	}
 
 	// Verify events were marked as uploaded.
-	depth, _ := q.Depth()
+	depth, _ := q.Depth(ctx)
 	if depth != 0 {
 		t.Fatalf("expected queue depth 0 after upload, got %d", depth)
 	}
@@ -68,8 +69,9 @@ func TestUploadBatch(t *testing.T) {
 
 func TestUploadRetry(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
-	if err := q.Enqueue([]byte(`{"event_id":"retry-test"}`)); err != nil {
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"retry-test"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
@@ -89,13 +91,13 @@ func TestUploadRetry(t *testing.T) {
 	cfg.MaxRetries = 5
 
 	u := New(q, cfg)
-	u.drainOnce(t.Context())
+	u.drainOnce(ctx)
 
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("expected 3 attempts, got %d", got)
 	}
 
-	depth, _ := q.Depth()
+	depth, _ := q.Depth(ctx)
 	if depth != 0 {
 		t.Fatalf("expected queue depth 0 after retry success, got %d", depth)
 	}
@@ -103,8 +105,9 @@ func TestUploadRetry(t *testing.T) {
 
 func TestUploadAllRetriesFail(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
-	if err := q.Enqueue([]byte(`{"event_id":"fail-test"}`)); err != nil {
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"fail-test"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
@@ -118,10 +121,10 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	cfg.MaxRetries = 3
 
 	u := New(q, cfg)
-	u.drainOnce(t.Context())
+	u.drainOnce(ctx)
 
 	// Event should still be in queue since upload failed.
-	depth, _ := q.Depth()
+	depth, _ := q.Depth(ctx)
 	if depth != 1 {
 		t.Fatalf("expected queue depth 1 after failed upload, got %d", depth)
 	}
@@ -130,11 +133,11 @@ func TestUploadAllRetriesFail(t *testing.T) {
 func openTestQueue(t *testing.T) *queue.Queue {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	q, err := queue.Open(dbPath)
+	q, err := queue.Open(t.Context(), dbPath)
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
 	}
-	t.Cleanup(func() { q.Close() })
+	t.Cleanup(func() { _ = q.Close() })
 	return q
 }
 

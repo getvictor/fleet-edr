@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -78,7 +79,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 
 // drainOnce uploads one batch from the queue.
 func (u *Uploader) drainOnce(ctx context.Context) {
-	batch, err := u.queue.DequeueBatch(u.cfg.BatchSize)
+	batch, err := u.queue.DequeueBatch(ctx, u.cfg.BatchSize)
 	if err != nil {
 		log.Printf("uploader: dequeue error: %v", err)
 		return
@@ -106,7 +107,7 @@ func (u *Uploader) drainOnce(ctx context.Context) {
 		return
 	}
 
-	if err := u.queue.MarkUploaded(ids); err != nil {
+	if err := u.queue.MarkUploaded(ctx, ids); err != nil {
 		log.Printf("uploader: mark uploaded error: %v", err)
 	}
 }
@@ -121,7 +122,8 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 		}
 
 		// Don't retry client errors (4xx) — only server/network errors are retryable.
-		if clientErr, ok := err.(*clientError); ok {
+		var clientErr *clientError
+		if errors.As(err, &clientErr) {
 			return clientErr
 		}
 
@@ -164,7 +166,7 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 		return err
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil

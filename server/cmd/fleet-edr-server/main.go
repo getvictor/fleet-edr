@@ -28,20 +28,21 @@ func main() {
 	)
 	flag.Parse()
 
+	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	if *apiKey == "" {
-		logger.Warn("no API key configured, all requests will be accepted")
+		logger.WarnContext(ctx, "no API key configured, all requests will be accepted")
 	}
 
-	logger.Info("fleet-edr-server starting", "addr", *addr)
+	logger.InfoContext(ctx, "fleet-edr-server starting", "addr", *addr)
 
-	s, err := store.New(*dsn)
+	s, err := store.New(ctx, *dsn)
 	if err != nil {
-		logger.Error("open store", "err", err)
+		logger.ErrorContext(ctx, "open store", "err", err)
 		os.Exit(1)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	h := ingest.New(s, *apiKey, logger)
 	q := graph.NewQuery(s)
@@ -54,7 +55,7 @@ func main() {
 	// Serve the embedded React UI at /ui/.
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {
-		logger.Error("embed ui", "err", err)
+		logger.ErrorContext(ctx, "embed ui", "err", err)
 		os.Exit(1)
 	}
 	// Serve static assets; fall back to index.html for React BrowserRouter.
@@ -87,16 +88,16 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
-		logger.Info("shutting down")
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		logger.InfoContext(ctx, "shutting down")
+		shutdownCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			logger.Error("shutdown error", "err", err)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.ErrorContext(ctx, "shutdown error", "err", err)
 		}
 	}()
 
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-		logger.Error("server error", "err", err)
+		logger.ErrorContext(ctx, "server error", "err", err)
 		os.Exit(1)
 	}
 }

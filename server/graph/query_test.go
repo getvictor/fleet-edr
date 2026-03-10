@@ -41,13 +41,14 @@ func TestBuildTree(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
 	tr := store.TimeRange{FromNs: 0, ToNs: 10000}
-	roots, err := q.BuildTree("tree-host", tr, 500)
+	roots, err := q.BuildTree(ctx, "tree-host", tr, 500)
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 
@@ -95,12 +96,13 @@ func TestGetDetailWithNetworkEvents(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
-	detail, err := q.GetDetail("detail-host", 50, 2500)
+	detail, err := q.GetDetail(ctx, "detail-host", 50, 2500)
 	require.NoError(t, err)
 	require.NotNil(t, detail, "expected to find process detail")
 
@@ -170,13 +172,14 @@ func TestGetDetailRunningProcess(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
 	// Process has no exit — GetDetail should still work using the 30-day bound.
-	detail, err := q.GetDetail("running-host", 60, 2500)
+	detail, err := q.GetDetail(ctx, "running-host", 60, 2500)
 	require.NoError(t, err)
 	require.NotNil(t, detail, "expected to find running process detail")
 
@@ -191,8 +194,8 @@ func openTreeTestStore(t *testing.T) *store.Store {
 	if dsn == "" {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
-	s, err := store.New(dsn)
+	s, err := store.New(t.Context(), dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }

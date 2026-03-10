@@ -2,6 +2,7 @@
 package graph
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,15 +27,15 @@ func NewBuilder(s *store.Store, logger *slog.Logger) *Builder {
 
 // ProcessBatch processes a batch of events, updating the processes table for
 // fork, exec, and exit events. Other event types are ignored.
-func (b *Builder) ProcessBatch(events []store.Event) error {
+func (b *Builder) ProcessBatch(ctx context.Context, events []store.Event) error {
 	// Sort by timestamp so fork always precedes exec/exit for the same PID.
 	sorted := make([]store.Event, len(events))
 	copy(sorted, events)
-	slices.SortStableFunc(sorted, func(a, b store.Event) int {
-		if a.TimestampNs < b.TimestampNs {
+	slices.SortStableFunc(sorted, func(a, be store.Event) int {
+		if a.TimestampNs < be.TimestampNs {
 			return -1
 		}
-		if a.TimestampNs > b.TimestampNs {
+		if a.TimestampNs > be.TimestampNs {
 			return 1
 		}
 		return 0
@@ -45,15 +46,15 @@ func (b *Builder) ProcessBatch(events []store.Event) error {
 		var err error
 		switch evt.EventType {
 		case "fork":
-			err = b.handleFork(evt)
+			err = b.handleFork(ctx, evt)
 		case "exec":
-			err = b.handleExec(evt)
+			err = b.handleExec(ctx, evt)
 		case "exit":
-			err = b.handleExit(evt)
+			err = b.handleExit(ctx, evt)
 		}
 		if err != nil {
 			failCount++
-			b.logger.Warn("event processing failed", "event_id", evt.EventID, "type", evt.EventType, "err", err)
+			b.logger.WarnContext(ctx, "event processing failed", "event_id", evt.EventID, "type", evt.EventType, "err", err)
 		}
 	}
 	if failCount > 0 {
@@ -67,24 +68,24 @@ type forkPayload struct {
 	ParentPID int `json:"parent_pid"`
 }
 
-func (b *Builder) handleFork(evt store.Event) error {
+func (b *Builder) handleFork(ctx context.Context, evt store.Event) error {
 	var p forkPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
 	}
 
 	// Handle PID reuse: close any existing non-exited record for this PID.
-	if err := b.store.CloseStaleProcess(evt.HostID, p.ChildPID, evt.TimestampNs); err != nil {
+	if err := b.store.CloseStaleProcess(ctx, evt.HostID, p.ChildPID, evt.TimestampNs); err != nil {
 		return err
 	}
 
 	// Inherit parent's path for the new process (fork-without-exec case).
-	parentPath, err := b.store.GetParentPath(evt.HostID, p.ParentPID)
+	parentPath, err := b.store.GetParentPath(ctx, evt.HostID, p.ParentPID)
 	if err != nil {
-		b.logger.Warn("failed to get parent path", "host_id", evt.HostID, "parent_pid", p.ParentPID, "err", err)
+		b.logger.WarnContext(ctx, "failed to get parent path", "host_id", evt.HostID, "parent_pid", p.ParentPID, "err", err)
 	}
 
-	_, err = b.store.InsertProcess(store.Process{
+	_, err = b.store.InsertProcess(ctx, store.Process{
 		HostID:     evt.HostID,
 		PID:        p.ChildPID,
 		PPID:       p.ParentPID,
@@ -105,14 +106,14 @@ type execPayload struct {
 	SHA256      *string           `json:"sha256"`
 }
 
-func (b *Builder) handleExec(evt store.Event) error {
+func (b *Builder) handleExec(ctx context.Context, evt store.Event) error {
 	var p execPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
 	}
 
 	// Try to update an existing process record (from a prior fork).
-	err := b.store.UpdateProcessExec(evt.HostID, p.PID, evt.TimestampNs,
+	err := b.store.UpdateProcessExec(ctx, evt.HostID, p.PID, evt.TimestampNs,
 		p.Path, p.Args, p.UID, p.GID, p.CodeSigning, p.SHA256)
 	if err != nil {
 		return err
@@ -121,7 +122,7 @@ func (b *Builder) handleExec(evt store.Event) error {
 	// Exec-without-fork: if no matching fork record exists, create a partial process record.
 	// We detect this by checking if any row was updated. Since MySQL doesn't easily return
 	// rows affected for "matched but unchanged" vs "no match", we do a lookup.
-	proc, err := b.store.GetProcessByPID(evt.HostID, p.PID, evt.TimestampNs)
+	proc, err := b.store.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return err
 	}
@@ -130,7 +131,7 @@ func (b *Builder) handleExec(evt store.Event) error {
 		if p.PPID != 0 {
 			ppid = p.PPID
 		}
-		_, err = b.store.InsertProcess(store.Process{
+		_, err = b.store.InsertProcess(ctx, store.Process{
 			HostID:      evt.HostID,
 			PID:         p.PID,
 			PPID:        ppid,
@@ -153,11 +154,11 @@ type exitPayload struct {
 	ExitCode int `json:"exit_code"`
 }
 
-func (b *Builder) handleExit(evt store.Event) error {
+func (b *Builder) handleExit(ctx context.Context, evt store.Event) error {
 	var p exitPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
 	}
 
-	return b.store.UpdateProcessExit(evt.HostID, p.PID, evt.TimestampNs, p.ExitCode)
+	return b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, p.ExitCode)
 }

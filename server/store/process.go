@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
@@ -86,8 +87,8 @@ type TimeRange struct {
 }
 
 // InsertProcess inserts a new process record (typically from a fork event).
-func (s *Store) InsertProcess(p Process) (int64, error) {
-	res, err := s.db.Exec(`
+func (s *Store) InsertProcess(ctx context.Context, p Process) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO processes (host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, fork_time_ns, exec_time_ns, exit_time_ns, exit_code)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
@@ -104,9 +105,9 @@ func (s *Store) InsertProcess(p Process) (int64, error) {
 }
 
 // UpdateProcessExec updates an existing process record with exec-time metadata.
-func (s *Store) UpdateProcessExec(hostID string, pid int, execTimeNs int64,
+func (s *Store) UpdateProcessExec(ctx context.Context, hostID string, pid int, execTimeNs int64,
 	path string, args NullRawJSON, uid, gid *int, codeSigning NullRawJSON, sha256 *string) error {
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, exec_time_ns = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
@@ -117,8 +118,8 @@ func (s *Store) UpdateProcessExec(hostID string, pid int, execTimeNs int64,
 }
 
 // UpdateProcessExit sets the exit timestamp and code for a running process.
-func (s *Store) UpdateProcessExit(hostID string, pid int, exitTimeNs int64, exitCode int) error {
-	_, err := s.db.Exec(`
+func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int, exitTimeNs int64, exitCode int) error {
+	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET exit_time_ns = ?, exit_code = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
@@ -130,8 +131,8 @@ func (s *Store) UpdateProcessExit(hostID string, pid int, exitTimeNs int64, exit
 // CloseStaleProcess force-closes a process record that hasn't exited yet.
 // Used to handle PID reuse: when a fork arrives for a PID that already has an
 // active (non-exited) record, close the old one first.
-func (s *Store) CloseStaleProcess(hostID string, pid int, closedAtNs int64) error {
-	_, err := s.db.Exec(`
+func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error {
+	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET exit_time_ns = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL`,
 		closedAtNs, hostID, pid,
@@ -142,9 +143,9 @@ func (s *Store) CloseStaleProcess(hostID string, pid int, closedAtNs int64) erro
 // GetParentPath returns the path of the most recent process with the given PID
 // that is still alive (or was alive most recently). Used for fork-without-exec
 // to inherit the parent's path.
-func (s *Store) GetParentPath(hostID string, pid int) (string, error) {
+func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (string, error) {
 	var path string
-	err := s.db.Get(&path, `
+	err := s.db.GetContext(ctx, &path, `
 		SELECT path FROM processes
 		WHERE host_id = ? AND pid = ?
 		ORDER BY fork_time_ns DESC LIMIT 1`,
@@ -157,9 +158,9 @@ func (s *Store) GetParentPath(hostID string, pid int) (string, error) {
 }
 
 // GetProcessTree returns all processes for a host within a time range.
-func (s *Store) GetProcessTree(hostID string, tr TimeRange, limit int) ([]Process, error) {
+func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr TimeRange, limit int) ([]Process, error) {
 	var procs []Process
-	err := s.db.Select(&procs, `
+	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
 		FROM processes
@@ -175,9 +176,9 @@ func (s *Store) GetProcessTree(hostID string, tr TimeRange, limit int) ([]Proces
 }
 
 // GetProcessByPID returns the process that was active at the given timestamp.
-func (s *Store) GetProcessByPID(hostID string, pid int, atTimeNs int64) (*Process, error) {
+func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error) {
 	var proc Process
-	err := s.db.Get(&proc, `
+	err := s.db.GetContext(ctx, &proc, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
 		FROM processes
@@ -198,9 +199,9 @@ func (s *Store) GetProcessByPID(hostID string, pid int, atTimeNs int64) (*Proces
 
 // GetNetworkEventsForProcess returns network_connect and dns_query events
 // attributed to the given PID within a time range.
-func (s *Store) GetNetworkEventsForProcess(hostID string, pid int, tr TimeRange) ([]Event, error) {
+func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr TimeRange) ([]Event, error) {
 	var events []Event
-	err := s.db.Select(&events, `
+	err := s.db.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, event_type, payload
 		FROM events
 		WHERE host_id = ? AND event_type IN ('network_connect', 'dns_query')
@@ -216,9 +217,9 @@ func (s *Store) GetNetworkEventsForProcess(hostID string, pid int, tr TimeRange)
 }
 
 // ListHosts returns a summary of all hosts that have sent events.
-func (s *Store) ListHosts() ([]HostSummary, error) {
+func (s *Store) ListHosts(ctx context.Context) ([]HostSummary, error) {
 	var hosts []HostSummary
-	err := s.db.Select(&hosts, `
+	err := s.db.SelectContext(ctx, &hosts, `
 		SELECT host_id, COUNT(*) AS event_count, MAX(timestamp_ns) AS last_seen_ns
 		FROM events
 		GROUP BY host_id

@@ -1,6 +1,10 @@
 package graph
 
-import "github.com/fleetdm/edr/server/store"
+import (
+	"context"
+
+	"github.com/fleetdm/edr/server/store"
+)
 
 // ProcessNode is a process with its children and associated network events, used for tree responses.
 type ProcessNode struct {
@@ -28,8 +32,8 @@ func NewQuery(s *store.Store) *Query {
 }
 
 // BuildTree returns a forest of process trees for the given host and time range.
-func (q *Query) BuildTree(hostID string, tr store.TimeRange, limit int) ([]ProcessNode, error) {
-	procs, err := q.store.GetProcessTree(hostID, tr, limit)
+func (q *Query) BuildTree(ctx context.Context, hostID string, tr store.TimeRange, limit int) ([]ProcessNode, error) {
+	procs, err := q.store.GetProcessTree(ctx, hostID, tr, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -38,8 +42,8 @@ func (q *Query) BuildTree(hostID string, tr store.TimeRange, limit int) ([]Proce
 }
 
 // GetDetail returns a process with its network connections and DNS queries.
-func (q *Query) GetDetail(hostID string, pid int, atTimeNs int64) (*ProcessDetail, error) {
-	proc, err := q.store.GetProcessByPID(hostID, pid, atTimeNs)
+func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*ProcessDetail, error) {
+	proc, err := q.store.GetProcessByPID(ctx, hostID, pid, atTimeNs)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +60,7 @@ func (q *Query) GetDetail(hostID string, pid int, atTimeNs int64) (*ProcessDetai
 		tr.ToNs = proc.ForkTimeNs + 30*86400_000_000_000
 	}
 
-	netEvents, err := q.store.GetNetworkEventsForProcess(hostID, pid, tr)
+	netEvents, err := q.store.GetNetworkEventsForProcess(ctx, hostID, pid, tr)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +74,8 @@ func (q *Query) GetDetail(hostID string, pid int, atTimeNs int64) (*ProcessDetai
 }
 
 // ListHosts delegates to the store.
-func (q *Query) ListHosts() ([]store.HostSummary, error) {
-	return q.store.ListHosts()
+func (q *Query) ListHosts(ctx context.Context) ([]store.HostSummary, error) {
+	return q.store.ListHosts(ctx)
 }
 
 // buildForest constructs a tree from a flat list of processes by matching ppid → pid.

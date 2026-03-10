@@ -8,6 +8,7 @@ import (
 
 func TestEnqueueDequeue(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
 	events := []string{
 		`{"event_id":"a","event_type":"exec"}`,
@@ -16,12 +17,12 @@ func TestEnqueueDequeue(t *testing.T) {
 	}
 
 	for _, e := range events {
-		if err := q.Enqueue([]byte(e)); err != nil {
+		if err := q.Enqueue(ctx, []byte(e)); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
 
-	depth, err := q.Depth()
+	depth, err := q.Depth(ctx)
 	if err != nil {
 		t.Fatalf("depth: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestEnqueueDequeue(t *testing.T) {
 		t.Fatalf("expected depth 3, got %d", depth)
 	}
 
-	batch, err := q.DequeueBatch(2)
+	batch, err := q.DequeueBatch(ctx, 2)
 	if err != nil {
 		t.Fatalf("dequeue: %v", err)
 	}
@@ -46,15 +47,15 @@ func TestEnqueueDequeue(t *testing.T) {
 
 func TestMarkUploaded(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
-	for i := range 3 {
-		_ = i
-		if err := q.Enqueue([]byte(`{"event_id":"x"}`)); err != nil {
+	for range 3 {
+		if err := q.Enqueue(ctx, []byte(`{"event_id":"x"}`)); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
 
-	batch, err := q.DequeueBatch(10)
+	batch, err := q.DequeueBatch(ctx, 10)
 	if err != nil {
 		t.Fatalf("dequeue: %v", err)
 	}
@@ -64,11 +65,11 @@ func TestMarkUploaded(t *testing.T) {
 		ids[i] = e.ID
 	}
 
-	if err := q.MarkUploaded(ids[:2]); err != nil {
+	if err := q.MarkUploaded(ctx, ids[:2]); err != nil {
 		t.Fatalf("mark uploaded: %v", err)
 	}
 
-	depth, _ := q.Depth()
+	depth, _ := q.Depth(ctx)
 	if depth != 1 {
 		t.Fatalf("expected depth 1 after marking 2 uploaded, got %d", depth)
 	}
@@ -76,18 +77,19 @@ func TestMarkUploaded(t *testing.T) {
 
 func TestPrune(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
-	if err := q.Enqueue([]byte(`{"event_id":"old"}`)); err != nil {
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"old"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	batch, _ := q.DequeueBatch(1)
-	if err := q.MarkUploaded([]int64{batch[0].ID}); err != nil {
+	batch, _ := q.DequeueBatch(ctx, 1)
+	if err := q.MarkUploaded(ctx, []int64{batch[0].ID}); err != nil {
 		t.Fatalf("mark uploaded: %v", err)
 	}
 
 	// Prune with zero duration should delete the uploaded event.
-	pruned, err := q.Prune(0)
+	pruned, err := q.Prune(ctx, 0)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -98,13 +100,14 @@ func TestPrune(t *testing.T) {
 
 func TestPruneDoesNotDeletePending(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
-	if err := q.Enqueue([]byte(`{"event_id":"pending"}`)); err != nil {
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"pending"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
 	// Prune should not touch non-uploaded events.
-	pruned, err := q.Prune(0)
+	pruned, err := q.Prune(ctx, 0)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -112,7 +115,7 @@ func TestPruneDoesNotDeletePending(t *testing.T) {
 		t.Fatalf("expected 0 pruned, got %d", pruned)
 	}
 
-	depth, _ := q.Depth()
+	depth, _ := q.Depth(ctx)
 	if depth != 1 {
 		t.Fatalf("expected depth 1, got %d", depth)
 	}
@@ -120,16 +123,17 @@ func TestPruneDoesNotDeletePending(t *testing.T) {
 
 func TestPruneRespectsAge(t *testing.T) {
 	q := openTestQueue(t)
+	ctx := t.Context()
 
-	if err := q.Enqueue([]byte(`{"event_id":"recent"}`)); err != nil {
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"recent"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	batch, _ := q.DequeueBatch(1)
-	_ = q.MarkUploaded([]int64{batch[0].ID})
+	batch, _ := q.DequeueBatch(ctx, 1)
+	_ = q.MarkUploaded(ctx, []int64{batch[0].ID})
 
 	// Prune with 1 hour should not delete a just-created event.
-	pruned, err := q.Prune(time.Hour)
+	pruned, err := q.Prune(ctx, time.Hour)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -141,10 +145,10 @@ func TestPruneRespectsAge(t *testing.T) {
 func openTestQueue(t *testing.T) *Queue {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	q, err := Open(dbPath)
+	q, err := Open(t.Context(), dbPath)
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
 	}
-	t.Cleanup(func() { q.Close() })
+	t.Cleanup(func() { _ = q.Close() })
 	return q
 }

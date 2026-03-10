@@ -34,12 +34,13 @@ func TestProcessBatchForkExecExit(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
-	proc, err := s.GetProcessByPID("host-1", 100, 2500)
+	proc, err := s.GetProcessByPID(ctx, "host-1", 100, 2500)
 	require.NoError(t, err)
 	require.NotNil(t, proc, "expected to find process 100")
 
@@ -61,12 +62,13 @@ func TestProcessBatchExecWithoutFork(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
-	proc, err := s.GetProcessByPID("host-2", 200, 5000)
+	proc, err := s.GetProcessByPID(ctx, "host-2", 200, 5000)
 	require.NoError(t, err)
 	require.NotNil(t, proc, "expected to find process 200 (exec-without-fork)")
 	assert.Equal(t, "/usr/bin/cat", proc.Path)
@@ -100,13 +102,14 @@ func TestProcessBatchPIDReuse(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
 	// The second instance should be active at timestamp 5000.
-	proc, err := s.GetProcessByPID("host-3", 300, 5000)
+	proc, err := s.GetProcessByPID(ctx, "host-3", 300, 5000)
 	require.NoError(t, err)
 	require.NotNil(t, proc, "expected to find process 300")
 	assert.Equal(t, "/usr/bin/second", proc.Path)
@@ -136,12 +139,13 @@ func TestProcessBatchOutOfOrderEvents(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.NoError(t, err)
 
-	proc, err := s.GetProcessByPID("host-ooo", 400, 2500)
+	proc, err := s.GetProcessByPID(ctx, "host-ooo", 400, 2500)
 	require.NoError(t, err)
 	require.NotNil(t, proc)
 	assert.Equal(t, "/usr/bin/whoami", proc.Path)
@@ -172,15 +176,16 @@ func TestProcessBatchPartialFailure(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	ctx := t.Context()
+	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
 
-	err = b.ProcessBatch(events)
+	err = b.ProcessBatch(ctx, events)
 	require.Error(t, err, "expected error from partial failure")
 	assert.Contains(t, err.Error(), "1 event(s) failed")
 
 	// The good events should still have been processed.
-	proc, err := s.GetProcessByPID("host-partial", 500, 3000)
+	proc, err := s.GetProcessByPID(ctx, "host-partial", 500, 3000)
 	require.NoError(t, err)
 	require.NotNil(t, proc, "good events should still be processed despite partial failure")
 	assert.Equal(t, "/usr/bin/echo", proc.Path)
@@ -192,13 +197,13 @@ func openTestStore(t *testing.T) *store.Store {
 	if dsn == "" {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
-	s, err := store.New(dsn)
+	s, err := store.New(t.Context(), dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	// Truncate tables to ensure no stale data from previous test runs.
-	_, err = s.DB().Exec("TRUNCATE TABLE processes")
+	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE processes")
 	require.NoError(t, err)
-	_, err = s.DB().Exec("TRUNCATE TABLE events")
+	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
 	require.NoError(t, err)
 	return s
 }

@@ -36,11 +36,11 @@ func main() {
 	log.Println("fleet-edr-agent starting")
 
 	// Open the durable event queue.
-	q, err := queue.Open(*dbPath)
+	q, err := queue.Open(context.Background(), *dbPath)
 	if err != nil {
 		log.Fatalf("open queue: %v", err)
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 
 	// In-memory PID table populated from ESF exec/exit events.
 	pidTable := proctable.New()
@@ -83,7 +83,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pruned, err := q.Prune(*pruneAge)
+				pruned, err := q.Prune(ctx, *pruneAge)
 				if err != nil {
 					log.Printf("prune: %v", err)
 				} else if pruned > 0 {
@@ -99,7 +99,7 @@ func main() {
 	// Give uploader a moment to drain in-flight uploads.
 	time.Sleep(2 * time.Second)
 
-	depth, _ := q.Depth()
+	depth, _ := q.Depth(context.Background())
 	log.Printf("shutdown complete, queue depth: %d", depth)
 	os.Exit(0)
 }
@@ -159,7 +159,7 @@ func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, pt
 			if updateTable {
 				updateProcTable(pt, evt.Data)
 			}
-			if err := q.Enqueue(evt.Data); err != nil {
+			if err := q.Enqueue(ctx, evt.Data); err != nil {
 				log.Printf("enqueue: %v", err)
 			}
 		case errCode := <-recv.Errors():

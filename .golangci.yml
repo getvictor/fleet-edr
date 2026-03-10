@@ -84,6 +84,7 @@ linters:
         - "(*database/sql.DB).Close"
         - "(*database/sql.Stmt).Close"
         - "(*database/sql.Tx).Rollback"
+        - "(*github.com/jmoiron/sqlx.DB).Close"
         # OS operations
         - os.Remove
         - os.RemoveAll

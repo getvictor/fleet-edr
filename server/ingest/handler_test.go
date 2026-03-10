@@ -22,7 +22,7 @@ func TestHealthEndpoint(t *testing.T) {
 	h := &Handler{apiKey: "test"}
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -40,7 +40,7 @@ func TestIngestUnauthorized(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	body := `[{"event_id":"1","host_id":"h","timestamp_ns":1,"event_type":"exec","payload":{}}]`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -55,7 +55,7 @@ func TestIngestInvalidJSON(t *testing.T) {
 	h := &Handler{apiKey: ""}
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString("not json"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString("not json"))
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -71,8 +71,8 @@ func TestIngestMissingFields(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	events := []store.Event{{EventID: "", HostID: "h", TimestampNs: 1, EventType: "exec", Payload: json.RawMessage(`{}`)}}
-	body, _ := json.Marshal(events)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	body, _ := json.Marshal(events) //nolint:errcheck // test helper
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -87,9 +87,9 @@ func TestIngestLargeBatchNearLimit(t *testing.T) {
 	if dsn == "" {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
-	s, err := store.New(dsn)
+	s, err := store.New(t.Context(), dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	h := New(s, "", slog.Default())
 	mux := http.NewServeMux()
@@ -113,7 +113,7 @@ func TestIngestLargeBatchNearLimit(t *testing.T) {
 	require.Less(t, len(body), 10*1024*1024, "test body should be under 10 MB")
 	require.Greater(t, len(body), 1*1024*1024, "test body should be over 1 MB")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -125,9 +125,9 @@ func TestIngestGraphBuilderErrorDoesNotFailIngest(t *testing.T) {
 	if dsn == "" {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
-	s, err := store.New(dsn)
+	s, err := store.New(t.Context(), dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	h := New(s, "", slog.Default())
 	mux := http.NewServeMux()
@@ -149,15 +149,15 @@ func TestIngestGraphBuilderErrorDoesNotFailIngest(t *testing.T) {
 			Payload:   json.RawMessage(`{"child_pid": "not_a_number"}`),
 		},
 	}
-	body, _ := json.Marshal(events)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	body, _ := json.Marshal(events) //nolint:errcheck // test helper
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code, "ingest should succeed even if graph builder fails")
 
 	// Verify events were stored.
-	count, err := s.CountEvents()
+	count, err := s.CountEvents(t.Context())
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, count, int64(2))
 }

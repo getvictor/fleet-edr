@@ -8,6 +8,8 @@ Checks: >-
   performance-*,
   readability-*,
   -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -misc-include-cleaner,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 
 WarningsAsErrors: ''

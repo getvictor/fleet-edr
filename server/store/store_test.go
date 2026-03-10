@@ -32,10 +32,10 @@ func TestInsertAndCount(t *testing.T) {
 		},
 	}
 
-	err := s.InsertEvents(events)
+	err := s.InsertEvents(t.Context(), events)
 	require.NoError(t, err)
 
-	count, err := s.CountEvents()
+	count, err := s.CountEvents(t.Context())
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, count, int64(2))
 }
@@ -51,11 +51,11 @@ func TestInsertDuplicateIsIdempotent(t *testing.T) {
 		Payload:     json.RawMessage(`{"pid":1}`),
 	}
 
-	err := s.InsertEvents([]Event{event})
+	err := s.InsertEvents(t.Context(), []Event{event})
 	require.NoError(t, err)
 
 	// Insert again — should not error.
-	err = s.InsertEvents([]Event{event})
+	err = s.InsertEvents(t.Context(), []Event{event})
 	require.NoError(t, err)
 }
 
@@ -67,8 +67,8 @@ func openTestStore(t *testing.T) *Store {
 		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
 
-	s, err := New(dsn)
+	s, err := New(t.Context(), dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }

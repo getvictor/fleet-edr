@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -60,7 +61,7 @@ type Store struct {
 
 // New opens a connection to MySQL and ensures the schema exists.
 // The dsn should be in go-sql-driver/mysql format, e.g. "user:pass@tcp(127.0.0.1:3306)/edr?parseTime=true".
-func New(dsn string) (*Store, error) {
+func New(ctx context.Context, dsn string) (*Store, error) {
 	if !strings.Contains(dsn, "parseTime") {
 		sep := "?"
 		if strings.Contains(dsn, "?") {
@@ -74,13 +75,13 @@ func New(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 
 	for _, stmt := range schemaStatements {
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("create schema: %w", err)
 		}
@@ -95,18 +96,18 @@ func (s *Store) Close() error {
 }
 
 // InsertEvents upserts a batch of events. Duplicates (by event_id) are ignored.
-func (s *Store) InsertEvents(events []Event) error {
+func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
 
-	tx, err := s.db.Beginx()
+	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(ctx, `
 		INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, event_type, payload)
 		VALUES (?, ?, ?, ?, ?)
 	`)
@@ -120,7 +121,7 @@ func (s *Store) InsertEvents(events []Event) error {
 		if err != nil {
 			return fmt.Errorf("marshal payload for %s: %w", e.EventID, err)
 		}
-		if _, err := stmt.Exec(e.EventID, e.HostID, e.TimestampNs, e.EventType, payloadBytes); err != nil {
+		if _, err := stmt.ExecContext(ctx, e.EventID, e.HostID, e.TimestampNs, e.EventType, payloadBytes); err != nil {
 			return fmt.Errorf("insert %s: %w", e.EventID, err)
 		}
 	}
@@ -129,8 +130,8 @@ func (s *Store) InsertEvents(events []Event) error {
 }
 
 // CountEvents returns the total number of events.
-func (s *Store) CountEvents() (int64, error) {
+func (s *Store) CountEvents(ctx context.Context) (int64, error) {
 	var count int64
-	err := s.db.Get(&count, "SELECT COUNT(*) FROM events")
+	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events")
 	return count, err
 }

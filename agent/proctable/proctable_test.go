@@ -64,22 +64,18 @@ func TestConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Concurrent writers.
-	for i := range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			pt.Update(int32(i), ProcessInfo{Path: "/bin/test"})
-		}()
+	for i := range int32(50) {
+		wg.Go(func() {
+			pt.Update(i, ProcessInfo{Path: "/bin/test"})
+		})
 	}
 
 	// Concurrent readers.
 	for range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			pt.Size()
 			pt.Lookup(1)
-		}()
+		})
 	}
 
 	wg.Wait()

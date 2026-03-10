@@ -1,11 +1,12 @@
 #include "xpc_bridge.h"
 
-#include <xpc/xpc.h>
 #include <dispatch/dispatch.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <xpc/xpc.h>
 
 // Per-connection state.
 typedef struct {

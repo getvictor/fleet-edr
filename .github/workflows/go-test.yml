@@ -25,9 +25,11 @@ jobs:
     name: Agent tests
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: agent/go.mod
 
@@ -41,12 +43,14 @@ jobs:
     env:
       EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Create UI dist placeholder for embed
         run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: server/go.mod
 
@@ -54,13 +58,29 @@ jobs:
         run: brew install mysql@8.4
 
       - name: Start MySQL
-        run: brew services start mysql@8.4
+        run: |
+          MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
+          echo "${MYSQL_PREFIX}/bin" >> "$GITHUB_PATH"
+          "${MYSQL_PREFIX}/bin/mysqld_safe" --datadir="${MYSQL_PREFIX}/data" &
 
       - name: Wait for MySQL
-        run: until mysqladmin ping --silent; do sleep 1; done
+        timeout-minutes: 2
+        run: |
+          MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
+          for i in $(seq 1 60); do
+            if "${MYSQL_PREFIX}/bin/mysqladmin" ping --silent 2>/dev/null; then
+              echo "MySQL is ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MySQL failed to start"
+          exit 1
 
       - name: Create test database
-        run: mysql -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
+        run: |
+          MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
+          "${MYSQL_PREFIX}/bin/mysql" -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
 
       - name: Run tests
         working-directory: server
