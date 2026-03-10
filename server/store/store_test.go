@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,10 +9,10 @@ import (
 )
 
 // These tests require a MySQL 8.4 instance.
-// Set EDR_TEST_DSN to run them (e.g., "root@tcp(127.0.0.1:3306)/edr_test").
+// Set EDR_TEST_DSN to run them (e.g., "root@tcp(127.0.0.1:3306)/edr_test?parseTime=true").
 
 func TestInsertAndCount(t *testing.T) {
-	s := openTestStore(t)
+	s := OpenTestStore(t)
 
 	events := []Event{
 		{
@@ -37,11 +36,11 @@ func TestInsertAndCount(t *testing.T) {
 
 	count, err := s.CountEvents(t.Context())
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, count, int64(2))
+	assert.Equal(t, int64(2), count)
 }
 
 func TestInsertDuplicateIsIdempotent(t *testing.T) {
-	s := openTestStore(t)
+	s := OpenTestStore(t)
 
 	event := Event{
 		EventID:     "dup-test-001",
@@ -59,16 +58,23 @@ func TestInsertDuplicateIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func openTestStore(t *testing.T) *Store {
-	t.Helper()
+func TestFetchUnprocessedAndMarkProcessed(t *testing.T) {
+	s := OpenTestStore(t)
+	ctx := t.Context()
 
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
+	events := []Event{
+		{EventID: "unproc-1", HostID: "host-1", TimestampNs: 1000, EventType: "exec", Payload: json.RawMessage(`{"pid":1}`)},
+		{EventID: "unproc-2", HostID: "host-1", TimestampNs: 2000, EventType: "exec", Payload: json.RawMessage(`{"pid":2}`)},
 	}
+	require.NoError(t, s.InsertEvents(ctx, events))
 
-	s, err := New(t.Context(), dsn)
+	unprocessed, err := s.FetchUnprocessed(ctx, 100)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	assert.Len(t, unprocessed, 2)
+
+	require.NoError(t, s.MarkProcessed(ctx, []string{"unproc-1", "unproc-2"}))
+
+	unprocessed, err = s.FetchUnprocessed(ctx, 100)
+	require.NoError(t, err)
+	assert.Empty(t, unprocessed)
 }

@@ -3,7 +3,6 @@ package processor
 import (
 	"encoding/json"
 	"log/slog"
-	"os"
 	"testing"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 )
 
 func TestProcessOncePicksUpUnprocessedEvents(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	builder := graph.NewBuilder(s, slog.Default())
 	proc := New(s, builder, slog.Default(), time.Second, 500)
 
@@ -66,7 +65,7 @@ func TestProcessOncePicksUpUnprocessedEvents(t *testing.T) {
 }
 
 func TestProcessOnceIsIdempotent(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	builder := graph.NewBuilder(s, slog.Default())
 	proc := New(s, builder, slog.Default(), time.Second, 500)
 
@@ -92,7 +91,7 @@ func TestProcessOnceIsIdempotent(t *testing.T) {
 }
 
 func TestProcessOnceBatchLimit(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	builder := graph.NewBuilder(s, slog.Default())
 	// Small batch size to test batching.
 	proc := New(s, builder, slog.Default(), time.Second, 2)
@@ -121,20 +120,4 @@ func TestProcessOnceBatchLimit(t *testing.T) {
 	unprocessed, err = s.FetchUnprocessed(ctx, 100)
 	require.NoError(t, err)
 	assert.Empty(t, unprocessed, "all events should be processed after second batch")
-}
-
-func openTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
-	}
-	s, err := store.New(t.Context(), dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE processes")
-	require.NoError(t, err)
-	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
-	require.NoError(t, err)
-	return s
 }

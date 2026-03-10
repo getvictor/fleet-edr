@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -83,13 +82,7 @@ func TestIngestMissingFields(t *testing.T) {
 }
 
 func TestIngestLargeBatchNearLimit(t *testing.T) {
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
-	}
-	s, err := store.New(t.Context(), dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	s := store.OpenTestStore(t)
 
 	h := New(s, "", slog.Default())
 	mux := http.NewServeMux()
@@ -121,17 +114,7 @@ func TestIngestLargeBatchNearLimit(t *testing.T) {
 }
 
 func TestIngestDoesNotProcessEvents(t *testing.T) {
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
-	}
-	s, err := store.New(t.Context(), dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-
-	// Truncate to start clean.
-	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
-	require.NoError(t, err)
+	s := store.OpenTestStore(t)
 
 	h := New(s, "", slog.Default())
 	mux := http.NewServeMux()

@@ -38,4 +38,4 @@ jobs:
         run: find agent/xpcbridge \( -name '*.c' -o -name '*.h' \) -exec "$(brew --prefix llvm)/bin/clang-tidy" {} +
 
       - name: Check formatting
-        run: find agent \( -name '*.c' -o -name '*.h' \) -exec clang-format --dry-run --Werror {} +
+        run: find agent \( -name '*.c' -o -name '*.h' \) -exec "$(brew --prefix llvm)/bin/clang-format" --dry-run --Werror {} +
