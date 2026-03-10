@@ -13,14 +13,23 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
   const [detail, setDetail] = useState<ProcessDetailType | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const atTime = node.exec_time_ns || node.fork_time_ns;
+
   useEffect(() => {
-    setLoading(true);
-    const atTime = node.exec_time_ns || node.fork_time_ns;
+    let cancelled = false;
+    setLoading(true); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch pattern
     getProcessDetail(hostId, node.pid, atTime)
-      .then(setDetail)
-      .catch(() => setDetail(null))
-      .finally(() => setLoading(false));
-  }, [hostId, node.pid, node.fork_time_ns, node.exec_time_ns]);
+      .then((result) => {
+        if (!cancelled) setDetail(result);
+      })
+      .catch(() => {
+        if (!cancelled) setDetail(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [hostId, node.pid, atTime]);
 
   return (
     <div style={{ border: "1px solid #ddd", borderRadius: 4, padding: "1rem" }}>
@@ -84,7 +93,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
             <dt>Exit</dt>
             <dd>
               {formatTimestamp(node.exit_time_ns)}
-              {node.exit_code !== undefined ? ` (code ${node.exit_code})` : ""}
+              {node.exit_code !== undefined ? ` (code ${String(node.exit_code)})` : ""}
             </dd>
           </>
         )}

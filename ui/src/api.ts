@@ -21,9 +21,9 @@ async function fetchJSON<T>(path: string): Promise<T> {
 
   const res = await fetch(`${API_BASE}${path}`, { headers });
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 export async function listHosts(): Promise<HostSummary[]> {
@@ -37,7 +37,7 @@ export async function getProcessTree(
   limit = 500
 ): Promise<TreeResponse> {
   return fetchJSON<TreeResponse>(
-    `/hosts/${encodeURIComponent(hostId)}/tree?from=${fromNs}&to=${toNs}&limit=${limit}`
+    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}`
   );
 }
 
@@ -47,6 +47,6 @@ export async function getProcessDetail(
   atNs: number
 ): Promise<ProcessDetail> {
   return fetchJSON<ProcessDetail>(
-    `/hosts/${encodeURIComponent(hostId)}/processes/${pid}?at=${atNs}`
+    `/hosts/${encodeURIComponent(hostId)}/processes/${String(pid)}?at=${String(atNs)}`
   );
 }

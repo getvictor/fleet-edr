@@ -12,8 +12,12 @@ export function HostList() {
   useEffect(() => {
     listHosts()
       .then(setHosts)
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   if (loading) return <p>Loading hosts...</p>;
@@ -33,7 +37,7 @@ export function HostList() {
         {hosts.map((h) => (
           <tr
             key={h.host_id}
-            onClick={() => navigate(`/hosts/${encodeURIComponent(h.host_id)}`)}
+            onClick={() => { void navigate(`/hosts/${encodeURIComponent(h.host_id)}`); }}
             style={{ cursor: "pointer" }}
           >
             <td style={tdStyle}>{h.host_id}</td>
@@ -49,9 +53,9 @@ export function HostList() {
 function formatRelative(ns: number): string {
   const diff = Date.now() - ns / 1_000_000;
   if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+  if (diff < 3_600_000) return `${String(Math.floor(diff / 60_000))}m ago`;
+  if (diff < 86_400_000) return `${String(Math.floor(diff / 3_600_000))}h ago`;
+  return `${String(Math.floor(diff / 86_400_000))}d ago`;
 }
 
 const thStyle: React.CSSProperties = {

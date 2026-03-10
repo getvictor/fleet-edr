@@ -31,13 +31,15 @@ export function ProcessTreeView() {
     const from = now - range.ms * 1_000_000;
 
     getProcessTree(hostId, from, now)
-      .then((res) => setRoots(res.roots))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((res) => { setRoots(res.roots); })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      })
+      .finally(() => { setLoading(false); });
   }, [hostId, rangeIdx]);
 
   useEffect(() => {
-    fetchTree();
+    fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
   }, [fetchTree]);
 
   useEffect(() => {
@@ -59,7 +61,7 @@ export function ProcessTreeView() {
         {TIME_RANGES.map((r, i) => (
           <button
             key={r.label}
-            onClick={() => setRangeIdx(i)}
+            onClick={() => { setRangeIdx(i); }}
             style={{
               marginRight: "0.25rem",
               fontWeight: i === rangeIdx ? "bold" : "normal",
@@ -83,7 +85,7 @@ export function ProcessTreeView() {
         </div>
         {selectedNode && (
           <div style={{ width: 400, flexShrink: 0 }}>
-            <ProcessDetail hostId={hostId} node={selectedNode} onClose={() => setSelectedNode(null)} />
+            <ProcessDetail hostId={hostId} node={selectedNode} onClose={() => { setSelectedNode(null); }} />
           </div>
         )}
       </div>
@@ -102,7 +104,7 @@ interface D3Node {
 function toD3Hierarchy(nodes: ProcessNode[]): D3Node {
   function convert(n: ProcessNode): D3Node {
     return {
-      name: basename(n.path) || `PID ${n.pid}`,
+      name: basename(n.path) || `PID ${String(n.pid)}`,
       pid: n.pid,
       path: n.path,
       data: n,
@@ -166,13 +168,14 @@ function renderTree(
 
   const g = sel
     .append("g")
-    .attr("transform", `translate(${margin - minY},${margin - minX})`);
+    .attr("transform", `translate(${String(margin - minY)},${String(margin - minX)})`);
 
   // Zoom behavior.
-  const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.2, 3]).on("zoom", (event) => {
-    g.attr("transform", event.transform);
+  const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.2, 3]).on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
+    g.attr("transform", String(event.transform));
   });
   sel.call(zoom);
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   sel.call(zoom.transform, d3.zoomIdentity.translate(margin - minY, margin - minX));
 
   // Links.
@@ -197,7 +200,7 @@ function renderTree(
     .data(nodes.filter((n) => n.data.pid !== 0 || roots.length === 1))
     .join("g")
     .attr("class", "node")
-    .attr("transform", (d) => `translate(${d.y},${d.x})`)
+    .attr("transform", (d) => `translate(${String(d.y)},${String(d.x)})`)
     .style("cursor", "pointer")
     .on("click", (_, d) => {
       onSelect(d.data.data);
@@ -217,5 +220,5 @@ function renderTree(
     .attr("dy", 4)
     .attr("font-size", "12px")
     .attr("font-family", "monospace")
-    .text((d) => `${d.data.name} (${d.data.pid})`);
+    .text((d) => `${d.data.name} (${String(d.data.pid)})`);
 }

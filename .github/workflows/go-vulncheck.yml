@@ -30,9 +30,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create UI dist placeholder for embed
+        if: matrix.module == 'server'
+        run: mkdir -p server/ui/dist
+
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ matrix.module }}/go.mod
+          go-version: stable
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest

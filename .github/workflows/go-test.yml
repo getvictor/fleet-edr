@@ -43,6 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create UI dist placeholder for embed
+        run: mkdir -p server/ui/dist
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: server/go.mod
