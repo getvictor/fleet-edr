@@ -10,8 +10,8 @@ interface Props {
 }
 
 export function NetworkConnections({ connections, dnsQueries }: Props) {
-  const hasConnections = connections.length > 0;
-  const hasDNS = dnsQueries.length > 0;
+  const hasConnections = connections?.length > 0;
+  const hasDNS = dnsQueries?.length > 0;
 
   if (!hasConnections && !hasDNS) {
     return <p style={{ fontSize: "0.85rem", color: "#666" }}>No network activity.</p>;

@@ -69,14 +69,18 @@ final class ESFSubscriber: Sendable {
         let process = msg.process.pointee
         var exec = msg.event.exec
 
-        let pid = audit_token_to_pid(process.audit_token)
+        // Use the exec target for PID, path, and code signing — msg.process
+        // is the process *before* the exec (e.g., xpcproxy), while
+        // exec.target is the new executable being loaded.
+        let target = exec.target.pointee
+        let pid = audit_token_to_pid(target.audit_token)
         let ppid = audit_token_to_pid(process.parent_audit_token)
-        let path = String(cString: process.executable.pointee.path.data)
+        let path = String(cString: target.executable.pointee.path.data)
         let args = extractArgs(from: &exec)
-        let uid = audit_token_to_euid(process.audit_token)
-        let gid = audit_token_to_egid(process.audit_token)
+        let uid = audit_token_to_euid(target.audit_token)
+        let gid = audit_token_to_egid(target.audit_token)
 
-        let codeSigning = extractCodeSigning(from: process)
+        let codeSigning = extractCodeSigning(from: target)
 
         let payload = ExecPayload(
             pid: pid,

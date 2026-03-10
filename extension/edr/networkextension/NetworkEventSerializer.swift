@@ -30,24 +30,6 @@ struct NetworkConnectPayload: Codable, Sendable {
     }
 }
 
-struct DNSQueryPayload: Codable, Sendable {
-    let pid: pid_t
-    let path: String
-    let uid: uid_t
-    let queryName: String
-    let queryType: String
-    let responseAddresses: [String]
-    let proto: String
-
-    enum CodingKeys: String, CodingKey {
-        case pid, path, uid
-        case queryName = "query_name"
-        case queryType = "query_type"
-        case responseAddresses = "response_addresses"
-        case proto = "protocol"
-    }
-}
-
 // MARK: - Event envelope (same as ESF extension)
 
 struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {

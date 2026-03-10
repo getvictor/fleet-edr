@@ -86,34 +86,46 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         }
     }
 
-    private func enableContentFilter() {
-        NEFilterManager.shared().loadFromPreferences { error in
+}
+
+private func enableContentFilter() {
+    NEFilterManager.shared().loadFromPreferences { error in
+        if let error {
+            print("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
+            exit(EXIT_FAILURE)
+        }
+        print("Loaded filter preferences, isEnabled=\(NEFilterManager.shared().isEnabled)")
+
+        let filterConfig = NEFilterProviderConfiguration()
+        filterConfig.filterSockets = true
+        filterConfig.filterPackets = false
+
+        NEFilterManager.shared().providerConfiguration = filterConfig
+        NEFilterManager.shared().localizedDescription = "Fleet EDR Network Monitor"
+        NEFilterManager.shared().isEnabled = true
+
+        print("Saving filter preferences...")
+        NEFilterManager.shared().saveToPreferences { error in
             if let error {
-                logger.error("Failed to load filter preferences: \(error.localizedDescription)")
+                print("ERROR: Failed to save filter preferences: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
-
-            let filterConfig = NEFilterProviderConfiguration()
-            filterConfig.filterSockets = true
-            filterConfig.filterPackets = false
-
-            NEFilterManager.shared().providerConfiguration = filterConfig
-            NEFilterManager.shared().localizedDescription = "Fleet EDR Network Monitor"
-            NEFilterManager.shared().isEnabled = true
-
-            NEFilterManager.shared().saveToPreferences { error in
-                if let error {
-                    logger.error("Failed to save filter preferences: \(error.localizedDescription)")
-                    exit(EXIT_FAILURE)
-                }
-                logger.info("Content filter enabled")
-                exit(EXIT_SUCCESS)
-            }
+            print("Content filter enabled successfully")
+            exit(EXIT_SUCCESS)
         }
     }
 }
 
 let action = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"
-let manager = ExtensionManager(action: action)
-manager.run()
-dispatchMain()
+
+if action == "enable-filter" {
+    // Directly enable the content filter without re-activating extensions.
+    // Useful when extensions were activated via db.plist or are already active.
+    print("Enabling content filter...")
+    enableContentFilter()
+    dispatchMain()
+} else {
+    let manager = ExtensionManager(action: action)
+    manager.run()
+    dispatchMain()
+}

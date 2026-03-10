@@ -1,11 +1,14 @@
 import Foundation
 import NetworkExtension
 
-// NEFilterDataProvider lifecycle is managed by the system. The NetworkFilter
-// subclass is instantiated automatically via the NEProviderClasses key in
-// Info.plist. We only need to start the XPC server here so the filter can
-// send events to the agent.
-
+// Start the XPC server so the filter can send events to the agent.
 XPCServer.shared.start()
+
+// Register with the NetworkExtension framework as a system extension provider.
+// This tells nesessionmanager that this process is the provider for the
+// extension points declared in Info.plist (NEProviderClasses).
+autoreleasepool {
+    NEProvider.startSystemExtensionMode()
+}
 
 dispatchMain()
