@@ -3,7 +3,6 @@ package graph
 import (
 	"encoding/json"
 	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +12,7 @@ import (
 )
 
 func TestBuildTree(t *testing.T) {
-	s := openTreeTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 	q := NewQuery(s)
 
@@ -63,7 +62,7 @@ func TestBuildTree(t *testing.T) {
 }
 
 func TestGetDetailWithNetworkEvents(t *testing.T) {
-	s := openTreeTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 	q := NewQuery(s)
 
@@ -149,7 +148,7 @@ func TestBuildForestPIDReuse(t *testing.T) {
 }
 
 func TestGetDetailRunningProcess(t *testing.T) {
-	s := openTreeTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 	q := NewQuery(s)
 
@@ -186,16 +185,4 @@ func TestGetDetailRunningProcess(t *testing.T) {
 	assert.Equal(t, "/usr/sbin/sshd", detail.Process.Path)
 	assert.Nil(t, detail.Process.ExitTimeNs, "process should still be running")
 	assert.Len(t, detail.NetworkConnections, 1, "expected 1 network connection")
-}
-
-func openTreeTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
-	}
-	s, err := store.New(t.Context(), dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	return s
 }

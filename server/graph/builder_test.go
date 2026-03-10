@@ -3,7 +3,6 @@ package graph
 import (
 	"encoding/json"
 	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +12,7 @@ import (
 )
 
 func TestProcessBatchForkExecExit(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 
 	events := []store.Event{
@@ -51,7 +50,7 @@ func TestProcessBatchForkExecExit(t *testing.T) {
 }
 
 func TestProcessBatchExecWithoutFork(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 
 	events := []store.Event{
@@ -75,7 +74,7 @@ func TestProcessBatchExecWithoutFork(t *testing.T) {
 }
 
 func TestProcessBatchPIDReuse(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 
 	events := []store.Event{
@@ -116,7 +115,7 @@ func TestProcessBatchPIDReuse(t *testing.T) {
 }
 
 func TestProcessBatchOutOfOrderEvents(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 
 	// Events arrive in reverse order (exit, exec, fork). ProcessBatch should
@@ -154,7 +153,7 @@ func TestProcessBatchOutOfOrderEvents(t *testing.T) {
 }
 
 func TestProcessBatchPartialFailure(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())
 
 	events := []store.Event{
@@ -189,21 +188,4 @@ func TestProcessBatchPartialFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, proc, "good events should still be processed despite partial failure")
 	assert.Equal(t, "/usr/bin/echo", proc.Path)
-}
-
-func openTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
-	}
-	s, err := store.New(t.Context(), dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	// Truncate tables to ensure no stale data from previous test runs.
-	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE processes")
-	require.NoError(t, err)
-	_, err = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
-	require.NoError(t, err)
-	return s
 }

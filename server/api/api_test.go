@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,13 +15,7 @@ import (
 )
 
 func TestListHostsEmpty(t *testing.T) {
-	s := openTestStore(t)
-	// Truncate tables to ensure no stale data from other test runs.
-	_, truncErr := s.DB().ExecContext(t.Context(), "TRUNCATE TABLE processes")
-	require.NoError(t, truncErr)
-	_, truncErr = s.DB().ExecContext(t.Context(), "TRUNCATE TABLE events")
-	require.NoError(t, truncErr)
-
+	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
 	h := New(q, "", slog.Default())
 
@@ -42,7 +35,7 @@ func TestListHostsEmpty(t *testing.T) {
 }
 
 func TestProcessTreeEmpty(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
 	h := New(q, "", slog.Default())
 
@@ -66,7 +59,7 @@ func TestProcessTreeEmpty(t *testing.T) {
 }
 
 func TestProcessDetailNotFound(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
 	h := New(q, "", slog.Default())
 
@@ -81,7 +74,7 @@ func TestProcessDetailNotFound(t *testing.T) {
 }
 
 func TestAuthRequired(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
 	h := New(q, "secret-key", slog.Default())
 
@@ -105,7 +98,7 @@ func TestAuthRequired(t *testing.T) {
 }
 
 func TestAuthWrongPrefix(t *testing.T) {
-	s := openTestStore(t)
+	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
 	h := New(q, "secret-key", slog.Default())
 
@@ -125,16 +118,4 @@ func TestAuthWrongPrefix(t *testing.T) {
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
-}
-
-func openTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	dsn := os.Getenv("EDR_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
-	}
-	s, err := store.New(t.Context(), dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	return s
 }

@@ -1,5 +1,6 @@
-// fleet-edr-server is a standalone Go service that receives EDR events
-// from agents and stores them in MySQL.
+// fleet-edr-server is the main EDR server that handles event processing,
+// serves the API and UI. Event ingestion can be handled by this server or
+// by a separate fleet-edr-ingest instance.
 package main
 
 import (
@@ -16,15 +17,18 @@ import (
 	"github.com/fleetdm/edr/server/api"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/ingest"
+	"github.com/fleetdm/edr/server/processor"
 	"github.com/fleetdm/edr/server/store"
 	"github.com/fleetdm/edr/server/ui"
 )
 
 func main() {
 	var (
-		addr   = flag.String("addr", ":8080", "Listen address")
-		dsn    = flag.String("dsn", "root@tcp(127.0.0.1:3306)/edr", "MySQL DSN (user:pass@tcp(host:port)/db)")
-		apiKey = flag.String("api-key", "", "Required API key for ingestion (empty = no auth)")
+		addr             = flag.String("addr", ":8080", "Listen address")
+		dsn              = flag.String("dsn", "root@tcp(127.0.0.1:3306)/edr", "MySQL DSN (user:pass@tcp(host:port)/db)")
+		apiKey           = flag.String("api-key", "", "Required API key for ingestion (empty = no auth)")
+		processInterval  = flag.Duration("process-interval", 500*time.Millisecond, "Interval between processing cycles")
+		processBatchSize = flag.Int("process-batch", 500, "Max events per processing cycle")
 	)
 	flag.Parse()
 
@@ -44,7 +48,13 @@ func main() {
 	}
 	defer func() { _ = s.Close() }()
 
+	// Ingest handler (also serves events when running as a single binary).
 	h := ingest.New(s, *apiKey, logger)
+
+	// Graph builder and processor — polls for unprocessed events.
+	builder := graph.NewBuilder(s, logger)
+	proc := processor.New(s, builder, logger, *processInterval, *processBatchSize)
+
 	q := graph.NewQuery(s)
 	a := api.New(q, *apiKey, logger)
 
@@ -84,11 +94,21 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Start the background event processor.
+	procCtx, procCancel := context.WithCancel(ctx)
+	defer procCancel()
+	go func() {
+		if err := proc.Run(procCtx); err != nil {
+			logger.ErrorContext(ctx, "processor", "err", err)
+		}
+	}()
+
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		logger.InfoContext(ctx, "shutting down")
+		procCancel()
 		shutdownCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
