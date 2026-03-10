@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		57B10CFC2F43BC89007F4B27 /* libEndpointSecurity.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */; };
 		57B10D042F43BC89007F4B27 /* com.fleet.edr.extension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		57B10E102F43BC89007F4B27 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 57B10E142F43BC89007F4B27 /* NetworkExtension.framework */; };
+		57B10E112F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -18,6 +20,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 57B10CF82F43BC89007F4B27;
 			remoteInfo = extension;
+		};
+		57B10E122F43BC89007F4B27 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B10CC32F43BBBF007F4B27 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 57B10E172F43BC89007F4B27;
+			remoteInfo = networkextension;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -29,6 +38,7 @@
 			dstSubfolderSpec = 16;
 			files = (
 				57B10D042F43BC89007F4B27 /* com.fleet.edr.extension.systemextension in Embed System Extensions */,
+				57B10E112F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension in Embed System Extensions */,
 			);
 			name = "Embed System Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -39,6 +49,8 @@
 		57B10CCB2F43BBBF007F4B27 /* edr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = edr.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.fleet.edr.extension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libEndpointSecurity.tbd; path = usr/lib/libEndpointSecurity.tbd; sourceTree = SDKROOT; };
+		57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.fleet.edr.networkextension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		57B10E142F43BC89007F4B27 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -55,6 +67,13 @@
 				Info.plist,
 			);
 			target = 57B10CCA2F43BBBF007F4B27 /* edr */;
+		};
+		57B10E152F43BC89007F4B27 /* Exceptions for "networkextension" folder in "networkextension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 57B10E172F43BC89007F4B27 /* networkextension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -75,6 +94,14 @@
 			path = extension;
 			sourceTree = "<group>";
 		};
+		57B10E162F43BC89007F4B27 /* networkextension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				57B10E152F43BC89007F4B27 /* Exceptions for "networkextension" folder in "networkextension" target */,
+			);
+			path = networkextension;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -93,6 +120,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		57B10E192F43BC89007F4B27 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				57B10E102F43BC89007F4B27 /* NetworkExtension.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -101,6 +136,7 @@
 			children = (
 				57B10CCD2F43BBBF007F4B27 /* edr */,
 				57B10CFD2F43BC89007F4B27 /* extension */,
+				57B10E162F43BC89007F4B27 /* networkextension */,
 				57B10CFA2F43BC89007F4B27 /* Frameworks */,
 				57B10CCC2F43BBBF007F4B27 /* Products */,
 			);
@@ -111,6 +147,7 @@
 			children = (
 				57B10CCB2F43BBBF007F4B27 /* edr.app */,
 				57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */,
+				57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -119,6 +156,7 @@
 			isa = PBXGroup;
 			children = (
 				57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */,
+				57B10E142F43BC89007F4B27 /* NetworkExtension.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -139,6 +177,7 @@
 			);
 			dependencies = (
 				57B10D032F43BC89007F4B27 /* PBXTargetDependency */,
+				57B10E1B2F43BC89007F4B27 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				57B10CCD2F43BBBF007F4B27 /* edr */,
@@ -172,6 +211,28 @@
 			productReference = 57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
+		57B10E172F43BC89007F4B27 /* networkextension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 57B10E1E2F43BC89007F4B27 /* Build configuration list for PBXNativeTarget "networkextension" */;
+			buildPhases = (
+				57B10E182F43BC89007F4B27 /* Sources */,
+				57B10E192F43BC89007F4B27 /* Frameworks */,
+				57B10E1A2F43BC89007F4B27 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				57B10E162F43BC89007F4B27 /* networkextension */,
+			);
+			name = networkextension;
+			packageProductDependencies = (
+			);
+			productName = networkextension;
+			productReference = 57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -186,6 +247,9 @@
 						CreatedOnToolsVersion = 26.2;
 					};
 					57B10CF82F43BC89007F4B27 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					57B10E172F43BC89007F4B27 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -206,6 +270,7 @@
 			targets = (
 				57B10CCA2F43BBBF007F4B27 /* edr */,
 				57B10CF82F43BC89007F4B27 /* extension */,
+				57B10E172F43BC89007F4B27 /* networkextension */,
 			);
 		};
 /* End PBXProject section */
@@ -219,6 +284,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		57B10CF72F43BC89007F4B27 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57B10E1A2F43BC89007F4B27 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -242,6 +314,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		57B10E182F43BC89007F4B27 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -249,6 +328,11 @@
 			isa = PBXTargetDependency;
 			target = 57B10CF82F43BC89007F4B27 /* extension */;
 			targetProxy = 57B10D022F43BC89007F4B27 /* PBXContainerItemProxy */;
+		};
+		57B10E1B2F43BC89007F4B27 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 57B10E172F43BC89007F4B27 /* networkextension */;
+			targetProxy = 57B10E122F43BC89007F4B27 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -455,6 +539,54 @@
 			};
 			name = Release;
 		};
+		57B10E1C2F43BC89007F4B27 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = networkextension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = networkextension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lbsm";
+				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.networkextension;
+				PRODUCT_NAME = "$(inherited)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		57B10E1D2F43BC89007F4B27 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = networkextension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = networkextension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lbsm";
+				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.networkextension;
+				PRODUCT_NAME = "$(inherited)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -481,6 +613,15 @@
 			buildConfigurations = (
 				57B10D072F43BC89007F4B27 /* Debug */,
 				57B10D082F43BC89007F4B27 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		57B10E1E2F43BC89007F4B27 /* Build configuration list for PBXNativeTarget "networkextension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57B10E1C2F43BC89007F4B27 /* Debug */,
+				57B10E1D2F43BC89007F4B27 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

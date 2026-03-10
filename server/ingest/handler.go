@@ -5,22 +5,30 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/store"
 )
 
 // Handler serves the event ingestion API.
 type Handler struct {
-	store  *store.Store
-	apiKey string
+	store   *store.Store
+	builder *graph.Builder
+	apiKey  string
+	logger  *slog.Logger
 }
 
-// New creates an ingestion Handler.
-func New(s *store.Store, apiKey string) *Handler {
-	return &Handler{store: s, apiKey: apiKey}
+// New creates an ingestion Handler. The graph builder processes fork/exec/exit
+// events into the processes table after each batch insert.
+func New(s *store.Store, apiKey string, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Handler{store: s, builder: graph.NewBuilder(s, logger), apiKey: apiKey, logger: logger}
 }
 
 // RegisterRoutes registers the API routes on the given mux.
@@ -56,9 +64,14 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.InsertEvents(events); err != nil {
-		log.Printf("ingest: insert error: %v", err)
+		h.logger.Error("insert error", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	// Update the processes table from fork/exec/exit events.
+	if err := h.builder.ProcessBatch(events); err != nil {
+		h.logger.Error("graph builder error", "err", err)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -76,7 +89,7 @@ func (h *Handler) authorize(r *http.Request) bool {
 	}
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
-	if len(auth) < len(prefix) {
+	if !strings.HasPrefix(auth, prefix) {
 		return false
 	}
 	token := auth[len(prefix):]

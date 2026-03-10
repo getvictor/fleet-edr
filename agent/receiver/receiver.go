@@ -1,5 +1,5 @@
-// Package receiver connects to the ESF system extension over XPC and delivers
-// raw JSON event bytes to a Go channel.
+// Package receiver connects to XPC Mach services (ESF extension, network extension)
+// and delivers raw JSON event bytes to Go channels.
 package receiver
 
 /*
@@ -9,12 +9,11 @@ package receiver
 #include "xpc_bridge.h"
 #include <stdlib.h>
 
-extern int bridge_connect_go(const char *service_name);
+extern int bridge_connect_go(const char *service_name, int receiver_id);
 */
 import "C"
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -28,33 +27,43 @@ const (
 	ErrorTerminated            = 3
 )
 
-// Event is a raw JSON event received from the ESF extension.
+// Event is a raw JSON event received from an XPC extension.
 type Event struct {
 	Data []byte
 }
 
-// Receiver manages the XPC connection and delivers events.
+// Receiver manages a single XPC connection and delivers events.
 type Receiver struct {
 	serviceName string
 	events      chan Event
 	errors      chan int
 	mu          sync.Mutex
 	connected   bool
+	handle      int // C bridge connection handle, -1 when not connected
+	receiverID  int // ID used to route C callbacks to this receiver
 }
 
-// global receiver instance referenced by C callbacks.
+// Registry of active receivers, keyed by receiverID.
 var (
-	globalReceiver   *Receiver
-	globalReceiverMu sync.Mutex
+	receivers   = make(map[int]*Receiver)
+	receiversMu sync.Mutex
+	nextID      int
 )
 
 // New creates a Receiver for the given XPC Mach service name.
 // eventBuf controls the channel buffer size.
 func New(serviceName string, eventBuf int) *Receiver {
+	receiversMu.Lock()
+	id := nextID
+	nextID++
+	receiversMu.Unlock()
+
 	return &Receiver{
 		serviceName: serviceName,
 		events:      make(chan Event, eventBuf),
 		errors:      make(chan int, 8),
+		handle:      -1,
+		receiverID:  id,
 	}
 }
 
@@ -68,30 +77,33 @@ func (r *Receiver) Errors() <-chan int {
 	return r.errors
 }
 
-// Connect establishes the XPC connection. Only one Receiver may be connected
-// at a time (the C shim uses global state).
+// Connect establishes the XPC connection. Multiple receivers may be
+// connected simultaneously to different XPC services.
 func (r *Receiver) Connect() error {
-	globalReceiverMu.Lock()
-	if globalReceiver != nil {
-		globalReceiverMu.Unlock()
-		return fmt.Errorf("another receiver is already connected")
-	}
-	globalReceiver = r
-	globalReceiverMu.Unlock()
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.connected {
+		return fmt.Errorf("already connected")
+	}
+
+	// Register in the global map so C callbacks can find us.
+	receiversMu.Lock()
+	receivers[r.receiverID] = r
+	receiversMu.Unlock()
 
 	cName := C.CString(r.serviceName)
 	defer C.free(unsafe.Pointer(cName))
 
-	rc := C.bridge_connect_go(cName)
-	if rc != 0 {
-		globalReceiverMu.Lock()
-		globalReceiver = nil
-		globalReceiverMu.Unlock()
-		return fmt.Errorf("xpc_bridge_connect failed with code %d", rc)
+	handle := int(C.bridge_connect_go(cName, C.int(r.receiverID)))
+	if handle < 0 {
+		receiversMu.Lock()
+		delete(receivers, r.receiverID)
+		receiversMu.Unlock()
+		return fmt.Errorf("xpc_bridge_connect failed for %s", r.serviceName)
 	}
+
+	r.handle = handle
 	r.connected = true
 	return nil
 }
@@ -102,41 +114,21 @@ func (r *Receiver) Disconnect() {
 	defer r.mu.Unlock()
 
 	if r.connected {
-		C.xpc_bridge_disconnect()
+		C.xpc_bridge_disconnect(C.int(r.handle))
 		r.connected = false
+		r.handle = -1
 	}
 
-	globalReceiverMu.Lock()
-	if globalReceiver == r {
-		globalReceiver = nil
-	}
-	globalReceiverMu.Unlock()
-}
-
-// Run connects and blocks until the context is cancelled, logging received events.
-func (r *Receiver) Run(ctx context.Context) error {
-	if err := r.Connect(); err != nil {
-		return err
-	}
-	defer r.Disconnect()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case evt := <-r.events:
-			log.Printf("event received: %s", string(evt.Data))
-		case errCode := <-r.errors:
-			log.Printf("xpc error: %d", errCode)
-		}
-	}
+	receiversMu.Lock()
+	delete(receivers, r.receiverID)
+	receiversMu.Unlock()
 }
 
 // onEvent is called from C (via callbacks.go) when an XPC event message arrives.
-func onEvent(data unsafe.Pointer, length int) {
-	globalReceiverMu.Lock()
-	recv := globalReceiver
-	globalReceiverMu.Unlock()
+func onEvent(receiverID int, data unsafe.Pointer, length int) {
+	receiversMu.Lock()
+	recv := receivers[receiverID]
+	receiversMu.Unlock()
 
 	if recv == nil {
 		return
@@ -147,15 +139,15 @@ func onEvent(data unsafe.Pointer, length int) {
 	select {
 	case recv.events <- Event{Data: buf}:
 	default:
-		log.Println("receiver: event channel full, dropping event")
+		log.Printf("receiver(%s): event channel full, dropping event", recv.serviceName)
 	}
 }
 
 // onError is called from C (via callbacks.go) when an XPC connection error occurs.
-func onError(errorCode int) {
-	globalReceiverMu.Lock()
-	recv := globalReceiver
-	globalReceiverMu.Unlock()
+func onError(receiverID int, errorCode int) {
+	receiversMu.Lock()
+	recv := receivers[receiverID]
+	receiversMu.Unlock()
 
 	if recv == nil {
 		return

@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query"],
       "description": "Type of endpoint security event"
     },
     "payload": {
@@ -27,7 +27,9 @@
         { "$ref": "#/definitions/exec_payload" },
         { "$ref": "#/definitions/fork_payload" },
         { "$ref": "#/definitions/exit_payload" },
-        { "$ref": "#/definitions/open_payload" }
+        { "$ref": "#/definitions/open_payload" },
+        { "$ref": "#/definitions/network_connect_payload" },
+        { "$ref": "#/definitions/dns_query_payload" }
       ]
     }
   },
@@ -83,6 +85,38 @@
         "pid": { "type": "integer" },
         "path": { "type": "string" },
         "flags": { "type": "integer" }
+      }
+    },
+    "network_connect_payload": {
+      "type": "object",
+      "required": ["pid", "protocol", "direction", "remote_address", "remote_port"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": { "type": "string" },
+        "uid": { "type": "integer" },
+        "protocol": { "type": "string", "enum": ["tcp", "udp"] },
+        "direction": { "type": "string", "enum": ["outbound", "inbound"] },
+        "local_address": { "type": "string" },
+        "local_port": { "type": "integer" },
+        "remote_address": { "type": "string" },
+        "remote_port": { "type": "integer" },
+        "remote_hostname": { "type": "string" }
+      }
+    },
+    "dns_query_payload": {
+      "type": "object",
+      "required": ["pid", "query_name", "query_type"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": { "type": "string" },
+        "uid": { "type": "integer" },
+        "query_name": { "type": "string" },
+        "query_type": { "type": "string" },
+        "response_addresses": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "protocol": { "type": "string", "enum": ["udp", "tcp"] }
       }
     }
   }

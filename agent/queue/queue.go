@@ -33,22 +33,16 @@ type Queue struct {
 
 // Open creates or opens a SQLite queue at the given path.
 func Open(dbPath string) (*Queue, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// Set busy_timeout via DSN so it applies to every connection in the pool.
+	dsn := dbPath + "?_pragma=busy_timeout%3d5000&_pragma=journal_mode%3dwal"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Enable WAL mode for crash safety and concurrent reads.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-
-	// Reasonable defaults for an embedded queue.
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
+	// SQLite only supports one writer at a time. Limiting to a single connection
+	// avoids SQLITE_BUSY contention between pooled connections.
+	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

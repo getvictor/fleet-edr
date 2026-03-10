@@ -17,8 +17,11 @@ typedef void (*xpc_bridge_error_fn)(const void *context, int error_code);
 #define XPC_BRIDGE_ERROR_CONNECTION_INTERRUPTED 2
 #define XPC_BRIDGE_ERROR_TERMINATED           3
 
+// Maximum number of simultaneous XPC connections.
+#define XPC_BRIDGE_MAX_CONNECTIONS 4
+
 // Connect to a named XPC Mach service as a client.
-// Returns 0 on success, non-zero on failure.
+// Returns a non-negative connection handle on success, -1 on failure.
 int xpc_bridge_connect(
     const char *service_name,
     const void *context,
@@ -26,7 +29,7 @@ int xpc_bridge_connect(
     xpc_bridge_error_fn on_error
 );
 
-// Disconnect and clean up.
-void xpc_bridge_disconnect(void);
+// Disconnect and clean up a specific connection.
+void xpc_bridge_disconnect(int handle);
 
 #endif

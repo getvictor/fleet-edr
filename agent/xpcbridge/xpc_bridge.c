@@ -2,12 +2,20 @@
 
 #include <xpc/xpc.h>
 #include <dispatch/dispatch.h>
+#include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Internal state for the XPC connection.
-static xpc_connection_t g_connection = NULL;
-static dispatch_queue_t g_queue = NULL;
+// Per-connection state.
+typedef struct {
+    xpc_connection_t connection;
+    dispatch_queue_t queue;
+    int              in_use;
+} xpc_bridge_slot;
+
+static xpc_bridge_slot g_slots[XPC_BRIDGE_MAX_CONNECTIONS];
+static pthread_mutex_t g_slots_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int xpc_bridge_connect(
     const char *service_name,
@@ -15,31 +23,50 @@ int xpc_bridge_connect(
     xpc_bridge_event_fn on_event,
     xpc_bridge_error_fn on_error
 ) {
-    if (g_connection != NULL) {
-        return -1; // Already connected.
+    // Find a free slot.
+    pthread_mutex_lock(&g_slots_mutex);
+    int handle = -1;
+    for (int i = 0; i < XPC_BRIDGE_MAX_CONNECTIONS; i++) {
+        if (!g_slots[i].in_use) {
+            handle = i;
+            g_slots[i].in_use = 1; // Reserve immediately.
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_slots_mutex);
+    if (handle < 0) {
+        return -1; // All slots in use.
     }
 
-    g_queue = dispatch_queue_create("com.fleetdm.edr.xpcbridge", DISPATCH_QUEUE_SERIAL);
-    if (g_queue == NULL) {
+    // Create a unique dispatch queue label per connection.
+    char label[64];
+    snprintf(label, sizeof(label), "com.fleetdm.edr.xpcbridge.%d", handle);
+
+    dispatch_queue_t queue = dispatch_queue_create(label, DISPATCH_QUEUE_SERIAL);
+    if (queue == NULL) {
+        pthread_mutex_lock(&g_slots_mutex);
+        g_slots[handle].in_use = 0;
+        pthread_mutex_unlock(&g_slots_mutex);
         return -1;
     }
 
-    g_connection = xpc_connection_create_mach_service(
-        service_name, g_queue, 0 /* client, not listener */
+    xpc_connection_t conn = xpc_connection_create_mach_service(
+        service_name, queue, 0 /* client, not listener */
     );
-    if (g_connection == NULL) {
-        dispatch_release(g_queue);
-        g_queue = NULL;
+    if (conn == NULL) {
+        dispatch_release(queue);
+        pthread_mutex_lock(&g_slots_mutex);
+        g_slots[handle].in_use = 0;
+        pthread_mutex_unlock(&g_slots_mutex);
         return -1;
     }
 
-    // Capture callback context for use in handlers. The context pointer must
-    // remain valid for the lifetime of the connection.
+    // Capture callback context for use in handlers.
     const void *ctx = context;
     xpc_bridge_event_fn event_cb = on_event;
     xpc_bridge_error_fn error_cb = on_error;
 
-    xpc_connection_set_event_handler(g_connection, ^(xpc_object_t event) {
+    xpc_connection_set_event_handler(conn, ^(xpc_object_t event) {
         xpc_type_t type = xpc_get_type(event);
 
         if (type == XPC_TYPE_ERROR) {
@@ -77,26 +104,43 @@ int xpc_bridge_connect(
         }
     });
 
-    xpc_connection_activate(g_connection);
+    xpc_connection_activate(conn);
 
     // Send a handshake message to trigger the lazy Mach port connection.
-    // Without this, the listener never sees the peer because XPC client
-    // connections only bootstrap on the first send.
     xpc_object_t hello = xpc_dictionary_create_empty();
     xpc_dictionary_set_string(hello, "type", "hello");
-    xpc_connection_send_message(g_connection, hello);
+    xpc_connection_send_message(conn, hello);
     xpc_release(hello);
 
-    return 0;
+    g_slots[handle].connection = conn;
+    g_slots[handle].queue = queue;
+
+    return handle;
 }
 
-void xpc_bridge_disconnect(void) {
-    if (g_connection != NULL) {
-        xpc_connection_cancel(g_connection);
-        g_connection = NULL;
+void xpc_bridge_disconnect(int handle) {
+    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS) {
+        return;
     }
-    if (g_queue != NULL) {
-        dispatch_release(g_queue);
-        g_queue = NULL;
+
+    pthread_mutex_lock(&g_slots_mutex);
+    if (!g_slots[handle].in_use) {
+        pthread_mutex_unlock(&g_slots_mutex);
+        return;
+    }
+
+    xpc_connection_t conn = g_slots[handle].connection;
+    dispatch_queue_t queue = g_slots[handle].queue;
+    g_slots[handle].connection = NULL;
+    g_slots[handle].queue = NULL;
+    g_slots[handle].in_use = 0;
+    pthread_mutex_unlock(&g_slots_mutex);
+
+    if (conn != NULL) {
+        xpc_connection_cancel(conn);
+        xpc_release(conn);
+    }
+    if (queue != NULL) {
+        dispatch_release(queue);
     }
 }
