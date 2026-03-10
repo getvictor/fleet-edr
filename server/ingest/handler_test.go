@@ -135,7 +135,7 @@ func TestIngestDoesNotProcessEvents(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Events should be stored but NOT processed (processed = 0).
-	unprocessed, err := s.FetchUnprocessed(t.Context(), 100)
+	count, err := s.CountUnprocessed(t.Context())
 	require.NoError(t, err)
-	assert.Len(t, unprocessed, 1, "ingested events should remain unprocessed")
+	assert.Equal(t, int64(1), count, "ingested events should remain unprocessed")
 }

@@ -42,18 +42,18 @@ func TestProcessOncePicksUpUnprocessedEvents(t *testing.T) {
 	err := s.InsertEvents(ctx, events)
 	require.NoError(t, err)
 
-	// Verify events are unprocessed.
-	unprocessed, err := s.FetchUnprocessed(ctx, 100)
+	// Verify events are unprocessed (read-only check, does not claim).
+	count, err := s.CountUnprocessed(ctx)
 	require.NoError(t, err)
-	assert.Len(t, unprocessed, 3)
+	assert.Equal(t, int64(3), count)
 
 	// Run one processing cycle.
 	proc.ProcessOnce(ctx)
 
 	// Events should now be marked as processed.
-	unprocessed, err = s.FetchUnprocessed(ctx, 100)
+	count, err = s.CountUnprocessed(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, unprocessed, "all events should be processed")
+	assert.Equal(t, int64(0), count, "all events should be processed")
 
 	// Process tree should be built.
 	process, err := s.GetProcessByPID(ctx, "host-proc", 100, 2500)
@@ -85,9 +85,9 @@ func TestProcessOnceIsIdempotent(t *testing.T) {
 	proc.ProcessOnce(ctx)
 	proc.ProcessOnce(ctx)
 
-	unprocessed, err := s.FetchUnprocessed(ctx, 100)
+	count, err := s.CountUnprocessed(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, unprocessed)
+	assert.Equal(t, int64(0), count)
 }
 
 func TestProcessOnceBatchLimit(t *testing.T) {
@@ -111,13 +111,13 @@ func TestProcessOnceBatchLimit(t *testing.T) {
 
 	// First cycle processes only 2.
 	proc.ProcessOnce(ctx)
-	unprocessed, err := s.FetchUnprocessed(ctx, 100)
+	count, err := s.CountUnprocessed(ctx)
 	require.NoError(t, err)
-	assert.Len(t, unprocessed, 1, "one event should remain after first batch")
+	assert.Equal(t, int64(1), count, "one event should remain after first batch")
 
 	// Second cycle processes the remaining 1.
 	proc.ProcessOnce(ctx)
-	unprocessed, err = s.FetchUnprocessed(ctx, 100)
+	count, err = s.CountUnprocessed(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, unprocessed, "all events should be processed after second batch")
+	assert.Equal(t, int64(0), count, "all events should be processed after second batch")
 }

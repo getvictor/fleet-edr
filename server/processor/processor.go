@@ -65,16 +65,20 @@ func (p *Processor) processOnce(ctx context.Context) {
 		return
 	}
 
-	if err := p.builder.ProcessBatch(ctx, events); err != nil {
-		p.logger.WarnContext(ctx, "graph builder partial failure", "err", err)
-		// Continue to mark as processed — the builder logs individual failures
-		// and we don't want to reprocess the same broken events forever.
-	}
-
 	eventIDs := make([]string, len(events))
 	for i, e := range events {
 		eventIDs[i] = e.EventID
 	}
+
+	if err := p.builder.ProcessBatch(ctx, events); err != nil {
+		p.logger.WarnContext(ctx, "graph builder failure, will retry batch", "err", err)
+		// Unclaim events so they can be retried in a future cycle.
+		if unclaimErr := p.store.UnclaimEvents(ctx, eventIDs); unclaimErr != nil {
+			p.logger.ErrorContext(ctx, "unclaim events after builder failure", "err", unclaimErr)
+		}
+		return
+	}
+
 	if err := p.store.MarkProcessed(ctx, eventIDs); err != nil {
 		p.logger.ErrorContext(ctx, "mark events processed", "err", err)
 	}

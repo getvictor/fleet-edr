@@ -4,10 +4,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -24,7 +25,7 @@ var schemaStatements = []string{
 		INDEX idx_events_host_id (host_id),
 		INDEX idx_events_type (event_type),
 		INDEX idx_events_timestamp (timestamp_ns),
-		INDEX idx_events_processed (processed, created_at)
+		INDEX idx_events_processed (processed, host_id, timestamp_ns)
 	)`,
 	`CREATE TABLE IF NOT EXISTS processes (
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -92,11 +93,13 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 	// Run idempotent migrations for schema changes to existing tables.
 	for _, m := range migrations {
 		if _, err := db.ExecContext(ctx, m); err != nil {
-			// Ignore "Duplicate column" errors for already-applied migrations.
-			if !strings.Contains(err.Error(), "Duplicate column") && !strings.Contains(err.Error(), "Duplicate key name") {
-				db.Close()
-				return nil, fmt.Errorf("migration: %w", err)
+			var mysqlErr *mysql.MySQLError
+			// 1060 = duplicate column, 1061 = duplicate key name — already applied.
+			if errors.As(err, &mysqlErr) && (mysqlErr.Number == 1060 || mysqlErr.Number == 1061) {
+				continue
 			}
+			db.Close()
+			return nil, fmt.Errorf("migration: %w", err)
 		}
 	}
 
@@ -106,7 +109,7 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 // migrations are idempotent ALTER TABLE statements applied after initial schema creation.
 var migrations = []string{
 	`ALTER TABLE events ADD COLUMN processed TINYINT(1) NOT NULL DEFAULT 0`,
-	`ALTER TABLE events ADD INDEX idx_events_processed (processed, created_at)`,
+	`ALTER TABLE events ADD INDEX idx_events_processed (processed, host_id, timestamp_ns)`,
 }
 
 // Close closes the database connection.
@@ -155,23 +158,65 @@ func (s *Store) CountEvents(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-// FetchUnprocessed returns up to limit events that have not yet been processed by the graph builder.
+// CountUnprocessed returns the number of events that have not been fully processed (state 0 or 2).
+// This is a read-only query useful for monitoring and testing.
+func (s *Store) CountUnprocessed(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events WHERE processed != 1")
+	return count, err
+}
+
+// FetchUnprocessed atomically claims up to limit unprocessed events for the graph builder.
+// It uses SELECT ... FOR UPDATE SKIP LOCKED to prevent concurrent processors from claiming the same rows,
+// and transitions events from state 0 (unprocessed) to 2 (processing) within the same transaction.
 // Events are ordered by host_id and timestamp to ensure correct per-host ordering.
 func (s *Store) FetchUnprocessed(ctx context.Context, limit int) ([]Event, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx for fetch unprocessed: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+
 	var events []Event
-	err := s.db.SelectContext(ctx, &events, `
+	err = tx.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, event_type, payload
 		FROM events
 		WHERE processed = 0
 		ORDER BY host_id, timestamp_ns
-		LIMIT ?`, limit)
+		LIMIT ?
+		FOR UPDATE SKIP LOCKED`, limit)
 	if err != nil {
-		return nil, fmt.Errorf("fetch unprocessed: %w", err)
+		return nil, fmt.Errorf("fetch unprocessed select: %w", err)
+	}
+
+	if len(events) == 0 {
+		return events, tx.Commit()
+	}
+
+	eventIDs := make([]string, len(events))
+	for i, e := range events {
+		eventIDs[i] = e.EventID
+	}
+
+	claimQuery, args, err := sqlx.In("UPDATE events SET processed = 2 WHERE event_id IN (?)", eventIDs)
+	if err != nil {
+		return nil, fmt.Errorf("fetch unprocessed build claim query: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, claimQuery, args...); err != nil {
+		return nil, fmt.Errorf("fetch unprocessed claim: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit fetch unprocessed tx: %w", err)
 	}
 	return events, nil
 }
 
-// MarkProcessed marks the given events as processed by the graph builder.
+// MarkProcessed marks the given events as fully processed (state 2 -> 1) by the graph builder.
 func (s *Store) MarkProcessed(ctx context.Context, eventIDs []string) error {
 	if len(eventIDs) == 0 {
 		return nil
@@ -182,6 +227,22 @@ func (s *Store) MarkProcessed(ctx context.Context, eventIDs []string) error {
 	}
 	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("mark processed: %w", err)
+	}
+	return nil
+}
+
+// UnclaimEvents transitions events from processing (state 2) back to unprocessed (state 0)
+// so they can be retried by a future processing cycle.
+func (s *Store) UnclaimEvents(ctx context.Context, eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In("UPDATE events SET processed = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
+	if err != nil {
+		return fmt.Errorf("unclaim events build query: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("unclaim events: %w", err)
 	}
 	return nil
 }
