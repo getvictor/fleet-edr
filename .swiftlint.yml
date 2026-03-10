@@ -1,0 +1,48 @@
+included:
+  - extension/edr
+
+excluded:
+  - extension/edr/build
+
+opt_in_rules:
+  - closure_body_length
+  - discouraged_optional_boolean
+  - empty_count
+  - explicit_init
+  - fatal_error_message
+  - force_cast
+  - force_try
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - overridden_super_call
+  - private_action
+  - private_outlet
+  - strong_iboutlet
+  - toggle_bool
+  - unavailable_function
+  - unowned_variable_capture
+  - vertical_whitespace_closing_braces
+
+analyzer_rules:
+  - unused_import
+
+disabled_rules: []
+
+identifier_name:
+  min_length: 1
+
+line_length:
+  warning: 150
+  error: 200
+
+file_length:
+  warning: 500
+  error: 1000
+
+type_body_length:
+  warning: 300
+  error: 500
+
+function_body_length:
+  warning: 60
+  error: 100

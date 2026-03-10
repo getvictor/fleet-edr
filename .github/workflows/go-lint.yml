@@ -1,0 +1,42 @@
+name: Go lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "server/**"
+      - ".golangci.yml"
+      - ".github/workflows/go-lint.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "server/**"
+      - ".golangci.yml"
+      - ".github/workflows/go-lint.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [agent, server]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11
+          working-directory: ${{ matrix.module }}

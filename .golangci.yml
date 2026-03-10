@@ -1,0 +1,123 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - errcheck
+    - errorlint
+    - exhaustive
+    - exptostd
+    - forbidigo
+    - gosec
+    - govet
+    - ineffassign
+    - intrange
+    - makezero
+    - modernize
+    - musttag
+    - nilnesserr
+    - noctx
+    - revive
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unused
+    - usetesting
+
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: "^print$"
+          msg: "use structured logging instead of built-in print"
+        - pattern: "^println$"
+          msg: "use structured logging instead of built-in println"
+        - pattern: "^slog\\.(Debug|Info|Warn|Error)"
+          pkg: "^log/slog$"
+          msg: "Don't use the default logger. Use a specific *slog.Logger instance."
+        - pattern: "slog\\.Logger\\.(Debug|Info|Warn|Error)$"
+          msg: "use DebugContext/InfoContext/WarnContext/ErrorContext instead"
+      analyze-types: true
+
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: "use stdlib errors.New / fmt.Errorf with the %w verb"
+
+    govet:
+      enable:
+        - nilness
+
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+      disable-default-exclusions: false
+      exclude-functions:
+        # fmt package
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+        # Close methods
+        - "(io.Closer).Close"
+        - "(io.ReadCloser).Close"
+        - "(io.WriteCloser).Close"
+        - "(*os.File).Close"
+        - "(*database/sql.Rows).Close"
+        - "(*database/sql.DB).Close"
+        - "(*database/sql.Stmt).Close"
+        - "(*database/sql.Tx).Rollback"
+        # OS operations
+        - os.Remove
+        - os.RemoveAll
+        - os.Setenv
+        - os.Unsetenv
+
+    gosec:
+      excludes:
+        - G104 # Covered by errcheck linter
+      config:
+        G306: "0644"
+
+    staticcheck:
+      checks:
+        - "all"
+        - "-SA9003" # Empty body in an if or else branch
+        - "-ST1000" # Incorrect or missing package comment
+
+    revive:
+      severity: "warning"
+      confidence: 0.8
+      rules:
+        - name: dot-imports
+        - name: error-return
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+  exclusions:
+    generated: strict

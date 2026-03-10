@@ -7,6 +7,7 @@ private let logger = Logger(subsystem: "com.fleet.edr.extension", category: "ESF
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
 final class ESFSubscriber: Sendable {
+    // swiftlint:disable:next implicitly_unwrapped_optional
     private nonisolated(unsafe) var client: OpaquePointer!
     private let serializer = EventSerializer()
     nonisolated(unsafe) var onEvent: ((Data) -> Void)?
@@ -31,7 +32,7 @@ final class ESFSubscriber: Sendable {
             ES_EVENT_TYPE_NOTIFY_EXEC,
             ES_EVENT_TYPE_NOTIFY_FORK,
             ES_EVENT_TYPE_NOTIFY_EXIT,
-            ES_EVENT_TYPE_NOTIFY_OPEN,
+            ES_EVENT_TYPE_NOTIFY_OPEN
         ]
 
         let subResult = es_subscribe(client, events, UInt32(events.count))

@@ -1,0 +1,34 @@
+name: Swift lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extension/**"
+      - ".swiftlint.yml"
+      - ".github/workflows/swift-lint.yml"
+  pull_request:
+    paths:
+      - "extension/**"
+      - ".swiftlint.yml"
+      - ".github/workflows/swift-lint.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swiftlint:
+    name: SwiftLint
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Run SwiftLint
+        run: swiftlint lint --strict

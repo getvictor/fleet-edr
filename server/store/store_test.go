@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests require a MySQL 8.0.45 instance.
+// These tests require a MySQL 8.4 instance.
 // Set EDR_TEST_DSN to run them (e.g., "root@tcp(127.0.0.1:3306)/edr_test").
 
 func TestInsertAndCount(t *testing.T) {

@@ -1,0 +1,15 @@
+Checks: >-
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  clang-analyzer-security.*,
+  misc-*,
+  performance-*,
+  readability-*,
+  -readability-magic-numbers,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+WarningsAsErrors: ''
+
+HeaderFilterRegex: '.*'

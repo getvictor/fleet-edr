@@ -1,0 +1,64 @@
+name: Go test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "server/**"
+      - ".github/workflows/go-test.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "server/**"
+      - ".github/workflows/go-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-test:
+    name: Agent tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+
+      - name: Run tests
+        working-directory: agent
+        run: go test -race -count=1 -timeout=10m ./...
+
+  server-test:
+    name: Server tests
+    runs-on: macos-latest
+    env:
+      EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Install MySQL 8.4
+        run: brew install mysql@8.4
+
+      - name: Start MySQL
+        run: brew services start mysql@8.4
+
+      - name: Wait for MySQL
+        run: until mysqladmin ping --silent; do sleep 1; done
+
+      - name: Create test database
+        run: mysql -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
+
+      - name: Run tests
+        working-directory: server
+        run: go test -race -count=1 -timeout=10m ./...

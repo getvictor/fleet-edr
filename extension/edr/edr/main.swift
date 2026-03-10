@@ -85,7 +85,6 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
             exit(EXIT_FAILURE)
         }
     }
-
 }
 
 private func enableContentFilter() {

@@ -53,6 +53,7 @@ final class NetworkFilter: NEFilterDataProvider {
         if let token = flow.sourceAppAuditToken {
             token.withUnsafeBytes { buf in
                 guard buf.count >= MemoryLayout<audit_token_t>.size else { return }
+                // swiftlint:disable:next force_unwrapping
                 let ptr = buf.baseAddress!.assumingMemoryBound(to: audit_token_t.self)
                 pid = audit_token_to_pid(ptr.pointee)
                 uid = audit_token_to_euid(ptr.pointee)

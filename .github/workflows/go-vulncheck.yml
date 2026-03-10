@@ -1,0 +1,42 @@
+name: Go vulncheck
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "server/**"
+      - ".github/workflows/go-vulncheck.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "server/**"
+      - ".github/workflows/go-vulncheck.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [agent, server]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        working-directory: ${{ matrix.module }}
+        run: govulncheck ./...
