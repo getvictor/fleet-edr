@@ -12,18 +12,14 @@
 typedef struct {
     xpc_connection_t connection;
     dispatch_queue_t queue;
-    int              in_use;
+    int in_use;
 } xpc_bridge_slot;
 
 static xpc_bridge_slot g_slots[XPC_BRIDGE_MAX_CONNECTIONS];
 static pthread_mutex_t g_slots_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-int xpc_bridge_connect(
-    const char *service_name,
-    const void *context,
-    xpc_bridge_event_fn on_event,
-    xpc_bridge_error_fn on_error
-) {
+int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge_event_fn on_event,
+                       xpc_bridge_error_fn on_error) {
     // Find a free slot.
     pthread_mutex_lock(&g_slots_mutex);
     int handle = -1;
@@ -51,8 +47,7 @@ int xpc_bridge_connect(
         return -1;
     }
 
-    xpc_connection_t conn = xpc_connection_create_mach_service(
-        service_name, queue, 0 /* client, not listener */
+    xpc_connection_t conn = xpc_connection_create_mach_service(service_name, queue, 0 /* client, not listener */
     );
     if (conn == NULL) {
         dispatch_release(queue);
@@ -68,41 +63,41 @@ int xpc_bridge_connect(
     xpc_bridge_error_fn error_cb = on_error;
 
     xpc_connection_set_event_handler(conn, ^(xpc_object_t event) {
-        xpc_type_t type = xpc_get_type(event);
+      xpc_type_t type = xpc_get_type(event);
 
-        if (type == XPC_TYPE_ERROR) {
-            if (event == XPC_ERROR_CONNECTION_INVALID) {
-                if (error_cb) {
-                    error_cb(ctx, XPC_BRIDGE_ERROR_CONNECTION_INVALID);
-                }
-            } else if (event == XPC_ERROR_CONNECTION_INTERRUPTED) {
-                if (error_cb) {
-                    error_cb(ctx, XPC_BRIDGE_ERROR_CONNECTION_INTERRUPTED);
-                }
-            } else if (event == XPC_ERROR_TERMINATION_IMMINENT) {
-                if (error_cb) {
-                    error_cb(ctx, XPC_BRIDGE_ERROR_TERMINATED);
-                }
-            }
-            return;
-        }
+      if (type == XPC_TYPE_ERROR) {
+          if (event == XPC_ERROR_CONNECTION_INVALID) {
+              if (error_cb) {
+                  error_cb(ctx, XPC_BRIDGE_ERROR_CONNECTION_INVALID);
+              }
+          } else if (event == XPC_ERROR_CONNECTION_INTERRUPTED) {
+              if (error_cb) {
+                  error_cb(ctx, XPC_BRIDGE_ERROR_CONNECTION_INTERRUPTED);
+              }
+          } else if (event == XPC_ERROR_TERMINATION_IMMINENT) {
+              if (error_cb) {
+                  error_cb(ctx, XPC_BRIDGE_ERROR_TERMINATED);
+              }
+          }
+          return;
+      }
 
-        if (type == XPC_TYPE_DICTIONARY) {
-            // The extension sends events as a dictionary with a "data" key
-            // containing raw JSON bytes.
-            size_t data_len = 0;
-            const void *data = xpc_dictionary_get_data(event, "data", &data_len);
-            if (data != NULL && data_len > 0 && event_cb) {
-                // Copy the data before invoking the callback so the caller
-                // does not depend on XPC message lifetime.
-                uint8_t *buf = malloc(data_len);
-                if (buf != NULL) {
-                    memcpy(buf, data, data_len);
-                    event_cb(ctx, buf, data_len);
-                    free(buf);
-                }
-            }
-        }
+      if (type == XPC_TYPE_DICTIONARY) {
+          // The extension sends events as a dictionary with a "data" key
+          // containing raw JSON bytes.
+          size_t data_len = 0;
+          const void *data = xpc_dictionary_get_data(event, "data", &data_len);
+          if (data != NULL && data_len > 0 && event_cb) {
+              // Copy the data before invoking the callback so the caller
+              // does not depend on XPC message lifetime.
+              uint8_t *buf = malloc(data_len);
+              if (buf != NULL) {
+                  memcpy(buf, data, data_len);
+                  event_cb(ctx, buf, data_len);
+                  free(buf);
+              }
+          }
+      }
     });
 
     xpc_connection_activate(conn);
