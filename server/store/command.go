@@ -92,7 +92,7 @@ func (s *Store) UpdateCommandStatus(ctx context.Context, id int64, status string
 		res, err = s.db.ExecContext(ctx,
 			"UPDATE commands SET status = ?, completed_at = NOW(), result = ? WHERE id = ?", status, result, id)
 	default:
-		res, err = s.db.ExecContext(ctx, "UPDATE commands SET status = ? WHERE id = ?", status, id)
+		return fmt.Errorf("invalid command status: %q", status)
 	}
 
 	if err != nil {

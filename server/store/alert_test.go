@@ -28,7 +28,7 @@ func TestInsertAndGetAlert(t *testing.T) {
 		Severity:    "high",
 		Title:       "Suspicious exec from temp path",
 		Description: "python3 → /bin/sh → /tmp/payload",
-		ProcessID:   &procID,
+		ProcessID:   procID,
 	}
 
 	id, created, err := s.InsertAlert(ctx, alert, []string{"evt-1"})
@@ -43,7 +43,7 @@ func TestInsertAndGetAlert(t *testing.T) {
 	assert.Equal(t, "suspicious_exec", got.RuleID)
 	assert.Equal(t, "high", got.Severity)
 	assert.Equal(t, "open", got.Status)
-	assert.Equal(t, &procID, got.ProcessID)
+	assert.Equal(t, procID, got.ProcessID)
 
 	eventIDs, err := s.GetAlertEventIDs(ctx, id)
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestInsertAlertDeduplication(t *testing.T) {
 		RuleID:    "suspicious_exec",
 		Severity:  "high",
 		Title:     "Alert 1",
-		ProcessID: &procID,
+		ProcessID: procID,
 	}
 
 	firstID, created, err := s.InsertAlert(ctx, alert, nil)
@@ -86,9 +86,9 @@ func TestListAlerts(t *testing.T) {
 	procIDHigh, err := s.InsertProcess(ctx, Process{HostID: "host-a", PID: 200, PPID: 1, Path: "/bin/sh", ForkTimeNs: 2000})
 	require.NoError(t, err)
 
-	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r1", Severity: "low", Title: "Low alert", ProcessID: &procIDLow}, nil)
+	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r1", Severity: "low", Title: "Low alert", ProcessID: procIDLow}, nil)
 	require.NoError(t, err)
-	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r2", Severity: "high", Title: "High alert", ProcessID: &procIDHigh}, nil)
+	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r2", Severity: "high", Title: "High alert", ProcessID: procIDHigh}, nil)
 	require.NoError(t, err)
 
 	t.Run("all alerts", func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestUpdateAlertStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	id, _, err := s.InsertAlert(ctx, Alert{
-		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test", ProcessID: &procID,
+		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test", ProcessID: procID,
 	}, nil)
 	require.NoError(t, err)
 
@@ -174,7 +174,7 @@ func TestGetAlertsByProcessID(t *testing.T) {
 	procID, err := s.InsertProcess(ctx, Process{HostID: "host-a", PID: 100, PPID: 1, Path: "/bin/sh", ForkTimeNs: 1000})
 	require.NoError(t, err)
 
-	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Alert", ProcessID: &procID}, nil)
+	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Alert", ProcessID: procID}, nil)
 	require.NoError(t, err)
 
 	alerts, err := s.GetAlertsByProcessID(ctx, procID)
@@ -195,9 +195,9 @@ func TestCountAlerts(t *testing.T) {
 	procIDOther, err := s.InsertProcess(ctx, Process{HostID: "host-a", PID: 200, PPID: 1, Path: "/bin/sh", ForkTimeNs: 2000})
 	require.NoError(t, err)
 
-	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r1", Severity: "high", Title: "A1", ProcessID: &procID}, nil)
+	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r1", Severity: "high", Title: "A1", ProcessID: procID}, nil)
 	require.NoError(t, err)
-	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r2", Severity: "low", Title: "A2", ProcessID: &procIDOther}, nil)
+	_, _, err = s.InsertAlert(ctx, Alert{HostID: "host-a", RuleID: "r2", Severity: "low", Title: "A2", ProcessID: procIDOther}, nil)
 	require.NoError(t, err)
 
 	count, err := s.CountAlerts(ctx, AlertFilter{})

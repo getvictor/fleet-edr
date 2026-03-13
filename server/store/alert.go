@@ -18,7 +18,7 @@ type Alert struct {
 	Severity    string     `db:"severity" json:"severity"`
 	Title       string     `db:"title" json:"title"`
 	Description string     `db:"description" json:"description"`
-	ProcessID   *int64     `db:"process_id" json:"process_id,omitempty"`
+	ProcessID   int64      `db:"process_id" json:"process_id"`
 	Status      string     `db:"status" json:"status"`
 	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
@@ -58,6 +58,14 @@ func (s *Store) InsertAlert(ctx context.Context, a Alert, eventIDs []string) (in
 				a.HostID, a.RuleID, a.ProcessID,
 			); lookupErr != nil {
 				return 0, false, fmt.Errorf("lookup duplicate alert: %w", lookupErr)
+			}
+			// Link any new event IDs to the existing alert (ignore duplicates).
+			for _, eid := range eventIDs {
+				if _, linkErr := tx.ExecContext(ctx,
+					"INSERT IGNORE INTO alert_events (alert_id, event_id) VALUES (?, ?)", existingID, eid,
+				); linkErr != nil {
+					return 0, false, fmt.Errorf("link event to existing alert (%d, %s): %w", existingID, eid, linkErr)
+				}
 			}
 			if commitErr := tx.Commit(); commitErr != nil {
 				return 0, false, fmt.Errorf("commit duplicate alert lookup: %w", commitErr)

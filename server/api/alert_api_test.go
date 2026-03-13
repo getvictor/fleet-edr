@@ -49,7 +49,7 @@ func TestListAlertsWithFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, err = s.InsertAlert(ctx, store.Alert{
-		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "High alert", ProcessID: &procID,
+		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "High alert", ProcessID: procID,
 	}, nil)
 	require.NoError(t, err)
 
@@ -88,7 +88,7 @@ func TestGetAlertDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	alertID, _, err := s.InsertAlert(ctx, store.Alert{
-		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test alert", Description: "desc", ProcessID: &procID,
+		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test alert", Description: "desc", ProcessID: procID,
 	}, []string{"evt-1"})
 	require.NoError(t, err)
 
@@ -122,7 +122,7 @@ func TestUpdateAlertStatusAPI(t *testing.T) {
 	require.NoError(t, err)
 
 	alertID, _, err := s.InsertAlert(ctx, store.Alert{
-		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test", ProcessID: &procID,
+		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test", ProcessID: procID,
 	}, nil)
 	require.NoError(t, err)
 

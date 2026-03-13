@@ -53,7 +53,7 @@ var schemaStatements = []string{
 		severity     ENUM('low', 'medium', 'high', 'critical') NOT NULL,
 		title        VARCHAR(512) NOT NULL,
 		description  TEXT         NOT NULL,
-		process_id   BIGINT,
+		process_id   BIGINT       NOT NULL,
 		status       ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
 		created_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		updated_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),

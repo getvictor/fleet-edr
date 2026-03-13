@@ -197,6 +197,23 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	return &proc, nil
 }
 
+// GetChildProcesses returns processes whose PPID matches the given PID and were forked within the given time range.
+func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, tr TimeRange) ([]Process, error) {
+	var procs []Process
+	err := s.db.SelectContext(ctx, &procs, `
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
+		FROM processes
+		WHERE host_id = ? AND ppid = ? AND fork_time_ns >= ? AND fork_time_ns <= ?
+		ORDER BY fork_time_ns`,
+		hostID, ppid, tr.FromNs, tr.ToNs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query child processes: %w", err)
+	}
+	return procs, nil
+}
+
 // GetNetworkEventsForProcess returns network_connect and dns_query events
 // attributed to the given PID within a time range.
 func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr TimeRange) ([]Event, error) {
