@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { getProcessDetail, listAlertsByProcessId, updateAlertStatus } from "../api";
-import type { ProcessNode, ProcessDetail as ProcessDetailType, Alert } from "../types";
+import { useEffect, useState, useCallback } from "react";
+import { getProcessDetail, listAlertsByProcessId, updateAlertStatus, createCommand, listCommandsByHostId } from "../api";
+import type { ProcessNode, ProcessDetail as ProcessDetailType, Alert, Command } from "../types";
 import { NetworkConnections } from "./NetworkConnections";
 
 interface Props {
@@ -13,6 +13,8 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
   const [detail, setDetail] = useState<ProcessDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [killCommand, setKillCommand] = useState<Command | null>(null);
+  const [killSending, setKillSending] = useState(false);
 
   const atTime = node.exec_time_ns || node.fork_time_ns;
 
@@ -41,6 +43,50 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       .catch(() => { /* alerts are best-effort */ });
     return () => { cancelled = true; };
   }, [node.id]);
+
+  // Poll for command status updates when a kill command is pending/acked.
+  useEffect(() => {
+    if (!killCommand || killCommand.status === "completed" || killCommand.status === "failed") return;
+    const timer = setInterval(() => {
+      listCommandsByHostId(hostId)
+        .then((commands) => {
+          const found = commands.find((c) => c.id === killCommand.id);
+          if (found && found.status !== killCommand.status) {
+            setKillCommand(found);
+          }
+        })
+        .catch(() => { /* polling is best-effort */ });
+    }, 2000);
+    return () => { clearInterval(timer); };
+  }, [killCommand, hostId]);
+
+  const handleKillProcess = useCallback(() => {
+    if (killSending) return;
+    setKillSending(true);
+    createCommand(hostId, "kill_process", { pid: node.pid })
+      .then((res) => {
+        setKillCommand({
+          id: res.id,
+          host_id: hostId,
+          command_type: "kill_process",
+          payload: { pid: node.pid },
+          status: "pending",
+          created_at: new Date().toISOString(),
+        });
+      })
+      .catch(() => {
+        setKillCommand({
+          id: 0,
+          host_id: hostId,
+          command_type: "kill_process",
+          payload: { pid: node.pid },
+          status: "failed",
+          created_at: new Date().toISOString(),
+          result: { error: "Failed to send command" },
+        });
+      })
+      .finally(() => { setKillSending(false); });
+  }, [hostId, node.pid, killSending]);
 
   const handleAlertStatusChange = (alertId: number, newStatus: string) => {
     updateAlertStatus(alertId, newStatus)
@@ -119,6 +165,28 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
           </>
         )}
       </dl>
+
+      <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <button
+          onClick={handleKillProcess}
+          disabled={killSending || (killCommand !== null && killCommand.status !== "completed" && killCommand.status !== "failed")}
+          style={{
+            ...killBtnStyle,
+            opacity: killSending || (killCommand !== null && killCommand.status !== "completed" && killCommand.status !== "failed") ? 0.5 : 1,
+          }}
+        >
+          Kill process
+        </button>
+        {killCommand && (
+          <span style={{ fontSize: "0.8rem", color: commandStatusColor(killCommand.status) }}>
+            {killCommand.status}
+            {killCommand.status === "failed" && typeof killCommand.result?.error === "string"
+              ? `: ${killCommand.result.error}`
+              : ""}
+            {killCommand.status === "completed" ? " — process killed" : ""}
+          </span>
+        )}
+      </div>
 
       {loading && <p>Loading network data...</p>}
 
@@ -213,3 +281,21 @@ const alertBtnStyle: React.CSSProperties = {
   fontSize: "0.7rem",
   cursor: "pointer",
 };
+
+const killBtnStyle: React.CSSProperties = {
+  padding: "0.3rem 0.75rem",
+  fontSize: "0.8rem",
+  cursor: "pointer",
+  backgroundColor: "#d32f2f",
+  color: "#fff",
+  border: "none",
+  borderRadius: 3,
+  fontWeight: "bold",
+};
+
+function commandStatusColor(status: string): string {
+  if (status === "pending") return "#f9a825";
+  if (status === "acked") return "#e65100";
+  if (status === "completed") return "#388e3c";
+  return "#d32f2f";
+}

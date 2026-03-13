@@ -97,3 +97,15 @@ export interface Alert {
 export interface AlertDetail extends Alert {
   event_ids: string[];
 }
+
+export interface Command {
+  id: number;
+  host_id: string;
+  command_type: string;
+  payload: Record<string, unknown>;
+  status: string;
+  created_at: string;
+  acked_at?: string;
+  completed_at?: string;
+  result?: Record<string, unknown>;
+}

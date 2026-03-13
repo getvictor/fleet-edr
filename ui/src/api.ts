@@ -1,4 +1,4 @@
-import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail } from "./types";
+import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail, Command } from "./types";
 
 const API_BASE = "/api/v1";
 
@@ -91,4 +91,15 @@ export async function listAlertsByProcessId(processId: number): Promise<Alert[]>
   // so we fetch all and filter. For MVP this is fine since alert counts are small.
   const all = await listAlerts();
   return all.filter((a) => a.process_id === processId);
+}
+
+export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {
+  return fetchJSON<{ id: number }>("/commands", {
+    method: "POST",
+    body: JSON.stringify({ host_id: hostId, command_type: commandType, payload }),
+  });
+}
+
+export async function listCommandsByHostId(hostId: string): Promise<Command[]> {
+  return fetchJSON<Command[]>(`/commands?host_id=${encodeURIComponent(hostId)}`);
 }
