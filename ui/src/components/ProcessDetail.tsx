@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { getProcessDetail, listAlertsByProcessId, updateAlertStatus, createCommand, listCommandsByHostId } from "../api";
+import { getProcessDetail, listAlertsByProcessId, updateAlertStatus, createCommand, getCommand } from "../api";
 import type { ProcessNode, ProcessDetail as ProcessDetailType, Alert, Command } from "../types";
 import { NetworkConnections } from "./NetworkConnections";
 
@@ -46,19 +46,18 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
 
   // Poll for command status updates when a kill command is pending/acked.
   useEffect(() => {
-    if (!killCommand || killCommand.status === "completed" || killCommand.status === "failed") return;
+    if (!killCommand || killCommand.id === 0 || killCommand.status === "completed" || killCommand.status === "failed") return;
     const timer = setInterval(() => {
-      listCommandsByHostId(hostId)
-        .then((commands) => {
-          const found = commands.find((c) => c.id === killCommand.id);
-          if (found && found.status !== killCommand.status) {
+      getCommand(killCommand.id)
+        .then((found) => {
+          if (found.status !== killCommand.status) {
             setKillCommand(found);
           }
         })
         .catch(() => { /* polling is best-effort */ });
     }, 2000);
     return () => { clearInterval(timer); };
-  }, [killCommand, hostId]);
+  }, [killCommand]);
 
   const handleKillProcess = useCallback(() => {
     if (killSending) return;

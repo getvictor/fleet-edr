@@ -24,6 +24,7 @@ export function AlertList() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch pattern
+    setError(null);
     listAlerts({
       status: statusFilter || undefined,
       severity: severityFilter || undefined,

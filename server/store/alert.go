@@ -27,10 +27,11 @@ type Alert struct {
 
 // AlertFilter controls which alerts are returned by ListAlerts.
 type AlertFilter struct {
-	HostID   string
-	Status   string
-	Severity string
-	Limit    int
+	HostID    string
+	Status    string
+	Severity  string
+	ProcessID int64
+	Limit     int
 }
 
 // InsertAlert creates an alert and links it to the given event IDs.
@@ -115,6 +116,10 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]Alert, error) 
 	if f.Severity != "" {
 		query += " AND severity = ?"
 		args = append(args, f.Severity)
+	}
+	if f.ProcessID != 0 {
+		query += " AND process_id = ?"
+		args = append(args, f.ProcessID)
 	}
 
 	query += " ORDER BY created_at DESC LIMIT ?"
@@ -206,6 +211,10 @@ func (s *Store) CountAlerts(ctx context.Context, f AlertFilter) (int64, error) {
 	if f.Severity != "" {
 		query += " AND severity = ?"
 		args = append(args, f.Severity)
+	}
+	if f.ProcessID != 0 {
+		query += " AND process_id = ?"
+		args = append(args, f.ProcessID)
 	}
 
 	var count int64

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"syscall"
 	"time"
 )
@@ -84,9 +85,9 @@ func (c *Commander) pollAndDispatch(ctx context.Context) {
 }
 
 func (c *Commander) fetchPending(ctx context.Context) ([]command, error) {
-	url := fmt.Sprintf("%s/api/v1/commands?host_id=%s&status=pending", c.cfg.ServerURL, c.cfg.HostID)
+	reqURL := fmt.Sprintf("%s/api/v1/commands?host_id=%s&status=pending", c.cfg.ServerURL, url.QueryEscape(c.cfg.HostID))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -121,8 +122,7 @@ func (c *Commander) dispatch(ctx context.Context, cmd command) {
 	case "kill_process":
 		c.executeKill(ctx, cmd)
 	default:
-		result := json.RawMessage(fmt.Sprintf(`{"error":"unknown command type: %s"}`, cmd.CommandType))
-		if err := c.updateStatus(ctx, cmd.ID, "failed", result); err != nil {
+		if err := c.updateStatus(ctx, cmd.ID, "failed", marshalResult("unknown command type: "+cmd.CommandType)); err != nil {
 			log.Printf("commander: fail command %d: %v", cmd.ID, err)
 		}
 	}
@@ -131,14 +131,12 @@ func (c *Commander) dispatch(ctx context.Context, cmd command) {
 func (c *Commander) executeKill(ctx context.Context, cmd command) {
 	var payload killPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
-		result := json.RawMessage(fmt.Sprintf(`{"error":"invalid payload: %s"}`, err.Error()))
-		_ = c.updateStatus(ctx, cmd.ID, "failed", result)
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid payload: "+err.Error()))
 		return
 	}
 
 	if payload.PID <= 0 {
-		result := json.RawMessage(`{"error":"invalid pid"}`)
-		_ = c.updateStatus(ctx, cmd.ID, "failed", result)
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid pid"))
 		return
 	}
 
@@ -147,21 +145,26 @@ func (c *Commander) executeKill(ctx context.Context, cmd command) {
 	// Send SIGKILL.
 	err := syscall.Kill(payload.PID, syscall.SIGKILL)
 	if err != nil {
-		result := json.RawMessage(fmt.Sprintf(`{"error":"%s"}`, err.Error()))
-		if updateErr := c.updateStatus(ctx, cmd.ID, "failed", result); updateErr != nil {
+		if updateErr := c.updateStatus(ctx, cmd.ID, "failed", marshalResult(err.Error())); updateErr != nil {
 			log.Printf("commander: report kill failure for command %d: %v", cmd.ID, updateErr)
 		}
 		return
 	}
 
-	result := json.RawMessage(fmt.Sprintf(`{"killed_pid":%d}`, payload.PID))
-	if err := c.updateStatus(ctx, cmd.ID, "completed", result); err != nil {
+	successResult, _ := json.Marshal(map[string]int{"killed_pid": payload.PID})
+	if err := c.updateStatus(ctx, cmd.ID, "completed", successResult); err != nil {
 		log.Printf("commander: report kill success for command %d: %v", cmd.ID, err)
 	}
 }
 
+// marshalResult builds a properly-escaped JSON result with an error field.
+func marshalResult(errMsg string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{"error": errMsg})
+	return b
+}
+
 func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string, result json.RawMessage) error {
-	url := fmt.Sprintf("%s/api/v1/commands/%d", c.cfg.ServerURL, cmdID)
+	reqURL := fmt.Sprintf("%s/api/v1/commands/%d", c.cfg.ServerURL, cmdID)
 
 	update := statusUpdate{Status: status, Result: result}
 	body, err := json.Marshal(update)
@@ -169,7 +172,7 @@ func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

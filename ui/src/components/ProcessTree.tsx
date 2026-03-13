@@ -43,16 +43,20 @@ export function ProcessTreeView() {
   // Fetch alerts for this host to mark nodes with alert badges.
   useEffect(() => {
     if (!hostId) return;
-    listAlerts({ host_id: hostId, status: "open" })
+    let cancelled = false;
+    listAlerts({ host_id: hostId, status: "open", limit: 1000 })
       .then((alerts) => {
+        if (cancelled) return;
         const ids = new Set(alerts.map((a) => a.process_id));
         // Also include acknowledged alerts.
-        return listAlerts({ host_id: hostId, status: "acknowledged" }).then((acked) => {
+        return listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }).then((acked) => {
+          if (cancelled) return;
           for (const a of acked) ids.add(a.process_id);
           setAlertProcessIds(ids);
         });
       })
       .catch(() => { /* alert badges are best-effort */ });
+    return () => { cancelled = true; };
   }, [hostId]);
 
   // Auto-select process from URL query params (from alert list navigation).

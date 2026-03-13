@@ -51,6 +51,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/alerts/{id}", h.handleUpdateAlertStatus)
 
 	mux.HandleFunc("GET /api/v1/commands", h.handleListCommands)
+	mux.HandleFunc("GET /api/v1/commands/{id}", h.handleGetCommand)
 	mux.HandleFunc("POST /api/v1/commands", h.handleCreateCommand)
 	mux.HandleFunc("PUT /api/v1/commands/{id}", h.handleUpdateCommandStatus)
 }
@@ -142,10 +143,11 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f := store.AlertFilter{
-		HostID:   r.URL.Query().Get("host_id"),
-		Status:   r.URL.Query().Get("status"),
-		Severity: r.URL.Query().Get("severity"),
-		Limit:    parseIntParam(r, "limit", 100),
+		HostID:    r.URL.Query().Get("host_id"),
+		Status:    r.URL.Query().Get("status"),
+		Severity:  r.URL.Query().Get("severity"),
+		ProcessID: parseInt64Param(r, "process_id", 0),
+		Limit:     parseIntParam(r, "limit", 100),
 	}
 
 	ctx := r.Context()
@@ -238,6 +240,33 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleGetCommand(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid command id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	cmd, err := h.store.GetCommand(ctx, id)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "get command", "id", id, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if cmd == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	h.writeJSON(w, r, cmd)
 }
 
 func (h *Handler) handleListCommands(w http.ResponseWriter, r *http.Request) {

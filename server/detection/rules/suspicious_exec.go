@@ -127,19 +127,14 @@ func (r *SuspiciousExec) evaluateShellExec(ctx context.Context, shell shellExecI
 			continue
 		}
 
-		// Build the finding.
-		parentPath := parent.Path
-
-		eventIDs := []string{shell.event.EventID}
-
 		return &detection.Finding{
 			HostID:      shell.event.HostID,
 			RuleID:      r.ID(),
 			Severity:    detection.SeverityHigh,
 			Title:       "Suspicious exec from temp path",
-			Description: fmt.Sprintf("%s → %s → %s", parentPath, shell.payload.Path, child.Path),
-			ProcessID:   shellProc.ID,
-			EventIDs:    eventIDs,
+			Description: fmt.Sprintf("%s → %s → %s", parent.Path, shell.payload.Path, child.Path),
+			ProcessID:   child.ID,
+			EventIDs:    []string{shell.event.EventID},
 		}, nil
 	}
 

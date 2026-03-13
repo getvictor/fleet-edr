@@ -56,12 +56,14 @@ export async function listAlerts(params?: {
   host_id?: string;
   status?: string;
   severity?: string;
+  process_id?: number;
   limit?: number;
 }): Promise<Alert[]> {
   const query = new URLSearchParams();
   if (params?.host_id) query.set("host_id", params.host_id);
   if (params?.status) query.set("status", params.status);
   if (params?.severity) query.set("severity", params.severity);
+  if (params?.process_id) query.set("process_id", String(params.process_id));
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();
   return fetchJSON<Alert[]>(`/alerts${qs ? `?${qs}` : ""}`);
@@ -87,10 +89,7 @@ export async function updateAlertStatus(id: number, status: string): Promise<voi
 }
 
 export async function listAlertsByProcessId(processId: number): Promise<Alert[]> {
-  // Use the general alerts endpoint — process_id filtering not available server-side,
-  // so we fetch all and filter. For MVP this is fine since alert counts are small.
-  const all = await listAlerts();
-  return all.filter((a) => a.process_id === processId);
+  return listAlerts({ process_id: processId });
 }
 
 export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {
@@ -100,6 +99,6 @@ export async function createCommand(hostId: string, commandType: string, payload
   });
 }
 
-export async function listCommandsByHostId(hostId: string): Promise<Command[]> {
-  return fetchJSON<Command[]>(`/commands?host_id=${encodeURIComponent(hostId)}`);
+export async function getCommand(id: number): Promise<Command> {
+  return fetchJSON<Command>(`/commands/${String(id)}`);
 }
