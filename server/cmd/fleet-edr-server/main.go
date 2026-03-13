@@ -56,7 +56,7 @@ func main() {
 	proc := processor.New(s, builder, logger, *processInterval, *processBatchSize)
 
 	q := graph.NewQuery(s)
-	a := api.New(q, *apiKey, logger)
+	a := api.New(q, s, *apiKey, logger)
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

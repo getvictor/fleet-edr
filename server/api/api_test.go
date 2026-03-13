@@ -17,7 +17,7 @@ import (
 func TestListHostsEmpty(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, "", slog.Default())
+	h := New(q, s, "", slog.Default())
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -37,7 +37,7 @@ func TestListHostsEmpty(t *testing.T) {
 func TestProcessTreeEmpty(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, "", slog.Default())
+	h := New(q, s, "", slog.Default())
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -61,7 +61,7 @@ func TestProcessTreeEmpty(t *testing.T) {
 func TestProcessDetailNotFound(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, "", slog.Default())
+	h := New(q, s, "", slog.Default())
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -76,7 +76,7 @@ func TestProcessDetailNotFound(t *testing.T) {
 func TestAuthRequired(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, "secret-key", slog.Default())
+	h := New(q, s, "secret-key", slog.Default())
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -100,7 +100,7 @@ func TestAuthRequired(t *testing.T) {
 func TestAuthWrongPrefix(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, "secret-key", slog.Default())
+	h := New(q, s, "secret-key", slog.Default())
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
