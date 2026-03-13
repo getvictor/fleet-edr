@@ -24,7 +24,7 @@ func TestFetchPending(t *testing.T) {
 		assert.Equal(t, "pending", r.URL.Query().Get("status"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(commands)
+		_ = json.NewEncoder(w).Encode(commands)
 	}))
 	defer srv.Close()
 
@@ -40,7 +40,7 @@ func TestFetchPendingWithAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		_, _ = w.Write([]byte("[]"))
 	}))
 	defer srv.Close()
 
@@ -57,7 +57,7 @@ func TestDispatchUnknownCommand(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
 			var u statusUpdate
-			json.NewDecoder(r.Body).Decode(&u)
+			_ = json.NewDecoder(r.Body).Decode(&u)
 			mu.Lock()
 			updates = append(updates, u)
 			mu.Unlock()
@@ -85,7 +85,7 @@ func TestDispatchKillInvalidPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
 			var u statusUpdate
-			json.NewDecoder(r.Body).Decode(&u)
+			_ = json.NewDecoder(r.Body).Decode(&u)
 			mu.Lock()
 			updates = append(updates, u)
 			mu.Unlock()
@@ -115,7 +115,7 @@ func TestRunPolls(t *testing.T) {
 		callCount++
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		_, _ = w.Write([]byte("[]"))
 	}))
 	defer srv.Close()
 
