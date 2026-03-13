@@ -300,8 +300,11 @@ func (h *Handler) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	h.writeJSON(w, r, map[string]int64{"id": id})
+	if err := json.NewEncoder(w).Encode(map[string]int64{"id": id}); err != nil {
+		h.logger.ErrorContext(ctx, "writeJSON encode failed", "err", err)
+	}
 }
 
 func (h *Handler) handleUpdateCommandStatus(w http.ResponseWriter, r *http.Request) {

@@ -43,7 +43,7 @@ var schemaStatements = []string{
 		exit_time_ns BIGINT,
 		exit_code    INT,
 		INDEX idx_processes_host_pid (host_id, pid, fork_time_ns),
-		INDEX idx_processes_host_ppid (host_id, ppid),
+		INDEX idx_processes_host_ppid (host_id, ppid, fork_time_ns),
 		INDEX idx_processes_host_time (host_id, fork_time_ns)
 	)`,
 	`CREATE TABLE IF NOT EXISTS alerts (
@@ -57,7 +57,7 @@ var schemaStatements = []string{
 		status       ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
 		created_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		updated_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-		resolved_at  TIMESTAMP    NULL,
+		resolved_at  TIMESTAMP(6) NULL,
 		UNIQUE KEY uk_alerts_dedup (host_id, rule_id, process_id),
 		INDEX idx_alerts_host (host_id),
 		INDEX idx_alerts_status_created (status, created_at),
@@ -77,8 +77,8 @@ var schemaStatements = []string{
 		payload      JSON          NOT NULL,
 		status       ENUM('pending', 'acked', 'completed', 'failed') NOT NULL DEFAULT 'pending',
 		created_at   TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		acked_at     TIMESTAMP     NULL,
-		completed_at TIMESTAMP     NULL,
+		acked_at     TIMESTAMP(6)  NULL,
+		completed_at TIMESTAMP(6)  NULL,
 		result       JSON,
 		INDEX idx_commands_host_status (host_id, status),
 		INDEX idx_commands_created (created_at)

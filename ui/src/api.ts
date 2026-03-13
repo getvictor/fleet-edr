@@ -1,4 +1,4 @@
-import type { HostSummary, TreeResponse, ProcessDetail } from "./types";
+import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail } from "./types";
 
 const API_BASE = "/api/v1";
 
@@ -10,16 +10,17 @@ export function setApiKey(key: string) {
   sessionStorage.setItem("edr_api_key", key);
 }
 
-async function fetchJSON<T>(path: string): Promise<T> {
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const apiKey = getApiKey();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
   };
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
@@ -49,4 +50,45 @@ export async function getProcessDetail(
   return fetchJSON<ProcessDetail>(
     `/hosts/${encodeURIComponent(hostId)}/processes/${String(pid)}?at=${String(atNs)}`
   );
+}
+
+export async function listAlerts(params?: {
+  host_id?: string;
+  status?: string;
+  severity?: string;
+  limit?: number;
+}): Promise<Alert[]> {
+  const query = new URLSearchParams();
+  if (params?.host_id) query.set("host_id", params.host_id);
+  if (params?.status) query.set("status", params.status);
+  if (params?.severity) query.set("severity", params.severity);
+  if (params?.limit) query.set("limit", String(params.limit));
+  const qs = query.toString();
+  return fetchJSON<Alert[]>(`/alerts${qs ? `?${qs}` : ""}`);
+}
+
+export async function getAlertDetail(id: number): Promise<AlertDetail> {
+  return fetchJSON<AlertDetail>(`/alerts/${String(id)}`);
+}
+
+export async function updateAlertStatus(id: number, status: string): Promise<void> {
+  const apiKey = getApiKey();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+  const res = await fetch(`${API_BASE}/alerts/${String(id)}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
+  }
+}
+
+export async function listAlertsByProcessId(processId: number): Promise<Alert[]> {
+  // Use the general alerts endpoint — process_id filtering not available server-side,
+  // so we fetch all and filter. For MVP this is fine since alert counts are small.
+  const all = await listAlerts();
+  return all.filter((a) => a.process_id === processId);
 }

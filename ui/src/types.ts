@@ -79,3 +79,21 @@ export interface ProcessDetail {
 export interface TreeResponse {
   roots: ProcessNode[];
 }
+
+export interface Alert {
+  id: number;
+  host_id: string;
+  rule_id: string;
+  severity: string;
+  title: string;
+  description: string;
+  process_id: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+}
+
+export interface AlertDetail extends Alert {
+  event_ids: string[];
+}

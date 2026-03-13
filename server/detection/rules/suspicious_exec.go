@@ -27,8 +27,8 @@ var suspiciousPrefixes = []string{
 	"/dev/shm/",
 }
 
-// SuspiciousExec detects when a non-shell process spawns a shell and the shell
-// (or a descendant) executes a binary from a suspicious location within 30 seconds.
+// SuspiciousExec detects when a non-shell process spawns a shell and a direct
+// child of the shell executes a binary from a suspicious location within 30 seconds.
 //
 // MITRE ATT&CK: T1059 (Command and Scripting Interpreter), T1204 (User Execution)
 type SuspiciousExec struct{}
@@ -92,7 +92,10 @@ func (r *SuspiciousExec) evaluateShellExec(ctx context.Context, shell shellExecI
 	if err != nil {
 		return nil, fmt.Errorf("get parent: %w", err)
 	}
-	if parent != nil && shellPaths[parent.Path] {
+	if parent == nil {
+		return nil, nil // parent not yet materialized — skip to avoid false positives
+	}
+	if shellPaths[parent.Path] {
 		return nil, nil // shell → shell is normal
 	}
 
@@ -117,17 +120,15 @@ func (r *SuspiciousExec) evaluateShellExec(ctx context.Context, shell shellExecI
 		return nil, fmt.Errorf("get children: %w", err)
 	}
 
-	// Check if any child exec'd from a suspicious path.
+	// Check if any child was forked from a suspicious path.
+	// We use fork_time_ns as the time window boundary since exec_time_ns may not be set yet.
 	for _, child := range children {
 		if !isSuspiciousPath(child.Path) {
 			continue
 		}
 
 		// Build the finding.
-		parentPath := "(unknown)"
-		if parent != nil {
-			parentPath = parent.Path
-		}
+		parentPath := parent.Path
 
 		eventIDs := []string{shell.event.EventID}
 

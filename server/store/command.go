@@ -87,10 +87,10 @@ func (s *Store) UpdateCommandStatus(ctx context.Context, id int64, status string
 
 	switch status {
 	case "acked":
-		res, err = s.db.ExecContext(ctx, "UPDATE commands SET status = ?, acked_at = NOW() WHERE id = ?", status, id)
+		res, err = s.db.ExecContext(ctx, "UPDATE commands SET status = ?, acked_at = NOW(6) WHERE id = ?", status, id)
 	case "completed", "failed":
 		res, err = s.db.ExecContext(ctx,
-			"UPDATE commands SET status = ?, completed_at = NOW(), result = ? WHERE id = ?", status, result, id)
+			"UPDATE commands SET status = ?, completed_at = NOW(6), result = ? WHERE id = ?", status, result, id)
 	default:
 		return fmt.Errorf("invalid command status: %q", status)
 	}

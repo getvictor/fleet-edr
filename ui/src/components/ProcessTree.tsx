@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useSearchParams, Link } from "react-router-dom";
 import * as d3 from "d3";
-import { getProcessTree } from "../api";
+import { getProcessTree, listAlerts } from "../api";
 import type { ProcessNode } from "../types";
 import { ProcessDetail } from "./ProcessDetail";
 
@@ -14,12 +14,14 @@ const TIME_RANGES: { label: string; ms: number }[] = [
 
 export function ProcessTreeView() {
   const { hostId } = useParams<{ hostId: string }>();
+  const [searchParams] = useSearchParams();
   const svgRef = useRef<SVGSVGElement>(null);
   const [roots, setRoots] = useState<ProcessNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
   const [rangeIdx, setRangeIdx] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
 
   const fetchTree = useCallback(() => {
     if (!hostId) return;
@@ -38,6 +40,31 @@ export function ProcessTreeView() {
       .finally(() => { setLoading(false); });
   }, [hostId, rangeIdx]);
 
+  // Fetch alerts for this host to mark nodes with alert badges.
+  useEffect(() => {
+    if (!hostId) return;
+    listAlerts({ host_id: hostId, status: "open" })
+      .then((alerts) => {
+        const ids = new Set(alerts.map((a) => a.process_id));
+        // Also include acknowledged alerts.
+        return listAlerts({ host_id: hostId, status: "acknowledged" }).then((acked) => {
+          for (const a of acked) ids.add(a.process_id);
+          setAlertProcessIds(ids);
+        });
+      })
+      .catch(() => { /* alert badges are best-effort */ });
+  }, [hostId]);
+
+  // Auto-select process from URL query params (from alert list navigation).
+  useEffect(() => {
+    const processIdParam = searchParams.get("process");
+    if (processIdParam && roots.length > 0) {
+      const processId = Number(processIdParam);
+      const found = findNodeByDbId(roots, processId);
+      if (found) setSelectedNode(found); // eslint-disable-line react-hooks/set-state-in-effect -- auto-select from URL
+    }
+  }, [roots, searchParams]);
+
   useEffect(() => {
     fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
   }, [fetchTree]);
@@ -48,8 +75,8 @@ export function ProcessTreeView() {
       d3.select(svgRef.current).selectAll("*").remove();
       return;
     }
-    renderTree(svgRef.current, roots, setSelectedNode);
-  }, [roots]);
+    renderTree(svgRef.current, roots, setSelectedNode, alertProcessIds);
+  }, [roots, alertProcessIds]);
 
   if (!hostId) return <p>No host selected.</p>;
 
@@ -93,6 +120,17 @@ export function ProcessTreeView() {
   );
 }
 
+function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {
+  for (const n of nodes) {
+    if (n.id === dbId) return n;
+    if (n.children) {
+      const found = findNodeByDbId(n.children, dbId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 interface D3Node {
   name: string;
   pid: number;
@@ -134,7 +172,8 @@ function basename(path: string): string {
 function renderTree(
   svg: SVGSVGElement,
   roots: ProcessNode[],
-  onSelect: (node: ProcessNode) => void
+  onSelect: (node: ProcessNode) => void,
+  alertProcessIds: Set<number> = new Set()
 ) {
   const nodeHeight = 28;
 
@@ -213,6 +252,15 @@ function renderTree(
       if (d.data.data.exit_time_ns) return "#999";
       return "#4a90d9";
     });
+
+  // Alert badge: red ring around nodes with open/acknowledged alerts.
+  node
+    .filter((d) => alertProcessIds.has(d.data.data.id))
+    .append("circle")
+    .attr("r", 9)
+    .attr("fill", "none")
+    .attr("stroke", "#d32f2f")
+    .attr("stroke-width", 2);
 
   node
     .append("text")

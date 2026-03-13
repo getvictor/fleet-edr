@@ -37,6 +37,9 @@ type AlertFilter struct {
 // If a duplicate alert exists (same host_id, rule_id, process_id), the insert is skipped and the existing alert ID is
 // returned. Returns the alert ID and whether it was newly created.
 func (s *Store) InsertAlert(ctx context.Context, a Alert, eventIDs []string) (int64, bool, error) {
+	// Deduplicate event IDs to prevent primary key violations.
+	eventIDs = deduplicateStrings(eventIDs)
+
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, false, fmt.Errorf("begin tx for insert alert: %w", err)
@@ -142,28 +145,35 @@ func (s *Store) GetAlert(ctx context.Context, id int64) (*Alert, error) {
 // GetAlertEventIDs returns the event IDs linked to an alert.
 func (s *Store) GetAlertEventIDs(ctx context.Context, alertID int64) ([]string, error) {
 	var eventIDs []string
-	err := s.db.SelectContext(ctx, &eventIDs, "SELECT event_id FROM alert_events WHERE alert_id = ?", alertID)
+	err := s.db.SelectContext(ctx, &eventIDs, "SELECT event_id FROM alert_events WHERE alert_id = ? ORDER BY event_id", alertID)
 	if err != nil {
 		return nil, fmt.Errorf("get alert event ids %d: %w", alertID, err)
 	}
 	return eventIDs, nil
 }
 
-// UpdateAlertStatus changes the status of an alert. If the new status is "resolved", resolved_at is set.
+// UpdateAlertStatus changes the status of an alert. If the new status is "resolved", resolved_at is set
+// (only on the first resolve — subsequent resolves preserve the original timestamp).
 func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status string) error {
-	var res sql.Result
+	// Check existence first so we can distinguish "not found" from "no change" (RowsAffected=0).
+	var exists int64
+	if err := s.db.GetContext(ctx, &exists, "SELECT id FROM alerts WHERE id = ?", id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		return fmt.Errorf("check alert existence %d: %w", id, err)
+	}
+
 	var err error
 	if status == "resolved" {
-		res, err = s.db.ExecContext(ctx, "UPDATE alerts SET status = ?, resolved_at = NOW() WHERE id = ?", status, id)
+		_, err = s.db.ExecContext(ctx,
+			"UPDATE alerts SET status = ?, resolved_at = IFNULL(resolved_at, NOW(6)) WHERE id = ?", status, id)
 	} else {
-		res, err = s.db.ExecContext(ctx, "UPDATE alerts SET status = ?, resolved_at = NULL WHERE id = ?", status, id)
+		_, err = s.db.ExecContext(ctx,
+			"UPDATE alerts SET status = ?, resolved_at = NULL WHERE id = ?", status, id)
 	}
 	if err != nil {
 		return fmt.Errorf("update alert status %d: %w", id, err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return sql.ErrNoRows
 	}
 	return nil
 }
@@ -203,4 +213,20 @@ func (s *Store) CountAlerts(ctx context.Context, f AlertFilter) (int64, error) {
 		return 0, fmt.Errorf("count alerts: %w", err)
 	}
 	return count, nil
+}
+
+func deduplicateStrings(ss []string) []string {
+	if len(ss) <= 1 {
+		return ss
+	}
+	seen := make(map[string]struct{}, len(ss))
+	result := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		result = append(result, s)
+	}
+	return result
 }
