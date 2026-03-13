@@ -8,30 +8,34 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/store"
 )
 
 // Processor polls for unprocessed events and runs them through the graph builder.
 type Processor struct {
-	store    *store.Store
-	builder  *graph.Builder
-	logger   *slog.Logger
-	interval time.Duration
-	batch    int
+	store     *store.Store
+	builder   *graph.Builder
+	detection *detection.Engine
+	logger    *slog.Logger
+	interval  time.Duration
+	batch     int
 }
 
 // New creates a Processor with the given poll interval and batch size.
-func New(s *store.Store, builder *graph.Builder, logger *slog.Logger, interval time.Duration, batchSize int) *Processor {
+func New(s *store.Store, builder *graph.Builder, det *detection.Engine, logger *slog.Logger,
+	interval time.Duration, batchSize int) *Processor {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Processor{
-		store:    s,
-		builder:  builder,
-		logger:   logger,
-		interval: interval,
-		batch:    batchSize,
+		store:     s,
+		builder:   builder,
+		detection: det,
+		logger:    logger,
+		interval:  interval,
+		batch:     batchSize,
 	}
 }
 
@@ -77,6 +81,11 @@ func (p *Processor) processOnce(ctx context.Context) {
 			p.logger.ErrorContext(ctx, "unclaim events after builder failure", "err", unclaimErr)
 		}
 		return
+	}
+
+	// Run detection rules after processes are materialized.
+	if p.detection != nil {
+		p.detection.Evaluate(ctx, events)
 	}
 
 	if err := p.store.MarkProcessed(ctx, eventIDs); err != nil {
