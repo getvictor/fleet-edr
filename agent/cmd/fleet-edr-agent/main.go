@@ -25,7 +25,7 @@ func main() {
 		xpcService    = flag.String("xpc-service", "com.fleet.edr.extension", "ESF extension XPC Mach service name")
 		netXPCService = flag.String("net-xpc-service", "com.fleet.edr.networkextension", "Network extension XPC Mach service name")
 		dbPath        = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
-		serverURL     = flag.String("server-url", "http://localhost:8080", "Ingestion server URL")
+		serverURL     = flag.String("server-url", "http://localhost:8088", "Ingestion server URL")
 		apiKey        = flag.String("api-key", "", "API key for ingestion server")
 		hostID        = flag.String("host-id", "", "Host identifier for command polling (enables command channel when set)")
 		batchSize     = flag.Int("batch-size", 100, "Upload batch size")

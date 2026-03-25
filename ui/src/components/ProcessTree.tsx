@@ -145,12 +145,13 @@ interface D3Node {
 
 function toD3Hierarchy(nodes: ProcessNode[]): D3Node {
   function convert(n: ProcessNode): D3Node {
+    const kids = n.children?.map(convert);
     return {
       name: basename(n.path) || `PID ${String(n.pid)}`,
       pid: n.pid,
       path: n.path,
       data: n,
-      children: n.children?.map(convert),
+      children: kids && kids.length > 0 ? kids : undefined,
     };
   }
 

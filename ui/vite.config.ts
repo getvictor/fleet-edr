@@ -8,10 +8,12 @@ export default defineConfig({
   build: {
     outDir: "../server/ui/dist",
     emptyOutDir: true,
+    minify: false,
+    sourcemap: true,
   },
   server: {
     proxy: {
-      "/api": "http://localhost:8080",
+      "/api": "http://localhost:8088",
     },
   },
   test: {

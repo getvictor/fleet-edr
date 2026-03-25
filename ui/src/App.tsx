@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
 import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
+import { Login } from "./components/Login";
 
 function Nav() {
   const location = useLocation();
@@ -18,6 +20,12 @@ function Nav() {
 }
 
 export function App() {
+  const [authenticated, setAuthenticated] = useState(() => sessionStorage.getItem("edr_api_key") !== null);
+
+  if (!authenticated) {
+    return <Login onLogin={() => setAuthenticated(true)} />;
+  }
+
   return (
     <BrowserRouter basename="/ui">
       <div style={{ fontFamily: "system-ui, sans-serif", padding: "1rem" }}>
