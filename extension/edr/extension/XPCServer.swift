@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.fleet.edr.extension", category: "XPCServer")
+private let logger = Logger(subsystem: "com.victoronsoftware.edr.securityextension", category: "XPCServer")
 
 /// XPCServer vends a Mach service that the Go agent connects to.
 /// Serialized ESF events are broadcast to all connected peers as
@@ -10,7 +10,7 @@ final class XPCServer {
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
-    private let queue = DispatchQueue(label: "com.fleet.edr.xpcserver")
+    private let queue = DispatchQueue(label: "com.victoronsoftware.edr.xpcserver")
 
     init(serviceName: String) {
         self.serviceName = serviceName

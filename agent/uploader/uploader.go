@@ -19,7 +19,7 @@ import (
 
 // Config holds uploader settings.
 type Config struct {
-	// ServerURL is the base URL of the ingestion server (e.g. "http://localhost:8080").
+	// ServerURL is the base URL of the ingestion server (e.g. "http://localhost:8088").
 	ServerURL string
 
 	// APIKey is the static API key for authentication.

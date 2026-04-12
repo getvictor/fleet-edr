@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/api"
+	"github.com/fleetdm/edr/server/detection"
+	"github.com/fleetdm/edr/server/detection/rules"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/processor"
@@ -24,7 +26,7 @@ import (
 
 func main() {
 	var (
-		addr             = flag.String("addr", ":8080", "Listen address")
+		addr             = flag.String("addr", ":8088", "Listen address")
 		dsn              = flag.String("dsn", "root@tcp(127.0.0.1:3306)/edr", "MySQL DSN (user:pass@tcp(host:port)/db)")
 		apiKey           = flag.String("api-key", "", "Required API key for ingestion (empty = no auth)")
 		processInterval  = flag.Duration("process-interval", 500*time.Millisecond, "Interval between processing cycles")
@@ -51,12 +53,14 @@ func main() {
 	// Ingest handler (also serves events when running as a single binary).
 	h := ingest.New(s, *apiKey, logger)
 
-	// Graph builder and processor — polls for unprocessed events.
+	// Graph builder, detection engine, and processor — polls for unprocessed events.
 	builder := graph.NewBuilder(s, logger)
-	proc := processor.New(s, builder, logger, *processInterval, *processBatchSize)
+	det := detection.NewEngine(s, logger)
+	det.Register(&rules.SuspiciousExec{})
+	proc := processor.New(s, builder, det, logger, *processInterval, *processBatchSize)
 
 	q := graph.NewQuery(s)
-	a := api.New(q, *apiKey, logger)
+	a := api.New(q, s, *apiKey, logger)
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

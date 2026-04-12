@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
@@ -21,11 +22,12 @@ import (
 
 func main() {
 	var (
-		xpcService    = flag.String("xpc-service", "com.fleet.edr.extension", "ESF extension XPC Mach service name")
-		netXPCService = flag.String("net-xpc-service", "com.fleet.edr.networkextension", "Network extension XPC Mach service name")
+		xpcService    = flag.String("xpc-service", "com.victoronsoftware.edr.securityextension", "ESF extension XPC Mach service name")
+		netXPCService = flag.String("net-xpc-service", "com.victoronsoftware.edr.networkextension", "Network extension XPC Mach service name")
 		dbPath        = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
-		serverURL     = flag.String("server-url", "http://localhost:8080", "Ingestion server URL")
+		serverURL     = flag.String("server-url", "http://localhost:8088", "Ingestion server URL")
 		apiKey        = flag.String("api-key", "", "API key for ingestion server")
+		hostID        = flag.String("host-id", "", "Host identifier for command polling (enables command channel when set)")
 		batchSize     = flag.Int("batch-size", 100, "Upload batch size")
 		interval      = flag.Duration("interval", time.Second, "Upload interval")
 		pruneAge      = flag.Duration("prune-age", 24*time.Hour, "Prune uploaded events older than this")
@@ -73,6 +75,22 @@ func main() {
 			log.Printf("uploader: %v", err)
 		}
 	}()
+
+	// Start command polling if host-id is set.
+	if *hostID != "" {
+		cmdr := commander.New(commander.Config{
+			ServerURL: *serverURL,
+			APIKey:    *apiKey,
+			HostID:    *hostID,
+			Interval:  5 * time.Second,
+		})
+		go func() {
+			if err := cmdr.Run(ctx); err != nil {
+				log.Printf("commander: %v", err)
+			}
+		}()
+		log.Printf("commander: polling for commands as host %q", *hostID)
+	}
 
 	// Periodic prune.
 	go func() {

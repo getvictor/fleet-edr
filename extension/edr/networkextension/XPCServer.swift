@@ -1,18 +1,18 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.fleet.edr.networkextension", category: "XPCServer")
+private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "XPCServer")
 
 /// XPCServer vends a Mach service that the Go agent connects to.
 /// Network events are broadcast to all connected peers as XPC dictionaries
 /// with a "data" key containing raw JSON bytes.
 final class XPCServer {
-    static let shared = XPCServer(serviceName: "com.fleet.edr.networkextension")
+    static let shared = XPCServer(serviceName: "com.victoronsoftware.edr.networkextension")
 
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
-    private let queue = DispatchQueue(label: "com.fleet.edr.networkextension.xpcserver")
+    private let queue = DispatchQueue(label: "com.victoronsoftware.edr.networkextension.xpcserver")
 
     init(serviceName: String) {
         self.serviceName = serviceName

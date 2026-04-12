@@ -8,9 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		57B10CFC2F43BC89007F4B27 /* libEndpointSecurity.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */; };
-		57B10D042F43BC89007F4B27 /* com.fleet.edr.extension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		57B10D042F43BC89007F4B27 /* com.victoronsoftware.edr.securityextension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10CF92F43BC89007F4B27 /* com.victoronsoftware.edr.securityextension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		57B10E102F43BC89007F4B27 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 57B10E142F43BC89007F4B27 /* NetworkExtension.framework */; };
-		57B10E112F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		57B10E112F43BC89007F4B27 /* com.victoronsoftware.edr.networkextension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 57B10E132F43BC89007F4B27 /* com.victoronsoftware.edr.networkextension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,8 +37,8 @@
 			dstPath = "$(SYSTEM_EXTENSIONS_FOLDER_PATH)";
 			dstSubfolderSpec = 16;
 			files = (
-				57B10D042F43BC89007F4B27 /* com.fleet.edr.extension.systemextension in Embed System Extensions */,
-				57B10E112F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension in Embed System Extensions */,
+				57B10D042F43BC89007F4B27 /* com.victoronsoftware.edr.securityextension.systemextension in Embed System Extensions */,
+				57B10E112F43BC89007F4B27 /* com.victoronsoftware.edr.networkextension.systemextension in Embed System Extensions */,
 			);
 			name = "Embed System Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -47,9 +47,9 @@
 
 /* Begin PBXFileReference section */
 		57B10CCB2F43BBBF007F4B27 /* edr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = edr.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.fleet.edr.extension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		57B10CF92F43BC89007F4B27 /* com.victoronsoftware.edr.securityextension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.victoronsoftware.edr.securityextension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		57B10CFB2F43BC89007F4B27 /* libEndpointSecurity.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libEndpointSecurity.tbd; path = usr/lib/libEndpointSecurity.tbd; sourceTree = SDKROOT; };
-		57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.fleet.edr.networkextension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		57B10E132F43BC89007F4B27 /* com.victoronsoftware.edr.networkextension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.victoronsoftware.edr.networkextension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		57B10E142F43BC89007F4B27 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -146,8 +146,8 @@
 			isa = PBXGroup;
 			children = (
 				57B10CCB2F43BBBF007F4B27 /* edr.app */,
-				57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */,
-				57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */,
+				57B10CF92F43BC89007F4B27 /* com.victoronsoftware.edr.securityextension.systemextension */,
+				57B10E132F43BC89007F4B27 /* com.victoronsoftware.edr.networkextension.systemextension */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -208,7 +208,7 @@
 			packageProductDependencies = (
 			);
 			productName = extension;
-			productReference = 57B10CF92F43BC89007F4B27 /* com.fleet.edr.extension.systemextension */;
+			productReference = 57B10CF92F43BC89007F4B27 /* com.victoronsoftware.edr.securityextension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
 		57B10E172F43BC89007F4B27 /* networkextension */ = {
@@ -230,7 +230,7 @@
 			packageProductDependencies = (
 			);
 			productName = networkextension;
-			productReference = 57B10E132F43BC89007F4B27 /* com.fleet.edr.networkextension.systemextension */;
+			productReference = 57B10E132F43BC89007F4B27 /* com.victoronsoftware.edr.networkextension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
 /* End PBXNativeTarget section */
@@ -465,7 +465,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.victoronsoftware.edr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 			};
@@ -485,7 +485,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.victoronsoftware.edr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 			};
@@ -508,7 +508,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lbsm";
-				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.extension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.victoronsoftware.edr.securityextension;
 				PRODUCT_NAME = "$(inherited)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -532,7 +532,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lbsm";
-				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.extension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.victoronsoftware.edr.securityextension;
 				PRODUCT_NAME = "$(inherited)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -556,7 +556,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lbsm";
-				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.networkextension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.victoronsoftware.edr.networkextension;
 				PRODUCT_NAME = "$(inherited)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -580,7 +580,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lbsm";
-				PRODUCT_BUNDLE_IDENTIFIER = com.fleet.edr.networkextension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.victoronsoftware.edr.networkextension;
 				PRODUCT_NAME = "$(inherited)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;

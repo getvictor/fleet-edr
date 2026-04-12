@@ -4,7 +4,7 @@
 <dict>
 	<key>MachServices</key>
 	<dict>
-		<key>com.fleet.edr.extension</key>
+		<key>com.victoronsoftware.edr.securityextension</key>
 		<true/>
 	</dict>
 	<key>NSSystemExtensionUsageDescription</key>

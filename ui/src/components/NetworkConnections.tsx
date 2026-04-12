@@ -5,11 +5,13 @@ import type {
 } from "../types";
 
 interface Props {
-  connections: EventRecord[];
-  dnsQueries: EventRecord[];
+  connections: EventRecord[] | null;
+  dnsQueries: EventRecord[] | null;
 }
 
-export function NetworkConnections({ connections, dnsQueries }: Props) {
+export function NetworkConnections({ connections: rawConnections, dnsQueries: rawDNS }: Props) {
+  const connections = rawConnections ?? [];
+  const dnsQueries = rawDNS ?? [];
   const hasConnections = connections.length > 0;
   const hasDNS = dnsQueries.length > 0;
 

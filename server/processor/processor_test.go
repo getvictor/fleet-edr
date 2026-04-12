@@ -16,7 +16,7 @@ import (
 func TestProcessOncePicksUpUnprocessedEvents(t *testing.T) {
 	s := store.OpenTestStore(t)
 	builder := graph.NewBuilder(s, slog.Default())
-	proc := New(s, builder, slog.Default(), time.Second, 500)
+	proc := New(s, builder, nil, slog.Default(), time.Second, 500)
 
 	ctx := t.Context()
 
@@ -67,7 +67,7 @@ func TestProcessOncePicksUpUnprocessedEvents(t *testing.T) {
 func TestProcessOnceIsIdempotent(t *testing.T) {
 	s := store.OpenTestStore(t)
 	builder := graph.NewBuilder(s, slog.Default())
-	proc := New(s, builder, slog.Default(), time.Second, 500)
+	proc := New(s, builder, nil, slog.Default(), time.Second, 500)
 
 	ctx := t.Context()
 
@@ -94,7 +94,7 @@ func TestProcessOnceBatchLimit(t *testing.T) {
 	s := store.OpenTestStore(t)
 	builder := graph.NewBuilder(s, slog.Default())
 	// Small batch size to test batching.
-	proc := New(s, builder, slog.Default(), time.Second, 2)
+	proc := New(s, builder, nil, slog.Default(), time.Second, 2)
 
 	ctx := t.Context()
 
