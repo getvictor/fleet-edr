@@ -2,6 +2,7 @@ package detection
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/fleetdm/edr/server/store"
@@ -28,9 +29,9 @@ func (e *Engine) Register(r Rule) {
 }
 
 // Evaluate runs all registered rules against the event batch.
-// Findings are persisted as alerts. Detection failures are logged but do not return errors,
-// so event processing is not blocked by detection issues.
-func (e *Engine) Evaluate(ctx context.Context, events []store.Event) {
+// Findings are persisted as alerts. Rule evaluation failures are logged and skipped,
+// but alert persistence failures are returned so the caller can retry the batch.
+func (e *Engine) Evaluate(ctx context.Context, events []store.Event) error {
 	for _, rule := range e.rules {
 		findings, err := rule.Evaluate(ctx, events, e.store)
 		if err != nil {
@@ -48,8 +49,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []store.Event) {
 				ProcessID:   f.ProcessID,
 			}, f.EventIDs)
 			if err != nil {
-				e.logger.ErrorContext(ctx, "persist detection alert", "rule", f.RuleID, "host", f.HostID, "err", err)
-				continue
+				return fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
 			}
 			if created {
 				e.logger.InfoContext(ctx, "detection alert created",
@@ -57,4 +57,5 @@ func (e *Engine) Evaluate(ctx context.Context, events []store.Event) {
 			}
 		}
 	}
+	return nil
 }

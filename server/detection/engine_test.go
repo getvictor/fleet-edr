@@ -55,9 +55,10 @@ func TestEngineEvaluatePersistsAlerts(t *testing.T) {
 	})
 
 	// Run evaluation — should persist the alert.
-	engine.Evaluate(ctx, []store.Event{
+	err = engine.Evaluate(ctx, []store.Event{
 		{EventID: "evt-det-1", HostID: "host-a", TimestampNs: 1000, EventType: "exec", Payload: json.RawMessage(`{"pid":100}`)},
 	})
+	require.NoError(t, err)
 
 	// Verify alert was created.
 	alerts, err := s.ListAlerts(ctx, store.AlertFilter{HostID: "host-a"})
@@ -91,8 +92,8 @@ func TestEngineEvaluateDeduplicates(t *testing.T) {
 	events := []store.Event{{EventID: "e1", HostID: "host-a", TimestampNs: 1000, EventType: "exec"}}
 
 	// Run twice — second run should not create a duplicate.
-	engine.Evaluate(ctx, events)
-	engine.Evaluate(ctx, events)
+	require.NoError(t, engine.Evaluate(ctx, events))
+	require.NoError(t, engine.Evaluate(ctx, events))
 
 	count, err := s.CountAlerts(ctx, store.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
@@ -109,8 +110,8 @@ func TestEngineEvaluateRuleError(t *testing.T) {
 		err: assert.AnError,
 	})
 
-	// Should not panic — errors are logged, not returned.
-	engine.Evaluate(ctx, []store.Event{{EventID: "e1", HostID: "host-a"}})
+	// Rule evaluation errors are logged and skipped, not returned.
+	require.NoError(t, engine.Evaluate(ctx, []store.Event{{EventID: "e1", HostID: "host-a"}}))
 
 	count, err := s.CountAlerts(ctx, store.AlertFilter{})
 	require.NoError(t, err)

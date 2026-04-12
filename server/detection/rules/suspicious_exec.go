@@ -13,10 +13,14 @@ import (
 
 // Known shell paths.
 var shellPaths = map[string]bool{
-	"/bin/sh":   true,
-	"/bin/bash": true,
-	"/bin/zsh":  true,
-	"/bin/dash": true,
+	"/bin/sh":       true,
+	"/bin/bash":     true,
+	"/bin/zsh":      true,
+	"/bin/dash":     true,
+	"/usr/bin/sh":   true,
+	"/usr/bin/bash": true,
+	"/usr/bin/zsh":  true,
+	"/usr/bin/dash": true,
 }
 
 // Suspicious path prefixes where legitimate binaries should not execute from.

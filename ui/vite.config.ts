@@ -2,14 +2,14 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   base: "/ui/",
   build: {
     outDir: "../server/ui/dist",
     emptyOutDir: true,
-    minify: false,
-    sourcemap: true,
+    minify: mode === "production",
+    sourcemap: mode !== "production",
   },
   server: {
     proxy: {
@@ -22,4 +22,4 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     passWithNoTests: true,
   },
-});
+}));

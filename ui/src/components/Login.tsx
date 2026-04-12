@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { setApiKey } from "../api";
-import { listHosts } from "../api";
+import { setApiKey, listHosts } from "../api";
 
 interface LoginProps {
   onLogin: () => void;

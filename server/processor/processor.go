@@ -85,7 +85,13 @@ func (p *Processor) processOnce(ctx context.Context) {
 
 	// Run detection rules after processes are materialized.
 	if p.detection != nil {
-		p.detection.Evaluate(ctx, events)
+		if err := p.detection.Evaluate(ctx, events); err != nil {
+			p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
+			if unclaimErr := p.store.UnclaimEvents(ctx, eventIDs); unclaimErr != nil {
+				p.logger.ErrorContext(ctx, "unclaim events after detection failure", "err", unclaimErr)
+			}
+			return
+		}
 	}
 
 	if err := p.store.MarkProcessed(ctx, eventIDs); err != nil {
