@@ -34,7 +34,7 @@ func TestInsertAndGetAlert(t *testing.T) {
 	id, created, err := s.InsertAlert(ctx, alert, []string{"evt-1"})
 	require.NoError(t, err)
 	assert.True(t, created)
-	assert.Greater(t, id, int64(0))
+	assert.Positive(t, id)
 
 	got, err := s.GetAlert(ctx, id)
 	require.NoError(t, err)

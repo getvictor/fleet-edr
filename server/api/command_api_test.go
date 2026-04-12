@@ -39,7 +39,7 @@ func TestCreateCommand(t *testing.T) {
 
 	var resp map[string]int64
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Greater(t, resp["id"], int64(0))
+	assert.Positive(t, resp["id"])
 
 	got, err := s.GetCommand(ctx, resp["id"])
 	require.NoError(t, err)

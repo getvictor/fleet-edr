@@ -34,6 +34,7 @@ linters:
     - revive
     - sqlclosecheck
     - staticcheck
+    - testifylint
     - unconvert
     - unused
     - usetesting

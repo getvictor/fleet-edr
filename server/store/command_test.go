@@ -19,7 +19,7 @@ func TestInsertAndGetCommand(t *testing.T) {
 		Payload:     payload,
 	})
 	require.NoError(t, err)
-	assert.Greater(t, id, int64(0))
+	assert.Positive(t, id)
 
 	got, err := s.GetCommand(ctx, id)
 	require.NoError(t, err)
