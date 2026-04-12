@@ -4,9 +4,9 @@
 <dict>
 	<key>MachServices</key>
 	<dict>
-		<key>com.fleet.edr.networkextension</key>
+		<key>com.victoronsoftware.edr.networkextension</key>
 		<true/>
-		<key>group.com.fleet.edr.networkextension</key>
+		<key>group.com.victoronsoftware.edr.networkextension</key>
 		<true/>
 	</dict>
 	<key>NEProviderClasses</key>
@@ -22,7 +22,7 @@
 			<string>$(PRODUCT_MODULE_NAME).NetworkFilter</string>
 		</dict>
 		<key>NEMachServiceName</key>
-		<string>group.com.fleet.edr.networkextension</string>
+		<string>group.com.victoronsoftware.edr.networkextension</string>
 	</dict>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>Fleet EDR monitors network connections for threat detection.</string>

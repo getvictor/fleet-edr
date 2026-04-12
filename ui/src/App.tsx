@@ -23,7 +23,7 @@ export function App() {
   const [authenticated, setAuthenticated] = useState(() => sessionStorage.getItem("edr_api_key") !== null);
 
   if (!authenticated) {
-    return <Login onLogin={() => setAuthenticated(true)} />;
+    return <Login onLogin={() => { setAuthenticated(true); }} />;
   }
 
   return (

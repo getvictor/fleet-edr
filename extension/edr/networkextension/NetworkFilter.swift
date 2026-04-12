@@ -3,7 +3,7 @@ import Foundation
 import NetworkExtension
 import os.log
 
-private let logger = Logger(subsystem: "com.fleet.edr.networkextension", category: "NetworkFilter")
+private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "NetworkFilter")
 
 /// Returns the executable path for a given PID using proc_pidpath, or "unknown" on failure.
 private func processPath(for pid: pid_t) -> String {

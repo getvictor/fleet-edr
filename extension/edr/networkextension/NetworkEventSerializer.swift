@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 import os.log
 
-private let logger = Logger(subsystem: "com.fleet.edr.networkextension", category: "Serializer")
+private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "Serializer")
 
 // MARK: - Payload types
 

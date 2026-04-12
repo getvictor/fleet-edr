@@ -1,7 +1,7 @@
 import Foundation
 import EndpointSecurity
 
-let server = XPCServer(serviceName: "com.fleet.edr.extension")
+let server = XPCServer(serviceName: "com.victoronsoftware.edr.securityextension")
 server.start()
 
 let subscriber = ESFSubscriber()

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { setApiKey } from "../api";
 import { listHosts } from "../api";
 
@@ -11,7 +11,7 @@ export function Login({ onLogin }: LoginProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.SyntheticEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
@@ -31,7 +31,7 @@ export function Login({ onLogin }: LoginProps) {
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: "2rem", maxWidth: "20rem", margin: "4rem auto" }}>
       <h1 style={{ fontSize: "1.25rem", marginBottom: "1.5rem" }}>Fleet EDR</h1>
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={(e) => { void handleSubmit(e); }}>
         <label htmlFor="api-key" style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9rem" }}>
           API key
         </label>
@@ -39,7 +39,7 @@ export function Login({ onLogin }: LoginProps) {
           id="api-key"
           type="password"
           value={key}
-          onChange={(e) => setKey(e.target.value)}
+          onChange={(e) => { setKey(e.target.value); }}
           style={{ width: "100%", padding: "0.5rem", boxSizing: "border-box", marginBottom: "0.75rem" }}
           autoFocus
         />
