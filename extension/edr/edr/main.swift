@@ -115,15 +115,87 @@ private func enableContentFilter() {
     }
 }
 
+private func enableDNSProxy() {
+    NEDNSProxyManager.shared().loadFromPreferences { error in
+        if let error {
+            print("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
+            exit(EXIT_FAILURE)
+        }
+
+        let proxyConfig = NEDNSProxyProviderProtocol()
+        proxyConfig.providerBundleIdentifier = netExtensionID
+
+        NEDNSProxyManager.shared().providerProtocol = proxyConfig
+        NEDNSProxyManager.shared().localizedDescription = "Fleet EDR DNS Monitor"
+        NEDNSProxyManager.shared().isEnabled = true
+
+        NEDNSProxyManager.shared().saveToPreferences { error in
+            if let error {
+                print("ERROR: Failed to save DNS proxy preferences: \(error.localizedDescription)")
+                exit(EXIT_FAILURE)
+            }
+            print("DNS proxy enabled successfully")
+            exit(EXIT_SUCCESS)
+        }
+    }
+}
+
+private func disableContentFilter() {
+    NEFilterManager.shared().loadFromPreferences { error in
+        if let error {
+            print("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
+            exit(EXIT_FAILURE)
+        }
+        NEFilterManager.shared().isEnabled = false
+        NEFilterManager.shared().saveToPreferences { error in
+            if let error {
+                print("ERROR: Failed to disable filter: \(error.localizedDescription)")
+                exit(EXIT_FAILURE)
+            }
+            print("Content filter disabled")
+            exit(EXIT_SUCCESS)
+        }
+    }
+}
+
+private func disableDNSProxy() {
+    NEDNSProxyManager.shared().loadFromPreferences { error in
+        if let error {
+            print("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
+            exit(EXIT_FAILURE)
+        }
+        NEDNSProxyManager.shared().isEnabled = false
+        NEDNSProxyManager.shared().saveToPreferences { error in
+            if let error {
+                print("ERROR: Failed to disable DNS proxy: \(error.localizedDescription)")
+                exit(EXIT_FAILURE)
+            }
+            print("DNS proxy disabled")
+            exit(EXIT_SUCCESS)
+        }
+    }
+}
+
 let action = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"
 
-if action == "enable-filter" {
-    // Directly enable the content filter without re-activating extensions.
-    // Useful when extensions were activated via db.plist or are already active.
+switch action {
+case "enable-filter":
     print("Enabling content filter...")
     enableContentFilter()
     dispatchMain()
-} else {
+case "disable-filter":
+    print("Disabling content filter...")
+    disableContentFilter()
+    dispatchMain()
+case "enable-dns-proxy":
+    print("Enabling DNS proxy...")
+    enableDNSProxy()
+    dispatchMain()
+case "disable-dns-proxy":
+    print("Disabling DNS proxy...")
+    disableDNSProxy()
+    dispatchMain()
+default:
     let manager = ExtensionManager(action: action)
     manager.run()
     dispatchMain()
