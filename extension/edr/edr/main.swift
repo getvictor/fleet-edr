@@ -3,9 +3,9 @@ import NetworkExtension
 import os.log
 import SystemExtensions
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr", category: "main")
-private let esfExtensionID = "com.victoronsoftware.edr.securityextension"
-private let netExtensionID = "com.victoronsoftware.edr.networkextension"
+private let logger = Logger(subsystem: "com.fleetdm.edr", category: "main")
+private let esfExtensionID = "com.fleetdm.edr.securityextension"
+private let netExtensionID = "com.fleetdm.edr.networkextension"
 
 final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     private let action: String

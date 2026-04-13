@@ -3,7 +3,7 @@ import Network
 import NetworkExtension
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "DNSProxy")
+private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "DNSProxy")
 
 /// Disambiguates the NWEndpoint type that comes from NetworkExtension (NEAppProxyFlow APIs).
 /// The Network framework's NWEndpoint uses a different type name via typealias.

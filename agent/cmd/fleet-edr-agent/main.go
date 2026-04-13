@@ -22,8 +22,8 @@ import (
 
 func main() {
 	var (
-		xpcService    = flag.String("xpc-service", "8VBZ3948LU.com.victoronsoftware.edr.securityextension.xpc", "ESF extension XPC Mach service name")
-		netXPCService = flag.String("net-xpc-service", "8VBZ3948LU.com.victoronsoftware.edr.networkextension.xpc", "Network extension XPC Mach service name")
+		xpcService    = flag.String("xpc-service", "8VBZ3948LU.com.fleetdm.edr.securityextension.xpc", "ESF extension XPC Mach service name")
+		netXPCService = flag.String("net-xpc-service", "8VBZ3948LU.com.fleetdm.edr.networkextension.xpc", "Network extension XPC Mach service name")
 		dbPath        = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
 		serverURL     = flag.String("server-url", "http://localhost:8088", "Ingestion server URL")
 		apiKey        = flag.String("api-key", "", "API key for ingestion server")

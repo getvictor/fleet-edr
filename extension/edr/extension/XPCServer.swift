@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.securityextension", category: "XPCServer")
+private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer")
 
 /// Code signing requirement that peers must satisfy to connect to the XPC service.
 /// Accepts any binary signed with the Fleet Device Management team ID (8VBZ3948LU).
@@ -14,7 +14,7 @@ final class XPCServer {
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
-    private let queue = DispatchQueue(label: "com.victoronsoftware.edr.xpcserver")
+    private let queue = DispatchQueue(label: "com.fleetdm.edr.xpcserver")
 
     init(serviceName: String) {
         self.serviceName = serviceName

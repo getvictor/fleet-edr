@@ -2,7 +2,7 @@ import Foundation
 import NetworkExtension
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "NetworkFilter")
+private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "NetworkFilter")
 
 /// NetworkFilter captures outbound network connections, attributing them
 /// to the source process via audit token.

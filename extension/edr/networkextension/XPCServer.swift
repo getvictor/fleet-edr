@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "XPCServer")
+private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "XPCServer")
 
 /// Code signing requirement that peers must satisfy to connect to the XPC service.
 /// Accepts any binary signed with the Fleet Device Management team ID (8VBZ3948LU).
@@ -11,12 +11,12 @@ private let peerCodeSigningRequirement = "anchor apple generic and certificate l
 /// Network events are broadcast to all connected peers as XPC dictionaries
 /// with a "data" key containing raw JSON bytes.
 final class XPCServer {
-    static let shared = XPCServer(serviceName: "8VBZ3948LU.com.victoronsoftware.edr.networkextension.xpc")
+    static let shared = XPCServer(serviceName: "8VBZ3948LU.com.fleetdm.edr.networkextension.xpc")
 
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
-    private let queue = DispatchQueue(label: "com.victoronsoftware.edr.networkextension.xpcserver")
+    private let queue = DispatchQueue(label: "com.fleetdm.edr.networkextension.xpcserver")
 
     init(serviceName: String) {
         self.serviceName = serviceName

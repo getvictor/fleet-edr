@@ -2,7 +2,7 @@ import EndpointSecurity
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.securityextension", category: "ESFSubscriber")
+private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFSubscriber")
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
