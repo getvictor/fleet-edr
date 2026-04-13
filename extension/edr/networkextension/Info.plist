@@ -4,7 +4,7 @@
 <dict>
 	<key>MachServices</key>
 	<dict>
-		<key>com.victoronsoftware.edr.networkextension</key>
+		<key>8VBZ3948LU.com.victoronsoftware.edr.networkextension.xpc</key>
 		<true/>
 		<key>group.com.victoronsoftware.edr.networkextension</key>
 		<true/>

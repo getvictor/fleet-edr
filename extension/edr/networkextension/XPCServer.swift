@@ -3,11 +3,15 @@ import os.log
 
 private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "XPCServer")
 
+/// Code signing requirement that peers must satisfy to connect to the XPC service.
+/// Accepts any binary signed with the Fleet Device Management team ID (8VBZ3948LU).
+private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"8VBZ3948LU\""
+
 /// XPCServer vends a Mach service that the Go agent connects to.
 /// Network events are broadcast to all connected peers as XPC dictionaries
 /// with a "data" key containing raw JSON bytes.
 final class XPCServer {
-    static let shared = XPCServer(serviceName: "com.victoronsoftware.edr.networkextension")
+    static let shared = XPCServer(serviceName: "8VBZ3948LU.com.victoronsoftware.edr.networkextension.xpc")
 
     private let serviceName: String
     private var listener: xpc_connection_t?
@@ -51,6 +55,14 @@ final class XPCServer {
         let type = xpc_get_type(event)
 
         if type == XPC_TYPE_CONNECTION {
+            // Validate peer code signing before accepting the connection.
+            let result = xpc_connection_set_peer_code_signing_requirement(event, peerCodeSigningRequirement)
+            if result != 0 {
+                logger.error("Failed to set peer code signing requirement: \(result)")
+                xpc_connection_cancel(event)
+                return
+            }
+
             let peer = XPCPeer(connection: event)
             peers.insert(peer)
             logger.info("Peer connected (total: \(self.peers.count))")

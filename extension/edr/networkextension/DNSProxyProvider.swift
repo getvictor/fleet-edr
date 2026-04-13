@@ -9,6 +9,14 @@ private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextensio
 /// The Network framework's NWEndpoint uses a different type name via typealias.
 private typealias FlowEndpoint = NWHostEndpoint
 
+/// Process attribution context for a single DNS flow. Bundled to keep function
+/// parameter counts manageable.
+private struct FlowContext {
+    let pid: pid_t
+    let uid: uid_t
+    let path: String
+}
+
 /// DNSProxyProvider intercepts DNS queries, captures metadata for EDR telemetry,
 /// and forwards queries to the originally-intended DNS server. Process attribution
 /// is done via audit tokens on the incoming flow.
@@ -47,18 +55,18 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
     private func handleUDPFlow(_ flow: NEAppProxyUDPFlow) {
         let (pid, uid) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let path = processPath(for: pid)
+        let ctx = FlowContext(pid: pid, uid: uid, path: processPath(for: pid))
 
         flow.open(withLocalEndpoint: nil) { [weak self] error in
             if let error {
                 logger.error("Failed to open UDP flow: \(error.localizedDescription)")
                 return
             }
-            self?.readUDPDatagrams(flow: flow, pid: pid, uid: uid, path: path)
+            self?.readUDPDatagrams(flow: flow, ctx: ctx)
         }
     }
 
-    private func readUDPDatagrams(flow: NEAppProxyUDPFlow, pid: pid_t, uid: uid_t, path: String) {
+    private func readUDPDatagrams(flow: NEAppProxyUDPFlow, ctx: FlowContext) {
         flow.readDatagrams { [weak self] datagrams, endpoints, error in
             guard let self else { return }
 
@@ -77,19 +85,19 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             for i in 0..<datagrams.count {
                 // Cast to NWHostEndpoint (which is the concrete subclass the framework returns).
                 if let hostEndpoint = endpoints[i] as? NWHostEndpoint {
-                    self.forwardUDPDatagram(datagrams[i], to: hostEndpoint, flow: flow, pid: pid, uid: uid, path: path)
+                    self.forwardUDPDatagram(datagrams[i], to: hostEndpoint, flow: flow, ctx: ctx)
                 }
             }
 
             // Continue reading for more datagrams on this flow.
-            self.readUDPDatagrams(flow: flow, pid: pid, uid: uid, path: path)
+            self.readUDPDatagrams(flow: flow, ctx: ctx)
         }
     }
 
-    private func forwardUDPDatagram(_ datagram: Data, to endpoint: NWHostEndpoint, flow: NEAppProxyUDPFlow,
-                                    pid: pid_t, uid: uid_t, path: String) {
+    private func forwardUDPDatagram(_ datagram: Data, to endpoint: NWHostEndpoint,
+                                    flow: NEAppProxyUDPFlow, ctx: FlowContext) {
         // Emit telemetry (best-effort).
-        emitDNSTelemetry(datagram: datagram, pid: pid, uid: uid, path: path)
+        emitDNSTelemetry(datagram: datagram, ctx: ctx)
 
         // Forward to the originally-intended DNS server using Network framework.
         // The system excludes this extension's own connections from the DNS proxy chain,
@@ -104,7 +112,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             switch state {
             case .ready:
                 self?.sendUDPAndReceive(connection: connection, datagram: datagram,
-                                        responseEndpoint: endpoint, flow: flow, pid: pid, uid: uid, path: path)
+                                        responseEndpoint: endpoint, flow: flow, ctx: ctx)
             case .failed(let error):
                 logger.error("Upstream UDP connection failed: \(error.localizedDescription)")
                 connection.cancel()
@@ -119,7 +127,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
     private func sendUDPAndReceive(connection: Network.NWConnection, datagram: Data,
                                    responseEndpoint: NWHostEndpoint, flow: NEAppProxyUDPFlow,
-                                   pid: pid_t, uid: uid_t, path: String) {
+                                   ctx: FlowContext) {
         connection.send(content: datagram, completion: .contentProcessed { [weak self] error in
             if let error {
                 logger.error("Failed to send UDP datagram: \(error.localizedDescription)")
@@ -138,7 +146,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 guard let responseData, !responseData.isEmpty else { return }
 
                 // Enrich telemetry with response addresses.
-                self?.emitDNSResponseTelemetry(response: responseData, pid: pid, uid: uid, path: path)
+                self?.emitDNSResponseTelemetry(response: responseData, ctx: ctx)
 
                 // Write response back to the originating flow.
                 flow.writeDatagrams([responseData], sentBy: [responseEndpoint]) { writeError in
@@ -154,7 +162,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
     private func handleTCPFlow(_ flow: NEAppProxyTCPFlow) {
         let (pid, uid) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let path = processPath(for: pid)
+        let ctx = FlowContext(pid: pid, uid: uid, path: processPath(for: pid))
 
         guard let remoteEndpoint = flow.remoteEndpoint as? NWHostEndpoint,
               let upstreamEndpoint = convertToNetworkEndpoint(remoteEndpoint) else {
@@ -173,7 +181,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             connection.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
-                    self?.pumpTCP(flow: flow, connection: connection, pid: pid, uid: uid, path: path)
+                    self?.pumpTCP(flow: flow, connection: connection, ctx: ctx)
                 case .failed(let error):
                     logger.error("TCP connection failed: \(error.localizedDescription)")
                     flow.closeReadWithError(error)
@@ -187,16 +195,14 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    private func pumpTCP(flow: NEAppProxyTCPFlow, connection: Network.NWConnection,
-                         pid: pid_t, uid: uid_t, path: String) {
+    private func pumpTCP(flow: NEAppProxyTCPFlow, connection: Network.NWConnection, ctx: FlowContext) {
         // Flow -> upstream
-        readTCPFromFlow(flow: flow, connection: connection, pid: pid, uid: uid, path: path)
+        readTCPFromFlow(flow: flow, connection: connection, ctx: ctx)
         // Upstream -> flow
         readTCPFromConnection(flow: flow, connection: connection)
     }
 
-    private func readTCPFromFlow(flow: NEAppProxyTCPFlow, connection: Network.NWConnection,
-                                 pid: pid_t, uid: uid_t, path: String) {
+    private func readTCPFromFlow(flow: NEAppProxyTCPFlow, connection: Network.NWConnection, ctx: FlowContext) {
         flow.readData { [weak self] data, error in
             guard let self else { return }
 
@@ -209,7 +215,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             // TCP DNS has a 2-byte length prefix; emit telemetry on the query portion.
             if let data, data.count > 2 {
                 let queryData = data.suffix(from: 2)
-                self.emitDNSTelemetry(datagram: Data(queryData), pid: pid, uid: uid, path: path)
+                self.emitDNSTelemetry(datagram: Data(queryData), ctx: ctx)
             }
 
             connection.send(content: data, completion: .contentProcessed { sendError in
@@ -217,7 +223,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                     flow.closeWriteWithError(sendError)
                     return
                 }
-                self.readTCPFromFlow(flow: flow, connection: connection, pid: pid, uid: uid, path: path)
+                self.readTCPFromFlow(flow: flow, connection: connection, ctx: ctx)
             })
         }
     }
@@ -251,14 +257,14 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
     // MARK: - Telemetry
 
-    private func emitDNSTelemetry(datagram: Data, pid: pid_t, uid: uid_t, path: String) {
+    private func emitDNSTelemetry(datagram: Data, ctx: FlowContext) {
         guard let queryName = DNSParser.queryName(from: datagram) else { return }
         let queryType = DNSParser.queryType(from: datagram)
 
-        logger.debug("DNS query: \(queryName, privacy: .public) (\(queryType)) pid=\(pid) path=\(path, privacy: .public)")
+        logger.debug("DNS query: \(queryName, privacy: .public) (\(queryType)) pid=\(ctx.pid) path=\(ctx.path, privacy: .public)")
 
         let payload = DNSQueryPayload(
-            pid: pid, path: path, uid: uid,
+            pid: ctx.pid, path: ctx.path, uid: ctx.uid,
             queryName: queryName, queryType: queryType,
             responseAddresses: nil,
             proto: "udp"
@@ -269,7 +275,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    private func emitDNSResponseTelemetry(response: Data, pid: pid_t, uid: uid_t, path: String) {
+    private func emitDNSResponseTelemetry(response: Data, ctx: FlowContext) {
         guard let queryName = DNSParser.queryName(from: response) else { return }
         let queryType = DNSParser.queryType(from: response)
         let responseAddrs = DNSParser.responseAddresses(from: response)
@@ -277,7 +283,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         guard !responseAddrs.isEmpty else { return }
 
         let payload = DNSQueryPayload(
-            pid: pid, path: path, uid: uid,
+            pid: ctx.pid, path: ctx.path, uid: ctx.uid,
             queryName: queryName, queryType: queryType,
             responseAddresses: responseAddrs,
             proto: "udp"

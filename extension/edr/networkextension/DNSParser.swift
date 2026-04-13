@@ -55,43 +55,59 @@ enum DNSParser {
         let ancount = UInt16(data[6]) << 8 | UInt16(data[7])
         guard ancount > 0 else { return [] }
 
-        // Skip header (12 bytes) + question section
-        var offset = 12
         let qdcount = UInt16(data[4]) << 8 | UInt16(data[5])
-        for _ in 0..<qdcount {
-            offset = skipName(in: data, at: offset)
-            offset += 4 // QTYPE + QCLASS
-            guard offset <= data.count else { return [] }
+        guard let questionsEnd = skipQuestions(in: data, count: qdcount, startOffset: 12) else {
+            return []
         }
 
+        var offset = questionsEnd
         var addresses: [String] = []
         for _ in 0..<ancount {
-            guard offset < data.count else { break }
-            // Skip name (may be compression pointer)
-            offset = skipName(in: data, at: offset)
-            guard offset + 10 <= data.count else { break }
-
-            let rrType = UInt16(data[offset]) << 8 | UInt16(data[offset + 1])
-            let rdlength = Int(UInt16(data[offset + 8]) << 8 | UInt16(data[offset + 9]))
-            offset += 10 // TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2)
-
-            guard offset + rdlength <= data.count else { break }
-
-            if rrType == 1 && rdlength == 4 { // A record
-                let ip = "\(data[offset]).\(data[offset+1]).\(data[offset+2]).\(data[offset+3])"
-                addresses.append(ip)
-            } else if rrType == 28 && rdlength == 16 { // AAAA record
-                let bytes = data[offset..<offset+16]
-                let parts = stride(from: 0, to: 16, by: 2).map { i in
-                    String(format: "%x", UInt16(bytes[bytes.startIndex + i]) << 8 | UInt16(bytes[bytes.startIndex + i + 1]))
-                }
-                addresses.append(parts.joined(separator: ":"))
-            }
-
-            offset += rdlength
+            guard let (addr, newOffset) = parseAnswer(in: data, at: offset) else { break }
+            if let addr { addresses.append(addr) }
+            offset = newOffset
         }
-
         return addresses
+    }
+
+    /// Skips the question section of a DNS packet. Returns the new offset or nil on error.
+    private static func skipQuestions(in data: Data, count: UInt16, startOffset: Int) -> Int? {
+        var offset = startOffset
+        for _ in 0..<count {
+            offset = skipName(in: data, at: offset)
+            offset += 4 // QTYPE + QCLASS
+            guard offset <= data.count else { return nil }
+        }
+        return offset
+    }
+
+    /// Parses a single answer record. Returns the address (if A/AAAA) and the new offset.
+    private static func parseAnswer(in data: Data, at start: Int) -> (String?, Int)? {
+        guard start < data.count else { return nil }
+        let afterName = skipName(in: data, at: start)
+        guard afterName + 10 <= data.count else { return nil }
+
+        let rrType = UInt16(data[afterName]) << 8 | UInt16(data[afterName + 1])
+        let rdlength = Int(UInt16(data[afterName + 8]) << 8 | UInt16(data[afterName + 9]))
+        let rdataStart = afterName + 10 // TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2)
+        guard rdataStart + rdlength <= data.count else { return nil }
+
+        let address = parseRecordData(in: data, type: rrType, start: rdataStart, length: rdlength)
+        return (address, rdataStart + rdlength)
+    }
+
+    private static func parseRecordData(in data: Data, type rrType: UInt16, start: Int, length: Int) -> String? {
+        if rrType == 1 && length == 4 { // A record
+            return "\(data[start]).\(data[start+1]).\(data[start+2]).\(data[start+3])"
+        }
+        if rrType == 28 && length == 16 { // AAAA record
+            let bytes = data[start..<start+16]
+            let parts = stride(from: 0, to: 16, by: 2).map { i in
+                String(format: "%x", UInt16(bytes[bytes.startIndex + i]) << 8 | UInt16(bytes[bytes.startIndex + i + 1]))
+            }
+            return parts.joined(separator: ":")
+        }
+        return nil
     }
 
     // MARK: - Private helpers
@@ -107,19 +123,20 @@ enum DNSParser {
         return offset
     }
 
+    private static let qtypeNames: [UInt16: String] = [
+        1: "A",
+        2: "NS",
+        5: "CNAME",
+        6: "SOA",
+        12: "PTR",
+        15: "MX",
+        16: "TXT",
+        28: "AAAA",
+        33: "SRV",
+        255: "ANY"
+    ]
+
     private static func qtypeToString(_ qtype: UInt16) -> String {
-        switch qtype {
-        case 1: return "A"
-        case 2: return "NS"
-        case 5: return "CNAME"
-        case 6: return "SOA"
-        case 12: return "PTR"
-        case 15: return "MX"
-        case 16: return "TXT"
-        case 28: return "AAAA"
-        case 33: return "SRV"
-        case 255: return "ANY"
-        default: return "TYPE\(qtype)"
-        }
+        qtypeNames[qtype] ?? "TYPE\(qtype)"
     }
 }
