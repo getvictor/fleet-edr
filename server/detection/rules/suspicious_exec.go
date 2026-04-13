@@ -169,10 +169,13 @@ func (r *SuspiciousExec) checkNetworkActivity(
 	tr store.TimeRange,
 	s *store.Store,
 ) (*detection.Finding, error) {
-	// Collect PIDs to check: the shell itself plus all children.
+	// Collect PIDs to check: the shell itself plus all children. Map each PID to its
+	// process row ID so the finding can link to the actual network-originating process.
 	pidsToCheck := []int{shell.payload.PID}
+	pidToProcessID := map[int]int64{shell.payload.PID: shellProc.ID}
 	for _, child := range children {
 		pidsToCheck = append(pidsToCheck, child.PID)
+		pidToProcessID[child.PID] = child.ID
 	}
 
 	for _, pid := range pidsToCheck {
@@ -204,7 +207,7 @@ func (r *SuspiciousExec) checkNetworkActivity(
 				Severity:    detection.SeverityHigh,
 				Title:       "Shell spawn with outbound network connection",
 				Description: fmt.Sprintf("%s → %s → outbound %s:%d", parentPath, shell.payload.Path, connPayload.RemoteAddress, connPayload.RemotePort),
-				ProcessID:   shellProc.ID,
+				ProcessID:   pidToProcessID[pid],
 				EventIDs:    []string{shell.event.EventID, evt.EventID},
 			}, nil
 		}
