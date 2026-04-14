@@ -1,5 +1,5 @@
-# Local dev only. Server and ingest defaults assume port 3306; override with
-# -dsn "root@tcp(127.0.0.1:3316)/edr?parseTime=true" when using these containers.
+# Local dev MySQL. Ports 3316/3317 avoid conflicts with other local MySQL instances.
+# Server and ingest CLI defaults match these ports.
 services:
   mysql:
     image: mysql:8.4

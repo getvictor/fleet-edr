@@ -34,11 +34,11 @@ ui/                  React/TypeScript frontend (Vite, D3.js process tree)
 ## Quick start
 
 ```bash
-# Start MySQL (docker-compose binds to port 3316 to avoid conflicts)
+# Start MySQL
 docker compose up mysql -d
 
-# Run the server (specify the docker-compose port)
-cd server && go run ./cmd/fleet-edr-server/ -dsn "root@tcp(127.0.0.1:3316)/edr?parseTime=true"
+# Run the server
+cd server && go run ./cmd/fleet-edr-server/
 
 # Build the UI (embedded in the server binary)
 cd ui && npm run build
@@ -49,7 +49,7 @@ cd ui && npm run build
 ## Running tests
 
 ```bash
-# Server (requires MySQL; use docker-compose port for local, CI uses 3306)
+# Server (requires MySQL)
 cd server && EDR_TEST_DSN="root@tcp(127.0.0.1:3316)/edr_test?parseTime=true" go test ./...
 
 # Agent
