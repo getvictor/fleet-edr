@@ -4,8 +4,6 @@
 <dict>
 	<key>MachServices</key>
 	<dict>
-		<key>8VBZ3948LU.com.fleetdm.edr.networkextension.xpc</key>
-		<true/>
 		<key>group.com.fleetdm.edr.networkextension</key>
 		<true/>
 	</dict>
