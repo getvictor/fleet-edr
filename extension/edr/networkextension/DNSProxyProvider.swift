@@ -200,7 +200,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // Flow -> upstream
         readTCPFromFlow(flow: flow, connection: connection, ctx: ctx)
         // Upstream -> flow
-        readTCPFromConnection(flow: flow, connection: connection)
+        readTCPFromConnection(flow: flow, connection: connection, ctx: ctx)
     }
 
     private func readTCPFromFlow(flow: NEAppProxyTCPFlow, connection: Network.NWConnection, ctx: FlowContext) {
@@ -231,9 +231,13 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    private func readTCPFromConnection(flow: NEAppProxyTCPFlow, connection: Network.NWConnection) {
+    private func readTCPFromConnection(flow: NEAppProxyTCPFlow, connection: Network.NWConnection, ctx: FlowContext) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65535) { [weak self] data, _, isComplete, error in
             if let data, !data.isEmpty {
+                // Emit response telemetry (TCP DNS has a 2-byte length prefix).
+                if data.count > 2 {
+                    self?.emitDNSResponseTelemetry(response: Data(data.dropFirst(2)), ctx: ctx, proto: "tcp")
+                }
                 flow.write(data) { writeError in
                     if let writeError {
                         flow.closeReadWithError(writeError)
@@ -241,11 +245,12 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                         connection.cancel()
                         return
                     }
-                    self?.readTCPFromConnection(flow: flow, connection: connection)
+                    self?.readTCPFromConnection(flow: flow, connection: connection, ctx: ctx)
                 }
             }
             if isComplete || error != nil {
-                flow.closeReadWithError(nil)
+                flow.closeReadWithError(error)
+                flow.closeWriteWithError(error)
                 connection.cancel()
             }
         }
@@ -268,7 +273,9 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         guard let queryName = DNSParser.queryName(from: datagram) else { return }
         let queryType = DNSParser.queryType(from: datagram)
 
-        logger.debug("DNS query: \(queryName, privacy: .public) (\(queryType)) pid=\(ctx.pid) path=\(ctx.path, privacy: .private(mask: .hash))")
+        logger.debug(
+            "DNS query: \(queryName, privacy: .private(mask: .hash)) (\(queryType)) pid=\(ctx.pid)"
+        )
 
         let payload = DNSQueryPayload(
             pid: ctx.pid, path: ctx.path, uid: ctx.uid,

@@ -18,7 +18,7 @@ enum DNSParser {
             offset += 1
 
             if length == 0 { break } // end of name
-            if length >= 0xC0 { break } // compression pointer, stop parsing
+            if length >= 0xC0 { return nil } // compression pointer -- we don't resolve it
             guard offset + length <= data.count else { return nil }
 
             let label = String(data: data[offset..<offset + length], encoding: .utf8) ?? ""
