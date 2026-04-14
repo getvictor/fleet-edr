@@ -55,9 +55,14 @@ final class XPCServer {
         let type = xpc_get_type(event)
 
         if type == XPC_TYPE_CONNECTION {
-            // TODO(phase-4): re-enable peer code signing validation once we resolve why
-            // xpc_connection_set_peer_code_signing_requirement rejects Fleet-signed agents
-            // that pass `codesign -R` verification. Tracked as a Phase 4 hardening item.
+            // Validate peer code signing before accepting the connection.
+            // The agent binary must be signed with --options runtime for this to work.
+            let result = xpc_connection_set_peer_code_signing_requirement(event, peerCodeSigningRequirement)
+            if result != 0 {
+                logger.error("Failed to set peer code signing requirement: \(result)")
+                xpc_connection_cancel(event)
+                return
+            }
 
             let peer = XPCPeer(connection: event)
             peers.insert(peer)
