@@ -21,7 +21,9 @@ export function ProcessTreeView() {
   const svgRef = useRef<SVGSVGElement>(null);
   const [roots, setRoots] = useState<ProcessNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
-  const [rangeIdx, setRangeIdx] = useState(1);
+  // Default to 24h window when navigating from an alert (alert times may be days old);
+  // otherwise default to 1h for the live view.
+  const [rangeIdx, setRangeIdx] = useState(() => (searchParams.get("at") ? 3 : 1));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
@@ -31,17 +33,20 @@ export function ProcessTreeView() {
     setLoading(true);
     setError(null);
 
-    const now = Date.now() * 1_000_000;
+    // Anchor the window on the alert time when arriving from the alert list; fall back to now.
+    const atParam = searchParams.get("at");
+    const anchorMs = atParam ? Number(atParam) : Date.now();
+    const to = anchorMs * 1_000_000;
     const range = TIME_RANGES[rangeIdx];
-    const from = now - range.ms * 1_000_000;
+    const from = to - range.ms * 1_000_000;
 
-    getProcessTree(hostId, from, now)
+    getProcessTree(hostId, from, to)
       .then((res) => { setRoots(res.roots); })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Unknown error");
       })
       .finally(() => { setLoading(false); });
-  }, [hostId, rangeIdx]);
+  }, [hostId, rangeIdx, searchParams]);
 
   // Fetch alerts for this host to mark nodes with alert badges.
   useEffect(() => {

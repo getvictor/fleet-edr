@@ -121,8 +121,9 @@ export function AlertList() {
                     type="button"
                     className="link-button"
                     onClick={() => {
+                      const atMs = new Date(a.created_at).getTime();
                       void navigate(
-                        `/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}`,
+                        `/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(atMs)}`,
                       );
                     }}
                   >
