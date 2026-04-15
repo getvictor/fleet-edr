@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import * as d3 from "d3";
-import { getProcessTree, listAlerts } from "../api";
-import type { ProcessNode } from "../types";
+import { getAlertDetail, getProcessTree, listAlerts } from "../api";
+import type { AlertDetail, ProcessNode } from "../types";
 import { ProcessDetail } from "./ProcessDetail";
+import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import { PageHeader } from "./ui/PageHeader";
 import "./ProcessTree.scss";
+
+const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
+  critical: "critical",
+  high: "high",
+  medium: "medium",
+  low: "low",
+};
 
 const TIME_RANGES: { label: string; ms: number }[] = [
   { label: "15 min", ms: 15 * 60 * 1000 },
@@ -63,10 +71,42 @@ export function ProcessTreeView() {
     }
   });
   const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
+  // Alert focus mode: when we arrived from an alert link, the tree defaults to showing only
+  // the alerted process plus its ancestors and descendants — "related processes only" — so
+  // the analyst isn't wading through a forest of unrelated background daemons. Toggleable.
+  const [focusAlertChain, setFocusAlertChain] = useState<boolean>(
+    () => searchParams.get("alert") !== null,
+  );
+  const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(null);
 
   useEffect(() => {
     try { localStorage.setItem(HIDE_SYSTEM_STORAGE_KEY, String(hideSystem)); } catch { /* ignore */ }
   }, [hideSystem]);
+
+  // Fetch the alert so we can render a breadcrumb with title/severity/timestamp.
+  useEffect(() => {
+    const alertIdParam = searchParams.get("alert");
+    if (!alertIdParam) {
+      setAlertDetail(null); // eslint-disable-line react-hooks/set-state-in-effect -- clear on param removal
+      return;
+    }
+    const alertId = Number(alertIdParam);
+    let cancelled = false;
+    getAlertDetail(alertId)
+      .then((result) => { if (!cancelled) setAlertDetail(result); })
+      .catch(() => { if (!cancelled) setAlertDetail(null); });
+    return () => { cancelled = true; };
+  }, [searchParams]);
+
+  // Compute the set of process row-ids that make up the alert chain:
+  // the alerted process, every ancestor back to the root, and every descendant.
+  // Used by the focus-mode filter to drop everything unrelated to the alert.
+  const alertChainIds = useMemo(() => {
+    const processIdParam = searchParams.get("process");
+    if (!focusAlertChain || !processIdParam) return null;
+    const targetId = Number(processIdParam);
+    return findAlertChain(roots, targetId);
+  }, [roots, searchParams, focusAlertChain]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one —
   // even if their binary is in a system path, the analyst context matters.
@@ -84,16 +124,18 @@ export function ProcessTreeView() {
   }, [roots, alertProcessIds]);
 
   // Re-shape the raw tree according to the current filters: hide system-path nodes
-  // unconditionally (except preserved) and drop children of collapsed nodes while stashing
-  // the hidden-count on the surviving parent so we can render it as "+N".
-  // While a search query is active, skip the collapse step so the user never sees "0 matches"
-  // when a match is only hidden inside a collapsed subtree.
+  // unconditionally (except preserved), optionally restrict to the alert chain, and drop
+  // children of collapsed nodes while stashing the hidden-count on the surviving parent so
+  // we can render it as "+N". While a search query is active, skip the collapse step so the
+  // user never sees "0 matches" when a match is only hidden inside a collapsed subtree.
   const applyCollapse = query.trim() === "";
   const { tree: visibleRoots, hiddenSystemCount } = useMemo(() => {
     const apply = (nodes: ProcessNode[]): { kept: ProcessNode[]; hidden: number } => {
       const out: ProcessNode[] = [];
       let hidden = 0;
       for (const n of nodes) {
+        // In alert focus mode, drop anything that isn't on the alert's ancestor/descendant chain.
+        if (alertChainIds && !alertChainIds.has(n.id)) continue;
         if (hideSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) {
           hidden += 1 + countDescendants(n);
           continue;
@@ -112,7 +154,7 @@ export function ProcessTreeView() {
     };
     const { kept, hidden } = apply(roots);
     return { tree: kept, hiddenSystemCount: hidden };
-  }, [roots, hideSystem, collapsedIds, preservedIds, applyCollapse]);
+  }, [roots, hideSystem, collapsedIds, preservedIds, applyCollapse, alertChainIds]);
 
   const toggleCollapsed = useCallback((nodeId: number) => {
     setCollapsedIds((prev) => {
@@ -356,6 +398,32 @@ export function ProcessTreeView() {
         actions={headerActions}
       />
 
+      {alertDetail && (
+        <div className="alert-breadcrumb">
+          <Link to="/alerts" className="alert-breadcrumb__back">&larr; Alerts</Link>
+          <span className="alert-breadcrumb__sep">/</span>
+          <span className="alert-breadcrumb__id">#{String(alertDetail.id)}</span>
+          <Badge variant={SEVERITY_VARIANTS[alertDetail.severity] ?? "neutral"}>
+            {alertDetail.severity}
+          </Badge>
+          <span className="alert-breadcrumb__title">{alertDetail.title}</span>
+          <span className="alert-breadcrumb__time">
+            {new Date(alertDetail.created_at).toLocaleString()}
+          </span>
+          <span className="alert-breadcrumb__spacer" />
+          <Button
+            size="small"
+            variant={focusAlertChain ? "primary" : "inverse"}
+            onClick={() => { setFocusAlertChain((v) => !v); }}
+            title={focusAlertChain
+              ? "Showing only the alert's process chain"
+              : "Showing the full host tree"}
+          >
+            {focusAlertChain ? "Focused on chain" : "Show full tree"}
+          </Button>
+        </div>
+      )}
+
       {loading && <p className="process-tree__status">Loading...</p>}
       {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
       {!loading && roots.length === 0 && (
@@ -404,6 +472,32 @@ function countDescendants(node: ProcessNode): number {
   let n = 0;
   for (const c of node.children) n += 1 + countDescendants(c);
   return n;
+}
+
+// Given a root list and a target process row id, return the set of ids that form the alert
+// chain — the target, every ancestor back to the top root, and every descendant. If the
+// target isn't in the tree, returns an empty set (the focus filter will then drop the whole
+// tree, making it visually obvious that the target is out of range).
+function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<number> {
+  const related = new Set<number>();
+  let path: ProcessNode[] = [];
+  const findPath = (nodes: ProcessNode[], acc: ProcessNode[]): boolean => {
+    for (const n of nodes) {
+      const next = [...acc, n];
+      if (n.id === targetDbId) { path = next; return true; }
+      if (n.children && findPath(n.children, next)) return true;
+    }
+    return false;
+  };
+  findPath(roots, []);
+  if (path.length === 0) return related;
+  for (const p of path) related.add(p.id);
+  const addDescendants = (n: ProcessNode) => {
+    related.add(n.id);
+    if (n.children) for (const c of n.children) addDescendants(c);
+  };
+  addDescendants(path[path.length - 1]);
+  return related;
 }
 
 function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {
