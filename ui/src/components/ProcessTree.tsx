@@ -623,22 +623,15 @@ function renderTree(
   node
     .append("circle")
     .attr("class", "node__dot")
-    .attr("r", 5)
+    // Alerted processes get a larger, vibrant-red solid dot to stand out — a ring
+    // would be partially hidden by the label backdrop and read as a "C" instead
+    // of a full circle. A bigger filled dot keeps the shape intact at any angle.
+    .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? 7 : 5))
     .attr("fill", (d) => {
-      // Fleet UI colors: ui-fleet-black-50 for exited, core-fleet-green for live.
-      if (d.data.data.exit_time_ns) return "#8b8fa2";
-      return "#009a7d";
+      if (alertProcessIds.has(d.data.data.id)) return "#ff5c83"; // core-vibrant-red
+      if (d.data.data.exit_time_ns) return "#8b8fa2"; // ui-fleet-black-50 (exited)
+      return "#009a7d"; // core-fleet-green (live)
     });
-
-  // Alert badge: vibrant red ring around nodes with open/acknowledged alerts.
-  node
-    .filter((d) => alertProcessIds.has(d.data.data.id))
-    .append("circle")
-    .attr("class", "node__alert-ring")
-    .attr("r", 9)
-    .attr("fill", "none")
-    .attr("stroke", "#ff5c83")
-    .attr("stroke-width", 2);
 
   // Collapse/expand chevron. Sits in front of the dot. Only rendered when a node has
   // children in the underlying data OR has been collapsed (so we can expand it back).
