@@ -9,7 +9,7 @@
 	<array>
 		<string>/usr/local/bin/fleet-edr-agent</string>
 		<string>-xpc-service</string>
-		<string>com.victoronsoftware.edr.securityextension</string>
+		<string>8VBZ3948LU.com.fleetdm.edr.securityextension.xpc</string>
 		<string>-db</string>
 		<string>/var/db/fleet-edr/events.db</string>
 		<string>-server-url</string>

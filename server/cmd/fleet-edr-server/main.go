@@ -27,7 +27,7 @@ import (
 func main() {
 	var (
 		addr             = flag.String("addr", ":8088", "Listen address")
-		dsn              = flag.String("dsn", "root@tcp(127.0.0.1:3306)/edr", "MySQL DSN (user:pass@tcp(host:port)/db)")
+		dsn              = flag.String("dsn", "root@tcp(127.0.0.1:3316)/edr", "MySQL DSN (user:pass@tcp(host:port)/db)")
 		apiKey           = flag.String("api-key", "", "Required API key for ingestion (empty = no auth)")
 		processInterval  = flag.Duration("process-interval", 500*time.Millisecond, "Interval between processing cycles")
 		processBatchSize = flag.Int("process-batch", 500, "Max events per processing cycle")

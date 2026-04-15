@@ -9,7 +9,7 @@ import (
 )
 
 // These tests require a MySQL 8.4 instance.
-// Set EDR_TEST_DSN to run them (e.g., "root@tcp(127.0.0.1:3306)/edr_test?parseTime=true").
+// Set EDR_TEST_DSN to run them (e.g., "root@tcp(127.0.0.1:3316)/edr_test?parseTime=true").
 
 func TestInsertAndCount(t *testing.T) {
 	s := OpenTestStore(t)

@@ -2,11 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>MachServices</key>
-	<dict>
-		<key>com.victoronsoftware.edr.securityextension</key>
-		<true/>
-	</dict>
+	<key>NSEndpointSecurityMachServiceName</key>
+	<string>8VBZ3948LU.com.fleetdm.edr.securityextension.xpc</string>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>Fleet EDR monitors endpoint security events for threat detection.</string>
 </dict>

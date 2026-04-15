@@ -14,7 +14,7 @@ import (
 // from the test name. The database is dropped when the test completes. This
 // allows test packages to run in parallel without interfering with each other.
 //
-// Requires EDR_TEST_DSN to be set (e.g., "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true").
+// Requires EDR_TEST_DSN to be set (e.g., "root:@tcp(127.0.0.1:3316)/edr_test?parseTime=true").
 // The database name in the DSN is used only to connect initially; the test
 // runs against its own temporary database.
 func OpenTestStore(t *testing.T) *Store {
@@ -83,8 +83,8 @@ func sanitizeDBName(testName string) string {
 
 // stripDBName removes the database name from a MySQL DSN, returning a DSN
 // that connects to the server without selecting a database.
-// Input:  "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
-// Output: "root:@tcp(127.0.0.1:3306)/?parseTime=true"
+// Input:  "root:@tcp(127.0.0.1:3316)/edr_test?parseTime=true"
+// Output: "root:@tcp(127.0.0.1:3316)/?parseTime=true"
 func stripDBName(dsn string) string {
 	// Find the slash after the address.
 	slashIdx := strings.LastIndex(dsn, ")/")

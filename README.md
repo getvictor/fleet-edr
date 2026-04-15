@@ -38,7 +38,7 @@ ui/                  React/TypeScript frontend (Vite, D3.js process tree)
 docker compose up mysql -d
 
 # Run the server
-cd server && go run ./cmd/fleet-edr-server/ -dsn "root@tcp(127.0.0.1:3306)/edr?parseTime=true"
+cd server && go run ./cmd/fleet-edr-server/
 
 # Build the UI (embedded in the server binary)
 cd ui && npm run build
@@ -50,7 +50,7 @@ cd ui && npm run build
 
 ```bash
 # Server (requires MySQL)
-cd server && go test ./...
+cd server && EDR_TEST_DSN="root@tcp(127.0.0.1:3316)/edr_test?parseTime=true" go test ./...
 
 # Agent
 cd agent && go test ./...

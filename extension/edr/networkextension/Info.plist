@@ -4,15 +4,15 @@
 <dict>
 	<key>MachServices</key>
 	<dict>
-		<key>com.victoronsoftware.edr.networkextension</key>
-		<true/>
-		<key>group.com.victoronsoftware.edr.networkextension</key>
+		<key>group.com.fleetdm.edr.networkextension</key>
 		<true/>
 	</dict>
 	<key>NEProviderClasses</key>
 	<dict>
 		<key>com.apple.networkextension.filter-data</key>
 		<string>$(PRODUCT_MODULE_NAME).NetworkFilter</string>
+		<key>com.apple.networkextension.dns-proxy</key>
+		<string>$(PRODUCT_MODULE_NAME).DNSProxyProvider</string>
 	</dict>
 	<key>NetworkExtension</key>
 	<dict>
@@ -20,9 +20,11 @@
 		<dict>
 			<key>com.apple.networkextension.filter-data</key>
 			<string>$(PRODUCT_MODULE_NAME).NetworkFilter</string>
+			<key>com.apple.networkextension.dns-proxy</key>
+			<string>$(PRODUCT_MODULE_NAME).DNSProxyProvider</string>
 		</dict>
 		<key>NEMachServiceName</key>
-		<string>group.com.victoronsoftware.edr.networkextension</string>
+		<string>group.com.fleetdm.edr.networkextension</string>
 	</dict>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>Fleet EDR monitors network connections for threat detection.</string>

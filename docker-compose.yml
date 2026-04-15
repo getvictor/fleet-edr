@@ -1,3 +1,5 @@
+# Local dev MySQL. Ports 3316/3317 avoid conflicts with other local MySQL instances.
+# Server and ingest CLI defaults match these ports.
 services:
   mysql:
     image: mysql:8.4
@@ -6,7 +8,7 @@ services:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: edr
     ports:
-      - "127.0.0.1:3306:3306"
+      - "127.0.0.1:3316:3306"
     volumes:
       - edr-mysql-data:/var/lib/mysql
     healthcheck:
@@ -22,7 +24,7 @@ services:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: edr_test
     ports:
-      - "127.0.0.1:3307:3306"
+      - "127.0.0.1:3317:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s

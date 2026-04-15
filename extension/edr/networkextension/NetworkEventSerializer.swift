@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.networkextension", category: "Serializer")
+private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "Serializer")
 
 // MARK: - Payload types
 
@@ -27,6 +27,24 @@ struct NetworkConnectPayload: Codable, Sendable {
         case remoteAddress = "remote_address"
         case remotePort = "remote_port"
         case remoteHostname = "remote_hostname"
+    }
+}
+
+struct DNSQueryPayload: Codable, Sendable {
+    let pid: pid_t
+    let path: String
+    let uid: uid_t
+    let queryName: String
+    let queryType: String
+    let responseAddresses: [String]?
+    let proto: String
+
+    enum CodingKeys: String, CodingKey {
+        case pid, path, uid
+        case queryName = "query_name"
+        case queryType = "query_type"
+        case responseAddresses = "response_addresses"
+        case proto = "protocol"
     }
 }
 

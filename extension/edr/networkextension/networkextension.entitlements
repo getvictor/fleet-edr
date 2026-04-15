@@ -5,10 +5,11 @@
 	<key>com.apple.developer.networking.networkextension</key>
 	<array>
 		<string>content-filter-provider</string>
+		<string>dns-proxy</string>
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.victoronsoftware.edr.networkextension</string>
+		<string>group.com.fleetdm.edr.networkextension</string>
 	</array>
 </dict>
 </plist>

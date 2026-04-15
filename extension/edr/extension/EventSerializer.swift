@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 import os.log
 
-private let logger = Logger(subsystem: "com.victoronsoftware.edr.securityextension", category: "EventSerializer")
+private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "EventSerializer")
 
 // MARK: - Payload types
 

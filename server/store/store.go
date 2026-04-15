@@ -100,7 +100,7 @@ type Store struct {
 }
 
 // New opens a connection to MySQL and ensures the schema exists.
-// The dsn should be in go-sql-driver/mysql format, e.g. "user:pass@tcp(127.0.0.1:3306)/edr?parseTime=true".
+// The dsn should be in go-sql-driver/mysql format, e.g. "user:pass@tcp(127.0.0.1:3316)/edr?parseTime=true".
 func New(ctx context.Context, dsn string) (*Store, error) {
 	if !strings.Contains(dsn, "parseTime") {
 		sep := "?"
