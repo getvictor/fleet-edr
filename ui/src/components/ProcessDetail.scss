@@ -129,12 +129,15 @@
     font-weight: $bold;
     margin-top: $pad-xsmall;
     color: $core-fleet-black;
+    overflow-wrap: anywhere;
   }
 
   &__alert-desc {
     font-size: $xx-small;
     color: $ui-fleet-black-75;
     margin-top: $pad-xxsmall;
+    overflow-wrap: anywhere;
+    line-height: 1.4;
   }
 
   &__alert-actions {
