@@ -27,7 +27,6 @@ export function ProcessTreeView() {
   const [searchParams] = useSearchParams();
   const svgRef = useRef<SVGSVGElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const layoutNodesRef = useRef<D3PointNode[]>([]);
   const matchesRef = useRef<D3PointNode[]>([]);
   const [roots, setRoots] = useState<ProcessNode[]>([]);
@@ -99,30 +98,35 @@ export function ProcessTreeView() {
     if (!svgRef.current) return;
     if (roots.length === 0) {
       d3.select(svgRef.current).selectAll("*").remove();
-      zoomRef.current = null;
       layoutNodesRef.current = [];
       return;
     }
     const result = renderTree(svgRef.current, roots, setSelectedNode, alertProcessIds);
-    zoomRef.current = result.zoom;
     layoutNodesRef.current = result.nodes;
   }, [roots, alertProcessIds]);
 
-  // Focus the currently-active match: pan the SVG so the match sits near the centre,
-  // preserving the user's current zoom level.
+  // Focus the currently-active match: scroll the canvas so the match sits near the
+  // vertical centre, preserving the user's current zoom level and scroll position
+  // horizontally where possible.
   const zoomToNode = useCallback((node: D3PointNode) => {
-    if (!svgRef.current || !zoomRef.current) return;
-    const svg = d3.select(svgRef.current);
-    const { width, height } = svgRef.current.getBoundingClientRect();
-    const currentTransform = d3.zoomTransform(svgRef.current);
-    const k = currentTransform.k;
-    const tx = width / 2 - node.y * k;
-    const ty = height / 2 - node.x * k;
-    svg.transition().duration(300).call(
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      zoomRef.current.transform,
-      d3.zoomIdentity.translate(tx, ty).scale(k),
-    );
+    const svg = svgRef.current;
+    const canvas = svg?.parentElement;
+    if (!svg || !canvas) return;
+    const tr = d3.zoomTransform(svg);
+    // Node's y in the hierarchy layout is its vertical position; x-axis of the hierarchy
+    // is horizontal because we invert the layout in linkHorizontal. After the current zoom
+    // transform, the node's on-screen y is node.x * k + tr.y, and its on-screen x is
+    // node.y * k + tr.x.
+    const nodeScreenY = node.x * tr.k + tr.y;
+    const nodeScreenX = node.y * tr.k + tr.x;
+    const targetTop = Math.max(0, nodeScreenY - canvas.clientHeight / 2);
+    // Only adjust horizontal scroll when the match is outside the current viewport;
+    // preserve the user's horizontal position otherwise so deep-tree panning feels stable.
+    const curLeft = canvas.scrollLeft;
+    const inHorizontalView = nodeScreenX >= curLeft + 40
+      && nodeScreenX <= curLeft + canvas.clientWidth - 40;
+    const targetLeft = inHorizontalView ? curLeft : Math.max(0, nodeScreenX - canvas.clientWidth / 2);
+    canvas.scrollTo({ top: targetTop, left: targetLeft, behavior: "smooth" });
   }, []);
 
   // Re-run highlighting whenever the query or the rendered tree changes.
