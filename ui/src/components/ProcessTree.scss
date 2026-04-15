@@ -26,11 +26,42 @@
     display: flex;
     gap: $pad-small;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   &__range {
     display: flex;
     gap: $pad-xsmall;
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: $pad-xsmall;
+  }
+
+  &__search-input {
+    padding: 6px 10px;
+    font-size: $x-small;
+    font-family: inherit;
+    color: $core-fleet-black;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: $border-radius;
+    width: 260px;
+
+    &:focus {
+      outline: none;
+      border-color: $core-fleet-green;
+      box-shadow: 0 0 0 2px rgba(0, 154, 125, 0.2);
+    }
+  }
+
+  &__search-count {
+    font-size: $xx-small;
+    color: $ui-fleet-black-50;
+    font-variant-numeric: tabular-nums;
+    min-width: 60px;
   }
 
   &__status {
@@ -66,5 +97,39 @@
   &__detail {
     width: 420px;
     flex-shrink: 0;
+  }
+}
+
+// Search highlight styles applied to D3-rendered nodes and links.
+// Stable selections managed by D3; these rules only toggle visual state.
+.process-tree__canvas {
+  svg .link {
+    stroke: $ui-fleet-black-25;
+    stroke-width: 1;
+    transition: opacity 120ms ease, stroke 120ms ease;
+  }
+
+  svg .node {
+    transition: opacity 120ms ease;
+  }
+
+  svg .node--dim,
+  svg .link--dim {
+    opacity: 0.15;
+  }
+
+  svg .node--match .node__dot {
+    r: 7;
+    stroke: $core-fleet-green;
+    stroke-width: 2;
+  }
+
+  svg .node--match .node__label {
+    font-weight: $bold;
+  }
+
+  svg .link--path {
+    stroke: $core-fleet-green;
+    stroke-width: 2;
   }
 }

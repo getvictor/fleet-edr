@@ -15,10 +15,21 @@ const TIME_RANGES: { label: string; ms: number }[] = [
   { label: "24 hours", ms: 24 * 60 * 60 * 1000 },
 ];
 
+type D3PointNode = d3.HierarchyPointNode<D3Node>;
+
+interface RenderResult {
+  zoom: d3.ZoomBehavior<SVGSVGElement, unknown>;
+  nodes: D3PointNode[];
+}
+
 export function ProcessTreeView() {
   const { hostId } = useParams<{ hostId: string }>();
   const [searchParams] = useSearchParams();
   const svgRef = useRef<SVGSVGElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const layoutNodesRef = useRef<D3PointNode[]>([]);
+  const matchesRef = useRef<D3PointNode[]>([]);
   const [roots, setRoots] = useState<ProcessNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
   // Default to 24h window when navigating from an alert (alert times may be days old);
@@ -27,6 +38,9 @@ export function ProcessTreeView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
+  const [query, setQuery] = useState("");
+  const [matchIdx, setMatchIdx] = useState(0);
+  const [matchCount, setMatchCount] = useState(0);
 
   const fetchTree = useCallback(() => {
     if (!hostId) return;
@@ -85,15 +99,136 @@ export function ProcessTreeView() {
     if (!svgRef.current) return;
     if (roots.length === 0) {
       d3.select(svgRef.current).selectAll("*").remove();
+      zoomRef.current = null;
+      layoutNodesRef.current = [];
       return;
     }
-    renderTree(svgRef.current, roots, setSelectedNode, alertProcessIds);
+    const result = renderTree(svgRef.current, roots, setSelectedNode, alertProcessIds);
+    zoomRef.current = result.zoom;
+    layoutNodesRef.current = result.nodes;
   }, [roots, alertProcessIds]);
+
+  // Focus the currently-active match: pan the SVG so the match sits near the centre,
+  // preserving the user's current zoom level.
+  const zoomToNode = useCallback((node: D3PointNode) => {
+    if (!svgRef.current || !zoomRef.current) return;
+    const svg = d3.select(svgRef.current);
+    const { width, height } = svgRef.current.getBoundingClientRect();
+    const currentTransform = d3.zoomTransform(svgRef.current);
+    const k = currentTransform.k;
+    const tx = width / 2 - node.y * k;
+    const ty = height / 2 - node.x * k;
+    svg.transition().duration(300).call(
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      zoomRef.current.transform,
+      d3.zoomIdentity.translate(tx, ty).scale(k),
+    );
+  }, []);
+
+  // Re-run highlighting whenever the query or the rendered tree changes.
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svg = d3.select(svgRef.current);
+    const q = query.toLowerCase().trim();
+
+    // Compute matches and the set of nodes on the ancestor path of any match.
+    const matches: D3PointNode[] = [];
+    const pathNodes = new Set<D3PointNode>();
+    if (q) {
+      for (const n of layoutNodesRef.current) {
+        const d = n.data;
+        if (d.pid === 0) continue; // synthetic root when tree has multiple real roots
+        if (nodeMatchesQuery(d, q)) {
+          matches.push(n);
+          let cur: D3PointNode | null = n;
+          while (cur) {
+            pathNodes.add(cur);
+            cur = cur.parent;
+          }
+        }
+      }
+    }
+    matchesRef.current = matches;
+    /* eslint-disable react-hooks/set-state-in-effect -- derived from DOM walk after tree render */
+    setMatchCount(matches.length);
+    if (matches.length === 0) {
+      setMatchIdx(0);
+    } else {
+      setMatchIdx((prev) => (prev < matches.length ? prev : 0));
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    svg.selectAll<SVGGElement, D3PointNode>("g.node")
+      .classed("node--match", (d) => matches.includes(d))
+      .classed("node--path", (d) => !matches.includes(d) && pathNodes.has(d))
+      .classed("node--dim", (d) => q !== "" && !pathNodes.has(d));
+
+    svg.selectAll<SVGPathElement, d3.HierarchyLink<D3Node>>("path.link")
+      .classed(
+        "link--path",
+        (d) => pathNodes.has(d.source as D3PointNode) && pathNodes.has(d.target as D3PointNode),
+      )
+      .classed(
+        "link--dim",
+        (d) => q !== ""
+          && !(pathNodes.has(d.source as D3PointNode) && pathNodes.has(d.target as D3PointNode)),
+      );
+
+    if (matches.length > 0) zoomToNode(matches[0]);
+  }, [query, roots, alertProcessIds, zoomToNode]);
+
+  // Global "/" keyboard shortcut to focus the search box.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      const target = e.target as HTMLElement | null;
+      // Don't steal focus if the user is already typing in an input/textarea.
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener("keydown", handler);
+    return () => { window.removeEventListener("keydown", handler); };
+  }, []);
+
+  const stepMatch = useCallback((delta: number) => {
+    const total = matchesRef.current.length;
+    if (total === 0) return;
+    setMatchIdx((prev) => {
+      const next = (prev + delta + total) % total;
+      zoomToNode(matchesRef.current[next]);
+      return next;
+    });
+  }, [zoomToNode]);
 
   if (!hostId) return <p>No host selected.</p>;
 
   const headerActions = (
     <div className="process-tree__controls">
+      <div className="process-tree__search">
+        <input
+          ref={searchInputRef}
+          type="search"
+          className="process-tree__search-input"
+          placeholder="Search name, path, pid (press /)"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              stepMatch(e.shiftKey ? -1 : 1);
+            } else if (e.key === "Escape") {
+              setQuery("");
+            }
+          }}
+        />
+        {query && (
+          <span className="process-tree__search-count">
+            {matchCount === 0 ? "0 matches" : `${String(matchIdx + 1)} / ${String(matchCount)}`}
+          </span>
+        )}
+      </div>
       <div className="process-tree__range">
         {TIME_RANGES.map((r, i) => (
           <Button
@@ -146,6 +281,15 @@ export function ProcessTreeView() {
       </div>
     </>
   );
+}
+
+function nodeMatchesQuery(d: D3Node, q: string): boolean {
+  if (d.name.toLowerCase().includes(q)) return true;
+  if (d.path.toLowerCase().includes(q)) return true;
+  if (String(d.pid).includes(q)) return true;
+  const args = d.data.args;
+  if (args && args.some((a) => a.toLowerCase().includes(q))) return true;
+  return false;
 }
 
 function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {
@@ -203,7 +347,7 @@ function renderTree(
   roots: ProcessNode[],
   onSelect: (node: ProcessNode) => void,
   alertProcessIds: Set<number> = new Set()
-) {
+): RenderResult {
   const nodeHeight = 28;
 
   const hierarchy = toD3Hierarchy(roots);
@@ -212,19 +356,17 @@ function renderTree(
   const treeLayout = d3.tree<D3Node>().nodeSize([nodeHeight, 220]);
   treeLayout(root);
 
-  const nodes = root.descendants();
+  const nodes = root.descendants() as D3PointNode[];
   const links = root.links();
 
   // Compute bounding box.
   let minY = Infinity, maxY = -Infinity;
   let minX = Infinity, maxX = -Infinity;
   for (const n of nodes) {
-    const nx = n.x ?? 0;
-    const ny = n.y ?? 0;
-    if (nx < minX) minX = nx;
-    if (nx > maxX) maxX = nx;
-    if (ny < minY) minY = ny;
-    if (ny > maxY) maxY = ny;
+    if (n.x < minX) minX = n.x;
+    if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.y > maxY) maxY = n.y;
   }
 
   const margin = 40;
@@ -252,8 +394,6 @@ function renderTree(
     .join("path")
     .attr("class", "link")
     .attr("fill", "none")
-    .attr("stroke", "#c5c7d1") // ui-fleet-black-25
-    .attr("stroke-width", 1)
     .attr(
       "d",
       d3
@@ -276,6 +416,7 @@ function renderTree(
 
   node
     .append("circle")
+    .attr("class", "node__dot")
     .attr("r", 5)
     .attr("fill", (d) => {
       // Fleet UI colors: ui-fleet-black-50 for exited, core-fleet-green for live.
@@ -287,6 +428,7 @@ function renderTree(
   node
     .filter((d) => alertProcessIds.has(d.data.data.id))
     .append("circle")
+    .attr("class", "node__alert-ring")
     .attr("r", 9)
     .attr("fill", "none")
     .attr("stroke", "#ff5c83")
@@ -294,10 +436,13 @@ function renderTree(
 
   node
     .append("text")
+    .attr("class", "node__label")
     .attr("dx", 8)
     .attr("dy", 4)
     .attr("font-size", "12px")
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
     .attr("fill", "#192147") // core-fleet-black
     .text((d) => `${d.data.name} (${String(d.data.pid)})`);
+
+  return { zoom, nodes };
 }
