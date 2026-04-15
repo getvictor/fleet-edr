@@ -623,11 +623,12 @@ function renderTree(
   node
     .append("circle")
     .attr("class", "node__dot")
-    .attr("r", 5)
+    // Alerted nodes get a larger red dot. The label sits far enough away from the
+    // dot (see dx on the label text below) that neither the bigger dot nor the
+    // search-match ring get clipped by the label backdrop.
+    .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? 8 : 5))
     .attr("fill", (d) => {
-      // Dot reflects liveness (green = running, grey = exited). Alert state is
-      // signalled separately via the label colour/weight, so the dot stays a
-      // clean, consistent shape that doesn't fight the label backdrop.
+      if (alertProcessIds.has(d.data.data.id)) return "#ff5c83"; // core-vibrant-red
       if (d.data.data.exit_time_ns) return "#8b8fa2";
       return "#009a7d";
     });
@@ -660,7 +661,10 @@ function renderTree(
       const isAlerted = alertProcessIds.has(d.data.data.id);
       return `node__label${isAlerted ? " node__label--alert" : ""}`;
     })
-    .attr("dx", 8)
+    // dx=16 leaves enough gap that the label backdrop starts clear of an r=8
+    // alert dot (extends to x=8) and of the r=7 + 2px stroke search-match ring
+    // (extends to x=9), so neither is clipped by the backdrop rect.
+    .attr("dx", 16)
     .attr("dy", 4)
     .attr("font-size", "12px")
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
