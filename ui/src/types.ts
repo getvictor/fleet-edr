@@ -37,6 +37,10 @@ export interface ProcessNode extends Process {
   children?: ProcessNode[];
   network_connections?: EventRecord[];
   dns_queries?: EventRecord[];
+  // UI-only annotation: when a subtree is collapsed or a system-path group is hidden,
+  // the count of descendants that were dropped is stashed here so the renderer can
+  // show a "+N" affordance on the surviving parent.
+  _collapsedCount?: number;
 }
 
 export interface EventRecord {
