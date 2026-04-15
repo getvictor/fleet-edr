@@ -58,6 +58,50 @@ func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
 	assert.Contains(t, f.EventIDs, "exec-sh")
 }
 
+// Covers the "shell exec optimization" case on macOS: `sh -c "<single command>"`
+// re-execs the target binary directly, reusing the shell's pid instead of
+// fork+exec'ing a child. The exec event stream shows two exec events for the
+// same pid (first /bin/sh, then the payload), and the processes table ends up
+// with the pid's path as the payload. The rule must still fire.
+func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
+	s := store.OpenTestStore(t)
+	ctx := t.Context()
+
+	// Simulate: python3 (PID 50) forks child 100, which execs /bin/sh then
+	// immediately re-execs /private/tmp/payload at the same pid. No separate
+	// child process for the payload.
+	events := []store.Event{
+		{EventID: "fork-python", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-python", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh","-c","/private/tmp/payload pwned"],"uid":501,"gid":20}`)},
+		// Same pid (100) re-execs into /private/tmp/payload.
+		{EventID: "exec-payload", HostID: "host-a", TimestampNs: 2200, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/private/tmp/payload","args":["/private/tmp/payload","pwned"],"uid":501,"gid":20}`)},
+	}
+
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	rule := &SuspiciousExec{}
+	findings, err := rule.Evaluate(ctx, events, s)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+
+	f := findings[0]
+	assert.Equal(t, "suspicious_exec", f.RuleID)
+	assert.Equal(t, "high", f.Severity)
+	assert.Equal(t, "Suspicious exec from temp path", f.Title)
+	assert.Contains(t, f.Description, "/usr/bin/python3")
+	assert.Contains(t, f.Description, "/bin/sh")
+	assert.Contains(t, f.Description, "/private/tmp/payload")
+	assert.Contains(t, f.EventIDs, "exec-sh")
+}
+
 func TestSuspiciousExecSkipsShellToShell(t *testing.T) {
 	s := store.OpenTestStore(t)
 	ctx := t.Context()
