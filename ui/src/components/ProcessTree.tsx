@@ -35,7 +35,7 @@ const TIME_RANGES: { label: string; ms: number }[] = [
 // Finder, Dock, loginwindow-hosted apps, and the like also remain in the tree.
 const SYSTEM_PATH_SEGMENTS = ["/System/Library/", "/usr/libexec/", "/Library/Apple/"];
 
-const HIDE_SYSTEM_STORAGE_KEY = "edr.processTree.hideSystem";
+const SHOW_SYSTEM_STORAGE_KEY = "edr.processTree.showSystem";
 
 type D3PointNode = d3.HierarchyPointNode<D3Node>;
 
@@ -62,12 +62,14 @@ export function ProcessTreeView() {
   const [query, setQuery] = useState("");
   const [matchIdx, setMatchIdx] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
-  const [hideSystem, setHideSystem] = useState<boolean>(() => {
+  // System processes (framework daemons, libexec helpers, etc.) are hidden by default.
+  // Flipping the toggle on reveals them. Persisted across reloads.
+  const [showSystem, setShowSystem] = useState<boolean>(() => {
     try {
-      const stored = localStorage.getItem(HIDE_SYSTEM_STORAGE_KEY);
-      return stored === null ? true : stored === "true";
+      const stored = localStorage.getItem(SHOW_SYSTEM_STORAGE_KEY);
+      return stored === "true";
     } catch {
-      return true;
+      return false;
     }
   });
   const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
@@ -80,8 +82,8 @@ export function ProcessTreeView() {
   const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(null);
 
   useEffect(() => {
-    try { localStorage.setItem(HIDE_SYSTEM_STORAGE_KEY, String(hideSystem)); } catch { /* ignore */ }
-  }, [hideSystem]);
+    try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
+  }, [showSystem]);
 
   // Fetch the alert so we can render a breadcrumb with title/severity/timestamp.
   useEffect(() => {
@@ -129,20 +131,14 @@ export function ProcessTreeView() {
   // we can render it as "+N". While a search query is active, skip the collapse step so the
   // user never sees "0 matches" when a match is only hidden inside a collapsed subtree.
   const applyCollapse = query.trim() === "";
-  const { tree: visibleRoots, hiddenSystemCount } = useMemo(() => {
-    const apply = (nodes: ProcessNode[]): { kept: ProcessNode[]; hidden: number } => {
+  const visibleRoots = useMemo(() => {
+    const apply = (nodes: ProcessNode[]): ProcessNode[] => {
       const out: ProcessNode[] = [];
-      let hidden = 0;
       for (const n of nodes) {
         // In alert focus mode, drop anything that isn't on the alert's ancestor/descendant chain.
         if (alertChainIds && !alertChainIds.has(n.id)) continue;
-        if (hideSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) {
-          hidden += 1 + countDescendants(n);
-          continue;
-        }
-        const kidsResult = n.children ? apply(n.children) : { kept: undefined, hidden: 0 };
-        hidden += kidsResult.hidden;
-        const kids = kidsResult.kept;
+        if (!showSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) continue;
+        const kids = n.children ? apply(n.children) : undefined;
         if (applyCollapse && collapsedIds.has(n.id) && kids && kids.length > 0) {
           const collapsedTotal = kids.reduce((acc, c) => acc + 1 + countDescendants(c), 0);
           out.push({ ...n, children: undefined, _collapsedCount: collapsedTotal });
@@ -150,11 +146,10 @@ export function ProcessTreeView() {
           out.push({ ...n, children: kids });
         }
       }
-      return { kept: out, hidden };
+      return out;
     };
-    const { kept, hidden } = apply(roots);
-    return { tree: kept, hiddenSystemCount: hidden };
-  }, [roots, hideSystem, collapsedIds, preservedIds, applyCollapse, alertChainIds]);
+    return apply(roots);
+  }, [roots, showSystem, collapsedIds, preservedIds, applyCollapse, alertChainIds]);
 
   const toggleCollapsed = useCallback((nodeId: number) => {
     setCollapsedIds((prev) => {
@@ -370,24 +365,20 @@ export function ProcessTreeView() {
       </div>
       <label
         className="process-tree__toggle"
-        title={hideSystem
-          ? `System processes hidden${hiddenSystemCount > 0 ? ` (${String(hiddenSystemCount)})` : ""}`
-          : "System processes shown"}
+        title={showSystem ? "System processes shown" : "System processes hidden"}
       >
         <input
           type="checkbox"
           className="process-tree__toggle-input"
-          checked={hideSystem}
-          onChange={(e) => { setHideSystem(e.target.checked); }}
+          checked={showSystem}
+          onChange={(e) => { setShowSystem(e.target.checked); }}
         />
         <span className="process-tree__toggle-switch" aria-hidden="true" />
-        <span className="process-tree__toggle-label">
-          Hide system{hideSystem && hiddenSystemCount > 0 ? ` (${String(hiddenSystemCount)})` : ""}
-        </span>
+        <span className="process-tree__toggle-label">Show system</span>
       </label>
-      <Button size="small" variant="inverse" onClick={fetchTree}>
+      <button type="button" className="process-tree__action-btn" onClick={fetchTree}>
         Refresh
-      </Button>
+      </button>
     </div>
   );
 
