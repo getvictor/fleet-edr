@@ -160,12 +160,15 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 // GetProcessTree returns all processes for a host within a time range.
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr TimeRange, limit int) ([]Process, error) {
 	var procs []Process
+	// Order DESC so that when the caller's limit is smaller than the window's true population,
+	// we return the most recent activity rather than silently discarding it. Newer processes are
+	// almost always what the analyst is looking at; losing the oldest tail is the lesser harm.
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
 		FROM processes
 		WHERE host_id = ? AND fork_time_ns >= ? AND fork_time_ns <= ?
-		ORDER BY fork_time_ns
+		ORDER BY fork_time_ns DESC
 		LIMIT ?`,
 		hostID, tr.FromNs, tr.ToNs, limit,
 	)
