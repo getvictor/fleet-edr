@@ -23,7 +23,10 @@ export function AlertList() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState("");
+  // Default to showing only open alerts, matching the landing-page default on every
+  // mature EDR (Defender, CrowdStrike, Elastic, etc). Resolved/acknowledged alerts are
+  // one click away via the Status dropdown but don't clutter the default view.
+  const [statusFilter, setStatusFilter] = useState("open");
   const [severityFilter, setSeverityFilter] = useState("");
   const navigate = useNavigate();
 
