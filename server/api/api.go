@@ -89,7 +89,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tr := parseTimeRange(r)
-	limit := parseIntParam(r, "limit", 500)
+	limit := parseIntParam(r, "limit", 2000)
 
 	ctx := r.Context()
 	roots, err := h.query.BuildTree(ctx, hostID, tr, limit)
