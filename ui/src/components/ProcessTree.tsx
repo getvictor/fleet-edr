@@ -356,16 +356,16 @@ export function ProcessTreeView() {
           </span>
         )}
       </div>
-      <div className="process-tree__range">
+      <div className="process-tree__range" role="group" aria-label="Time range">
         {TIME_RANGES.map((r, i) => (
-          <Button
+          <button
             key={r.label}
-            size="small"
-            variant={i === rangeIdx ? "primary" : "inverse"}
+            type="button"
+            className={`process-tree__range-item${i === rangeIdx ? " process-tree__range-item--active" : ""}`}
             onClick={() => { setRangeIdx(i); }}
           >
             {r.label}
-          </Button>
+          </button>
         ))}
       </div>
       <Button

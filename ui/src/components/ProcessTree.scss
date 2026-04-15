@@ -29,9 +29,42 @@
     flex-wrap: wrap;
   }
 
+  // Segmented control: one rounded container with vertical dividers between
+  // options. Replaces the prior row of individual buttons.
   &__range {
-    display: flex;
-    gap: $pad-xsmall;
+    display: inline-flex;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: $border-radius;
+    overflow: hidden;
+    background-color: $core-fleet-white;
+    line-height: 1;
+  }
+
+  &__range-item {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-right: 1px solid $ui-fleet-black-10;
+    padding: 6px 12px;
+    font-size: $x-small;
+    font-family: inherit;
+    color: $core-fleet-black;
+    cursor: pointer;
+    transition: background-color 100ms ease, color 100ms ease;
+
+    &:last-child {
+      border-right: 0;
+    }
+
+    &:hover:not(&--active) {
+      background-color: $ui-off-white;
+    }
+
+    &--active {
+      background-color: $core-fleet-green;
+      color: $core-fleet-white;
+      font-weight: $bold;
+    }
   }
 
   &__search {
