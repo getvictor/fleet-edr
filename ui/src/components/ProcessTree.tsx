@@ -15,9 +15,13 @@ const TIME_RANGES: { label: string; ms: number }[] = [
   { label: "24 hours", ms: 24 * 60 * 60 * 1000 },
 ];
 
-// Paths we consider "system noise" for the hide-system toggle. Matches cover the bulk of the
-// macOS background chatter (framework support binaries, libexec daemons, Apple-ship helpers).
-const SYSTEM_PATH_PREFIXES = ["/System/", "/usr/libexec/", "/Library/Apple/"];
+// Paths we consider "system noise" for the hide-system toggle. Targets framework support
+// binaries and background daemons only — we deliberately do NOT filter /System/Applications/
+// (Safari, Mail, Notes, Messages, Calendar, etc.) because those are user-facing apps and are
+// as valid an attack surface as anything in /Applications/. Likewise, anything packaged as a
+// .app bundle is kept regardless of where it lives, so Finder, Dock, loginwindow-hosted apps,
+// and the like still appear in the tree.
+const SYSTEM_PATH_PREFIXES = ["/System/Library/", "/usr/libexec/", "/Library/Apple/"];
 
 const HIDE_SYSTEM_STORAGE_KEY = "edr.processTree.hideSystem";
 
@@ -382,6 +386,9 @@ function nodeMatchesQuery(d: D3Node, q: string): boolean {
 }
 
 function isSystemPath(path: string): boolean {
+  // Any .app bundle is a user-launchable application — keep it visible even if it lives
+  // under /System/Library/ (e.g. /System/Library/CoreServices/Finder.app/...).
+  if (path.includes(".app/")) return false;
   for (const prefix of SYSTEM_PATH_PREFIXES) {
     if (path.startsWith(prefix)) return true;
   }
