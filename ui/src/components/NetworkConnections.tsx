@@ -18,7 +18,6 @@ interface GroupedConnection {
   key: string;
   remote_address: string;
   remote_port: number;
-  remote_hostname?: string;
   protocol: string;
   direction: string;
   count: number;
@@ -51,9 +50,7 @@ export function NetworkConnections({
             <thead>
               <tr>
                 <th>Remote</th>
-                <th>Hostname</th>
                 <th>Proto</th>
-                <th>Count</th>
                 <th>Latest</th>
               </tr>
             </thead>
@@ -61,9 +58,11 @@ export function NetworkConnections({
               {grouped.map((g) => (
                 <tr key={g.key}>
                   <td>{g.remote_address}:{g.remote_port}</td>
-                  <td>{g.remote_hostname || "-"}</td>
-                  <td>{g.protocol}{g.direction === "inbound" ? " in" : ""}</td>
-                  <td className="net-table__count">{g.count > 1 ? `×${String(g.count)}` : ""}</td>
+                  <td>
+                    {g.protocol}
+                    {g.direction === "inbound" ? " in" : ""}
+                    {g.count > 1 ? ` ×${String(g.count)}` : ""}
+                  </td>
                   <td>{formatTime(g.latest_ts_ns)}</td>
                 </tr>
               ))}
@@ -118,7 +117,6 @@ function groupConnections(events: EventRecord[]): GroupedConnection[] {
         key,
         remote_address: p.remote_address,
         remote_port: p.remote_port,
-        remote_hostname: p.remote_hostname,
         protocol: p.protocol,
         direction: p.direction,
         count: 1,
