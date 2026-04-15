@@ -31,6 +31,13 @@
   border-collapse: collapse;
   font-size: $xx-small;
 
+  &__count {
+    font-family: inherit;
+    color: $ui-fleet-black-75;
+    font-weight: $bold;
+    font-variant-numeric: tabular-nums;
+  }
+
   th {
     text-align: left;
     padding: $pad-xsmall $pad-small;
