@@ -1,0 +1,100 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+@use "../../styles/var/global" as *;
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: $pad-small $pad-medium;
+  height: 36px;
+  border: 0;
+  border-radius: $border-radius;
+  font-size: $x-small;
+  font-weight: $bold;
+  font-family: inherit;
+  color: $core-fleet-white;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 150ms ease-in-out, color 150ms ease-in-out;
+
+  &:focus {
+    outline: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $core-focused-outline;
+    outline-offset: 2px;
+  }
+
+  &--small {
+    padding: $pad-xsmall $pad-small;
+    height: 28px;
+    font-size: $xx-small;
+  }
+
+  &--disabled,
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &--loading .button__label {
+    opacity: 0.5;
+  }
+
+  // Primary: Fleet green solid.
+  &--primary {
+    background-color: $core-fleet-green;
+
+    &:hover:not(.button--disabled) {
+      background-color: $core-fleet-green-over;
+    }
+
+    &:active:not(.button--disabled) {
+      background-color: $core-fleet-green-down;
+    }
+  }
+
+  // Alert: red for destructive actions (kill process, resolve-wide).
+  &--alert {
+    background-color: $core-vibrant-red;
+
+    &:hover:not(.button--disabled) {
+      background-color: $core-vibrant-red-over;
+    }
+
+    &:active:not(.button--disabled) {
+      background-color: $core-vibrant-red-down;
+    }
+  }
+
+  // Inverse: white with dark border.
+  &--inverse {
+    background-color: $core-fleet-white;
+    color: $core-fleet-black;
+    border: 1px solid $ui-fleet-black-10;
+
+    &:hover:not(.button--disabled) {
+      background-color: $ui-fleet-black-5;
+    }
+
+    &:active:not(.button--disabled) {
+      background-color: $ui-fleet-black-5-down;
+    }
+  }
+
+  // Text-link: no background, looks like a link.
+  &--text-link {
+    background: transparent;
+    color: $core-fleet-green;
+    padding: 0;
+    height: auto;
+    font-weight: $regular;
+
+    &:hover:not(.button--disabled) {
+      text-decoration: underline;
+    }
+  }
+}

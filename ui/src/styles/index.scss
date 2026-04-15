@@ -1,0 +1,66 @@
+// Fleet EDR design system entry point.
+@use "var/global" as *;
+@use "var/colors" as *;
+@use "var/fonts" as *;
+@use "var/padding" as *;
+
+// Global resets and defaults.
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: $x-small;
+  line-height: $line-height;
+  color: $core-fleet-black;
+  background-color: $ui-off-white;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: $bold;
+  margin: 0 0 $pad-small 0;
+  color: $core-fleet-black;
+}
+
+h1 { font-size: $large; }
+h2 { font-size: $medium; }
+h3 { font-size: $small; }
+h4 { font-size: $x-small; text-transform: uppercase; letter-spacing: 0.5px; }
+
+a {
+  color: $core-fleet-green;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+button {
+  font-family: inherit;
+}
+
+// App-level layout.
+.app-page {
+  padding: $pad-page;
+  max-width: 1600px;
+  margin: 0 auto;
+}

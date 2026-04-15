@@ -4,6 +4,9 @@ import * as d3 from "d3";
 import { getProcessTree, listAlerts } from "../api";
 import type { ProcessNode } from "../types";
 import { ProcessDetail } from "./ProcessDetail";
+import { Button } from "./ui/Button";
+import { PageHeader } from "./ui/PageHeader";
+import "./ProcessTree.scss";
 
 const TIME_RANGES: { label: string; ms: number }[] = [
   { label: "15 min", ms: 15 * 60 * 1000 },
@@ -84,43 +87,59 @@ export function ProcessTreeView() {
 
   if (!hostId) return <p>No host selected.</p>;
 
-  return (
-    <div>
-      <div style={{ marginBottom: "1rem" }}>
-        <Link to="/">&larr; Hosts</Link>
-        <span style={{ margin: "0 1rem", color: "#666" }}>{hostId}</span>
+  const headerActions = (
+    <div className="process-tree__controls">
+      <div className="process-tree__range">
         {TIME_RANGES.map((r, i) => (
-          <button
+          <Button
             key={r.label}
+            size="small"
+            variant={i === rangeIdx ? "primary" : "inverse"}
             onClick={() => { setRangeIdx(i); }}
-            style={{
-              marginRight: "0.25rem",
-              fontWeight: i === rangeIdx ? "bold" : "normal",
-            }}
           >
             {r.label}
-          </button>
+          </Button>
         ))}
-        <button onClick={fetchTree} style={{ marginLeft: "0.5rem" }}>
-          Refresh
-        </button>
       </div>
+      <Button size="small" variant="inverse" onClick={fetchTree}>
+        Refresh
+      </Button>
+    </div>
+  );
 
-      {loading && <p>Loading...</p>}
-      {error && <p style={{ color: "red" }}>Error: {error}</p>}
-      {!loading && roots.length === 0 && <p>No processes in this time range.</p>}
+  return (
+    <>
+      <PageHeader
+        title={
+          <span className="process-tree__title">
+            <Link to="/" className="process-tree__back">&larr; Hosts</Link>
+            <span className="process-tree__host">{hostId}</span>
+          </span>
+        }
+        actions={headerActions}
+      />
 
-      <div style={{ display: "flex", gap: "1rem" }}>
-        <div style={{ flex: 1, overflow: "auto", border: "1px solid #ddd", borderRadius: 4 }}>
-          <svg ref={svgRef} style={{ width: "100%", minHeight: 600 }} />
+      {loading && <p className="process-tree__status">Loading...</p>}
+      {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
+      {!loading && roots.length === 0 && (
+        <p className="process-tree__status">No processes in this time range.</p>
+      )}
+
+      <div className="process-tree__layout">
+        <div className="process-tree__canvas">
+          <svg ref={svgRef} />
         </div>
         {selectedNode && (
-          <div style={{ width: 400, flexShrink: 0 }}>
-            <ProcessDetail hostId={hostId} node={selectedNode} onClose={() => { setSelectedNode(null); }} />
-          </div>
+          <aside className="process-tree__detail">
+            <ProcessDetail
+              hostId={hostId}
+              node={selectedNode}
+              onClose={() => { setSelectedNode(null); }}
+            />
+          </aside>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -228,7 +247,7 @@ function renderTree(
     .join("path")
     .attr("class", "link")
     .attr("fill", "none")
-    .attr("stroke", "#999")
+    .attr("stroke", "#c5c7d1") // ui-fleet-black-25
     .attr("stroke-width", 1)
     .attr(
       "d",
@@ -254,17 +273,18 @@ function renderTree(
     .append("circle")
     .attr("r", 5)
     .attr("fill", (d) => {
-      if (d.data.data.exit_time_ns) return "#999";
-      return "#4a90d9";
+      // Fleet UI colors: ui-fleet-black-50 for exited, core-fleet-green for live.
+      if (d.data.data.exit_time_ns) return "#8b8fa2";
+      return "#009a7d";
     });
 
-  // Alert badge: red ring around nodes with open/acknowledged alerts.
+  // Alert badge: vibrant red ring around nodes with open/acknowledged alerts.
   node
     .filter((d) => alertProcessIds.has(d.data.data.id))
     .append("circle")
     .attr("r", 9)
     .attr("fill", "none")
-    .attr("stroke", "#d32f2f")
+    .attr("stroke", "#ff5c83")
     .attr("stroke-width", 2);
 
   node
@@ -272,6 +292,7 @@ function renderTree(
     .attr("dx", 8)
     .attr("dy", 4)
     .attr("font-size", "12px")
-    .attr("font-family", "monospace")
+    .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
+    .attr("fill", "#192147") // core-fleet-black
     .text((d) => `${d.data.name} (${String(d.data.pid)})`);
 }

@@ -1,0 +1,57 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+@use "../../styles/var/global" as *;
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: $pad-xsmall;
+
+  &--inline {
+    flex-direction: row;
+    align-items: center;
+    gap: $pad-small;
+  }
+
+  &__label {
+    font-size: $xx-small;
+    font-weight: $bold;
+    color: $ui-fleet-black-75;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+
+    &--inline {
+      text-transform: none;
+      font-weight: $regular;
+      color: $core-fleet-black;
+    }
+  }
+
+  &__input {
+    padding: $pad-small $pad-smedium;
+    font-size: $x-small;
+    font-family: inherit;
+    color: $core-fleet-black;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: $border-radius;
+    height: 36px;
+    outline: none;
+    transition: border-color 150ms ease-in-out;
+
+    &:hover {
+      border-color: $ui-fleet-black-50;
+    }
+
+    &:focus {
+      border-color: $core-fleet-green;
+      box-shadow: 0 0 0 3px rgba(0, 154, 125, 0.15);
+    }
+  }
+}
+
+select.field__input {
+  cursor: pointer;
+  padding-right: $pad-large;
+}

@@ -1,0 +1,70 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+@use "../styles/var/global" as *;
+
+.process-tree {
+  &__title {
+    display: inline-flex;
+    align-items: center;
+    gap: $pad-medium;
+  }
+
+  &__back {
+    font-size: $x-small;
+    font-weight: $regular;
+    color: $core-fleet-green;
+  }
+
+  &__host {
+    color: $ui-fleet-black-75;
+    font-size: $x-small;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  &__controls {
+    display: flex;
+    gap: $pad-small;
+    align-items: center;
+  }
+
+  &__range {
+    display: flex;
+    gap: $pad-xsmall;
+  }
+
+  &__status {
+    margin: $pad-medium 0;
+    color: $ui-fleet-black-75;
+
+    &--error {
+      color: $core-vibrant-red;
+    }
+  }
+
+  &__layout {
+    display: flex;
+    gap: $pad-medium;
+    align-items: flex-start;
+  }
+
+  &__canvas {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-10;
+    border-radius: $border-radius;
+
+    svg {
+      width: 100%;
+      min-height: 600px;
+      display: block;
+    }
+  }
+
+  &__detail {
+    width: 420px;
+    flex-shrink: 0;
+  }
+}

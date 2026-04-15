@@ -1,13 +1,35 @@
 import { useEffect, useState, useCallback } from "react";
-import { getProcessDetail, listAlertsByProcessId, updateAlertStatus, createCommand, getCommand } from "../api";
-import type { ProcessNode, ProcessDetail as ProcessDetailType, Alert, Command } from "../types";
+import {
+  getProcessDetail,
+  listAlertsByProcessId,
+  updateAlertStatus,
+  createCommand,
+  getCommand,
+} from "../api";
+import type {
+  ProcessNode,
+  ProcessDetail as ProcessDetailType,
+  Alert,
+  Command,
+} from "../types";
 import { NetworkConnections } from "./NetworkConnections";
+import { Card } from "./ui/Card";
+import { Button } from "./ui/Button";
+import { Badge, type BadgeVariant } from "./ui/Badge";
+import "./ProcessDetail.scss";
 
 interface Props {
   hostId: string;
   node: ProcessNode;
   onClose: () => void;
 }
+
+const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
+  critical: "critical",
+  high: "high",
+  medium: "medium",
+  low: "low",
+};
 
 export function ProcessDetail({ hostId, node, onClose }: Props) {
   const [detail, setDetail] = useState<ProcessDetailType | null>(null);
@@ -46,7 +68,12 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
 
   // Poll for command status updates when a kill command is pending/acked.
   useEffect(() => {
-    if (!killCommand || killCommand.id === 0 || killCommand.status === "completed" || killCommand.status === "failed") return;
+    if (
+      !killCommand
+      || killCommand.id === 0
+      || killCommand.status === "completed"
+      || killCommand.status === "failed"
+    ) return;
     const timer = setInterval(() => {
       getCommand(killCommand.id)
         .then((found) => {
@@ -91,32 +118,42 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     updateAlertStatus(alertId, newStatus)
       .then(() => {
         setAlerts((prev) =>
-          prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a))
+          prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a)),
         );
       })
       .catch(() => { /* ignore */ });
   };
 
+  const killDisabled = killSending
+    || (killCommand !== null
+      && killCommand.status !== "completed"
+      && killCommand.status !== "failed");
+
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 4, padding: "1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-        <strong>Process detail</strong>
-        <button onClick={onClose} aria-label="Close" style={{ cursor: "pointer" }}>
+    <Card padding="medium" className="process-detail">
+      <div className="process-detail__header">
+        <h3 className="process-detail__title">Process detail</h3>
+        <button
+          type="button"
+          className="process-detail__close"
+          onClick={onClose}
+          aria-label="Close"
+        >
           &times;
         </button>
       </div>
 
-      <dl style={dlStyle}>
+      <dl className="process-detail__list">
         <dt>PID</dt>
         <dd>{node.pid}</dd>
         <dt>PPID</dt>
         <dd>{node.ppid}</dd>
         <dt>Path</dt>
-        <dd style={{ wordBreak: "break-all" }}>{node.path || "(unknown)"}</dd>
+        <dd className="process-detail__break">{node.path || "(unknown)"}</dd>
         {node.args && (
           <>
             <dt>Args</dt>
-            <dd style={{ wordBreak: "break-all" }}>{node.args.join(" ")}</dd>
+            <dd className="process-detail__break">{node.args.join(" ")}</dd>
           </>
         )}
         {node.uid !== undefined && (
@@ -134,7 +171,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         {node.sha256 && (
           <>
             <dt>SHA256</dt>
-            <dd style={{ wordBreak: "break-all", fontSize: "0.75rem" }}>{node.sha256}</dd>
+            <dd className="process-detail__hash">{node.sha256}</dd>
           </>
         )}
         {node.code_signing && (
@@ -165,21 +202,20 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         )}
       </dl>
 
-      <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <button
+      <div className="process-detail__kill">
+        <Button
+          variant="alert"
+          size="small"
           onClick={handleKillProcess}
-          disabled={killSending || (killCommand !== null && killCommand.status !== "completed" && killCommand.status !== "failed")}
-          style={{
-            ...killBtnStyle,
-            opacity: killSending || (killCommand !== null && killCommand.status !== "completed" && killCommand.status !== "failed") ? 0.5 : 1,
-          }}
+          disabled={killDisabled}
         >
           Kill process
-        </button>
+        </Button>
         {killCommand && (
-          <span style={{ fontSize: "0.8rem", color: commandStatusColor(killCommand.status) }}>
+          <span className={`process-detail__cmd-status process-detail__cmd-status--${killCommand.status}`}>
             {killCommand.status}
-            {killCommand.status === "failed" && typeof killCommand.result?.error === "string"
+            {killCommand.status === "failed"
+              && typeof killCommand.result?.error === "string"
               ? `: ${killCommand.result.error}`
               : ""}
             {killCommand.status === "completed" ? " — process killed" : ""}
@@ -187,7 +223,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         )}
       </div>
 
-      {loading && <p>Loading network data...</p>}
+      {loading && <p className="process-detail__loading">Loading network data...</p>}
 
       {detail && (
         <NetworkConnections
@@ -197,104 +233,55 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       )}
 
       {alerts.length > 0 && (
-        <div style={{ marginTop: "1rem" }}>
-          <strong style={{ fontSize: "0.85rem" }}>Alerts</strong>
+        <div className="process-detail__alerts">
+          <h4 className="process-detail__alerts-title">Alerts</h4>
           {alerts.map((a) => (
-            <div key={a.id} style={alertCardStyle}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{
-                  display: "inline-block",
-                  padding: "0.1rem 0.4rem",
-                  borderRadius: 3,
-                  color: "#fff",
-                  fontSize: "0.7rem",
-                  fontWeight: "bold",
-                  backgroundColor: severityColor(a.severity),
-                }}>
+            <div key={a.id} className="process-detail__alert">
+              <div className="process-detail__alert-header">
+                <Badge variant={SEVERITY_VARIANTS[a.severity] ?? "neutral"}>
                   {a.severity}
-                </span>
-                <span style={{ fontSize: "0.75rem", color: statusColor(a.status) }}>{a.status}</span>
+                </Badge>
+                <span className={`status-text status-text--${a.status}`}>{a.status}</span>
               </div>
-              <div style={{ fontSize: "0.8rem", fontWeight: "bold", marginTop: "0.25rem" }}>{a.title}</div>
-              <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.15rem" }}>{a.description}</div>
-              <div style={{ marginTop: "0.4rem", display: "flex", gap: "0.25rem" }}>
+              <div className="process-detail__alert-title">{a.title}</div>
+              <div className="process-detail__alert-desc">{a.description}</div>
+              <div className="process-detail__alert-actions">
                 {a.status === "open" && (
-                  <button style={alertBtnStyle} onClick={() => { handleAlertStatusChange(a.id, "acknowledged"); }}>
+                  <Button
+                    size="small"
+                    variant="inverse"
+                    onClick={() => { handleAlertStatusChange(a.id, "acknowledged"); }}
+                  >
                     Acknowledge
-                  </button>
+                  </Button>
                 )}
                 {a.status !== "resolved" && (
-                  <button style={alertBtnStyle} onClick={() => { handleAlertStatusChange(a.id, "resolved"); }}>
+                  <Button
+                    size="small"
+                    variant="inverse"
+                    onClick={() => { handleAlertStatusChange(a.id, "resolved"); }}
+                  >
                     Resolve
-                  </button>
+                  </Button>
                 )}
                 {a.status === "resolved" && (
-                  <button style={alertBtnStyle} onClick={() => { handleAlertStatusChange(a.id, "open"); }}>
+                  <Button
+                    size="small"
+                    variant="inverse"
+                    onClick={() => { handleAlertStatusChange(a.id, "open"); }}
+                  >
                     Reopen
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </Card>
   );
-}
-
-function severityColor(severity: string): string {
-  const colors: Record<string, string> = {
-    critical: "#d32f2f", high: "#e65100", medium: "#f9a825", low: "#1976d2",
-  };
-  return colors[severity] || "#999";
-}
-
-function statusColor(status: string): string {
-  if (status === "open") return "#d32f2f";
-  if (status === "acknowledged") return "#e65100";
-  return "#388e3c";
 }
 
 function formatTimestamp(ns: number): string {
   return new Date(ns / 1_000_000).toLocaleTimeString();
-}
-
-const dlStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "auto 1fr",
-  gap: "0.25rem 0.75rem",
-  fontSize: "0.85rem",
-  margin: 0,
-};
-
-const alertCardStyle: React.CSSProperties = {
-  border: "1px solid #ffcdd2",
-  borderRadius: 4,
-  padding: "0.5rem",
-  marginTop: "0.5rem",
-  backgroundColor: "#fff5f5",
-};
-
-const alertBtnStyle: React.CSSProperties = {
-  padding: "0.15rem 0.4rem",
-  fontSize: "0.7rem",
-  cursor: "pointer",
-};
-
-const killBtnStyle: React.CSSProperties = {
-  padding: "0.3rem 0.75rem",
-  fontSize: "0.8rem",
-  cursor: "pointer",
-  backgroundColor: "#d32f2f",
-  color: "#fff",
-  border: "none",
-  borderRadius: 3,
-  fontWeight: "bold",
-};
-
-function commandStatusColor(status: string): string {
-  if (status === "pending") return "#f9a825";
-  if (status === "acked") return "#e65100";
-  if (status === "completed") return "#388e3c";
-  return "#d32f2f";
 }

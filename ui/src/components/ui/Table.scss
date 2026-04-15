@@ -1,0 +1,61 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+@use "../../styles/var/global" as *;
+
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  background-color: $core-fleet-white;
+  border: 1px solid $ui-fleet-black-10;
+  border-radius: $border-radius;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: $x-small;
+
+  th,
+  td {
+    padding: $pad-small $pad-medium;
+    text-align: left;
+    vertical-align: middle;
+  }
+
+  thead th {
+    padding: $pad-smedium $pad-medium;
+    background-color: $ui-fleet-black-5;
+    color: $ui-fleet-black-75;
+    text-transform: uppercase;
+    font-size: $xx-small;
+    font-weight: $bold;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid $ui-fleet-black-10;
+  }
+
+  tbody tr {
+    border-bottom: 1px solid $ui-fleet-black-5;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    &:hover {
+      background-color: $ui-off-white;
+    }
+  }
+
+  &--clickable tbody tr {
+    cursor: pointer;
+  }
+}
+
+.table-empty {
+  padding: $pad-large;
+  text-align: center;
+  color: $ui-fleet-black-50;
+  background-color: $core-fleet-white;
+  border: 1px solid $ui-fleet-black-10;
+  border-radius: $border-radius;
+}

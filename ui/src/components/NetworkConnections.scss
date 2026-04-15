@@ -1,0 +1,60 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.net-empty {
+  margin: $pad-medium 0 0 0;
+  font-size: $x-small;
+  color: $ui-fleet-black-50;
+}
+
+.net-section {
+  margin-top: $pad-medium;
+  padding-top: $pad-medium;
+  border-top: 1px solid $ui-fleet-black-10;
+
+  &__title {
+    font-size: $xx-small;
+    margin: 0 0 $pad-small 0;
+    color: $ui-fleet-black-75;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+
+    &--dns {
+      margin-top: $pad-medium;
+    }
+  }
+}
+
+.net-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: $xx-small;
+
+  th {
+    text-align: left;
+    padding: $pad-xsmall $pad-small;
+    color: $ui-fleet-black-75;
+    font-weight: $bold;
+    border-bottom: 1px solid $ui-fleet-black-10;
+    text-transform: uppercase;
+    font-size: $xxx-small;
+    letter-spacing: 0.5px;
+  }
+
+  td {
+    padding: $pad-xsmall $pad-small;
+    border-bottom: 1px solid $ui-fleet-black-5;
+    color: $core-fleet-black;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    &:last-child {
+      font-family: inherit;
+      color: $ui-fleet-black-50;
+    }
+  }
+
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+}
