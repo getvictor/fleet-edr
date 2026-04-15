@@ -623,14 +623,13 @@ function renderTree(
   node
     .append("circle")
     .attr("class", "node__dot")
-    // Alerted processes get a larger, vibrant-red solid dot to stand out — a ring
-    // would be partially hidden by the label backdrop and read as a "C" instead
-    // of a full circle. A bigger filled dot keeps the shape intact at any angle.
-    .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? 7 : 5))
+    .attr("r", 5)
     .attr("fill", (d) => {
-      if (alertProcessIds.has(d.data.data.id)) return "#ff5c83"; // core-vibrant-red
-      if (d.data.data.exit_time_ns) return "#8b8fa2"; // ui-fleet-black-50 (exited)
-      return "#009a7d"; // core-fleet-green (live)
+      // Dot reflects liveness (green = running, grey = exited). Alert state is
+      // signalled separately via the label colour/weight, so the dot stays a
+      // clean, consistent shape that doesn't fight the label backdrop.
+      if (d.data.data.exit_time_ns) return "#8b8fa2";
+      return "#009a7d";
     });
 
   // Collapse/expand chevron. Sits in front of the dot. Only rendered when a node has
@@ -657,12 +656,16 @@ function renderTree(
 
   node
     .append("text")
-    .attr("class", "node__label")
+    .attr("class", (d) => {
+      const isAlerted = alertProcessIds.has(d.data.data.id);
+      return `node__label${isAlerted ? " node__label--alert" : ""}`;
+    })
     .attr("dx", 8)
     .attr("dy", 4)
     .attr("font-size", "12px")
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
-    .attr("fill", "#192147") // core-fleet-black
+    .attr("fill", (d) => (alertProcessIds.has(d.data.data.id) ? "#ff5c83" : "#192147"))
+    .attr("font-weight", (d) => (alertProcessIds.has(d.data.data.id) ? "bold" : "normal"))
     .text((d) => {
       const base = `${d.data.name} (${String(d.data.pid)})`;
       const hidden = d.data.data._collapsedCount;
