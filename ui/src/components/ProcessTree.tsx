@@ -676,5 +676,24 @@ function renderTree(
       return hidden && hidden > 0 ? `${base}  +${String(hidden)}` : base;
     });
 
+  // White backdrop behind each label so sibling tree links passing through the
+  // label area don't visually cut through the text. Inserted after the text is
+  // drawn so we can size it from the text's actual bounding box, and inserted
+  // BEFORE the text in the DOM so the text paints on top of the backdrop.
+  node.each(function () {
+    const g = d3.select(this);
+    const textEl = g.select<SVGTextElement>("text.node__label").node();
+    if (!textEl) return;
+    const bbox = textEl.getBBox();
+    g.insert("rect", "text.node__label")
+      .attr("class", "node__label-bg")
+      .attr("x", bbox.x - 3)
+      .attr("y", bbox.y - 1)
+      .attr("width", bbox.width + 6)
+      .attr("height", bbox.height + 2)
+      .attr("fill", "#fff")
+      .attr("pointer-events", "none");
+  });
+
   return { zoom, nodes };
 }
