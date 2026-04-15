@@ -368,18 +368,23 @@ export function ProcessTreeView() {
           </button>
         ))}
       </div>
-      <Button
-        size="small"
-        variant={hideSystem ? "primary" : "inverse"}
-        onClick={() => { setHideSystem((v) => !v); }}
+      <label
+        className="process-tree__toggle"
         title={hideSystem
           ? `System processes hidden${hiddenSystemCount > 0 ? ` (${String(hiddenSystemCount)})` : ""}`
           : "System processes shown"}
       >
-        {hideSystem
-          ? `Hide system${hiddenSystemCount > 0 ? ` (${String(hiddenSystemCount)})` : ""}`
-          : "Show system"}
-      </Button>
+        <input
+          type="checkbox"
+          className="process-tree__toggle-input"
+          checked={hideSystem}
+          onChange={(e) => { setHideSystem(e.target.checked); }}
+        />
+        <span className="process-tree__toggle-switch" aria-hidden="true" />
+        <span className="process-tree__toggle-label">
+          Hide system{hideSystem && hiddenSystemCount > 0 ? ` (${String(hiddenSystemCount)})` : ""}
+        </span>
+      </label>
       <Button size="small" variant="inverse" onClick={fetchTree}>
         Refresh
       </Button>

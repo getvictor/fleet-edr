@@ -67,6 +67,66 @@
     }
   }
 
+  // Toggle switch styled to match Fleet's form controls. Uses a hidden checkbox
+  // for accessibility/keyboard focus and a pure-CSS visual track/thumb.
+  &__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: $pad-small;
+    cursor: pointer;
+    font-size: $x-small;
+    color: $core-fleet-black;
+    user-select: none;
+  }
+
+  &__toggle-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+
+  &__toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+    background-color: $ui-fleet-black-25;
+    border-radius: 9px;
+    transition: background-color 150ms ease;
+    flex-shrink: 0;
+
+    &::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      background-color: $core-fleet-white;
+      border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+      transition: transform 150ms ease;
+    }
+  }
+
+  &__toggle-input:checked + &__toggle-switch {
+    background-color: $core-fleet-green;
+  }
+
+  &__toggle-input:checked + &__toggle-switch::after {
+    transform: translateX(14px);
+  }
+
+  &__toggle-input:focus-visible + &__toggle-switch {
+    box-shadow: 0 0 0 2px rgba(0, 154, 125, 0.3);
+  }
+
+  &__toggle-label {
+    font-variant-numeric: tabular-nums;
+  }
+
   &__search {
     display: flex;
     align-items: center;
