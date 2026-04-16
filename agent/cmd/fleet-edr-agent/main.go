@@ -82,12 +82,12 @@ func main() {
 	// the same id the system extension stamps into event envelopes.
 	cmdHostID := *hostID
 	if cmdHostID == "" {
-		derived, err := hostid.Get()
+		derived, err := hostid.Get(ctx)
 		if err != nil {
 			log.Printf("commander: cannot derive host-id from IOPlatformUUID: %v; command polling disabled", err)
 		} else {
 			cmdHostID = derived
-			log.Printf("commander: derived host-id %q from IOPlatformUUID", cmdHostID)
+			log.Printf("commander: derived host-id %.8s... from IOPlatformUUID", cmdHostID)
 		}
 	}
 	if cmdHostID != "" {
@@ -102,7 +102,7 @@ func main() {
 				log.Printf("commander: %v", err)
 			}
 		}()
-		log.Printf("commander: polling for commands as host %q", cmdHostID)
+		log.Printf("commander: polling for commands as host %.8s...", cmdHostID)
 	}
 
 	// Periodic prune.

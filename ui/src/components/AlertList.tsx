@@ -53,9 +53,13 @@ export function AlertList() {
   const handleStatusChange = (alertId: number, newStatus: string) => {
     updateAlertStatus(alertId, newStatus)
       .then(() => {
-        setAlerts((prev) =>
-          prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a)),
-        );
+        setAlerts((prev) => {
+          // If the current filter no longer matches, remove the row instead of just patching it.
+          if (statusFilter && newStatus !== statusFilter) {
+            return prev.filter((a) => a.id !== alertId);
+          }
+          return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
+        });
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Failed to update status");

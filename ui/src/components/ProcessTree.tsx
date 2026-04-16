@@ -273,10 +273,14 @@ export function ProcessTreeView() {
     matchesRef.current = matches;
     /* eslint-disable react-hooks/set-state-in-effect -- derived from DOM walk after tree render */
     setMatchCount(matches.length);
+    let targetIdx = 0;
     if (matches.length === 0) {
       setMatchIdx(0);
     } else {
-      setMatchIdx((prev) => (prev < matches.length ? prev : 0));
+      setMatchIdx((prev) => {
+        targetIdx = prev < matches.length ? prev : 0;
+        return targetIdx;
+      });
     }
     /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -296,7 +300,7 @@ export function ProcessTreeView() {
           && !(pathNodes.has(d.source as D3PointNode) && pathNodes.has(d.target as D3PointNode)),
       );
 
-    if (matches.length > 0) zoomToNode(matches[0]);
+    if (matches.length > 0) zoomToNode(matches[targetIdx]);
   }, [query, visibleRoots, alertProcessIds, zoomToNode]);
 
   // Global "/" keyboard shortcut to focus the search box.

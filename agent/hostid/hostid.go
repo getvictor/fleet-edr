@@ -6,6 +6,7 @@ package hostid
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -21,8 +22,8 @@ var uuidRegexp = regexp.MustCompile(`"IOPlatformUUID"\s*=\s*"([^"]+)"`)
 // Get reads the macOS IOPlatformUUID and returns it as a string. It shells out
 // to ioreg which is always present on macOS. On non-macOS platforms, or if the
 // command fails, an error is returned.
-func Get() (string, error) {
-	cmd := exec.Command(ioregPath, "-rd1", "-c", "IOPlatformExpertDevice")
+func Get(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, ioregPath, "-rd1", "-c", "IOPlatformExpertDevice")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

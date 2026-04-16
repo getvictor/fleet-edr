@@ -60,7 +60,11 @@ func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs 
 	// "No network activity" because the strict fork-bounded query excluded the event.
 	// Within 5s of fork, macOS pid reuse is not a concern.
 	const skewPadNs = int64(5 * 1_000_000_000)
-	tr := store.TimeRange{FromNs: proc.ForkTimeNs - skewPadNs}
+	fromNs := proc.ForkTimeNs - skewPadNs
+	if fromNs < 0 {
+		fromNs = 0
+	}
+	tr := store.TimeRange{FromNs: fromNs}
 	if proc.ExitTimeNs != nil {
 		tr.ToNs = *proc.ExitTimeNs
 	} else {
