@@ -4,6 +4,14 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFSubscriber")
 
+/// Paths that AUTH_EXEC will unconditionally deny. This is a hardcoded demo blocklist;
+/// a production implementation would sync a policy from the server into the agent and
+/// communicate it to the extension over XPC.
+private let blockedPaths: Set<String> = [
+    "/tmp/payload-block",
+    "/private/tmp/payload-block",  // macOS resolves /tmp -> /private/tmp
+]
+
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
 final class ESFSubscriber: Sendable {
@@ -29,7 +37,8 @@ final class ESFSubscriber: Sendable {
 
     func start() {
         let events: [es_event_type_t] = [
-            ES_EVENT_TYPE_NOTIFY_EXEC,
+            ES_EVENT_TYPE_AUTH_EXEC,    // authorization: allows us to block specific binaries
+            ES_EVENT_TYPE_NOTIFY_EXEC,  // notification: records allowed execs (fires after AUTH allows)
             ES_EVENT_TYPE_NOTIFY_FORK,
             ES_EVENT_TYPE_NOTIFY_EXIT,
             ES_EVENT_TYPE_NOTIFY_OPEN
@@ -41,7 +50,7 @@ final class ESFSubscriber: Sendable {
             exit(EXIT_FAILURE)
         }
 
-        logger.info("Subscribed to \(events.count) event types")
+        logger.info("Subscribed to \(events.count) event types (including AUTH_EXEC)")
     }
 
     func stop() {
@@ -53,6 +62,8 @@ final class ESFSubscriber: Sendable {
         let msg = message.pointee
 
         switch msg.event_type {
+        case ES_EVENT_TYPE_AUTH_EXEC:
+            handleAuthExec(message)
         case ES_EVENT_TYPE_NOTIFY_EXEC:
             handleExec(msg)
         case ES_EVENT_TYPE_NOTIFY_FORK:
@@ -63,6 +74,23 @@ final class ESFSubscriber: Sendable {
             handleOpen(msg)
         default:
             break
+        }
+    }
+
+    /// AUTH_EXEC handler: check the target binary against the hardcoded blocklist and
+    /// respond with DENY or ALLOW. The response is synchronous and immediate (simple
+    /// string lookup), well within the kernel's AUTH deadline. For denied execs the
+    /// kernel returns EPERM to the caller and the binary never runs.
+    private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
+        let msg = message.pointee
+        let target = msg.event.exec.target.pointee
+        let path = String(cString: target.executable.pointee.path.data)
+
+        if blockedPaths.contains(path) {
+            logger.warning("AUTH_EXEC DENIED: \(path, privacy: .public)")
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
+        } else {
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
         }
     }
 
