@@ -67,6 +67,12 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update the hosts summary table with event counts and last-seen timestamps.
+	if err := h.store.UpsertHosts(ctx, events); err != nil {
+		h.logger.ErrorContext(ctx, "upsert hosts", "err", err)
+		// Non-fatal: events are already stored; host stats will be corrected on next server restart via backfill.
+	}
+
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]int{"accepted": len(events)}); err != nil {
 		h.logger.ErrorContext(ctx, "encode response", "err", err)

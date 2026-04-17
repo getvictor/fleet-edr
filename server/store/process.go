@@ -249,14 +249,53 @@ func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, p
 func (s *Store) ListHosts(ctx context.Context) ([]HostSummary, error) {
 	var hosts []HostSummary
 	err := s.db.SelectContext(ctx, &hosts, `
-		SELECT host_id, COUNT(*) AS event_count, MAX(timestamp_ns) AS last_seen_ns
-		FROM events
-		GROUP BY host_id
+		SELECT host_id, event_count, last_seen_ns
+		FROM hosts
 		ORDER BY last_seen_ns DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}
 	return hosts, nil
+}
+
+// UpsertHosts incrementally updates the hosts summary table for a batch of ingested events. It aggregates event counts
+// and max timestamps per host, then upserts them in a single statement.
+func (s *Store) UpsertHosts(ctx context.Context, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	// Aggregate per host.
+	type hostStats struct {
+		count   int64
+		maxTsNs int64
+	}
+	byHost := make(map[string]*hostStats)
+	for _, e := range events {
+		st, ok := byHost[e.HostID]
+		if !ok {
+			st = &hostStats{}
+			byHost[e.HostID] = st
+		}
+		st.count++
+		if e.TimestampNs > st.maxTsNs {
+			st.maxTsNs = e.TimestampNs
+		}
+	}
+
+	for hostID, st := range byHost {
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO hosts (host_id, event_count, last_seen_ns)
+			VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				event_count = event_count + VALUES(event_count),
+				last_seen_ns = GREATEST(last_seen_ns, VALUES(last_seen_ns))`,
+			hostID, st.count, st.maxTsNs)
+		if err != nil {
+			return fmt.Errorf("upsert host %s: %w", hostID, err)
+		}
+	}
+	return nil
 }
 
 // DB exposes the underlying database connection for use by other packages

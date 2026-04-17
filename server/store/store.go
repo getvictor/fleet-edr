@@ -83,6 +83,12 @@ var schemaStatements = []string{
 		INDEX idx_commands_host_status (host_id, status),
 		INDEX idx_commands_created (created_at)
 	)`,
+	`CREATE TABLE IF NOT EXISTS hosts (
+		host_id      VARCHAR(255) PRIMARY KEY,
+		event_count  BIGINT       NOT NULL DEFAULT 0,
+		last_seen_ns BIGINT       NOT NULL DEFAULT 0,
+		updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+	)`,
 }
 
 // Event represents the canonical event envelope.
@@ -140,6 +146,14 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		}
 	}
 
+	// Post-schema data migrations (backfills, etc.). Safe to re-run.
+	for _, m := range postSchemaMigrations {
+		if _, err := db.ExecContext(ctx, m); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("post-schema migration: %w", err)
+		}
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -147,6 +161,17 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 var migrations = []string{
 	`ALTER TABLE events ADD COLUMN processed TINYINT(1) NOT NULL DEFAULT 0`,
 	`ALTER TABLE events ADD INDEX idx_events_processed (processed, host_id, timestamp_ns)`,
+}
+
+// postSchemaMigrations run after schema creation and idempotent ALTER migrations. They use INSERT IGNORE / INSERT ...
+// ON DUPLICATE KEY UPDATE so they are safe to re-run.
+var postSchemaMigrations = []string{
+	// Backfill the hosts summary table from existing events.
+	`INSERT INTO hosts (host_id, event_count, last_seen_ns)
+	 SELECT host_id, COUNT(*), MAX(timestamp_ns) FROM events GROUP BY host_id
+	 ON DUPLICATE KEY UPDATE
+	   event_count = VALUES(event_count),
+	   last_seen_ns = GREATEST(hosts.last_seen_ns, VALUES(last_seen_ns))`,
 }
 
 // Close closes the database connection.
