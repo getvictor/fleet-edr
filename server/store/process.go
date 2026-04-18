@@ -267,7 +267,7 @@ func (s *Store) UpsertHosts(ctx context.Context, events []Event) error {
 
 	// Aggregate per host.
 	type hostStats struct {
-		count    int64
+		count   int64
 		maxTSNs int64
 	}
 	byHost := make(map[string]*hostStats)
