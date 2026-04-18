@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// communicate it to the extension over XPC.
 private let blockedPaths: Set<String> = [
     "/tmp/payload-block",
-    "/private/tmp/payload-block",  // macOS resolves /tmp -> /private/tmp
+    "/private/tmp/payload-block"  // macOS resolves /tmp -> /private/tmp
 ]
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to

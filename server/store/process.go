@@ -267,8 +267,8 @@ func (s *Store) UpsertHosts(ctx context.Context, events []Event) error {
 
 	// Aggregate per host.
 	type hostStats struct {
-		count   int64
-		maxTsNs int64
+		count    int64
+		maxTSNs int64
 	}
 	byHost := make(map[string]*hostStats)
 	for _, e := range events {
@@ -278,8 +278,8 @@ func (s *Store) UpsertHosts(ctx context.Context, events []Event) error {
 			byHost[e.HostID] = st
 		}
 		st.count++
-		if e.TimestampNs > st.maxTsNs {
-			st.maxTsNs = e.TimestampNs
+		if e.TimestampNs > st.maxTSNs {
+			st.maxTSNs = e.TimestampNs
 		}
 	}
 
@@ -290,7 +290,7 @@ func (s *Store) UpsertHosts(ctx context.Context, events []Event) error {
 			ON DUPLICATE KEY UPDATE
 				event_count = event_count + VALUES(event_count),
 				last_seen_ns = GREATEST(last_seen_ns, VALUES(last_seen_ns))`,
-			hostID, st.count, st.maxTsNs)
+			hostID, st.count, st.maxTSNs)
 		if err != nil {
 			return fmt.Errorf("upsert host %s: %w", hostID, err)
 		}
