@@ -51,8 +51,17 @@ func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs 
 		return nil, nil
 	}
 
-	// Build a time range from the process lifetime.
-	tr := store.TimeRange{FromNs: proc.ForkTimeNs}
+	// Build a time range from the process lifetime. We pad the lower bound by 5 seconds
+	// because our Endpoint Security and Network Extension timestamp sources are not always
+	// in lockstep — in practice we've seen NE-emitted network_connect events arrive with
+	// timestamps ~50-100ms *before* the ES-emitted fork event for the same pid. Without
+	// the pad, short-lived tools like `nc` would correctly fire a detection rule (which
+	// uses a broader shell-exec-forward window) but the ProcessDetail panel would show
+	// "No network activity" because the strict fork-bounded query excluded the event.
+	// Within 5s of fork, macOS pid reuse is not a concern.
+	const skewPadNs = int64(5 * 1_000_000_000)
+	fromNs := max(proc.ForkTimeNs-skewPadNs, 0)
+	tr := store.TimeRange{FromNs: fromNs}
 	if proc.ExitTimeNs != nil {
 		tr.ToNs = *proc.ExitTimeNs
 	} else {

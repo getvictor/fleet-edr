@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listHosts } from "../api";
 import type { HostSummary } from "../types";
+import { Table, EmptyState } from "./ui/Table";
+import { PageHeader } from "./ui/PageHeader";
 
 export function HostList() {
   const [hosts, setHosts] = useState<HostSummary[]>([]);
@@ -20,33 +22,40 @@ export function HostList() {
       });
   }, []);
 
-  if (loading) return <p>Loading hosts...</p>;
-  if (error) return <p style={{ color: "red" }}>Error: {error}</p>;
-  if (hosts.length === 0) return <p>No hosts reporting yet.</p>;
-
   return (
-    <table style={{ borderCollapse: "collapse", width: "100%" }}>
-      <thead>
-        <tr>
-          <th style={thStyle}>Host ID</th>
-          <th style={thStyle}>Events</th>
-          <th style={thStyle}>Last seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        {hosts.map((h) => (
-          <tr
-            key={h.host_id}
-            onClick={() => { void navigate(`/hosts/${encodeURIComponent(h.host_id)}`); }}
-            style={{ cursor: "pointer" }}
-          >
-            <td style={tdStyle}>{h.host_id}</td>
-            <td style={tdStyle}>{h.event_count.toLocaleString()}</td>
-            <td style={tdStyle}>{formatRelative(h.last_seen_ns)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <>
+      <PageHeader title="Hosts" subtitle="Endpoints reporting events" />
+      {loading && <EmptyState>Loading hosts...</EmptyState>}
+      {error && !loading && <EmptyState>Error: {error}</EmptyState>}
+      {!loading && !error && hosts.length === 0 && (
+        <EmptyState>No hosts reporting yet.</EmptyState>
+      )}
+      {!loading && !error && hosts.length > 0 && (
+        <Table className="table--clickable">
+          <thead>
+            <tr>
+              <th>Host ID</th>
+              <th>Events</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hosts.map((h) => (
+              <tr
+                key={h.host_id}
+                onClick={() => {
+                  void navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
+                }}
+              >
+                <td>{h.host_id}</td>
+                <td>{h.event_count.toLocaleString()}</td>
+                <td>{formatRelative(h.last_seen_ns)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </>
   );
 }
 
@@ -57,14 +66,3 @@ function formatRelative(ns: number): string {
   if (diff < 86_400_000) return `${String(Math.floor(diff / 3_600_000))}h ago`;
   return `${String(Math.floor(diff / 86_400_000))}d ago`;
 }
-
-const thStyle: React.CSSProperties = {
-  textAlign: "left",
-  borderBottom: "2px solid #ccc",
-  padding: "0.5rem",
-};
-
-const tdStyle: React.CSSProperties = {
-  borderBottom: "1px solid #eee",
-  padding: "0.5rem",
-};

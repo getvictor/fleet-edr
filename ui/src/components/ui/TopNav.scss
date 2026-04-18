@@ -1,0 +1,75 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+
+.top-nav {
+  background: $gradients-dark-gradient;
+  color: $core-fleet-white;
+  padding: 0 $pad-page;
+
+  &__inner {
+    display: flex;
+    align-items: center;
+    gap: $pad-xlarge;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  &__brand {
+    display: flex;
+    align-items: center;
+    gap: $pad-small;
+    padding: $pad-small 0;
+  }
+
+  &__logo-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background-color: $core-fleet-green;
+    color: $core-fleet-white;
+    font-weight: $bold;
+    font-size: $small;
+  }
+
+  &__logo-text {
+    font-weight: $bold;
+    font-size: $small;
+    letter-spacing: 0.3px;
+  }
+
+  &__logo-accent {
+    color: $core-fleet-green;
+  }
+
+  &__links {
+    display: flex;
+    gap: $pad-smedium;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__link {
+    display: inline-block;
+    padding: $pad-smedium $pad-medium;
+    color: $ui-fleet-black-10;
+    font-weight: $bold;
+    font-size: $x-small;
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+
+    &:hover {
+      color: $core-fleet-white;
+      text-decoration: none;
+    }
+
+    &--active {
+      color: $core-fleet-white;
+      border-bottom-color: $core-fleet-green;
+    }
+  }
+}

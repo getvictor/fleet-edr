@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { setApiKey, listHosts } from "../api";
+import { Button } from "./ui/Button";
+import { Card } from "./ui/Card";
+import { Input } from "./ui/Input";
+import "./Login.scss";
 
 interface LoginProps {
   onLogin: () => void;
@@ -28,25 +32,39 @@ export function Login({ onLogin }: LoginProps) {
   }
 
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", padding: "2rem", maxWidth: "20rem", margin: "4rem auto" }}>
-      <h1 style={{ fontSize: "1.25rem", marginBottom: "1.5rem" }}>Fleet EDR</h1>
-      <form onSubmit={(e) => { void handleSubmit(e); }}>
-        <label htmlFor="api-key" style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9rem" }}>
-          API key
-        </label>
-        <input
-          id="api-key"
-          type="password"
-          value={key}
-          onChange={(e) => { setKey(e.target.value); }}
-          style={{ width: "100%", padding: "0.5rem", boxSizing: "border-box", marginBottom: "0.75rem" }}
-          autoFocus
-        />
-        {error && <div style={{ color: "red", fontSize: "0.85rem", marginBottom: "0.75rem" }}>{error}</div>}
-        <button type="submit" disabled={loading || key.length === 0} style={{ padding: "0.5rem 1.5rem" }}>
-          {loading ? "Checking..." : "Log in"}
-        </button>
-      </form>
+    <div className="login-page">
+      <Card padding="large" className="login-card">
+        <div className="login-card__header">
+          <div className="login-card__brand">
+            <span className="login-card__logo">F</span>
+            <h1 className="login-card__title">
+              Fleet <span className="login-card__accent">EDR</span>
+            </h1>
+          </div>
+          <p className="login-card__subtitle">
+            Enter your API key to sign in
+          </p>
+        </div>
+
+        <form onSubmit={(e) => { void handleSubmit(e); }} className="login-card__form">
+          <Input
+            id="api-key"
+            label="API key"
+            type="password"
+            value={key}
+            onChange={(e) => { setKey(e.target.value); }}
+            autoFocus
+          />
+          {error && <div className="login-card__error">{error}</div>}
+          <Button
+            type="submit"
+            disabled={key.length === 0}
+            isLoading={loading}
+          >
+            {loading ? "Checking..." : "Log in"}
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }

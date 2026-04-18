@@ -1,0 +1,299 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+@use "../styles/var/global" as *;
+
+.process-tree {
+  &__title {
+    display: inline-flex;
+    align-items: center;
+    gap: $pad-medium;
+  }
+
+  &__back {
+    font-size: $x-small;
+    font-weight: $regular;
+    color: $core-fleet-green;
+  }
+
+  &__host {
+    color: $ui-fleet-black-75;
+    font-size: $x-small;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  &__controls {
+    display: flex;
+    gap: $pad-small;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  // Segmented control: one rounded container with vertical dividers between
+  // options. Replaces the prior row of individual buttons.
+  &__range {
+    display: inline-flex;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: $border-radius;
+    overflow: hidden;
+    background-color: $core-fleet-white;
+    line-height: 1;
+  }
+
+  &__range-item {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-right: 1px solid $ui-fleet-black-10;
+    padding: 6px 12px;
+    font-size: $x-small;
+    font-family: inherit;
+    color: $core-fleet-black;
+    cursor: pointer;
+    transition: background-color 100ms ease, color 100ms ease;
+
+    &:last-child {
+      border-right: 0;
+    }
+
+    &:hover:not(&--active) {
+      background-color: $ui-off-white;
+    }
+
+    &--active {
+      background-color: $core-fleet-green;
+      color: $core-fleet-white;
+      font-weight: $bold;
+    }
+  }
+
+  // Toggle switch styled to match Fleet's form controls. Uses a hidden checkbox
+  // for accessibility/keyboard focus and a pure-CSS visual track/thumb.
+  &__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: $pad-small;
+    cursor: pointer;
+    font-size: $x-small;
+    color: $core-fleet-black;
+    user-select: none;
+  }
+
+  &__toggle-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+
+  &__toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+    background-color: $ui-fleet-black-25;
+    border-radius: 9px;
+    transition: background-color 150ms ease;
+    flex-shrink: 0;
+
+    &::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      background-color: $core-fleet-white;
+      border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+      transition: transform 150ms ease;
+    }
+  }
+
+  &__toggle-input:checked + &__toggle-switch {
+    background-color: $core-fleet-green;
+  }
+
+  &__toggle-input:checked + &__toggle-switch::after {
+    transform: translateX(14px);
+  }
+
+  &__toggle-input:focus-visible + &__toggle-switch {
+    box-shadow: 0 0 0 2px rgba(0, 154, 125, 0.3);
+  }
+
+  &__toggle-label {
+    font-variant-numeric: tabular-nums;
+  }
+
+  // Standalone toolbar action button (e.g. Refresh). Matches the height of the
+  // search input and segmented range control so the toolbar row lines up.
+  &__action-btn {
+    appearance: none;
+    padding: 6px 12px;
+    font-size: $x-small;
+    font-family: inherit;
+    color: $core-fleet-black;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: $border-radius;
+    cursor: pointer;
+    transition: background-color 100ms ease;
+
+    &:hover {
+      background-color: $ui-off-white;
+    }
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: $pad-xsmall;
+  }
+
+  &__search-input {
+    padding: 6px 10px;
+    font-size: $x-small;
+    font-family: inherit;
+    color: $core-fleet-black;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: $border-radius;
+    width: 260px;
+
+    &:focus {
+      outline: none;
+      border-color: $core-fleet-green;
+      box-shadow: 0 0 0 2px rgba(0, 154, 125, 0.2);
+    }
+  }
+
+  &__search-count {
+    font-size: $xx-small;
+    color: $ui-fleet-black-50;
+    font-variant-numeric: tabular-nums;
+    min-width: 60px;
+  }
+
+  &__status {
+    margin: $pad-medium 0;
+    color: $ui-fleet-black-75;
+
+    &--error {
+      color: $core-vibrant-red;
+    }
+  }
+
+  &__layout {
+    display: flex;
+    gap: $pad-medium;
+    align-items: flex-start;
+  }
+
+  &__canvas {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-10;
+    border-radius: $border-radius;
+
+    svg {
+      width: 100%;
+      min-height: 600px;
+      display: block;
+    }
+  }
+
+  &__detail {
+    width: 420px;
+    flex-shrink: 0;
+  }
+}
+
+.alert-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: $pad-small;
+  padding: $pad-small $pad-medium;
+  margin-bottom: $pad-medium;
+  background-color: rgba(255, 232, 236, 0.6);
+  border: 1px solid rgba(255, 92, 131, 0.4);
+  border-radius: $border-radius;
+  font-size: $x-small;
+  color: $core-fleet-black;
+
+  &__back {
+    color: $core-fleet-green;
+    font-weight: $bold;
+    text-decoration: none;
+
+    &:hover { text-decoration: underline; }
+  }
+
+  &__sep {
+    color: $ui-fleet-black-25;
+  }
+
+  &__id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: $ui-fleet-black-75;
+  }
+
+  &__title {
+    font-weight: $bold;
+  }
+
+  &__time {
+    color: $ui-fleet-black-50;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: $xx-small;
+  }
+
+  &__spacer {
+    flex: 1;
+  }
+}
+
+// Search highlight styles applied to D3-rendered nodes and links.
+// Stable selections managed by D3; these rules only toggle visual state.
+.process-tree__canvas {
+  svg .link {
+    stroke: $ui-fleet-black-25;
+    stroke-width: 1;
+    transition: opacity 120ms ease, stroke 120ms ease;
+  }
+
+  svg .node {
+    transition: opacity 120ms ease;
+  }
+
+  svg .node--dim,
+  svg .link--dim {
+    opacity: 0.15;
+  }
+
+  svg .node--match .node__dot {
+    r: 7px;
+    stroke: $core-fleet-green;
+    stroke-width: 2;
+  }
+
+  svg .node--match .node__label {
+    font-weight: $bold;
+  }
+
+  svg .link--path {
+    stroke: $core-fleet-green;
+    stroke-width: 2;
+  }
+
+  svg .node__chevron {
+    user-select: none;
+
+    &:hover {
+      fill: $core-fleet-green;
+    }
+  }
+}

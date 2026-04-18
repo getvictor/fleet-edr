@@ -1,0 +1,36 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: $pad-medium;
+  margin-bottom: $pad-large;
+  flex-wrap: wrap;
+
+  &__text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: $large;
+    font-weight: $bold;
+    color: $core-fleet-black;
+  }
+
+  &__subtitle {
+    margin: $pad-xxsmall 0 0 0;
+    color: $ui-fleet-black-75;
+    font-size: $x-small;
+  }
+
+  &__actions {
+    display: flex;
+    gap: $pad-small;
+    align-items: center;
+  }
+}

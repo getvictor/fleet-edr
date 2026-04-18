@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/agent/commander"
+	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
@@ -27,7 +28,7 @@ func main() {
 		dbPath        = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
 		serverURL     = flag.String("server-url", "http://localhost:8088", "Ingestion server URL")
 		apiKey        = flag.String("api-key", "", "API key for ingestion server")
-		hostID        = flag.String("host-id", "", "Host identifier for command polling (enables command channel when set)")
+		hostID        = flag.String("host-id", "", "Host identifier for command polling (defaults to the hardware IOPlatformUUID)")
 		batchSize     = flag.Int("batch-size", 100, "Upload batch size")
 		interval      = flag.Duration("interval", time.Second, "Upload interval")
 		pruneAge      = flag.Duration("prune-age", 24*time.Hour, "Prune uploaded events older than this")
@@ -76,12 +77,24 @@ func main() {
 		}
 	}()
 
-	// Start command polling if host-id is set.
-	if *hostID != "" {
+	// Start command polling. If -host-id wasn't provided, derive it from the
+	// hardware IOPlatformUUID so the commander is always on by default. This is
+	// the same id the system extension stamps into event envelopes.
+	cmdHostID := *hostID
+	if cmdHostID == "" {
+		derived, err := hostid.Get(ctx)
+		if err != nil {
+			log.Printf("commander: cannot derive host-id from IOPlatformUUID: %v; command polling disabled", err)
+		} else {
+			cmdHostID = derived
+			log.Printf("commander: derived host-id %.8s... from IOPlatformUUID", cmdHostID)
+		}
+	}
+	if cmdHostID != "" {
 		cmdr := commander.New(commander.Config{
 			ServerURL: *serverURL,
 			APIKey:    *apiKey,
-			HostID:    *hostID,
+			HostID:    cmdHostID,
 			Interval:  5 * time.Second,
 		})
 		go func() {
@@ -89,7 +102,7 @@ func main() {
 				log.Printf("commander: %v", err)
 			}
 		}()
-		log.Printf("commander: polling for commands as host %q", *hostID)
+		log.Printf("commander: polling for commands as host %.8s...", cmdHostID)
 	}
 
 	// Periodic prune.

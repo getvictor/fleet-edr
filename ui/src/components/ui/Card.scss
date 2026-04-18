@@ -1,0 +1,21 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/padding" as *;
+@use "../../styles/var/global" as *;
+
+.card {
+  background-color: $core-fleet-white;
+  border: 1px solid $ui-fleet-black-10;
+  border-radius: $border-radius;
+
+  &--padding-small {
+    padding: $pad-small;
+  }
+
+  &--padding-medium {
+    padding: $pad-medium;
+  }
+
+  &--padding-large {
+    padding: $pad-large;
+  }
+}

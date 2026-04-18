@@ -35,7 +35,7 @@ export async function getProcessTree(
   hostId: string,
   fromNs: number,
   toNs: number,
-  limit = 500
+  limit = 2000
 ): Promise<TreeResponse> {
   return fetchJSON<TreeResponse>(
     `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}`

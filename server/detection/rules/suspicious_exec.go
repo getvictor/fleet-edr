@@ -112,6 +112,23 @@ func (r *SuspiciousExec) evaluateShellExec(ctx context.Context, shell shellExecI
 		return nil, nil // process not yet materialized
 	}
 
+	// Shell-exec-optimization case: sh -c "<single command>" often re-execs directly
+	// into the target binary without forking. The pid survives, but GetProcessByPID
+	// returns the *latest* exec for that pid, which is no longer /bin/sh. If the
+	// pid's current path is a suspicious location, the shell was used as a launcher
+	// for a temp-path binary and we fire here.
+	if shellProc.Path != shell.payload.Path && isSuspiciousPath(shellProc.Path) {
+		return &detection.Finding{
+			HostID:      shell.event.HostID,
+			RuleID:      r.ID(),
+			Severity:    detection.SeverityHigh,
+			Title:       "Suspicious exec from temp path",
+			Description: fmt.Sprintf("%s → %s → %s", parent.Path, shell.payload.Path, shellProc.Path),
+			ProcessID:   shellProc.ID,
+			EventIDs:    []string{shell.event.EventID},
+		}, nil
+	}
+
 	// Query child processes of the shell within a 30-second window.
 	windowNs := int64(30_000_000_000) // 30 seconds in nanoseconds
 	tr := store.TimeRange{

@@ -160,14 +160,26 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 // GetProcessTree returns all processes for a host within a time range.
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr TimeRange, limit int) ([]Process, error) {
 	var procs []Process
+	// Include any process that was alive at any point during the window:
+	//   1. Forked during the window (fork_time_ns between from and to), OR
+	//   2. Still running and forked before the window (fork < from AND no exit), OR
+	//   3. Exited during the window but forked before it (fork < from AND exit >= from)
+	// This ensures long-running processes like Safari that forked hours ago still appear
+	// in the 15-min view while they're running. Order DESC so the most recent activity
+	// survives the limit.
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
 		FROM processes
-		WHERE host_id = ? AND fork_time_ns >= ? AND fork_time_ns <= ?
-		ORDER BY fork_time_ns
+		WHERE host_id = ?
+		  AND (
+		    (fork_time_ns >= ? AND fork_time_ns <= ?)
+		    OR (fork_time_ns < ? AND exit_time_ns IS NULL)
+		    OR (fork_time_ns < ? AND exit_time_ns >= ?)
+		  )
+		ORDER BY fork_time_ns DESC
 		LIMIT ?`,
-		hostID, tr.FromNs, tr.ToNs, limit,
+		hostID, tr.FromNs, tr.ToNs, tr.FromNs, tr.FromNs, tr.FromNs, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query process tree: %w", err)
@@ -237,14 +249,53 @@ func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, p
 func (s *Store) ListHosts(ctx context.Context) ([]HostSummary, error) {
 	var hosts []HostSummary
 	err := s.db.SelectContext(ctx, &hosts, `
-		SELECT host_id, COUNT(*) AS event_count, MAX(timestamp_ns) AS last_seen_ns
-		FROM events
-		GROUP BY host_id
+		SELECT host_id, event_count, last_seen_ns
+		FROM hosts
 		ORDER BY last_seen_ns DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}
 	return hosts, nil
+}
+
+// UpsertHosts incrementally updates the hosts summary table for a batch of ingested events. It aggregates event counts
+// and max timestamps per host, then upserts them in a single statement.
+func (s *Store) UpsertHosts(ctx context.Context, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	// Aggregate per host.
+	type hostStats struct {
+		count   int64
+		maxTSNs int64
+	}
+	byHost := make(map[string]*hostStats)
+	for _, e := range events {
+		st, ok := byHost[e.HostID]
+		if !ok {
+			st = &hostStats{}
+			byHost[e.HostID] = st
+		}
+		st.count++
+		if e.TimestampNs > st.maxTSNs {
+			st.maxTSNs = e.TimestampNs
+		}
+	}
+
+	for hostID, st := range byHost {
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO hosts (host_id, event_count, last_seen_ns)
+			VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				event_count = event_count + VALUES(event_count),
+				last_seen_ns = GREATEST(last_seen_ns, VALUES(last_seen_ns))`,
+			hostID, st.count, st.maxTSNs)
+		if err != nil {
+			return fmt.Errorf("upsert host %s: %w", hostID, err)
+		}
+	}
+	return nil
 }
 
 // DB exposes the underlying database connection for use by other packages

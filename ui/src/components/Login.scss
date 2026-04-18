@@ -1,0 +1,69 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: $pad-medium;
+  background: $gradients-dark-gradient;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+
+  &__header {
+    margin-bottom: $pad-large;
+  }
+
+  &__brand {
+    display: flex;
+    align-items: center;
+    gap: $pad-small;
+    margin-bottom: $pad-small;
+  }
+
+  &__logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    background-color: $core-fleet-green;
+    color: $core-fleet-white;
+    font-size: $medium;
+    font-weight: $bold;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: $medium;
+    font-weight: $bold;
+    color: $core-fleet-black;
+  }
+
+  &__accent {
+    color: $core-fleet-green;
+  }
+
+  &__subtitle {
+    margin: 0;
+    color: $ui-fleet-black-75;
+    font-size: $x-small;
+  }
+
+  &__form {
+    display: flex;
+    flex-direction: column;
+    gap: $pad-medium;
+  }
+
+  &__error {
+    color: $core-vibrant-red;
+    font-size: $xx-small;
+  }
+}

@@ -1,0 +1,47 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+@use "../../styles/var/global" as *;
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: $pad-xxsmall $pad-small;
+  border-radius: $border-radius-xxlarge;
+  font-size: $xx-small;
+  font-weight: $bold;
+  text-transform: capitalize;
+  color: $core-fleet-white;
+  line-height: 1;
+
+  &--critical {
+    background-color: $core-vibrant-red;
+  }
+
+  &--high {
+    background-color: $rainbow-orange;
+    color: $core-fleet-black;
+  }
+
+  &--medium {
+    background-color: $ui-warning;
+    color: $core-fleet-black;
+  }
+
+  &--low {
+    background-color: $ui-info;
+  }
+
+  &--success {
+    background-color: $ui-success;
+  }
+
+  &--info {
+    background-color: $core-vibrant-blue;
+  }
+
+  &--neutral {
+    background-color: $ui-fleet-black-10;
+    color: $core-fleet-black;
+  }
+}

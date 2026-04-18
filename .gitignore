@@ -1,5 +1,5 @@
 .claude
-claude-plans
+/claude
 tmp
 
 # Xcode
@@ -12,7 +12,7 @@ build/
 .idea/
 
 # Node / UI
-ui/node_modules/
+/ui/node_modules/
 
 # UI build output (embedded via server/ui/embed.go)
-server/ui/dist/
+/server/ui/dist/
