@@ -55,6 +55,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Defer shutdown as soon as Init succeeds so any later startup failure still flushes
+	// buffered OTel telemetry on its way out.
+	defer func() {
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer flushCancel()
+		if err := shutdownOTel(flushCtx); err != nil {
+			slog.Default().WarnContext(flushCtx, "otel shutdown", "err", err)
+		}
+	}()
 
 	logger, err := logging.New(os.Stderr, logging.Options{
 		Level:               cfg.LogLevel,
@@ -119,13 +128,10 @@ func run() error {
 
 	select {
 	case <-ctx.Done():
-		logger.InfoContext(context.Background(), "shutdown starting", "signal", ctx.Err())
+		logger.InfoContext(context.Background(), "shutdown starting", "reason", ctx.Err())
 	case err := <-serverErr:
 		if err != nil {
 			logger.ErrorContext(ctx, "server error", "err", err)
-			flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer flushCancel()
-			_ = shutdownOTel(flushCtx)
 			return err
 		}
 	}
@@ -135,9 +141,7 @@ func run() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.ErrorContext(shutdownCtx, "shutdown error", "err", err)
 	}
-	if err := shutdownOTel(shutdownCtx); err != nil {
-		logger.ErrorContext(shutdownCtx, "otel shutdown error", "err", err)
-	}
 	logger.InfoContext(shutdownCtx, "shutdown complete")
+	// OTel shutdown handled by the deferred flusher installed right after observability.Init.
 	return nil
 }

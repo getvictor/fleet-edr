@@ -1,9 +1,14 @@
 // Package observability wires up the OpenTelemetry SDK for the EDR server.
 //
 // Init installs global tracer, meter, and logger providers backed by OTLP/gRPC when
-// OTEL_EXPORTER_OTLP_ENDPOINT is set, and no-op providers when it isn't. This lets the rest
-// of the codebase call otel.Tracer / otelslog unconditionally; offline dev, CI, and unit
-// tests do not need a running collector.
+// OTEL_EXPORTER_OTLP_ENDPOINT is set, and leaves the SDK defaults (no-op) in place when it
+// isn't. Callers can therefore invoke otel.Tracer / otel.Meter / otelslog unconditionally;
+// offline dev, CI, and unit tests do not need a running collector.
+//
+// The globals are published atomically: every provider is constructed and wired up before
+// `otel.SetTracerProvider` / `global.SetLoggerProvider` / `otel.SetMeterProvider` is called.
+// A failure to create any exporter leaves the globals untouched and returns an error, so
+// callers never observe a half-initialised observability stack.
 //
 // The W3C tracecontext + baggage propagators are installed as the global propagator so
 // traceparent headers flow in and out of our HTTP boundaries automatically.
@@ -19,11 +24,13 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
@@ -76,6 +83,9 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 	initCtx, cancel := context.WithTimeout(ctx, initDeadline)
 	defer cancel()
 
+	// Construct every exporter + provider BEFORE publishing any of them globally. If any step
+	// fails, previously-created providers are shut down and no global is modified, so callers
+	// never see a half-initialised observability stack.
 	traceExp, err := otlptracegrpc.New(initCtx)
 	if err != nil {
 		return noopShutdown, fmt.Errorf("create trace exporter: %w", err)
@@ -84,11 +94,9 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 		sdktrace.WithBatcher(traceExp),
 		sdktrace.WithResource(res),
 	)
-	otel.SetTracerProvider(tp)
 
 	logExp, err := otlploggrpc.New(initCtx)
 	if err != nil {
-		// Roll back the trace provider so we do not leave partial state installed.
 		_ = tp.Shutdown(context.Background())
 		return noopShutdown, fmt.Errorf("create log exporter: %w", err)
 	}
@@ -96,9 +104,24 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExp)),
 		sdklog.WithResource(res),
 	)
-	global.SetLoggerProvider(lp)
 
-	bundle := &providerBundle{tracer: tp, logger: lp}
+	metricExp, err := otlpmetricgrpc.New(initCtx)
+	if err != nil {
+		_ = tp.Shutdown(context.Background())
+		_ = lp.Shutdown(context.Background())
+		return noopShutdown, fmt.Errorf("create metric exporter: %w", err)
+	}
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)),
+		sdkmetric.WithResource(res),
+	)
+
+	// Atomic publish — the code below is infallible.
+	otel.SetTracerProvider(tp)
+	global.SetLoggerProvider(lp)
+	otel.SetMeterProvider(mp)
+
+	bundle := &providerBundle{tracer: tp, logger: lp, meter: mp}
 	return bundle.shutdown, nil
 }
 
@@ -109,6 +132,7 @@ var _ otellog.LoggerProvider = (*sdklog.LoggerProvider)(nil)
 type providerBundle struct {
 	tracer *sdktrace.TracerProvider
 	logger *sdklog.LoggerProvider
+	meter  *sdkmetric.MeterProvider
 }
 
 func (p *providerBundle) shutdown(ctx context.Context) error {
@@ -121,6 +145,11 @@ func (p *providerBundle) shutdown(ctx context.Context) error {
 	if p.logger != nil {
 		if err := p.logger.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("logger shutdown: %w", err))
+		}
+	}
+	if p.meter != nil {
+		if err := p.meter.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("meter shutdown: %w", err))
 		}
 	}
 	return errors.Join(errs...)

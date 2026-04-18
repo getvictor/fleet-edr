@@ -67,14 +67,16 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	}
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
-		c.LogLevel = v
+		// Normalize to the canonical lowercase form so downstream slog handlers see one of the
+		// documented values regardless of how the operator spelled it (e.g. "INFO", "Warn").
+		c.LogLevel = strings.ToLower(v)
 	}
 	if !validLogLevel(c.LogLevel) {
 		errs = append(errs, fmt.Errorf("EDR_LOG_LEVEL=%q must be one of debug, info, warn, error", c.LogLevel))
 	}
 
 	if v := getenv("EDR_LOG_FORMAT"); v != "" {
-		c.LogFormat = v
+		c.LogFormat = strings.ToLower(v)
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
 		errs = append(errs, fmt.Errorf("EDR_LOG_FORMAT=%q must be 'json' or 'text'", c.LogFormat))
@@ -82,9 +84,13 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	if v := getenv("EDR_PROCESS_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil {
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("EDR_PROCESS_INTERVAL=%q: %w", v, err))
-		} else {
+		case d <= 0:
+			// processor.Run feeds this to time.NewTicker, which panics on non-positive values.
+			errs = append(errs, fmt.Errorf("EDR_PROCESS_INTERVAL=%q must be positive", v))
+		default:
 			c.ProcessInterval = d
 		}
 	}

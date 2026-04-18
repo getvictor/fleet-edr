@@ -109,6 +109,40 @@ func TestLoad(t *testing.T) {
 			wantErr: "EDR_PROCESS_INTERVAL",
 		},
 		{
+			name: "zero process interval rejected (would panic ticker)",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_PROCESS_INTERVAL": "0s",
+			}),
+			wantErr: `EDR_PROCESS_INTERVAL="0s" must be positive`,
+		},
+		{
+			name: "negative process interval rejected",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_PROCESS_INTERVAL": "-500ms",
+			}),
+			wantErr: "must be positive",
+		},
+		{
+			name: "log level normalized to lowercase",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_LOG_LEVEL": "WARN",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "warn", c.LogLevel)
+			},
+		},
+		{
+			name: "log format normalized to lowercase",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_LOG_FORMAT": "JSON",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "json", c.LogFormat)
+			},
+		},
+		{
 			name: "bad process batch",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_PROCESS_BATCH": "banana",

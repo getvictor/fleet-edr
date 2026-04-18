@@ -59,6 +59,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Defer shutdown as soon as Init succeeds so any later startup failure (logging.New,
+	// queue.Open, etc.) still flushes buffered OTel telemetry on its way out.
+	defer func() {
+		otelCtx, otelCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer otelCancel()
+		if err := shutdownOTel(otelCtx); err != nil {
+			slog.Default().WarnContext(otelCtx, "otel shutdown", "err", err)
+		}
+	}()
 
 	hostID := cfg.HostIDOverride
 	if hostID == "" {
@@ -166,17 +175,15 @@ func run() error {
 	logger.InfoContext(context.Background(), "agent shutting down")
 
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	up.Drain(drainCtx)
+	if err := up.Drain(drainCtx); err != nil {
+		logger.WarnContext(drainCtx, "uploader drain", "err", err)
+	}
 	drainCancel()
 
 	depth, _ := q.Depth(context.Background())
 	logger.InfoContext(context.Background(), "shutdown queue depth", "depth", depth)
 
-	otelCtx, otelCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer otelCancel()
-	if err := shutdownOTel(otelCtx); err != nil {
-		logger.WarnContext(otelCtx, "otel shutdown", "err", err)
-	}
+	// OTel shutdown is handled by the deferred flusher installed right after observability.Init.
 	return nil
 }
 

@@ -105,6 +105,81 @@ func TestLoad(t *testing.T) {
 			wantErr: "EDR_UPLOAD_INTERVAL",
 		},
 		{
+			name: "zero upload interval rejected (would panic ticker)",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_UPLOAD_INTERVAL": "0s",
+			}),
+			wantErr: `EDR_UPLOAD_INTERVAL="0s" must be positive`,
+		},
+		{
+			name: "negative upload interval rejected",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_UPLOAD_INTERVAL": "-1s",
+			}),
+			wantErr: "must be positive",
+		},
+		{
+			name: "zero prune age rejected (would delete all uploaded events)",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_PRUNE_AGE": "0s",
+			}),
+			wantErr: `EDR_PRUNE_AGE="0s" must be positive`,
+		},
+		{
+			name: "negative prune age rejected",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_PRUNE_AGE": "-1h",
+			}),
+			wantErr: "must be positive",
+		},
+		{
+			name: "invalid server URL rejected",
+			env: map[string]string{
+				"EDR_SERVER_URL":   "://not a url",
+				"EDR_BEARER_TOKEN": "s",
+			},
+			wantErr: "must be a valid http(s) URL",
+		},
+		{
+			name: "unsupported scheme rejected",
+			env: map[string]string{
+				"EDR_SERVER_URL":   "ws://host:8088",
+				"EDR_BEARER_TOKEN": "s",
+			},
+			wantErr: "must use http or https",
+		},
+		{
+			name: "scheme case-insensitive; HTTP:// still requires EDR_ALLOW_INSECURE",
+			env: map[string]string{
+				"EDR_SERVER_URL":   "HTTP://host:8088",
+				"EDR_BEARER_TOKEN": "s",
+			},
+			wantErr: "EDR_ALLOW_INSECURE",
+		},
+		{
+			name: "uppercase HTTPS accepted",
+			env: map[string]string{
+				"EDR_SERVER_URL":   "HTTPS://host:8088",
+				"EDR_BEARER_TOKEN": "s",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "HTTPS://host:8088", c.ServerURL)
+			},
+		},
+		{
+			name: "log level normalized to lowercase",
+			env: map[string]string{
+				"EDR_SERVER_URL":   "https://x",
+				"EDR_BEARER_TOKEN": "s",
+				"EDR_LOG_LEVEL":    "WARN",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "warn", c.LogLevel)
+			},
+		},
+		{
 			name: "optional overrides",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_QUEUE_DB_PATH":   "/tmp/test.db",

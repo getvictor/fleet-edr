@@ -1,14 +1,17 @@
 // Package httpserver wires the EDR server's HTTP stack.
 //
-// Build composes otelhttp (auto-instrumentation and W3C trace context extraction), a panic
-// recovery layer, and an access log layer around the provided mux. Layer order:
+// Build composes otelhttp (auto-instrumentation and W3C trace context extraction), an
+// X-Request-ID echo layer, a panic-recovery layer, and an access-log layer around the
+// provided mux. Layer order:
 //
-//	otelhttp( accessLog( recover( mux ) ) )
+//	otelhttp( xRequestIDEcho( accessLog( recover( mux ) ) ) )
 //
 // The span from otelhttp covers the entire request including the access log overhead, so the
-// span duration matches what shows up in SigNoz. The access log runs inside the span so it can
-// stamp trace_id on its lines and so the slow-request warn path reflects real handler latency.
-// Recovery runs inside the access log so the log entry captures the 500 status set by recovery.
+// span duration matches what shows up in SigNoz. xRequestIDEcho copies the span's trace-id
+// onto the response `X-Request-ID` header (or falls back to an inbound header) so humans have a
+// stable handle. The access log runs inside the span so it can stamp trace_id on its lines
+// and so the slow-request warn path reflects real handler latency. Recovery runs inside the
+// access log so the log entry captures the 500 status set by recovery.
 package httpserver
 
 import (
@@ -170,10 +173,12 @@ func (s *statusCapture) Flush() {
 	}
 }
 
+// remoteAddr returns the peer address for access logging. We intentionally do NOT consult
+// `X-Forwarded-For`: that header is client-settable and trusting it without a trusted-proxy
+// allowlist lets any caller spoof their logged source IP. When the server moves behind a
+// real reverse proxy (Phase 5 packaging), revisit this with an explicit trusted-proxies
+// config knob; until then, r.RemoteAddr is the only trustworthy source.
 func remoteAddr(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		return v
-	}
 	return r.RemoteAddr
 }
 

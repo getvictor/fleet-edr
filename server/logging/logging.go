@@ -63,8 +63,10 @@ func New(w io.Writer, opts Options) (*slog.Logger, error) {
 		name = "fleet-edr"
 	}
 	// otelslog.NewHandler reads the global LoggerProvider. When OTel is disabled this becomes a
-	// cheap no-op emitter.
-	otelHandler := otelslog.NewHandler(name)
+	// cheap no-op emitter. Upstream's Enabled() always returns true, so we wrap it in a level
+	// filter that matches the stderr handler — otherwise DEBUG and INFO records would be
+	// exported to OTLP even when the configured level is WARN or ERROR.
+	otelHandler := slog.Handler(&levelFilter{level: lvl, next: otelslog.NewHandler(name)})
 
 	h := slog.Handler(&multiHandler{handlers: []slog.Handler{stderr, otelHandler}})
 	if len(opts.BaseAttrs) > 0 {
@@ -85,6 +87,33 @@ func parseLevel(s string) (slog.Level, error) {
 		return slog.LevelError, nil
 	}
 	return 0, fmt.Errorf("log level %q must be one of debug, info, warn, error", s)
+}
+
+// levelFilter drops records below the configured level before they reach the wrapped handler.
+// Applied to the otelslog bridge because its own Enabled() always returns true — without this
+// filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN or ERROR.
+type levelFilter struct {
+	level slog.Level
+	next  slog.Handler
+}
+
+func (l *levelFilter) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= l.level && l.next.Enabled(ctx, level)
+}
+
+func (l *levelFilter) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level < l.level {
+		return nil
+	}
+	return l.next.Handle(ctx, r)
+}
+
+func (l *levelFilter) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &levelFilter{level: l.level, next: l.next.WithAttrs(attrs)}
+}
+
+func (l *levelFilter) WithGroup(name string) slog.Handler {
+	return &levelFilter{level: l.level, next: l.next.WithGroup(name)}
 }
 
 // traceEnricher adds trace_id and span_id attrs from the context span, when present, to every

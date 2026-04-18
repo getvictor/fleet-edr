@@ -33,10 +33,16 @@ type Handler struct {
 }
 
 // New creates an ingestion Handler. apiKey must not be empty; empty keys would accept every
-// request, a demo-only behavior we refuse to ship.
+// request, a demo-only behavior we refuse to ship. The store argument may be nil in tests that
+// only exercise the ingest-auth path; readiness checks handle that case explicitly.
 func New(s *store.Store, apiKey string, logger *slog.Logger, info BuildInfo) *Handler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if apiKey == "" {
+		// Fail loud rather than silently accept every request. Production paths feed this from
+		// config.Load which already enforces non-empty.
+		panic("ingest.New: apiKey must not be empty")
 	}
 	return &Handler{
 		store:     s,
@@ -145,13 +151,26 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	overall := "ok"
 	httpStatus := http.StatusOK
 
-	start := time.Now()
-	if err := h.store.PingContext(pingCtx); err != nil {
-		checks["db"] = checkResult{Status: "error", Error: err.Error()}
+	if h.store == nil {
+		// Defensive: tests (and potentially an /ingest-less build) can construct a Handler with a
+		// nil store. Treat that as a readiness failure rather than panicking.
+		h.logger.WarnContext(ctx, "readiness check: store is not configured")
+		checks["db"] = checkResult{Status: "error", Error: "unavailable"}
 		overall = "degraded"
 		httpStatus = http.StatusServiceUnavailable
 	} else {
-		checks["db"] = checkResult{Status: "ok", LatencyMS: time.Since(start).Milliseconds()}
+		start := time.Now()
+		if err := h.store.PingContext(pingCtx); err != nil {
+			// Log the detailed error server-side so operators can diagnose, but return a generic
+			// "unavailable" in the body — /readyz is unauthenticated and err.Error() can leak
+			// DSN host names, driver details, and topology hints.
+			h.logger.WarnContext(ctx, "readiness db ping failed", "err", err)
+			checks["db"] = checkResult{Status: "error", Error: "unavailable"}
+			overall = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+		} else {
+			checks["db"] = checkResult{Status: "ok", LatencyMS: time.Since(start).Milliseconds()}
+		}
 	}
 
 	httpserver.NoStoreJSON(ctx, h.logger, w, httpStatus, readyzResponse{
@@ -165,6 +184,11 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authorize(r *http.Request) bool {
+	// Belt-and-suspenders: New() panics on empty apiKey, but a zero-valued Handler constructed
+	// outside of New (e.g., &Handler{} in a future refactor) would otherwise accept "Bearer ".
+	if h.apiKey == "" {
+		return false
+	}
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(auth, prefix) {

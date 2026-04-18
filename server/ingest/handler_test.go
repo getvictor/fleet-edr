@@ -77,7 +77,45 @@ func TestReadyz_DBDown(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "degraded", body.Status)
 	assert.Equal(t, "error", body.Checks["db"].Status)
-	assert.NotEmpty(t, body.Checks["db"].Error)
+	// Readiness must NOT leak raw driver / topology details from err.Error(). We only accept the
+	// generic "unavailable" marker.
+	assert.Equal(t, "unavailable", body.Checks["db"].Error)
+}
+
+func TestReadyz_NilStore(t *testing.T) {
+	// Guards against a future refactor / mis-construction where the Handler has no store. Must
+	// respond with 503 "unavailable" instead of panicking on the nil deref.
+	mux := http.NewServeMux()
+	h := New(nil, testToken, slog.Default(), BuildInfo{})
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var body readyzResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "degraded", body.Status)
+	assert.Equal(t, "unavailable", body.Checks["db"].Error)
+}
+
+func TestNew_PanicsOnEmptyAPIKey(t *testing.T) {
+	// An empty apiKey previously allowed "Authorization: Bearer " to pass the constant-time
+	// compare. Make the invariant a hard panic at construction time so no production path can
+	// silently ship the demo bypass.
+	assert.PanicsWithValue(t, "ingest.New: apiKey must not be empty", func() {
+		_ = New(nil, "", slog.Default(), BuildInfo{})
+	})
+}
+
+func TestIngest_RejectsEmptyBearerSuffix(t *testing.T) {
+	// Regression test for the "Bearer " → empty token bypass. Even if someone managed to land a
+	// zero-value &Handler{} (bypassing New), the authorize() guard must still reject.
+	h := &Handler{apiKey: "", logger: slog.Default()}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	assert.False(t, h.authorize(req))
 }
 
 func TestIngestUnauthorizedWithoutToken(t *testing.T) {

@@ -20,11 +20,14 @@ import (
 )
 
 // installTracer installs a real SDK tracer provider so otelhttp produces valid SpanContexts
-// (the global no-op provider returns zero trace IDs, which defeats the test).
+// (the global no-op provider returns zero trace IDs, which defeats the test). Both the
+// tracer provider and the text-map propagator are restored on cleanup so the global state
+// does not leak into subsequent tests.
 func installTracer(t *testing.T) {
 	t.Helper()
 	tp := sdktrace.NewTracerProvider()
-	prev := otel.GetTracerProvider()
+	prevProvider := otel.GetTracerProvider()
+	prevPropagator := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
@@ -32,7 +35,8 @@ func installTracer(t *testing.T) {
 	))
 	t.Cleanup(func() {
 		_ = tp.Shutdown(context.Background())
-		otel.SetTracerProvider(prev)
+		otel.SetTracerProvider(prevProvider)
+		otel.SetTextMapPropagator(prevPropagator)
 	})
 }
 

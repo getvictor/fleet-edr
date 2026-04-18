@@ -1,11 +1,13 @@
-// Package config loads agent configuration from the environment. See claude/mvp/phase-0-foundation.md
-// for the full variable reference. No flag-based fallback is provided; a clean env is the only
-// supported configuration surface.
+// Package config loads agent configuration from the environment. No flag-based fallback is
+// provided; environment variables are the only supported configuration surface. Every
+// recognised variable is validated at startup and every invalid value produces an error that
+// names the offending variable.
 package config
 
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -52,7 +54,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	}
 	var errs []error
 
-	c.ServerURL = getenv("EDR_SERVER_URL")
+	c.ServerURL = strings.TrimSpace(getenv("EDR_SERVER_URL"))
 	if c.ServerURL == "" {
 		errs = append(errs, errors.New("required env var EDR_SERVER_URL is not set"))
 	}
@@ -63,8 +65,27 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	}
 
 	c.AllowInsecure = getenv("EDR_ALLOW_INSECURE") == "1"
-	if strings.HasPrefix(c.ServerURL, "http://") && !c.AllowInsecure {
-		errs = append(errs, errors.New("EDR_SERVER_URL uses http://; set EDR_ALLOW_INSECURE=1 for dev or use an https:// URL"))
+	if c.ServerURL != "" {
+		// Parse the URL properly rather than doing a prefix match on "http://". This catches
+		// typos, missing schemes, case variants ("HTTP://..."), and unsupported schemes such as
+		// "ws://" or "gopher://" that would otherwise slip past the insecure-scheme gate.
+		u, err := url.Parse(c.ServerURL)
+		switch {
+		case err != nil || u.Host == "":
+			errs = append(errs, fmt.Errorf("EDR_SERVER_URL=%q must be a valid http(s) URL", c.ServerURL))
+		default:
+			switch strings.ToLower(u.Scheme) {
+			case "https":
+				// ok
+			case "http":
+				if !c.AllowInsecure {
+					errs = append(errs, errors.New(
+						"EDR_SERVER_URL uses http://; set EDR_ALLOW_INSECURE=1 for dev or use an https:// URL"))
+				}
+			default:
+				errs = append(errs, fmt.Errorf("EDR_SERVER_URL=%q must use http or https", c.ServerURL))
+			}
+		}
 	}
 
 	optional(&c.HostIDOverride, "EDR_HOST_ID", getenv)
@@ -85,31 +106,42 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	if v := getenv("EDR_UPLOAD_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil {
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("EDR_UPLOAD_INTERVAL=%q: %w", v, err))
-		} else {
+		case d <= 0:
+			// uploader.Run feeds this to time.NewTicker, which panics on non-positive values.
+			errs = append(errs, fmt.Errorf("EDR_UPLOAD_INTERVAL=%q must be positive", v))
+		default:
 			c.UploadInterval = d
 		}
 	}
 
 	if v := getenv("EDR_PRUNE_AGE"); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil {
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("EDR_PRUNE_AGE=%q: %w", v, err))
-		} else {
+		case d <= 0:
+			// A zero or negative prune age computes a future cutoff and deletes nearly every
+			// uploaded row; outright reject.
+			errs = append(errs, fmt.Errorf("EDR_PRUNE_AGE=%q must be positive", v))
+		default:
 			c.PruneAge = d
 		}
 	}
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
-		c.LogLevel = v
+		// Normalize to canonical lowercase so downstream slog handlers see one of the documented
+		// values regardless of case.
+		c.LogLevel = strings.ToLower(v)
 	}
 	if !validLogLevel(c.LogLevel) {
 		errs = append(errs, fmt.Errorf("EDR_LOG_LEVEL=%q must be one of debug, info, warn, error", c.LogLevel))
 	}
 
 	if v := getenv("EDR_LOG_FORMAT"); v != "" {
-		c.LogFormat = v
+		c.LogFormat = strings.ToLower(v)
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
 		errs = append(errs, fmt.Errorf("EDR_LOG_FORMAT=%q must be 'json' or 'text'", c.LogFormat))

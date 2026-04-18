@@ -8,10 +8,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	otellog "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 )
 
+// restoreGlobals captures the current global OTel providers + propagator and registers a
+// cleanup that restores them after the test. Tests that call Init with a non-empty endpoint
+// MUST call this first, otherwise their providers leak into subsequent tests.
+func restoreGlobals(t *testing.T) {
+	t.Helper()
+	prevTP := otel.GetTracerProvider()
+	prevMP := otel.GetMeterProvider()
+	prevLP := otellog.GetLoggerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetMeterProvider(prevMP)
+		otellog.SetLoggerProvider(prevLP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+}
+
 func TestInit_Disabled(t *testing.T) {
+	restoreGlobals(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc"})
 	require.NoError(t, err)
@@ -28,6 +47,7 @@ func TestInit_Disabled(t *testing.T) {
 }
 
 func TestInit_Enabled_BogusEndpoint(t *testing.T) {
+	restoreGlobals(t)
 	// Dial a port we are confident nothing is listening on. gRPC dialing is lazy and the
 	// BatchProcessor export happens asynchronously, so Init must still return quickly and
 	// Shutdown must not block on the dead endpoint for longer than the deadline we pass.
@@ -56,6 +76,7 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 }
 
 func TestInit_PropagatorInstalled(t *testing.T) {
+	restoreGlobals(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc"})
 	require.NoError(t, err)

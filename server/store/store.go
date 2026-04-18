@@ -127,11 +127,17 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	// Register db.client.connection metrics (idle/in_use/max) via the global meter provider.
+	// observability.Init installs a real MeterProvider when OTEL_EXPORTER_OTLP_ENDPOINT is set;
+	// otherwise these register against the SDK's no-op meter and cost nothing.
 	_, err = otelsql.RegisterDBStatsMetrics(sqldb, otelsql.WithAttributes(
 		semconv.DBSystemNameMySQL,
 	))
 	if err != nil {
-		sqldb.Close()
+		// Surface both the registration failure and any close-path issue rather than swallowing
+		// the latter — a stuck close is often what explains the underlying problem.
+		if cerr := sqldb.Close(); cerr != nil {
+			return nil, fmt.Errorf("register db stats metrics: %w (close: %w)", err, cerr)
+		}
 		return nil, fmt.Errorf("register db stats metrics: %w", err)
 	}
 

@@ -78,27 +78,29 @@ func (u *Uploader) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			u.drainOnce(ctx)
+			_ = u.drainOnce(ctx)
 			return ctx.Err()
 		case <-ticker.C:
-			u.drainOnce(ctx)
+			_ = u.drainOnce(ctx)
 		}
 	}
 }
 
-// Drain attempts one more upload cycle without waiting for the next tick. Useful during shutdown.
-func (u *Uploader) Drain(ctx context.Context) {
-	u.drainOnce(ctx)
+// Drain attempts one more upload cycle without waiting for the next tick. Callers that need
+// to report shutdown status (e.g. "final flush failed, N events still queued") can inspect
+// the returned error. An empty queue returns nil.
+func (u *Uploader) Drain(ctx context.Context) error {
+	return u.drainOnce(ctx)
 }
 
-func (u *Uploader) drainOnce(ctx context.Context) {
+func (u *Uploader) drainOnce(ctx context.Context) error {
 	batch, err := u.queue.DequeueBatch(ctx, u.cfg.BatchSize)
 	if err != nil {
 		u.logger.ErrorContext(ctx, "uploader dequeue", "err", err)
-		return
+		return err
 	}
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 
 	payloads := make([]json.RawMessage, len(batch))
@@ -111,17 +113,19 @@ func (u *Uploader) drainOnce(ctx context.Context) {
 	body, err := json.Marshal(payloads)
 	if err != nil {
 		u.logger.ErrorContext(ctx, "uploader marshal", "err", err)
-		return
+		return err
 	}
 
 	if err := u.uploadWithRetry(ctx, body); err != nil {
 		u.logger.ErrorContext(ctx, "uploader upload failed", "err", err, "batch_size", len(batch))
-		return
+		return err
 	}
 
 	if err := u.queue.MarkUploaded(ctx, ids); err != nil {
 		u.logger.ErrorContext(ctx, "uploader mark uploaded", "err", err)
+		return err
 	}
+	return nil
 }
 
 func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
