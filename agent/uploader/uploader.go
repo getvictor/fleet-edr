@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"time"
@@ -19,7 +19,7 @@ import (
 
 // Config holds uploader settings.
 type Config struct {
-	// ServerURL is the base URL of the ingestion server (e.g. "http://localhost:8088").
+	// ServerURL is the base URL of the ingestion server (e.g. "https://edr.example.com").
 	ServerURL string
 
 	// APIKey is the static API key for authentication.
@@ -49,14 +49,24 @@ type Uploader struct {
 	queue  *queue.Queue
 	client *http.Client
 	cfg    Config
+	logger *slog.Logger
 }
 
-// New creates an Uploader.
-func New(q *queue.Queue, cfg Config) *Uploader {
+// New creates an Uploader. The http.Client should already be wrapped with otelhttp.NewTransport
+// if the caller wants OTel propagation; callers that pass nil get a vanilla client with a 30s
+// timeout and no instrumentation.
+func New(q *queue.Queue, cfg Config, client *http.Client, logger *slog.Logger) *Uploader {
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Uploader{
 		queue:  q,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: client,
 		cfg:    cfg,
+		logger: logger,
 	}
 }
 
@@ -68,7 +78,6 @@ func (u *Uploader) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining events on shutdown.
 			u.drainOnce(ctx)
 			return ctx.Err()
 		case <-ticker.C:
@@ -77,18 +86,21 @@ func (u *Uploader) Run(ctx context.Context) error {
 	}
 }
 
-// drainOnce uploads one batch from the queue.
+// Drain attempts one more upload cycle without waiting for the next tick. Useful during shutdown.
+func (u *Uploader) Drain(ctx context.Context) {
+	u.drainOnce(ctx)
+}
+
 func (u *Uploader) drainOnce(ctx context.Context) {
 	batch, err := u.queue.DequeueBatch(ctx, u.cfg.BatchSize)
 	if err != nil {
-		log.Printf("uploader: dequeue error: %v", err)
+		u.logger.ErrorContext(ctx, "uploader dequeue", "err", err)
 		return
 	}
 	if len(batch) == 0 {
 		return
 	}
 
-	// Build JSON array of raw event payloads.
 	payloads := make([]json.RawMessage, len(batch))
 	ids := make([]int64, len(batch))
 	for i, e := range batch {
@@ -98,17 +110,17 @@ func (u *Uploader) drainOnce(ctx context.Context) {
 
 	body, err := json.Marshal(payloads)
 	if err != nil {
-		log.Printf("uploader: marshal error: %v", err)
+		u.logger.ErrorContext(ctx, "uploader marshal", "err", err)
 		return
 	}
 
 	if err := u.uploadWithRetry(ctx, body); err != nil {
-		log.Printf("uploader: upload failed after retries: %v", err)
+		u.logger.ErrorContext(ctx, "uploader upload failed", "err", err, "batch_size", len(batch))
 		return
 	}
 
 	if err := u.queue.MarkUploaded(ctx, ids); err != nil {
-		log.Printf("uploader: mark uploaded error: %v", err)
+		u.logger.ErrorContext(ctx, "uploader mark uploaded", "err", err)
 	}
 }
 
@@ -128,7 +140,8 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 		}
 
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * 100 * time.Millisecond
-		log.Printf("uploader: attempt %d failed: %v, retrying in %v", attempt+1, err, backoff)
+		u.logger.WarnContext(ctx, "uploader attempt failed",
+			"attempt", attempt+1, "err", err, "backoff", backoff)
 
 		timer := time.NewTimer(backoff)
 		select {
@@ -157,9 +170,7 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if u.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+u.cfg.APIKey)
-	}
+	req.Header.Set("Authorization", "Bearer "+u.cfg.APIKey)
 
 	resp, err := u.client.Do(req)
 	if err != nil {

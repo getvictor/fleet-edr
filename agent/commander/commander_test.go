@@ -28,7 +28,7 @@ func TestFetchPending(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"})
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
 	result, err := cmdr.fetchPending(t.Context())
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -44,7 +44,7 @@ func TestFetchPendingWithAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", APIKey: "test-key"})
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", APIKey: "test-key"}, nil, nil)
 	result, err := cmdr.fetchPending(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, result)
@@ -66,7 +66,7 @@ func TestDispatchUnknownCommand(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"})
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
 	cmd := command{ID: 42, CommandType: "reboot", Payload: json.RawMessage(`{}`)}
 	cmdr.dispatch(t.Context(), cmd)
 
@@ -94,7 +94,7 @@ func TestDispatchKillInvalidPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"})
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
 	cmd := command{ID: 43, CommandType: "kill_process", Payload: json.RawMessage(`{"pid":0}`)}
 	cmdr.dispatch(t.Context(), cmd)
 
@@ -119,7 +119,7 @@ func TestRunPolls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", Interval: 50 * time.Millisecond})
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", Interval: 50 * time.Millisecond}, nil, nil)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()

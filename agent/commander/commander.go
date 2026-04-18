@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"syscall"
@@ -26,16 +26,25 @@ type Config struct {
 type Commander struct {
 	cfg    Config
 	client *http.Client
+	logger *slog.Logger
 }
 
-// New creates a Commander.
-func New(cfg Config) *Commander {
+// New creates a Commander. The client should already be wrapped with otelhttp.NewTransport if
+// trace propagation is desired; nil gets a vanilla 10s-timeout client.
+func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	if cfg.Interval == 0 {
 		cfg.Interval = 5 * time.Second
 	}
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Commander{
 		cfg:    cfg,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: client,
+		logger: logger,
 	}
 }
 
@@ -75,7 +84,7 @@ func (c *Commander) Run(ctx context.Context) error {
 func (c *Commander) pollAndDispatch(ctx context.Context) {
 	commands, err := c.fetchPending(ctx)
 	if err != nil {
-		log.Printf("commander: fetch pending: %v", err)
+		c.logger.WarnContext(ctx, "commander fetch pending", "err", err)
 		return
 	}
 
@@ -112,9 +121,8 @@ func (c *Commander) fetchPending(ctx context.Context) ([]command, error) {
 }
 
 func (c *Commander) dispatch(ctx context.Context, cmd command) {
-	// Acknowledge the command first.
 	if err := c.updateStatus(ctx, cmd.ID, "acked", nil); err != nil {
-		log.Printf("commander: ack command %d: %v", cmd.ID, err)
+		c.logger.ErrorContext(ctx, "commander ack", "cmd_id", cmd.ID, "err", err)
 		return
 	}
 
@@ -123,7 +131,7 @@ func (c *Commander) dispatch(ctx context.Context, cmd command) {
 		c.executeKill(ctx, cmd)
 	default:
 		if err := c.updateStatus(ctx, cmd.ID, "failed", marshalResult("unknown command type: "+cmd.CommandType)); err != nil {
-			log.Printf("commander: fail command %d: %v", cmd.ID, err)
+			c.logger.ErrorContext(ctx, "commander fail", "cmd_id", cmd.ID, "err", err)
 		}
 	}
 }
@@ -140,20 +148,18 @@ func (c *Commander) executeKill(ctx context.Context, cmd command) {
 		return
 	}
 
-	log.Printf("commander: killing PID %d", payload.PID)
+	c.logger.InfoContext(ctx, "commander kill_process", "pid", payload.PID, "cmd_id", cmd.ID)
 
-	// Send SIGKILL.
-	err := syscall.Kill(payload.PID, syscall.SIGKILL)
-	if err != nil {
+	if err := syscall.Kill(payload.PID, syscall.SIGKILL); err != nil {
 		if updateErr := c.updateStatus(ctx, cmd.ID, "failed", marshalResult(err.Error())); updateErr != nil {
-			log.Printf("commander: report kill failure for command %d: %v", cmd.ID, updateErr)
+			c.logger.ErrorContext(ctx, "commander report kill failure", "cmd_id", cmd.ID, "err", updateErr)
 		}
 		return
 	}
 
 	successResult, _ := json.Marshal(map[string]int{"killed_pid": payload.PID})
 	if err := c.updateStatus(ctx, cmd.ID, "completed", successResult); err != nil {
-		log.Printf("commander: report kill success for command %d: %v", cmd.ID, err)
+		c.logger.ErrorContext(ctx, "commander report kill success", "cmd_id", cmd.ID, "err", err)
 	}
 }
 

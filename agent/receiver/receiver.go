@@ -14,11 +14,31 @@ extern int bridge_connect_go(const char *service_name, int receiver_id);
 import "C"
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
+
+// logger is the package-level logger used from CGo callbacks where passing a per-request logger
+// would be impractical. Callers can override it via SetLogger; the default is slog.Default().
+var logger atomic.Pointer[slog.Logger]
+
+// SetLogger installs a logger for diagnostic output from CGo callbacks. Safe to call concurrently.
+func SetLogger(l *slog.Logger) {
+	if l != nil {
+		logger.Store(l)
+	}
+}
+
+func getLogger() *slog.Logger {
+	if l := logger.Load(); l != nil {
+		return l
+	}
+	return slog.Default()
+}
 
 // Error codes matching xpc_bridge.h constants.
 const (
@@ -139,7 +159,7 @@ func onEvent(receiverID int, data unsafe.Pointer, length int) {
 	select {
 	case recv.events <- Event{Data: buf}:
 	default:
-		log.Printf("receiver(%s): event channel full, dropping event", recv.serviceName)
+		getLogger().WarnContext(context.Background(), "receiver event channel full", "service", recv.serviceName)
 	}
 }
 

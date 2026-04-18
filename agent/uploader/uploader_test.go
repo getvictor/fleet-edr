@@ -53,7 +53,7 @@ func TestUploadBatch(t *testing.T) {
 	cfg.APIKey = "test-key"
 	cfg.BatchSize = 10
 
-	u := New(q, cfg)
+	u := New(q, cfg, nil, nil)
 	u.drainOnce(ctx)
 
 	if len(received) != 2 {
@@ -90,7 +90,7 @@ func TestUploadRetry(t *testing.T) {
 	cfg.ServerURL = srv.URL
 	cfg.MaxRetries = 5
 
-	u := New(q, cfg)
+	u := New(q, cfg, nil, nil)
 	u.drainOnce(ctx)
 
 	if got := attempts.Load(); got != 3 {
@@ -120,7 +120,7 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	cfg.ServerURL = srv.URL
 	cfg.MaxRetries = 3
 
-	u := New(q, cfg)
+	u := New(q, cfg, nil, nil)
 	u.drainOnce(ctx)
 
 	// Event should still be in queue since upload failed.
