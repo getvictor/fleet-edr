@@ -49,8 +49,8 @@ type Options struct {
 	Logger *slog.Logger
 }
 
-// DroppedMetrics is the optional OTel hook. Nil is fine.
-type DroppedMetrics interface {
+// MetricsRecorder is the optional OTel hook. Nil is fine.
+type MetricsRecorder interface {
 	// QueueDropped is invoked when trim() removed rows. `lossy=true` means non-uploaded
 	// rows were dropped (events lost forever); operators care about this count.
 	QueueDropped(ctx context.Context, n int64, lossy bool)
@@ -61,7 +61,7 @@ type Queue struct {
 	db       *sql.DB
 	maxBytes int64
 	logger   *slog.Logger
-	metrics  DroppedMetrics
+	metrics  MetricsRecorder
 }
 
 // Open creates or opens a SQLite queue at the given path. opts may be the zero
@@ -96,7 +96,7 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Queue, error) {
 }
 
 // SetMetrics installs the OTel hook. Safe to call after Open; nil clears.
-func (q *Queue) SetMetrics(m DroppedMetrics) { q.metrics = m }
+func (q *Queue) SetMetrics(m MetricsRecorder) { q.metrics = m }
 
 // Close closes the underlying database.
 func (q *Queue) Close() error {
@@ -166,51 +166,54 @@ func (q *Queue) enforceCap(ctx context.Context) error {
 		return nil
 	}
 
-	// Drop uploaded rows first. Repeat until either we're under the cap or there are
-	// no more uploaded rows to delete.
-	for size > q.maxBytes {
-		n, err := q.deleteOldestUploaded(ctx, trimBatch)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			break
-		}
-		if q.metrics != nil {
-			q.metrics.QueueDropped(ctx, n, false)
-		}
-		size, err = q.dbSizeBytes(ctx)
-		if err != nil {
-			return err
-		}
+	// Drop uploaded rows first (lossless), then non-uploaded rows if still over cap.
+	if _, size, err = q.dropUntilUnderCap(ctx, q.deleteOldestUploaded, false); err != nil {
+		return err
+	}
+	lossyDropped, size, err := q.dropUntilUnderCap(ctx, q.deleteOldestPending, true)
+	if err != nil {
+		return err
 	}
 
-	// Still over cap? Lossy phase: drop non-uploaded rows. Emit ONE warn per
-	// enforceCap call (not one per batch) so a sustained overflow doesn't spam logs.
-	var lossyDropped int64
-	for size > q.maxBytes {
-		n, err := q.deleteOldestPending(ctx, trimBatch)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			break
-		}
-		lossyDropped += n
-		if q.metrics != nil {
-			q.metrics.QueueDropped(ctx, n, true)
-		}
-		size, err = q.dbSizeBytes(ctx)
-		if err != nil {
-			return err
-		}
-	}
+	// Emit ONE warn per enforceCap call (not one per batch) so a sustained overflow
+	// doesn't spam logs.
 	if lossyDropped > 0 {
 		q.logger.WarnContext(ctx, "queue cap reached: dropped non-uploaded events",
 			"dropped", lossyDropped, "db_bytes", size, "cap_bytes", q.maxBytes,
 		)
 	}
 	return nil
+}
+
+// dropUntilUnderCap calls deleter in a loop until the DB is under cap or deleter
+// returns 0 rows. Returns total rows dropped and the final size. The lossy flag is
+// passed through to the metrics hook unchanged.
+func (q *Queue) dropUntilUnderCap(
+	ctx context.Context,
+	deleter func(context.Context, int) (int64, error),
+	lossy bool,
+) (int64, int64, error) {
+	var dropped int64
+	for {
+		size, err := q.dbSizeBytes(ctx)
+		if err != nil {
+			return dropped, 0, err
+		}
+		if size <= q.maxBytes {
+			return dropped, size, nil
+		}
+		n, err := deleter(ctx, trimBatch)
+		if err != nil {
+			return dropped, size, err
+		}
+		if n == 0 {
+			return dropped, size, nil
+		}
+		dropped += n
+		if q.metrics != nil {
+			q.metrics.QueueDropped(ctx, n, lossy)
+		}
+	}
 }
 
 // deleteOldestUploaded removes up to batch already-uploaded rows, oldest first. Split

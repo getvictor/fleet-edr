@@ -33,24 +33,34 @@ func newTestRecorder(t *testing.T, gauges GaugeSource, opts Options) (*Recorder,
 	}
 }
 
-// findSum extracts a Sum[int64] data point for the given metric name + required
-// attribute subset. Returns -1 if nothing matches so assertion failures read naturally.
-func findSum(t *testing.T, rm metricdata.ResourceMetrics, name string, want map[string]any) int64 {
-	t.Helper()
+// findMetricData walks rm and returns the first metric named `name` whose Data is
+// of type T. Returns the zero value of T and false if no match.
+func findMetricData[T any](rm metricdata.ResourceMetrics, name string) (T, bool) {
+	var zero T
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
 			if m.Name != name {
 				continue
 			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				continue
+			if data, ok := m.Data.(T); ok {
+				return data, true
 			}
-			for _, dp := range sum.DataPoints {
-				if attrsMatch(dp.Attributes.ToSlice(), want) {
-					return dp.Value
-				}
-			}
+		}
+	}
+	return zero, false
+}
+
+// findSum extracts a Sum[int64] data point for the given metric name + required
+// attribute subset. Returns -1 if nothing matches so assertion failures read naturally.
+func findSum(t *testing.T, rm metricdata.ResourceMetrics, name string, want map[string]any) int64 {
+	t.Helper()
+	sum, ok := findMetricData[metricdata.Sum[int64]](rm, name)
+	if !ok {
+		return -1
+	}
+	for _, dp := range sum.DataPoints {
+		if attrsMatch(dp.Attributes.ToSlice(), want) {
+			return dp.Value
 		}
 	}
 	return -1
@@ -58,40 +68,22 @@ func findSum(t *testing.T, rm metricdata.ResourceMetrics, name string, want map[
 
 func findGauge(t *testing.T, rm metricdata.ResourceMetrics, name string) int64 {
 	t.Helper()
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name != name {
-				continue
-			}
-			g, ok := m.Data.(metricdata.Gauge[int64])
-			if !ok {
-				continue
-			}
-			if len(g.DataPoints) == 0 {
-				return -1
-			}
-			return g.DataPoints[0].Value
-		}
+	g, ok := findMetricData[metricdata.Gauge[int64]](rm, name)
+	if !ok || len(g.DataPoints) == 0 {
+		return -1
 	}
-	return -1
+	return g.DataPoints[0].Value
 }
 
 func findHistogramCount(t *testing.T, rm metricdata.ResourceMetrics, name string, want map[string]any) uint64 {
 	t.Helper()
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name != name {
-				continue
-			}
-			h, ok := m.Data.(metricdata.Histogram[float64])
-			if !ok {
-				continue
-			}
-			for _, dp := range h.DataPoints {
-				if attrsMatch(dp.Attributes.ToSlice(), want) {
-					return dp.Count
-				}
-			}
+	h, ok := findMetricData[metricdata.Histogram[float64]](rm, name)
+	if !ok {
+		return 0
+	}
+	for _, dp := range h.DataPoints {
+		if attrsMatch(dp.Attributes.ToSlice(), want) {
+			return dp.Count
 		}
 	}
 	return 0
@@ -195,6 +187,6 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 // during phase-4-style refactors.
 var (
 	_ ingest.MetricsHook        = (*Recorder)(nil)
-	_ detection.MetricsHook     = (*Recorder)(nil)
+	_ detection.MetricsRecorder = (*Recorder)(nil)
 	_ retention.MetricsRecorder = (*Recorder)(nil)
 )

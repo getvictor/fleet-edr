@@ -8,8 +8,8 @@ import (
 	"github.com/fleetdm/edr/server/store"
 )
 
-// MetricsHook is the Phase 4 counter interface. Nil is fine; metrics are optional.
-type MetricsHook interface {
+// MetricsRecorder is the Phase 4 counter interface. Nil is fine; metrics are optional.
+type MetricsRecorder interface {
 	AlertCreated(ctx context.Context, ruleID, severity string)
 }
 
@@ -18,7 +18,7 @@ type Engine struct {
 	rules   []Rule
 	store   *store.Store
 	logger  *slog.Logger
-	metrics MetricsHook
+	metrics MetricsRecorder
 }
 
 // NewEngine creates a detection engine backed by the given store.
@@ -30,7 +30,7 @@ func NewEngine(s *store.Store, logger *slog.Logger) *Engine {
 }
 
 // SetMetrics installs the OTel counter hook. Safe to call after NewEngine.
-func (e *Engine) SetMetrics(m MetricsHook) { e.metrics = m }
+func (e *Engine) SetMetrics(m MetricsRecorder) { e.metrics = m }
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r Rule) {

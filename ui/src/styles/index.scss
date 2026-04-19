@@ -78,9 +78,9 @@ button {
 }
 .status-pill--online {
   background: rgba($ui-success, 0.15);
-  color: $ui-success;
+  color: $ui-success-down;
 }
 .status-pill--offline {
   background: rgba($ui-error, 0.15);
-  color: $ui-error;
+  color: $ui-error-down;
 }

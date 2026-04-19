@@ -35,7 +35,7 @@ func New() *Recorder {
 	return r
 }
 
-// QueueDropped satisfies queue.DroppedMetrics. Nil-safe: a zero Recorder discards the
+// QueueDropped satisfies queue.MetricsRecorder. Nil-safe: a zero Recorder discards the
 // call silently so callers can ignore the "did Init succeed" question.
 func (r *Recorder) QueueDropped(ctx context.Context, n int64, lossy bool) {
 	if r == nil || r.queueDropped == nil || n <= 0 {

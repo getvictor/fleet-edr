@@ -52,6 +52,9 @@ type Options struct {
 	Now func() time.Time
 }
 
+// attrRetentionDays is the slog/OTel attribute key for the configured retention window.
+const attrRetentionDays = "edr.retention.days"
+
 // Runner executes retention passes on a cadence.
 type Runner struct {
 	db            Deleter
@@ -100,7 +103,7 @@ func New(db Deleter, opts Options) *Runner {
 // doesn't wait a full interval to purge old rows from a pre-existing DB.
 func (r *Runner) Loop(ctx context.Context) {
 	if r.retentionDays == 0 {
-		r.logger.InfoContext(ctx, "retention disabled", "edr.retention.days", 0)
+		r.logger.InfoContext(ctx, "retention disabled", attrRetentionDays, 0)
 		return
 	}
 	t := time.NewTicker(r.interval)
@@ -132,7 +135,7 @@ func (r *Runner) Run(ctx context.Context) (int64, error) {
 	cutoff := r.now().Add(-time.Duration(r.retentionDays) * 24 * time.Hour).UnixNano()
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
-		attribute.Int("edr.retention.days", r.retentionDays),
+		attribute.Int(attrRetentionDays, r.retentionDays),
 		attribute.Int64("edr.retention.cutoff_ns", cutoff),
 	)
 
@@ -179,7 +182,7 @@ func (r *Runner) Run(ctx context.Context) (int64, error) {
 		r.metrics.RetentionRowsDeleted(ctx, total)
 	}
 	r.logger.InfoContext(ctx, "retention run",
-		"edr.retention.days", r.retentionDays,
+		attrRetentionDays, r.retentionDays,
 		"edr.retention.cutoff_ns", cutoff,
 		"edr.retention.rows_deleted", total,
 	)

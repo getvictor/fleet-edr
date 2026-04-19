@@ -179,7 +179,7 @@ func (r *Recorder) RetentionRowsDeleted(ctx context.Context, n int64) {
 	r.retentionRowsDeleted.Add(ctx, n)
 }
 
-// QueueDropped satisfies queue.DroppedMetrics. A single counter with a `lossy` attribute
+// QueueDropped satisfies queue.MetricsRecorder. A single counter with a `lossy` attribute
 // lets operators alert on lossy drops (real data loss) independently of lossless drops
 // (already-delivered events pruned for space) without maintaining two metric families.
 func (r *Recorder) QueueDropped(ctx context.Context, n int64, lossy bool) {
