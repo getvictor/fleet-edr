@@ -143,8 +143,10 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Burn the argon2 cycles anyway so we don't leak via timing. The dummy salt is a
-		// per-process constant — argon2id is deterministic given the same salt so this
-		// produces a stable "unknown email" timing profile without allocating.
+		// per-process constant — argon2id is deterministic given the same salt, producing
+		// a stable "unknown email" timing profile. (argon2.IDKey still allocates its
+		// output slice; the timing property we care about is work done under the same
+		// memory + cost parameters as the real path, not allocation-free execution.)
 		_ = argon2.IDKey([]byte(password), dummySalt, argonTime, argonMemory, argonThreads, argonKeyLen)
 		return nil, ErrNotFound
 	}

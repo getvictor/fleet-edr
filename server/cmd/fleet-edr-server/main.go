@@ -210,7 +210,7 @@ func run() error {
 		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
 		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
 		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
-		"GET /api/v1/session", "DELETE /api/v1/session",
+		"GET /api/v1/session",
 	} {
 		mux.Handle(p, sessionProtected)
 	}
@@ -349,7 +349,6 @@ func run() error {
 // carries both the cookie (automatic, HttpOnly) and an X-CSRF-Token header. Gating /ui/
 // itself behind the Session middleware would make the login page unreachable (chicken/egg).
 // The privileged surface is /api/v1/*, which IS session-gated.
-// Phase 3 replaces this with a server-rendered login endpoint + session cookies.
 func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {

@@ -224,8 +224,14 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 	for _, m := range migrations {
 		if _, err := db.ExecContext(ctx, m); err != nil {
 			var mysqlErr *mysql.MySQLError
-			// 1060 = duplicate column, 1061 = duplicate key name — already applied.
-			if errors.As(err, &mysqlErr) && (mysqlErr.Number == 1060 || mysqlErr.Number == 1061) {
+			// Already-applied variants:
+			//   1060 = duplicate column
+			//   1061 = duplicate key name
+			//   1826 = duplicate FK name
+			//   1022 = duplicate key on add (older MySQL error code for FK name clash)
+			if errors.As(err, &mysqlErr) &&
+				(mysqlErr.Number == 1060 || mysqlErr.Number == 1061 ||
+					mysqlErr.Number == 1826 || mysqlErr.Number == 1022) {
 				continue
 			}
 			db.Close()
@@ -253,6 +259,15 @@ var migrations = []string{
 	// to render. The migration loop above swallows "duplicate column name" errors, so
 	// re-running on an already-migrated DB is a no-op.
 	`ALTER TABLE alerts ADD COLUMN updated_by BIGINT NULL`,
+	// Phase 3 FK constraints: enforce that sessions point at live users (CASCADE on
+	// user delete so stale sessions die with their owner) and alert audit references
+	// are either a real user or NULL (SET NULL on delete so a removed admin doesn't
+	// erase their historical acknowledgements). Indexes on the FK columns are
+	// required for InnoDB to accept the constraint and make JOIN-based queries cheap.
+	`ALTER TABLE sessions ADD INDEX idx_sessions_user_id (user_id)`,
+	`ALTER TABLE sessions ADD CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+	`ALTER TABLE alerts ADD INDEX idx_alerts_updated_by (updated_by)`,
+	`ALTER TABLE alerts ADD CONSTRAINT fk_alerts_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL`,
 }
 
 // postSchemaMigrations run after schema creation and idempotent ALTER migrations. They use INSERT IGNORE / INSERT ...

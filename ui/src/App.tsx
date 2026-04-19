@@ -20,24 +20,26 @@ export function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    const controller = new AbortController();
+    // `void` marks the floating promise as intentional for
+    // @typescript-eslint/no-floating-promises. We don't need to await it — React's
+    // useEffect already handles async component lifecycle via the cleanup closure.
+    void (async () => {
       try {
         const info = await currentSession();
-        if (!cancelled) setAuth({ status: "authed", user: info.user });
+        if (!controller.signal.aborted) setAuth({ status: "authed", user: info.user });
       } catch (err) {
-        if (!cancelled) {
-          if (err instanceof Unauthorized401Error) {
-            setAuth({ status: "anon" });
-          } else {
-            // Unknown error (network, 5xx) — fall back to the login page rather than
-            // render with no data. The user can retry after fixing the network.
-            setAuth({ status: "anon" });
-          }
+        if (controller.signal.aborted) return;
+        if (err instanceof Unauthorized401Error) {
+          setAuth({ status: "anon" });
+        } else {
+          // Unknown error (network, 5xx) — fall back to the login page rather than
+          // render with no data. The user can retry after fixing the network.
+          setAuth({ status: "anon" });
         }
       }
     })();
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, []);
 
   async function handleLogout() {

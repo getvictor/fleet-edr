@@ -61,13 +61,23 @@ func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, stderr io.
 
 	// stderr banner so a human watching the log sees it during `docker run`. Not logged
 	// through slog because even slog's text handler can quote / escape the string in
-	// ways that make copy-paste tricky; raw writes win.
+	// ways that make copy-paste tricky; raw writes win. Build the banner once and
+	// write it in a single call so a partial-write failure can't leave the operator
+	// staring at half the password; any write error is surfaced to the caller so
+	// main.go can choose to abort startup rather than continue with an admin account
+	// whose password was never shown.
 	if stderr != nil {
-		fmt.Fprintln(stderr, "================================================================")
-		fmt.Fprintln(stderr, "SEEDED ADMIN USER (captured once — save the password now)")
-		fmt.Fprintf(stderr, "  Email:    %s\n", u.Email)
-		fmt.Fprintf(stderr, "  Password: %s\n", pw)
-		fmt.Fprintln(stderr, "================================================================")
+		banner := fmt.Sprintf(
+			"================================================================\n"+
+				"SEEDED ADMIN USER (captured once — save the password now)\n"+
+				"  Email:    %s\n"+
+				"  Password: %s\n"+
+				"================================================================\n",
+			u.Email, pw,
+		)
+		if _, err := io.WriteString(stderr, banner); err != nil {
+			return u, pw, fmt.Errorf("write admin seed banner: %w", err)
+		}
 	}
 
 	// Structured log WITHOUT the password so SigNoz has the event without leaking the

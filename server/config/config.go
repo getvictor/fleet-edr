@@ -100,6 +100,18 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 		}
 	}
 
+	if v := getenv("EDR_LOGIN_RATE_PER_MIN"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("EDR_LOGIN_RATE_PER_MIN=%q: %w", v, err))
+		case n <= 0:
+			errs = append(errs, fmt.Errorf("EDR_LOGIN_RATE_PER_MIN=%d must be positive", n))
+		default:
+			c.LoginRatePerMin = n
+		}
+	}
+
 	if v := getenv("EDR_LAUNCHAGENT_ALLOWLIST"); v != "" {
 		c.LaunchAgentAllowlist = make(map[string]struct{})
 		for p := range strings.SplitSeq(v, ",") {

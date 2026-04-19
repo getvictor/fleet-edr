@@ -35,14 +35,17 @@ func setupServer(t *testing.T, ratePerMinute int) (*httptest.Server, *users.Stor
 	publicMux := http.NewServeMux()
 	h.RegisterPublicRoutes(publicMux)
 
+	// Mirror production: authed routes (GET /session) go through Session → CSRF.
+	// CSRF is safe for GET (passes through) but including it in the stack makes this
+	// test setup accurate for any PUT/PATCH/DELETE the handler might grow later.
 	authedSub := http.NewServeMux()
 	h.RegisterAuthedRoutes(authedSub)
-	authedWrap := authn.Session(ss, slog.Default())(authedSub)
+	authedWrap := authn.Session(ss, slog.Default())(authn.CSRF(slog.Default())(authedSub))
 
 	root := http.NewServeMux()
-	root.Handle("POST /api/v1/session", publicMux)
+	root.Handle("POST /api/v1/session", publicMux)   // login: public
+	root.Handle("DELETE /api/v1/session", publicMux) // logout: public (reads cookie itself)
 	root.Handle("GET /api/v1/session", authedWrap)
-	root.Handle("DELETE /api/v1/session", authedWrap)
 
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)

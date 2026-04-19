@@ -172,9 +172,9 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status string, 
 		return fmt.Errorf("check alert existence %d: %w", id, err)
 	}
 
-	// When userID is zero we leave updated_by alone (COALESCE(existing, NULL)) so
-	// internal backfills don't clobber the last real user. When non-zero we overwrite;
-	// the last responder's identity is what forensics cares about.
+	// When userID is zero we preserve the existing updated_by value via IF(?=0, col, ?)
+	// so internal backfills don't clobber the last real user. When non-zero we
+	// overwrite; the last responder's identity is what forensics cares about.
 	var err error
 	if status == "resolved" {
 		_, err = s.db.ExecContext(ctx, `

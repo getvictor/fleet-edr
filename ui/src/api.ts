@@ -90,7 +90,7 @@ export async function currentSession(): Promise<SessionInfo> {
 
 export async function logout(): Promise<void> {
   try {
-    await fetchJSON<void>("/session", { method: "DELETE" });
+    await fetchJSON<unknown>("/session", { method: "DELETE" });
   } finally {
     clearCsrfToken();
   }
@@ -145,7 +145,7 @@ export async function getAlertDetail(id: number): Promise<AlertDetail> {
 }
 
 export async function updateAlertStatus(id: number, status: string): Promise<void> {
-  await fetchJSON<void>(`/alerts/${String(id)}`, {
+  await fetchJSON<unknown>(`/alerts/${String(id)}`, {
     method: "PUT",
     body: JSON.stringify({ status }),
   });

@@ -15,9 +15,38 @@ import (
 )
 
 // newSessionsStore returns a ready-to-use sessions.Store backed by a fresh test DB.
+// A stub users row (id=42, and anything else tests reference) is inserted first so the
+// Phase 3 FK sessions.user_id → users(id) constraint doesn't reject the insert.
 func newSessionsStore(t *testing.T) *sessions.Store {
 	t.Helper()
-	return sessions.New(store.OpenTestStore(t).DB(), sessions.Options{})
+	s := store.OpenTestStore(t)
+	for _, uid := range []int64{1, 7, 42} {
+		_, err := s.DB().ExecContext(t.Context(),
+			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
+			uid, "authn-stub@test", []byte("stub-hash"), []byte("stub-salt"))
+		if err != nil {
+			// Email is UNIQUE so the 2nd+ inserts with the same email fail. Use unique.
+			_, err2 := s.DB().ExecContext(t.Context(),
+				`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
+				uid, "authn-stub-"+fmtInt(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
+			if err2 != nil {
+				t.Fatalf("seed stub user %d: %v / %v", uid, err, err2)
+			}
+		}
+	}
+	return sessions.New(s.DB(), sessions.Options{})
+}
+
+func fmtInt(i int64) string {
+	if i == 0 {
+		return "0"
+	}
+	var out []byte
+	for i > 0 {
+		out = append([]byte{byte('0' + i%10)}, out...)
+		i /= 10
+	}
+	return string(out)
 }
 
 // sealedBody is a tiny handler that writes "ok" once the middleware lets it through.

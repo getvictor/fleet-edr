@@ -177,11 +177,12 @@ func TestLoad(t *testing.T) {
 		{
 			name: "optional overrides applied",
 			env: withExtra(minEnv, map[string]string{
-				"EDR_LISTEN_ADDR":      "127.0.0.1:9090",
-				"EDR_LOG_LEVEL":        "debug",
-				"EDR_LOG_FORMAT":       "text",
-				"EDR_PROCESS_INTERVAL": "1s",
-				"EDR_PROCESS_BATCH":    "200",
+				"EDR_LISTEN_ADDR":        "127.0.0.1:9090",
+				"EDR_LOG_LEVEL":          "debug",
+				"EDR_LOG_FORMAT":         "text",
+				"EDR_PROCESS_INTERVAL":   "1s",
+				"EDR_PROCESS_BATCH":      "200",
+				"EDR_LOGIN_RATE_PER_MIN": "20",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -191,7 +192,22 @@ func TestLoad(t *testing.T) {
 				assert.Equal(t, "text", c.LogFormat)
 				assert.Equal(t, time.Second, c.ProcessInterval)
 				assert.Equal(t, 200, c.ProcessBatch)
+				assert.Equal(t, 20, c.LoginRatePerMin)
 			},
+		},
+		{
+			name: "invalid login rate rejected",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_LOGIN_RATE_PER_MIN": "banana",
+			}),
+			wantErr: "EDR_LOGIN_RATE_PER_MIN",
+		},
+		{
+			name: "zero login rate rejected",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_LOGIN_RATE_PER_MIN": "0",
+			}),
+			wantErr: "EDR_LOGIN_RATE_PER_MIN=0 must be positive",
 		},
 	}
 

@@ -162,6 +162,14 @@ func TestUpdateAlertStatus_CapturesUserID(t *testing.T) {
 	mux, s := setupAlertTestHandler(t)
 	ctx := t.Context()
 
+	// Phase 3 added an FK alerts.updated_by → users(id) ON DELETE SET NULL, so the
+	// user we reference via WithUserIDForTest must exist in the users table.
+	_, err := s.DB().ExecContext(ctx, `
+		INSERT INTO users (id, email, password_hash, password_salt)
+		VALUES (?, ?, ?, ?)
+	`, 42, "seed@test", []byte("hash"), []byte("salt"))
+	require.NoError(t, err)
+
 	procID, err := s.InsertProcess(ctx, store.Process{HostID: "host-a", PID: 100, PPID: 1, Path: "/bin/sh", ForkTimeNs: 1000})
 	require.NoError(t, err)
 	alertID, _, err := s.InsertAlert(ctx, store.Alert{

@@ -78,18 +78,27 @@ func New(us *users.Store, ss *sessions.Store, opts Options) *Handler {
 	}
 }
 
-// RegisterPublicRoutes wires POST /api/v1/session on the given mux. The login endpoint
-// is public (there is no session yet); the server caller is responsible for keeping
-// GET + DELETE behind the Session middleware.
+// RegisterPublicRoutes wires POST /api/v1/session (login) and DELETE /api/v1/session
+// (logout) on the given mux. Both are public because neither has a valid session to
+// authenticate with at call time: login is the mint-it step, logout is permissive by
+// design (a stale / expired / missing cookie still needs to produce a Set-Cookie that
+// clears the client's copy, or the browser keeps sending a dead session id forever).
+// Logout's handler reads the cookie itself, best-effort deletes the matching row, and
+// always emits the clearing Set-Cookie.
+//
+// CSRF concern: logout is exempt from CSRF by design. The cookie's SameSite=Lax flag
+// already prevents cross-site XHRs from including it, so an attacker cannot trigger
+// logout via a forged fetch. A top-level cross-site navigation could send the cookie
+// on DELETE, but the blast radius is "user gets logged out" — annoying, not a breach.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/session", h.handleLogin)
+	mux.HandleFunc("DELETE /api/v1/session", h.handleLogout)
 }
 
-// RegisterAuthedRoutes wires GET + DELETE /api/v1/session on the given mux. Caller
-// wraps the mux in `authn.Session` + `authn.CSRF` at mount time — see main.go.
+// RegisterAuthedRoutes wires GET /api/v1/session on the given mux. Caller wraps the
+// mux in `authn.Session` + `authn.CSRF` at mount time — see main.go.
 func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/session", h.handleGet)
-	mux.HandleFunc("DELETE /api/v1/session", h.handleLogout)
 }
 
 type loginRequest struct {
@@ -189,7 +198,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"edr.remote_addr", ip,
 	)
 
-	h.writeSessionJSON(w, u, sess)
+	h.writeSessionJSON(ctx, w, u, sess)
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -207,41 +216,54 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(ctx, h.logger, w, http.StatusInternalServerError, errBody{Error: "internal"})
 		return
 	}
-	h.writeSessionJSON(w, u, sess)
+	h.writeSessionJSON(ctx, w, u, sess)
 }
 
+// handleLogout is public (not behind Session middleware). It does its own cookie
+// lookup so a stale / expired / unknown cookie still produces a clearing Set-Cookie —
+// otherwise the browser keeps re-sending the dead session id forever. The
+// Set-Cookie header MUST be written before the response status because Go's
+// http.ResponseWriter silently drops header mutations after WriteHeader; splitting
+// the "try to delete the row" and "always clear the cookie" phases keeps that ordering
+// explicit.
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	sess, ok := authn.SessionFromContext(ctx)
-	if !ok {
-		// No session on ctx — the Session middleware would normally 401 before we got
-		// here, but treat this as a permissive "already logged out" and clear the
-		// cookie anyway. The logout endpoint is one of those places where being lax
-		// about a missing credential is the right UX.
-		http.SetCookie(w, h.expireCookie())
-		w.WriteHeader(http.StatusNoContent)
-		return
+
+	// Phase 1: best-effort session deletion. Any failure here is swallowed (logged on
+	// the unexpected-error path only) because logout must be idempotent; the client
+	// has already decided to forget this session.
+	if cookie, err := r.Cookie(authn.SessionCookieName); err == nil && cookie.Value != "" {
+		if raw, err := authn.DecodeSessionIDForTest(cookie.Value); err == nil {
+			if sess, err := h.sessions.Get(ctx, raw); err == nil {
+				if delErr := h.sessions.Delete(ctx, sess.ID); delErr != nil {
+					h.logger.ErrorContext(ctx, "session delete", "err", delErr, "edr.user.id", sess.UserID)
+				} else {
+					trace.SpanFromContext(ctx).SetAttributes(
+						attribute.String("edr.auth.action", "logout"),
+						attribute.Int64("edr.user.id", sess.UserID),
+					)
+					h.logger.InfoContext(ctx, "logout ok",
+						"edr.auth.action", "logout",
+						"edr.user.id", sess.UserID,
+						"edr.session.id_prefix", idPrefix(sess.ID),
+					)
+				}
+			}
+			// Unknown / expired / decode error all fall through to the clear-cookie
+			// step below — the client's view of "am I logged in?" should converge on
+			// "no" regardless of the server-side reality.
+		}
 	}
-	if err := h.sessions.Delete(ctx, sess.ID); err != nil {
-		h.logger.ErrorContext(ctx, "session delete", "err", err, "edr.user.id", sess.UserID)
-		writeJSON(ctx, h.logger, w, http.StatusInternalServerError, errBody{Error: "internal"})
-		return
-	}
-	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String("edr.auth.action", "logout"),
-		attribute.Int64("edr.user.id", sess.UserID),
-	)
-	h.logger.InfoContext(ctx, "logout ok",
-		"edr.auth.action", "logout",
-		"edr.user.id", sess.UserID,
-		"edr.session.id_prefix", idPrefix(sess.ID),
-	)
+
+	// Phase 2: always clear the cookie. Must happen before WriteHeader.
 	http.SetCookie(w, h.expireCookie())
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) writeSessionJSON(w http.ResponseWriter, u *users.User, sess *sessions.Session) {
-	writeJSON(context.Background(), h.logger, w, http.StatusOK, sessionResponse{
+func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u *users.User, sess *sessions.Session) {
+	// Passing the request ctx (rather than context.Background) keeps the response-
+	// encode error log tied to the originating trace + span for SigNoz correlation.
+	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
 		User:      userResponse{ID: u.ID, Email: u.Email},
 		CSRFToken: authn.EncodeSessionID(sess.CSRFToken),
 	})
@@ -324,27 +346,58 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 // --- ipLimiter mirrors enrollment.ipLimiter. Duplicated to avoid a cross-package
 // private export; both packages are short enough that the duplication is a smaller
 // cost than the coupling. Refactor into a shared limiter package when we add a third.
+//
+// Bucket GC: the map grows with distinct client IPs. Left unbounded, a long-running
+// server under IP rotation (NAT with churning source ports is rare, but attacker-
+// driven probing is not) would accumulate dead rate.Limiter entries forever. When the
+// map crosses `maxBuckets`, we evict any bucket whose lastSeen is older than
+// `bucketIdleTTL` in the same request's critical section. The eviction is O(N) but
+// only runs when the map is actually large, so amortised cost stays negligible.
+
+const (
+	bucketIdleTTL = 2 * time.Hour
+	maxBuckets    = 1024
+)
+
+type ipBucket struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
 
 type ipLimiter struct {
 	mu      sync.Mutex
 	limit   rate.Limit
 	burst   int
-	buckets map[string]*rate.Limiter
+	buckets map[string]*ipBucket
 }
 
 func newIPLimiter(limit rate.Limit, burst int) *ipLimiter {
-	return &ipLimiter{limit: limit, burst: burst, buckets: make(map[string]*rate.Limiter)}
+	return &ipLimiter{limit: limit, burst: burst, buckets: make(map[string]*ipBucket)}
 }
 
 func (l *ipLimiter) allow(ip string) bool {
+	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	rl, ok := l.buckets[ip]
-	if !ok {
-		rl = rate.NewLimiter(l.limit, l.burst)
-		l.buckets[ip] = rl
+
+	// Opportunistic sweep: only when the map is above the soft cap, and only walks
+	// entries that actually look dead. Under normal load (few IPs, all active) this
+	// branch never fires.
+	if len(l.buckets) > maxBuckets {
+		for k, b := range l.buckets {
+			if now.Sub(b.lastSeen) > bucketIdleTTL {
+				delete(l.buckets, k)
+			}
+		}
 	}
-	return rl.Allow()
+
+	b, ok := l.buckets[ip]
+	if !ok {
+		b = &ipBucket{limiter: rate.NewLimiter(l.limit, l.burst)}
+		l.buckets[ip] = b
+	}
+	b.lastSeen = now
+	return b.limiter.Allow()
 }
 
 // remoteIP strips the port from r.RemoteAddr. Falls back to the raw field if the host

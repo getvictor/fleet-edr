@@ -333,31 +333,52 @@ func remoteIP(r *http.Request, trimHost bool) string {
 	return host
 }
 
-// ipLimiter is a naive per-source-IP rate limiter keyed on the IP string. Each key owns its
-// own `rate.Limiter`. The map grows without bound, but MVP fleet sizes and typical pilot
-// deployments bound this at low thousands of IPs and we can reap stale entries later.
+// ipLimiter is a per-source-IP rate limiter keyed on the IP string. Each key owns its
+// own `rate.Limiter`. We cap the map at `maxBuckets` and evict idle entries older than
+// `bucketIdleTTL` when the cap is exceeded, so an attacker rotating source IPs cannot
+// turn the brute-force defence into an unbounded-memory-growth vector.
+
+const (
+	bucketIdleTTL = 2 * time.Hour
+	maxBuckets    = 1024
+)
+
+type ipBucket struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 type ipLimiter struct {
-	mu     sync.Mutex
-	limit  rate.Limit
-	burst  int
-	limit2 map[string]*rate.Limiter
+	mu      sync.Mutex
+	limit   rate.Limit
+	burst   int
+	buckets map[string]*ipBucket
 }
 
 func newIPLimiter(limit rate.Limit, burst int) *ipLimiter {
 	return &ipLimiter{
-		limit:  limit,
-		burst:  burst,
-		limit2: make(map[string]*rate.Limiter),
+		limit:   limit,
+		burst:   burst,
+		buckets: make(map[string]*ipBucket),
 	}
 }
 
 func (l *ipLimiter) allow(ip string) bool {
+	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	rl, ok := l.limit2[ip]
-	if !ok {
-		rl = rate.NewLimiter(l.limit, l.burst)
-		l.limit2[ip] = rl
+	if len(l.buckets) > maxBuckets {
+		for k, b := range l.buckets {
+			if now.Sub(b.lastSeen) > bucketIdleTTL {
+				delete(l.buckets, k)
+			}
+		}
 	}
-	return rl.Allow()
+	b, ok := l.buckets[ip]
+	if !ok {
+		b = &ipBucket{limiter: rate.NewLimiter(l.limit, l.burst)}
+		l.buckets[ip] = b
+	}
+	b.lastSeen = now
+	return b.limiter.Allow()
 }

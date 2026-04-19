@@ -11,9 +11,35 @@ import (
 	"github.com/fleetdm/edr/server/store"
 )
 
+// newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the
+// userID tests reference (1, 2, 7, 42 — whatever the test passes to Create). Without
+// this the Phase 3 FK constraint sessions.user_id → users(id) rejects inserts.
 func newTestStore(t *testing.T, opts Options) *Store {
 	t.Helper()
-	return New(store.OpenTestStore(t).DB(), opts)
+	s := store.OpenTestStore(t)
+	for _, uid := range []int64{1, 2, 7, 42} {
+		_, err := s.DB().ExecContext(t.Context(),
+			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
+			uid, "u"+intToStr(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
+		if err != nil {
+			t.Fatalf("seed test user %d: %v", uid, err)
+		}
+	}
+	return New(s.DB(), opts)
+}
+
+func intToStr(i int64) string {
+	// Tiny stdlib-free int→string to keep the test helper dependency-light.
+	if i == 0 {
+		return "0"
+	}
+	const digits = "0123456789"
+	var out []byte
+	for i > 0 {
+		out = append([]byte{digits[i%10]}, out...)
+		i /= 10
+	}
+	return string(out)
 }
 
 // frozenClock returns a controllable time.Now for deterministic expiry tests. Starts at

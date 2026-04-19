@@ -8,11 +8,14 @@
 //     the row in the sessions table, and pins user_id + session_id + csrf_token onto
 //     the request context. Phase 3 replaces the Phase 1 `AdminToken` stopgap.
 //
-//   - CSRF wraps the same UI + admin routes as Session (applied on the outside of
-//     Session so it can read the per-session CSRF token off the context). It compares
-//     the `X-CSRF-Token` header against the stored value on unsafe methods (POST, PUT,
-//     DELETE, PATCH) via subtle.ConstantTimeCompare; safe methods (GET, HEAD, OPTIONS)
-//     pass through.
+//   - CSRF wraps the same UI + admin routes as Session and runs AFTER Session has
+//     pinned the per-session CSRF token onto the context (i.e. Session is the outer
+//     middleware; CSRF is applied to the inner handler). In Go's convention
+//     `outer(inner(h))` runs the outer on the way in, so the correct composition is
+//     `Session(CSRF(h))`. Reversing them yields csrf_misconfigured 500s on every
+//     unsafe method. The middleware compares the `X-CSRF-Token` header against the
+//     stored value on unsafe methods (POST, PUT, DELETE, PATCH) via
+//     subtle.ConstantTimeCompare; safe methods (GET, HEAD, OPTIONS) pass through.
 //
 // Authentication failures return 401 + JSON body + `WWW-Authenticate: Bearer`. Verifier
 // outages (DB down, unexpected errors) return 503 without WWW-Authenticate so an agent
@@ -207,10 +210,10 @@ func Session(store *sessions.Store, logger *slog.Logger) func(http.Handler) http
 }
 
 // CSRF returns a middleware that enforces per-session CSRF tokens on unsafe methods.
-// Wire it on the OUTSIDE of Session so the session is already pinned on ctx by the
-// time CSRF reads it:
+// Wire it INSIDE Session so Session runs first (outer middleware runs on the way in)
+// and pins the session on ctx before CSRF reads it:
 //
-//	mux.Handle("PUT /api/v1/alerts/{id}", CSRF(logger)(Session(store, logger)(h)))
+//	mux.Handle("PUT /api/v1/alerts/{id}", Session(store, logger)(CSRF(logger)(h)))
 //
 // Safe methods (GET/HEAD/OPTIONS) pass through without any CSRF check. Callers that
 // expose a non-idempotent GET would be making a mistake regardless of auth.
