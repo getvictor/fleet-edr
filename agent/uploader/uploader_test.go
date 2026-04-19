@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/fleetdm/edr/agent/queue"
 )
@@ -53,8 +52,8 @@ func TestUploadBatch(t *testing.T) {
 	cfg.APIKey = "test-key"
 	cfg.BatchSize = 10
 
-	u := New(q, cfg)
-	u.drainOnce(ctx)
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
 
 	if len(received) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(received))
@@ -90,8 +89,8 @@ func TestUploadRetry(t *testing.T) {
 	cfg.ServerURL = srv.URL
 	cfg.MaxRetries = 5
 
-	u := New(q, cfg)
-	u.drainOnce(ctx)
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
 
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("expected 3 attempts, got %d", got)
@@ -120,8 +119,8 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	cfg.ServerURL = srv.URL
 	cfg.MaxRetries = 3
 
-	u := New(q, cfg)
-	u.drainOnce(ctx)
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
 
 	// Event should still be in queue since upload failed.
 	depth, _ := q.Depth(ctx)
@@ -139,9 +138,4 @@ func openTestQueue(t *testing.T) *queue.Queue {
 	}
 	t.Cleanup(func() { _ = q.Close() })
 	return q
-}
-
-func init() {
-	// Suppress log output in tests.
-	_ = time.Now
 }

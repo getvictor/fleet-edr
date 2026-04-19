@@ -17,10 +17,9 @@ import (
 func TestListHostsEmpty(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, "", slog.Default())
+	h := New(q, s, testAPIToken, slog.Default())
 
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := testMux(h)
 
 	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
 	w := httptest.NewRecorder()
@@ -37,10 +36,9 @@ func TestListHostsEmpty(t *testing.T) {
 func TestProcessTreeEmpty(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, "", slog.Default())
+	h := New(q, s, testAPIToken, slog.Default())
 
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := testMux(h)
 
 	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts/nonexistent/tree?from=0&to=999999999999999999", nil)
 	w := httptest.NewRecorder()
@@ -61,10 +59,9 @@ func TestProcessTreeEmpty(t *testing.T) {
 func TestProcessDetailNotFound(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, "", slog.Default())
+	h := New(q, s, testAPIToken, slog.Default())
 
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := testMux(h)
 
 	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts/nonexistent/processes/999?at=1000", nil)
 	w := httptest.NewRecorder()

@@ -16,14 +16,12 @@ import (
 	"github.com/fleetdm/edr/server/store"
 )
 
-func setupCommandTestHandler(t *testing.T) (*http.ServeMux, *store.Store) {
+func setupCommandTestHandler(t *testing.T) (http.Handler, *store.Store) {
 	t.Helper()
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, "", slog.Default())
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-	return mux, s
+	h := New(q, s, testAPIToken, slog.Default())
+	return testMux(h), s
 }
 
 func TestCreateCommand(t *testing.T) {

@@ -385,9 +385,6 @@ func (h *Handler) handleUpdateCommandStatus(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) authorize(r *http.Request) bool {
-	if h.apiKey == "" {
-		return true
-	}
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(auth, prefix) {

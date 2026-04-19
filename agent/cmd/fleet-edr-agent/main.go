@@ -1,111 +1,158 @@
 // fleet-edr-agent is the Go daemon that receives ESF and network events from
 // system extensions over XPC, queues them in SQLite, and uploads them to the
-// cloud ingestion server.
+// ingestion server. Configuration is loaded from environment variables; see
+// agent/config for the full reference.
 package main
 
 import (
 	"context"
 	"encoding/json"
-	"flag"
-	"log"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/fleetdm/edr/agent/commander"
+	"github.com/fleetdm/edr/agent/config"
 	"github.com/fleetdm/edr/agent/hostid"
+	"github.com/fleetdm/edr/agent/logging"
+	"github.com/fleetdm/edr/agent/observability"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/uploader"
 )
 
+// Build info injected via -ldflags at build time.
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildTime = ""
+)
+
+const serviceName = "fleet-edr-agent"
+
 func main() {
-	var (
-		xpcService    = flag.String("xpc-service", "8VBZ3948LU.com.fleetdm.edr.securityextension.xpc", "ESF extension XPC Mach service name")
-		netXPCService = flag.String("net-xpc-service", "group.com.fleetdm.edr.networkextension", "Network extension XPC Mach service name")
-		dbPath        = flag.String("db", "/var/db/fleet-edr/events.db", "SQLite queue database path")
-		serverURL     = flag.String("server-url", "http://localhost:8088", "Ingestion server URL")
-		apiKey        = flag.String("api-key", "", "API key for ingestion server")
-		hostID        = flag.String("host-id", "", "Host identifier for command polling (defaults to the hardware IOPlatformUUID)")
-		batchSize     = flag.Int("batch-size", 100, "Upload batch size")
-		interval      = flag.Duration("interval", time.Second, "Upload interval")
-		pruneAge      = flag.Duration("prune-age", 24*time.Hour, "Prune uploaded events older than this")
-	)
-	flag.Parse()
+	if err := run(); err != nil {
+		_, _ = os.Stderr.WriteString("fatal: " + err.Error() + "\n")
+		os.Exit(2)
+	}
+}
 
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Println("fleet-edr-agent starting")
-
-	// Open the durable event queue.
-	q, err := queue.Open(context.Background(), *dbPath)
+func run() error {
+	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("open queue: %v", err)
+		return err
 	}
-	defer func() { _ = q.Close() }()
 
-	// In-memory PID table populated from ESF exec/exit events.
-	pidTable := proctable.New()
-
-	// Create the uploader.
-	cfg := uploader.Config{
-		ServerURL:  *serverURL,
-		APIKey:     *apiKey,
-		BatchSize:  *batchSize,
-		Interval:   *interval,
-		MaxRetries: 5,
-	}
-	up := uploader.New(q, cfg)
-
-	// Set up graceful shutdown.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Start ESF receiver → queue pipeline with PID table updates.
-	go runReceiverLoop(ctx, *xpcService, q, pidTable, true)
-
-	// Start network receiver → queue pipeline (reads PID table but doesn't write).
-	if *netXPCService != "" {
-		go runReceiverLoop(ctx, *netXPCService, q, pidTable, false)
+	shutdownOTel, err := observability.Init(ctx, observability.Options{
+		ServiceName:    serviceName,
+		ServiceVersion: version,
+	})
+	if err != nil {
+		return err
 	}
-
-	// Start uploader.
-	go func() {
-		if err := up.Run(ctx); err != nil {
-			log.Printf("uploader: %v", err)
+	// Defer shutdown as soon as Init succeeds so any later startup failure (logging.New,
+	// queue.Open, etc.) still flushes buffered OTel telemetry on its way out.
+	defer func() {
+		otelCtx, otelCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer otelCancel()
+		if err := shutdownOTel(otelCtx); err != nil {
+			slog.Default().WarnContext(otelCtx, "otel shutdown", "err", err)
 		}
 	}()
 
-	// Start command polling. If -host-id wasn't provided, derive it from the
-	// hardware IOPlatformUUID so the commander is always on by default. This is
-	// the same id the system extension stamps into event envelopes.
-	cmdHostID := *hostID
-	if cmdHostID == "" {
-		derived, err := hostid.Get(ctx)
-		if err != nil {
-			log.Printf("commander: cannot derive host-id from IOPlatformUUID: %v; command polling disabled", err)
-		} else {
-			cmdHostID = derived
-			log.Printf("commander: derived host-id %.8s... from IOPlatformUUID", cmdHostID)
+	hostID := cfg.HostIDOverride
+	if hostID == "" {
+		if derived, derivErr := hostid.Get(ctx); derivErr == nil {
+			hostID = derived
 		}
 	}
-	if cmdHostID != "" {
-		cmdr := commander.New(commander.Config{
-			ServerURL: *serverURL,
-			APIKey:    *apiKey,
-			HostID:    cmdHostID,
-			Interval:  5 * time.Second,
-		})
-		go func() {
-			if err := cmdr.Run(ctx); err != nil {
-				log.Printf("commander: %v", err)
-			}
-		}()
-		log.Printf("commander: polling for commands as host %.8s...", cmdHostID)
+
+	baseAttrs := []slog.Attr{slog.String("host_id", hostID)}
+	logger, err := logging.New(os.Stderr, logging.Options{
+		Level:               cfg.LogLevel,
+		Format:              cfg.LogFormat,
+		InstrumentationName: serviceName,
+		BaseAttrs:           baseAttrs,
+	})
+	if err != nil {
+		return err
+	}
+	slog.SetDefault(logger)
+	receiver.SetLogger(logger)
+
+	logger.InfoContext(ctx, "fleet-edr-agent starting",
+		"version", version,
+		"commit", commit,
+		"build_time", buildTime,
+		"server_url", cfg.ServerURL,
+		"insecure", cfg.AllowInsecure,
+	)
+	if cfg.AllowInsecure {
+		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE=1 is set; use https:// in production")
 	}
 
-	// Periodic prune.
+	q, err := queue.Open(ctx, cfg.QueueDBPath)
+	if err != nil {
+		logger.ErrorContext(ctx, "open queue", "err", err)
+		return err
+	}
+	defer func() { _ = q.Close() }()
+
+	pidTable := proctable.New()
+
+	httpClient := &http.Client{
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+		Timeout:   30 * time.Second,
+	}
+
+	up := uploader.New(q, uploader.Config{
+		ServerURL:  cfg.ServerURL,
+		APIKey:     cfg.BearerToken,
+		BatchSize:  cfg.BatchSize,
+		Interval:   cfg.UploadInterval,
+		MaxRetries: 5,
+	}, httpClient, logger)
+
+	// Start ESF and network receiver loops.
+	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true)
+	if cfg.NetXPCService != "" {
+		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false)
+	}
+
+	go func() {
+		if err := up.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.ErrorContext(ctx, "uploader", "err", err)
+		}
+	}()
+
+	// Commander
+	if hostID != "" {
+		cmdr := commander.New(commander.Config{
+			ServerURL: cfg.ServerURL,
+			APIKey:    cfg.BearerToken,
+			HostID:    hostID,
+			Interval:  5 * time.Second,
+		}, &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport), Timeout: 10 * time.Second}, logger)
+		go func() {
+			if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.ErrorContext(ctx, "commander", "err", err)
+			}
+		}()
+		logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
+	} else {
+		logger.WarnContext(ctx, "no host_id available; commander disabled")
+	}
+
+	// Periodic prune of uploaded events.
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -114,37 +161,47 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pruned, err := q.Prune(ctx, *pruneAge)
+				pruned, err := q.Prune(ctx, cfg.PruneAge)
 				if err != nil {
-					log.Printf("prune: %v", err)
+					logger.WarnContext(ctx, "prune", "err", err)
 				} else if pruned > 0 {
-					log.Printf("pruned %d old events", pruned)
+					logger.InfoContext(ctx, "pruned old events", "count", pruned)
 				}
 			}
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("fleet-edr-agent shutting down")
+	logger.InfoContext(context.Background(), "agent shutting down")
 
-	// Give uploader a moment to drain in-flight uploads.
-	time.Sleep(2 * time.Second)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := up.Drain(drainCtx); err != nil {
+		logger.WarnContext(drainCtx, "uploader drain", "err", err)
+	}
+	drainCancel()
 
 	depth, _ := q.Depth(context.Background())
-	log.Printf("shutdown complete, queue depth: %d", depth)
-	os.Exit(0)
+	logger.InfoContext(context.Background(), "shutdown queue depth", "depth", depth)
+
+	// OTel shutdown is handled by the deferred flusher installed right after observability.Init.
+	return nil
 }
 
-// runReceiverLoop connects to an XPC service and reconnects with exponential
-// backoff when the connection is interrupted or invalidated.
-func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue, pt *proctable.Table, updateTable bool) {
+func safePrefix(s string) string {
+	if len(s) < 8 {
+		return s
+	}
+	return s[:8]
+}
+
+// runReceiverLoop connects to an XPC service and reconnects with exponential backoff.
+func runReceiverLoop(ctx context.Context, logger *slog.Logger, xpcService string, q *queue.Queue, pt *proctable.Table, updateTable bool) {
 	const (
 		initialBackoff = time.Second
 		maxBackoff     = 30 * time.Second
 	)
 
 	backoff := initialBackoff
-
 	for {
 		if ctx.Err() != nil {
 			return
@@ -153,7 +210,7 @@ func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue, pt 
 		recv := receiver.New(xpcService, 4096)
 
 		if err := recv.Connect(); err != nil {
-			log.Printf("receiver(%s) connect: %v (retrying in %v)", xpcService, err, backoff)
+			logger.WarnContext(ctx, "receiver connect", "service", xpcService, "err", err, "retry_in", backoff)
 			if !sleepCtx(ctx, backoff) {
 				return
 			}
@@ -161,27 +218,25 @@ func runReceiverLoop(ctx context.Context, xpcService string, q *queue.Queue, pt 
 			continue
 		}
 
-		log.Printf("receiver(%s): connected", xpcService)
+		logger.InfoContext(ctx, "receiver connected", "service", xpcService)
 		backoff = initialBackoff
 
-		reconnect := pipeEvents(ctx, recv, q, pt, updateTable)
+		reconnect := pipeEvents(ctx, logger, recv, q, pt, updateTable)
 		recv.Disconnect()
 
 		if !reconnect {
 			return
 		}
 
-		log.Printf("receiver(%s): connection lost, reconnecting in %v", xpcService, initialBackoff)
+		logger.InfoContext(ctx, "receiver reconnecting", "service", xpcService, "retry_in", initialBackoff)
 		if !sleepCtx(ctx, initialBackoff) {
 			return
 		}
 	}
 }
 
-// pipeEvents reads from the receiver and enqueues events until the context is
-// cancelled or the XPC connection is lost. When updateTable is true, exec and
-// exit events update the PID table.
-func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, pt *proctable.Table, updateTable bool) bool {
+// pipeEvents reads from the receiver and enqueues events until ctx is cancelled or XPC errors.
+func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receiver, q *queue.Queue, pt *proctable.Table, updateTable bool) bool {
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,23 +246,21 @@ func pipeEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, pt
 				updateProcTable(pt, evt.Data)
 			}
 			if err := q.Enqueue(ctx, evt.Data); err != nil {
-				log.Printf("enqueue: %v", err)
+				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		case errCode := <-recv.Errors():
-			log.Printf("xpc error: %d", errCode)
+			logger.WarnContext(ctx, "xpc error", "code", errCode)
 			switch errCode {
 			case receiver.ErrorConnectionInvalid, receiver.ErrorConnectionInterrupted, receiver.ErrorTerminated:
 				return true
 			default:
-				log.Printf("unknown xpc error code %d, reconnecting", errCode)
 				return true
 			}
 		}
 	}
 }
 
-// eventHeader is a minimal struct for peeking at event_type, pid, path, and uid
-// without fully parsing the payload.
+// eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.
 type eventHeader struct {
 	EventType   string          `json:"event_type"`
 	TimestampNs int64           `json:"timestamp_ns"`
@@ -224,7 +277,6 @@ type exitFields struct {
 	PID int32 `json:"pid"`
 }
 
-// updateProcTable parses just enough of the event to maintain the PID table.
 func updateProcTable(pt *proctable.Table, data []byte) {
 	var hdr eventHeader
 	if err := json.Unmarshal(data, &hdr); err != nil {
@@ -251,7 +303,6 @@ func updateProcTable(pt *proctable.Table, data []byte) {
 	}
 }
 
-// sleepCtx sleeps for the given duration or until the context is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

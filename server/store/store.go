@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/XSAM/otelsql"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
 
 // schemaStatements are executed sequentially to bootstrap the database.
@@ -116,10 +118,30 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		dsn += sep + "parseTime=true"
 	}
 
-	db, err := sqlx.Open("mysql", dsn)
+	// Open the driver through otelsql so each query emits a span. The no-op tracer provider
+	// keeps this cheap when OTel is disabled.
+	sqldb, err := otelsql.Open("mysql", dsn, otelsql.WithAttributes(
+		semconv.DBSystemNameMySQL,
+	))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	// Register db.client.connection metrics (idle/in_use/max) via the global meter provider.
+	// observability.Init installs a real MeterProvider when OTEL_EXPORTER_OTLP_ENDPOINT is set;
+	// otherwise these register against the SDK's no-op meter and cost nothing.
+	_, err = otelsql.RegisterDBStatsMetrics(sqldb, otelsql.WithAttributes(
+		semconv.DBSystemNameMySQL,
+	))
+	if err != nil {
+		// Surface both the registration failure and any close-path issue rather than swallowing
+		// the latter — a stuck close is often what explains the underlying problem.
+		if cerr := sqldb.Close(); cerr != nil {
+			return nil, fmt.Errorf("register db stats metrics: %w (close: %w)", err, cerr)
+		}
+		return nil, fmt.Errorf("register db stats metrics: %w", err)
+	}
+
+	db := sqlx.NewDb(sqldb, "mysql")
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
@@ -177,6 +199,11 @@ var postSchemaMigrations = []string{
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// PingContext verifies connectivity to the underlying database. Used by the readiness probe.
+func (s *Store) PingContext(ctx context.Context) error {
+	return s.db.PingContext(ctx)
 }
 
 // InsertEvents upserts a batch of events. Duplicates (by event_id) are ignored.
