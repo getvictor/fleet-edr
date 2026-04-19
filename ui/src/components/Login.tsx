@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { setApiKey, listHosts } from "../api";
+import { login, Unauthorized401Error } from "../api";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { Input } from "./ui/Input";
@@ -9,8 +9,12 @@ interface LoginProps {
   onLogin: () => void;
 }
 
+// Phase 3 login: email + password → POST /api/v1/session → server sets HttpOnly
+// session cookie and returns the per-session CSRF token. api.ts stashes the CSRF in
+// sessionStorage; App.tsx re-renders with the logged-in view.
 export function Login({ onLogin }: LoginProps) {
-  const [key, setKey] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -19,17 +23,23 @@ export function Login({ onLogin }: LoginProps) {
     setError("");
     setLoading(true);
 
-    setApiKey(key);
     try {
-      await listHosts();
+      await login(email.trim(), password);
       onLogin();
-    } catch {
-      setApiKey("");
-      setError("Invalid API key");
+    } catch (err) {
+      if (err instanceof Unauthorized401Error) {
+        // The server returns a generic 401 for both "unknown email" and "wrong
+        // password" so the UI cannot be used to enumerate accounts. Show the same.
+        setError("Invalid email or password.");
+      } else {
+        setError("Sign-in failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
   }
+
+  const submitDisabled = email.length === 0 || password.length === 0;
 
   return (
     <div className="login-page">
@@ -42,26 +52,35 @@ export function Login({ onLogin }: LoginProps) {
             </h1>
           </div>
           <p className="login-card__subtitle">
-            Enter your API key to sign in
+            Sign in with your admin email and password
           </p>
         </div>
 
         <form onSubmit={(e) => { void handleSubmit(e); }} className="login-card__form">
           <Input
-            id="api-key"
-            label="API key"
-            type="password"
-            value={key}
-            onChange={(e) => { setKey(e.target.value); }}
+            id="email"
+            label="Email"
+            type="email"
+            autoComplete="username"
+            value={email}
+            onChange={(e) => { setEmail(e.target.value); }}
             autoFocus
+          />
+          <Input
+            id="password"
+            label="Password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); }}
           />
           {error && <div className="login-card__error">{error}</div>}
           <Button
             type="submit"
-            disabled={key.length === 0}
+            disabled={submitDisabled}
             isLoading={loading}
           >
-            {loading ? "Checking..." : "Log in"}
+            {loading ? "Signing in…" : "Sign in"}
           </Button>
         </form>
       </Card>

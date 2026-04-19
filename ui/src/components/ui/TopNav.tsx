@@ -12,7 +12,15 @@ const LINKS: NavLink[] = [
   { to: "/alerts", label: "Alerts" },
 ];
 
-export function TopNav() {
+interface TopNavProps {
+  // user + onLogout are optional for pre-Phase-3 callers. Post-Phase-3 both are set
+  // from App.tsx whenever a session is active; when absent we just hide the identity
+  // + logout UI.
+  user?: { id: number; email: string };
+  onLogout?: () => void;
+}
+
+export function TopNav({ user, onLogout }: TopNavProps) {
   const location = useLocation();
 
   return (
@@ -42,6 +50,18 @@ export function TopNav() {
             );
           })}
         </ul>
+        {user && onLogout && (
+          <div className="top-nav__account">
+            <span className="top-nav__user">{user.email}</span>
+            <button
+              type="button"
+              className="top-nav__logout"
+              onClick={onLogout}
+            >
+              Log out
+            </button>
+          </div>
+        )}
       </div>
     </nav>
   );

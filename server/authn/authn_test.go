@@ -15,10 +15,7 @@ import (
 	"github.com/fleetdm/edr/server/store"
 )
 
-const (
-	testAdminToken = "test-admin-token"
-	testUUID       = "93DFC6F5-763D-5075-B305-8AC145D12F96"
-)
+const testUUID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 
 // enrolledHost constructs a store with a single enrolled host and returns its token.
 func enrolledHost(t *testing.T) (*enrollment.Store, string) {
@@ -146,51 +143,10 @@ func TestHostToken_RevokedToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-func TestAdminToken_HappyPath(t *testing.T) {
-	mw := AdminToken(testAdminToken, slog.Default())
-	mux := http.NewServeMux()
-	mux.Handle("GET /admin", mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	t.Run("valid admin token", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/admin", nil)
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+testAdminToken)
-		resp, err := srv.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("wrong admin token", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/admin", nil)
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer nope")
-		resp, err := srv.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	})
-
-	t.Run("wrong scheme", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/admin", nil)
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Token "+testAdminToken)
-		resp, err := srv.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	})
-}
-
-func TestAdminToken_PanicsOnEmptyToken(t *testing.T) {
-	assert.PanicsWithValue(t, "authn.AdminToken: adminToken must not be empty", func() {
-		_ = AdminToken("", slog.Default())
-	})
-}
+// The Phase 1 AdminToken tests used to live here; Phase 3 replaces AdminToken with
+// Session + CSRF. Session middleware coverage lives in session_test.go (full happy
+// path + CSRF + expiry). The smoke tests below are kept to lock in the basics so the
+// shared fail/failStatus path keeps working as we refactor.
 
 func TestHostIDFromContext_Nil(t *testing.T) {
 	_, ok := HostIDFromContext(t.Context())

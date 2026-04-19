@@ -205,7 +205,12 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	ctx := r.Context()
-	if err := h.store.UpdateAlertStatus(ctx, id, body.Status); err != nil {
+	// Phase 3: record the authenticated user id on the row so SOC forensics can tell
+	// who resolved what. When the handler is invoked outside the session middleware
+	// stack (e.g. direct test harness), UserIDFromContext returns false and we pass 0,
+	// which UpdateAlertStatus treats as "leave updated_by alone".
+	userID, _ := authn.UserIDFromContext(ctx)
+	if err := h.store.UpdateAlertStatus(ctx, id, body.Status, userID); err != nil {
 		if errors.Is(err, errNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -213,6 +218,15 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		h.logger.ErrorContext(ctx, "update alert status", "id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	if userID > 0 {
+		h.logger.InfoContext(ctx, "alert status updated",
+			"edr.admin.action", "alert_update",
+			"edr.alert.id", id,
+			"edr.alert.status", body.Status,
+			"edr.user.id", userID,
+		)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
