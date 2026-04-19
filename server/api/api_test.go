@@ -17,7 +17,7 @@ import (
 func TestListHostsEmpty(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, testAPIToken, slog.Default())
+	h := New(q, s, slog.Default())
 
 	mux := testMux(h)
 
@@ -36,7 +36,7 @@ func TestListHostsEmpty(t *testing.T) {
 func TestProcessTreeEmpty(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, testAPIToken, slog.Default())
+	h := New(q, s, slog.Default())
 
 	mux := testMux(h)
 
@@ -59,7 +59,7 @@ func TestProcessTreeEmpty(t *testing.T) {
 func TestProcessDetailNotFound(t *testing.T) {
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, testAPIToken, slog.Default())
+	h := New(q, s, slog.Default())
 
 	mux := testMux(h)
 
@@ -70,49 +70,7 @@ func TestProcessDetailNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestAuthRequired(t *testing.T) {
-	s := store.OpenTestStore(t)
-	q := graph.NewQuery(s)
-	h := New(q, s, "secret-key", slog.Default())
-
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-
-	t.Run("no auth header", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
-		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-	})
-
-	t.Run("valid auth", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
-		req.Header.Set("Authorization", "Bearer secret-key")
-		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
-}
-
-func TestAuthWrongPrefix(t *testing.T) {
-	s := store.OpenTestStore(t)
-	q := graph.NewQuery(s)
-	h := New(q, s, "secret-key", slog.Default())
-
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-
-	// "Token" prefix instead of "Bearer" should be rejected.
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
-	req.Header.Set("Authorization", "Token secret-key")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-
-	// "Basic" prefix should also be rejected.
-	req = httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
-	req.Header.Set("Authorization", "Basic secret-key")
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-}
+// Historical TestAuthRequired / TestAuthWrongPrefix tests were removed in Phase 1 — the api
+// package no longer enforces auth on its own; server/authn/authn_test.go covers the
+// middleware path. Integration with middleware is exercised through the main binary's smoke
+// tests (server/cmd/fleet-edr-server).

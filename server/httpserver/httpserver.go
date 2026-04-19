@@ -37,6 +37,10 @@ type Options struct {
 	// SlowThreshold upgrades access-log lines to warn when the handler took longer than this.
 	// Zero disables the upgrade. Default 500ms.
 	SlowThreshold time.Duration
+	// TLSEnabled toggles the HSTS response header. Only set this true when the server actually
+	// speaks TLS; emitting HSTS over plain HTTP is a footgun that can make users unreachable if
+	// they accidentally deploy the next process without TLS.
+	TLSEnabled bool
 }
 
 // Build wraps the provided handler with the full middleware chain.
@@ -54,6 +58,9 @@ func Build(handler http.Handler, opts Options) http.Handler {
 	h := handler
 	h = recoverMiddleware(opts.Logger)(h)
 	h = accessLog(opts.Logger, opts.SlowThreshold)(h)
+	if opts.TLSEnabled {
+		h = hstsHeader()(h)
+	}
 	h = xRequestIDEcho()(h)
 	h = otelhttp.NewHandler(h, opts.ServiceName,
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
@@ -64,6 +71,17 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		}),
 	)
 	return h
+}
+
+// hstsHeader adds the Strict-Transport-Security header on every response. Two years, including
+// subdomains, matching modern best practice. Only installed when the server speaks TLS.
+func hstsHeader() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // xRequestIDEcho sets the X-Request-ID response header to the hex trace-id when a span is active,

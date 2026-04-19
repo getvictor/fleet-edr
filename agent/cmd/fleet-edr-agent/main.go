@@ -18,6 +18,7 @@ import (
 
 	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/enrollment"
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/logging"
 	"github.com/fleetdm/edr/agent/observability"
@@ -69,6 +70,9 @@ func run() error {
 		}
 	}()
 
+	// Derive host_id early so the base logger carries it before we start touching other
+	// subsystems. The enrollment.Ensure step below re-derives for the enroll payload but
+	// uses the same source.
 	hostID := cfg.HostIDOverride
 	if hostID == "" {
 		if derived, derivErr := hostid.Get(ctx); derivErr == nil {
@@ -100,6 +104,28 @@ func run() error {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE=1 is set; use https:// in production")
 	}
 
+	// Enroll (or load the persisted token) before touching the queue / uploader. A failure
+	// here is fatal — the agent has no way to upload events without a valid token.
+	tokenProvider, err := enrollment.Ensure(ctx, enrollment.Options{
+		ServerURL:         cfg.ServerURL,
+		EnrollSecret:      cfg.EnrollSecret,
+		TokenFile:         cfg.TokenFile,
+		ServerFingerprint: cfg.ServerFingerprint,
+		AllowInsecure:     cfg.AllowInsecure,
+		HostIDOverride:    cfg.HostIDOverride,
+		AgentVersion:      version,
+		Logger:            logger,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "enrollment", "err", err)
+		return err
+	}
+	// The TokenProvider owns the current host_id (enrolled value, not necessarily the same
+	// as the pre-enroll derived value above). Keep hostID in sync for the commander.
+	if tpID := tokenProvider.HostID(); tpID != "" {
+		hostID = tpID
+	}
+
 	q, err := queue.Open(ctx, cfg.QueueDBPath)
 	if err != nil {
 		logger.ErrorContext(ctx, "open queue", "err", err)
@@ -109,14 +135,27 @@ func run() error {
 
 	pidTable := proctable.New()
 
+	// Build one TLS config for every agent HTTP client so the self-signed /
+	// fingerprint-pinned policies that worked during enroll also apply to the uploader
+	// and commander. Without this, every post-enroll request fails with "certificate
+	// signed by unknown authority" because DefaultTransport uses the system trust store
+	// with no knowledge of EDR_ALLOW_INSECURE or EDR_SERVER_FINGERPRINT.
+	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	if err != nil {
+		logger.ErrorContext(ctx, "build tls config", "err", err)
+		return err
+	}
+	agentTransport := otelhttp.NewTransport(&http.Transport{TLSClientConfig: tlsCfg})
+
 	httpClient := &http.Client{
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
+		Transport: agentTransport,
 		Timeout:   30 * time.Second,
 	}
 
 	up := uploader.New(q, uploader.Config{
 		ServerURL:  cfg.ServerURL,
-		APIKey:     cfg.BearerToken,
+		TokenFn:    tokenProvider.Token,
+		OnAuthFail: tokenProvider.OnUnauthorized,
 		BatchSize:  cfg.BatchSize,
 		Interval:   cfg.UploadInterval,
 		MaxRetries: 5,
@@ -137,11 +176,12 @@ func run() error {
 	// Commander
 	if hostID != "" {
 		cmdr := commander.New(commander.Config{
-			ServerURL: cfg.ServerURL,
-			APIKey:    cfg.BearerToken,
-			HostID:    hostID,
-			Interval:  5 * time.Second,
-		}, &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport), Timeout: 10 * time.Second}, logger)
+			ServerURL:  cfg.ServerURL,
+			TokenFn:    tokenProvider.Token,
+			OnAuthFail: tokenProvider.OnUnauthorized,
+			HostID:     hostID,
+			Interval:   5 * time.Second,
+		}, &http.Client{Transport: agentTransport, Timeout: 10 * time.Second}, logger)
 		go func() {
 			if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
 				logger.ErrorContext(ctx, "commander", "err", err)

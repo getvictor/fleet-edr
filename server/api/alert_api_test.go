@@ -20,7 +20,7 @@ func setupAlertTestHandler(t *testing.T) (http.Handler, *store.Store) {
 	t.Helper()
 	s := store.OpenTestStore(t)
 	q := graph.NewQuery(s)
-	h := New(q, s, testAPIToken, slog.Default())
+	h := New(q, s, slog.Default())
 	return testMux(h), s
 }
 

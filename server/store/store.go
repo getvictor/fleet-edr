@@ -91,6 +91,21 @@ var schemaStatements = []string{
 		last_seen_ns BIGINT       NOT NULL DEFAULT 0,
 		updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	)`,
+	`CREATE TABLE IF NOT EXISTS enrollments (
+		host_id          VARCHAR(255) PRIMARY KEY,
+		host_token_hash  VARBINARY(255) NOT NULL,
+		host_token_salt  VARBINARY(32)  NOT NULL,
+		hostname         VARCHAR(255)   NOT NULL,
+		agent_version    VARCHAR(64)    NOT NULL,
+		os_version       VARCHAR(128)   NOT NULL,
+		source_ip        VARCHAR(45)    NOT NULL,
+		enrolled_at      TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		expires_at       TIMESTAMP(6)   NULL,
+		revoked_at       TIMESTAMP(6)   NULL,
+		revoke_reason    VARCHAR(128)   NULL,
+		revoked_by       VARCHAR(255)   NULL,
+		INDEX idx_enrollments_active (revoked_at)
+	)`,
 }
 
 // Event represents the canonical event envelope.

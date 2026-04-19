@@ -2,16 +2,15 @@
 package api
 
 import (
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -28,16 +27,17 @@ type alertDetailResponse struct {
 type Handler struct {
 	query  *graph.Query
 	store  *store.Store
-	apiKey string
 	logger *slog.Logger
 }
 
-// New creates an API handler.
-func New(q *graph.Query, s *store.Store, apiKey string, logger *slog.Logger) *Handler {
+// New creates an API handler. Authorization is NOT enforced in this package anymore; callers
+// wrap the returned mux (or this handler's routes) in the authn.AdminToken middleware (or,
+// when Phase 3 lands, a session-cookie middleware) at registration time.
+func New(q *graph.Query, s *store.Store, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{query: q, store: s, apiKey: apiKey, logger: logger}
+	return &Handler{query: q, store: s, logger: logger}
 }
 
 // RegisterRoutes registers the API routes on the given mux.
@@ -50,18 +50,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/alerts/{id}", h.handleGetAlert)
 	mux.HandleFunc("PUT /api/v1/alerts/{id}", h.handleUpdateAlertStatus)
 
-	mux.HandleFunc("GET /api/v1/commands", h.handleListCommands)
+	mux.HandleFunc("GET /api/v1/commands", h.ListCommands)
 	mux.HandleFunc("GET /api/v1/commands/{id}", h.handleGetCommand)
 	mux.HandleFunc("POST /api/v1/commands", h.handleCreateCommand)
-	mux.HandleFunc("PUT /api/v1/commands/{id}", h.handleUpdateCommandStatus)
+	mux.HandleFunc("PUT /api/v1/commands/{id}", h.UpdateCommandStatus)
 }
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	ctx := r.Context()
 	hosts, err := h.query.ListHosts(ctx)
 	if err != nil {
@@ -77,11 +72,6 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	hostID := r.PathValue("host_id")
 	if hostID == "" {
 		http.Error(w, "host_id required", http.StatusBadRequest)
@@ -112,11 +102,6 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	hostID := r.PathValue("host_id")
 	pidStr := r.PathValue("pid")
 	pid, err := strconv.Atoi(pidStr)
@@ -143,11 +128,6 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	f := store.AlertFilter{
 		HostID:    r.URL.Query().Get("host_id"),
 		Status:    r.URL.Query().Get("status"),
@@ -171,11 +151,6 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid alert id", http.StatusBadRequest)
@@ -208,11 +183,6 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid alert id", http.StatusBadRequest)
@@ -249,11 +219,6 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handleGetCommand(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid command id", http.StatusBadRequest)
@@ -275,21 +240,23 @@ func (h *Handler) handleGetCommand(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, r, cmd)
 }
 
-func (h *Handler) handleListCommands(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	hostID := r.URL.Query().Get("host_id")
-	if hostID == "" {
-		http.Error(w, "host_id required", http.StatusBadRequest)
-		return
+func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	// When the request carries a host-token (agent polling its own queue), always scope the
+	// listing to the authenticated host — any host_id query parameter is ignored so an agent
+	// with a valid token for host A can never read commands queued for host B. Admin-token
+	// callers (no host_id in ctx) are trusted to pass host_id explicitly.
+	hostID, viaHostToken := authn.HostIDFromContext(ctx)
+	if !viaHostToken {
+		hostID = r.URL.Query().Get("host_id")
+		if hostID == "" {
+			http.Error(w, "host_id required", http.StatusBadRequest)
+			return
+		}
 	}
 
 	status := r.URL.Query().Get("status")
 
-	ctx := r.Context()
 	commands, err := h.store.ListCommands(ctx, hostID, status)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list commands", "err", err)
@@ -304,11 +271,6 @@ func (h *Handler) handleListCommands(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	var body struct {
 		HostID      string          `json:"host_id"`
 		CommandType string          `json:"command_type"`
@@ -342,12 +304,7 @@ func (h *Handler) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleUpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
+func (h *Handler) UpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid command id", http.StatusBadRequest)
@@ -371,6 +328,25 @@ func (h *Handler) handleUpdateCommandStatus(w http.ResponseWriter, r *http.Reque
 	}
 
 	ctx := r.Context()
+	// For host-token callers, enforce that the command being updated actually belongs to the
+	// authenticated host. Without this check, any valid agent token could mark another host's
+	// commands as "acked" or "completed".
+	if ctxHostID, viaHostToken := authn.HostIDFromContext(ctx); viaHostToken {
+		existing, getErr := h.store.GetCommand(ctx, id)
+		if getErr != nil {
+			h.logger.ErrorContext(ctx, "update command lookup", "id", id, "err", getErr)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if existing == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if existing.HostID != ctxHostID {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+	}
 	if err := h.store.UpdateCommandStatus(ctx, id, body.Status, body.Result); err != nil {
 		if errors.Is(err, errNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -382,16 +358,6 @@ func (h *Handler) handleUpdateCommandStatus(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) authorize(r *http.Request) bool {
-	auth := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return false
-	}
-	token := auth[len(prefix):]
-	return subtle.ConstantTimeCompare([]byte(token), []byte(h.apiKey)) == 1
 }
 
 func parseTimeRange(r *http.Request) store.TimeRange {

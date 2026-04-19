@@ -44,7 +44,7 @@ func TestFetchPendingWithAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", APIKey: "test-key"}, nil, nil)
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", TokenFn: func() string { return "test-key" }}, nil, nil)
 	result, err := cmdr.fetchPending(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, result)

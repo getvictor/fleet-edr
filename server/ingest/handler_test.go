@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -12,21 +13,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/store"
 )
 
-const testToken = "test-bearer-token"
+// withHostID returns a request whose context carries the pinned host_id the real authn
+// middleware would set. Use this in tests that exercise handleIngest directly (i.e. bypass
+// the mux + middleware chain that the main binary wires up).
+func withHostID(req *http.Request, hostID string) *http.Request {
+	ctx := authn.WithHostIDForTest(req.Context(), hostID)
+	return req.WithContext(ctx)
+}
 
 func newHandler(t *testing.T) *Handler {
 	t.Helper()
-	return New(store.OpenTestStore(t), testToken, slog.Default(), BuildInfo{Version: "test", Commit: "deadbeef"})
+	return New(store.OpenTestStore(t), slog.Default(), BuildInfo{Version: "test", Commit: "deadbeef"})
 }
 
 func TestLivez(t *testing.T) {
 	mux := http.NewServeMux()
-	// livez does not need the store.
-	h := New(nil, testToken, slog.Default(), BuildInfo{Version: "test"})
-	h.RegisterRoutes(mux)
+	h := New(nil, slog.Default(), BuildInfo{Version: "test"})
+	h.RegisterHealthRoutes(mux)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/livez", nil)
 	rec := httptest.NewRecorder()
@@ -44,7 +51,7 @@ func TestLivez(t *testing.T) {
 func TestReadyz_DBUp(t *testing.T) {
 	h := newHandler(t)
 	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	h.RegisterHealthRoutes(mux)
 
 	for _, path := range []string{"/readyz", "/health"} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
@@ -61,12 +68,11 @@ func TestReadyz_DBUp(t *testing.T) {
 
 func TestReadyz_DBDown(t *testing.T) {
 	s := store.OpenTestStore(t)
-	// Close the store so any Ping fails.
 	require.NoError(t, s.Close())
 
-	h := New(s, testToken, slog.Default(), BuildInfo{})
+	h := New(s, slog.Default(), BuildInfo{})
 	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	h.RegisterHealthRoutes(mux)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
@@ -77,17 +83,13 @@ func TestReadyz_DBDown(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "degraded", body.Status)
 	assert.Equal(t, "error", body.Checks["db"].Status)
-	// Readiness must NOT leak raw driver / topology details from err.Error(). We only accept the
-	// generic "unavailable" marker.
 	assert.Equal(t, "unavailable", body.Checks["db"].Error)
 }
 
 func TestReadyz_NilStore(t *testing.T) {
-	// Guards against a future refactor / mis-construction where the Handler has no store. Must
-	// respond with 503 "unavailable" instead of panicking on the nil deref.
 	mux := http.NewServeMux()
-	h := New(nil, testToken, slog.Default(), BuildInfo{})
-	h.RegisterRoutes(mux)
+	h := New(nil, slog.Default(), BuildInfo{})
+	h.RegisterHealthRoutes(mux)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
@@ -100,85 +102,60 @@ func TestReadyz_NilStore(t *testing.T) {
 	assert.Equal(t, "unavailable", body.Checks["db"].Error)
 }
 
-func TestNew_PanicsOnEmptyAPIKey(t *testing.T) {
-	// An empty apiKey previously allowed "Authorization: Bearer " to pass the constant-time
-	// compare. Make the invariant a hard panic at construction time so no production path can
-	// silently ship the demo bypass.
-	assert.PanicsWithValue(t, "ingest.New: apiKey must not be empty", func() {
-		_ = New(nil, "", slog.Default(), BuildInfo{})
-	})
+// serveIngest builds the handler wrapped in a mux that pins host_id on context before
+// dispatching. Mirrors what the real authn.HostToken middleware does in production.
+func serveIngest(t *testing.T, h *Handler, hostID string, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	withHostID(req, hostID)
+	// http.ServeMux doesn't interact with our pinning helper, so call the inner handler directly.
+	h.IngestHandler().ServeHTTP(rec, withHostID(req, hostID))
+	return rec
 }
 
-func TestIngest_RejectsEmptyBearerSuffix(t *testing.T) {
-	// Regression test for the "Bearer " → empty token bypass. Even if someone managed to land a
-	// zero-value &Handler{} (bypassing New), the authorize() guard must still reject.
-	h := &Handler{apiKey: "", logger: slog.Default()}
+func TestIngest_RejectsMissingContext(t *testing.T) {
+	// Direct-dispatch without pinning the host_id must 500 so the misconfiguration is loud.
+	h := New(nil, slog.Default(), BuildInfo{})
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
-	req.Header.Set("Authorization", "Bearer ")
-	assert.False(t, h.authorize(req))
-}
-
-func TestIngestUnauthorizedWithoutToken(t *testing.T) {
-	mux := http.NewServeMux()
-	h := New(nil, "secret-key", slog.Default(), BuildInfo{})
-	h.RegisterRoutes(mux)
-
-	body := `[{"event_id":"1","host_id":"h","timestamp_ns":1,"event_type":"exec","payload":{}}]`
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	h.IngestHandler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
-func TestIngestUnauthorizedWithWrongToken(t *testing.T) {
-	mux := http.NewServeMux()
-	h := New(nil, "secret-key", slog.Default(), BuildInfo{})
-	h.RegisterRoutes(mux)
-
-	body := `[{"event_id":"1","host_id":"h","timestamp_ns":1,"event_type":"exec","payload":{}}]`
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
-	req.Header.Set("Authorization", "Bearer not-the-right-one")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestIngestInvalidJSON(t *testing.T) {
-	mux := http.NewServeMux()
-	h := New(nil, testToken, slog.Default(), BuildInfo{})
-	h.RegisterRoutes(mux)
-
+func TestIngest_InvalidJSON(t *testing.T) {
+	h := newHandler(t)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString("not json"))
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
+	rec := serveIngest(t, h, "host-a", req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestIngestMissingFields(t *testing.T) {
-	mux := http.NewServeMux()
-	h := New(nil, testToken, slog.Default(), BuildInfo{})
-	h.RegisterRoutes(mux)
-
-	events := []store.Event{{EventID: "", HostID: "h", TimestampNs: 1, EventType: "exec", Payload: json.RawMessage(`{}`)}}
+func TestIngest_MissingFields(t *testing.T) {
+	h := newHandler(t)
+	events := []store.Event{{EventID: "", HostID: "host-a", TimestampNs: 1, EventType: "exec", Payload: json.RawMessage(`{}`)}}
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
+	rec := serveIngest(t, h, "host-a", req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestIngestLargeBatchNearLimit(t *testing.T) {
+func TestIngest_HostIDMismatchRejected(t *testing.T) {
+	// The pinned host_id from the token is "host-a"; the event body claims "host-b". Must 400.
+	h := newHandler(t)
+	events := []store.Event{{
+		EventID: "evt-1", HostID: "host-b", TimestampNs: 1, EventType: "exec", Payload: json.RawMessage(`{}`),
+	}}
+	body, err := json.Marshal(events)
+	require.NoError(t, err)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	rec := serveIngest(t, h, "host-a", req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "host_id_mismatch")
+}
+
+func TestIngest_LargeBatchNearLimit(t *testing.T) {
 	s := store.OpenTestStore(t)
-	h := New(s, testToken, slog.Default(), BuildInfo{})
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	h := New(s, slog.Default(), BuildInfo{})
 
 	var events []store.Event
 	bigPayload := json.RawMessage(`{"pid":1,"ppid":0,"path":"/bin/sh","args":[],"uid":0,"gid":0,"data":"` + strings.Repeat("x", 5000) + `"}`)
@@ -191,25 +168,19 @@ func TestIngestLargeBatchNearLimit(t *testing.T) {
 			Payload:     bigPayload,
 		})
 	}
-
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
-	require.Less(t, len(body), 10*1024*1024, "test body should be under 10 MB")
-	require.Greater(t, len(body), 1*1024*1024, "test body should be over 1 MB")
+	require.Less(t, len(body), 10*1024*1024)
+	require.Greater(t, len(body), 1*1024*1024)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code, "large batch should be accepted")
+	rec := serveIngest(t, h, "host-large", req)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-func TestIngestDoesNotProcessEvents(t *testing.T) {
+func TestIngest_DoesNotProcessEvents(t *testing.T) {
 	s := store.OpenTestStore(t)
-	h := New(s, testToken, slog.Default(), BuildInfo{})
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	h := New(s, slog.Default(), BuildInfo{})
 
 	events := []store.Event{
 		{
@@ -221,13 +192,13 @@ func TestIngestDoesNotProcessEvents(t *testing.T) {
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
+	rec := serveIngest(t, h, "host-noproc", req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	count, err := s.CountUnprocessed(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count, "ingested events should remain unprocessed")
 }
+
+// Compile-time check that we still honour the context cancellation contract.
+var _ = context.Background

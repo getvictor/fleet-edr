@@ -49,7 +49,7 @@ func TestUploadBatch(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ServerURL = srv.URL
-	cfg.APIKey = "test-key"
+	cfg.TokenFn = func() string { return "test-key" }
 	cfg.BatchSize = 10
 
 	u := New(q, cfg, nil, nil)
