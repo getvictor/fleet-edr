@@ -5,17 +5,29 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/**"
+      - ".github/actions/**/action.yml"
+      - ".github/actions/**/action.yaml"
   pull_request:
     paths:
       - ".github/workflows/**"
+      - ".github/actions/**/action.yml"
+      - ".github/actions/**/action.yaml"
+  schedule:
+    # Weekly run catches new zizmor rules even when workflows haven't changed.
+    - cron: "17 13 * * 1"
   workflow_dispatch:
 
 permissions: {}
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   zizmor:
     name: zizmor
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       security-events: write
       contents: read
@@ -26,3 +38,5 @@ jobs:
           persist-credentials: false
 
       - uses: zizmorcore/zizmor-action@71321a20a9ded102f6e9ce5718a2fcec2c4f70d8 # v0.5.2
+        with:
+          persona: auditor

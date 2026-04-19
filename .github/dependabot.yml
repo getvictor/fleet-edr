@@ -1,0 +1,89 @@
+version: 2
+
+# Notes:
+# - Security updates (GHSA advisories) always fire immediately and bypass `cooldown`.
+# - `cooldown` delays version-update PRs until a release has been public for N days,
+#   so we trail new releases by ~1-2 weeks while still getting CVE fixes right away.
+# - Majors are ignored; they need human review. Dependabot will still open security
+#   PRs for majors when a CVE only has a fix in the next major.
+
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/agent"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 10
+      semver-major-days: 30
+    groups:
+      agent-minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: ["dependencies", "go", "agent"]
+    commit-message:
+      prefix: "deps(agent)"
+
+  - package-ecosystem: "gomod"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 10
+      semver-major-days: 30
+    groups:
+      server-minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: ["dependencies", "go", "server"]
+    commit-message:
+      prefix: "deps(server)"
+
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 10
+      semver-major-days: 30
+    groups:
+      ui-minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: ["dependencies", "javascript", "ui"]
+    commit-message:
+      prefix: "deps(ui)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      actions-all:
+        patterns: ["*"]
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "deps(ci)"
