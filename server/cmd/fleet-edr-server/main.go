@@ -3,7 +3,7 @@
 // by a separate fleet-edr-ingest instance.
 //
 // Configuration is loaded from environment variables; see server/config for the full list.
-// Start it with EDR_DSN, EDR_ENROLL_SECRET, EDR_ADMIN_TOKEN, TLS cert files (or
+// Start it with EDR_DSN, EDR_ENROLL_SECRET, TLS cert files (or
 // EDR_ALLOW_INSECURE_HTTP=1 for dev), and optionally the OTEL_* vars that route traces and
 // logs to a collector (SigNoz, Tempo, Datadog, ...).
 package main
@@ -35,8 +35,12 @@ import (
 	"github.com/fleetdm/edr/server/observability"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/processor"
+	"github.com/fleetdm/edr/server/seed"
+	"github.com/fleetdm/edr/server/session"
+	"github.com/fleetdm/edr/server/sessions"
 	"github.com/fleetdm/edr/server/store"
 	"github.com/fleetdm/edr/server/ui"
+	"github.com/fleetdm/edr/server/users"
 )
 
 // Build info injected via -ldflags at build time.
@@ -126,6 +130,17 @@ func run() error {
 
 	enrollStore := enrollment.NewStore(s.DB())
 	policyStore := policy.New(s.DB())
+	userStore := users.New(s.DB())
+	sessionStore := sessions.New(s.DB(), sessions.Options{})
+
+	// Phase 3: seed the first admin before we bind the HTTP listener. If the operator
+	// is watching, they capture the printed password at boot; if they miss it they can
+	// restart and re-seed by deleting the admin row. Never fatal — a seed failure is
+	// logged but the server still boots (operator can run migrations by hand).
+	if _, _, err := seed.Admin(ctx, userStore, logger, os.Stderr); err != nil {
+		logger.ErrorContext(ctx, "admin seed failed", "err", err)
+	}
+
 	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{
 		EnrollSecret:  cfg.EnrollSecret,
 		RatePerMinute: cfg.EnrollRatePerMin,
@@ -134,22 +149,32 @@ func run() error {
 		CommandStore:  s,
 	})
 	adminHandler := admin.New(enrollStore, policyStore, s, logger)
+	sessionHandler := session.New(userStore, sessionStore, session.Options{
+		RatePerMinute: cfg.LoginRatePerMin,
+		CookieSecure:  cfg.TLSEnabled(),
+		Logger:        logger,
+	})
 
 	// Build the mux as a composition of three authorization domains:
-	//   - public:  /livez, /readyz, /health, POST /api/v1/enroll
+	//   - public:  /livez, /readyz, /health, POST /api/v1/enroll, POST /api/v1/session
 	//   - host:    POST /api/v1/events, GET /api/v1/commands, PUT /api/v1/commands/{id}
 	//             (wrapped in authn.HostToken — the agent polls for + reports on its own commands)
-	//   - admin:   everything under /api/v1/{hosts,alerts,admin}, POST /api/v1/commands,
-	//             GET /api/v1/commands/{id}, and /ui/* (wrapped in authn.AdminToken)
+	//   - session: everything under /api/v1/{hosts,alerts,admin}, POST /api/v1/commands,
+	//             GET /api/v1/commands/{id}, GET/DELETE /api/v1/session (wrapped in
+	//             authn.Session; unsafe methods additionally gated by authn.CSRF)
 	//
 	// Middleware is applied per-handler at registration time so a single mux serves the whole
 	// surface and we don't have to route through multiple servers.
 	hostTokenMW := authn.HostToken(enrollStore, logger)
-	adminTokenMW := authn.AdminToken(cfg.AdminToken, logger)
+	sessionMW := authn.Session(sessionStore, logger)
+	csrfMW := authn.CSRF(logger)
 
 	mux := http.NewServeMux()
 	ingestHandler.RegisterHealthRoutes(mux)
 	enrollHandler.RegisterRoutes(mux)
+	// POST /api/v1/session is public — there is no session yet. The session handler
+	// does its own rate-limit + audit log so we don't need to wrap it.
+	sessionHandler.RegisterPublicRoutes(mux)
 
 	// Host-token protected agent endpoints. We wrap a dedicated sub-mux so the api.Handler
 	// routes (GET/PUT commands) share scoping logic with the ingest handler.
@@ -166,24 +191,54 @@ func run() error {
 		mux.Handle(p, hostProtected)
 	}
 
-	// Admin-token protected admin APIs. api.Handler.RegisterRoutes registers onto a dedicated
-	// sub-mux so we can wrap that whole sub-mux in the admin middleware. GET /commands and
+	// Session-protected admin APIs. api.Handler.RegisterRoutes registers onto a dedicated
+	// sub-mux so we can wrap that whole sub-mux in the session middleware. GET /commands and
 	// PUT /commands/{id} are deliberately host-token-only — those paths are the agent-facing
-	// command protocol. Admin UI command management (POST, GET /{id}) goes here.
+	// command protocol. Admin UI command management (POST, GET /{id}) goes here. The
+	// session + CSRF middleware pair lives here: Session first (reads cookie, pins user
+	// + session on ctx), CSRF second (reads session off ctx, validates X-CSRF-Token on
+	// unsafe methods). GET + DELETE /api/v1/session live under the same stack; login POST
+	// is public (above).
 	apiMux := http.NewServeMux()
 	apiHandler.RegisterRoutes(apiMux)
 	adminHandler.RegisterRoutes(apiMux)
-	adminProtected := adminTokenMW(apiMux)
+	sessionHandler.RegisterAuthedRoutes(apiMux)
+	sessionProtected := sessionMW(csrfMW(apiMux))
 	for _, p := range []string{
 		"GET /api/v1/hosts", "GET /api/v1/hosts/{host_id}/tree", "GET /api/v1/hosts/{host_id}/processes/{pid}",
 		"GET /api/v1/alerts", "GET /api/v1/alerts/{id}", "PUT /api/v1/alerts/{id}",
 		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
 		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
 		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
+		"GET /api/v1/session", "DELETE /api/v1/session",
 	} {
-		mux.Handle(p, adminProtected)
+		mux.Handle(p, sessionProtected)
 	}
 	registerUIRoutes(mux, logger)
+
+	// Phase 3: periodic cleanup of expired session rows. Every 5 minutes; the exact
+	// interval doesn't matter much — 12h-TTL rows that linger for a few extra minutes
+	// are harmless because Session middleware already rejects expired rows via the
+	// `expires_at > NOW()` filter.
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				n, err := sessionStore.CleanupExpired(ctx)
+				if err != nil {
+					logger.WarnContext(ctx, "session cleanup", "err", err)
+					continue
+				}
+				if n > 0 {
+					logger.InfoContext(ctx, "session cleanup removed rows", "count", n)
+				}
+			}
+		}
+	}()
 
 	// Start the background event processor.
 	go func() {
@@ -288,10 +343,12 @@ func run() error {
 }
 
 // registerUIRoutes serves the embedded React UI at /ui/ and redirects / to /ui/. The bundle
-// itself is intentionally unauthenticated: the React app's login screen is what collects the
-// admin token and stores it in sessionStorage, from which every subsequent API call reads it
-// into an `Authorization: Bearer` header. Gating /ui/ behind AdminToken would make the login
-// page unreachable (chicken/egg). The privileged surface is /api/v1/*, which IS gated.
+// itself is intentionally unauthenticated: the React app's Login screen is what collects the
+// email + password via POST /api/v1/session. The server replies with a HttpOnly session
+// cookie and a CSRF token the JS stores in memory. Every subsequent state-changing call
+// carries both the cookie (automatic, HttpOnly) and an X-CSRF-Token header. Gating /ui/
+// itself behind the Session middleware would make the login page unreachable (chicken/egg).
+// The privileged surface is /api/v1/*, which IS session-gated.
 // Phase 3 replaces this with a server-rendered login endpoint + session cookies.
 func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")

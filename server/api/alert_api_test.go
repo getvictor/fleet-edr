@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -151,4 +152,35 @@ func TestUpdateAlertStatusAPI(t *testing.T) {
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
+}
+
+// TestUpdateAlertStatus_CapturesUserID locks in the Phase 3 audit contract: when the
+// request context carries an authenticated user id (pinned by authn.Session), the
+// updated_by column is set on the row. Without a session on ctx, updated_by stays
+// NULL — this is the path admin-less direct calls (e.g. internal backfills) take.
+func TestUpdateAlertStatus_CapturesUserID(t *testing.T) {
+	mux, s := setupAlertTestHandler(t)
+	ctx := t.Context()
+
+	procID, err := s.InsertProcess(ctx, store.Process{HostID: "host-a", PID: 100, PPID: 1, Path: "/bin/sh", ForkTimeNs: 1000})
+	require.NoError(t, err)
+	alertID, _, err := s.InsertAlert(ctx, store.Alert{
+		HostID: "host-a", RuleID: "r1", Severity: "high", Title: "Test", ProcessID: procID,
+	}, nil)
+	require.NoError(t, err)
+
+	body := `{"status":"resolved"}`
+	req := httptest.NewRequestWithContext(t.Context(), "PUT",
+		fmt.Sprintf("/api/v1/alerts/%d", alertID), strings.NewReader(body))
+	req = req.WithContext(authn.WithUserIDForTest(req.Context(), 42))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	// Verify the updated_by column directly — Alert type doesn't expose it (SOC-only).
+	var updatedBy *int64
+	err = s.DB().GetContext(ctx, &updatedBy, "SELECT updated_by FROM alerts WHERE id = ?", alertID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedBy)
+	assert.Equal(t, int64(42), *updatedBy)
 }

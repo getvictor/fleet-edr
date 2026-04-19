@@ -18,12 +18,12 @@ type Config struct {
 	DSN               string
 	ListenAddr        string
 	EnrollSecret      string
-	AdminToken        string
 	TLSCertFile       string
 	TLSKeyFile        string
 	AllowInsecureHTTP bool
 	AllowTLS12        bool
 	EnrollRatePerMin  int
+	LoginRatePerMin   int
 	LogLevel          string
 	LogFormat         string
 	ProcessInterval   time.Duration
@@ -49,6 +49,7 @@ func defaults() Config {
 		ProcessInterval:  500 * time.Millisecond,
 		ProcessBatch:     500,
 		EnrollRatePerMin: 30,
+		LoginRatePerMin:  6,
 	}
 }
 
@@ -66,7 +67,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	requireStr(&c.DSN, "EDR_DSN", getenv, &errs, true)
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, &errs, true)
-	requireStr(&c.AdminToken, "EDR_ADMIN_TOKEN", getenv, &errs, true)
+	// Phase 3 removed EDR_ADMIN_TOKEN. UI + admin surfaces now authenticate via the
+	// session cookie minted by POST /api/v1/session. The first-boot seeder prints the
+	// admin password once so the operator can log in.
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 

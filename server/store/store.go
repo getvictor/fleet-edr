@@ -129,6 +129,33 @@ var schemaStatements = []string{
 	// row. The initial blocklist is empty — operators opt in to blocking via PUT.
 	`INSERT IGNORE INTO policies (name, version, blocklist, updated_by)
 	 VALUES ('default', 1, JSON_OBJECT('paths', JSON_ARRAY(), 'hashes', JSON_ARRAY()), 'system')`,
+	// Phase 3: users table for UI auth. password_hash is argon2id output (32 bytes);
+	// password_salt is 16 random bytes (same argon params as enrollment host tokens).
+	// email is UNIQUE so duplicate invites fail cleanly at the DB boundary.
+	`CREATE TABLE IF NOT EXISTS users (
+		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+		email          VARCHAR(255)   NOT NULL,
+		password_hash  VARBINARY(255) NOT NULL,
+		password_salt  VARBINARY(32)  NOT NULL,
+		created_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		updated_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+		                              ON UPDATE CURRENT_TIMESTAMP(6),
+		UNIQUE KEY uk_users_email (email)
+	)`,
+	// Phase 3: sessions table for UI cookie auth. id is 32 random bytes (~256 bits of
+	// entropy) — acts as its own unguessable lookup key, no separate index needed.
+	// csrf_token is 32 random bytes; compared constant-time against X-CSRF-Token header
+	// on unsafe methods.
+	`CREATE TABLE IF NOT EXISTS sessions (
+		id            VARBINARY(32)  PRIMARY KEY,
+		user_id       BIGINT         NOT NULL,
+		csrf_token    VARBINARY(32)  NOT NULL,
+		created_at    TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		last_seen_at  TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+		                             ON UPDATE CURRENT_TIMESTAMP(6),
+		expires_at    TIMESTAMP(6)   NOT NULL,
+		INDEX idx_sessions_expires (expires_at)
+	)`,
 }
 
 // Event represents the canonical event envelope.
@@ -221,6 +248,11 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 var migrations = []string{
 	`ALTER TABLE events ADD COLUMN processed TINYINT(1) NOT NULL DEFAULT 0`,
 	`ALTER TABLE events ADD INDEX idx_events_processed (processed, host_id, timestamp_ns)`,
+	// Phase 3: alert audit trail. updated_by references users.id for SOC forensics.
+	// NULL is allowed so pre-Phase-3 rows (written before the column existed) continue
+	// to render. The migration loop above swallows "duplicate column name" errors, so
+	// re-running on an already-migrated DB is a no-op.
+	`ALTER TABLE alerts ADD COLUMN updated_by BIGINT NULL`,
 }
 
 // postSchemaMigrations run after schema creation and idempotent ALTER migrations. They use INSERT IGNORE / INSERT ...

@@ -158,8 +158,11 @@ func (s *Store) GetAlertEventIDs(ctx context.Context, alertID int64) ([]string, 
 }
 
 // UpdateAlertStatus changes the status of an alert. If the new status is "resolved", resolved_at is set
-// (only on the first resolve — subsequent resolves preserve the original timestamp).
-func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status string) error {
+// (only on the first resolve — subsequent resolves preserve the original timestamp). userID is the id
+// of the authenticated user making the change (from Phase 3 session auth); pass 0 to leave updated_by
+// untouched (e.g. an internal backfill). userID is written to alerts.updated_by so SOC forensics can
+// reconstruct who resolved what.
+func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status string, userID int64) error {
 	// Check existence first so we can distinguish "not found" from "no change" (RowsAffected=0).
 	var exists int64
 	if err := s.db.GetContext(ctx, &exists, "SELECT id FROM alerts WHERE id = ?", id); err != nil {
@@ -169,13 +172,26 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status string) 
 		return fmt.Errorf("check alert existence %d: %w", id, err)
 	}
 
+	// When userID is zero we leave updated_by alone (COALESCE(existing, NULL)) so
+	// internal backfills don't clobber the last real user. When non-zero we overwrite;
+	// the last responder's identity is what forensics cares about.
 	var err error
 	if status == "resolved" {
-		_, err = s.db.ExecContext(ctx,
-			"UPDATE alerts SET status = ?, resolved_at = IFNULL(resolved_at, NOW(6)) WHERE id = ?", status, id)
+		_, err = s.db.ExecContext(ctx, `
+			UPDATE alerts
+			SET status = ?,
+			    resolved_at = IFNULL(resolved_at, NOW(6)),
+			    updated_by = IF(? = 0, updated_by, ?)
+			WHERE id = ?
+		`, status, userID, userID, id)
 	} else {
-		_, err = s.db.ExecContext(ctx,
-			"UPDATE alerts SET status = ?, resolved_at = NULL WHERE id = ?", status, id)
+		_, err = s.db.ExecContext(ctx, `
+			UPDATE alerts
+			SET status = ?,
+			    resolved_at = NULL,
+			    updated_by = IF(? = 0, updated_by, ?)
+			WHERE id = ?
+		`, status, userID, userID, id)
 	}
 	if err != nil {
 		return fmt.Errorf("update alert status %d: %w", id, err)

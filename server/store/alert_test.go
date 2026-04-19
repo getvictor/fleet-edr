@@ -130,7 +130,7 @@ func TestUpdateAlertStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("acknowledge", func(t *testing.T) {
-		err := s.UpdateAlertStatus(ctx, id, "acknowledged")
+		err := s.UpdateAlertStatus(ctx, id, "acknowledged", 0)
 		require.NoError(t, err)
 
 		got, err := s.GetAlert(ctx, id)
@@ -140,7 +140,7 @@ func TestUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("resolve", func(t *testing.T) {
-		err := s.UpdateAlertStatus(ctx, id, "resolved")
+		err := s.UpdateAlertStatus(ctx, id, "resolved", 0)
 		require.NoError(t, err)
 
 		got, err := s.GetAlert(ctx, id)
@@ -150,7 +150,7 @@ func TestUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("reopen clears resolved_at", func(t *testing.T) {
-		err := s.UpdateAlertStatus(ctx, id, "open")
+		err := s.UpdateAlertStatus(ctx, id, "open", 0)
 		require.NoError(t, err)
 
 		got, err := s.GetAlert(ctx, id)
