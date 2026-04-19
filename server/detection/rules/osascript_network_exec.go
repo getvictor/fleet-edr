@@ -56,25 +56,31 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []store.Even
 		}
 
 		tr := store.TimeRange{FromNs: evt.TimestampNs, ToNs: evt.TimestampNs + windowNs}
-		children, err := s.GetChildProcesses(ctx, evt.HostID, p.PID, tr)
+		descendants, err := collectDescendants(ctx, s, evt.HostID, p.PID, tr)
 		if err != nil {
-			return nil, fmt.Errorf("get osascript children pid %d: %w", p.PID, err)
+			return nil, err
 		}
-		if len(children) == 0 {
+		if len(descendants) == 0 {
 			continue
 		}
 
-		// Chain detection: at least one download child AND at least one exec out of a
+		// Chain detection: at least one downloader AND at least one exec out of a
 		// suspicious path (same allowlist as suspicious_exec, via isSuspiciousPath).
+		// Walk the full descendant set because real droppers often route through an
+		// intermediate shell (`osascript → sh → curl → /tmp/stage2`) and a direct-
+		// children-only scan misses those.
 		var downloader *store.Process
 		var tempExec *store.Process
-		for i := range children {
-			c := &children[i]
-			if downloadBinaries[c.Path] {
+		for i := range descendants {
+			c := &descendants[i]
+			if downloader == nil && downloadBinaries[c.Path] {
 				downloader = c
 			}
-			if isSuspiciousPath(c.Path) {
+			if tempExec == nil && isSuspiciousPath(c.Path) {
 				tempExec = c
+			}
+			if downloader != nil && tempExec != nil {
+				break
 			}
 		}
 		if downloader == nil || tempExec == nil {
@@ -82,16 +88,10 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []store.Even
 		}
 
 		// The finding links to the temp-path process — that's the thing responders need
-		// to investigate first. The download child + the osascript itself are both in the
-		// event_ids so the alert detail view can render the full chain.
-		osaProc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
-		if err != nil {
-			return nil, fmt.Errorf("get osascript process pid %d: %w", p.PID, err)
-		}
-		if osaProc == nil {
-			continue
-		}
-
+		// to investigate first. EventIDs includes just the triggering osascript exec
+		// because that is the event this detector saw in the batch; child exec events
+		// are reachable from the linked ProcessID via the process tree query and the
+		// server-side alert detail view renders the full chain from there.
 		findings = append(findings, detection.Finding{
 			HostID:   evt.HostID,
 			RuleID:   r.ID(),
@@ -106,4 +106,39 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []store.Even
 		})
 	}
 	return findings, nil
+}
+
+// collectDescendants runs a bounded breadth-first traversal rooted at rootPID, returning
+// every process whose ancestry within the given time range terminates at rootPID. The
+// traversal is capped by `maxDescendants` to keep pathological fork-bomb trees from
+// blowing up memory; real dropper chains land in single digits, so a 500-node cap is
+// generous without being abusable.
+const maxDescendants = 500
+
+func collectDescendants(ctx context.Context, s *store.Store, hostID string, rootPID int, tr store.TimeRange) ([]store.Process, error) {
+	var all []store.Process
+	queue := []int{rootPID}
+	seen := map[int]struct{}{rootPID: {}}
+
+	for len(queue) > 0 && len(all) < maxDescendants {
+		parent := queue[0]
+		queue = queue[1:]
+
+		children, err := s.GetChildProcesses(ctx, hostID, parent, tr)
+		if err != nil {
+			return nil, fmt.Errorf("get children of pid %d: %w", parent, err)
+		}
+		for _, c := range children {
+			if _, dupe := seen[c.PID]; dupe {
+				continue
+			}
+			seen[c.PID] = struct{}{}
+			all = append(all, c)
+			if len(all) >= maxDescendants {
+				break
+			}
+			queue = append(queue, c.PID)
+		}
+	}
+	return all, nil
 }

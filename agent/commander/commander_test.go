@@ -124,7 +124,11 @@ func TestExecuteSetBlocklist_HappyPath(t *testing.T) {
 	c.executeSetBlocklist(t.Context(), cmd)
 
 	require.Len(t, sender.sent, 1)
-	assert.JSONEq(t, string(cmd.Payload), string(sender.sent[0]),
+	// Byte equality, not JSONEq — the commander's contract with the extension is
+	// "forward the exact payload bytes the server sent", not "forward some JSON
+	// equivalent". Re-marshalling could change field ordering or whitespace and the
+	// test must catch that.
+	assert.Equal(t, []byte(cmd.Payload), sender.sent[0],
 		"commander must forward the raw payload bytes, not a re-marshalled copy")
 
 	assert.Equal(t, "completed", gotStatus)
@@ -154,6 +158,35 @@ func TestExecuteSetBlocklist_InvalidPayload(t *testing.T) {
 	})
 	assert.Equal(t, "failed", gotStatus)
 	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
+}
+
+// TestExecuteSetBlocklist_InvalidVersion covers the Phase 2 guard: a payload with
+// version <= 0 is malformed (real server versions start at 1) and must be rejected
+// before XPC handoff so the extension never sees a payload it cannot order correctly.
+func TestExecuteSetBlocklist_InvalidVersion(t *testing.T) {
+	var gotStatus, gotErr string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body statusUpdate
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStatus = body.Status
+		var result map[string]string
+		_ = json.Unmarshal(body.Result, &result)
+		gotErr = result["error"]
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	sender := &recordingPolicySender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", PolicySender: sender}, nil, nil)
+
+	c.executeSetBlocklist(t.Context(), command{
+		ID:          10,
+		CommandType: "set_blocklist",
+		Payload:     json.RawMessage(`{"name":"default","version":0,"paths":[],"hashes":[]}`),
+	})
+	assert.Equal(t, "failed", gotStatus)
+	assert.Equal(t, "invalid policy version", gotErr)
+	assert.Empty(t, sender.sent, "payload with invalid version must not reach the extension")
 }
 
 func TestExecuteSetBlocklist_NoSenderConfigured(t *testing.T) {

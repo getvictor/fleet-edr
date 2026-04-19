@@ -395,16 +395,24 @@ func TestHandler_EnrollQueuesInitialPolicy(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	// Exactly one pending set_blocklist command with the seeded policy.
-	cmds, err := s.ListCommands(t.Context(), testUUID, "pending")
-	require.NoError(t, err)
+	// Phase 2: the initial policy enqueue runs in a detached goroutine so enroll latency
+	// is not coupled to the command insert. Poll until the row lands (with a generous
+	// timeout that tolerates CI jitter but would still catch a dropped goroutine).
 	var got []store.Command
-	for _, c := range cmds {
-		if c.CommandType == "set_blocklist" {
-			got = append(got, c)
+	require.Eventually(t, func() bool {
+		cmds, err := s.ListCommands(t.Context(), testUUID, "pending")
+		if err != nil {
+			return false
 		}
-	}
-	require.Len(t, got, 1)
+		got = got[:0]
+		for _, c := range cmds {
+			if c.CommandType == "set_blocklist" {
+				got = append(got, c)
+			}
+		}
+		return len(got) == 1
+	}, 3*time.Second, 25*time.Millisecond,
+		"expected exactly one pending set_blocklist command after enroll")
 
 	var payload struct {
 		Name    string   `json:"name"`
@@ -415,6 +423,50 @@ func TestHandler_EnrollQueuesInitialPolicy(t *testing.T) {
 	assert.Equal(t, "default", payload.Name)
 	assert.Equal(t, int64(2), payload.Version)
 	assert.Equal(t, []string{"/tmp/initial-block"}, payload.Paths)
+}
+
+// TestHandler_EnrollSkipsEmptyPolicy proves the "empty blocklist = no command" contract:
+// a fresh host enrolling against the seeded default policy (version 1, empty blocklist)
+// must NOT receive a set_blocklist command — the agent would just apply-then-discard a
+// no-op, and a later admin PUT fan-out catches the host naturally. This closes the loop
+// with CodeRabbit's comment that an empty initial policy was previously enqueued.
+func TestHandler_EnrollSkipsEmptyPolicy(t *testing.T) {
+	s := store.OpenTestStore(t)
+	es := NewStore(s.DB())
+	ps := policy.New(s.DB())
+	// Do NOT advance the policy — it stays at the seeded v1 empty row.
+
+	h := NewHandler(es, Options{
+		EnrollSecret:  testSecret,
+		RatePerMinute: 30,
+		Logger:        slog.Default(),
+		PolicyStore:   ps,
+		CommandStore:  s,
+	})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := postEnroll(t, srv, map[string]string{
+		"enroll_secret": testSecret,
+		"hardware_uuid": testUUID,
+		"hostname":      "qa-host",
+		"os_version":    "macOS 15.3",
+		"agent_version": "0.0.1-dev",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Give the detached enqueue goroutine a chance to run (it won't insert, but we need
+	// to be sure it HAD the chance). 500 ms is generous for a skip path.
+	time.Sleep(500 * time.Millisecond)
+	cmds, err := s.ListCommands(t.Context(), testUUID, "pending")
+	require.NoError(t, err)
+	for _, c := range cmds {
+		assert.NotEqual(t, "set_blocklist", c.CommandType,
+			"empty policy must not queue a set_blocklist command")
+	}
 }
 
 func TestEnrollRequest_StringRedactsSecret(t *testing.T) {

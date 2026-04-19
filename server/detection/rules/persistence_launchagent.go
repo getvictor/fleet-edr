@@ -101,8 +101,15 @@ func (r *PersistenceLaunchAgent) allowed(path string) bool {
 }
 
 // extractLaunchctlSubcommand pulls the subcommand (`load`, `bootstrap`, `unload`, etc.) and
-// the first path-looking argument out of an argv. argv[0] is the binary path; we look for
-// the first non-flag token for the subcommand and then walk the rest for a path.
+// the first LaunchAgents plist argument out of an argv. argv[0] is the binary path; we look
+// for the first non-flag token for the subcommand and then keep walking until we find an
+// arg that looks like an actual LaunchAgents plist.
+//
+// Why "keep walking" rather than "first arg with /": `launchctl bootstrap gui/501
+// /Users/alice/Library/LaunchAgents/evil.plist` puts the launch-domain specifier
+// ("gui/501") before the plist path. A naive "first slash-containing arg" grab catches
+// the domain and then the rule drops the event entirely. Matching on `launchAgentPath`
+// keeps the scan going past launch domains so the plist is the thing we return.
 //
 // Example inputs:
 //
@@ -110,6 +117,8 @@ func (r *PersistenceLaunchAgent) allowed(path string) bool {
 //	  → ("load", "/Users/alice/Library/LaunchAgents/evil.plist")
 //	[]string{"/bin/launchctl", "load", "-w", "/Library/LaunchAgents/foo.plist"}
 //	  → ("load", "/Library/LaunchAgents/foo.plist")
+//	[]string{"/bin/launchctl", "bootstrap", "gui/501", "/Users/alice/Library/LaunchAgents/evil.plist"}
+//	  → ("bootstrap", "/Users/alice/Library/LaunchAgents/evil.plist")
 func extractLaunchctlSubcommand(args []string) (subcommand, plistPath string) {
 	for i := 1; i < len(args); i++ {
 		if args[i] == "" || strings.HasPrefix(args[i], "-") {
@@ -119,10 +128,9 @@ func extractLaunchctlSubcommand(args []string) (subcommand, plistPath string) {
 			subcommand = args[i]
 			continue
 		}
-		if plistPath == "" && strings.Contains(args[i], "/") {
-			plistPath = args[i]
-			break
+		if launchAgentPath.MatchString(args[i]) {
+			return subcommand, args[i]
 		}
 	}
-	return subcommand, plistPath
+	return subcommand, ""
 }

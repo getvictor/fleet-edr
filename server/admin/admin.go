@@ -15,6 +15,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -42,7 +43,21 @@ type Handler struct {
 
 // New creates an admin handler. The handler does not perform its own auth — wrap it with
 // authn.AdminToken at registration time.
+//
+// Panics if any required dependency is nil: enrollment Store for /enrollments routes,
+// policy Store + CommandInserter for /policy. Fail-fast at construction mirrors the
+// enrollment.NewHandler pattern — a misconfigured handler otherwise blows up only on the
+// first request, after the server is already accepting connections.
 func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, logger *slog.Logger) *Handler {
+	if es == nil {
+		panic("admin.New: enrollment store must not be nil")
+	}
+	if ps == nil {
+		panic("admin.New: policy store must not be nil")
+	}
+	if ci == nil {
+		panic("admin.New: command inserter must not be nil")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -176,7 +191,19 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Actor == "" || body.Reason == "" {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "actor and reason are required")
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "actor_reason_required")
+		return
+	}
+
+	// List active hosts BEFORE committing the policy update. A listing failure after the
+	// upsert would leave us with a committed v+1 row and a 500 response — the caller has
+	// no way to know whether the policy landed, and retrying would bump the version again.
+	// Moving the read ahead keeps the failure mode honest: a listing error aborts cleanly
+	// and the DB is untouched.
+	hostIDs, err := h.enrollments.ActiveHostIDs(ctx)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin put policy list hosts", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -188,7 +215,15 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin put policy", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		// Validation errors from policy.Update (non-absolute path, bad hash) should be a
+		// 400 — the caller can fix their PUT body. Database / internal errors stay 500.
+		status := http.StatusInternalServerError
+		code := "internal"
+		if isValidationError(err) {
+			status = http.StatusBadRequest
+			code = "invalid_blocklist"
+		}
+		writeErr(ctx, h.logger, w, status, code)
 		return
 	}
 
@@ -206,12 +241,6 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hostIDs, err := h.enrollments.ActiveHostIDs(ctx)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin put policy list hosts", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
 	fanoutFailed := 0
 	for _, hostID := range hostIDs {
 		if _, err := h.commands.InsertCommand(ctx, store.Command{
@@ -234,7 +263,13 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		attribute.Int("edr.policy.fanout_hosts", len(hostIDs)),
 		attribute.Int("edr.policy.fanout_failed", fanoutFailed),
 	)
-	h.logger.WarnContext(ctx, "admin policy updated",
+	// Success is INFO. WARN is reserved for partial fan-out failures so operators can
+	// actually tell a healthy policy push apart from one where N hosts missed the update.
+	logFn := h.logger.InfoContext
+	if fanoutFailed > 0 {
+		logFn = h.logger.WarnContext
+	}
+	logFn(ctx, "admin policy updated",
 		"edr.admin.action", "policy_update",
 		"edr.admin.actor", body.Actor,
 		"edr.admin.reason", body.Reason,
@@ -255,4 +290,19 @@ type policyCommandPayload struct {
 	Version int64    `json:"version"`
 	Paths   []string `json:"paths"`
 	Hashes  []string `json:"hashes"`
+}
+
+// isValidationError reports whether err is a blocklist-shape violation returned by
+// policy.Update (e.g. non-absolute path, bad hash). We key off the error string rather
+// than a typed error because policy.Update already wraps the message and the alternative
+// (exporting a sentinel per-error variant) would bloat the policy package for a single
+// caller. The errors.Is check covers the common substring; if policy.Update grows more
+// typed errors later, tighten this.
+func isValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "must be absolute") ||
+		strings.Contains(s, "64 lowercase hex")
 }

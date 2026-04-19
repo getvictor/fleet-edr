@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -105,11 +106,16 @@ type UpdateRequest struct {
 }
 
 // Update atomically bumps the named policy's version and replaces its blocklist. Paths +
-// Hashes are normalised (sorted + deduplicated, paths trimmed) before persisting so the
-// wire payload the extension sees is canonical regardless of input order.
+// Hashes are normalised (sorted + deduplicated, paths trimmed) and validated before
+// persisting so the wire payload the extension sees is canonical and well-formed
+// regardless of input order.
 //
 // Returns the new Policy with the bumped version. If the row is missing Update inserts it
 // at version 1; callers don't need to distinguish insert vs update. Actor must be non-empty.
+//
+// Validation: paths must be absolute filesystem paths (start with '/'); hashes must be
+// 64-character lowercase hex (SHA-256). An invalid entry fails the whole update so a
+// bad policy never gets versioned, audited, and fanned out.
 func (s *Store) Update(ctx context.Context, req UpdateRequest) (*Policy, error) {
 	if req.Name == "" {
 		return nil, errors.New("policy: name is required")
@@ -118,6 +124,9 @@ func (s *Store) Update(ctx context.Context, req UpdateRequest) (*Policy, error) 
 		return nil, errors.New("policy: actor is required")
 	}
 	normalized := normalizeBlocklist(req.Paths, req.Hashes)
+	if err := validateBlocklist(normalized); err != nil {
+		return nil, err
+	}
 	payload, err := json.Marshal(normalized)
 	if err != nil {
 		return nil, fmt.Errorf("marshal blocklist: %w", err)
@@ -144,13 +153,61 @@ func (s *Store) Update(ctx context.Context, req UpdateRequest) (*Policy, error) 
 		return nil, fmt.Errorf("upsert policy %q: %w", req.Name, err)
 	}
 
+	// Read the row we just wrote INSIDE the same tx, before commit. Reading via s.Get
+	// after Commit leaves a window where another admin update can interleave and we'd
+	// return (and fan out) someone else's version; REPEATABLE READ inside a tx prevents
+	// that interleaving.
+	var row struct {
+		Name      string    `db:"name"`
+		Version   int64     `db:"version"`
+		Blocklist []byte    `db:"blocklist"`
+		UpdatedAt time.Time `db:"updated_at"`
+		UpdatedBy string    `db:"updated_by"`
+	}
+	if err := tx.GetContext(ctx, &row, `
+		SELECT name, version, blocklist, updated_at, updated_by
+		FROM policies
+		WHERE name = ?
+	`, req.Name); err != nil {
+		return nil, fmt.Errorf("read updated policy %q: %w", req.Name, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit policy update: %w", err)
 	}
 
-	// Round-trip read so we return the canonical stored form (paths/hashes normalised,
-	// timestamps populated by the server).
-	return s.Get(ctx, req.Name)
+	var bl Blocklist
+	if err := json.Unmarshal(row.Blocklist, &bl); err != nil {
+		return nil, fmt.Errorf("decode updated blocklist for policy %q: %w", req.Name, err)
+	}
+	return &Policy{
+		Name:      row.Name,
+		Version:   row.Version,
+		Blocklist: bl,
+		UpdatedAt: row.UpdatedAt,
+		UpdatedBy: row.UpdatedBy,
+	}, nil
+}
+
+// hashPattern is a 64-character lowercase hex string, the canonical SHA-256 representation.
+// We enforce lowercase at the validation boundary rather than after the fact because the
+// normalization step upstream already lowercases input.
+var hashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// validateBlocklist enforces the documented contract: paths must be absolute (start with
+// "/"), hashes must be 64-char lowercase hex. Returns a descriptive error naming the first
+// offending entry so operators can fix the PUT and retry.
+func validateBlocklist(bl Blocklist) error {
+	for _, p := range bl.Paths {
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("policy: path %q must be absolute (start with '/')", p)
+		}
+	}
+	for _, h := range bl.Hashes {
+		if !hashPattern.MatchString(h) {
+			return fmt.Errorf("policy: hash %q must be 64 lowercase hex chars (SHA-256)", h)
+		}
+	}
+	return nil
 }
 
 // normalizeBlocklist returns a deterministic blocklist: paths trimmed + deduped + sorted,

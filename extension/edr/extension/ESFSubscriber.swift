@@ -76,10 +76,12 @@ final class ESFSubscriber: Sendable {
     }
 
     /// AUTH_EXEC handler: check the target binary against the runtime blocklist and
-    /// respond with DENY or ALLOW. The lookup is O(log n) through Set's hashing, well
-    /// within the kernel's AUTH deadline. For denied execs the kernel returns EPERM to
-    /// the caller and the binary never runs. The blocklist is owned by PolicyStore —
-    /// server-driven policy pushes swap it atomically.
+    /// respond with DENY or ALLOW. The lookup is O(1) expected (Swift `Set` is hash-
+    /// backed) and the PolicyStore read is a lock-free snapshot load — no queue.sync,
+    /// no disk I/O on the hot path — so it comfortably fits inside the kernel's AUTH
+    /// deadline. For denied execs the kernel returns EPERM to the caller and the
+    /// binary never runs. The blocklist is owned by PolicyStore; server-driven policy
+    /// pushes swap the snapshot atomically and persist on a separate queue.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
         let target = msg.event.exec.target.pointee

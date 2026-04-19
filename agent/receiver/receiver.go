@@ -133,19 +133,25 @@ func (r *Receiver) Connect() error {
 // connection is not established or the send call rejected the payload. The send is
 // asynchronous; a nil error means the message was handed off to XPC, not that the peer
 // has acknowledged it — an ack is not part of the wire protocol at Phase 2.
+//
+// We hold r.mu across the C bridge call so a concurrent Disconnect() cannot tear the
+// slot down while C is still using the handle. Without the extended lock, the small
+// integer handle could be reused by another Receiver's Connect between our snapshot and
+// the xpc_bridge_send_policy call, and we'd end up sending this host's policy bytes on a
+// different peer's connection. The bridge's own mutex also rechecks in-use-ness, so the
+// window is tiny, but explicit is safer than "probably can't happen".
 func (r *Receiver) SendPolicy(payload []byte) error {
-	r.mu.Lock()
-	handle := r.handle
-	connected := r.connected
-	r.mu.Unlock()
-
-	if !connected || handle < 0 {
-		return fmt.Errorf("receiver not connected")
-	}
 	if len(payload) == 0 {
 		return fmt.Errorf("empty policy payload")
 	}
-	rc := int(C.xpc_bridge_send_policy(C.int(handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.connected || r.handle < 0 {
+		return fmt.Errorf("receiver not connected")
+	}
+	rc := int(C.xpc_bridge_send_policy(C.int(r.handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
 	if rc != 0 {
 		return fmt.Errorf("xpc_bridge_send_policy returned %d", rc)
 	}

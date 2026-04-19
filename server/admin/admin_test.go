@@ -138,9 +138,11 @@ func TestPutPolicy_HappyPath(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Phase 2 requires hashes to be 64-char lowercase hex (SHA-256). Use a fake digest of
+	// the right shape — the server just persists + fans out, no SHA validation runs.
 	body, _ := json.Marshal(map[string]any{
 		"paths":  []string{"/tmp/qa-block", "/opt/evil"},
-		"hashes": []string{"deadbeef"},
+		"hashes": []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		"actor":  "qa-tester",
 		"reason": "phase-2 smoke",
 	})
@@ -197,6 +199,29 @@ func TestPutPolicy_EmptyBlocklistAccepted(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestPutPolicy_InvalidBlocklistReturns400 locks in the Phase 2 validation surface: a
+// non-absolute path or a malformed hash gets a 400 with a stable error code, not the old
+// 500 that made it look like a server bug.
+func TestPutPolicy_InvalidBlocklistReturns400(t *testing.T) {
+	srv, _, _ := newAdminServer(t)
+	body, _ := json.Marshal(map[string]any{
+		"paths":  []string{"relative/path"},
+		"actor":  "qa-tester",
+		"reason": "phase-2 negative",
+	})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/admin/policy", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var got map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	assert.Equal(t, "invalid_blocklist", got["error"])
 }
 
 func TestRevoke_IdempotentPreservesFirstActor(t *testing.T) {

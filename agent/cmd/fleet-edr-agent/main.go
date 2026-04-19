@@ -397,14 +397,14 @@ type policyDispatcher struct {
 
 func (d *policyDispatcher) set(r *receiver.Receiver) { d.cur.Store(r) }
 
-// clear CASes from a specific receiver to nil. Using CompareAndSwap (rather than an
-// unconditional Store) avoids a race where set() for a new connection lands before the
-// old connection's goroutine gets around to calling clear() — without the CAS we'd null
-// out the freshly-published pointer.
+// clear unconditionally clears the published receiver pointer. This is safe under the
+// current runReceiverLoop lifecycle, which serialises set/clear for a single service —
+// there is only one goroutine calling set() and clear() in sequence per connect cycle,
+// so there is no window where a later set() can be wiped by an earlier clear(). If this
+// dispatcher is ever extended to handle overlapping receiver lifecycles (multiple
+// services or concurrent reconnects), clear() would need receiver-aware CompareAndSwap
+// semantics to avoid nulling out a freshly-published pointer from a later set().
 func (d *policyDispatcher) clear() {
-	// Unconditionally clear is the safe default because runReceiverLoop serialises
-	// set/clear for a single service. The commented-out CAS form above is there to
-	// document why a multi-service dispatcher would need a handle tag.
 	d.cur.Store(nil)
 }
 

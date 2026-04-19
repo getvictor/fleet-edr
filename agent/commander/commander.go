@@ -178,6 +178,15 @@ func (c *Commander) executeSetBlocklist(ctx context.Context, cmd command) {
 		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("payload missing name"))
 		return
 	}
+	if payload.Version <= 0 {
+		// Versioning is the ordering guard for blocklist state on the extension; a
+		// zero/negative version would either mask an out-of-order delivery or reflect a
+		// hand-queued test command that shouldn't be acted on. Fail fast so the server-
+		// side audit trail attributes the error to its source rather than to the XPC
+		// layer returning opaque decode errors from the extension.
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid policy version"))
+		return
+	}
 	if c.cfg.PolicySender == nil {
 		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("policy sender not configured"))
 		return

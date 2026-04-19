@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,17 +37,23 @@ func TestUpdate_BumpsVersionAndNormalizes(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
+	const (
+		hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		hashB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+
 	// Send paths out of order with duplicates + whitespace to exercise normalization.
+	// Hashes mix case + duplicates — post-normalize they must be lowercase, deduped, sorted.
 	p, err := s.Update(ctx, UpdateRequest{
 		Name:   DefaultName,
 		Paths:  []string{"/opt/b", " /opt/a ", "/opt/b", "", "/opt/a"},
-		Hashes: []string{"DEADBEEF", "deadbeef", " CAFEBABE"},
+		Hashes: []string{strings.ToUpper(hashB), hashB, " " + strings.ToUpper(hashA)},
 		Actor:  "qa-tester",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), p.Version, "seed row is v1; first Update takes it to v2")
 	assert.Equal(t, []string{"/opt/a", "/opt/b"}, p.Blocklist.Paths)
-	assert.Equal(t, []string{"cafebabe", "deadbeef"}, p.Blocklist.Hashes)
+	assert.Equal(t, []string{hashA, hashB}, p.Blocklist.Hashes)
 	assert.Equal(t, "qa-tester", p.UpdatedBy)
 	assert.False(t, p.UpdatedAt.IsZero())
 
@@ -61,6 +68,55 @@ func TestUpdate_BumpsVersionAndNormalizes(t *testing.T) {
 	assert.Equal(t, int64(3), p2.Version)
 	assert.Equal(t, []string{"/opt/c"}, p2.Blocklist.Paths)
 	assert.Equal(t, []string{}, p2.Blocklist.Hashes)
+}
+
+// TestUpdate_RejectsInvalidBlocklistEntries locks in the Phase 2 validation contract: a
+// malformed path (relative, empty after trim) or hash (not 64 lowercase hex chars) fails
+// the update before anything is persisted. Without this, bad operator input would be
+// versioned + audited + fanned out to agents that silently can't apply it.
+func TestUpdate_RejectsInvalidBlocklistEntries(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	cases := []struct {
+		name       string
+		paths      []string
+		hashes     []string
+		wantErrSub string
+	}{
+		{
+			name:       "relative path rejected",
+			paths:      []string{"relative/path"},
+			wantErrSub: "must be absolute",
+		},
+		{
+			name:       "short hash rejected",
+			hashes:     []string{"deadbeef"},
+			wantErrSub: "64 lowercase hex",
+		},
+		{
+			name:       "non-hex hash rejected",
+			hashes:     []string{"z" + strings.Repeat("a", 63)},
+			wantErrSub: "64 lowercase hex",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.Update(ctx, UpdateRequest{
+				Name:   DefaultName,
+				Paths:  tc.paths,
+				Hashes: tc.hashes,
+				Actor:  "qa-tester",
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErrSub)
+		})
+	}
+
+	// Seed row untouched — bad updates must not increment the version.
+	p, err := s.Get(ctx, DefaultName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), p.Version)
 }
 
 func TestUpdate_RejectsEmptyActor(t *testing.T) {

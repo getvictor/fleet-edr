@@ -49,7 +49,7 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []store.Event, s *stor
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			continue
 		}
-		matched := matchDyldArg(p.Args)
+		matched := matchDyldArg(p.Path, p.Args)
 		if matched == "" {
 			continue
 		}
@@ -75,12 +75,32 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []store.Event, s *stor
 	return findings, nil
 }
 
-// matchDyldArg returns the first argv entry that starts with a dangerous DYLD env prefix,
-// or "" if none. We strip the value side so logs / alerts don't accidentally echo a
-// potentially-sensitive dylib path; the full path is still in the raw event payload for
-// responders who need it.
-func matchDyldArg(args []string) string {
-	for _, a := range args {
+// matchDyldArg returns the matching DYLD env prefix when the exec is launching with one
+// of the dangerous env vars in a leading assignment position, or "" otherwise. We strip
+// the value side so logs / alerts don't accidentally echo a potentially-sensitive dylib
+// path; the full argv is still in the raw event payload for responders who need it.
+//
+// Why leading-only: `echo DYLD_INSERT_LIBRARIES=/tmp/x` or `curl --data
+// DYLD_INSERT_LIBRARIES=...` would false-positive if we scanned every argv slot. The
+// dangerous shape is the shell-style "VAR=value /path/to/binary" prefix (argv[0] onwards)
+// or the `env VAR=value binary` invocation. We capture both without firing on arbitrary
+// data that happens to contain the substring.
+func matchDyldArg(path string, args []string) string {
+	// The canonical env invocations are "env", "/usr/bin/env", and shim paths ending in
+	// "/env". For anything else, only argv[0] is a legitimate VAR=VALUE slot (the shell's
+	// `VAR=value cmd` form).
+	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
+
+	for i, a := range args {
+		// Stop once we've walked past the leading env-assignment window. For `env`-style
+		// invocations that's every leading KEY=VALUE until the first non-assignment arg;
+		// for everything else it's argv[0] only.
+		if !isEnv && i > 0 {
+			break
+		}
+		if isEnv && i > 0 && !strings.Contains(a, "=") {
+			break
+		}
 		for _, prefix := range dyldPrefixes {
 			if strings.HasPrefix(a, prefix) {
 				return prefix + "<redacted>"

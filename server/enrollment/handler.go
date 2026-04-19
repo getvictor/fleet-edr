@@ -199,12 +199,6 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		"edr.remote_addr", ip,
 	)
 
-	// Phase 2: queue an initial set_blocklist command so the new host converges to the
-	// current blocklist without waiting for the next admin push. A failure here is
-	// non-fatal: enrollment already succeeded, the agent will get the policy on its
-	// next poll cycle after the next admin edit.
-	h.enqueueInitialPolicy(ctx, result.HostID)
-
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -213,6 +207,24 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		HostToken:  result.HostToken,
 		EnrolledAt: result.EnrolledAt,
 	})
+
+	// Phase 2: queue an initial set_blocklist command AFTER responding so the enroll
+	// request's tail latency is not coupled to the policy store + command insert. The
+	// detached context keeps the DB writes alive even if the client drops the connection
+	// (a transient TLS glitch shouldn't make the host miss its first policy). A failure
+	// here is non-fatal: the next admin policy push re-converges any host whose initial
+	// command didn't land.
+	//
+	// Using a detached background context rather than the request ctx so client
+	// cancellation doesn't abort the best-effort fanout; capped at 10s to match the
+	// outer HTTP server's write timeout + some slack. gosec G118 flags this pattern —
+	// the nolint below is the honest marker that we intentionally decouple the
+	// background work from the request lifetime.
+	go func(hostID string) { //nolint:gosec // G118: intentional detached context so best-effort fanout survives client cancellation.
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		h.enqueueInitialPolicy(bgCtx, hostID)
+	}(result.HostID)
 }
 
 // enqueueInitialPolicy fetches the current default policy and queues a set_blocklist
@@ -220,6 +232,11 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 // already succeeded, so the operator is not held up by a flaky command insert; the next
 // policy PUT will re-converge the host anyway. Logs at warn so the failure is still
 // visible in SigNoz if a class of hosts systematically fails this step.
+//
+// Skips enqueue entirely when the seeded / current policy is empty (no paths AND no
+// hashes): agents with no prior policy state gain nothing from an "apply empty blocklist"
+// command, and the command would just round-trip for no effect. The next PUT that adds
+// entries will fan out to this host via the admin endpoint's ActiveHostIDs walk.
 func (h *Handler) enqueueInitialPolicy(ctx context.Context, hostID string) {
 	if h.policy == nil || h.commands == nil {
 		return
@@ -227,6 +244,12 @@ func (h *Handler) enqueueInitialPolicy(ctx context.Context, hostID string) {
 	p, err := h.policy.Get(ctx, policy.DefaultName)
 	if err != nil {
 		h.logger.WarnContext(ctx, "initial policy fetch failed", "edr.host_id", hostID, "err", err)
+		return
+	}
+	if len(p.Blocklist.Paths) == 0 && len(p.Blocklist.Hashes) == 0 {
+		// Seed policy (v1 empty) or operator explicitly cleared. Nothing to push.
+		h.logger.InfoContext(ctx, "initial policy skipped — blocklist empty",
+			"edr.host_id", hostID, "edr.policy.version", p.Version)
 		return
 	}
 	payload, err := json.Marshal(policyCommandPayload{

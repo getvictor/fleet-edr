@@ -55,8 +55,14 @@ func (r *ShellFromOffice) Evaluate(ctx context.Context, events []store.Event, s 
 			return nil, fmt.Errorf("get parent pid %d: %w", p.PPID, err)
 		}
 		if parent == nil {
-			// Parent not yet materialised — skip; the processor will re-feed this event in
-			// the next batch once the parent row lands.
+			// Parent not yet materialised. The processor marks the whole batch processed
+			// after Evaluate returns, so a re-feed does not happen automatically — this
+			// miss is accepted for Phase 2. In practice the graph builder lands parents
+			// before exec-driven rules because the fork + exec events are in the same
+			// batch and the builder runs before the detection engine. A deferred retry
+			// queue ("evaluate later when the parent shows up") is Phase 4 scope. This
+			// same trade-off applies to the other rules (suspicious_exec, persistence_*)
+			// that depend on process lookups; see claude/mvp/plan.md Phase 4 notes.
 			continue
 		}
 		if !officeBinaries[parent.Path] {
