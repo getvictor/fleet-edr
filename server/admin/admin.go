@@ -1,7 +1,11 @@
-// Package admin exposes the Phase 1 operator endpoints: list enrollments and revoke an
-// individual host. Both are gated on the admin token by server-side middleware (not by this
-// package). Every revoke emits an audit log + span attributes so SOC teams can reconstruct
-// what changed and when.
+// Package admin exposes the operator endpoints:
+//
+//   - Phase 1: list enrollments, revoke an individual host.
+//   - Phase 2: get + update the server-driven blocklist policy.
+//
+// All endpoints are gated on the admin token by server-side middleware (not by this
+// package). Every state-changing call emits an audit log + span attributes so SOC teams
+// can reconstruct what changed and when.
 package admin
 
 import (
@@ -16,21 +20,33 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/enrollment"
+	"github.com/fleetdm/edr/server/policy"
+	"github.com/fleetdm/edr/server/store"
 )
 
-// Handler serves the admin endpoints. Construct it with the enrollment store + a slog logger.
+// CommandInserter is the narrow interface admin needs to queue set_blocklist commands. Kept
+// as an interface so tests can substitute a recording double; in production it's satisfied
+// by *store.Store.
+type CommandInserter interface {
+	InsertCommand(ctx context.Context, c store.Command) (int64, error)
+}
+
+// Handler serves the admin endpoints. Construct it with the enrollment + policy stores,
+// the command inserter used to fan out policy pushes, and a slog logger.
 type Handler struct {
 	enrollments *enrollment.Store
+	policy      *policy.Store
+	commands    CommandInserter
 	logger      *slog.Logger
 }
 
 // New creates an admin handler. The handler does not perform its own auth — wrap it with
 // authn.AdminToken at registration time.
-func New(es *enrollment.Store, logger *slog.Logger) *Handler {
+func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{enrollments: es, logger: logger}
+	return &Handler{enrollments: es, policy: ps, commands: ci, logger: logger}
 }
 
 // RegisterRoutes wires the endpoints onto the mux. Callers wrap the returned handler in the
@@ -38,6 +54,8 @@ func New(es *enrollment.Store, logger *slog.Logger) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/enrollments", h.handleList)
 	mux.HandleFunc("POST /api/v1/admin/enrollments/{host_id}/revoke", h.handleRevoke)
+	mux.HandleFunc("GET /api/v1/admin/policy", h.handleGetPolicy)
+	mux.HandleFunc("PUT /api/v1/admin/policy", h.handlePutPolicy)
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -115,4 +133,126 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 // short `code` rather than a human sentence where possible.
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	writeJSON(ctx, logger, w, status, map[string]string{"error": code})
+}
+
+// handleGetPolicy returns the current default policy. Used by the Phase 3 admin UI to
+// render the blocklist editor form and by operators who want to confirm a pending edit
+// before PUTting a new version.
+func (h *Handler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p, err := h.policy.Get(ctx, policy.DefaultName)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin get policy", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, p)
+}
+
+// putPolicyRequest is the body shape accepted by PUT /api/v1/admin/policy. `Actor` +
+// `Reason` are required for audit. `Paths` + `Hashes` are optional individually but the
+// effective blocklist must be one of those two forms; a completely empty PUT is still
+// accepted so operators have a fast "clear everything" path.
+type putPolicyRequest struct {
+	Paths  []string `json:"paths"`
+	Hashes []string `json:"hashes"`
+	Actor  string   `json:"actor"`
+	Reason string   `json:"reason"`
+}
+
+// handlePutPolicy is the end-to-end policy push: upsert the policy row, list active hosts,
+// and queue a set_blocklist command for each. A non-zero fan-out failure count logs a
+// warning but still reports 200 — the policy row is authoritative; the fan-out is best-
+// effort and the next enroll/admin-push catches up any host whose command didn't land.
+func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// 64 KiB is generous for a blocklist; if someone tries to push multi-MB the public
+	// DoS vector is real. Same rationale as enrollment/handler.go's cap.
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	var body putPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
+		return
+	}
+	if body.Actor == "" || body.Reason == "" {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "actor and reason are required")
+		return
+	}
+
+	p, err := h.policy.Update(ctx, policy.UpdateRequest{
+		Name:   policy.DefaultName,
+		Paths:  body.Paths,
+		Hashes: body.Hashes,
+		Actor:  body.Actor,
+	})
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin put policy", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+
+	// Fan out to every active host. Building the payload once and re-using is safe — the
+	// store.Command.Payload field is json.RawMessage which is immutable once populated.
+	payload, err := json.Marshal(policyCommandPayload{
+		Name:    p.Name,
+		Version: p.Version,
+		Paths:   p.Blocklist.Paths,
+		Hashes:  p.Blocklist.Hashes,
+	})
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin put policy marshal payload", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+
+	hostIDs, err := h.enrollments.ActiveHostIDs(ctx)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin put policy list hosts", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	fanoutFailed := 0
+	for _, hostID := range hostIDs {
+		if _, err := h.commands.InsertCommand(ctx, store.Command{
+			HostID:      hostID,
+			CommandType: "set_blocklist",
+			Payload:     payload,
+		}); err != nil {
+			fanoutFailed++
+			h.logger.WarnContext(ctx, "admin put policy fan-out failed",
+				"edr.host_id", hostID, "err", err)
+		}
+	}
+
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("edr.admin.action", "policy_update"),
+		attribute.String("edr.admin.actor", body.Actor),
+		attribute.Int64("edr.policy.version", p.Version),
+		attribute.Int("edr.policy.path_count", len(p.Blocklist.Paths)),
+		attribute.Int("edr.policy.hash_count", len(p.Blocklist.Hashes)),
+		attribute.Int("edr.policy.fanout_hosts", len(hostIDs)),
+		attribute.Int("edr.policy.fanout_failed", fanoutFailed),
+	)
+	h.logger.WarnContext(ctx, "admin policy updated",
+		"edr.admin.action", "policy_update",
+		"edr.admin.actor", body.Actor,
+		"edr.admin.reason", body.Reason,
+		"edr.policy.version", p.Version,
+		"edr.policy.path_count", len(p.Blocklist.Paths),
+		"edr.policy.hash_count", len(p.Blocklist.Hashes),
+		"edr.policy.fanout_hosts", len(hostIDs),
+		"edr.policy.fanout_failed", fanoutFailed,
+	)
+
+	writeJSON(ctx, h.logger, w, http.StatusOK, p)
+}
+
+// policyCommandPayload is the wire shape of a set_blocklist command payload. Field names
+// mirror what the agent's commander decodes and what the extension's PolicyStore expects.
+type policyCommandPayload struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Paths   []string `json:"paths"`
+	Hashes  []string `json:"hashes"`
 }

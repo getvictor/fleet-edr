@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
 )
 
@@ -352,6 +353,68 @@ func TestEnroll_SecretNeverLogged(t *testing.T) {
 	// The obviously-bad variant must also not leak.
 	assert.NotContains(t, buf.String(), testSecret+"-wrong",
 		"presented secret must not leak even on failure")
+}
+
+// TestHandler_EnrollQueuesInitialPolicy is the Phase 2 regression bar: a successful
+// enrollment must leave exactly one pending `set_blocklist` command for the new host,
+// with a payload that mirrors the current default policy. Without this, a fresh host
+// starts with no blocklist until the next admin edit.
+func TestHandler_EnrollQueuesInitialPolicy(t *testing.T) {
+	s := store.OpenTestStore(t)
+	es := NewStore(s.DB())
+	ps := policy.New(s.DB())
+
+	// Advance the policy to a non-default version + non-empty blocklist so the test is
+	// actually exercising payload population.
+	_, err := ps.Update(t.Context(), policy.UpdateRequest{
+		Name:  policy.DefaultName,
+		Paths: []string{"/tmp/initial-block"},
+		Actor: "seed",
+	})
+	require.NoError(t, err)
+
+	h := NewHandler(es, Options{
+		EnrollSecret:  testSecret,
+		RatePerMinute: 30,
+		Logger:        slog.Default(),
+		PolicyStore:   ps,
+		CommandStore:  s,
+	})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := postEnroll(t, srv, map[string]string{
+		"enroll_secret": testSecret,
+		"hardware_uuid": testUUID,
+		"hostname":      "qa-host",
+		"os_version":    "macOS 15.3",
+		"agent_version": "0.0.1-dev",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Exactly one pending set_blocklist command with the seeded policy.
+	cmds, err := s.ListCommands(t.Context(), testUUID, "pending")
+	require.NoError(t, err)
+	var got []store.Command
+	for _, c := range cmds {
+		if c.CommandType == "set_blocklist" {
+			got = append(got, c)
+		}
+	}
+	require.Len(t, got, 1)
+
+	var payload struct {
+		Name    string   `json:"name"`
+		Version int64    `json:"version"`
+		Paths   []string `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(got[0].Payload, &payload))
+	assert.Equal(t, "default", payload.Name)
+	assert.Equal(t, int64(2), payload.Version)
+	assert.Equal(t, []string{"/tmp/initial-block"}, payload.Paths)
 }
 
 func TestEnrollRequest_StringRedactsSecret(t *testing.T) {

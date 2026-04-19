@@ -14,6 +14,14 @@ import (
 	"time"
 )
 
+// PolicySender forwards a raw policy JSON payload to the ESF extension over XPC. The
+// commander stays decoupled from the concrete receiver so tests can supply a recording
+// double. Nil is allowed (policy commands are then reported as `failed` with a clear
+// reason), matching the pre-Phase-2 commander which reported unknown command types.
+type PolicySender interface {
+	SendPolicy(payload []byte) error
+}
+
 // Config holds commander settings.
 type Config struct {
 	ServerURL string
@@ -23,6 +31,10 @@ type Config struct {
 	OnAuthFail func(ctx context.Context)
 	HostID     string
 	Interval   time.Duration
+	// PolicySender is the XPC bridge to the ESF extension. Used by the set_blocklist
+	// command handler; nil means "commander cannot apply policy updates" and the
+	// handler will report the command failed with a clear reason.
+	PolicySender PolicySender
 }
 
 // Commander polls the server for pending commands and dispatches them.
@@ -62,6 +74,15 @@ type command struct {
 
 type killPayload struct {
 	PID int `json:"pid"`
+}
+
+// setBlocklistPayload mirrors server/admin.policyCommandPayload. Field ordering + names
+// are load-bearing: the extension side parses the same JSON.
+type setBlocklistPayload struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Paths   []string `json:"paths"`
+	Hashes  []string `json:"hashes"`
 }
 
 type statusUpdate struct {
@@ -135,10 +156,57 @@ func (c *Commander) dispatch(ctx context.Context, cmd command) {
 	switch cmd.CommandType {
 	case "kill_process":
 		c.executeKill(ctx, cmd)
+	case "set_blocklist":
+		c.executeSetBlocklist(ctx, cmd)
 	default:
 		if err := c.updateStatus(ctx, cmd.ID, "failed", marshalResult("unknown command type: "+cmd.CommandType)); err != nil {
 			c.logger.ErrorContext(ctx, "commander fail", "cmd_id", cmd.ID, "err", err)
 		}
+	}
+}
+
+// executeSetBlocklist forwards the raw command payload to the ESF extension over XPC.
+// Result shape on success: {"version": N, "applied_paths": K} so operators can confirm
+// via `GET /commands/{id}` exactly which version each host applied.
+func (c *Commander) executeSetBlocklist(ctx context.Context, cmd command) {
+	var payload setBlocklistPayload
+	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid payload: "+err.Error()))
+		return
+	}
+	if payload.Name == "" {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("payload missing name"))
+		return
+	}
+	if c.cfg.PolicySender == nil {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("policy sender not configured"))
+		return
+	}
+
+	c.logger.InfoContext(ctx, "commander set_blocklist",
+		"cmd_id", cmd.ID,
+		"edr.policy.version", payload.Version,
+		"edr.policy.path_count", len(payload.Paths),
+	)
+
+	// Forward the raw JSON bytes so the extension parses the same shape the server wrote.
+	// Re-marshalling would introduce drift in field ordering / casing that a future schema
+	// tightening could catch on one side but not the other.
+	if err := c.cfg.PolicySender.SendPolicy([]byte(cmd.Payload)); err != nil {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("xpc send: "+err.Error()))
+		return
+	}
+
+	// The send is async — completing the command here does NOT mean the extension has
+	// successfully applied the policy. Phase 2 intentionally stops short of an
+	// extension-side ack; the audit trail of "command completed on agent" is sufficient
+	// for MVP. v1.1 adds a round-trip ack with the actually-applied version.
+	result, _ := json.Marshal(map[string]any{
+		"version":       payload.Version,
+		"applied_paths": len(payload.Paths),
+	})
+	if err := c.updateStatus(ctx, cmd.ID, "completed", result); err != nil {
+		c.logger.ErrorContext(ctx, "commander report set_blocklist success", "cmd_id", cmd.ID, "err", err)
 	}
 }
 

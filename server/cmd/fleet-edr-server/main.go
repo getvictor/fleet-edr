@@ -33,6 +33,7 @@ import (
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/logging"
 	"github.com/fleetdm/edr/server/observability"
+	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/processor"
 	"github.com/fleetdm/edr/server/store"
 	"github.com/fleetdm/edr/server/ui"
@@ -114,18 +115,25 @@ func run() error {
 	builder := graph.NewBuilder(s, logger)
 	det := detection.NewEngine(s, logger)
 	det.Register(&rules.SuspiciousExec{})
+	det.Register(&rules.PersistenceLaunchAgent{AllowedPlists: cfg.LaunchAgentAllowlist})
+	det.Register(&rules.DyldInsert{})
+	det.Register(&rules.ShellFromOffice{})
+	det.Register(&rules.OsascriptNetworkExec{})
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)
 	apiHandler := api.New(q, s, logger)
 
 	enrollStore := enrollment.NewStore(s.DB())
+	policyStore := policy.New(s.DB())
 	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{
 		EnrollSecret:  cfg.EnrollSecret,
 		RatePerMinute: cfg.EnrollRatePerMin,
 		Logger:        logger,
+		PolicyStore:   policyStore,
+		CommandStore:  s,
 	})
-	adminHandler := admin.New(enrollStore, logger)
+	adminHandler := admin.New(enrollStore, policyStore, s, logger)
 
 	// Build the mux as a composition of three authorization domains:
 	//   - public:  /livez, /readyz, /health, POST /api/v1/enroll
@@ -171,6 +179,7 @@ func run() error {
 		"GET /api/v1/alerts", "GET /api/v1/alerts/{id}", "PUT /api/v1/alerts/{id}",
 		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
 		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
+		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
 	} {
 		mux.Handle(p, adminProtected)
 	}

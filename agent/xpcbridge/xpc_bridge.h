@@ -28,4 +28,11 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
 // Disconnect and clean up a specific connection.
 void xpc_bridge_disconnect(int handle);
 
+// Send a "policy.update" message to the peer on the given handle. The payload is copied
+// into an XPC dictionary under the "data" key alongside "type"="policy.update". Returns
+// 0 on success, -1 if the handle is invalid or the connection is gone. XPC send is
+// asynchronous — success here means the message was enqueued on the connection, not that
+// the peer received it.
+int xpc_bridge_send_policy(int handle, const uint8_t *data, size_t len);
+
 #endif

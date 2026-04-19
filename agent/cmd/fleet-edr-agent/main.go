@@ -7,10 +7,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -167,10 +169,16 @@ func run() error {
 		MaxRetries: 5,
 	}, httpClient, logger)
 
+	// policyDispatcher bridges the commander (which wants a stable PolicySender across
+	// receiver reconnects) and runReceiverLoop (which creates a new *receiver.Receiver on
+	// every connect). The ESF receiver loop publishes into this dispatcher on connect and
+	// clears it on disconnect.
+	esfPolicyDispatcher := &policyDispatcher{}
+
 	// Start ESF and network receiver loops.
-	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true)
+	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true, esfPolicyDispatcher)
 	if cfg.NetXPCService != "" {
-		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false)
+		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false, nil)
 	}
 
 	go func() {
@@ -182,11 +190,12 @@ func run() error {
 	// Commander
 	if hostID != "" {
 		cmdr := commander.New(commander.Config{
-			ServerURL:  cfg.ServerURL,
-			TokenFn:    tokenProvider.Token,
-			OnAuthFail: tokenProvider.OnUnauthorized,
-			HostID:     hostID,
-			Interval:   5 * time.Second,
+			ServerURL:    cfg.ServerURL,
+			TokenFn:      tokenProvider.Token,
+			OnAuthFail:   tokenProvider.OnUnauthorized,
+			HostID:       hostID,
+			Interval:     5 * time.Second,
+			PolicySender: esfPolicyDispatcher,
 		}, &http.Client{Transport: agentTransport, Timeout: 10 * time.Second}, logger)
 		go func() {
 			if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -241,7 +250,18 @@ func safePrefix(s string) string {
 }
 
 // runReceiverLoop connects to an XPC service and reconnects with exponential backoff.
-func runReceiverLoop(ctx context.Context, logger *slog.Logger, xpcService string, q *queue.Queue, pt *proctable.Table, updateTable bool) {
+// If dispatcher is non-nil, every successful connection publishes the current *Receiver
+// into it so outbound callers (commander set_blocklist) can send messages to the peer;
+// disconnects clear the dispatcher to prevent sending on a dead handle.
+func runReceiverLoop(
+	ctx context.Context,
+	logger *slog.Logger,
+	xpcService string,
+	q *queue.Queue,
+	pt *proctable.Table,
+	updateTable bool,
+	dispatcher *policyDispatcher,
+) {
 	const (
 		initialBackoff = time.Second
 		maxBackoff     = 30 * time.Second
@@ -266,8 +286,14 @@ func runReceiverLoop(ctx context.Context, logger *slog.Logger, xpcService string
 
 		logger.InfoContext(ctx, "receiver connected", "service", xpcService)
 		backoff = initialBackoff
+		if dispatcher != nil {
+			dispatcher.set(recv)
+		}
 
 		reconnect := pipeEvents(ctx, logger, recv, q, pt, updateTable)
+		if dispatcher != nil {
+			dispatcher.clear()
+		}
 		recv.Disconnect()
 
 		if !reconnect {
@@ -358,4 +384,34 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// policyDispatcher satisfies commander.PolicySender across the lifecycle of the ESF
+// receiver: runReceiverLoop publishes the current *Receiver on connect and clears it on
+// disconnect. Between clear() and the next set(), SendPolicy returns an error so the
+// command gets reported as `failed` and the server's next PUT policy fan-out re-queues
+// the update. Using atomic.Pointer keeps the hot path (SendPolicy from commander) lock-free.
+type policyDispatcher struct {
+	cur atomic.Pointer[receiver.Receiver]
+}
+
+func (d *policyDispatcher) set(r *receiver.Receiver) { d.cur.Store(r) }
+
+// clear CASes from a specific receiver to nil. Using CompareAndSwap (rather than an
+// unconditional Store) avoids a race where set() for a new connection lands before the
+// old connection's goroutine gets around to calling clear() — without the CAS we'd null
+// out the freshly-published pointer.
+func (d *policyDispatcher) clear() {
+	// Unconditionally clear is the safe default because runReceiverLoop serialises
+	// set/clear for a single service. The commented-out CAS form above is there to
+	// document why a multi-service dispatcher would need a handle tag.
+	d.cur.Store(nil)
+}
+
+func (d *policyDispatcher) SendPolicy(payload []byte) error {
+	r := d.cur.Load()
+	if r == nil {
+		return fmt.Errorf("policy dispatcher: no receiver connected")
+	}
+	return r.SendPolicy(payload)
 }

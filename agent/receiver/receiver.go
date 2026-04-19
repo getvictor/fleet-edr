@@ -8,6 +8,7 @@ package receiver
 
 #include "xpc_bridge.h"
 #include <stdlib.h>
+#include <stdint.h>
 
 extern int bridge_connect_go(const char *service_name, int receiver_id);
 */
@@ -125,6 +126,29 @@ func (r *Receiver) Connect() error {
 
 	r.handle = handle
 	r.connected = true
+	return nil
+}
+
+// SendPolicy delivers a policy.update XPC message to the peer. Returns an error if the
+// connection is not established or the send call rejected the payload. The send is
+// asynchronous; a nil error means the message was handed off to XPC, not that the peer
+// has acknowledged it — an ack is not part of the wire protocol at Phase 2.
+func (r *Receiver) SendPolicy(payload []byte) error {
+	r.mu.Lock()
+	handle := r.handle
+	connected := r.connected
+	r.mu.Unlock()
+
+	if !connected || handle < 0 {
+		return fmt.Errorf("receiver not connected")
+	}
+	if len(payload) == 0 {
+		return fmt.Errorf("empty policy payload")
+	}
+	rc := int(C.xpc_bridge_send_policy(C.int(handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
+	if rc != 0 {
+		return fmt.Errorf("xpc_bridge_send_policy returned %d", rc)
+	}
 	return nil
 }
 

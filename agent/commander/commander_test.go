@@ -74,6 +74,107 @@ func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
 	assert.Equal(t, int64(1), called.Load(), "401 on fetchPending must trigger OnAuthFail exactly once")
 }
 
+// recordingPolicySender captures policy payloads so tests can inspect them without cgo
+// / real XPC. It mimics the real Receiver.SendPolicy contract: return nil on success,
+// a non-nil error on failure so the commander reports the command as `failed`.
+type recordingPolicySender struct {
+	sent    [][]byte
+	sendErr error
+}
+
+func (r *recordingPolicySender) SendPolicy(payload []byte) error {
+	if r.sendErr != nil {
+		return r.sendErr
+	}
+	r.sent = append(r.sent, append([]byte(nil), payload...))
+	return nil
+}
+
+// TestExecuteSetBlocklist_HappyPath covers the Phase 2 command path: server enqueues a
+// set_blocklist, commander forwards it to the extension, and reports `completed` with
+// version + applied_paths.
+func TestExecuteSetBlocklist_HappyPath(t *testing.T) {
+	var gotStatus string
+	var gotResult []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body statusUpdate
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStatus = body.Status
+		gotResult = body.Result
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	sender := &recordingPolicySender{}
+	c := New(Config{
+		ServerURL:    srv.URL,
+		HostID:       "host-a",
+		PolicySender: sender,
+	}, nil, nil)
+
+	cmd := command{
+		ID:          7,
+		CommandType: "set_blocklist",
+		Payload:     json.RawMessage(`{"name":"default","version":5,"paths":["/tmp/x"],"hashes":[]}`),
+	}
+	c.executeSetBlocklist(t.Context(), cmd)
+
+	require.Len(t, sender.sent, 1)
+	assert.JSONEq(t, string(cmd.Payload), string(sender.sent[0]),
+		"commander must forward the raw payload bytes, not a re-marshalled copy")
+
+	assert.Equal(t, "completed", gotStatus)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(gotResult, &result))
+	assert.EqualValues(t, 5, result["version"])
+	assert.EqualValues(t, 1, result["applied_paths"])
+}
+
+func TestExecuteSetBlocklist_InvalidPayload(t *testing.T) {
+	var gotStatus string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body statusUpdate
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStatus = body.Status
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	sender := &recordingPolicySender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", PolicySender: sender}, nil, nil)
+
+	c.executeSetBlocklist(t.Context(), command{
+		ID:          8,
+		CommandType: "set_blocklist",
+		Payload:     json.RawMessage(`{`), // malformed
+	})
+	assert.Equal(t, "failed", gotStatus)
+	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
+}
+
+func TestExecuteSetBlocklist_NoSenderConfigured(t *testing.T) {
+	var gotStatus string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body statusUpdate
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStatus = body.Status
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
+	c.executeSetBlocklist(t.Context(), command{
+		ID:          9,
+		CommandType: "set_blocklist",
+		Payload:     json.RawMessage(`{"name":"default","version":1,"paths":[],"hashes":[]}`),
+	})
+	assert.Equal(t, "failed", gotStatus)
+}
+
 // TestUpdateStatus401_CallsOnAuthFail covers the PUT /commands/{id} path — a token can be
 // revoked between fetchPending and the following ack/complete, and the hook must fire there
 // too or recovery waits for the next poll tick.
