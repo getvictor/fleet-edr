@@ -69,18 +69,18 @@ button {
 // red otherwise. Two-tone + uppercase label keeps it legible at small sizes.
 .status-pill {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 600;
+  padding: calc($pad-small / 4) $pad-small;
+  border-radius: $border-radius-xlarge;
+  font-size: $xx-small;
+  font-weight: $bold;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 .status-pill--online {
-  background: rgba(35, 142, 69, 0.15);
-  color: #238e45;
+  background: rgba($ui-success, 0.15);
+  color: $ui-success;
 }
 .status-pill--offline {
-  background: rgba(204, 52, 62, 0.15);
-  color: #cc343e;
+  background: rgba($ui-error, 0.15);
+  color: $ui-error;
 }

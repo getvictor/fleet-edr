@@ -41,23 +41,29 @@ export function HostList() {
             </tr>
           </thead>
           <tbody>
-            {hosts.map((h) => (
-              <tr
-                key={h.host_id}
-                onClick={() => {
-                  void navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
-                }}
-              >
-                <td>{h.host_id}</td>
-                <td>
-                  <span className={statusPillClass(h.last_seen_ns)}>
-                    {isOnline(h.last_seen_ns) ? "online" : "offline"}
-                  </span>
-                </td>
-                <td>{h.event_count.toLocaleString()}</td>
-                <td>{formatRelative(h.last_seen_ns)}</td>
-              </tr>
-            ))}
+            {hosts.map((h) => {
+              // Compute online once per row: isOnline calls Date.now(), so calling it
+              // twice (for className and label) could theoretically flip the two reads
+              // at the exact threshold boundary and render an "online" class with an
+              // "offline" label.
+              const online = isOnline(h.last_seen_ns);
+              const pillClass = online ? "status-pill status-pill--online" : "status-pill status-pill--offline";
+              return (
+                <tr
+                  key={h.host_id}
+                  onClick={() => {
+                    void navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
+                  }}
+                >
+                  <td>{h.host_id}</td>
+                  <td>
+                    <span className={pillClass}>{online ? "online" : "offline"}</span>
+                  </td>
+                  <td>{h.event_count.toLocaleString()}</td>
+                  <td>{formatRelative(h.last_seen_ns)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </Table>
       )}
@@ -73,10 +79,6 @@ const offlineThresholdMs = 5 * 60 * 1000;
 function isOnline(lastSeenNs: number): boolean {
   if (lastSeenNs === 0) return false;
   return Date.now() - lastSeenNs / 1_000_000 < offlineThresholdMs;
-}
-
-function statusPillClass(lastSeenNs: number): string {
-  return isOnline(lastSeenNs) ? "status-pill status-pill--online" : "status-pill status-pill--offline";
 }
 
 function formatRelative(ns: number): string {

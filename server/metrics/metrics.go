@@ -11,6 +11,7 @@ package metrics
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -111,8 +112,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 				defer cancel()
 				n, err := gauges.EnrolledHosts(gaugeCtx)
 				if err != nil {
-					// Swallow: a slow/broken DB would otherwise drop every collection. The
-					// log/trace pipeline will surface the underlying store error separately.
+					// A slow or failing DB must not drop every collection cycle; log so an
+					// operator staring at a flat/absent `edr.enrolled.hosts` has a breadcrumb.
+					slog.Default().WarnContext(ctx, "edr.enrolled.hosts gauge callback failed", "err", err)
 					return nil
 				}
 				obs.Observe(int64(n))
@@ -127,6 +129,8 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 				defer cancel()
 				n, err := gauges.OfflineHosts(gaugeCtx, threshold)
 				if err != nil {
+					slog.Default().WarnContext(ctx, "edr.offline.hosts gauge callback failed",
+						"err", err, "threshold", threshold)
 					return nil
 				}
 				obs.Observe(int64(n))

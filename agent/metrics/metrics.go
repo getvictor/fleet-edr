@@ -20,9 +20,10 @@ type Recorder struct {
 	queueDropped metric.Int64Counter
 }
 
-// New builds a Recorder wired against the global OTel meter. The optional hostID is
-// attached as a resource-like attribute on each drop counter sample so per-host drop
-// rates can be sliced in SigNoz without needing a separate instrument per host.
+// New builds a Recorder wired against the global OTel meter. Host identity is
+// carried on the OTLP resource (set by observability.Init), not on the counter
+// attribute set, so per-host drop rates come for free in SigNoz without
+// inflating cardinality on every sample.
 func New() *Recorder {
 	m := otel.Meter(meterName)
 	r := &Recorder{}

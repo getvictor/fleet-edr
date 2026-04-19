@@ -259,14 +259,16 @@ func (s *Store) ListHosts(ctx context.Context) ([]HostSummary, error) {
 	return hosts, nil
 }
 
-// CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` older than
-// (now - threshold). Used by the Phase 4 /metrics scrape-time gauge. A host with
-// last_seen_ns == 0 (never seen) counts as offline.
+// CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` at or
+// before (now - threshold). Used by the Phase 4 OTel gauge `edr.offline.hosts`.
+// The `<=` boundary matches `HostList.tsx`'s `Date.now() - lastSeenMs >= threshold`
+// predicate so the UI pill and gauge agree on hosts seen exactly at the cutoff.
+// A host with last_seen_ns == 0 (never seen) counts as offline.
 func (s *Store) CountOfflineHosts(ctx context.Context, threshold time.Duration) (int, error) {
 	cutoff := time.Now().Add(-threshold).UnixNano()
 	var n int
 	if err := s.db.GetContext(ctx, &n, `
-		SELECT COUNT(*) FROM hosts WHERE last_seen_ns < ?
+		SELECT COUNT(*) FROM hosts WHERE last_seen_ns <= ?
 	`, cutoff); err != nil {
 		return 0, fmt.Errorf("count offline hosts: %w", err)
 	}

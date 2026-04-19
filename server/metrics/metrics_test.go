@@ -8,9 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/fleetdm/edr/server/detection"
+	"github.com/fleetdm/edr/server/ingest"
+	"github.com/fleetdm/edr/server/retention"
 )
 
 // newTestRecorder builds a Recorder backed by a ManualReader so tests can collect
@@ -186,6 +189,12 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 	})
 }
 
-// Ensure the package imports the OTel metric API — prevents an accidental revert to a
-// library that exposes scrape surfaces.
-var _ metric.Meter = (metric.Meter)(nil)
+// Compile-time guards: *Recorder must satisfy every hook interface its callers
+// expect. Renaming or changing the signature of any of these hook methods will
+// break compilation here before the consumer packages — catches signature drift
+// during phase-4-style refactors.
+var (
+	_ ingest.MetricsHook        = (*Recorder)(nil)
+	_ detection.MetricsHook     = (*Recorder)(nil)
+	_ retention.MetricsRecorder = (*Recorder)(nil)
+)

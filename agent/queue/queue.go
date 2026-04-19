@@ -4,9 +4,12 @@
 // Enqueue would push the main DB file past the cap, the queue drops oldest rows to
 // stay bounded. Uploaded rows are dropped first (lossless — they've already reached
 // the server); if the cap is still exceeded, non-uploaded rows are dropped lossy and
-// a warn log is emitted so the operator sees the backpressure. The default is
-// "unbounded" (MaxBytes=0) so pre-Phase-4 behaviour is preserved unless the operator
-// opts in.
+// a warn log is emitted so the operator sees the backpressure.
+//
+// At this layer, MaxBytes=0 disables the cap (unbounded growth). The agent-level
+// config (`EDR_AGENT_QUEUE_MAX_BYTES`) defaults that knob to 500 MiB, so bounded
+// queueing is on by default in a stock agent; set `EDR_AGENT_QUEUE_MAX_BYTES=0`
+// to restore the pre-Phase-4 unbounded behaviour.
 package queue
 
 import (
@@ -119,18 +122,30 @@ func (q *Queue) Enqueue(ctx context.Context, eventJSON []byte) error {
 	return err
 }
 
-// dbSizeBytes returns the main SQLite file's on-disk size. We multiply page_count by
-// page_size rather than os.Stat'ing the file path so the metric matches what SQLite
-// itself considers allocated (stat can lag while WAL is flushing).
+// dbSizeBytes returns the logical SQLite size as used-pages * page_size.
+//
+// We deliberately subtract freelist_count from page_count rather than returning
+// the allocated file size: SQLite (without auto_vacuum) keeps deleted pages on
+// a freelist for reuse, so `page_count * page_size` stays pinned at the high-
+// water mark even after a DELETE. If enforceCap keyed off that value it would
+// keep triggering lossy drops forever once the file ever grew past the cap,
+// even though the freelist can absorb every subsequent insert without growth.
+//
+// We still avoid os.Stat: (a) the WAL file is tracked separately via
+// `journal_size_limit`, and (b) stat can lag while WAL is flushing, producing
+// spurious cap trips.
 func (q *Queue) dbSizeBytes(ctx context.Context) (int64, error) {
-	var pageCount, pageSize int64
+	var pageCount, freelistCount, pageSize int64
 	if err := q.db.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pageCount); err != nil {
 		return 0, fmt.Errorf("page_count: %w", err)
+	}
+	if err := q.db.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&freelistCount); err != nil {
+		return 0, fmt.Errorf("freelist_count: %w", err)
 	}
 	if err := q.db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
 		return 0, fmt.Errorf("page_size: %w", err)
 	}
-	return pageCount * pageSize, nil
+	return max(pageCount-freelistCount, 0) * pageSize, nil
 }
 
 // trimBatch is the DELETE cap per iteration. Keeps the transaction bounded so we

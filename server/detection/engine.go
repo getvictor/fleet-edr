@@ -29,7 +29,7 @@ func NewEngine(s *store.Store, logger *slog.Logger) *Engine {
 	return &Engine{store: s, logger: logger}
 }
 
-// SetMetrics installs the Prometheus counter hook. Safe to call after NewEngine.
+// SetMetrics installs the OTel counter hook. Safe to call after NewEngine.
 func (e *Engine) SetMetrics(m MetricsHook) { e.metrics = m }
 
 // Register adds a detection rule to the engine.

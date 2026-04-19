@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,19 +37,7 @@ func seedEvents(t *testing.T, s *store.Store, hostID string, age time.Duration, 
 }
 
 func fmtID(hostID string, age time.Duration, i int) string {
-	return hostID + "-" + age.String() + "-" + itoa(i)
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var out []byte
-	for i > 0 {
-		out = append([]byte{byte('0' + i%10)}, out...)
-		i /= 10
-	}
-	return string(out)
+	return hostID + "-" + age.String() + "-" + strconv.Itoa(i)
 }
 
 // insertAlertLinkingEvent fabricates an alert + alert_events rows that reference the

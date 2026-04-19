@@ -28,7 +28,7 @@ type Config struct {
 	ServerFingerprint string
 	HostIDOverride    string
 	QueueDBPath       string
-	QueueMaxBytes     int64 // EDR_AGENT_QUEUE_MAX_BYTES; 0 = unbounded (default 500 MiB)
+	QueueMaxBytes     int64 // EDR_AGENT_QUEUE_MAX_BYTES; default 500 MiB, 0 = unbounded
 	XPCService        string
 	NetXPCService     string
 	BatchSize         int

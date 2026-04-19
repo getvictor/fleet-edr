@@ -115,13 +115,17 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	insertStart := time.Now()
-	if err := h.store.InsertEvents(ctx, events); err != nil {
-		h.logger.ErrorContext(ctx, "insert error", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
+	insertErr := h.store.InsertEvents(ctx, events)
+	// Record latency on both success AND failure paths: lock waits, timeouts, and
+	// deadlocks are precisely the cases where a p95/p99 spike reveals a DB issue,
+	// and suppressing them on error would mask real pathology on the dashboards.
 	if h.metrics != nil {
 		h.metrics.ObserveDBQuery(ctx, "insert_events", time.Since(insertStart))
+	}
+	if insertErr != nil {
+		h.logger.ErrorContext(ctx, "insert error", "err", insertErr)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
 	}
 
 	// Phase 4: count events successfully persisted. Labeled by host_id — the

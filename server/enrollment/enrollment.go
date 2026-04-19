@@ -138,8 +138,8 @@ func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 }
 
 // CountActive returns how many non-revoked enrollments exist. Cheaper than
-// ActiveHostIDs when the caller only needs the count — Phase 4's /metrics
-// edr_enrolled_hosts gauge is the primary caller.
+// ActiveHostIDs when the caller only needs the count — Phase 4's OTel gauge
+// `edr.enrolled.hosts` is the primary caller.
 func (s *Store) CountActive(ctx context.Context) (int, error) {
 	var n int
 	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM enrollments WHERE revoked_at IS NULL`); err != nil {

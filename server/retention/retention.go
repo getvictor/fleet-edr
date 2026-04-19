@@ -4,8 +4,8 @@
 //
 // Deletes run in batches (default 10k rows) so a backlogged fleet that accumulated
 // months of events doesn't hold InnoDB row locks for the entire table during a single
-// multi-gigabyte DELETE. Each batch is a separate transaction; the loop keeps running
-// until `RowsAffected == 0`.
+// multi-gigabyte DELETE. Each batch is a separate transaction; the loop stops once a
+// batch deletes fewer rows than the configured batch size.
 package retention
 
 import (
@@ -34,7 +34,9 @@ type MetricsRecorder interface {
 // Options tune the runner. Zero values fall back to documented defaults.
 type Options struct {
 	// RetentionDays is how long events are kept. 0 disables retention entirely (the
-	// runner becomes a no-op). Default 30 when the caller doesn't override.
+	// runner becomes a no-op). There is no default at this layer — config.Load
+	// applies 30 when EDR_RETENTION_DAYS is unset; New preserves whatever value
+	// arrives here so operators who explicitly pass 0 get retention off.
 	RetentionDays int
 	// Interval between runs. Default 1h. In tests pass something short so the loop
 	// loop doesn't take a real hour.
@@ -138,9 +140,14 @@ func (r *Runner) Run(ctx context.Context) (int64, error) {
 	for {
 		// MySQL does not allow `DELETE ... JOIN ... LIMIT` in a single statement, so
 		// the join-based variant of this query gets rewritten as a single-table DELETE
-		// with a NOT IN (subquery) predicate on the event_id PK. The subquery is
-		// covered by the UNIQUE/PK index on alert_events.event_id; for pilot fleet
-		// sizes the optimiser keeps this in the O(alert_events) range, not O(events).
+		// with a correlated NOT EXISTS predicate against alert_events.event_id. NOT
+		// EXISTS is optimiser-safer than NOT IN (no anti-semi-join rewrite gotchas) and
+		// runs against the UNIQUE/PK index on alert_events.event_id.
+		//
+		// ORDER BY timestamp_ns makes per-batch deletion deterministic (oldest-first)
+		// and keeps statement-based replication happy — MySQL warns on
+		// `DELETE ... LIMIT` without ORDER BY because different replicas could pick
+		// different rows. The existing idx_events_host_ts covers the ordering.
 		//
 		// LIMIT bounds the lock footprint: retention on a DB with years of history
 		// would otherwise DELETE millions of rows in a single statement and block
@@ -148,7 +155,10 @@ func (r *Runner) Run(ctx context.Context) (int64, error) {
 		res, err := r.db.ExecContext(ctx, `
 			DELETE FROM events
 			WHERE timestamp_ns < ?
-			  AND event_id NOT IN (SELECT event_id FROM alert_events)
+			  AND NOT EXISTS (
+			      SELECT 1 FROM alert_events ae WHERE ae.event_id = events.event_id
+			  )
+			ORDER BY timestamp_ns
 			LIMIT ?
 		`, cutoff, r.batchSize)
 		if err != nil {
