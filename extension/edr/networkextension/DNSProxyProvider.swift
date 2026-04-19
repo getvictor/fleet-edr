@@ -28,7 +28,7 @@ private struct FlowContext {
 final class DNSProxyProvider: NEDNSProxyProvider {
     private let serializer = NetworkEventSerializer()
 
-    override func startProxy(options: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
+    override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         logger.info("DNS proxy started")
         completionHandler(nil)
     }
@@ -135,28 +135,34 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 connection.cancel()
                 return
             }
+            self?.receiveUDPResponse(connection: connection, responseEndpoint: responseEndpoint,
+                                     flow: flow, ctx: ctx)
+        })
+    }
 
-            connection.receiveMessage { [weak self] responseData, _, _, recvError in
-                defer { connection.cancel() }
+    /// receiveUDPResponse reads the upstream DNS reply and forwards it back to the
+    /// originating flow. Split out of sendUDPAndReceive so each closure holds only one
+    /// level of nested asynchronous work.
+    private func receiveUDPResponse(connection: Network.NWConnection, responseEndpoint: NWHostEndpoint,
+                                    flow: NEAppProxyUDPFlow, ctx: FlowContext) {
+        connection.receiveMessage { [weak self] responseData, _, _, recvError in
+            defer { connection.cancel() }
 
-                if let recvError {
-                    logger.debug("UDP receive error: \(recvError.localizedDescription)")
-                    return
-                }
+            if let recvError {
+                logger.debug("UDP receive error: \(recvError.localizedDescription)")
+                return
+            }
+            guard let responseData, !responseData.isEmpty else { return }
 
-                guard let responseData, !responseData.isEmpty else { return }
+            // Enrich telemetry with response addresses.
+            self?.emitDNSResponseTelemetry(response: responseData, ctx: ctx, proto: "udp")
 
-                // Enrich telemetry with response addresses.
-                self?.emitDNSResponseTelemetry(response: responseData, ctx: ctx, proto: "udp")
-
-                // Write response back to the originating flow.
-                flow.writeDatagrams([responseData], sentBy: [responseEndpoint]) { writeError in
-                    if let writeError {
-                        logger.error("Failed to write UDP response: \(writeError.localizedDescription)")
-                    }
+            flow.writeDatagrams([responseData], sentBy: [responseEndpoint]) { writeError in
+                if let writeError {
+                    logger.error("Failed to write UDP response: \(writeError.localizedDescription)")
                 }
             }
-        })
+        }
     }
 
     // MARK: - TCP flow handling
@@ -208,8 +214,14 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             guard let self else { return }
 
             if error != nil || data == nil || data?.isEmpty == true {
+                // Flow-closed / empty read → send an NWConnection FIN upstream so the
+                // upstream side also unwinds. We don't need the send completion; the
+                // connection is about to be cancelled by the upstream reader.
                 connection.send(content: nil, contentContext: .finalMessage,
-                                isComplete: true, completion: .contentProcessed { _ in })
+                                isComplete: true, completion: .contentProcessed { _ in
+                                    // Intentional no-op; connection teardown is handled
+                                    // by the matching upstream reader on error/EOF.
+                                })
                 return
             }
 

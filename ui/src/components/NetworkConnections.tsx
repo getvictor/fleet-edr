@@ -7,8 +7,8 @@ import type {
 import "./NetworkConnections.scss";
 
 interface Props {
-  connections: EventRecord[] | null;
-  dnsQueries: EventRecord[] | null;
+  readonly connections: EventRecord[] | null;
+  readonly dnsQueries: EventRecord[] | null;
 }
 
 // Collapsed connection row: identical remote+port+proto+direction grouped into a single row
@@ -44,7 +44,7 @@ export function NetworkConnections({
         <>
           <h4 className="net-section__title">
             Network connections ({totalConnections}
-            {totalConnections !== grouped.length ? `, ${String(grouped.length)} unique` : ""})
+            {totalConnections === grouped.length ? "" : `, ${String(grouped.length)} unique`})
           </h4>
           <table className="net-table">
             <thead>

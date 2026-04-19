@@ -6,7 +6,7 @@ import { Input } from "./ui/Input";
 import "./Login.scss";
 
 interface LoginProps {
-  onLogin: () => void;
+  readonly onLogin: () => void;
 }
 
 // Phase 3 login: email + password → POST /api/v1/session → server sets HttpOnly

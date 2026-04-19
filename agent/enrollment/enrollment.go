@@ -449,41 +449,51 @@ func parseMinimalPlist(buf []byte) (*Persisted, error) {
 		if !ok {
 			continue
 		}
-		switch se.Name.Local {
-		case "key":
-			var k string
-			if err := dec.DecodeElement(&k, &se); err != nil {
-				return nil, err
-			}
-			key = k
-		case "string":
-			var v string
-			if err := dec.DecodeElement(&v, &se); err != nil {
-				return nil, err
-			}
-			switch key {
-			case "host_id":
-				p.HostID = v
-			case "host_token":
-				p.HostToken = v
-			case "server_url":
-				p.ServerURL = v
-			}
-			key = ""
-		case "date":
-			var v string
-			if err := dec.DecodeElement(&v, &se); err != nil {
-				return nil, err
-			}
-			if key == "enrolled_at" {
-				if t, err := time.Parse(time.RFC3339, strings.TrimSpace(v)); err == nil {
-					p.EnrolledAt = t
-				}
-			}
-			key = ""
+		if err := applyPlistElement(dec, se, &key, p); err != nil {
+			return nil, err
 		}
 	}
 	return p, nil
+}
+
+// applyPlistElement decodes a single XML element into the Persisted struct, mutating
+// *keyPtr to track the "key" token preceding each value. Extracted from
+// parseMinimalPlist so the driver loop stays flat.
+func applyPlistElement(dec *xml.Decoder, se xml.StartElement, keyPtr *string, p *Persisted) error {
+	switch se.Name.Local {
+	case "key":
+		var k string
+		if err := dec.DecodeElement(&k, &se); err != nil {
+			return err
+		}
+		*keyPtr = k
+	case "string":
+		var v string
+		if err := dec.DecodeElement(&v, &se); err != nil {
+			return err
+		}
+		switch *keyPtr {
+		case "host_id":
+			p.HostID = v
+		case "host_token":
+			p.HostToken = v
+		case "server_url":
+			p.ServerURL = v
+		}
+		*keyPtr = ""
+	case "date":
+		var v string
+		if err := dec.DecodeElement(&v, &se); err != nil {
+			return err
+		}
+		if *keyPtr == "enrolled_at" {
+			if t, err := time.Parse(time.RFC3339, strings.TrimSpace(v)); err == nil {
+				p.EnrolledAt = t
+			}
+		}
+		*keyPtr = ""
+	}
+	return nil
 }
 
 // --- tiny helpers ---

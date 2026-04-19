@@ -19,9 +19,9 @@ import { Badge, type BadgeVariant } from "./ui/Badge";
 import "./ProcessDetail.scss";
 
 interface Props {
-  hostId: string;
-  node: ProcessNode;
-  onClose: () => void;
+  readonly hostId: string;
+  readonly node: ProcessNode;
+  readonly onClose: () => void;
 }
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
@@ -114,13 +114,13 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       .finally(() => { setKillSending(false); });
   }, [hostId, node.pid, killSending]);
 
+  const applyAlertStatus = (prev: Alert[], alertId: number, newStatus: string): Alert[] => {
+    return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
+  };
+
   const handleAlertStatusChange = (alertId: number, newStatus: string) => {
     updateAlertStatus(alertId, newStatus)
-      .then(() => {
-        setAlerts((prev) =>
-          prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a)),
-        );
-      })
+      .then(() => { setAlerts((prev) => applyAlertStatus(prev, alertId, newStatus)); })
       .catch(() => { /* ignore */ });
   };
 
@@ -196,7 +196,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
             <dt>Exit</dt>
             <dd>
               {formatTimestamp(node.exit_time_ns)}
-              {node.exit_code !== undefined ? ` (code ${String(node.exit_code)})` : ""}
+              {node.exit_code === undefined ? "" : ` (code ${String(node.exit_code)})`}
             </dd>
           </>
         )}

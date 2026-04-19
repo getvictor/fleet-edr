@@ -196,40 +196,54 @@ func (r *SuspiciousExec) checkNetworkActivity(
 	}
 
 	for _, pid := range pidsToCheck {
-		netEvents, err := s.GetNetworkEventsForProcess(ctx, shell.event.HostID, pid, tr)
+		f, err := r.findOutboundForPID(ctx, s, shell, parent, pidToProcessID[pid], pid, tr)
 		if err != nil {
-			return nil, fmt.Errorf("get network events for pid %d: %w", pid, err)
+			return nil, err
 		}
-
-		for _, evt := range netEvents {
-			if evt.EventType != "network_connect" {
-				continue
-			}
-			var connPayload networkConnectPayload
-			if err := json.Unmarshal(evt.Payload, &connPayload); err != nil {
-				continue
-			}
-			if connPayload.Direction != "outbound" {
-				continue
-			}
-
-			parentPath := "(unknown)"
-			if parent != nil {
-				parentPath = parent.Path
-			}
-
-			return &detection.Finding{
-				HostID:      shell.event.HostID,
-				RuleID:      r.ID(),
-				Severity:    detection.SeverityHigh,
-				Title:       "Shell spawn with outbound network connection",
-				Description: fmt.Sprintf("%s → %s → outbound %s:%d", parentPath, shell.payload.Path, connPayload.RemoteAddress, connPayload.RemotePort),
-				ProcessID:   pidToProcessID[pid],
-				EventIDs:    []string{shell.event.EventID, evt.EventID},
-			}, nil
+		if f != nil {
+			return f, nil
 		}
 	}
+	return nil, nil
+}
 
+// findOutboundForPID scans a single PID's network events for the first outbound
+// connection and returns a finding when found. Factored out of checkNetworkActivity to
+// flatten the nested for/for/continue structure.
+func (r *SuspiciousExec) findOutboundForPID(
+	ctx context.Context, s *store.Store,
+	shell shellExecInfo, parent *store.Process,
+	processID int64, pid int, tr store.TimeRange,
+) (*detection.Finding, error) {
+	netEvents, err := s.GetNetworkEventsForProcess(ctx, shell.event.HostID, pid, tr)
+	if err != nil {
+		return nil, fmt.Errorf("get network events for pid %d: %w", pid, err)
+	}
+	for _, evt := range netEvents {
+		if evt.EventType != "network_connect" {
+			continue
+		}
+		var conn networkConnectPayload
+		if err := json.Unmarshal(evt.Payload, &conn); err != nil {
+			continue
+		}
+		if conn.Direction != "outbound" {
+			continue
+		}
+		parentPath := "(unknown)"
+		if parent != nil {
+			parentPath = parent.Path
+		}
+		return &detection.Finding{
+			HostID:      shell.event.HostID,
+			RuleID:      r.ID(),
+			Severity:    detection.SeverityHigh,
+			Title:       "Shell spawn with outbound network connection",
+			Description: fmt.Sprintf("%s → %s → outbound %s:%d", parentPath, shell.payload.Path, conn.RemoteAddress, conn.RemotePort),
+			ProcessID:   processID,
+			EventIDs:    []string{shell.event.EventID, evt.EventID},
+		}, nil
+	}
 	return nil, nil
 }
 

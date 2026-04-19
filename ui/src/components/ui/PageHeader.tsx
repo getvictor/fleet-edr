@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 import "./PageHeader.scss";
 
 interface PageHeaderProps {
-  title: ReactNode;
-  subtitle?: ReactNode;
-  actions?: ReactNode;
+  readonly title: ReactNode;
+  readonly subtitle?: ReactNode;
+  readonly actions?: ReactNode;
 }
 
 export function PageHeader({ title, subtitle, actions }: PageHeaderProps) {

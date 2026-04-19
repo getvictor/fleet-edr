@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 // Alert represents a detection alert linked to a process and triggering events.
@@ -53,28 +54,8 @@ func (s *Store) InsertAlert(ctx context.Context, a Alert, eventIDs []string) (in
 		a.HostID, a.RuleID, a.Severity, a.Title, a.Description, a.ProcessID,
 	)
 	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		// 1062 = duplicate entry — alert already exists for this (host_id, rule_id, process_id).
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			var existingID int64
-			if lookupErr := tx.GetContext(ctx, &existingID,
-				"SELECT id FROM alerts WHERE host_id = ? AND rule_id = ? AND process_id = ?",
-				a.HostID, a.RuleID, a.ProcessID,
-			); lookupErr != nil {
-				return 0, false, fmt.Errorf("lookup duplicate alert: %w", lookupErr)
-			}
-			// Link any new event IDs to the existing alert (ignore duplicates).
-			for _, eid := range eventIDs {
-				if _, linkErr := tx.ExecContext(ctx,
-					"INSERT IGNORE INTO alert_events (alert_id, event_id) VALUES (?, ?)", existingID, eid,
-				); linkErr != nil {
-					return 0, false, fmt.Errorf("link event to existing alert (%d, %s): %w", existingID, eid, linkErr)
-				}
-			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				return 0, false, fmt.Errorf("commit duplicate alert lookup: %w", commitErr)
-			}
-			return existingID, false, nil
+		if isDuplicateKeyErr(err) {
+			return s.attachEventsToExistingAlert(ctx, tx, a, eventIDs)
 		}
 		return 0, false, fmt.Errorf("insert alert: %w", err)
 	}
@@ -94,6 +75,36 @@ func (s *Store) InsertAlert(ctx context.Context, a Alert, eventIDs []string) (in
 		return 0, false, fmt.Errorf("commit insert alert: %w", err)
 	}
 	return alertID, true, nil
+}
+
+// isDuplicateKeyErr matches MySQL error 1062 (duplicate primary/unique key).
+func isDuplicateKeyErr(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
+
+// attachEventsToExistingAlert handles the "alert already exists for this
+// (host_id, rule_id, process_id)" branch. Extracted from InsertAlert to keep the main
+// path under the cognitive complexity limit.
+func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a Alert, eventIDs []string) (int64, bool, error) {
+	var existingID int64
+	if err := tx.GetContext(ctx, &existingID,
+		"SELECT id FROM alerts WHERE host_id = ? AND rule_id = ? AND process_id = ?",
+		a.HostID, a.RuleID, a.ProcessID,
+	); err != nil {
+		return 0, false, fmt.Errorf("lookup duplicate alert: %w", err)
+	}
+	for _, eid := range eventIDs {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT IGNORE INTO alert_events (alert_id, event_id) VALUES (?, ?)", existingID, eid,
+		); err != nil {
+			return 0, false, fmt.Errorf("link event to existing alert (%d, %s): %w", existingID, eid, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("commit duplicate alert lookup: %w", err)
+	}
+	return existingID, false, nil
 }
 
 // ListAlerts returns alerts matching the given filter, ordered by created_at DESC.

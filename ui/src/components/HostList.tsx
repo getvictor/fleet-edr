@@ -52,7 +52,9 @@ export function HostList() {
                 <tr
                   key={h.host_id}
                   onClick={() => {
-                    void navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
+                    const result = navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
+                    // navigate() may return void or Promise<void> in react-router v7.
+                    if (result instanceof Promise) result.catch(() => { /* ignored */ });
                   }}
                 >
                   <td>{h.host_id}</td>

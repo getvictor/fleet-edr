@@ -189,44 +189,8 @@ func run() error {
 		}
 	}()
 
-	// Commander
-	if hostID != "" {
-		cmdr := commander.New(commander.Config{
-			ServerURL:    cfg.ServerURL,
-			TokenFn:      tokenProvider.Token,
-			OnAuthFail:   tokenProvider.OnUnauthorized,
-			HostID:       hostID,
-			Interval:     5 * time.Second,
-			PolicySender: esfPolicyDispatcher,
-		}, &http.Client{Transport: agentTransport, Timeout: 10 * time.Second}, logger)
-		go func() {
-			if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
-				logger.ErrorContext(ctx, "commander", "err", err)
-			}
-		}()
-		logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
-	} else {
-		logger.WarnContext(ctx, "no host_id available; commander disabled")
-	}
-
-	// Periodic prune of uploaded events.
-	go func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				pruned, err := q.Prune(ctx, cfg.PruneAge)
-				if err != nil {
-					logger.WarnContext(ctx, "prune", "err", err)
-				} else if pruned > 0 {
-					logger.InfoContext(ctx, "pruned old events", "count", pruned)
-				}
-			}
-		}
-	}()
+	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfPolicyDispatcher, agentTransport, logger)
+	go pruneLoop(ctx, q, cfg.PruneAge, logger)
 
 	<-ctx.Done()
 	logger.InfoContext(context.Background(), "agent shutting down")
@@ -249,6 +213,58 @@ func safePrefix(s string) string {
 		return s
 	}
 	return s[:8]
+}
+
+// startCommander spins up the command-poll loop when we have a host_id. With no
+// host_id the agent keeps running (events still upload) but cannot receive commands,
+// so commander launch is skipped and logged.
+func startCommander(
+	ctx context.Context,
+	hostID, serverURL string,
+	tokenProvider enrollment.TokenProvider,
+	policySender commander.PolicySender,
+	transport http.RoundTripper,
+	logger *slog.Logger,
+) {
+	if hostID == "" {
+		logger.WarnContext(ctx, "no host_id available; commander disabled")
+		return
+	}
+	cmdr := commander.New(commander.Config{
+		ServerURL:    serverURL,
+		TokenFn:      tokenProvider.Token,
+		OnAuthFail:   tokenProvider.OnUnauthorized,
+		HostID:       hostID,
+		Interval:     5 * time.Second,
+		PolicySender: policySender,
+	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
+	go func() {
+		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.ErrorContext(ctx, "commander", "err", err)
+		}
+	}()
+	logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
+}
+
+// pruneLoop periodically prunes uploaded events older than pruneAge from the
+// persistent queue.
+func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pruned, err := q.Prune(ctx, pruneAge)
+			switch {
+			case err != nil:
+				logger.WarnContext(ctx, "prune", "err", err)
+			case pruned > 0:
+				logger.InfoContext(ctx, "pruned old events", "count", pruned)
+			}
+		}
+	}
 }
 
 // runReceiverLoop connects to an XPC service and reconnects with exponential backoff.
@@ -323,13 +339,14 @@ func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receive
 				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		case errCode := <-recv.Errors():
-			logger.WarnContext(ctx, "xpc error", "code", errCode)
-			switch errCode {
-			case receiver.ErrorConnectionInvalid, receiver.ErrorConnectionInterrupted, receiver.ErrorTerminated:
-				return true
-			default:
-				return true
-			}
+			// All XPC error codes force a reconnect today; the switch is kept so the
+			// call site is explicit about which codes are expected vs unexpected and so
+			// we can route them differently later (e.g. backoff vs fail-fast).
+			logger.WarnContext(ctx, "xpc error", "code", errCode,
+				"expected", errCode == receiver.ErrorConnectionInvalid ||
+					errCode == receiver.ErrorConnectionInterrupted ||
+					errCode == receiver.ErrorTerminated)
+			return true
 		}
 	}
 }

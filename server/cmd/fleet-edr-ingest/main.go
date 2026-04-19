@@ -124,44 +124,10 @@ func run() error {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-	var certHolder atomic.Pointer[tls.Certificate]
 	if cfg.TLSEnabled() {
-		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-		if err != nil {
-			logger.ErrorContext(ctx, "load tls cert", "err", err)
+		if err := configureTLS(ctx, srv, cfg, logger); err != nil {
 			return err
 		}
-		certHolder.Store(&cert)
-		minVer := uint16(tls.VersionTLS13)
-		if cfg.AllowTLS12 {
-			minVer = tls.VersionTLS12
-		}
-		//nolint:gosec // MinVersion may be TLS12 only when the operator explicitly opts in via EDR_TLS_ALLOW_TLS12=1.
-		srv.TLSConfig = &tls.Config{
-			MinVersion: minVer,
-			CipherSuites: []uint16{
-				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-			},
-			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return certHolder.Load(), nil
-			},
-		}
-		sighup := make(chan os.Signal, 1)
-		signal.Notify(sighup, syscall.SIGHUP)
-		go func() {
-			for range sighup {
-				cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-				if err != nil {
-					logger.ErrorContext(ctx, "tls reload failed", "err", err)
-					continue
-				}
-				certHolder.Store(&cert)
-				logger.InfoContext(ctx, "tls reload")
-			}
-		}()
 	}
 
 	serverErr := make(chan error, 1)
@@ -195,4 +161,53 @@ func run() error {
 	}
 	logger.InfoContext(shutdownCtx, "shutdown complete")
 	return nil
+}
+
+// configureTLS loads cert + key, installs a TLS config on srv, and starts a SIGHUP
+// watcher that atomically swaps the cert from disk so cert renewals do not require a
+// server restart. Only new handshakes see the replacement cert.
+func configureTLS(ctx context.Context, srv *http.Server, cfg *config.Config, logger *slog.Logger) error {
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		logger.ErrorContext(ctx, "load tls cert", "err", err)
+		return err
+	}
+	certHolder := &atomic.Pointer[tls.Certificate]{}
+	certHolder.Store(&cert)
+
+	minVer := uint16(tls.VersionTLS13)
+	if cfg.AllowTLS12 {
+		minVer = tls.VersionTLS12
+	}
+	//nolint:gosec // MinVersion may be TLS12 only when the operator explicitly opts in via EDR_TLS_ALLOW_TLS12=1.
+	srv.TLSConfig = &tls.Config{
+		MinVersion: minVer,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+		},
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certHolder.Load(), nil
+		},
+	}
+	go watchSIGHUPForCertReload(ctx, cfg, certHolder, logger)
+	return nil
+}
+
+// watchSIGHUPForCertReload reloads the cert + key from disk on every SIGHUP and swaps
+// it into certHolder atomically.
+func watchSIGHUPForCertReload(ctx context.Context, cfg *config.Config, certHolder *atomic.Pointer[tls.Certificate], logger *slog.Logger) {
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	for range sighup {
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			logger.ErrorContext(ctx, "tls reload failed", "err", err)
+			continue
+		}
+		certHolder.Store(&cert)
+		logger.InfoContext(ctx, "tls reload")
+	}
 }

@@ -3,7 +3,7 @@ import classnames from "classnames";
 import "./Table.scss";
 
 interface TableProps extends HTMLAttributes<HTMLTableElement> {
-  children: ReactNode;
+  readonly children: ReactNode;
 }
 
 export function Table({ className, children, ...rest }: TableProps) {
@@ -16,6 +16,6 @@ export function Table({ className, children, ...rest }: TableProps) {
   );
 }
 
-export function EmptyState({ children }: { children: ReactNode }) {
+export function EmptyState({ children }: { readonly children: ReactNode }) {
   return <div className="table-empty">{children}</div>;
 }

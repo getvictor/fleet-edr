@@ -46,50 +46,55 @@ type persistenceLaunchCtlPayload struct {
 func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []store.Event, s *store.Store) ([]detection.Finding, error) {
 	var findings []detection.Finding
 	for _, evt := range events {
-		if evt.EventType != "exec" {
-			continue
-		}
-		var p persistenceLaunchCtlPayload
-		if err := json.Unmarshal(evt.Payload, &p); err != nil {
-			continue
-		}
-		if !launchctlPaths[p.Path] {
-			continue
-		}
-
-		subcommand, plistPath := extractLaunchctlSubcommand(p.Args)
-		if subcommand != "load" && subcommand != "bootstrap" {
-			continue
-		}
-		if plistPath == "" || !launchAgentPath.MatchString(plistPath) {
-			continue
-		}
-		if r.allowed(plistPath) {
-			continue
-		}
-
-		// Look up the process row so the alert can link to the process detail view. If it's
-		// not yet materialised we skip — the next batch re-evaluates once the processor
-		// lands the row. Safer than firing an alert we can't pivot from.
-		proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+		f, err := r.evalEvent(ctx, evt, s)
 		if err != nil {
-			return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+			return nil, err
 		}
-		if proc == nil {
-			continue
+		if f != nil {
+			findings = append(findings, *f)
 		}
-
-		findings = append(findings, detection.Finding{
-			HostID:      evt.HostID,
-			RuleID:      r.ID(),
-			Severity:    detection.SeverityHigh,
-			Title:       "LaunchAgent persistence attempt",
-			Description: fmt.Sprintf("launchctl %s %s", subcommand, plistPath),
-			ProcessID:   proc.ID,
-			EventIDs:    []string{evt.EventID},
-		})
 	}
 	return findings, nil
+}
+
+// evalEvent returns a finding for a single event, or nil when the event doesn't match.
+func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt store.Event, s *store.Store) (*detection.Finding, error) {
+	if evt.EventType != "exec" {
+		return nil, nil
+	}
+	var p persistenceLaunchCtlPayload
+	if err := json.Unmarshal(evt.Payload, &p); err != nil {
+		return nil, nil
+	}
+	if !launchctlPaths[p.Path] {
+		return nil, nil
+	}
+	subcommand, plistPath := extractLaunchctlSubcommand(p.Args)
+	if subcommand != "load" && subcommand != "bootstrap" {
+		return nil, nil
+	}
+	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.allowed(plistPath) {
+		return nil, nil
+	}
+	// Look up the process row so the alert can link to the process detail view. If it's
+	// not yet materialised we skip — the next batch re-evaluates once the processor
+	// lands the row. Safer than firing an alert we can't pivot from.
+	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	if err != nil {
+		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+	}
+	if proc == nil {
+		return nil, nil
+	}
+	return &detection.Finding{
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    detection.SeverityHigh,
+		Title:       "LaunchAgent persistence attempt",
+		Description: fmt.Sprintf("launchctl %s %s", subcommand, plistPath),
+		ProcessID:   proc.ID,
+		EventIDs:    []string{evt.EventID},
+	}, nil
 }
 
 func (r *PersistenceLaunchAgent) allowed(path string) bool {

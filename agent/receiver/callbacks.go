@@ -8,7 +8,10 @@ package receiver
 #include <stdint.h>
 */
 import "C"
-import "unsafe"
+
+import (
+	"unsafe"
+)
 
 //export bridgeOnEvent
 func bridgeOnEvent(ctx unsafe.Pointer, data *C.uint8_t, length C.size_t) {

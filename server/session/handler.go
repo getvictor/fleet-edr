@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/sessions"
 	"github.com/fleetdm/edr/server/users"
@@ -134,25 +135,25 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
 	ip := remoteIP(r)
-	span.SetAttributes(attribute.String("edr.remote_addr", ip))
+	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 
 	if !h.limiter.allow(ip) {
 		w.Header().Set("Retry-After", "60")
-		h.fail(ctx, w, http.StatusTooManyRequests, "rate_limited", ip, 0, "",
-			"edr.auth.reason", "rate_limited")
+		h.fail(ctx, w, http.StatusTooManyRequests, "rate_limited", failInfo{IP: ip},
+			attrkeys.AuthReason, "rate_limited")
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, loginBodyCap)
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.fail(ctx, w, http.StatusBadRequest, "bad_body", ip, 0, "",
-			"edr.auth.reason", "bad_body", "err", err.Error())
+		h.fail(ctx, w, http.StatusBadRequest, "bad_body", failInfo{IP: ip},
+			attrkeys.AuthReason, "bad_body", "err", err.Error())
 		return
 	}
 	if req.Email == "" || req.Password == "" {
-		h.fail(ctx, w, http.StatusBadRequest, "bad_body", ip, 0, req.Email,
-			"edr.auth.reason", "bad_body", "missing_fields", true)
+		h.fail(ctx, w, http.StatusBadRequest, "bad_body", failInfo{IP: ip, Email: req.Email},
+			attrkeys.AuthReason, "bad_body", "missing_fields", true)
 		return
 	}
 
@@ -162,40 +163,40 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Same wire response as ErrBadPassword so the caller cannot enumerate emails.
 		// The server-side audit log records the distinction so forensics can tell
 		// "hit a real account with wrong password" apart from "probed unknown email".
-		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", ip, 0, req.Email,
-			"edr.auth.reason", "user_not_found")
+		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
+			attrkeys.AuthReason, "user_not_found")
 		return
 	case errors.Is(err, users.ErrBadPassword):
-		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", ip, 0, req.Email,
-			"edr.auth.reason", "password_mismatch")
+		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
+			attrkeys.AuthReason, "password_mismatch")
 		return
 	case err != nil:
 		h.logger.ErrorContext(ctx, "login verify", "err", err)
-		h.fail(ctx, w, http.StatusInternalServerError, "internal", ip, 0, req.Email,
-			"edr.auth.reason", "internal")
+		h.fail(ctx, w, http.StatusInternalServerError, "internal", failInfo{IP: ip, Email: req.Email},
+			attrkeys.AuthReason, "internal")
 		return
 	}
 
 	sess, err := h.sessions.Create(ctx, u.ID)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "session create", "err", err, "edr.user.id", u.ID)
-		h.fail(ctx, w, http.StatusInternalServerError, "internal", ip, u.ID, req.Email,
-			"edr.auth.reason", "session_create_failed")
+		h.logger.ErrorContext(ctx, "session create", "err", err, attrkeys.UserID, u.ID)
+		h.fail(ctx, w, http.StatusInternalServerError, "internal", failInfo{IP: ip, UserID: u.ID, Email: req.Email},
+			attrkeys.AuthReason, "session_create_failed")
 		return
 	}
 
 	http.SetCookie(w, h.buildCookie(sess))
 	span.SetAttributes(
-		attribute.String("edr.auth.action", "login"),
-		attribute.String("edr.auth.result", "ok"),
-		attribute.Int64("edr.user.id", u.ID),
+		attribute.String(attrkeys.AuthAction, "login"),
+		attribute.String(attrkeys.AuthResult, "ok"),
+		attribute.Int64(attrkeys.UserID, u.ID),
 	)
 	h.logger.InfoContext(ctx, "login ok",
-		"edr.auth.action", "login",
-		"edr.user.id", u.ID,
-		"edr.user.email", u.Email,
-		"edr.session.id_prefix", idPrefix(sess.ID),
-		"edr.remote_addr", ip,
+		attrkeys.AuthAction, "login",
+		attrkeys.UserID, u.ID,
+		attrkeys.UserEmail, u.Email,
+		attrkeys.SessionIDPrefix, idPrefix(sess.ID),
+		attrkeys.RemoteAddr, ip,
 	)
 
 	h.writeSessionJSON(ctx, w, u, sess)
@@ -212,7 +213,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := h.users.Get(ctx, sess.UserID)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "get user for session", "err", err, "edr.user.id", sess.UserID)
+		h.logger.ErrorContext(ctx, "get user for session", "err", err, attrkeys.UserID, sess.UserID)
 		writeJSON(ctx, h.logger, w, http.StatusInternalServerError, errBody{Error: "internal"})
 		return
 	}
@@ -236,16 +237,16 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 		if raw, err := authn.DecodeSessionIDForTest(cookie.Value); err == nil {
 			if sess, err := h.sessions.Get(ctx, raw); err == nil {
 				if delErr := h.sessions.Delete(ctx, sess.ID); delErr != nil {
-					h.logger.ErrorContext(ctx, "session delete", "err", delErr, "edr.user.id", sess.UserID)
+					h.logger.ErrorContext(ctx, "session delete", "err", delErr, attrkeys.UserID, sess.UserID)
 				} else {
 					trace.SpanFromContext(ctx).SetAttributes(
-						attribute.String("edr.auth.action", "logout"),
-						attribute.Int64("edr.user.id", sess.UserID),
+						attribute.String(attrkeys.AuthAction, "logout"),
+						attribute.Int64(attrkeys.UserID, sess.UserID),
 					)
 					h.logger.InfoContext(ctx, "logout ok",
-						"edr.auth.action", "logout",
-						"edr.user.id", sess.UserID,
-						"edr.session.id_prefix", idPrefix(sess.ID),
+						attrkeys.AuthAction, "logout",
+						attrkeys.UserID, sess.UserID,
+						attrkeys.SessionIDPrefix, idPrefix(sess.ID),
 					)
 				}
 			}
@@ -313,22 +314,30 @@ func toHex(b []byte) string {
 	return string(out)
 }
 
-// fail writes a typed 4xx/5xx JSON error + audit log. userID is best-effort (0 when the
-// email didn't resolve). email in the audit helps forensics but we never echo it in the
-// response body so the client cannot enumerate.
-func (h *Handler) fail(ctx context.Context, w http.ResponseWriter, status int, code, ip string, userID int64, email string, attrs ...any) {
+// failInfo carries the identity + audit fields for a failed login attempt. Grouped
+// as a struct so fail() stays under the 7-param limit and call sites read better.
+type failInfo struct {
+	IP     string
+	UserID int64
+	Email  string
+}
+
+// fail writes a typed 4xx/5xx JSON error + audit log. info.UserID is best-effort (0 when
+// the email didn't resolve). info.Email in the audit helps forensics but we never echo
+// it in the response body so the client cannot enumerate.
+func (h *Handler) fail(ctx context.Context, w http.ResponseWriter, status int, code string, info failInfo, attrs ...any) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
-		attribute.String("edr.auth.result", "fail"),
+		attribute.String(attrkeys.AuthResult, "fail"),
 		attribute.Int("http.response.status_code", status),
 	)
 	logAttrs := append([]any{
-		"edr.auth.result", "fail",
-		"edr.remote_addr", ip,
-		"edr.user.email", email,
+		attrkeys.AuthResult, "fail",
+		attrkeys.RemoteAddr, info.IP,
+		attrkeys.UserEmail, info.Email,
 	}, attrs...)
-	if userID > 0 {
-		logAttrs = append(logAttrs, "edr.user.id", userID)
+	if info.UserID > 0 {
+		logAttrs = append(logAttrs, attrkeys.UserID, info.UserID)
 	}
 	h.logger.WarnContext(ctx, "login failed", logAttrs...)
 	writeJSON(ctx, h.logger, w, status, errBody{Error: code})

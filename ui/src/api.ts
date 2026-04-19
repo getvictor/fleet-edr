@@ -24,8 +24,23 @@ export function getCsrfToken(): string {
   return sessionStorage.getItem(CSRF_KEY) || "";
 }
 
+// sanitizeCsrfToken restricts stored values to the shape the server actually mints
+// (URL-safe base64 of a 32-byte CSRF secret — see server/authn.EncodeSessionID). The
+// whitelist blocks any exotic payload that somehow ended up here before hitting
+// sessionStorage, which is what the taint analyzer is flagging.
+function sanitizeCsrfToken(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > 128) return "";
+  return /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "";
+}
+
 export function setCsrfToken(token: string): void {
-  sessionStorage.setItem(CSRF_KEY, token);
+  const clean = sanitizeCsrfToken(token);
+  if (!clean) {
+    console.warn("rejected malformed CSRF token");
+    return;
+  }
+  sessionStorage.setItem(CSRF_KEY, clean);
 }
 
 export function clearCsrfToken(): void {
@@ -137,7 +152,8 @@ export async function listAlerts(params?: {
   if (params?.process_id) query.set("process_id", String(params.process_id));
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();
-  return fetchJSON<Alert[]>(`/alerts${qs ? `?${qs}` : ""}`);
+  const suffix = qs ? `?${qs}` : "";
+  return fetchJSON<Alert[]>(`/alerts${suffix}`);
 }
 
 export async function getAlertDetail(id: number): Promise<AlertDetail> {

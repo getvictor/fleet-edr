@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/enrollment"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
@@ -120,15 +121,15 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	// Audit the revoke at WARN so it's visible in SigNoz alert queries. Span attributes give
 	// SOC teams the query dimensions they expect (`edr.admin.action`, `edr.admin.actor`).
 	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String("edr.admin.action", "revoke"),
-		attribute.String("edr.admin.actor", body.Actor),
-		attribute.String("edr.host_id", hostID),
+		attribute.String(attrkeys.AdminAction, "revoke"),
+		attribute.String(attrkeys.AdminActor, body.Actor),
+		attribute.String(attrkeys.HostID, hostID),
 	)
 	h.logger.WarnContext(ctx, "admin action",
-		"edr.admin.action", "revoke",
-		"edr.admin.actor", body.Actor,
-		"edr.admin.reason", body.Reason,
-		"edr.host_id", hostID,
+		attrkeys.AdminAction, "revoke",
+		attrkeys.AdminActor, body.Actor,
+		attrkeys.AdminReason, body.Reason,
+		attrkeys.HostID, hostID,
 	)
 
 	w.WriteHeader(http.StatusNoContent)
@@ -250,13 +251,13 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			fanoutFailed++
 			h.logger.WarnContext(ctx, "admin put policy fan-out failed",
-				"edr.host_id", hostID, "err", err)
+				attrkeys.HostID, hostID, "err", err)
 		}
 	}
 
 	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String("edr.admin.action", "policy_update"),
-		attribute.String("edr.admin.actor", body.Actor),
+		attribute.String(attrkeys.AdminAction, "policy_update"),
+		attribute.String(attrkeys.AdminActor, body.Actor),
 		attribute.Int64("edr.policy.version", p.Version),
 		attribute.Int("edr.policy.path_count", len(p.Blocklist.Paths)),
 		attribute.Int("edr.policy.hash_count", len(p.Blocklist.Hashes)),
@@ -270,9 +271,9 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		logFn = h.logger.WarnContext
 	}
 	logFn(ctx, "admin policy updated",
-		"edr.admin.action", "policy_update",
-		"edr.admin.actor", body.Actor,
-		"edr.admin.reason", body.Reason,
+		attrkeys.AdminAction, "policy_update",
+		attrkeys.AdminActor, body.Actor,
+		attrkeys.AdminReason, body.Reason,
 		"edr.policy.version", p.Version,
 		"edr.policy.path_count", len(p.Blocklist.Paths),
 		"edr.policy.hash_count", len(p.Blocklist.Hashes),

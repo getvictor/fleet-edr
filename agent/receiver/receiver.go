@@ -194,7 +194,7 @@ func onEvent(receiverID int, data unsafe.Pointer, length int) {
 }
 
 // onError is called from C (via callbacks.go) when an XPC connection error occurs.
-func onError(receiverID int, errorCode int) {
+func onError(receiverID, errorCode int) {
 	receiversMu.Lock()
 	recv := receivers[receiverID]
 	receiversMu.Unlock()

@@ -19,6 +19,9 @@ import (
 	"log/slog"
 	"time"
 
+	// Register the CGo-free modernc.org/sqlite driver under the name "sqlite" so
+	// sql.Open("sqlite", ...) below finds it. Blank import is required because
+	// database/sql drivers register themselves in an init() function.
 	_ "modernc.org/sqlite"
 )
 
