@@ -104,11 +104,11 @@ final class PolicyStore {
     /// Called from XPCServer's peer dispatch. AUTH_EXEC reads never block on this
     /// method — they hit the snapshot lock, which is held for the nanoseconds of a
     /// pointer swap, not for the milliseconds of a filesystem write.
-    /// applyDecision is the small result type apply() extracts from the snapshot lock.
+    /// ApplyDecision is the small result type apply() extracts from the snapshot lock.
     /// Pulling the decision out of the locked region lets us log + dispatch persistence
     /// without holding the lock, and sidesteps the Swift 6 sendable-closure-captures
     /// warning that would otherwise hit a mutated `swapped` flag.
-    private struct applyDecision {
+    private struct ApplyDecision {
         let accepted: Bool
         let reApply: Bool
         let priorVersion: Int64
@@ -116,55 +116,73 @@ final class PolicyStore {
 
     func apply(rawJSON: Data) {
         stateQueue.sync {
-            let doc: PolicyDocument
-            do {
-                doc = try JSONDecoder().decode(PolicyDocument.self, from: rawJSON)
-            } catch {
-                logger.error("policy decode failed: \(error.localizedDescription, privacy: .public)")
-                return
-            }
+            guard let doc = decodePolicy(from: rawJSON) else { return }
+            let decision = swapSnapshot(to: doc)
+            handleApplyResult(doc: doc, rawJSON: rawJSON, decision: decision)
+        }
+    }
 
-            let decision = self.snapshotLock.withLock { current -> applyDecision in
-                let prior = current.version
-                if doc.version < prior {
-                    return applyDecision(accepted: false, reApply: false, priorVersion: prior)
-                }
-                // Equal-version "re-apply" is accepted so an operator can force a re-push
-                // after a suspected apply-but-didn't-persist split. New version case is
-                // the normal path.
-                let reApply = doc.version == prior
-                current = Snapshot(paths: Set(doc.paths), version: doc.version)
-                return applyDecision(accepted: true, reApply: reApply, priorVersion: prior)
-            }
+    /// decodePolicy is the JSON decode step of apply(). Isolated so the apply() body stays
+    /// under the SwiftLint closure-body-length cap; also makes it easy to swap in a
+    /// different wire format (protobuf, Msgpack, ...) in one place.
+    private func decodePolicy(from rawJSON: Data) -> PolicyDocument? {
+        do {
+            return try JSONDecoder().decode(PolicyDocument.self, from: rawJSON)
+        } catch {
+            logger.error("policy decode failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
 
-            if !decision.accepted {
+    /// swapSnapshot runs the critical section: compare the incoming version against the
+    /// current snapshot and, if acceptable, publish a new one. Equal-version "re-apply"
+    /// is accepted so an operator can force a re-push after a suspected
+    /// apply-but-didn't-persist split; strictly-lower versions are rejected as
+    /// out-of-order replay. The caller is expected to react to the returned decision
+    /// outside the lock.
+    private func swapSnapshot(to doc: PolicyDocument) -> ApplyDecision {
+        snapshotLock.withLock { current -> ApplyDecision in
+            let prior = current.version
+            if doc.version < prior {
+                return ApplyDecision(accepted: false, reApply: false, priorVersion: prior)
+            }
+            let reApply = doc.version == prior
+            current = Snapshot(paths: Set(doc.paths), version: doc.version)
+            return ApplyDecision(accepted: true, reApply: reApply, priorVersion: prior)
+        }
+    }
+
+    /// handleApplyResult handles logging + background persistence based on the decision.
+    /// Extracted so apply()'s closure body stays short and no single path is buried in
+    /// conditional noise.
+    private func handleApplyResult(doc: PolicyDocument, rawJSON: Data, decision: ApplyDecision) {
+        if !decision.accepted {
+            logger.info(
+                "policy ignored: stale version \(doc.version, privacy: .public) < current \(decision.priorVersion, privacy: .public)"
+            )
+            return
+        }
+        if decision.reApply {
+            logger.info("policy re-applied at current version \(doc.version, privacy: .public) — no-op in memory")
+        }
+
+        // Kick off persistence on a dedicated queue so apply() returns as soon as the
+        // in-memory swap lands. AUTH_EXEC readers see the new policy immediately;
+        // disk I/O is best-effort and logs on failure.
+        let version = doc.version
+        let pathCount = doc.paths.count
+        persistQueue.async {
+            if self.persist(rawJSON: rawJSON) {
                 logger.info(
-                    "policy ignored: stale version \(doc.version, privacy: .public) < current \(decision.priorVersion, privacy: .public)"
+                    "policy applied: version=\(version, privacy: .public), paths=\(pathCount, privacy: .public)"
                 )
-                return
-            }
-            if decision.reApply {
-                logger.info("policy re-applied at current version \(doc.version, privacy: .public) — no-op in memory")
-            }
-
-            // Kick off persistence on a dedicated queue so apply() returns as soon as the
-            // in-memory swap lands. AUTH_EXEC readers see the new policy immediately;
-            // disk I/O is best-effort and logs on failure.
-            let version = doc.version
-            let pathCount = doc.paths.count
-            self.persistQueue.async {
-                if self.persist(rawJSON: rawJSON) {
-                    logger.info(
-                        "policy applied: version=\(version, privacy: .public), paths=\(pathCount, privacy: .public)"
-                    )
-                } else {
-                    // Snapshot is already swapped in memory. Log explicitly so operators
-                    // see the split state — the on-disk copy is stale until the next
-                    // successful apply.
-                    logger.error(
-                        "policy applied in memory but persistence failed: version=\(version, privacy: .public)"
-                    )
-                }
+            } else {
+                // Snapshot is already swapped in memory. Log explicitly so operators
+                // see the split state — the on-disk copy is stale until the next
+                // successful apply.
+                logger.error(
+                    "policy applied in memory but persistence failed: version=\(version, privacy: .public)"
+                )
             }
         }
     }
