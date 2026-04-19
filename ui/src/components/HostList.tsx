@@ -35,23 +35,35 @@ export function HostList() {
           <thead>
             <tr>
               <th>Host ID</th>
+              <th>Status</th>
               <th>Events</th>
               <th>Last seen</th>
             </tr>
           </thead>
           <tbody>
-            {hosts.map((h) => (
-              <tr
-                key={h.host_id}
-                onClick={() => {
-                  void navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
-                }}
-              >
-                <td>{h.host_id}</td>
-                <td>{h.event_count.toLocaleString()}</td>
-                <td>{formatRelative(h.last_seen_ns)}</td>
-              </tr>
-            ))}
+            {hosts.map((h) => {
+              // Compute online once per row: isOnline calls Date.now(), so calling it
+              // twice (for className and label) could theoretically flip the two reads
+              // at the exact threshold boundary and render an "online" class with an
+              // "offline" label.
+              const online = isOnline(h.last_seen_ns);
+              const pillClass = online ? "status-pill status-pill--online" : "status-pill status-pill--offline";
+              return (
+                <tr
+                  key={h.host_id}
+                  onClick={() => {
+                    void navigate(`/hosts/${encodeURIComponent(h.host_id)}`);
+                  }}
+                >
+                  <td>{h.host_id}</td>
+                  <td>
+                    <span className={pillClass}>{online ? "online" : "offline"}</span>
+                  </td>
+                  <td>{h.event_count.toLocaleString()}</td>
+                  <td>{formatRelative(h.last_seen_ns)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </Table>
       )}
@@ -59,7 +71,18 @@ export function HostList() {
   );
 }
 
+// offlineThresholdMs: Phase 4 defines "offline" as last_seen > 5 min old. The agent
+// polls every 5 s, so 5 min is 60× the polling interval — well past any transient
+// network blip but fast enough that a crashed agent shows up quickly in the UI.
+const offlineThresholdMs = 5 * 60 * 1000;
+
+function isOnline(lastSeenNs: number): boolean {
+  if (lastSeenNs === 0) return false;
+  return Date.now() - lastSeenNs / 1_000_000 < offlineThresholdMs;
+}
+
 function formatRelative(ns: number): string {
+  if (ns === 0) return "never";
   const diff = Date.now() - ns / 1_000_000;
   if (diff < 60_000) return "just now";
   if (diff < 3_600_000) return `${String(Math.floor(diff / 60_000))}m ago`;

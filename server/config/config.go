@@ -29,6 +29,15 @@ type Config struct {
 	ProcessInterval   time.Duration
 	ProcessBatch      int
 
+	// Phase 4: data lifecycle + observability.
+	//
+	// RetentionDays is the age cap for events in days. 0 disables the retention
+	// runner entirely (useful for operators who ship events to another store and
+	// don't want MVP's default 30-day window). Default 30.
+	RetentionDays int
+	// RetentionInterval is how often the retention runner wakes up. Default 1h.
+	RetentionInterval time.Duration
+
 	// LaunchAgentAllowlist is the set of plist paths the `persistence_launchagent` rule
 	// should silently accept. Populated from EDR_LAUNCHAGENT_ALLOWLIST (comma-separated
 	// absolute paths). Empty by default — every plist load fires.
@@ -43,13 +52,15 @@ func (c Config) TLSEnabled() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:       ":8088",
-		LogLevel:         "info",
-		LogFormat:        "json",
-		ProcessInterval:  500 * time.Millisecond,
-		ProcessBatch:     500,
-		EnrollRatePerMin: 30,
-		LoginRatePerMin:  6,
+		ListenAddr:        ":8088",
+		LogLevel:          "info",
+		LogFormat:         "json",
+		ProcessInterval:   500 * time.Millisecond,
+		ProcessBatch:      500,
+		EnrollRatePerMin:  30,
+		LoginRatePerMin:   6,
+		RetentionDays:     30,
+		RetentionInterval: time.Hour,
 	}
 }
 
@@ -109,6 +120,30 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 			errs = append(errs, fmt.Errorf("EDR_LOGIN_RATE_PER_MIN=%d must be positive", n))
 		default:
 			c.LoginRatePerMin = n
+		}
+	}
+
+	// Phase 4: retention window. Allow 0 to disable entirely. Negative = error.
+	if v := getenv("EDR_RETENTION_DAYS"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("EDR_RETENTION_DAYS=%q: %w", v, err))
+		case n < 0:
+			errs = append(errs, fmt.Errorf("EDR_RETENTION_DAYS=%d must be >= 0 (0 disables)", n))
+		default:
+			c.RetentionDays = n
+		}
+	}
+	if v := getenv("EDR_RETENTION_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("EDR_RETENTION_INTERVAL=%q: %w", v, err))
+		case d <= 0:
+			errs = append(errs, fmt.Errorf("EDR_RETENTION_INTERVAL=%q must be positive", v))
+		default:
+			c.RetentionInterval = d
 		}
 	}
 

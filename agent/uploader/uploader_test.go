@@ -170,7 +170,7 @@ func TestUpload401_CallsOnAuthFail(t *testing.T) {
 func openTestQueue(t *testing.T) *queue.Queue {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	q, err := queue.Open(t.Context(), dbPath)
+	q, err := queue.Open(t.Context(), dbPath, queue.Options{})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
 	}

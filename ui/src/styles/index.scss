@@ -64,3 +64,23 @@ button {
   max-width: 1600px;
   margin: 0 auto;
 }
+
+// Phase 4: host liveness pill. Green when the agent polled within the last 5 min,
+// red otherwise. Two-tone + uppercase label keeps it legible at small sizes.
+.status-pill {
+  display: inline-block;
+  padding: calc($pad-small / 4) $pad-small;
+  border-radius: $border-radius-xlarge;
+  font-size: $xx-small;
+  font-weight: $bold;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.status-pill--online {
+  background: rgba($ui-success, 0.15);
+  color: $ui-success-down;
+}
+.status-pill--offline {
+  background: rgba($ui-error, 0.15);
+  color: $ui-error-down;
+}

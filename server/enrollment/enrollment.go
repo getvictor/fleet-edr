@@ -137,6 +137,17 @@ func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 	return row.HostID, nil
 }
 
+// CountActive returns how many non-revoked enrollments exist. Cheaper than
+// ActiveHostIDs when the caller only needs the count — Phase 4's OTel gauge
+// `edr.enrolled.hosts` is the primary caller.
+func (s *Store) CountActive(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM enrollments WHERE revoked_at IS NULL`); err != nil {
+		return 0, fmt.Errorf("count active enrollments: %w", err)
+	}
+	return n, nil
+}
+
 // ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment.
 // Phase 2 uses this to fan out policy updates to the set of hosts that still have a
 // valid token; returning just the id column keeps the payload small when the caller is

@@ -23,6 +23,7 @@ import (
 	"github.com/fleetdm/edr/agent/enrollment"
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/logging"
+	"github.com/fleetdm/edr/agent/metrics"
 	"github.com/fleetdm/edr/agent/observability"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
@@ -128,12 +129,13 @@ func run() error {
 		hostID = tpID
 	}
 
-	q, err := queue.Open(ctx, cfg.QueueDBPath)
+	q, err := queue.Open(ctx, cfg.QueueDBPath, queue.Options{MaxBytes: cfg.QueueMaxBytes, Logger: logger})
 	if err != nil {
 		logger.ErrorContext(ctx, "open queue", "err", err)
 		return err
 	}
 	defer func() { _ = q.Close() }()
+	q.SetMetrics(metrics.New())
 
 	pidTable := proctable.New()
 

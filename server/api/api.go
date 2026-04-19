@@ -267,6 +267,14 @@ func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 4 host liveness: the agent polls this endpoint every 5 s, so it doubles as
+	// the heartbeat. A failure here is non-fatal — the list still returns, the next
+	// poll re-tries the upsert. The UI treats hosts with last_seen_ns older than 5 min
+	// as "offline".
+	if err := h.store.UpdateHostLastSeen(ctx, hostID, time.Now()); err != nil {
+		h.logger.WarnContext(ctx, "update host last_seen", "err", err, "edr.host_id", hostID)
+	}
+
 	status := r.URL.Query().Get("status")
 
 	commands, err := h.store.ListCommands(ctx, hostID, status)

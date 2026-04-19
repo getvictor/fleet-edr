@@ -8,11 +8,17 @@ import (
 	"github.com/fleetdm/edr/server/store"
 )
 
+// MetricsRecorder is the Phase 4 counter interface. Nil is fine; metrics are optional.
+type MetricsRecorder interface {
+	AlertCreated(ctx context.Context, ruleID, severity string)
+}
+
 // Engine manages a set of rules and evaluates them against event batches.
 type Engine struct {
-	rules  []Rule
-	store  *store.Store
-	logger *slog.Logger
+	rules   []Rule
+	store   *store.Store
+	logger  *slog.Logger
+	metrics MetricsRecorder
 }
 
 // NewEngine creates a detection engine backed by the given store.
@@ -22,6 +28,9 @@ func NewEngine(s *store.Store, logger *slog.Logger) *Engine {
 	}
 	return &Engine{store: s, logger: logger}
 }
+
+// SetMetrics installs the OTel counter hook. Safe to call after NewEngine.
+func (e *Engine) SetMetrics(m MetricsRecorder) { e.metrics = m }
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r Rule) {
@@ -54,6 +63,12 @@ func (e *Engine) Evaluate(ctx context.Context, events []store.Event) error {
 			if created {
 				e.logger.InfoContext(ctx, "detection alert created",
 					"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+				// Only count NEW alerts — the dedup-skip path (same rule + process + host)
+				// is evaluator noise, not a new finding. Operators care about the new-
+				// alert rate.
+				if e.metrics != nil {
+					e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
+				}
 			}
 		}
 	}

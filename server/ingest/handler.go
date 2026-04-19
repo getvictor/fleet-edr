@@ -27,12 +27,21 @@ type BuildInfo struct {
 	BuildTime string
 }
 
+// MetricsHook is the tiny write surface for Phase 4 ingest metrics. Matches
+// *metrics.Recorder; kept as an interface so tests don't need to import the OTel SDK.
+// Nil is fine — instrumentation is optional.
+type MetricsHook interface {
+	EventsIngested(ctx context.Context, hostID string, n int)
+	ObserveDBQuery(ctx context.Context, op string, d time.Duration)
+}
+
 // Handler serves the event ingestion API plus the livez/readyz/health endpoints.
 type Handler struct {
 	store     *store.Store
 	logger    *slog.Logger
 	buildInfo BuildInfo
 	startTime time.Time
+	metrics   MetricsHook
 }
 
 // New creates an ingestion Handler. The store argument may be nil in tests that only
@@ -48,6 +57,9 @@ func New(s *store.Store, logger *slog.Logger, info BuildInfo) *Handler {
 		startTime: time.Now(),
 	}
 }
+
+// SetMetrics installs the Phase 4 ingest-counter hook. Safe to call after New.
+func (h *Handler) SetMetrics(m MetricsHook) { h.metrics = m }
 
 // IngestHandler returns the POST /api/v1/events handler. Callers wrap it in
 // authn.HostToken middleware before mounting.
@@ -102,16 +114,35 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.store.InsertEvents(ctx, events); err != nil {
-		h.logger.ErrorContext(ctx, "insert error", "err", err)
+	insertStart := time.Now()
+	insertErr := h.store.InsertEvents(ctx, events)
+	// Record latency on both success AND failure paths: lock waits, timeouts, and
+	// deadlocks are precisely the cases where a p95/p99 spike reveals a DB issue,
+	// and suppressing them on error would mask real pathology on the dashboards.
+	if h.metrics != nil {
+		h.metrics.ObserveDBQuery(ctx, "insert_events", time.Since(insertStart))
+	}
+	if insertErr != nil {
+		h.logger.ErrorContext(ctx, "insert error", "err", insertErr)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
+	// Phase 4: count events successfully persisted. Labeled by host_id — the
+	// authn-pinned value, not the per-event field (which we already validated matches
+	// above), so a compromised agent cannot inflate another host's metric.
+	if h.metrics != nil {
+		h.metrics.EventsIngested(ctx, pinnedHostID, len(events))
+	}
+
 	// Update the hosts summary table with event counts and last-seen timestamps.
+	upsertStart := time.Now()
 	if err := h.store.UpsertHosts(ctx, events); err != nil {
 		h.logger.ErrorContext(ctx, "upsert hosts", "err", err)
 		// Non-fatal: events are already stored; host stats will be corrected on next server restart via backfill.
+	}
+	if h.metrics != nil {
+		h.metrics.ObserveDBQuery(ctx, "upsert_hosts", time.Since(upsertStart))
 	}
 
 	w.WriteHeader(http.StatusOK)
