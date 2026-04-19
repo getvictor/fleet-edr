@@ -1,6 +1,7 @@
 package uploader
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -49,7 +50,7 @@ func TestUploadBatch(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ServerURL = srv.URL
-	cfg.APIKey = "test-key"
+	cfg.TokenFn = func() string { return "test-key" }
 	cfg.BatchSize = 10
 
 	u := New(q, cfg, nil, nil)
@@ -126,6 +127,43 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	depth, _ := q.Depth(ctx)
 	if depth != 1 {
 		t.Fatalf("expected queue depth 1 after failed upload, got %d", depth)
+	}
+}
+
+// TestUpload401_CallsOnAuthFail locks in the 401 → re-auth signal. The Phase 1 QA bug was
+// that OnAuthFail never fired because the agent's TLS config was broken; this test prevents
+// any future regression where the auth path stops surfacing 401s to enrollment.
+func TestUpload401_CallsOnAuthFail(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"x"}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
+	}))
+	defer srv.Close()
+
+	var called atomic.Int64
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.TokenFn = func() string { return "stale-token" }
+	cfg.OnAuthFail = func(context.Context) { called.Add(1) }
+	cfg.MaxRetries = 1
+
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
+
+	if called.Load() != 1 {
+		t.Fatalf("expected OnAuthFail to fire exactly once on 401, got %d", called.Load())
+	}
+	// Batch must stay in the queue so the next tick can retry with a fresh token.
+	depth, _ := q.Depth(ctx)
+	if depth != 1 {
+		t.Fatalf("expected queue depth 1 after 401, got %d", depth)
 	}
 }
 

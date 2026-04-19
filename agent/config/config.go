@@ -22,18 +22,20 @@ const (
 
 // Config is the resolved agent configuration.
 type Config struct {
-	ServerURL      string
-	BearerToken    string
-	HostIDOverride string
-	QueueDBPath    string
-	XPCService     string
-	NetXPCService  string
-	BatchSize      int
-	UploadInterval time.Duration
-	PruneAge       time.Duration
-	LogLevel       string
-	LogFormat      string
-	AllowInsecure  bool
+	ServerURL         string
+	EnrollSecret      string
+	TokenFile         string
+	ServerFingerprint string
+	HostIDOverride    string
+	QueueDBPath       string
+	XPCService        string
+	NetXPCService     string
+	BatchSize         int
+	UploadInterval    time.Duration
+	PruneAge          time.Duration
+	LogLevel          string
+	LogFormat         string
+	AllowInsecure     bool
 }
 
 // Load reads configuration from the environment and validates it.
@@ -42,7 +44,9 @@ func Load() (*Config, error) {
 }
 
 func loadFrom(getenv func(string) string) (*Config, error) {
+	//nolint:gosec // "enrolled.plist" is a path, not a credential.
 	c := Config{
+		TokenFile:      "/var/db/fleet-edr/enrolled.plist",
 		QueueDBPath:    defaultQueueDBPath,
 		XPCService:     defaultXPCService,
 		NetXPCService:  defaultNetXPCService,
@@ -59,10 +63,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 		errs = append(errs, errors.New("required env var EDR_SERVER_URL is not set"))
 	}
 
-	c.BearerToken = getenv("EDR_BEARER_TOKEN")
-	if c.BearerToken == "" {
-		errs = append(errs, errors.New("required env var EDR_BEARER_TOKEN is not set"))
-	}
+	c.EnrollSecret = getenv("EDR_ENROLL_SECRET")
+	optional(&c.TokenFile, "EDR_TOKEN_FILE", getenv)
+	optional(&c.ServerFingerprint, "EDR_SERVER_FINGERPRINT", getenv)
 
 	c.AllowInsecure = getenv("EDR_ALLOW_INSECURE") == "1"
 	if c.ServerURL != "" {

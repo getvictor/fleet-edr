@@ -16,8 +16,7 @@ func envMap(pairs map[string]string) func(string) string {
 
 func TestLoad(t *testing.T) {
 	minEnv := map[string]string{
-		"EDR_SERVER_URL":   "https://edr.example.com",
-		"EDR_BEARER_TOKEN": "s3cret",
+		"EDR_SERVER_URL": "https://edr.example.com",
 	}
 
 	cases := []struct {
@@ -32,7 +31,6 @@ func TestLoad(t *testing.T) {
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
 				assert.Equal(t, "https://edr.example.com", c.ServerURL)
-				assert.Equal(t, "s3cret", c.BearerToken)
 				assert.Equal(t, 100, c.BatchSize)
 				assert.Equal(t, time.Second, c.UploadInterval)
 				assert.Equal(t, "/var/db/fleet-edr/events.db", c.QueueDBPath)
@@ -41,19 +39,13 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			name:    "missing server url",
-			env:     map[string]string{"EDR_BEARER_TOKEN": "s"},
+			env:     map[string]string{},
 			wantErr: "EDR_SERVER_URL",
-		},
-		{
-			name:    "missing bearer token",
-			env:     map[string]string{"EDR_SERVER_URL": "https://x"},
-			wantErr: "EDR_BEARER_TOKEN",
 		},
 		{
 			name: "http without EDR_ALLOW_INSECURE rejected",
 			env: map[string]string{
-				"EDR_SERVER_URL":   "http://insecure",
-				"EDR_BEARER_TOKEN": "s",
+				"EDR_SERVER_URL": "http://insecure",
 			},
 			wantErr: "EDR_ALLOW_INSECURE",
 		},
@@ -61,7 +53,6 @@ func TestLoad(t *testing.T) {
 			name: "http with EDR_ALLOW_INSECURE=1 accepted",
 			env: map[string]string{
 				"EDR_SERVER_URL":     "http://dev",
-				"EDR_BEARER_TOKEN":   "s",
 				"EDR_ALLOW_INSECURE": "1",
 			},
 			validate: func(t *testing.T, c *Config) {
@@ -135,32 +126,28 @@ func TestLoad(t *testing.T) {
 		{
 			name: "invalid server URL rejected",
 			env: map[string]string{
-				"EDR_SERVER_URL":   "://not a url",
-				"EDR_BEARER_TOKEN": "s",
+				"EDR_SERVER_URL": "://not a url",
 			},
 			wantErr: "must be a valid http(s) URL",
 		},
 		{
 			name: "unsupported scheme rejected",
 			env: map[string]string{
-				"EDR_SERVER_URL":   "ws://host:8088",
-				"EDR_BEARER_TOKEN": "s",
+				"EDR_SERVER_URL": "ws://host:8088",
 			},
 			wantErr: "must use http or https",
 		},
 		{
 			name: "scheme case-insensitive; HTTP:// still requires EDR_ALLOW_INSECURE",
 			env: map[string]string{
-				"EDR_SERVER_URL":   "HTTP://host:8088",
-				"EDR_BEARER_TOKEN": "s",
+				"EDR_SERVER_URL": "HTTP://host:8088",
 			},
 			wantErr: "EDR_ALLOW_INSECURE",
 		},
 		{
 			name: "uppercase HTTPS accepted",
 			env: map[string]string{
-				"EDR_SERVER_URL":   "HTTPS://host:8088",
-				"EDR_BEARER_TOKEN": "s",
+				"EDR_SERVER_URL": "HTTPS://host:8088",
 			},
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -170,9 +157,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "log level normalized to lowercase",
 			env: map[string]string{
-				"EDR_SERVER_URL":   "https://x",
-				"EDR_BEARER_TOKEN": "s",
-				"EDR_LOG_LEVEL":    "WARN",
+				"EDR_SERVER_URL": "https://x",
+				"EDR_LOG_LEVEL":  "WARN",
 			},
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()

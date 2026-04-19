@@ -3,25 +3,31 @@
 // by a separate fleet-edr-ingest instance.
 //
 // Configuration is loaded from environment variables; see server/config for the full list.
-// Start it with EDR_DSN, EDR_BEARER_TOKEN, and optionally the OTEL_* vars that route traces
-// and logs to a collector (SigNoz, Tempo, Datadog, ...).
+// Start it with EDR_DSN, EDR_ENROLL_SECRET, EDR_ADMIN_TOKEN, TLS cert files (or
+// EDR_ALLOW_INSECURE_HTTP=1 for dev), and optionally the OTEL_* vars that route traces and
+// logs to a collector (SigNoz, Tempo, Datadog, ...).
 package main
 
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
+	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/detection/rules"
+	"github.com/fleetdm/edr/server/enrollment"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/ingest"
@@ -66,8 +72,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Defer shutdown as soon as Init succeeds so any later startup failure (logging.New,
-	// store.New, etc.) still flushes buffered OTel telemetry on its way out.
 	defer func() {
 		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer flushCancel()
@@ -92,7 +96,11 @@ func run() error {
 		"commit", commit,
 		"build_time", buildTime,
 		"tls", cfg.TLSEnabled(),
+		"tls12_allowed", cfg.AllowTLS12,
 	)
+	if !cfg.TLSEnabled() {
+		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
+	}
 
 	s, err := store.New(ctx, cfg.DSN)
 	if err != nil {
@@ -102,18 +110,70 @@ func run() error {
 	defer func() { _ = s.Close() }()
 
 	build := ingest.BuildInfo{Version: version, Commit: commit, BuildTime: buildTime}
-	ingestHandler := ingest.New(s, cfg.BearerToken, logger, build)
+	ingestHandler := ingest.New(s, logger, build)
 	builder := graph.NewBuilder(s, logger)
 	det := detection.NewEngine(s, logger)
 	det.Register(&rules.SuspiciousExec{})
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)
-	apiHandler := api.New(q, s, cfg.BearerToken, logger)
+	apiHandler := api.New(q, s, logger)
+
+	enrollStore := enrollment.NewStore(s.DB())
+	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{
+		EnrollSecret:  cfg.EnrollSecret,
+		RatePerMinute: cfg.EnrollRatePerMin,
+		Logger:        logger,
+	})
+	adminHandler := admin.New(enrollStore, logger)
+
+	// Build the mux as a composition of three authorization domains:
+	//   - public:  /livez, /readyz, /health, POST /api/v1/enroll
+	//   - host:    POST /api/v1/events, GET /api/v1/commands, PUT /api/v1/commands/{id}
+	//             (wrapped in authn.HostToken — the agent polls for + reports on its own commands)
+	//   - admin:   everything under /api/v1/{hosts,alerts,admin}, POST /api/v1/commands,
+	//             GET /api/v1/commands/{id}, and /ui/* (wrapped in authn.AdminToken)
+	//
+	// Middleware is applied per-handler at registration time so a single mux serves the whole
+	// surface and we don't have to route through multiple servers.
+	hostTokenMW := authn.HostToken(enrollStore, logger)
+	adminTokenMW := authn.AdminToken(cfg.AdminToken, logger)
 
 	mux := http.NewServeMux()
-	ingestHandler.RegisterRoutes(mux)
-	apiHandler.RegisterRoutes(mux)
+	ingestHandler.RegisterHealthRoutes(mux)
+	enrollHandler.RegisterRoutes(mux)
+
+	// Host-token protected agent endpoints. We wrap a dedicated sub-mux so the api.Handler
+	// routes (GET/PUT commands) share scoping logic with the ingest handler.
+	hostMux := http.NewServeMux()
+	hostMux.Handle("POST /api/v1/events", ingestHandler.IngestHandler())
+	hostMux.HandleFunc("GET /api/v1/commands", apiHandler.ListCommands)
+	hostMux.HandleFunc("PUT /api/v1/commands/{id}", apiHandler.UpdateCommandStatus)
+	hostProtected := hostTokenMW(hostMux)
+	for _, p := range []string{
+		"POST /api/v1/events",
+		"GET /api/v1/commands",
+		"PUT /api/v1/commands/{id}",
+	} {
+		mux.Handle(p, hostProtected)
+	}
+
+	// Admin-token protected admin APIs. api.Handler.RegisterRoutes registers onto a dedicated
+	// sub-mux so we can wrap that whole sub-mux in the admin middleware. GET /commands and
+	// PUT /commands/{id} are deliberately host-token-only — those paths are the agent-facing
+	// command protocol. Admin UI command management (POST, GET /{id}) goes here.
+	apiMux := http.NewServeMux()
+	apiHandler.RegisterRoutes(apiMux)
+	adminHandler.RegisterRoutes(apiMux)
+	adminProtected := adminTokenMW(apiMux)
+	for _, p := range []string{
+		"GET /api/v1/hosts", "GET /api/v1/hosts/{host_id}/tree", "GET /api/v1/hosts/{host_id}/processes/{pid}",
+		"GET /api/v1/alerts", "GET /api/v1/alerts/{id}", "PUT /api/v1/alerts/{id}",
+		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
+		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
+	} {
+		mux.Handle(p, adminProtected)
+	}
 	registerUIRoutes(mux, logger)
 
 	// Start the background event processor.
@@ -126,6 +186,7 @@ func run() error {
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:      logger,
 		ServiceName: serviceName,
+		TLSEnabled:  cfg.TLSEnabled(),
 	})
 
 	srv := &http.Server{
@@ -135,19 +196,64 @@ func run() error {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	var certHolder atomic.Pointer[tls.Certificate]
 	if cfg.TLSEnabled() {
-		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			logger.ErrorContext(ctx, "load tls cert", "err", err)
+			return err
+		}
+		certHolder.Store(&cert)
+		minVer := uint16(tls.VersionTLS13)
+		if cfg.AllowTLS12 {
+			minVer = tls.VersionTLS12
+			logger.WarnContext(ctx, "EDR_TLS_ALLOW_TLS12=1 set; TLS 1.2 enabled for legacy pilot")
+		}
+		//nolint:gosec // MinVersion may be TLS12 only when the operator explicitly opts in via EDR_TLS_ALLOW_TLS12=1.
+		srv.TLSConfig = &tls.Config{
+			MinVersion: minVer,
+			// TLS 1.2 cipher list restricted to forward-secrecy AEADs. TLS 1.3 has its own
+			// fixed list, so this only applies when AllowTLS12 is on.
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			},
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				// atomic.Pointer.Load is cheap; the pointer is swapped by the SIGHUP handler.
+				return certHolder.Load(), nil
+			},
+		}
+
+		// Start a SIGHUP watcher that atomically swaps the cert + key from disk. Existing
+		// connections are not dropped; only new handshakes see the new cert.
+		sighup := make(chan os.Signal, 1)
+		signal.Notify(sighup, syscall.SIGHUP)
+		go func() {
+			for range sighup {
+				logger.InfoContext(ctx, "tls reload: reloading cert + key from disk")
+				cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+				if err != nil {
+					logger.ErrorContext(ctx, "tls reload failed", "err", err)
+					continue
+				}
+				certHolder.Store(&cert)
+				logger.InfoContext(ctx, "tls reload", "cert_file", cfg.TLSCertFile)
+			}
+		}()
 	}
 
 	serverErr := make(chan error, 1)
 	go func() {
 		var serveErr error
 		if cfg.TLSEnabled() {
-			serveErr = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			// Pass empty strings because GetCertificate owns the cert source.
+			serveErr = srv.ListenAndServeTLS("", "")
 		} else {
 			serveErr = srv.ListenAndServe()
 		}
-		if serveErr != nil && serveErr != http.ErrServerClosed {
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			serverErr <- serveErr
 		}
 		close(serverErr)
@@ -155,9 +261,6 @@ func run() error {
 
 	select {
 	case <-ctx.Done():
-		// ctx.Err() is context.Canceled; we record it as "reason" since it's not the OS signal
-		// (the signal is swallowed by signal.NotifyContext). The field name reflects what we
-		// actually log.
 		logger.InfoContext(context.Background(), "shutdown starting", "reason", ctx.Err())
 	case err := <-serverErr:
 		if err != nil {
@@ -172,11 +275,15 @@ func run() error {
 		logger.ErrorContext(shutdownCtx, "shutdown error", "err", err)
 	}
 	logger.InfoContext(shutdownCtx, "shutdown complete")
-	// OTel shutdown handled by the deferred flusher installed right after observability.Init.
 	return nil
 }
 
-// registerUIRoutes serves the embedded React UI at /ui/ and redirects / to /ui/.
+// registerUIRoutes serves the embedded React UI at /ui/ and redirects / to /ui/. The bundle
+// itself is intentionally unauthenticated: the React app's login screen is what collects the
+// admin token and stores it in sessionStorage, from which every subsequent API call reads it
+// into an `Authorization: Bearer` header. Gating /ui/ behind AdminToken would make the login
+// page unreachable (chicken/egg). The privileged surface is /api/v1/*, which IS gated.
+// Phase 3 replaces this with a server-rendered login endpoint + session cookies.
 func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {

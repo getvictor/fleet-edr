@@ -22,8 +22,13 @@ type Config struct {
 	// ServerURL is the base URL of the ingestion server (e.g. "https://edr.example.com").
 	ServerURL string
 
-	// APIKey is the static API key for authentication.
-	APIKey string
+	// TokenFn returns the current bearer token at request time. Typically backed by the
+	// enrollment package's TokenProvider. Nil means "send no Authorization header" (tests).
+	TokenFn func() string
+
+	// OnAuthFail is called when the server returns HTTP 401 so the agent can trigger a
+	// re-enroll. Nil is allowed (tests); in production wire it to TokenProvider.OnUnauthorized.
+	OnAuthFail func(ctx context.Context)
 
 	// BatchSize is the maximum number of events per upload.
 	BatchSize int
@@ -117,6 +122,16 @@ func (u *Uploader) drainOnce(ctx context.Context) error {
 	}
 
 	if err := u.uploadWithRetry(ctx, body); err != nil {
+		// 401 specifically is a recoverable state: OnAuthFail has already been signalled and
+		// the batch stays in the queue for the next tick to retry with a fresh token. Log at
+		// warn, not error, so operators don't see a flood of error-level lines during an
+		// expected re-enroll window.
+		var clientErr *clientError
+		if errors.As(err, &clientErr) && clientErr.statusCode == http.StatusUnauthorized {
+			u.logger.WarnContext(ctx, "uploader upload unauthorized; re-enroll in flight",
+				"batch_size", len(batch))
+			return err
+		}
 		u.logger.ErrorContext(ctx, "uploader upload failed", "err", err, "batch_size", len(batch))
 		return err
 	}
@@ -174,7 +189,11 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+u.cfg.APIKey)
+	if u.cfg.TokenFn != nil {
+		if tok := u.cfg.TokenFn(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
 
 	resp, err := u.client.Do(req)
 	if err != nil {
@@ -185,6 +204,14 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized && u.cfg.OnAuthFail != nil {
+		// Surface the 401 to the enrollment package so it can re-enroll. We fall through to
+		// the 4xx branch below, so this fires at most once per drain tick (not per retry —
+		// clientError is non-retryable). The callback is itself rate-limited, so repeated
+		// drain ticks while the token is stale are safe.
+		u.cfg.OnAuthFail(ctx)
 	}
 
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {

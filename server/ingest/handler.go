@@ -1,17 +1,21 @@
-// Package ingest provides HTTP handlers for the EDR event ingestion API.
+// Package ingest provides HTTP handlers for the EDR event ingestion API and the
+// livez/readyz/health probes. Starting in Phase 1 the ingest endpoint itself is
+// unauthenticated *at this layer*: the authn.HostToken middleware (wired up in main.go)
+// resolves the bearer token to a host_id and pins it on the request context. This handler
+// reads the pinned host_id via authn.HostIDFromContext and rejects any event payload whose
+// HostID field does not match.
 package ingest
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -26,36 +30,34 @@ type BuildInfo struct {
 // Handler serves the event ingestion API plus the livez/readyz/health endpoints.
 type Handler struct {
 	store     *store.Store
-	apiKey    string
 	logger    *slog.Logger
 	buildInfo BuildInfo
 	startTime time.Time
 }
 
-// New creates an ingestion Handler. apiKey must not be empty; empty keys would accept every
-// request, a demo-only behavior we refuse to ship. The store argument may be nil in tests that
-// only exercise the ingest-auth path; readiness checks handle that case explicitly.
-func New(s *store.Store, apiKey string, logger *slog.Logger, info BuildInfo) *Handler {
+// New creates an ingestion Handler. The store argument may be nil in tests that only
+// exercise the health endpoints; readiness checks handle that case explicitly.
+func New(s *store.Store, logger *slog.Logger, info BuildInfo) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if apiKey == "" {
-		// Fail loud rather than silently accept every request. Production paths feed this from
-		// config.Load which already enforces non-empty.
-		panic("ingest.New: apiKey must not be empty")
-	}
 	return &Handler{
 		store:     s,
-		apiKey:    apiKey,
 		logger:    logger,
 		buildInfo: info,
 		startTime: time.Now(),
 	}
 }
 
-// RegisterRoutes registers the API routes on the given mux.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/events", h.handleIngest)
+// IngestHandler returns the POST /api/v1/events handler. Callers wrap it in
+// authn.HostToken middleware before mounting.
+func (h *Handler) IngestHandler() http.Handler {
+	return http.HandlerFunc(h.handleIngest)
+}
+
+// RegisterHealthRoutes registers the unauthenticated /livez, /readyz, /health routes.
+// The ingest endpoint is mounted separately because it requires host-token middleware.
+func (h *Handler) RegisterHealthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /livez", h.handleLivez)
 	mux.HandleFunc("GET /readyz", h.handleReadyz)
 	// /health is an alias for /readyz, retained for human convenience and existing monitors.
@@ -63,35 +65,46 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+
+	// authn.HostToken must have run ahead of us. If the pinned host_id is missing the
+	// middleware wiring is broken — refuse rather than silently accept.
+	pinnedHostID, ok := authn.HostIDFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "ingest handler reached without host_id on context; middleware misconfigured")
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024)) // 10 MB limit
 	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "read_body")
 		return
 	}
 
 	var events []store.Event
 	if err := json.Unmarshal(body, &events); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_json")
 		return
 	}
 
-	// Validate required fields.
+	// Validate required fields AND enforce host_id pinning: the token identifies ONE host,
+	// so every event in the batch must carry that same host_id. This prevents a compromised
+	// agent from impersonating another host by stuffing a different host_id in the payload.
 	for i, e := range events {
 		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
-			http.Error(w, "event at index "+strconv.Itoa(i)+" missing required fields", http.StatusBadRequest)
+			writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing_fields_at_"+strconv.Itoa(i))
+			return
+		}
+		if e.HostID != pinnedHostID {
+			writeErr(ctx, h.logger, w, http.StatusBadRequest, "host_id_mismatch")
 			return
 		}
 	}
 
-	ctx := r.Context()
 	if err := h.store.InsertEvents(ctx, events); err != nil {
 		h.logger.ErrorContext(ctx, "insert error", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -183,17 +196,10 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) authorize(r *http.Request) bool {
-	// Belt-and-suspenders: New() panics on empty apiKey, but a zero-valued Handler constructed
-	// outside of New (e.g., &Handler{} in a future refactor) would otherwise accept "Bearer ".
-	if h.apiKey == "" {
-		return false
-	}
-	auth := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return false
-	}
-	token := auth[len(prefix):]
-	return subtle.ConstantTimeCompare([]byte(token), []byte(h.apiKey)) == 1
+// writeErr returns a typed application/json error body with the no-store headers httpserver.Build
+// also applies to our success responses, so a 4xx/5xx from ingest is indistinguishable from other
+// endpoints' errors on the wire. Callers pass short stable codes (e.g. "host_id_mismatch"), not
+// human sentences, so client tooling can switch on them.
+func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
+	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
 }

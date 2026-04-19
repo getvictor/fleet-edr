@@ -17,9 +17,12 @@ import (
 // Config holds commander settings.
 type Config struct {
 	ServerURL string
-	APIKey    string
-	HostID    string
-	Interval  time.Duration
+	// TokenFn returns the current bearer token at request time. Nil means "no auth header".
+	TokenFn func() string
+	// OnAuthFail is called on HTTP 401 so the agent can trigger a re-enroll. Nil is allowed.
+	OnAuthFail func(ctx context.Context)
+	HostID     string
+	Interval   time.Duration
 }
 
 // Commander polls the server for pending commands and dispatches them.
@@ -108,6 +111,9 @@ func (c *Commander) fetchPending(ctx context.Context) ([]command, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized && c.cfg.OnAuthFail != nil {
+		c.cfg.OnAuthFail(ctx)
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
@@ -192,6 +198,12 @@ func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string
 	defer resp.Body.Close()
 	_, _ = io.ReadAll(resp.Body)
 
+	// Surface 401 to the enrollment package here too. fetchPending already does this on its
+	// poll loop, but a revoked token can show up between a fetch and the following ack/complete
+	// PUT — without this call, recovery waits until the next poll tick.
+	if resp.StatusCode == http.StatusUnauthorized && c.cfg.OnAuthFail != nil {
+		c.cfg.OnAuthFail(ctx)
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
@@ -199,7 +211,9 @@ func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string
 }
 
 func (c *Commander) setAuth(req *http.Request) {
-	if c.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	if c.cfg.TokenFn != nil {
+		if tok := c.cfg.TokenFn(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 }

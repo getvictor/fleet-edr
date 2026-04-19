@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,10 +45,55 @@ func TestFetchPendingWithAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", APIKey: "test-key"}, nil, nil)
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", TokenFn: func() string { return "test-key" }}, nil, nil)
 	result, err := cmdr.fetchPending(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, result)
+}
+
+// TestFetchPending401_CallsOnAuthFail locks in the contract that a 401 from the server wakes
+// up the enrollment re-auth hook. Regression bar for the Phase 1 QA bug where a revoked token
+// left the commander silently stuck.
+func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
+	}))
+	defer srv.Close()
+
+	var called atomic.Int64
+	cmdr := New(Config{
+		ServerURL:  srv.URL,
+		HostID:     "host-a",
+		TokenFn:    func() string { return "stale-token" },
+		OnAuthFail: func(context.Context) { called.Add(1) },
+	}, nil, nil)
+
+	_, err := cmdr.fetchPending(t.Context())
+	require.Error(t, err)
+	assert.Equal(t, int64(1), called.Load(), "401 on fetchPending must trigger OnAuthFail exactly once")
+}
+
+// TestUpdateStatus401_CallsOnAuthFail covers the PUT /commands/{id} path — a token can be
+// revoked between fetchPending and the following ack/complete, and the hook must fire there
+// too or recovery waits for the next poll tick.
+func TestUpdateStatus401_CallsOnAuthFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	var called atomic.Int64
+	cmdr := New(Config{
+		ServerURL:  srv.URL,
+		HostID:     "host-a",
+		TokenFn:    func() string { return "stale-token" },
+		OnAuthFail: func(context.Context) { called.Add(1) },
+	}, nil, nil)
+
+	err := cmdr.updateStatus(t.Context(), 42, "acked", nil)
+	require.Error(t, err)
+	assert.Equal(t, int64(1), called.Load(), "401 on updateStatus must trigger OnAuthFail exactly once")
 }
 
 func TestDispatchUnknownCommand(t *testing.T) {

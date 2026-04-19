@@ -15,16 +15,19 @@ import (
 
 // Config is the resolved server configuration.
 type Config struct {
-	DSN             string
-	ListenAddr      string
-	BearerToken     string
-	EnrollSecret    string
-	TLSCertFile     string
-	TLSKeyFile      string
-	LogLevel        string
-	LogFormat       string
-	ProcessInterval time.Duration
-	ProcessBatch    int
+	DSN               string
+	ListenAddr        string
+	EnrollSecret      string
+	AdminToken        string
+	TLSCertFile       string
+	TLSKeyFile        string
+	AllowInsecureHTTP bool
+	AllowTLS12        bool
+	EnrollRatePerMin  int
+	LogLevel          string
+	LogFormat         string
+	ProcessInterval   time.Duration
+	ProcessBatch      int
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -35,11 +38,12 @@ func (c Config) TLSEnabled() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:      ":8088",
-		LogLevel:        "info",
-		LogFormat:       "json",
-		ProcessInterval: 500 * time.Millisecond,
-		ProcessBatch:    500,
+		ListenAddr:       ":8088",
+		LogLevel:         "info",
+		LogFormat:        "json",
+		ProcessInterval:  500 * time.Millisecond,
+		ProcessBatch:     500,
+		EnrollRatePerMin: 30,
 	}
 }
 
@@ -56,14 +60,36 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	requireStr(&c.DSN, "EDR_DSN", getenv, &errs, true)
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
-	requireStr(&c.BearerToken, "EDR_BEARER_TOKEN", getenv, &errs, true)
-	optionalStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv)
+	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, &errs, true)
+	requireStr(&c.AdminToken, "EDR_ADMIN_TOKEN", getenv, &errs, true)
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
+
+	c.AllowInsecureHTTP = getenv("EDR_ALLOW_INSECURE_HTTP") == "1"
+	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
 
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		errs = append(errs, errors.New(
 			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together (or both left unset)"))
+	}
+
+	// Phase 1 requires TLS in production. The opt-out is deliberately noisy so operators
+	// don't accidentally ship plaintext.
+	if !c.TLSEnabled() && !c.AllowInsecureHTTP {
+		errs = append(errs, errors.New(
+			"EDR_TLS_CERT_FILE is required (set EDR_ALLOW_INSECURE_HTTP=1 for dev)"))
+	}
+
+	if v := getenv("EDR_ENROLL_RATE_PER_MIN"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("EDR_ENROLL_RATE_PER_MIN=%q: %w", v, err))
+		case n <= 0:
+			errs = append(errs, fmt.Errorf("EDR_ENROLL_RATE_PER_MIN=%d must be positive", n))
+		default:
+			c.EnrollRatePerMin = n
+		}
 	}
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {

@@ -18,8 +18,10 @@ func envMap(pairs map[string]string) func(string) string {
 
 func TestLoad(t *testing.T) {
 	minEnv := map[string]string{
-		"EDR_DSN":          "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_BEARER_TOKEN": "s3cret",
+		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":       "enroll-me",
+		"EDR_ADMIN_TOKEN":         "admin-me",
+		"EDR_ALLOW_INSECURE_HTTP": "1",
 	}
 
 	cases := []struct {
@@ -34,33 +36,62 @@ func TestLoad(t *testing.T) {
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
 				assert.Equal(t, "root@tcp(127.0.0.1:3306)/edr?parseTime=true", c.DSN)
-				assert.Equal(t, "s3cret", c.BearerToken)
+				assert.Equal(t, "enroll-me", c.EnrollSecret)
+				assert.Equal(t, "admin-me", c.AdminToken)
+				assert.True(t, c.AllowInsecureHTTP)
 				assert.Equal(t, ":8088", c.ListenAddr)
 				assert.Equal(t, "info", c.LogLevel)
 				assert.Equal(t, "json", c.LogFormat)
 				assert.Equal(t, 500*time.Millisecond, c.ProcessInterval)
 				assert.Equal(t, 500, c.ProcessBatch)
+				assert.Equal(t, 30, c.EnrollRatePerMin)
 				assert.False(t, c.TLSEnabled())
 			},
 		},
 		{
-			name:    "missing EDR_DSN",
-			env:     map[string]string{"EDR_BEARER_TOKEN": "s3cret"},
+			name: "missing EDR_DSN",
+			env: map[string]string{
+				"EDR_ENROLL_SECRET":       "s",
+				"EDR_ADMIN_TOKEN":         "a",
+				"EDR_ALLOW_INSECURE_HTTP": "1",
+			},
 			wantErr: "EDR_DSN",
 		},
 		{
-			name:    "missing EDR_BEARER_TOKEN",
-			env:     map[string]string{"EDR_DSN": "x"},
-			wantErr: "EDR_BEARER_TOKEN",
+			name: "missing EDR_ENROLL_SECRET",
+			env: map[string]string{
+				"EDR_DSN":                 "x",
+				"EDR_ADMIN_TOKEN":         "a",
+				"EDR_ALLOW_INSECURE_HTTP": "1",
+			},
+			wantErr: "EDR_ENROLL_SECRET",
 		},
 		{
-			name: "missing both required vars reports both",
+			name: "missing EDR_ADMIN_TOKEN",
+			env: map[string]string{
+				"EDR_DSN":                 "x",
+				"EDR_ENROLL_SECRET":       "s",
+				"EDR_ALLOW_INSECURE_HTTP": "1",
+			},
+			wantErr: "EDR_ADMIN_TOKEN",
+		},
+		{
+			name: "TLS required unless EDR_ALLOW_INSECURE_HTTP=1",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_ADMIN_TOKEN":   "a",
+			},
+			wantErr: "EDR_TLS_CERT_FILE is required",
+		},
+		{
+			name: "missing every required var reports each",
 			env:  map[string]string{},
 			validate: func(t *testing.T, _ *Config) {
 				t.Helper()
 				t.Fatalf("validate should not be called when wantErr is set")
 			},
-			wantErr: "EDR_DSN\nrequired env var EDR_BEARER_TOKEN",
+			wantErr: "EDR_DSN\nrequired env var EDR_ENROLL_SECRET\nrequired env var EDR_ADMIN_TOKEN",
 		},
 		{
 			name: "TLS key without cert",
@@ -160,7 +191,6 @@ func TestLoad(t *testing.T) {
 			name: "optional overrides applied",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_LISTEN_ADDR":      "127.0.0.1:9090",
-				"EDR_ENROLL_SECRET":    "enroll-me",
 				"EDR_LOG_LEVEL":        "debug",
 				"EDR_LOG_FORMAT":       "text",
 				"EDR_PROCESS_INTERVAL": "1s",
