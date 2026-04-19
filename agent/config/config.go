@@ -28,6 +28,7 @@ type Config struct {
 	ServerFingerprint string
 	HostIDOverride    string
 	QueueDBPath       string
+	QueueMaxBytes     int64 // EDR_AGENT_QUEUE_MAX_BYTES; 0 = unbounded (default 500 MiB)
 	XPCService        string
 	NetXPCService     string
 	BatchSize         int
@@ -48,6 +49,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	c := Config{
 		TokenFile:      "/var/db/fleet-edr/enrolled.plist",
 		QueueDBPath:    defaultQueueDBPath,
+		QueueMaxBytes:  500 * 1024 * 1024, // 500 MiB soft cap; 0 via env disables.
 		XPCService:     defaultXPCService,
 		NetXPCService:  defaultNetXPCService,
 		BatchSize:      100,
@@ -131,6 +133,21 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 			errs = append(errs, fmt.Errorf("EDR_PRUNE_AGE=%q must be positive", v))
 		default:
 			c.PruneAge = d
+		}
+	}
+
+	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB
+	// is set above and applies when the env var is unset; setting it explicitly to 0
+	// restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
+	if v := getenv("EDR_AGENT_QUEUE_MAX_BYTES"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("EDR_AGENT_QUEUE_MAX_BYTES=%q: %w", v, err))
+		case n < 0:
+			errs = append(errs, fmt.Errorf("EDR_AGENT_QUEUE_MAX_BYTES=%d must be >= 0", n))
+		default:
+			c.QueueMaxBytes = n
 		}
 	}
 

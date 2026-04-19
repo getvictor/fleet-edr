@@ -32,9 +32,11 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/logging"
+	"github.com/fleetdm/edr/server/metrics"
 	"github.com/fleetdm/edr/server/observability"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/processor"
+	"github.com/fleetdm/edr/server/retention"
 	"github.com/fleetdm/edr/server/seed"
 	"github.com/fleetdm/edr/server/session"
 	"github.com/fleetdm/edr/server/sessions"
@@ -42,6 +44,22 @@ import (
 	"github.com/fleetdm/edr/server/ui"
 	"github.com/fleetdm/edr/server/users"
 )
+
+// serverGaugeSource adapts our enrollment + store handles to the metrics.GaugeSource
+// interface. Lives here (not in the metrics package) so the metrics package stays
+// free of MySQL dependencies and testable without a real DB.
+type serverGaugeSource struct {
+	enroll *enrollment.Store
+	store  *store.Store
+}
+
+func (g serverGaugeSource) EnrolledHosts(ctx context.Context) (int, error) {
+	return g.enroll.CountActive(ctx)
+}
+
+func (g serverGaugeSource) OfflineHosts(ctx context.Context, threshold time.Duration) (int, error) {
+	return g.store.CountOfflineHosts(ctx, threshold)
+}
 
 // Build info injected via -ldflags at build time.
 var (
@@ -133,6 +151,18 @@ func run() error {
 	userStore := users.New(s.DB())
 	sessionStore := sessions.New(s.DB(), sessions.Options{})
 
+	// Phase 4: OTel metrics recorder. Instruments register against the global meter
+	// provider wired by observability.Init; counters, histograms, and observable
+	// gauges flow through the same OTLP pipeline as traces + logs, so SigNoz (or any
+	// OTLP backend) sees them without a separate scrape endpoint. Gauge source
+	// queries live state on each collection via the enrollStore + s adapter.
+	metricsRec := metrics.New(
+		serverGaugeSource{enroll: enrollStore, store: s},
+		metrics.Options{OfflineThreshold: 5 * time.Minute},
+	)
+	ingestHandler.SetMetrics(metricsRec)
+	det.SetMetrics(metricsRec)
+
 	// Phase 3: seed the first admin before we bind the HTTP listener. If the operator
 	// is watching, they capture the printed password at boot; if they miss it they can
 	// restart and re-seed by deleting the admin row. Never fatal — a seed failure is
@@ -215,6 +245,15 @@ func run() error {
 		mux.Handle(p, sessionProtected)
 	}
 	registerUIRoutes(mux, logger)
+
+	// Phase 4: retention runner. Skipped entirely when RetentionDays == 0.
+	retentionRunner := retention.New(s.DB(), retention.Options{
+		RetentionDays: cfg.RetentionDays,
+		Interval:      cfg.RetentionInterval,
+		Logger:        logger,
+		Metrics:       metricsRec,
+	})
+	go retentionRunner.Loop(ctx)
 
 	// Phase 3: periodic cleanup of expired session rows. Every 5 minutes; the exact
 	// interval doesn't matter much — 12h-TTL rows that linger for a few extra minutes
