@@ -112,6 +112,23 @@ var schemaStatements = []string{
 		revoked_by       VARCHAR(255)   NULL,
 		UNIQUE KEY uk_enrollments_token_id (host_token_id)
 	)`,
+	// policies holds the Phase 2 server-driven blocklist. For MVP we keep a single "default"
+	// row — `name` is a UNIQUE key now so v1.1 can add per-team targeting without a schema
+	// migration. `version` is a monotonically-increasing integer bumped on every admin PUT;
+	// agents cache the last-applied version and skip no-op updates.
+	`CREATE TABLE IF NOT EXISTS policies (
+		id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+		name        VARCHAR(64)  NOT NULL,
+		version     BIGINT       NOT NULL DEFAULT 1,
+		blocklist   JSON         NOT NULL,
+		updated_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		updated_by  VARCHAR(255) NOT NULL DEFAULT 'system',
+		UNIQUE KEY uk_policies_name (name)
+	)`,
+	// Seed the default policy row. Using INSERT IGNORE so restarts don't clobber an edited
+	// row. The initial blocklist is empty — operators opt in to blocking via PUT.
+	`INSERT IGNORE INTO policies (name, version, blocklist, updated_by)
+	 VALUES ('default', 1, JSON_OBJECT('paths', JSON_ARRAY(), 'hashes', JSON_ARRAY()), 'system')`,
 }
 
 // Event represents the canonical event envelope.

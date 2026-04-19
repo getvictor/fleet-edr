@@ -4,13 +4,11 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFSubscriber")
 
-/// Paths that AUTH_EXEC will unconditionally deny. This is a hardcoded demo blocklist;
-/// a production implementation would sync a policy from the server into the agent and
-/// communicate it to the extension over XPC.
-private let blockedPaths: Set<String> = [
-    "/tmp/payload-block",
-    "/private/tmp/payload-block"  // macOS resolves /tmp -> /private/tmp
-]
+// Phase 2: the blocklist is now a runtime set owned by PolicyStore.shared. The server
+// pushes updates over the agent's XPC connection; the extension persists them to
+// /var/db/com.fleetdm.edr/policy.json and swaps the in-memory set atomically. The
+// hardcoded demo list (`/tmp/payload-block`) is gone; operators configure equivalents
+// via `PUT /api/v1/admin/policy` on the server.
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
@@ -77,16 +75,19 @@ final class ESFSubscriber: Sendable {
         }
     }
 
-    /// AUTH_EXEC handler: check the target binary against the hardcoded blocklist and
-    /// respond with DENY or ALLOW. The response is synchronous and immediate (simple
-    /// string lookup), well within the kernel's AUTH deadline. For denied execs the
-    /// kernel returns EPERM to the caller and the binary never runs.
+    /// AUTH_EXEC handler: check the target binary against the runtime blocklist and
+    /// respond with DENY or ALLOW. The lookup is O(1) expected (Swift `Set` is hash-
+    /// backed) and the PolicyStore read is a lock-free snapshot load — no queue.sync,
+    /// no disk I/O on the hot path — so it comfortably fits inside the kernel's AUTH
+    /// deadline. For denied execs the kernel returns EPERM to the caller and the
+    /// binary never runs. The blocklist is owned by PolicyStore; server-driven policy
+    /// pushes swap the snapshot atomically and persist on a separate queue.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
         let target = msg.event.exec.target.pointee
         let path = String(cString: target.executable.pointee.path.data)
 
-        if blockedPaths.contains(path) {
+        if PolicyStore.shared.currentBlockedPaths().contains(path) {
             logger.warning("AUTH_EXEC DENIED: \(path, privacy: .public)")
             es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
         } else {

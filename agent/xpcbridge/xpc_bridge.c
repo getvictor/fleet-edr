@@ -114,6 +114,31 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     return handle;
 }
 
+int xpc_bridge_send_policy(int handle, const uint8_t *data, size_t len) {
+    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS || data == NULL || len == 0) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_slots_mutex);
+    if (!g_slots[handle].in_use) {
+        pthread_mutex_unlock(&g_slots_mutex);
+        return -1;
+    }
+    xpc_connection_t conn = g_slots[handle].connection;
+    // Retain so the connection survives even if the caller tears the slot down between
+    // our unlock and the async send. XPC itself refcounts the object; we mirror that.
+    xpc_retain(conn);
+    pthread_mutex_unlock(&g_slots_mutex);
+
+    xpc_object_t msg = xpc_dictionary_create_empty();
+    xpc_dictionary_set_string(msg, "type", "policy.update");
+    xpc_dictionary_set_data(msg, "data", data, len);
+    xpc_connection_send_message(conn, msg);
+    xpc_release(msg);
+    xpc_release(conn);
+    return 0;
+}
+
 void xpc_bridge_disconnect(int handle) {
     if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS) {
         return;

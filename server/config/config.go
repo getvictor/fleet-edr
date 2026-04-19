@@ -28,6 +28,11 @@ type Config struct {
 	LogFormat         string
 	ProcessInterval   time.Duration
 	ProcessBatch      int
+
+	// LaunchAgentAllowlist is the set of plist paths the `persistence_launchagent` rule
+	// should silently accept. Populated from EDR_LAUNCHAGENT_ALLOWLIST (comma-separated
+	// absolute paths). Empty by default — every plist load fires.
+	LaunchAgentAllowlist map[string]struct{}
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -89,6 +94,17 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 			errs = append(errs, fmt.Errorf("EDR_ENROLL_RATE_PER_MIN=%d must be positive", n))
 		default:
 			c.EnrollRatePerMin = n
+		}
+	}
+
+	if v := getenv("EDR_LAUNCHAGENT_ALLOWLIST"); v != "" {
+		c.LaunchAgentAllowlist = make(map[string]struct{})
+		for p := range strings.SplitSeq(v, ",") {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			c.LaunchAgentAllowlist[p] = struct{}{}
 		}
 	}
 

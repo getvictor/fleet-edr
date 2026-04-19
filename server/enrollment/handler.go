@@ -14,7 +14,24 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
+
+	"github.com/fleetdm/edr/server/policy"
+	"github.com/fleetdm/edr/server/store"
 )
+
+// PolicyGetter is the minimal read interface the enrollment handler needs to queue an
+// initial set_blocklist command at first enroll. Kept as an interface so tests can inject
+// a stub without pulling in a real MySQL instance or the seed migration.
+type PolicyGetter interface {
+	Get(ctx context.Context, name string) (*policy.Policy, error)
+}
+
+// CommandInserter is the narrow interface the enrollment handler needs to queue the
+// initial set_blocklist. Same interface lives in admin.CommandInserter; duplicating it
+// here keeps enrollment free of a dependency on the admin package.
+type CommandInserter interface {
+	InsertCommand(ctx context.Context, c store.Command) (int64, error)
+}
 
 // Handler serves POST /api/v1/enroll. Unauthenticated; rate-limited per source IP; emits an
 // audit log + OTel span attribute set for every enrollment attempt.
@@ -23,7 +40,9 @@ type Handler struct {
 	secret   string
 	logger   *slog.Logger
 	limiter  *ipLimiter
-	trimHost bool // net.SplitHostPort applied in remoteIP; toggleable for tests
+	trimHost bool            // net.SplitHostPort applied in remoteIP; toggleable for tests
+	policy   PolicyGetter    // optional — if nil, no post-enroll fan-out
+	commands CommandInserter // optional — must be non-nil if policy is set
 }
 
 // Options control handler behaviour.
@@ -34,13 +53,23 @@ type Options struct {
 	RatePerMinute int
 	// Logger for audit lines.
 	Logger *slog.Logger
+	// PolicyStore is the read-only view used to queue a set_blocklist command on first
+	// enroll. Optional — leave nil (e.g. in tests) to skip the fan-out. When set,
+	// CommandStore must also be set.
+	PolicyStore PolicyGetter
+	// CommandStore is used to insert the initial set_blocklist command. See PolicyStore.
+	CommandStore CommandInserter
 }
 
 // NewHandler builds an enrollment handler. Panics if EnrollSecret is empty — the operator
-// has to explicitly configure it via EDR_ENROLL_SECRET.
+// has to explicitly configure it via EDR_ENROLL_SECRET. Panics if PolicyStore is set but
+// CommandStore is not: the two fields must be used together.
 func NewHandler(store *Store, opts Options) *Handler {
 	if opts.EnrollSecret == "" {
 		panic("enrollment.NewHandler: EnrollSecret must not be empty")
+	}
+	if opts.PolicyStore != nil && opts.CommandStore == nil {
+		panic("enrollment.NewHandler: PolicyStore set but CommandStore is nil")
 	}
 	if opts.RatePerMinute <= 0 {
 		opts.RatePerMinute = 30
@@ -55,6 +84,8 @@ func NewHandler(store *Store, opts Options) *Handler {
 		logger:   logger,
 		limiter:  newIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
 		trimHost: true,
+		policy:   opts.PolicyStore,
+		commands: opts.CommandStore,
 	}
 }
 
@@ -176,6 +207,84 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		HostToken:  result.HostToken,
 		EnrolledAt: result.EnrolledAt,
 	})
+
+	// Phase 2: queue an initial set_blocklist command AFTER responding so the enroll
+	// request's tail latency is not coupled to the policy store + command insert. The
+	// detached context keeps the DB writes alive even if the client drops the connection
+	// (a transient TLS glitch shouldn't make the host miss its first policy). A failure
+	// here is non-fatal: the next admin policy push re-converges any host whose initial
+	// command didn't land.
+	//
+	// Using a detached background context rather than the request ctx so client
+	// cancellation doesn't abort the best-effort fanout; capped at 10s to match the
+	// outer HTTP server's write timeout + some slack. gosec G118 flags this pattern —
+	// the nolint below is the honest marker that we intentionally decouple the
+	// background work from the request lifetime.
+	go func(hostID string) { //nolint:gosec // G118: intentional detached context so best-effort fanout survives client cancellation.
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		h.enqueueInitialPolicy(bgCtx, hostID)
+	}(result.HostID)
+}
+
+// enqueueInitialPolicy fetches the current default policy and queues a set_blocklist
+// command for the newly-enrolled host. Silent on all failures (best-effort) — enrollment
+// already succeeded, so the operator is not held up by a flaky command insert; the next
+// policy PUT will re-converge the host anyway. Logs at warn so the failure is still
+// visible in SigNoz if a class of hosts systematically fails this step.
+//
+// Skips enqueue entirely when the seeded / current policy is empty (no paths AND no
+// hashes): agents with no prior policy state gain nothing from an "apply empty blocklist"
+// command, and the command would just round-trip for no effect. The next PUT that adds
+// entries will fan out to this host via the admin endpoint's ActiveHostIDs walk.
+func (h *Handler) enqueueInitialPolicy(ctx context.Context, hostID string) {
+	if h.policy == nil || h.commands == nil {
+		return
+	}
+	p, err := h.policy.Get(ctx, policy.DefaultName)
+	if err != nil {
+		h.logger.WarnContext(ctx, "initial policy fetch failed", "edr.host_id", hostID, "err", err)
+		return
+	}
+	if len(p.Blocklist.Paths) == 0 && len(p.Blocklist.Hashes) == 0 {
+		// Seed policy (v1 empty) or operator explicitly cleared. Nothing to push.
+		h.logger.InfoContext(ctx, "initial policy skipped — blocklist empty",
+			"edr.host_id", hostID, "edr.policy.version", p.Version)
+		return
+	}
+	payload, err := json.Marshal(policyCommandPayload{
+		Name:    p.Name,
+		Version: p.Version,
+		Paths:   p.Blocklist.Paths,
+		Hashes:  p.Blocklist.Hashes,
+	})
+	if err != nil {
+		h.logger.WarnContext(ctx, "initial policy marshal failed", "edr.host_id", hostID, "err", err)
+		return
+	}
+	if _, err := h.commands.InsertCommand(ctx, store.Command{
+		HostID:      hostID,
+		CommandType: "set_blocklist",
+		Payload:     payload,
+	}); err != nil {
+		h.logger.WarnContext(ctx, "initial policy enqueue failed", "edr.host_id", hostID, "err", err)
+		return
+	}
+	h.logger.InfoContext(ctx, "initial policy queued",
+		"edr.host_id", hostID,
+		"edr.policy.version", p.Version,
+		"edr.policy.path_count", len(p.Blocklist.Paths),
+	)
+}
+
+// policyCommandPayload mirrors admin.policyCommandPayload. Duplicated here to avoid the
+// import cycle admin → enrollment; any future drift would be caught by a cross-package
+// integration test that queues + consumes the payload.
+type policyCommandPayload struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Paths   []string `json:"paths"`
+	Hashes  []string `json:"hashes"`
 }
 
 // failf writes a structured JSON error + audit log + span attributes. hostID and agentVersion

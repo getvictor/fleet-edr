@@ -137,6 +137,20 @@ func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 	return row.HostID, nil
 }
 
+// ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment.
+// Phase 2 uses this to fan out policy updates to the set of hosts that still have a
+// valid token; returning just the id column keeps the payload small when the caller is
+// already going to look up the full row by id.
+func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	if err := s.db.SelectContext(ctx, &ids, `
+		SELECT host_id FROM enrollments WHERE revoked_at IS NULL ORDER BY host_id
+	`); err != nil {
+		return nil, fmt.Errorf("list active host ids: %w", err)
+	}
+	return ids, nil
+}
+
 // List returns every enrollment row, active + revoked, for the admin UI. The token hash/salt
 // columns are intentionally omitted.
 func (s *Store) List(ctx context.Context) ([]Enrollment, error) {

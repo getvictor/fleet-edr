@@ -49,6 +49,38 @@ final class XPCServer {
         }
     }
 
+    /// handlePeerMessage dispatches an inbound XPC dictionary from a connected peer (the
+    /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
+    ///
+    ///   - "hello"         : the handshake the agent uses to trigger the Mach port bind.
+    ///   - "policy.update" : Phase 2 blocklist push. The "data" key holds raw JSON bytes
+    ///                       that PolicyStore decodes + persists.
+    ///
+    /// Unknown types are logged and ignored — future protocol evolutions should be
+    /// additive, and a forward-compat agent must still work against this server.
+    private func handlePeerMessage(_ event: xpc_object_t) {
+        guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
+            return
+        }
+        let type = String(cString: typeCStr)
+        switch type {
+        case "hello":
+            // No-op. The mere receipt of this message triggered the lazy Mach port
+            // connection; there's nothing to do server-side.
+            break
+        case "policy.update":
+            var dataLen: Int = 0
+            guard let rawPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 else {
+                logger.error("policy.update missing 'data'")
+                return
+            }
+            let data = Data(bytes: rawPtr, count: dataLen)
+            PolicyStore.shared.apply(rawJSON: data)
+        default:
+            logger.info("unknown XPC message type: \(type, privacy: .public)")
+        }
+    }
+
     private func handleListenerEvent(_ event: xpc_object_t) {
         let type = xpc_get_type(event)
 
@@ -73,6 +105,10 @@ final class XPCServer {
                         self?.peers.remove(peer)
                         logger.info("Peer disconnected (total: \(self?.peers.count ?? 0))")
                     }
+                    return
+                }
+                if peerType == XPC_TYPE_DICTIONARY {
+                    self?.handlePeerMessage(peerEvent)
                 }
             }
 
