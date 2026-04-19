@@ -167,7 +167,7 @@ func (q *Queue) enforceCap(ctx context.Context) error {
 	}
 
 	// Drop uploaded rows first (lossless), then non-uploaded rows if still over cap.
-	if _, size, err = q.dropUntilUnderCap(ctx, q.deleteOldestUploaded, false); err != nil {
+	if _, _, err = q.dropUntilUnderCap(ctx, q.deleteOldestUploaded, false); err != nil {
 		return err
 	}
 	lossyDropped, size, err := q.dropUntilUnderCap(ctx, q.deleteOldestPending, true)

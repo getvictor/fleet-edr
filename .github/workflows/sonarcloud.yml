@@ -16,6 +16,7 @@ jobs:
   sonarcloud:
     name: SonarCloud scan
     runs-on: ubuntu-latest
+    environment: sonarcloud
     timeout-minutes: 15
     permissions:
       contents: read
