@@ -3,15 +3,7 @@ name: GitHub Actions security
 on:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - ".github/actions/**/action.yml"
-      - ".github/actions/**/action.yaml"
   pull_request:
-    paths:
-      - ".github/workflows/**"
-      - ".github/actions/**/action.yml"
-      - ".github/actions/**/action.yaml"
   schedule:
     # Weekly run catches new zizmor rules even when workflows haven't changed.
     - cron: "17 13 * * 1"
