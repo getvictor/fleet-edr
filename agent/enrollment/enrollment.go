@@ -11,8 +11,9 @@
 //
 // Persistence uses XML plist format so operators can inspect the file via `plutil -p`. The
 // file is written with mode 0600; loading a world-readable file is a fatal error. Writes
-// use the classic write-to-.new + fsync + rename pattern so a crash between enroll and
-// persist cannot leave us holding a token the disk doesn't know about.
+// use write-to-.new + fsync(file) + rename. On APFS (the Phase 1 target) rename is a
+// durable metadata op, so this gives us crash safety; see writePersisted for details if you
+// port to a non-APFS filesystem.
 package enrollment
 
 import (
@@ -85,6 +86,15 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 
 	// Try to load the persisted token first. Happy path on every restart.
 	if existing, err := loadPersisted(opts.TokenFile); err == nil {
+		// Refuse a token bound to a different server. If EDR_SERVER_URL changed, sending the
+		// old host_token to a new endpoint would leak it to whatever server answers; fail loud
+		// and make the operator delete the file (or re-enroll with the matching URL) instead.
+		if trimTrailingSlash(existing.ServerURL) != trimTrailingSlash(opts.ServerURL) {
+			return nil, fmt.Errorf(
+				"token file %q is bound to server_url %q but EDR_SERVER_URL is %q; delete the file or re-enroll",
+				opts.TokenFile, existing.ServerURL, opts.ServerURL,
+			)
+		}
 		p.state.Store(&persistedState{p: existing})
 		opts.Logger.InfoContext(ctx, "loaded persisted token",
 			"edr.host_id", existing.HostID, "edr.token_file", opts.TokenFile)
@@ -154,10 +164,19 @@ func (p *provider) HostID() string {
 }
 
 // OnUnauthorized is called by the uploader/commander when the server returns 401. We throttle
-// to at most one attempt per minute so a misconfigured server doesn't get spammed.
+// to at most one attempt per minute so a misconfigured server doesn't get spammed. If the
+// operator started the agent from a persisted token without EDR_ENROLL_SECRET, re-enroll
+// cannot succeed — log a loud error and skip so we don't spin through pointless throttled
+// attempts.
 func (p *provider) OnUnauthorized(ctx context.Context) {
 	p.reenrollMu.Lock()
 	defer p.reenrollMu.Unlock()
+	if p.opts.EnrollSecret == "" {
+		p.logger.ErrorContext(ctx, "reenroll blocked: EDR_ENROLL_SECRET is not set",
+			"remedy", "set EDR_ENROLL_SECRET and restart the agent to recover from token revocation",
+		)
+		return
+	}
 	if !p.lastAttempt.IsZero() && time.Since(p.lastAttempt) < time.Minute {
 		return
 	}
@@ -240,14 +259,19 @@ func (p *provider) enroll(ctx context.Context) error {
 }
 
 // httpClient builds an http.Client that honours the fingerprint-pinning + insecure toggles.
+// We clone http.DefaultTransport so we inherit the stdlib's dial/idle/keep-alive timeouts and
+// ProxyFromEnvironment support — a bare &http.Transport{} loses those, which in turn loses
+// HTTPS_PROXY support and can leak connections under load.
 func (p *provider) httpClient() (*http.Client, error) {
 	tlsCfg, err := BuildTLSConfig(p.opts.AllowInsecure, p.opts.ServerFingerprint, p.logger)
 	if err != nil {
 		return nil, err
 	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = tlsCfg
 	return &http.Client{
 		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Transport: tr,
 	}, nil
 }
 
@@ -257,6 +281,10 @@ func (p *provider) httpClient() (*http.Client, error) {
 // enrollment round-trip succeeds against a self-signed cert but every subsequent request
 // fails with "x509: certificate signed by unknown authority" because DefaultTransport
 // doesn't know about the opt-in.
+//
+// Fingerprint pinning always takes precedence over AllowInsecure. When both are set, the
+// pinning verifier still runs — AllowInsecure alone is only the no-fingerprint dev shortcut.
+// This matches the operator intuition that fingerprint pinning is the *stronger* guarantee.
 func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.Logger) (*tls.Config, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -265,11 +293,10 @@ func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.L
 		MinVersion:             tls.VersionTLS12,
 		SessionTicketsDisabled: true, // ensure VerifyPeerCertificate is always called (no resume).
 	}
-	if allowInsecure {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // Dev mode, opted-in via EDR_ALLOW_INSECURE=1.
-		return tlsCfg, nil
-	}
 	if serverFingerprint == "" {
+		if allowInsecure {
+			tlsCfg.InsecureSkipVerify = true //nolint:gosec // Dev mode, opted-in via EDR_ALLOW_INSECURE=1.
+		}
 		return tlsCfg, nil
 	}
 	want, err := parseFingerprint(serverFingerprint)
@@ -330,13 +357,22 @@ func loadPersisted(path string) (*Persisted, error) {
 }
 
 // writePersisted atomically writes the token file with mode 0600.
+//
+// We remove any stale .new file before opening with O_EXCL so the temp file is always a fresh
+// inode at 0600 — O_TRUNC on an attacker-preseeded .new with broader permissions would briefly
+// leak the token. fsync on the file forces data to disk; APFS + ext4-default make the rename
+// itself durable, but strict POSIX requires fsyncing the parent directory too. We don't do
+// that here because macOS doesn't expose a reliable cross-volume directory fsync and the MVP
+// target platforms (APFS) treat rename as a transactional metadata op already. If we ever
+// port the agent to a non-APFS Linux filesystem, revisit.
 func writePersisted(path string, p *Persisted) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	buf := marshalMinimalPlist(p)
 	tmp := path + ".new"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // operator-controlled path via EDR_TOKEN_FILE.
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // operator-controlled path via EDR_TOKEN_FILE.
 	if err != nil {
 		return err
 	}
@@ -355,6 +391,12 @@ func writePersisted(path string, p *Persisted) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// trimTrailingSlash strips a single trailing "/" so "https://a.example/" and
+// "https://a.example" compare equal when validating the persisted ServerURL.
+func trimTrailingSlash(s string) string {
+	return strings.TrimSuffix(s, "/")
 }
 
 // --- minimal plist codec ---

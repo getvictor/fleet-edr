@@ -2,9 +2,9 @@ package enrollment
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +69,39 @@ func TestRegister_HappyPath(t *testing.T) {
 
 	// An obviously-wrong token is rejected fast (length check short-circuits argon2).
 	_, err = s.Verify(ctx, "nope")
+	assert.ErrorIs(t, err, ErrTokenMismatch)
+}
+
+// TestVerify_LookupByTokenID exercises the SHA-256-keyed Verify path with a non-trivial
+// number of enrollments. Asymptotic complexity can't be proven in a unit test; this just
+// verifies correctness for many hosts in one DB, which a regression to the old full-table
+// scan would still pass. The stronger O(1) contract is enforced at code-review time by
+// pointing at the `WHERE host_token_id = ?` SQL in Verify.
+func TestVerify_LookupByTokenID(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	// Register a handful of hosts so the active-enrollments table is non-trivial.
+	want := make(map[string]string, 10)
+	for i := range 10 {
+		uuid := fmt.Sprintf("11111111-2222-3333-4444-%012d", i)
+		res, err := s.Register(ctx, RegisterRequest{
+			HostID: uuid, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
+		})
+		require.NoError(t, err)
+		want[uuid] = res.HostToken
+	}
+
+	// Every real token resolves to its own host_id.
+	for uuid, tok := range want {
+		got, err := s.Verify(ctx, tok)
+		require.NoError(t, err)
+		assert.Equal(t, uuid, got)
+	}
+
+	// An unknown token with the correct length is ErrTokenMismatch — Verify must not
+	// silently tolerate mis-shaped tokens by iterating the table.
+	_, err := s.Verify(ctx, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 	assert.ErrorIs(t, err, ErrTokenMismatch)
 }
 
@@ -330,6 +363,3 @@ func TestEnrollRequest_StringRedactsSecret(t *testing.T) {
 	assert.NotContains(t, s, "this-must-not-appear")
 	assert.Contains(t, s, "REDACTED")
 }
-
-// Compile-time check the handler doesn't log through the global default logger.
-var _ = context.Background

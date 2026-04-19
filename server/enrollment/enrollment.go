@@ -56,9 +56,13 @@ type RegisterResult struct {
 	EnrolledAt time.Time
 }
 
-// Register issues a new token for HostID. If a row already exists for that host (e.g. the
-// host is re-imaged and re-enrolls), the previous row is revoked with reason "re-enrolled"
-// before inserting the new one, preserving the audit trail.
+// Register issues a new token for HostID and replaces any existing row keyed by host_id. The
+// enrollments table holds the *current* enrollment state only; an older design called for an
+// archive UPDATE before REPLACE, but REPLACE on the primary key deletes and re-inserts the
+// row, so "re-enrolled" audit metadata cannot survive in the same row. Enrollment history
+// (revocation reasons, who revoked, etc.) will live in a dedicated history table in Phase 4;
+// for the MVP, the audit trail lives in structured logs emitted by handler.go (enroll) and
+// admin.go (revoke).
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
 	token, err := generateToken()
 	if err != nil {
@@ -68,46 +72,21 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	if err != nil {
 		return nil, err
 	}
-
-	tx, err := s.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+	tokID := tokenID(token)
 
 	now := time.Now().UTC()
-	// Archive any existing row by flipping revoked_at; ON DUPLICATE KEY UPDATE then overwrites
-	// with the freshly-issued credentials. We model this as a two-step dance so that even if
-	// the existing row was already revoked, we don't clobber the original revocation metadata —
-	// we only mark "re-enrolled" when there's no revoked_at yet.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE enrollments
-		SET revoked_at = ?, revoke_reason = 're-enrolled'
-		WHERE host_id = ? AND revoked_at IS NULL
-	`, now, req.HostID); err != nil {
-		return nil, fmt.Errorf("archive previous enrollment: %w", err)
-	}
-
-	// DELETE+INSERT is cleaner than ON DUPLICATE KEY UPDATE for preserving the historic row via
-	// a separate audit table later. For Phase 1 we keep it simple: REPLACE the primary row,
-	// which conceptually represents the *current* enrollment. The archived-state above is the
-	// most recent previous state; richer history is a Phase 4 concern.
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, `
 		REPLACE INTO enrollments (
-			host_id, host_token_hash, host_token_salt,
+			host_id, host_token_id, host_token_hash, host_token_salt,
 			hostname, agent_version, os_version, source_ip,
 			enrolled_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		req.HostID, hash, salt,
+		req.HostID, tokID, hash, salt,
 		req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP,
 		now,
 	); err != nil {
 		return nil, fmt.Errorf("insert enrollment: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit enrollment: %w", err)
 	}
 
 	return &RegisterResult{
@@ -119,7 +98,11 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 
 // Verify returns the host_id associated with token, or an error. Returns ErrTokenMismatch
 // when the token does not match any active enrollment — callers should map that to 401.
-// Intrinsic argon2id cost means this is ~30 ms; cache in front of it if call rate climbs.
+//
+// Implementation: look up the single candidate row by host_token_id (SHA-256 of the token),
+// then run argon2id verify against that row's hash+salt. This is O(1) regardless of fleet
+// size, and the argon2id step is still run on every auth so DB theft doesn't yield usable
+// tokens.
 func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 	if token == "" {
 		return "", ErrTokenMismatch
@@ -130,33 +113,28 @@ func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 		return "", ErrTokenMismatch
 	}
 
-	rows, err := s.db.QueryxContext(ctx, `
+	var row struct {
+		HostID string `db:"host_id"`
+		Hash   []byte `db:"host_token_hash"`
+		Salt   []byte `db:"host_token_salt"`
+	}
+	err := s.db.GetContext(ctx, &row, `
 		SELECT host_id, host_token_hash, host_token_salt
 		FROM enrollments
-		WHERE revoked_at IS NULL
-	`)
+		WHERE host_token_id = ? AND revoked_at IS NULL
+	`, tokenID(token))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrTokenMismatch
+	}
 	if err != nil {
-		return "", fmt.Errorf("query enrollments: %w", err)
+		return "", fmt.Errorf("query enrollment by token id: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			hostID string
-			hash   []byte
-			salt   []byte
-		)
-		if err := rows.Scan(&hostID, &hash, &salt); err != nil {
-			return "", fmt.Errorf("scan enrollment: %w", err)
-		}
-		if verifyToken(token, hash, salt) {
-			return hostID, nil
-		}
+	if !verifyToken(token, row.Hash, row.Salt) {
+		// Token_id match but hash mismatch would require a SHA-256 collision — treat as
+		// mismatch rather than internal error.
+		return "", ErrTokenMismatch
 	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("iterate enrollments: %w", err)
-	}
-	return "", ErrTokenMismatch
+	return row.HostID, nil
 }
 
 // List returns every enrollment row, active + revoked, for the admin UI. The token hash/salt

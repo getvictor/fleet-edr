@@ -5,6 +5,7 @@ package enrollment
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -38,11 +39,21 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+// tokenID returns the SHA-256 of `token`. This is stored alongside the argon2id hash/salt as
+// a deterministic lookup key so Verify can fetch a single candidate row by indexed equality
+// rather than scan every active enrollment. SHA-256 of a 32-byte random token has the same
+// entropy as the token and is one-way, so leaking the column does not let an attacker recover
+// the token; the argon2id hash is still the authenticator.
+func tokenID(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
+}
+
 // hashToken returns (hash, salt) for a bearer token. The raw token is never stored; subsequent
 // verification calls hashToken with the stored salt and compares constant-time.
 func hashToken(token string) (hash, salt []byte, err error) {
 	salt = make([]byte, argonSaltLen)
-	if _, err := rand.Read(salt); err != nil {
+	if _, err = rand.Read(salt); err != nil {
 		return nil, nil, fmt.Errorf("generate salt: %w", err)
 	}
 	hash = argon2.IDKey([]byte(token), salt, argonTime, argonMemory, argonThreads, argonKeyLen)

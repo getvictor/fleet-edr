@@ -44,7 +44,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.enrollments.List(r.Context())
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "admin list enrollments", "err", err)
-		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+		writeErr(r.Context(), h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(r.Context(), h.logger, w, http.StatusOK, rows)
@@ -59,28 +59,28 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	hostID := r.PathValue("host_id")
 	if hostID == "" {
-		http.Error(w, `{"error":"missing host_id"}`, http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
 		return
 	}
 
 	var body revokeRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"bad_body"}`, http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
 		return
 	}
 	if body.Reason == "" || body.Actor == "" {
-		http.Error(w, `{"error":"reason and actor are required"}`, http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "reason and actor are required")
 		return
 	}
 
 	err := h.enrollments.Revoke(ctx, hostID, body.Reason, body.Actor)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
+		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
 		return
 	case err != nil:
 		h.logger.ErrorContext(ctx, "admin revoke", "err", err)
-		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -108,4 +108,11 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		logger.ErrorContext(ctx, "admin encode response", "err", err)
 	}
+}
+
+// writeErr serializes a typed error body through the same JSON+no-store headers as writeJSON,
+// so admin responses are consistently application/json instead of text/plain. Callers pass a
+// short `code` rather than a human sentence where possible.
+func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
+	writeJSON(ctx, logger, w, status, map[string]string{"error": code})
 }

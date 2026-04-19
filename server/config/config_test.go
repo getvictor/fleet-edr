@@ -191,7 +191,6 @@ func TestLoad(t *testing.T) {
 			name: "optional overrides applied",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_LISTEN_ADDR":      "127.0.0.1:9090",
-				"EDR_ENROLL_SECRET":    "enroll-me",
 				"EDR_LOG_LEVEL":        "debug",
 				"EDR_LOG_FORMAT":       "text",
 				"EDR_PROCESS_INTERVAL": "1s",

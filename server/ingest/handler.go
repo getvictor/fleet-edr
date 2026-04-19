@@ -72,19 +72,19 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	pinnedHostID, ok := authn.HostIDFromContext(ctx)
 	if !ok {
 		h.logger.ErrorContext(ctx, "ingest handler reached without host_id on context; middleware misconfigured")
-		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024)) // 10 MB limit
 	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "read_body")
 		return
 	}
 
 	var events []store.Event
 	if err := json.Unmarshal(body, &events); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_json")
 		return
 	}
 
@@ -93,18 +93,18 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// agent from impersonating another host by stuffing a different host_id in the payload.
 	for i, e := range events {
 		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
-			http.Error(w, "event at index "+strconv.Itoa(i)+" missing required fields", http.StatusBadRequest)
+			writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing_fields_at_"+strconv.Itoa(i))
 			return
 		}
 		if e.HostID != pinnedHostID {
-			http.Error(w, `{"error":"host_id_mismatch"}`, http.StatusBadRequest)
+			writeErr(ctx, h.logger, w, http.StatusBadRequest, "host_id_mismatch")
 			return
 		}
 	}
 
 	if err := h.store.InsertEvents(ctx, events); err != nil {
 		h.logger.ErrorContext(ctx, "insert error", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -194,4 +194,12 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		UptimeSeconds: int64(time.Since(h.startTime).Seconds()),
 		Checks:        checks,
 	})
+}
+
+// writeErr returns a typed application/json error body with the no-store headers httpserver.Build
+// also applies to our success responses, so a 4xx/5xx from ingest is indistinguishable from other
+// endpoints' errors on the wire. Callers pass short stable codes (e.g. "host_id_mismatch"), not
+// human sentences, so client tooling can switch on them.
+func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
+	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
 }

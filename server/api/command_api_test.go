@@ -73,8 +73,12 @@ func TestListCommandsAPI(t *testing.T) {
 	_, err := s.InsertCommand(ctx, store.Command{HostID: "host-a", CommandType: "kill_process", Payload: json.RawMessage(`{}`)})
 	require.NoError(t, err)
 
-	t.Run("with host_id", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/commands?host_id=host-a", nil)
+	withHostA := func(req *http.Request) *http.Request {
+		return req.WithContext(authn.WithHostIDForTest(req.Context(), "host-a"))
+	}
+
+	t.Run("host-scoped listing", func(t *testing.T) {
+		req := withHostA(httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/commands", nil))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -84,15 +88,15 @@ func TestListCommandsAPI(t *testing.T) {
 		assert.Len(t, commands, 1)
 	})
 
-	t.Run("missing host_id", func(t *testing.T) {
+	t.Run("missing host context", func(t *testing.T) {
 		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/commands", nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
-	t.Run("with status filter", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/commands?host_id=host-a&status=pending", nil)
+	t.Run("status filter", func(t *testing.T) {
+		req := withHostA(httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/commands?status=pending", nil))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -110,9 +114,13 @@ func TestUpdateCommandStatusAPI(t *testing.T) {
 	id, err := s.InsertCommand(ctx, store.Command{HostID: "host-a", CommandType: "kill_process", Payload: json.RawMessage(`{"pid":1}`)})
 	require.NoError(t, err)
 
+	withHostA := func(req *http.Request) *http.Request {
+		return req.WithContext(authn.WithHostIDForTest(req.Context(), "host-a"))
+	}
+
 	t.Run("ack", func(t *testing.T) {
 		body := `{"status":"acked"}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body))
+		req := withHostA(httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body)))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNoContent, w.Code)
@@ -124,7 +132,7 @@ func TestUpdateCommandStatusAPI(t *testing.T) {
 
 	t.Run("complete with result", func(t *testing.T) {
 		body := `{"status":"completed","result":{"killed":true}}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body))
+		req := withHostA(httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body)))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNoContent, w.Code)
@@ -137,7 +145,7 @@ func TestUpdateCommandStatusAPI(t *testing.T) {
 
 	t.Run("invalid status", func(t *testing.T) {
 		body := `{"status":"pending"}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body))
+		req := withHostA(httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body)))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -145,10 +153,18 @@ func TestUpdateCommandStatusAPI(t *testing.T) {
 
 	t.Run("not found", func(t *testing.T) {
 		body := `{"status":"acked"}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", "/api/v1/commands/99999", strings.NewReader(body))
+		req := withHostA(httptest.NewRequestWithContext(t.Context(), "PUT", "/api/v1/commands/99999", strings.NewReader(body)))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("missing host context", func(t *testing.T) {
+		body := `{"status":"acked"}`
+		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/commands/%d", id), strings.NewReader(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 }
 

@@ -8,9 +8,10 @@
 //   - AdminToken wraps UI + admin routes. It compares the bearer token against the
 //     single-value EDR_ADMIN_TOKEN (stopgap until Phase 3 replaces with sessions).
 //
-// Both middlewares respond with 401 + a machine-readable JSON body and the standard
-// `WWW-Authenticate: Bearer error="invalid_token"` header on failure, and emit structured
-// audit logs + span attributes the operator can filter on in SigNoz.
+// Authentication failures return 401 + JSON body + `WWW-Authenticate: Bearer`. Verifier
+// outages (DB down, unexpected errors) return 503 without WWW-Authenticate so an agent
+// cannot misinterpret infrastructure failure as token revocation and burn its re-enroll
+// throttle. All outcomes emit structured audit logs + span attributes for SigNoz.
 package authn
 
 import (
@@ -75,8 +76,11 @@ func HostToken(store *enrollment.Store, logger *slog.Logger) func(http.Handler) 
 				fail(ctx, w, logger, "invalid_token")
 				return
 			case err != nil:
+				// DB / internal errors must not look like a revocation to the agent — returning
+				// 401 here would trip the re-enroll hook in the agent and burn its throttle
+				// during infrastructure outages. Use 503 + no WWW-Authenticate instead.
 				logger.ErrorContext(ctx, "authn verify", "err", err)
-				fail(ctx, w, logger, "internal")
+				failStatus(ctx, w, logger, http.StatusServiceUnavailable, "verifier_unavailable")
 				return
 			}
 			trace.SpanFromContext(ctx).SetAttributes(attribute.String("edr.host_id", hostID))
@@ -133,16 +137,25 @@ type errBody struct {
 }
 
 func fail(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, reason string) {
+	failStatus(ctx, w, logger, http.StatusUnauthorized, reason)
+}
+
+// failStatus is the general failure writer. WWW-Authenticate is set only on 401 responses —
+// sending it with a 5xx would encourage retry-with-new-credentials logic that cannot help
+// when the real problem is a server-side outage.
+func failStatus(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, status int, reason string) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String("edr.auth.result", "fail"),
 		attribute.String("edr.auth.reason", reason),
 	)
-	logger.WarnContext(ctx, "authn failed", "edr.auth.reason", reason)
+	logger.WarnContext(ctx, "authn failed", "edr.auth.reason", reason, "status", status)
 
-	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusUnauthorized)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errBody{Error: reason})
 }

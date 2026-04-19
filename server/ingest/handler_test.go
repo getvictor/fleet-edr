@@ -2,7 +2,6 @@ package ingest
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -107,7 +106,6 @@ func TestReadyz_NilStore(t *testing.T) {
 func serveIngest(t *testing.T, h *Handler, hostID string, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	withHostID(req, hostID)
 	// http.ServeMux doesn't interact with our pinning helper, so call the inner handler directly.
 	h.IngestHandler().ServeHTTP(rec, withHostID(req, hostID))
 	return rec
@@ -199,6 +197,3 @@ func TestIngest_DoesNotProcessEvents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count, "ingested events should remain unprocessed")
 }
-
-// Compile-time check that we still honour the context cancellation contract.
-var _ = context.Background

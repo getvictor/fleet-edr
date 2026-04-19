@@ -122,6 +122,16 @@ func (u *Uploader) drainOnce(ctx context.Context) error {
 	}
 
 	if err := u.uploadWithRetry(ctx, body); err != nil {
+		// 401 specifically is a recoverable state: OnAuthFail has already been signalled and
+		// the batch stays in the queue for the next tick to retry with a fresh token. Log at
+		// warn, not error, so operators don't see a flood of error-level lines during an
+		// expected re-enroll window.
+		var clientErr *clientError
+		if errors.As(err, &clientErr) && clientErr.statusCode == http.StatusUnauthorized {
+			u.logger.WarnContext(ctx, "uploader upload unauthorized; re-enroll in flight",
+				"batch_size", len(batch))
+			return err
+		}
 		u.logger.ErrorContext(ctx, "uploader upload failed", "err", err, "batch_size", len(batch))
 		return err
 	}
@@ -197,8 +207,10 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized && u.cfg.OnAuthFail != nil {
-		// Surface the 401 to the enrollment package so it can re-enroll. The callback is itself
-		// rate-limited, so hammering it on every retry is safe.
+		// Surface the 401 to the enrollment package so it can re-enroll. We fall through to
+		// the 4xx branch below, so this fires at most once per drain tick (not per retry —
+		// clientError is non-retryable). The callback is itself rate-limited, so repeated
+		// drain ticks while the token is stale are safe.
 		u.cfg.OnAuthFail(ctx)
 	}
 

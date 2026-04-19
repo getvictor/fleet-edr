@@ -158,8 +158,10 @@ func run() error {
 		mux.Handle(p, hostProtected)
 	}
 
-	// Admin-token protected UI + admin APIs. api.Handler.RegisterRoutes registers onto a
-	// dedicated sub-mux so we can wrap that whole sub-mux in the admin middleware.
+	// Admin-token protected admin APIs. api.Handler.RegisterRoutes registers onto a dedicated
+	// sub-mux so we can wrap that whole sub-mux in the admin middleware. GET /commands and
+	// PUT /commands/{id} are deliberately host-token-only — those paths are the agent-facing
+	// command protocol. Admin UI command management (POST, GET /{id}) goes here.
 	apiMux := http.NewServeMux()
 	apiHandler.RegisterRoutes(apiMux)
 	adminHandler.RegisterRoutes(apiMux)
@@ -172,7 +174,7 @@ func run() error {
 	} {
 		mux.Handle(p, adminProtected)
 	}
-	registerUIRoutes(mux, logger, adminProtected)
+	registerUIRoutes(mux, logger)
 
 	// Start the background event processor.
 	go func() {
@@ -276,10 +278,13 @@ func run() error {
 	return nil
 }
 
-// registerUIRoutes serves the embedded React UI at /ui/ (wrapped in the admin-token middleware)
-// and redirects / to /ui/. The UI is a privileged surface — same auth model as the admin API.
-func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger, adminWrap http.Handler) {
-	_ = adminWrap // placeholder: UI currently exposes its own fetch with Authorization header; see phase 3 plan.
+// registerUIRoutes serves the embedded React UI at /ui/ and redirects / to /ui/. The bundle
+// itself is intentionally unauthenticated: the React app's login screen is what collects the
+// admin token and stores it in sessionStorage, from which every subsequent API call reads it
+// into an `Authorization: Bearer` header. Gating /ui/ behind AdminToken would make the login
+// page unreachable (chicken/egg). The privileged surface is /api/v1/*, which IS gated.
+// Phase 3 replaces this with a server-rendered login endpoint + session cookies.
+func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {
 		logger.ErrorContext(context.Background(), "embed ui", "err", err)

@@ -90,10 +90,16 @@ type enrollErrorBody struct {
 	Error string `json:"error"`
 }
 
-// uuidPattern accepts standard UUID formats (with or without hyphens, any case). A stricter
-// canonical form is too aggressive: macOS IOPlatformUUID is uppercase with hyphens, but
-// future platforms may differ.
+// uuidPattern accepts the canonical hyphenated UUID form in either case. macOS IOPlatformUUID
+// is always uppercase-hyphenated, so that is what agents send today; if a future platform
+// emits unhyphenated 32-hex strings, broaden this regex along with a matching agent change.
 var uuidPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+
+// maxEnrollBodyBytes caps the enroll request body. /api/v1/enroll is a public, unauthenticated
+// endpoint; decoding directly from an unbounded r.Body would let any client burn memory/CPU
+// before field validation. The real payload is ~300 bytes; 4 KiB leaves plenty of headroom for
+// metadata but closes the DoS vector.
+const maxEnrollBodyBytes = 4 << 10
 
 func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -108,6 +114,7 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxEnrollBodyBytes)
 	var req enrollRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.failf(ctx, w, http.StatusBadRequest, "bad_body", "", ip, "",

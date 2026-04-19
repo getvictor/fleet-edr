@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,10 +18,14 @@ import (
 const testUUID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 
 // fakeEnrollServer returns a server that accepts a fixed enroll secret and returns a
-// deterministic token.
-func fakeEnrollServer(t *testing.T, secret, wantToken string) *httptest.Server {
+// deterministic token. If hits is non-nil, every request increments it — tests can use the
+// counter to assert throttling + retry behaviour without fragile time-based sleeps.
+func fakeEnrollServer(t *testing.T, secret, wantToken string, hits *atomic.Int64) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits != nil {
+			hits.Add(1)
+		}
 		if r.URL.Path != "/api/v1/enroll" {
 			http.NotFound(w, r)
 			return
@@ -46,7 +51,7 @@ func fakeEnrollServer(t *testing.T, secret, wantToken string) *httptest.Server {
 }
 
 func TestEnsure_FirstBootEnrolls(t *testing.T) {
-	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012")
+	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)
 	defer srv.Close()
 
 	tokenFile := filepath.Join(t.TempDir(), "enrolled.plist")
@@ -104,7 +109,8 @@ func TestEnsure_FailsWithoutSecretAndNoFile(t *testing.T) {
 }
 
 func TestOnUnauthorized_Throttles(t *testing.T) {
-	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012")
+	var hits atomic.Int64
+	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", &hits)
 	defer srv.Close()
 
 	tokenFile := filepath.Join(t.TempDir(), "enrolled.plist")
@@ -118,12 +124,48 @@ func TestOnUnauthorized_Throttles(t *testing.T) {
 		Logger:         slog.Default(),
 	})
 	require.NoError(t, err)
+	require.Equal(t, int64(1), hits.Load(), "first-boot enroll should hit the server once")
 
 	// Two rapid OnUnauthorized calls. Only the first triggers a re-enroll; the second is
-	// throttled (within a minute of the first).
+	// throttled to the 1-per-minute limit. The counter makes this observable — without it, a
+	// broken throttle would still pass the "no panic" bar.
 	ctx := context.Background()
 	tp.OnUnauthorized(ctx)
-	tp.OnUnauthorized(ctx) // should be a no-op
-	// We can't easily observe the call count without instrumenting, but no panic is a minimum
-	// regression bar; more detailed coverage lives in the SigNoz MCP QA.
+	tp.OnUnauthorized(ctx)
+	assert.Equal(t, int64(2), hits.Load(), "first-boot + one re-enroll only; second OnUnauthorized must be throttled")
+}
+
+// TestOnUnauthorized_EmptySecretRefuses covers the Phase-1 recovery edge case: an agent that
+// restarted from a persisted token without EDR_ENROLL_SECRET cannot fix itself by re-enrolling.
+// OnUnauthorized must refuse up front rather than burn through retry attempts.
+func TestOnUnauthorized_EmptySecretRefuses(t *testing.T) {
+	var hits atomic.Int64
+	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", &hits)
+	defer srv.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "enrolled.plist")
+	// First-boot with the secret to populate the token file.
+	_, err := Ensure(t.Context(), Options{
+		ServerURL:      srv.URL,
+		EnrollSecret:   "secret",
+		TokenFile:      tokenFile,
+		HostIDOverride: testUUID,
+		AgentVersion:   "v",
+		AllowInsecure:  true,
+		Logger:         slog.Default(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), hits.Load())
+
+	// Second-boot from persisted token WITHOUT the secret.
+	tp2, err := Ensure(t.Context(), Options{
+		ServerURL:     srv.URL,
+		TokenFile:     tokenFile,
+		AllowInsecure: true,
+		Logger:        slog.Default(),
+	})
+	require.NoError(t, err)
+
+	tp2.OnUnauthorized(context.Background())
+	assert.Equal(t, int64(1), hits.Load(), "OnUnauthorized with empty secret must not hit the enroll endpoint")
 }

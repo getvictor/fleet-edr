@@ -198,6 +198,12 @@ func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string
 	defer resp.Body.Close()
 	_, _ = io.ReadAll(resp.Body)
 
+	// Surface 401 to the enrollment package here too. fetchPending already does this on its
+	// poll loop, but a revoked token can show up between a fetch and the following ack/complete
+	// PUT — without this call, recovery waits until the next poll tick.
+	if resp.StatusCode == http.StatusUnauthorized && c.cfg.OnAuthFail != nil {
+		c.cfg.OnAuthFail(ctx)
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}

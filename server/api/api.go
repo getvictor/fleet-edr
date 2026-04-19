@@ -242,17 +242,15 @@ func (h *Handler) handleGetCommand(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	// When the request carries a host-token (agent polling its own queue), always scope the
-	// listing to the authenticated host — any host_id query parameter is ignored so an agent
-	// with a valid token for host A can never read commands queued for host B. Admin-token
-	// callers (no host_id in ctx) are trusted to pass host_id explicitly.
-	hostID, viaHostToken := authn.HostIDFromContext(ctx)
-	if !viaHostToken {
-		hostID = r.URL.Query().Get("host_id")
-		if hostID == "" {
-			http.Error(w, "host_id required", http.StatusBadRequest)
-			return
-		}
+	// This handler is only wired under the host-token middleware (agents polling their own
+	// queue). The host_id is always the authenticated host's id — any query parameter is
+	// ignored so a valid token for host A cannot read commands queued for host B. Admin UI
+	// command listing (Phase 3) will live under a separate /api/v1/hosts/{host_id}/commands
+	// path so the two auth domains cannot collide on a single mux pattern.
+	hostID, ok := authn.HostIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "host context missing", http.StatusUnauthorized)
+		return
 	}
 
 	status := r.URL.Query().Get("status")
@@ -328,24 +326,22 @@ func (h *Handler) UpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	// For host-token callers, enforce that the command being updated actually belongs to the
-	// authenticated host. Without this check, any valid agent token could mark another host's
-	// commands as "acked" or "completed".
-	if ctxHostID, viaHostToken := authn.HostIDFromContext(ctx); viaHostToken {
-		existing, getErr := h.store.GetCommand(ctx, id)
-		if getErr != nil {
-			h.logger.ErrorContext(ctx, "update command lookup", "id", id, "err", getErr)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if existing == nil {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		if existing.HostID != ctxHostID {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
+	// Like ListCommands, this handler is host-token-only. Enforce that the command belongs
+	// to the authenticated host so agent A cannot ack/complete/fail agent B's commands.
+	ctxHostID, ok := authn.HostIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "host context missing", http.StatusUnauthorized)
+		return
+	}
+	existing, getErr := h.store.GetCommand(ctx, id)
+	if getErr != nil {
+		h.logger.ErrorContext(ctx, "update command lookup", "id", id, "err", getErr)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if existing == nil || existing.HostID != ctxHostID {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
 	}
 	if err := h.store.UpdateCommandStatus(ctx, id, body.Status, body.Result); err != nil {
 		if errors.Is(err, errNotFound) {

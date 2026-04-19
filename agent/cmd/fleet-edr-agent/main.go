@@ -140,12 +140,18 @@ func run() error {
 	// and commander. Without this, every post-enroll request fails with "certificate
 	// signed by unknown authority" because DefaultTransport uses the system trust store
 	// with no knowledge of EDR_ALLOW_INSECURE or EDR_SERVER_FINGERPRINT.
+	//
+	// We clone http.DefaultTransport (rather than &http.Transport{}) so the agent keeps
+	// ProxyFromEnvironment, keep-alive, and the stdlib's hardened dial/idle timeouts —
+	// real deployments behind HTTPS_PROXY fail without them.
 	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
 	if err != nil {
 		logger.ErrorContext(ctx, "build tls config", "err", err)
 		return err
 	}
-	agentTransport := otelhttp.NewTransport(&http.Transport{TLSClientConfig: tlsCfg})
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport.TLSClientConfig = tlsCfg
+	agentTransport := otelhttp.NewTransport(baseTransport)
 
 	httpClient := &http.Client{
 		Transport: agentTransport,
