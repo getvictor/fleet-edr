@@ -40,6 +40,9 @@
     line-height: 1;
     margin: 0;
     padding: 0;
+    // Fieldsets default to min-width: min-content, which can push this control
+    // past its flex container on narrow viewports. Reset so flexbox can shrink it.
+    min-width: 0;
 
     .visually-hidden {
       position: absolute;
@@ -48,7 +51,7 @@
       padding: 0;
       margin: -1px;
       overflow: hidden;
-      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
       white-space: nowrap;
       border: 0;
     }

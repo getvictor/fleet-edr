@@ -9,9 +9,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fleetdm/edr/envparse"
 )
 
 const (
@@ -79,16 +80,16 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	optional(&c.XPCService, "EDR_XPC_SERVICE", getenv)
 	optional(&c.NetXPCService, "EDR_NET_XPC_SERVICE", getenv)
 
-	parsePositiveInt(getenv, "EDR_BATCH_SIZE", &c.BatchSize, &errs)
+	envparse.PositiveInt(getenv, "EDR_BATCH_SIZE", &c.BatchSize, &errs)
 	// uploader.Run feeds UploadInterval into time.NewTicker, which panics on non-positive values.
-	parsePositiveDuration(getenv, "EDR_UPLOAD_INTERVAL", &c.UploadInterval, &errs)
+	envparse.PositiveDuration(getenv, "EDR_UPLOAD_INTERVAL", &c.UploadInterval, &errs)
 	// A zero or negative prune age computes a future cutoff and deletes nearly every uploaded
 	// row; outright reject.
-	parsePositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
+	envparse.PositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
 	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB
 	// is set above and applies when the env var is unset; setting it explicitly to 0
 	// restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
-	parseNonNegativeInt64(getenv, "EDR_AGENT_QUEUE_MAX_BYTES", &c.QueueMaxBytes, &errs)
+	envparse.NonNegativeInt64(getenv, "EDR_AGENT_QUEUE_MAX_BYTES", &c.QueueMaxBytes, &errs)
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
 		// Normalize to canonical lowercase so downstream slog handlers see one of the documented
@@ -144,57 +145,5 @@ func validateServerURL(serverURL string, allowInsecure bool, errs *[]error) {
 		}
 	default:
 		*errs = append(*errs, fmt.Errorf("EDR_SERVER_URL=%q must use http or https", serverURL))
-	}
-}
-
-// parsePositiveInt parses key as an int and requires it to be > 0, writing to *dst.
-func parsePositiveInt(getenv func(string) string, key string, dst *int, errs *[]error) {
-	v := getenv(key)
-	if v == "" {
-		return
-	}
-	n, err := strconv.Atoi(v)
-	switch {
-	case err != nil:
-		*errs = append(*errs, fmt.Errorf("%s=%q: %w", key, v, err))
-	case n <= 0:
-		*errs = append(*errs, fmt.Errorf("%s=%d must be positive", key, n))
-	default:
-		*dst = n
-	}
-}
-
-// parsePositiveDuration parses key as a Go duration and requires it to be > 0.
-func parsePositiveDuration(getenv func(string) string, key string, dst *time.Duration, errs *[]error) {
-	v := getenv(key)
-	if v == "" {
-		return
-	}
-	d, err := time.ParseDuration(v)
-	switch {
-	case err != nil:
-		*errs = append(*errs, fmt.Errorf("%s=%q: %w", key, v, err))
-	case d <= 0:
-		*errs = append(*errs, fmt.Errorf("%s=%q must be positive", key, v))
-	default:
-		*dst = d
-	}
-}
-
-// parseNonNegativeInt64 parses key as an int64 and requires it to be >= 0 (0 acts as a
-// "disabled" sentinel for cap-style settings like the agent queue max bytes).
-func parseNonNegativeInt64(getenv func(string) string, key string, dst *int64, errs *[]error) {
-	v := getenv(key)
-	if v == "" {
-		return
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	switch {
-	case err != nil:
-		*errs = append(*errs, fmt.Errorf("%s=%q: %w", key, v, err))
-	case n < 0:
-		*errs = append(*errs, fmt.Errorf("%s=%d must be >= 0", key, n))
-	default:
-		*dst = n
 	}
 }

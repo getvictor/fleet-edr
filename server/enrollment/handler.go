@@ -141,9 +141,11 @@ const maxEnrollBodyBytes = 4 << 10
 func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, r.RemoteAddr))
 
 	ip := remoteIP(r, h.trimHost)
+	// attrkeys.RemoteAddr is documented as port-stripped; attaching r.RemoteAddr
+	// would explode span cardinality with ephemeral client ports.
+	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 	if !h.limiter.allow(ip) {
 		w.Header().Set("Retry-After", "60")
 		h.failf(ctx, w, http.StatusTooManyRequests, "rate_limited", enrollFailInfo{IP: ip},
@@ -309,6 +311,7 @@ func (h *Handler) failf(ctx context.Context, w http.ResponseWriter, status int, 
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String(attrEnrollResult, "fail"),
+		attribute.String(attrEnrollReason, code),
 		attribute.Int("http.response.status_code", status),
 	)
 	if info.HostID != "" {
