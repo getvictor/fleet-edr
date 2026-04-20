@@ -91,29 +91,7 @@ func (q *Query) ListHosts(ctx context.Context) ([]store.HostSummary, error) {
 // Uses Process.ID as map key to handle PID reuse correctly, and builds parent-child
 // links via pointers before converting to value tree so grandchildren aren't lost.
 func buildForest(procs []store.Process) []ProcessNode {
-	// Key by Process.ID (unique DB row) to handle PID reuse within a time range.
-	nodeMap := make(map[int64]*ProcessNode, len(procs))
-
-	// Map PID → latest Process.ID so we can find parents by their OS PID.
-	// When multiple records share a PID (reuse), the latest fork wins.
-	pidToID := make(map[int]int64, len(procs))
-
-	for i := range procs {
-		p := &procs[i]
-		nodeMap[p.ID] = &ProcessNode{Process: *p}
-		existing, ok := pidToID[p.PID]
-		if !ok {
-			pidToID[p.PID] = p.ID
-			continue
-		}
-		// nodeMap[existing] was inserted by an earlier iteration (existing is
-		// an ID we've already seen), so the lookup is guaranteed non-nil; the
-		// explicit guard also makes the invariant visible to static analysis.
-		prev, prevOK := nodeMap[existing]
-		if prevOK && p.ForkTimeNs > prev.ForkTimeNs {
-			pidToID[p.PID] = p.ID
-		}
-	}
+	nodeMap, pidToID := indexProcesses(procs)
 
 	// Build parent-child links. Track children as IDs so we can resolve after all links are built.
 	childIDs := make(map[int64][]int64) // parentID → child IDs
@@ -144,6 +122,34 @@ func buildForest(procs []store.Process) []ProcessNode {
 		roots = append(roots, build(id))
 	}
 	return roots
+}
+
+// indexProcesses builds the two lookup tables buildForest needs: nodeMap keyed
+// by the unique Process.ID (so PID reuse within a time range doesn't collapse
+// rows) and pidToID pointing each OS PID at the row ID of its latest fork (so
+// the parent-lookup phase finds the current generation, not a historical one
+// with the same PID). Extracted from buildForest so that function stays below
+// the cognitive-complexity cap.
+func indexProcesses(procs []store.Process) (map[int64]*ProcessNode, map[int]int64) {
+	nodeMap := make(map[int64]*ProcessNode, len(procs))
+	pidToID := make(map[int]int64, len(procs))
+	for i := range procs {
+		p := &procs[i]
+		nodeMap[p.ID] = &ProcessNode{Process: *p}
+		existing, ok := pidToID[p.PID]
+		if !ok {
+			pidToID[p.PID] = p.ID
+			continue
+		}
+		// nodeMap[existing] was inserted by an earlier iteration (existing is
+		// an ID we've already seen), so the lookup is guaranteed non-nil; the
+		// explicit guard also makes the invariant visible to static analysis.
+		prev, prevOK := nodeMap[existing]
+		if prevOK && p.ForkTimeNs > prev.ForkTimeNs {
+			pidToID[p.PID] = p.ID
+		}
+	}
+	return nodeMap, pidToID
 }
 
 func filterByType(events []store.Event, eventType string) []store.Event {
