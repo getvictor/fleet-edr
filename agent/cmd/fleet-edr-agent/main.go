@@ -7,7 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -475,7 +475,7 @@ func (d *policyDispatcher) clear() {
 func (d *policyDispatcher) SendPolicy(payload []byte) error {
 	r := d.cur.Load()
 	if r == nil {
-		return fmt.Errorf("policy dispatcher: no receiver connected")
+		return errors.New("policy dispatcher: no receiver connected")
 	}
 	return r.SendPolicy(payload)
 }

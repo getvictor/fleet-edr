@@ -7,6 +7,7 @@ package hostid
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -38,7 +39,7 @@ func Get(ctx context.Context) (string, error) {
 func parseIORegOutput(out []byte) (string, error) {
 	m := uuidRegexp.FindSubmatch(out)
 	if m == nil {
-		return "", fmt.Errorf("IOPlatformUUID not found in ioreg output")
+		return "", errors.New("IOPlatformUUID not found in ioreg output")
 	}
 	return string(m[1]), nil
 }

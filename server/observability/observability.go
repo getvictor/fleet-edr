@@ -97,7 +97,7 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	logExp, err := otlploggrpc.New(initCtx)
 	if err != nil {
-		_ = tp.Shutdown(context.Background())
+		_ = tp.Shutdown(initCtx)
 		return noopShutdown, fmt.Errorf("create log exporter: %w", err)
 	}
 	lp := sdklog.NewLoggerProvider(
@@ -107,8 +107,8 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	metricExp, err := otlpmetricgrpc.New(initCtx)
 	if err != nil {
-		_ = tp.Shutdown(context.Background())
-		_ = lp.Shutdown(context.Background())
+		_ = tp.Shutdown(initCtx)
+		_ = lp.Shutdown(initCtx)
 		return noopShutdown, fmt.Errorf("create metric exporter: %w", err)
 	}
 	mp := sdkmetric.NewMeterProvider(

@@ -1,0 +1,52 @@
+# EditorConfig normalises indentation, line endings, charset, and whitespace
+# across every editor and every contributor. https://editorconfig.org/
+#
+# Most IDEs pick this up automatically (VS Code, JetBrains, Xcode via a
+# plugin, Vim with vim-editorconfig, Emacs with editorconfig-emacs, Zed,
+# Cursor, Claude Code). No extra build step; the file is consulted at
+# open-time.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+max_line_length = 140
+
+# Go uses tabs. `gofmt` would rewrite them anyway; this keeps editors from
+# fighting gofmt while you type.
+[*.go]
+indent_style = tab
+indent_size = 4
+
+# Makefiles require tabs; non-negotiable by `make` itself.
+[{Makefile,makefile,*.mk}]
+indent_style = tab
+indent_size = 4
+
+# Swift convention is 4-space indent.
+[*.swift]
+indent_style = space
+indent_size = 4
+
+# C / CGo bridge files follow the project's .clang-format (4 spaces).
+[*.{c,h}]
+indent_style = space
+indent_size = 4
+
+# Markdown is intentionally permissive on trailing whitespace: two trailing
+# spaces are a hard line break in Markdown. Let the markdown linter catch
+# genuine mistakes.
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = 140
+
+# Generated files we never hand-edit; don't impose rules that would rewrite
+# them on save.
+[{**/node_modules/**,**/vendor/**,server/ui/dist/**,tmp/**}]
+insert_final_newline = unset
+trim_trailing_whitespace = unset

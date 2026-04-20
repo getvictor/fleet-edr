@@ -15,29 +15,42 @@ linters:
   default: none
   enable:
     - bodyclose
+    - canonicalheader # enforce canonical HTTP header names (e.g. X-Request-ID not x-request-id)
+    - contextcheck # catches context.Context not propagated through function call chains
     - copyloopvar
     - depguard
+    - durationcheck # catches time.Duration * time.Duration (common bug that compiles fine but is meaningless)
     - errcheck
     - errorlint
     - exhaustive
     - exptostd
     - forbidigo
+    - gocheckcompilerdirectives # validates //go:build syntax; a typo silently disables the build tag
+    - gocritic # diagnostic + style checks; adds several readability rules missing from staticcheck
     - gosec
     - govet
     - ineffassign
     - intrange
     - makezero
+    - misspell # catches typos in comments + string literals; very cheap
     - modernize
     - musttag
     - nilnesserr
     - noctx
+    - perfsprint # catches fmt.Sprintf where strconv / string concat would suffice
+    - predeclared # warns when a local name shadows a Go predeclared identifier (cap, len, new, ...)
     - revive
+    - rowserrcheck # ensures rows.Err() is checked after rows.Next() in database/sql queries
     - sqlclosecheck
     - staticcheck
     - testifylint
+    - thelper # test helpers must call t.Helper() so failures point at the caller
+    - tparallel # tests that spawn subtests must opt in to parallelism consistently
     - unconvert
     - unused
     - usetesting
+    - wastedassign # catches x := foo(); x = bar() (the first value is wasted)
+    - whitespace # catches extraneous leading/trailing blank lines in blocks
 
   settings:
     forbidigo:

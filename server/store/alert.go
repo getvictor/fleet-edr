@@ -80,7 +80,10 @@ func (s *Store) InsertAlert(ctx context.Context, a Alert, eventIDs []string) (in
 // isDuplicateKeyErr matches MySQL error 1062 (duplicate primary/unique key).
 func isDuplicateKeyErr(err error) bool {
 	var mysqlErr *mysql.MySQLError
-	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == 1062
 }
 
 // attachEventsToExistingAlert handles the "alert already exists for this

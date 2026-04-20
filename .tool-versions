@@ -1,0 +1,15 @@
+# asdf / mise toolchain pin. Ensures local dev, CI, and any AI-agent sandbox
+# resolve the same versions of every tool the project builds with.
+#
+# Install either asdf (https://asdf-vm.com/) or mise (https://mise.jdx.dev/)
+# and these versions will be picked up automatically when you cd into the
+# repo root. `mise install` / `asdf install` fetches everything.
+#
+# Bumping a version here is the single source of truth; update the CI
+# workflow at the same time (workflows use `go-version-file: go.mod` where
+# possible, which already tracks this file's Go pin via go.mod).
+golang 1.26.0
+nodejs 22.21.0
+golangci-lint 2.11.3
+lefthook 1.8.0
+task 3.50.0

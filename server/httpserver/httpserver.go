@@ -105,7 +105,7 @@ func xRequestIDEcho() func(http.Handler) http.Handler {
 func recoverMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer func() {
+			defer func() { //nolint:contextcheck // closure pulls ctx from r.Context() below; contextcheck can't see through the defer.
 				if rec := recover(); rec != nil {
 					ctx := r.Context()
 					span := trace.SpanFromContext(ctx)

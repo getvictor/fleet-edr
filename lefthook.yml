@@ -1,0 +1,89 @@
+# Lefthook config (https://lefthook.dev). Run `lefthook install` once, then
+# every git commit / push runs the hooks below. Anything that fails here
+# blocks the commit / push, so keep the pre-commit phase FAST (sub-second on
+# a typical change). Slow checks belong in pre-push or CI.
+#
+# Bypass (use sparingly, with a reason): `git commit --no-verify`. CI is the
+# backstop and will re-run everything.
+
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: |
+        unformatted=$(gofmt -s -l {staged_files})
+        if [ -n "$unformatted" ]; then
+          echo "gofmt -s would rewrite the following files. Running it now; re-stage and recommit:"
+          echo "$unformatted"
+          gofmt -s -w {staged_files}
+          exit 1
+        fi
+      stage_fixed: true
+
+    eslint:
+      # Scope eslint to the UI source tree; running it on everything scans node_modules needlessly.
+      glob: "ui/src/**/*.{ts,tsx,js,jsx}"
+      root: "ui/"
+      run: npx eslint --fix --max-warnings=0 {staged_files}
+      stage_fixed: true
+
+    swiftformat:
+      # Optional: only runs if swiftformat is installed (`brew install swiftformat`).
+      glob: "extension/edr/**/*.swift"
+      run: |
+        if command -v swiftformat >/dev/null 2>&1; then
+          swiftformat {staged_files}
+        fi
+      stage_fixed: true
+
+    # Catch secrets before they land. `git secrets` or `trufflehog` could
+    # fit here later. For now, a minimal regex guard against the obvious
+    # patterns that shouldn't be in source.
+    no-secrets:
+      glob: "*"
+      exclude:
+        - ".tool-versions"
+        - "lefthook.yml"
+        - "docs/adr/**"
+      run: |
+        matched=0
+        for f in {staged_files}; do
+          # Skip binaries + generated.
+          case "$f" in
+            *.go|*.ts|*.tsx|*.js|*.swift|*.md|*.yml|*.yaml|*.json|*.sh)
+              if grep -nE 'AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----' "$f" 2>/dev/null; then
+                echo "Potential secret in $f"
+                matched=1
+              fi
+              ;;
+          esac
+        done
+        exit $matched
+
+pre-push:
+  parallel: true
+  commands:
+    go-build:
+      # Whole-module build as a cheap smoke test. Failures here almost
+      # always mean a refactor left a broken import somewhere.
+      run: go build ./...
+
+    go-lint-fast:
+      # --fast-only enables the quick-running linters (under ~2s usually).
+      # The full run still happens in CI and before release.
+      run: golangci-lint run --fast-only ./server/... ./agent/... ./internal/... ./test/...
+
+    tsc:
+      root: "ui/"
+      run: npx tsc --noEmit
+
+# Post-checkout hook keeps UI deps in sync if package-lock.json changed.
+post-checkout:
+  commands:
+    npm-install-if-lock-changed:
+      run: |
+        if git diff --name-only HEAD@{1} HEAD 2>/dev/null | grep -q '^ui/package-lock.json$'; then
+          echo "ui/package-lock.json changed; running npm ci"
+          (cd ui && npm ci)
+        fi
