@@ -59,6 +59,24 @@ linters:
           deny:
             - pkg: github.com/pkg/errors
               desc: "use stdlib errors.New / fmt.Errorf with the %w verb"
+        # Agent packages must not depend on server packages. The two were
+        # separate Go modules until the 2026-04 single-module refactor; the
+        # enforcement now lives here instead of at the module boundary. If
+        # genuinely shared code is needed, put it in internal/ and import
+        # from there.
+        agent-boundary:
+          files:
+            - "**/agent/**/*.go"
+          deny:
+            - pkg: github.com/fleetdm/edr/server
+              desc: "agent packages must not import server packages (move shared code to internal/)"
+        # Symmetric: server packages must not depend on agent packages.
+        server-boundary:
+          files:
+            - "**/server/**/*.go"
+          deny:
+            - pkg: github.com/fleetdm/edr/agent
+              desc: "server packages must not import agent packages (move shared code to internal/)"
 
     govet:
       enable:
@@ -123,3 +141,12 @@ linters:
 
   exclusions:
     generated: strict
+    rules:
+      # test/loadtest.go generates synthetic event payloads for throughput
+      # benchmarks; crypto/rand-grade randomness is wrong here (slower and
+      # semantically meaningless for test fixture data). gosec G404 flags
+      # math/rand and math/rand/v2 equally, so the exclusion is per-file.
+      - path: test/loadtest\.go
+        linters:
+          - gosec
+        text: "G404"

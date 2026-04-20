@@ -65,50 +65,18 @@ func run() error {
 	}
 	// Defer shutdown as soon as Init succeeds so any later startup failure (logging.New,
 	// queue.Open, etc.) still flushes buffered OTel telemetry on its way out.
-	defer func() {
-		otelCtx, otelCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer otelCancel()
-		if err := shutdownOTel(otelCtx); err != nil {
-			slog.Default().WarnContext(otelCtx, "otel shutdown", "err", err)
-		}
-	}()
+	defer flushOTel(shutdownOTel)
 
-	// Derive host_id early so the base logger carries it before we start touching other
-	// subsystems. The enrollment.Ensure step below re-derives for the enroll payload but
-	// uses the same source.
-	hostID := cfg.HostIDOverride
-	if hostID == "" {
-		if derived, derivErr := hostid.Get(ctx); derivErr == nil {
-			hostID = derived
-		}
-	}
-
-	baseAttrs := []slog.Attr{slog.String("host_id", hostID)}
-	logger, err := logging.New(os.Stderr, logging.Options{
-		Level:               cfg.LogLevel,
-		Format:              cfg.LogFormat,
-		InstrumentationName: serviceName,
-		BaseAttrs:           baseAttrs,
-	})
+	hostID := deriveHostID(ctx, cfg.HostIDOverride)
+	logger, err := newAgentLogger(cfg, hostID)
 	if err != nil {
 		return err
 	}
 	slog.SetDefault(logger)
 	receiver.SetLogger(logger)
 
-	logger.InfoContext(ctx, "fleet-edr-agent starting",
-		"version", version,
-		"commit", commit,
-		"build_time", buildTime,
-		"server_url", cfg.ServerURL,
-		"insecure", cfg.AllowInsecure,
-	)
-	if cfg.AllowInsecure {
-		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE=1 is set; use https:// in production")
-	}
+	logAgentStart(ctx, logger, cfg)
 
-	// Enroll (or load the persisted token) before touching the queue / uploader. A failure
-	// here is fatal — the agent has no way to upload events without a valid token.
 	tokenProvider, err := enrollment.Ensure(ctx, enrollment.Options{
 		ServerURL:         cfg.ServerURL,
 		EnrollSecret:      cfg.EnrollSecret,
@@ -137,29 +105,9 @@ func run() error {
 	defer func() { _ = q.Close() }()
 	q.SetMetrics(metrics.New())
 
-	pidTable := proctable.New()
-
-	// Build one TLS config for every agent HTTP client so the self-signed /
-	// fingerprint-pinned policies that worked during enroll also apply to the uploader
-	// and commander. Without this, every post-enroll request fails with "certificate
-	// signed by unknown authority" because DefaultTransport uses the system trust store
-	// with no knowledge of EDR_ALLOW_INSECURE or EDR_SERVER_FINGERPRINT.
-	//
-	// We clone http.DefaultTransport (rather than &http.Transport{}) so the agent keeps
-	// ProxyFromEnvironment, keep-alive, and the stdlib's hardened dial/idle timeouts —
-	// real deployments behind HTTPS_PROXY fail without them.
-	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	agentTransport, httpClient, err := newAgentHTTPClient(cfg, logger)
 	if err != nil {
-		logger.ErrorContext(ctx, "build tls config", "err", err)
 		return err
-	}
-	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
-	baseTransport.TLSClientConfig = tlsCfg
-	agentTransport := otelhttp.NewTransport(baseTransport)
-
-	httpClient := &http.Client{
-		Transport: agentTransport,
-		Timeout:   30 * time.Second,
 	}
 
 	up := uploader.New(q, uploader.Config{
@@ -177,35 +125,116 @@ func run() error {
 	// clears it on disconnect.
 	esfPolicyDispatcher := &policyDispatcher{}
 
-	// Start ESF and network receiver loops.
+	pidTable := proctable.New()
 	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true, esfPolicyDispatcher)
 	if cfg.NetXPCService != "" {
 		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false, nil)
 	}
-
-	go func() {
-		if err := up.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.ErrorContext(ctx, "uploader", "err", err)
-		}
-	}()
+	go runUploader(ctx, up, logger)
 
 	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfPolicyDispatcher, agentTransport, logger)
 	go pruneLoop(ctx, q, cfg.PruneAge, logger)
 
 	<-ctx.Done()
-	logger.InfoContext(context.Background(), "agent shutting down")
+	drainAndReport(up, q, logger)
+	return nil
+}
 
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+// flushOTel caps the OTel flush at 5s so a dead collector doesn't stall the
+// shutdown path.
+func flushOTel(shutdown func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := shutdown(ctx); err != nil {
+		slog.Default().WarnContext(ctx, "otel shutdown", "err", err)
+	}
+}
+
+// deriveHostID returns the host identity the agent advertises. An operator
+// override (EDR_HOST_ID) wins; otherwise we read IOPlatformUUID. Failures here
+// are non-fatal — the enrollment step re-derives and fails loudly if needed.
+func deriveHostID(ctx context.Context, override string) string {
+	if override != "" {
+		return override
+	}
+	if derived, err := hostid.Get(ctx); err == nil {
+		return derived
+	}
+	return ""
+}
+
+// newAgentLogger builds the base slog.Logger, pre-stamping host_id onto every
+// record so log search in SigNoz is routinely scoped to one endpoint.
+func newAgentLogger(cfg *config.Config, hostID string) (*slog.Logger, error) {
+	return logging.New(os.Stderr, logging.Options{
+		Level:               cfg.LogLevel,
+		Format:              cfg.LogFormat,
+		InstrumentationName: serviceName,
+		BaseAttrs:           []slog.Attr{slog.String("host_id", hostID)},
+	})
+}
+
+// logAgentStart emits the startup banner + the insecure-HTTP warning when
+// applicable. Factored out of run() so complexity stays under the linter cap.
+func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config) {
+	logger.InfoContext(ctx, "fleet-edr-agent starting",
+		"version", version,
+		"commit", commit,
+		"build_time", buildTime,
+		"server_url", cfg.ServerURL,
+		"insecure", cfg.AllowInsecure,
+	)
+	if cfg.AllowInsecure {
+		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE=1 is set; use https:// in production")
+	}
+}
+
+// newAgentHTTPClient wires one TLS config into every agent HTTP client so the
+// self-signed / fingerprint-pinned policies that worked during enroll also
+// apply to the uploader and commander. Without this, every post-enroll request
+// would fail "certificate signed by unknown authority" because
+// http.DefaultTransport uses the system trust store with no knowledge of
+// EDR_ALLOW_INSECURE or EDR_SERVER_FINGERPRINT.
+//
+// We clone http.DefaultTransport (rather than &http.Transport{}) so the agent
+// keeps ProxyFromEnvironment, keep-alive, and the stdlib's hardened
+// dial/idle timeouts — real deployments behind HTTPS_PROXY fail without them.
+func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
+	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	if err != nil {
+		logger.ErrorContext(context.Background(), "build tls config", "err", err)
+		return nil, nil, err
+	}
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport.TLSClientConfig = tlsCfg
+	agentTransport := otelhttp.NewTransport(baseTransport)
+	return agentTransport, &http.Client{Transport: agentTransport, Timeout: 30 * time.Second}, nil
+}
+
+// runUploader owns the uploader goroutine; any non-shutdown-induced exit is
+// logged as an error so SigNoz alerts fire if the uploader dies while the
+// agent is otherwise healthy.
+func runUploader(ctx context.Context, up *uploader.Uploader, logger *slog.Logger) {
+	if err := up.Run(ctx); err != nil && ctx.Err() == nil {
+		logger.ErrorContext(ctx, "uploader", "err", err)
+	}
+}
+
+// drainAndReport gives the uploader a 5s window to flush pending events after
+// the shutdown signal, then logs the final queue depth so post-mortems can
+// tell "clean drain" from "we hard-stopped with N events queued".
+func drainAndReport(up *uploader.Uploader, q *queue.Queue, logger *slog.Logger) {
+	shutdownCtx := context.Background()
+	logger.InfoContext(shutdownCtx, "agent shutting down")
+
+	drainCtx, drainCancel := context.WithTimeout(shutdownCtx, 5*time.Second)
+	defer drainCancel()
 	if err := up.Drain(drainCtx); err != nil {
 		logger.WarnContext(drainCtx, "uploader drain", "err", err)
 	}
-	drainCancel()
 
-	depth, _ := q.Depth(context.Background())
-	logger.InfoContext(context.Background(), "shutdown queue depth", "depth", depth)
-
-	// OTel shutdown is handled by the deferred flusher installed right after observability.Init.
-	return nil
+	depth, _ := q.Depth(shutdownCtx)
+	logger.InfoContext(shutdownCtx, "shutdown queue depth", "depth", depth)
 }
 
 func safePrefix(s string) string {
@@ -286,43 +315,59 @@ func runReceiverLoop(
 	)
 
 	backoff := initialBackoff
-	for {
-		if ctx.Err() != nil {
-			return
+	for ctx.Err() == nil {
+		reconnect, connected := runReceiverOnce(ctx, logger, xpcService, q, pt, updateTable, dispatcher)
+		if connected {
+			// Successful session; reset the backoff so the next reconnect is fast.
+			backoff = initialBackoff
 		}
-
-		recv := receiver.New(xpcService, 4096)
-
-		if err := recv.Connect(); err != nil {
-			logger.WarnContext(ctx, "receiver connect", "service", xpcService, "err", err, "retry_in", backoff)
-			if !sleepCtx(ctx, backoff) {
-				return
-			}
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
-		logger.InfoContext(ctx, "receiver connected", "service", xpcService)
-		backoff = initialBackoff
-		if dispatcher != nil {
-			dispatcher.set(recv)
-		}
-
-		reconnect := pipeEvents(ctx, logger, recv, q, pt, updateTable)
-		if dispatcher != nil {
-			dispatcher.clear()
-		}
-		recv.Disconnect()
-
 		if !reconnect {
 			return
 		}
-
-		logger.InfoContext(ctx, "receiver reconnecting", "service", xpcService, "retry_in", initialBackoff)
-		if !sleepCtx(ctx, initialBackoff) {
+		retryIn := initialBackoff
+		if !connected {
+			// Connection never established — back off exponentially before
+			// retrying to avoid a tight reconnect loop against a dead peer.
+			retryIn = backoff
+			backoff = min(backoff*2, maxBackoff)
+		} else {
+			logger.InfoContext(ctx, "receiver reconnecting", "service", xpcService, "retry_in", retryIn)
+		}
+		if !sleepCtx(ctx, retryIn) {
 			return
 		}
 	}
+}
+
+// runReceiverOnce performs a single connect→pipe→disconnect cycle against the
+// XPC service. Returns (reconnect, connected): reconnect says whether the outer
+// backoff loop should try again, and connected tells the caller whether the
+// last attempt actually established the peer link so the backoff can be reset.
+func runReceiverOnce(
+	ctx context.Context,
+	logger *slog.Logger,
+	xpcService string,
+	q *queue.Queue,
+	pt *proctable.Table,
+	updateTable bool,
+	dispatcher *policyDispatcher,
+) (reconnect, connected bool) {
+	recv := receiver.New(xpcService, 4096)
+	if err := recv.Connect(); err != nil {
+		logger.WarnContext(ctx, "receiver connect", "service", xpcService, "err", err)
+		return true, false
+	}
+	logger.InfoContext(ctx, "receiver connected", "service", xpcService)
+
+	if dispatcher != nil {
+		dispatcher.set(recv)
+	}
+	reconnect = pipeEvents(ctx, logger, recv, q, pt, updateTable)
+	if dispatcher != nil {
+		dispatcher.clear()
+	}
+	recv.Disconnect()
+	return reconnect, true
 }
 
 // pipeEvents reads from the receiver and enqueues events until ctx is cancelled or XPC errors.

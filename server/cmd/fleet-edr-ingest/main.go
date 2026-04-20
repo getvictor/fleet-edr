@@ -34,13 +34,13 @@ func main() {
 }
 
 func run() error {
-	env, err := bootstrap.Init(bootstrap.Options{ServiceName: serviceName, ServiceVersion: version})
+	ctx, env, err := bootstrap.Init(bootstrap.Options{ServiceName: serviceName, ServiceVersion: version})
 	if err != nil {
 		return err
 	}
 	defer env.FlushOTel()
 	defer env.Cancel()
-	ctx, cfg, logger := env.Ctx, env.Config, env.Logger
+	cfg, logger := env.Config, env.Logger
 
 	logger.InfoContext(ctx, "fleet-edr-ingest starting",
 		"addr", cfg.ListenAddr,

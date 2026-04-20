@@ -38,7 +38,11 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, tlsEnabled bool, logg
 
 	select {
 	case <-ctx.Done():
-		logger.InfoContext(context.Background(), "shutdown starting", "reason", ctx.Err())
+		// slog doesn't honour ctx.Done()/cancellation — it just reads the ctx
+		// for trace-id correlation — so logging through the cancelled ctx here
+		// is fine and keeps the shutdown log on the same trace as the request
+		// that triggered it.
+		logger.InfoContext(ctx, "shutdown starting", "reason", ctx.Err())
 	case err := <-serverErr:
 		if err != nil {
 			logger.ErrorContext(ctx, "server error", "err", err)
@@ -46,7 +50,13 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, tlsEnabled bool, logg
 		}
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+	// Derive the shutdown deadline context from ctx via WithoutCancel so it
+	// inherits ctx's values (trace-id, logger attrs) but NOT ctx's cancellation
+	// — otherwise srv.Shutdown would return immediately because ctx is already
+	// Done. http.Server.Shutdown uses its context purely to decide when to give
+	// up on in-flight connections, so a fresh, timeout-bounded, values-inherited
+	// context is the correct shape.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownTimeout)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.ErrorContext(shutdownCtx, "shutdown error", "err", err)

@@ -20,6 +20,7 @@ import (
 	"github.com/fleetdm/edr/server/api"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/bootstrap"
+	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/detection/rules"
 	"github.com/fleetdm/edr/server/enrollment"
@@ -73,13 +74,13 @@ func main() {
 }
 
 func run() error {
-	env, err := bootstrap.Init(bootstrap.Options{ServiceName: serviceName, ServiceVersion: version})
+	ctx, env, err := bootstrap.Init(bootstrap.Options{ServiceName: serviceName, ServiceVersion: version})
 	if err != nil {
 		return err
 	}
 	defer env.FlushOTel()
 	defer env.Cancel()
-	ctx, cfg, logger := env.Ctx, env.Config, env.Logger
+	cfg, logger := env.Config, env.Logger
 
 	logger.InfoContext(ctx, "fleet-edr-server starting",
 		"addr", cfg.ListenAddr,
@@ -173,51 +174,10 @@ func run() error {
 		Metrics:       metricsRec,
 	})
 	go retentionRunner.Loop(ctx)
+	go runSessionCleanup(ctx, sessionStore, logger)
+	go runProcessor(ctx, proc, logger)
 
-	// Phase 3: periodic cleanup of expired session rows. Every 5 minutes; the exact
-	// interval doesn't matter much — 12h-TTL rows that linger for a few extra minutes
-	// are harmless because Session middleware already rejects expired rows via the
-	// `expires_at > NOW()` filter.
-	go func() {
-		t := time.NewTicker(5 * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				n, err := sessionStore.CleanupExpired(ctx)
-				if err != nil {
-					logger.WarnContext(ctx, "session cleanup", "err", err)
-					continue
-				}
-				if n > 0 {
-					logger.InfoContext(ctx, "session cleanup removed rows", "count", n)
-				}
-			}
-		}
-	}()
-
-	// Start the background event processor.
-	go func() {
-		if err := proc.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.ErrorContext(ctx, "processor", "err", err)
-		}
-	}()
-
-	handler := httpserver.Build(mux, httpserver.Options{
-		Logger:      logger,
-		ServiceName: serviceName,
-		TLSEnabled:  cfg.TLSEnabled(),
-	})
-
-	srv := &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	srv := newHTTPServer(cfg, mux, logger)
 	if cfg.TLSEnabled() {
 		if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
 			CertFile:   cfg.TLSCertFile,
@@ -229,6 +189,57 @@ func run() error {
 		}
 	}
 	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
+}
+
+// runSessionCleanup sweeps expired session rows on a 5-minute cadence. The
+// exact interval is not load-bearing: Session middleware already rejects
+// expired rows via the `expires_at > NOW()` filter, so rows that linger for a
+// few extra minutes are harmless — this loop is about reclaiming disk, not
+// enforcing security.
+func runSessionCleanup(ctx context.Context, sessionStore *sessions.Store, logger *slog.Logger) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := sessionStore.CleanupExpired(ctx)
+			switch {
+			case err != nil:
+				logger.WarnContext(ctx, "session cleanup", "err", err)
+			case n > 0:
+				logger.InfoContext(ctx, "session cleanup removed rows", "count", n)
+			}
+		}
+	}
+}
+
+// runProcessor owns the background event-processor goroutine and logs any
+// non-shutdown-induced exit as an error so SigNoz alerts fire if the processor
+// dies while the server is otherwise healthy.
+func runProcessor(ctx context.Context, proc *processor.Processor, logger *slog.Logger) {
+	if err := proc.Run(ctx); err != nil && ctx.Err() == nil {
+		logger.ErrorContext(ctx, "processor", "err", err)
+	}
+}
+
+// newHTTPServer builds the *http.Server wrapped in the full httpserver
+// middleware chain. Timeouts are conservative MVP-scale defaults; pushing them
+// lower would starve slow clients on a residential NAT.
+func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger) *http.Server {
+	handler := httpserver.Build(mux, httpserver.Options{
+		Logger:      logger,
+		ServiceName: serviceName,
+		TLSEnabled:  cfg.TLSEnabled(),
+	})
+	return &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 }
 
 // muxDeps bundles the handlers + stores the HTTP mux assembly needs, so buildMux takes

@@ -8,11 +8,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"sync"
@@ -56,28 +57,26 @@ func main() {
 
 	log.Printf("batch size: %d, interval: %v, batches/min: %.0f", *batchSize, batchInterval, batchesPerMinute)
 
-	done := time.After(*duration)
+	ctx, cancel := context.WithTimeout(context.Background(), *duration)
+	defer cancel()
 	ticker := time.NewTicker(batchInterval)
 	defer ticker.Stop()
 
 	var wg sync.WaitGroup
-
 	hostID := fmt.Sprintf("loadtest-%d", os.Getpid())
 
 	for {
 		select {
-		case <-done:
+		case <-ctx.Done():
 			wg.Wait()
 			printSummary(sent.Load(), errors.Load(), totalLatNs.Load(), *duration)
 			return
 		case <-ticker.C:
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				batch := generateBatch(*batchSize, hostID)
 				start := time.Now()
 
-				if err := sendBatch(client, url, *apiKey, batch); err != nil {
+				if err := sendBatch(ctx, client, url, *apiKey, batch); err != nil {
 					errors.Add(1)
 					log.Printf("send error: %v", err)
 					return
@@ -86,7 +85,7 @@ func main() {
 				latency := time.Since(start)
 				totalLatNs.Add(latency.Nanoseconds())
 				sent.Add(int64(*batchSize))
-			}()
+			})
 		}
 	}
 }
@@ -100,8 +99,12 @@ func generateBatch(size int, hostID string) []event {
 
 	batch := make([]event, size)
 	for i := range size {
-		pid := rand.Intn(65535) + 100
-		path := paths[rand.Intn(len(paths))]
+		// math/rand/v2 is fine here: load-test payloads are synthetic data, not
+		// cryptographic material. The gosec G404 warning is silenced by the v2
+		// import (its auto-seeded RNG is the idiomatic replacement for the old
+		// math/rand default source).
+		pid := rand.IntN(65535) + 100
+		path := paths[rand.IntN(len(paths))]
 
 		payload, _ := json.Marshal(map[string]any{
 			"pid":  pid,
@@ -124,13 +127,13 @@ func generateBatch(size int, hostID string) []event {
 	return batch
 }
 
-func sendBatch(client *http.Client, url, apiKey string, batch []event) error {
+func sendBatch(ctx context.Context, client *http.Client, url, apiKey string, batch []event) error {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
