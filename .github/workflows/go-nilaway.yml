@@ -25,16 +25,15 @@ concurrency:
 
 jobs:
   # uber-go/nilaway does inter-procedural nil-dereference analysis that
-  # staticcheck + govet -nilness miss. The tool is intentionally aggressive and
-  # produces false positives on patterns it cannot prove safe (errors.As
-  # contracts, map-aliasing invariants, tests that skip nil checks on the
-  # happy path). Job is deliberately non-gating (`continue-on-error: true`) so
-  # findings are visible on the PR without blocking merges. Review periodically
-  # via `task lint:nilaway` locally and fix real bugs.
+  # staticcheck + govet -nilness miss because nilaway tracks nilability across
+  # function boundaries. Gating check: every PR must stay at zero findings.
+  # If nilaway flags something on a legitimate invariant (errors.As contract,
+  # map-aliasing, a test that asserts-by-panicking), restructure the code so
+  # the invariant is explicit (e.g. add require.NotNil / len-check) rather
+  # than adding a global suppression.
   nilaway:
-    name: nilaway (advisory)
+    name: nilaway
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -47,5 +46,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: arduino/setup-task@24c5e13bce349197642746563945fcdf9355e8f4 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run nilaway
-        run: go tool nilaway -include-pkgs="github.com/fleetdm/edr" ./...
+        run: task lint:nilaway

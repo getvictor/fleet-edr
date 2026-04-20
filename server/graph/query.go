@@ -101,7 +101,16 @@ func buildForest(procs []store.Process) []ProcessNode {
 	for i := range procs {
 		p := &procs[i]
 		nodeMap[p.ID] = &ProcessNode{Process: *p}
-		if existing, ok := pidToID[p.PID]; !ok || p.ForkTimeNs > nodeMap[existing].ForkTimeNs {
+		existing, ok := pidToID[p.PID]
+		if !ok {
+			pidToID[p.PID] = p.ID
+			continue
+		}
+		// nodeMap[existing] was inserted by an earlier iteration (existing is
+		// an ID we've already seen), so the lookup is guaranteed non-nil; the
+		// explicit guard also makes the invariant visible to static analysis.
+		prev, prevOK := nodeMap[existing]
+		if prevOK && p.ForkTimeNs > prev.ForkTimeNs {
 			pidToID[p.PID] = p.ID
 		}
 	}

@@ -413,6 +413,7 @@ func TestHandler_EnrollQueuesInitialPolicy(t *testing.T) {
 		return len(got) == 1
 	}, 3*time.Second, 25*time.Millisecond,
 		"expected exactly one pending set_blocklist command after enroll")
+	require.Len(t, got, 1, "poll exit implies len(got)==1 but make the invariant explicit for readers + static analysis")
 
 	var payload struct {
 		Name    string   `json:"name"`

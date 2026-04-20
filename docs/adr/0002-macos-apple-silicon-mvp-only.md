@@ -15,8 +15,9 @@ telemetry-source abstraction burden. The forces at play:
   requires entitlements that are only granted to system extensions, which in
   turn require notarisation + MDM-delivered profiles for production.
 - Apple's final Intel Mac shipped in November 2023. The last macOS release
-  that will support Intel (Sequoia, macOS 15) is approaching end-of-life.
-  Pilot customers are overwhelmingly Apple Silicon.
+  that supports Intel hardware is Tahoe (macOS 26); every macOS release after
+  Tahoe is Apple-Silicon-only. Pilot customers are overwhelmingly on Apple
+  Silicon already.
 - Linux and Windows need completely different telemetry stacks (eBPF +
   `tracee` / `falco-libs` for Linux, ETW + WDM for Windows). Each is a
   multi-quarter investment and deserves a separate ADR when that time

@@ -1,5 +1,10 @@
 # Fleet EDR
 
+![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=server/go.mod&style=flat-square)
+[![Go test](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-test.yml?branch=main&label=Go%20test&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-test.yml)
+[![govulncheck](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-vulncheck.yml?branch=main&label=govulncheck&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
+
 A macOS Endpoint Detection and Response (EDR) system. It provides
 real-time process monitoring, network attribution, behavioral detection, and response capabilities.
 
@@ -35,27 +40,49 @@ docs/adr/            Architecture Decision Records -- the "why" behind non-obvio
 
 ## First-time setup
 
+### 0a. Install mise (pick one)
+
 ```bash
-# 0. Install mise (one-time, global). Picks https://mise.jdx.dev/getting-started.html
-#    as the canonical source; pick whichever line matches your platform.
-curl https://mise.run | sh                 # any Unix
-brew install mise                          # macOS with Homebrew
+curl https://mise.run | sh      # any Unix; installs to ~/.local/bin/mise
+# --- OR ---
+brew install mise               # macOS with Homebrew
+```
 
-# Activate mise in your shell so pinned tools appear on PATH. Without this step
-# `mise install` downloads tools but they don't show up in `which task` / `which
-# lefthook` etc. Pick the right line for your shell and append to the rc file.
-echo 'eval "$(mise activate zsh)"'  >> ~/.zshrc   # zsh
-echo 'eval "$(mise activate bash)"' >> ~/.bashrc  # bash
-# Then open a new terminal, or `exec $SHELL`, so the activation takes effect.
+Only run **one** of those two lines. Running both will put two copies of
+`mise` on disk and leave an extra entry on PATH. If mise is already installed,
+skip to 0b. See <https://mise.jdx.dev/getting-started.html> for other
+installers.
 
-# 1. Install every pinned tool (Go, Node, golangci-lint, lefthook, task).
-#    Reads .tool-versions; asdf works the same way if you prefer it over mise.
-mise install
+### 0b. Activate mise in your shell (one-time, per shell)
 
-# 2. Install git hooks (format + lint on commit, build + tsc on push).
-lefthook install
+```bash
+echo 'eval "$(mise activate zsh)"'  >> ~/.zshrc    # zsh
+# --- OR ---
+echo 'eval "$(mise activate bash)"' >> ~/.bashrc   # bash
+```
 
-# 3. See every available task.
+Then open a new terminal (or `exec $SHELL`) so the activation takes effect.
+Without this step `mise install` downloads tools but they don't appear on
+PATH -- `which task` / `which lefthook` come up empty.
+
+### 1. Install every pinned tool
+
+```bash
+mise install   # reads .tool-versions; asdf users: asdf install
+```
+
+Fetches Go, Node, golangci-lint, lefthook, and task at the exact versions CI
+uses.
+
+### 2. Install git hooks
+
+```bash
+lefthook install   # format + lint on commit, build + tsc on push
+```
+
+### 3. Discover available commands
+
+```bash
 task --list
 ```
 

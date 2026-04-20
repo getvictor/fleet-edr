@@ -10,7 +10,10 @@ pre-commit:
   parallel: true
   commands:
     gofmt:
-      glob: "*.go"
+      # Lefthook globs match the whole path (not just basename), so "*.go"
+      # would only catch Go files at the repo root. Use a recursive glob to
+      # cover server/, agent/, internal/, test/, and anything else.
+      glob: "**/*.go"
       run: |
         unformatted=$(gofmt -s -l {staged_files})
         if [ -n "$unformatted" ]; then
@@ -40,8 +43,13 @@ pre-commit:
     # Catch secrets before they land. `git secrets` or `trufflehog` could
     # fit here later. For now, a minimal regex guard against the obvious
     # patterns that shouldn't be in source.
+    #
+    # Reads from the INDEX (`git show :path`) rather than the working tree so
+    # a developer who stages a secret and then edits it out of the working
+    # tree before committing still gets caught. Falls back to the working
+    # tree for files deleted from the index.
     no-secrets:
-      glob: "*"
+      glob: "**/*.{go,ts,tsx,js,swift,md,yml,yaml,json,sh}"
       exclude:
         - ".tool-versions"
         - "lefthook.yml"
@@ -49,15 +57,11 @@ pre-commit:
       run: |
         matched=0
         for f in {staged_files}; do
-          # Skip binaries + generated.
-          case "$f" in
-            *.go|*.ts|*.tsx|*.js|*.swift|*.md|*.yml|*.yaml|*.json|*.sh)
-              if grep -nE 'AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----' "$f" 2>/dev/null; then
-                echo "Potential secret in $f"
-                matched=1
-              fi
-              ;;
-          esac
+          content=$(git show ":$f" 2>/dev/null) || continue
+          if printf '%s' "$content" | grep -nE 'AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'; then
+            echo "Potential secret staged in $f"
+            matched=1
+          fi
         done
         exit $matched
 
@@ -66,13 +70,20 @@ pre-push:
   commands:
     go-build:
       # Whole-module build as a cheap smoke test. Failures here almost
-      # always mean a refactor left a broken import somewhere.
-      run: go build ./...
+      # always mean a refactor left a broken import somewhere. The server
+      # embeds server/ui/dist via `embed`; on a clean checkout that dir
+      # doesn't exist, so seed a placeholder here (CI workflows do the
+      # equivalent before their Go steps).
+      run: |
+        mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
+        go build ./...
 
     go-lint-fast:
       # --fast-only enables the quick-running linters (under ~2s usually).
       # The full run still happens in CI and before release.
-      run: golangci-lint run --fast-only ./server/... ./agent/... ./internal/... ./test/...
+      run: |
+        mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
+        golangci-lint run --fast-only ./server/... ./agent/... ./internal/... ./test/...
 
     tsc:
       root: "ui/"

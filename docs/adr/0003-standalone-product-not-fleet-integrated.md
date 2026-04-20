@@ -46,17 +46,22 @@ cookies + CSRF for the UI, bearer tokens for agent-to-server), and its own
 API at `/api/v1/*`.
 
 Fleet is one of several supported deployment channels. The contract between
-Fleet and the EDR is deliberately thin:
+Fleet and the EDR is deliberately thin and consists of three things the MDM
+must do on the endpoint:
 
-- Fleet delivers the signed `.pkg` to endpoints via its package management.
-- Fleet pushes two `.mobileconfig` profiles (system extension allowlist and
-  network extension allowlist) so the TCC prompts don't block the user.
-- A Fleet install script writes the enroll secret to
-  `/etc/fleet-edr.conf` where the agent reads it.
+1. Deliver the signed `.pkg` via the MDM's package-management channel.
+2. Push two `.mobileconfig` profiles (system extension allowlist and
+   network extension allowlist) so the TCC prompts don't block the user.
+3. Provision the enroll secret for the agent to read at startup. Today the
+   agent reads `EDR_ENROLL_SECRET` from its environment (see
+   `agent/config`); the MDM-owned LaunchDaemon plist that wraps the agent is
+   where that env var lands. A future revision may switch to reading from a
+   root-owned config file at `/etc/fleet-edr.conf` so the secret doesn't
+   appear in `launchctl print` output, but that is an implementation detail
+   of step 3, not a separate contract.
 
-Jamf, Kandji, mosyle, and Intune will use equivalent mechanisms when we
-wire them up. None of them are privileged over the others in the EDR's
-design.
+Jamf, Kandji, mosyle, and Intune use equivalent mechanisms. None of them are
+privileged over the others in the EDR's design.
 
 ## Consequences
 

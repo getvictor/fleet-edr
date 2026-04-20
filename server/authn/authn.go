@@ -76,9 +76,11 @@ const (
 const SessionCookieName = "edr_session"
 
 // CSRFHeaderName is the HTTP header the UI sends the per-session CSRF token in.
-// The wire is case-insensitive per RFC 7230; the value here uses Go's canonical
-// header form (http.CanonicalMIMEHeaderKey) so http.Header.{Get,Set} lookups do
-// not silently rewrite it.
+// Behaviorally it would work as "X-CSRF-Token" because HTTP header names are
+// case-insensitive per RFC 7230 and net/http canonicalises lookups via
+// http.CanonicalMIMEHeaderKey. We use the canonical form here so the
+// canonicalheader linter stays happy without a per-file suppression; UI docs
+// + JS emit "X-CSRF-Token" and the wire handles both equivalently.
 const CSRFHeaderName = "X-Csrf-Token"
 
 // HostIDFromContext returns the host_id pinned by the HostToken middleware. The second

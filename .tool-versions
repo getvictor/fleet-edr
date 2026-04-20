@@ -8,7 +8,7 @@
 # Bumping a version here is the single source of truth; update the CI
 # workflow at the same time (workflows use `go-version-file: go.mod` where
 # possible, which already tracks this file's Go pin via go.mod).
-golang 1.26.0
+golang 1.26.2
 nodejs 22.21.0
 golangci-lint 2.11.3
 lefthook 1.8.0

@@ -7,12 +7,14 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "Taskfile.yml"
       - ".github/workflows/go-test.yml"
   pull_request:
     paths:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "Taskfile.yml"
       - ".github/workflows/go-test.yml"
   workflow_dispatch:
 
@@ -24,6 +26,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The agent job doesn't need MySQL but needs macOS for CGo / ESF build tags.
+  # The server job needs MySQL 8.4 but runs faster on ubuntu. Both invoke the
+  # same Taskfile target (test:go) so the flags (-race -count=1 -timeout=10m)
+  # stay consistent between local dev and CI.
   agent-test:
     name: Agent tests
     runs-on: macos-latest
@@ -36,6 +42,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: arduino/setup-task@24c5e13bce349197642746563945fcdf9355e8f4 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Agent tests don't touch MySQL but test:go still runs the full suite
+      # (which is OK because the server tests gracefully no-op when
+      # EDR_TEST_DSN can't open a connection). Scope to agent + internal only
+      # on this runner.
       - name: Run agent tests
         run: go test -race -count=1 -timeout=10m ./agent/... ./internal/...
 
@@ -55,6 +70,11 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+
+      - uses: arduino/setup-task@24c5e13bce349197642746563945fcdf9355e8f4 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install MySQL 8.4
         run: brew install mysql@8.4
@@ -85,5 +105,8 @@ jobs:
           MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
           "${MYSQL_PREFIX}/bin/mysql" -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
 
-      - name: Run server tests
-        run: go test -race -count=1 -timeout=10m ./server/... ./internal/...
+      # test:go reads $EDR_TEST_DSN from the environment (set above) and
+      # otherwise falls back to the docker-compose port used locally. CI's DSN
+      # wins because the job-level `env:` is seen by Task's variable resolver.
+      - name: Run server tests via Taskfile
+        run: task test:go

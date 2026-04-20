@@ -545,21 +545,21 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 
 | Area                              | Adopted | Total | %    |
 |-----------------------------------|---------|-------|------|
-| Detection content + response      | 6       | 33    | 18%  |
-| Cross-platform reach              | 1       | 8     | 13%  |
-| AuthN / AuthZ / crypto            | 14      | 25    | 56%  |
-| Supply-chain security             | 9       | 24    | 38%  |
-| Code quality + static analysis    | 12      | 22    | 55%  |
+| Detection content + response      | 6       | 36    | 17%  |
+| Cross-platform reach              | 1       | 8     | 12%  |
+| AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
+| Supply-chain security             | 10      | 27    | 37%  |
+| Code quality + static analysis    | 12.5    | 22    | 57%  |
 | Testing                           | 6       | 19    | 32%  |
-| Observability + operations        | 16      | 26    | 62%  |
-| API design                        | 4       | 15    | 27%  |
+| Observability + operations        | 15      | 24    | 62%  |
+| API design                        | 4       | 16    | 25%  |
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
-| Build / release / packaging       | 2       | 14    | 14%  |
-| Community signals                 | 5       | 23    | 22%  |
+| Build / release / packaging       | 2       | 12    | 17%  |
+| Community signals                 | 10      | 24    | 42%  |
 | Compliance + privacy              | 0       | 13    | 0%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
-| AI-assisted engineering           | 1.5     | 14    | 11%  |
+| AI-assisted engineering           | 2       | 17    | 12%  |
 
 The standout strengths today are observability, code-quality tooling, and authn /
 session security. The clearest gaps for a "competing with CrowdStrike" pitch are the

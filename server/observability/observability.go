@@ -97,7 +97,9 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	logExp, err := otlploggrpc.New(initCtx)
 	if err != nil {
-		_ = tp.Shutdown(initCtx)
+		cleanupCtx, cancel := shutdownCtxFrom(initCtx)
+		defer cancel()
+		_ = tp.Shutdown(cleanupCtx)
 		return noopShutdown, fmt.Errorf("create log exporter: %w", err)
 	}
 	lp := sdklog.NewLoggerProvider(
@@ -107,8 +109,10 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	metricExp, err := otlpmetricgrpc.New(initCtx)
 	if err != nil {
-		_ = tp.Shutdown(initCtx)
-		_ = lp.Shutdown(initCtx)
+		cleanupCtx, cancel := shutdownCtxFrom(initCtx)
+		defer cancel()
+		_ = tp.Shutdown(cleanupCtx)
+		_ = lp.Shutdown(cleanupCtx)
 		return noopShutdown, fmt.Errorf("create metric exporter: %w", err)
 	}
 	mp := sdkmetric.NewMeterProvider(
@@ -156,6 +160,17 @@ func (p *providerBundle) shutdown(ctx context.Context) error {
 }
 
 func noopShutdown(context.Context) error { return nil }
+
+// shutdownCtxFrom derives a best-effort cleanup context from the init context.
+// On an init failure the parent may already be at/past cancellation (timeout,
+// operator Ctrl-C), in which case calling tp.Shutdown(parent) is a no-op and
+// leaks the partially-constructed provider. context.WithoutCancel strips the
+// parent's cancellation signal so the timeout added below is the only
+// deadline; values (trace correlation, logger attrs) still propagate. Caller
+// must defer the returned cancel func so the context is released on return.
+func shutdownCtxFrom(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 2*time.Second)
+}
 
 func buildResource(ctx context.Context, opts Options) (*resource.Resource, error) {
 	var attrs []attribute.KeyValue
