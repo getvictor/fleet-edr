@@ -48,20 +48,19 @@ jobs:
       # Install task so the CI entry point matches what developers run locally.
       # Keeps `task lint:go` as the single source of truth for how to invoke
       # golangci-lint across the project (paths, build tags, flags).
-      - uses: arduino/setup-task@24c5e13bce349197642746563945fcdf9355e8f4 # v2.0.0
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Install + cache the pinned golangci-lint binary. Passing version-only
-      # via `only-new-issues: false` and setting `args: version` makes the
-      # action install the binary and exit; the actual run happens via Taskfile
-      # below so the invocation matches `task lint:go` locally.
+      # Install + cache the pinned golangci-lint binary. `install-mode: goinstall`
+      # is faster than the binary release for pinned versions on actionlint-cached
+      # runners; `install-only: true` skips the action's built-in `golangci-lint
+      # run` so we can delegate the actual invocation to Taskfile below.
       - uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
         with:
           version: v2.11
-          args: version
-          install-mode: "binary"
+          install-only: "true"
 
       - name: Run golangci-lint via Taskfile
         run: task lint:go

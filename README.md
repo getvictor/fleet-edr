@@ -1,6 +1,6 @@
 # Fleet EDR
 
-![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=server/go.mod&style=flat-square)
+![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
 [![Go test](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-test.yml?branch=main&label=Go%20test&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-test.yml)
 [![govulncheck](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-vulncheck.yml?branch=main&label=govulncheck&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
@@ -71,8 +71,11 @@ PATH -- `which task` / `which lefthook` come up empty.
 mise install   # reads .tool-versions; asdf users: asdf install
 ```
 
-Fetches Go, Node, golangci-lint, lefthook, and task at the exact versions CI
-uses.
+Fetches Go, Node, golangci-lint, lefthook, and task at the versions pinned in
+`.tool-versions`. CI installs the same pins for Go + Node + golangci-lint
+(`go-version-file: go.mod`, explicit `node-version`, pinned `golangci-lint`);
+the Task and Lefthook installers in CI track the same minor series but aren't
+byte-for-byte locked to the patch version.
 
 ### 2. Install git hooks
 

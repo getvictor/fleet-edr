@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fleetdm/edr/internal/observability"
 	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/server/logging"
-	"github.com/fleetdm/edr/server/observability"
 )
 
 // Env is the bundle of ready-to-use primitives returned by Init.

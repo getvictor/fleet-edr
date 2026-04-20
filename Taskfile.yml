@@ -70,14 +70,32 @@ tasks:
 
   test:go:
     desc: |
-      Run Go tests with race detector. Uses $EDR_TEST_DSN from the environment
-      if set; otherwise defaults to the docker-compose mysql_test service on
-      port 3317 (see db:up). Pointing at the dev DB on 3316 by accident is a
-      common foot-gun because dev tests truncate tables. CI sets its own DSN.
+      Run Go tests with race detector (server + agent + internal). Uses
+      $EDR_TEST_DSN from the environment if set; otherwise defaults to the
+      docker-compose mysql_test service on port 3317 (see db:up). Pointing at
+      the dev DB on 3316 by accident is a common foot-gun because dev tests
+      truncate tables. CI sets its own DSN.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./agent/... ./internal/...
+
+  test:go:agent:
+    desc: |
+      Run Go tests with race detector for agent + shared code only. No DB
+      required. Use from CI's agent-test job so the server tests don't run
+      on a runner that doesn't have MySQL.
+    cmds:
+      - go test -race -count=1 -timeout=10m ./agent/... ./internal/...
+
+  test:go:server:
+    desc: |
+      Run Go tests with race detector for the server + shared code. Requires
+      $EDR_TEST_DSN set or the docker-compose mysql_test on port 3317.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+    cmds:
+      - go test -race -count=1 -timeout=10m ./server/... ./internal/...
 
   test:ui:
     desc: Run Vitest suite

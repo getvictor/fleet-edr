@@ -143,7 +143,9 @@ func TestPruneRespectsAge(t *testing.T) {
 	if len(batch) != 1 {
 		t.Fatalf("expected 1 dequeued event, got %d", len(batch))
 	}
-	_ = q.MarkUploaded(ctx, []int64{batch[0].ID})
+	if err := q.MarkUploaded(ctx, []int64{batch[0].ID}); err != nil {
+		t.Fatalf("mark uploaded: %v", err)
+	}
 
 	// Prune with 1 hour should not delete a just-created event.
 	pruned, err := q.Prune(ctx, time.Hour)

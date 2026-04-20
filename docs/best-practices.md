@@ -204,12 +204,12 @@ floor for any project that wants enterprise adoption.
   the gate evaluates vacuously)
 - [ ] **Codecov / Coveralls** with PR comments and coverage diff
 - [ ] **`go vet -vettool=fieldalignment`** -- catches struct padding waste in hot structs
-- [~] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
+- [x] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
   panics that `staticcheck` and `govet -nilness` miss because nilaway tracks nilability
-  across function boundaries. Wired as `task lint:nilaway` locally and as an advisory
-  (non-gating) CI job `.github/workflows/go-nilaway.yml`. Not blocking merges because
-  nilaway is noisy on tests that intentionally skip nil checks. Review PR findings
-  periodically and flip `continue-on-error: false` once the false-positive rate drops.
+  across function boundaries. Wired as `task lint:nilaway` locally and as a gating CI job
+  `.github/workflows/go-nilaway.yml`. False positives from tests or map-aliasing are
+  addressed by restructuring the code (explicit `require.NotNil` / `ok :=` guards) rather
+  than adding a blanket suppression, so the gate stays honest.
 - [ ] **`go-licenses` / `licensed`** to enforce dep license policy
 - [ ] **Spell-check** (`codespell`, `misspell`) in CI
 - [ ] **Markdown linter** (`markdownlint-cli2`) for the docs
@@ -549,7 +549,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | Cross-platform reach              | 1       | 8     | 12%  |
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
 | Supply-chain security             | 10      | 27    | 37%  |
-| Code quality + static analysis    | 12.5    | 22    | 57%  |
+| Code quality + static analysis    | 13      | 22    | 59%  |
 | Testing                           | 6       | 19    | 32%  |
 | Observability + operations        | 15      | 24    | 62%  |
 | API design                        | 4       | 16    | 25%  |

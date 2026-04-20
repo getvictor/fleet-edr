@@ -26,10 +26,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The agent job doesn't need MySQL but needs macOS for CGo / ESF build tags.
-  # The server job needs MySQL 8.4 but runs faster on ubuntu. Both invoke the
-  # same Taskfile target (test:go) so the flags (-race -count=1 -timeout=10m)
-  # stay consistent between local dev and CI.
+  # Both jobs run on macos-latest because the agent's CGo / ESF build tags are
+  # macOS-only. The agent-test job skips MySQL by scoping to the agent +
+  # internal packages; the server-test job installs MySQL locally on the
+  # runner. Both invoke scoped Taskfile targets (test:go:agent,
+  # test:go:server) so the flags (-race -count=1 -timeout=10m) stay
+  # consistent with local dev.
   agent-test:
     name: Agent tests
     runs-on: macos-latest
@@ -42,17 +44,13 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: arduino/setup-task@24c5e13bce349197642746563945fcdf9355e8f4 # v2.0.0
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Agent tests don't touch MySQL but test:go still runs the full suite
-      # (which is OK because the server tests gracefully no-op when
-      # EDR_TEST_DSN can't open a connection). Scope to agent + internal only
-      # on this runner.
-      - name: Run agent tests
-        run: go test -race -count=1 -timeout=10m ./agent/... ./internal/...
+      - name: Run agent tests via Taskfile
+        run: task test:go:agent
 
   server-test:
     name: Server tests
@@ -71,7 +69,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: arduino/setup-task@24c5e13bce349197642746563945fcdf9355e8f4 # v2.0.0
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -105,8 +103,9 @@ jobs:
           MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
           "${MYSQL_PREFIX}/bin/mysql" -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
 
-      # test:go reads $EDR_TEST_DSN from the environment (set above) and
-      # otherwise falls back to the docker-compose port used locally. CI's DSN
-      # wins because the job-level `env:` is seen by Task's variable resolver.
+      # test:go:server reads $EDR_TEST_DSN from the environment (set above)
+      # and otherwise falls back to the docker-compose port used locally.
+      # CI's DSN wins because the job-level `env:` is seen by Task's variable
+      # resolver.
       - name: Run server tests via Taskfile
-        run: task test:go
+        run: task test:go:server

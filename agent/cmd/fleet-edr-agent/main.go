@@ -24,11 +24,11 @@ import (
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/logging"
 	"github.com/fleetdm/edr/agent/metrics"
-	"github.com/fleetdm/edr/agent/observability"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/uploader"
+	"github.com/fleetdm/edr/internal/observability"
 )
 
 // Build info injected via -ldflags at build time.
