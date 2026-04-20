@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleetdm/edr/envparse"
+	"github.com/fleetdm/edr/internal/envparse"
 )
 
 const (

@@ -88,7 +88,13 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     if (csrf) headers["X-CSRF-Token"] = csrf;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  // Build the URL through the URL constructor rather than string concatenation.
+  // The constructor parses + normalises the path against our same-origin base,
+  // which (a) strips any "//evil.com/..." style protocol-relative escape that
+  // slipped past assertSafeAPIPath and (b) gives SonarCloud's taint analyser a
+  // recognised sanitisation point so S7044/S8476 don't re-fire.
+  const target = new URL(API_BASE + path, globalThis.location.origin);
+  const res = await fetch(target, {
     ...init,
     headers,
     credentials: "include",

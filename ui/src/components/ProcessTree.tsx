@@ -460,8 +460,7 @@ function nodeMatchesQuery(d: D3Node, q: string): boolean {
   if (d.name.toLowerCase().includes(q)) return true;
   if (d.path.toLowerCase().includes(q)) return true;
   if (String(d.pid).includes(q)) return true;
-  const args = d.data.args;
-  if (args && args.some((a) => a.toLowerCase().includes(q))) return true;
+  if (d.data.args?.some((a) => a.toLowerCase().includes(q))) return true;
   return false;
 }
 

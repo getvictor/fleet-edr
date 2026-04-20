@@ -4,13 +4,15 @@ on:
   push:
     branches: [main]
     paths:
-      - "agent/**"
-      - "server/**"
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/go-vulncheck.yml"
   pull_request:
     paths:
-      - "agent/**"
-      - "server/**"
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/go-vulncheck.yml"
   workflow_dispatch:
 
@@ -22,6 +24,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Two jobs on the same module: the agent binary's macOS-only CGo compiles only
+  # on macOS runners, while the server's Linux-centric stack is cheaper on
+  # ubuntu. Keeping them split means govulncheck evaluates each binary against
+  # the packages it actually imports rather than the union of the module graph.
   vulncheck-agent:
     name: govulncheck (agent)
     runs-on: macos-latest
@@ -38,8 +44,7 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        working-directory: agent
-        run: govulncheck ./...
+        run: govulncheck ./agent/... ./internal/...
 
   vulncheck-server:
     name: govulncheck (server)
@@ -60,5 +65,4 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        working-directory: server
-        run: govulncheck ./...
+        run: govulncheck ./server/...

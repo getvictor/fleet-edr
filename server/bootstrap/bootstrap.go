@@ -21,9 +21,11 @@ import (
 )
 
 // Env is the bundle of ready-to-use primitives returned by Init.
+//
+// ctx is NOT a field on Env because Go convention says contexts flow through
+// function calls, not across struct boundaries. Init returns it separately so
+// the caller threads it explicitly.
 type Env struct {
-	// Ctx is cancelled when the process receives SIGINT/SIGTERM.
-	Ctx context.Context
 	// Cancel releases the signal.NotifyContext. Safe to call multiple times.
 	Cancel context.CancelFunc
 	// Config is the validated env configuration.
@@ -42,13 +44,16 @@ type Options struct {
 }
 
 // Init runs the daemon prelude. On any error the partial state is torn down
-// before returning so the caller only has to check err. The caller is
-// responsible for calling env.Cancel (on clean exit) and env.FlushOTel (on every
-// exit path, ideally via defer immediately after Init returns).
-func Init(opts Options) (*Env, error) {
+// before returning so the caller only has to check err. Returns ctx first so
+// the caller's main() threads it through the rest of the program explicitly
+// (rather than reaching it through env.Ctx — a struct-stashed context is a
+// Go anti-pattern). The caller is responsible for calling env.Cancel (on
+// clean exit) and env.FlushOTel (on every exit path, ideally via defer
+// immediately after Init returns).
+func Init(opts Options) (context.Context, *Env, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -59,7 +64,7 @@ func Init(opts Options) (*Env, error) {
 	})
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, nil, err
 	}
 
 	logger, err := logging.New(os.Stderr, logging.Options{
@@ -72,13 +77,12 @@ func Init(opts Options) (*Env, error) {
 		// otherwise leak a pending batch.
 		flushWithTimeout(shutdownOTel)
 		cancel()
-		return nil, err
+		return nil, nil, err
 	}
 	slog.SetDefault(logger)
 
 	flush := func() { flushWithTimeout(shutdownOTel) }
-	return &Env{
-		Ctx:       ctx,
+	return ctx, &Env{
 		Cancel:    cancel,
 		Config:    cfg,
 		Logger:    logger,
