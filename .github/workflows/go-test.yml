@@ -4,13 +4,15 @@ on:
   push:
     branches: [main]
     paths:
-      - "agent/**"
-      - "server/**"
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/go-test.yml"
   pull_request:
     paths:
-      - "agent/**"
-      - "server/**"
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/go-test.yml"
   workflow_dispatch:
 
@@ -32,11 +34,10 @@ jobs:
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: agent/go.mod
+          go-version-file: go.mod
 
-      - name: Run tests
-        working-directory: agent
-        run: go test -race -count=1 -timeout=10m ./...
+      - name: Run agent tests
+        run: go test -race -count=1 -timeout=10m ./agent/... ./internal/...
 
   server-test:
     name: Server tests
@@ -53,7 +54,7 @@ jobs:
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: server/go.mod
+          go-version-file: go.mod
 
       - name: Install MySQL 8.4
         run: brew install mysql@8.4
@@ -84,6 +85,5 @@ jobs:
           MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
           "${MYSQL_PREFIX}/bin/mysql" -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
 
-      - name: Run tests
-        working-directory: server
-        run: go test -race -count=1 -timeout=10m ./...
+      - name: Run server tests
+        run: go test -race -count=1 -timeout=10m ./server/...

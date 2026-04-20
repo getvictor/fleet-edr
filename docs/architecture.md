@@ -284,14 +284,14 @@ XPC peer validation to work at the kernel level.
 docker compose up mysql -d
 
 # Build and run the server (port 3316 for MySQL)
-cd ui && npm run build && cd ../server
-go run ./cmd/fleet-edr-server/ -dsn "root@tcp(127.0.0.1:3316)/edr?parseTime=true"
+cd ui && npm run build && cd ..
+go run ./server/cmd/fleet-edr-server/ -dsn "root@tcp(127.0.0.1:3316)/edr?parseTime=true"
 
 # Open http://localhost:8088/ui/
 
 # Run tests
-cd server && EDR_TEST_DSN="root@tcp(127.0.0.1:3316)/edr_test?parseTime=true" go test ./...
-cd agent && go test ./...
+EDR_TEST_DSN="root@tcp(127.0.0.1:3316)/edr_test?parseTime=true" go test ./server/...
+go test ./agent/... ./internal/...
 ```
 
 ### VM testing
