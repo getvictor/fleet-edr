@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,7 +36,7 @@ const PasswordBytes = 24
 // log at debug.
 func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, stderr io.Writer) (*users.User, string, error) {
 	if us == nil {
-		return nil, "", fmt.Errorf("seed.Admin: users store required")
+		return nil, "", errors.New("seed.Admin: users store required")
 	}
 	if logger == nil {
 		logger = slog.Default()

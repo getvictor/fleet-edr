@@ -84,7 +84,13 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	batch, _ := q.DequeueBatch(ctx, 1)
+	batch, err := q.DequeueBatch(ctx, 1)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("expected 1 dequeued event, got %d", len(batch))
+	}
 	if err := q.MarkUploaded(ctx, []int64{batch[0].ID}); err != nil {
 		t.Fatalf("mark uploaded: %v", err)
 	}
@@ -130,8 +136,16 @@ func TestPruneRespectsAge(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	batch, _ := q.DequeueBatch(ctx, 1)
-	_ = q.MarkUploaded(ctx, []int64{batch[0].ID})
+	batch, err := q.DequeueBatch(ctx, 1)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("expected 1 dequeued event, got %d", len(batch))
+	}
+	if err := q.MarkUploaded(ctx, []int64{batch[0].ID}); err != nil {
+		t.Fatalf("mark uploaded: %v", err)
+	}
 
 	// Prune with 1 hour should not delete a just-created event.
 	pruned, err := q.Prune(ctx, time.Hour)

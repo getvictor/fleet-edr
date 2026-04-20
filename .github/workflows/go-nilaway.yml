@@ -1,0 +1,55 @@
+name: Go nilaway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/go-nilaway.yml"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/go-nilaway.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # uber-go/nilaway does inter-procedural nil-dereference analysis that
+  # staticcheck + govet -nilness miss because nilaway tracks nilability across
+  # function boundaries. Gating check: every PR must stay at zero findings.
+  # If nilaway flags something on a legitimate invariant (errors.As contract,
+  # map-aliasing, a test that asserts-by-panicking), restructure the code so
+  # the invariant is explicit (e.g. add require.NotNil / len-check) rather
+  # than adding a global suppression.
+  nilaway:
+    name: nilaway
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Create UI dist placeholder for embed
+        run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run nilaway
+        run: task lint:nilaway

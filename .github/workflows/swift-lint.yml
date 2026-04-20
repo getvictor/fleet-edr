@@ -6,11 +6,13 @@ on:
     paths:
       - "extension/**"
       - ".swiftlint.yml"
+      - "Taskfile.yml"
       - ".github/workflows/swift-lint.yml"
   pull_request:
     paths:
       - "extension/**"
       - ".swiftlint.yml"
+      - "Taskfile.yml"
       - ".github/workflows/swift-lint.yml"
   workflow_dispatch:
 
@@ -33,5 +35,10 @@ jobs:
       - name: Install SwiftLint
         run: brew install swiftlint
 
-      - name: Run SwiftLint
-        run: swiftlint lint --strict
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run SwiftLint via Taskfile
+        run: task lint:swift

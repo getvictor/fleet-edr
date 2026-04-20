@@ -42,6 +42,7 @@ func TestCreateCommand(t *testing.T) {
 
 	got, err := s.GetCommand(ctx, resp["id"])
 	require.NoError(t, err)
+	require.NotNil(t, got)
 	assert.Equal(t, "kill_process", got.CommandType)
 	assert.Equal(t, "pending", got.Status)
 }

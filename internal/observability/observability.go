@@ -1,17 +1,20 @@
-// Package observability wires up the OpenTelemetry SDK for the EDR server.
+// Package observability wires up the OpenTelemetry SDK for every fleet-edr
+// binary (server, ingest, agent). One Init call installs global tracer +
+// meter + logger providers backed by OTLP/gRPC when
+// OTEL_EXPORTER_OTLP_ENDPOINT is set, and leaves the SDK defaults (no-op) in
+// place when it isn't. Callers can therefore invoke otel.Tracer / otel.Meter
+// / otelslog unconditionally; offline dev, CI, and unit tests do not need a
+// running collector.
 //
-// Init installs global tracer, meter, and logger providers backed by OTLP/gRPC when
-// OTEL_EXPORTER_OTLP_ENDPOINT is set, and leaves the SDK defaults (no-op) in place when it
-// isn't. Callers can therefore invoke otel.Tracer / otel.Meter / otelslog unconditionally;
-// offline dev, CI, and unit tests do not need a running collector.
+// The globals are published atomically: every provider is constructed and
+// wired up before `otel.SetTracerProvider` / `global.SetLoggerProvider` /
+// `otel.SetMeterProvider` is called. A failure to create any exporter leaves
+// the globals untouched and returns an error, so callers never observe a
+// half-initialised observability stack.
 //
-// The globals are published atomically: every provider is constructed and wired up before
-// `otel.SetTracerProvider` / `global.SetLoggerProvider` / `otel.SetMeterProvider` is called.
-// A failure to create any exporter leaves the globals untouched and returns an error, so
-// callers never observe a half-initialised observability stack.
-//
-// The W3C tracecontext + baggage propagators are installed as the global propagator so
-// traceparent headers flow in and out of our HTTP boundaries automatically.
+// The W3C tracecontext + baggage propagators are installed as the global
+// propagator so traceparent headers flow in and out of HTTP boundaries
+// automatically.
 package observability
 
 import (
@@ -36,30 +39,34 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
 
-// Options configure the OTel SDK. Only the fields we rely on at startup are exposed; the SDK reads
-// every other OTEL_* env var (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_BSP_*, etc.) directly.
+// Options configure the OTel SDK. Only the fields we rely on at startup are
+// exposed; the SDK reads every other OTEL_* env var
+// (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_BSP_*, etc.) directly.
 type Options struct {
 	// ServiceName is used when OTEL_SERVICE_NAME is not set in the environment.
 	ServiceName string
 	// ServiceVersion is injected at build time via -ldflags.
 	ServiceVersion string
-	// ServiceInstanceID is typically the hostname or a random UUID; useful for distinguishing
-	// replicas in the backend UI.
+	// ServiceInstanceID is typically the hostname or a random UUID; useful for
+	// distinguishing replicas in the backend UI.
 	ServiceInstanceID string
-	// InitTimeout caps how long we wait for the OTLP dial during Init. Default 5s.
+	// InitTimeout caps how long we wait for the OTLP dial during Init.
+	// Default 5s.
 	InitTimeout time.Duration
 }
 
-// ShutdownFunc flushes buffered telemetry to the collector and releases SDK resources.
-// Call from main on SIGTERM. Safe to call on a no-op provider; it returns nil.
+// ShutdownFunc flushes buffered telemetry to the collector and releases SDK
+// resources. Call from main on SIGTERM. Safe to call on a no-op provider; it
+// returns nil.
 type ShutdownFunc func(ctx context.Context) error
 
-// Init configures global OTel providers. Returns a ShutdownFunc that is always non-nil.
-// When OTEL_EXPORTER_OTLP_ENDPOINT is empty, Init is a no-op and the returned function
-// returns nil immediately.
+// Init configures global OTel providers. Returns a ShutdownFunc that is
+// always non-nil. When OTEL_EXPORTER_OTLP_ENDPOINT is empty, Init is a no-op
+// and the returned function returns nil immediately.
 func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
-	// Install the W3C propagator unconditionally; it is harmless on a no-op tracer and crucial
-	// when a real tracer is installed later (e.g. a test swaps in a provider via otel.SetTracerProvider).
+	// Install the W3C propagator unconditionally; it is harmless on a no-op
+	// tracer and crucial when a real tracer is installed later (e.g. a test
+	// swaps in a provider via otel.SetTracerProvider).
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
@@ -67,7 +74,8 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	if endpoint == "" {
-		// No-op path: leave the SDK defaults in place and return a shutdown that does nothing.
+		// No-op path: leave the SDK defaults in place and return a shutdown
+		// that does nothing.
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -83,9 +91,10 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 	initCtx, cancel := context.WithTimeout(ctx, initDeadline)
 	defer cancel()
 
-	// Construct every exporter + provider BEFORE publishing any of them globally. If any step
-	// fails, previously-created providers are shut down and no global is modified, so callers
-	// never see a half-initialised observability stack.
+	// Construct every exporter + provider BEFORE publishing any of them
+	// globally. If any step fails, previously-created providers are shut down
+	// and no global is modified, so callers never see a half-initialised
+	// observability stack.
 	traceExp, err := otlptracegrpc.New(initCtx)
 	if err != nil {
 		return noopShutdown, fmt.Errorf("create trace exporter: %w", err)
@@ -97,7 +106,9 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	logExp, err := otlploggrpc.New(initCtx)
 	if err != nil {
-		_ = tp.Shutdown(context.Background())
+		cleanupCtx, cancel := shutdownCtxFrom(initCtx)
+		defer cancel()
+		_ = tp.Shutdown(cleanupCtx)
 		return noopShutdown, fmt.Errorf("create log exporter: %w", err)
 	}
 	lp := sdklog.NewLoggerProvider(
@@ -107,8 +118,10 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	metricExp, err := otlpmetricgrpc.New(initCtx)
 	if err != nil {
-		_ = tp.Shutdown(context.Background())
-		_ = lp.Shutdown(context.Background())
+		cleanupCtx, cancel := shutdownCtxFrom(initCtx)
+		defer cancel()
+		_ = tp.Shutdown(cleanupCtx)
+		_ = lp.Shutdown(cleanupCtx)
 		return noopShutdown, fmt.Errorf("create metric exporter: %w", err)
 	}
 	mp := sdkmetric.NewMeterProvider(
@@ -116,7 +129,7 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 		sdkmetric.WithResource(res),
 	)
 
-	// Atomic publish — the code below is infallible.
+	// Atomic publish -- the code below is infallible.
 	otel.SetTracerProvider(tp)
 	global.SetLoggerProvider(lp)
 	otel.SetMeterProvider(mp)
@@ -125,7 +138,8 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 	return bundle.shutdown, nil
 }
 
-// Ensure otellog is referenced even when only used transitively via the global provider.
+// Ensure otellog is referenced even when only used transitively via the
+// global provider.
 var _ otellog.LoggerProvider = (*sdklog.LoggerProvider)(nil)
 
 // providerBundle holds the providers we need to shut down together.
@@ -157,6 +171,18 @@ func (p *providerBundle) shutdown(ctx context.Context) error {
 
 func noopShutdown(context.Context) error { return nil }
 
+// shutdownCtxFrom derives a best-effort cleanup context from the init
+// context. On an init failure the parent may already be at/past cancellation
+// (timeout, operator Ctrl-C), in which case calling tp.Shutdown(parent) is a
+// no-op and leaks the partially-constructed provider. context.WithoutCancel
+// strips the parent's cancellation signal so the timeout added below is the
+// only deadline; values (trace correlation, logger attrs) still propagate.
+// Caller must defer the returned cancel func so the context is released on
+// return.
+func shutdownCtxFrom(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 2*time.Second)
+}
+
 func buildResource(ctx context.Context, opts Options) (*resource.Resource, error) {
 	var attrs []attribute.KeyValue
 	if opts.ServiceName != "" && os.Getenv("OTEL_SERVICE_NAME") == "" {
@@ -169,9 +195,10 @@ func buildResource(ctx context.Context, opts Options) (*resource.Resource, error
 		attrs = append(attrs, semconv.ServiceInstanceID(opts.ServiceInstanceID))
 	}
 
-	// The resource detectors below read OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, host, and process
-	// info. Merging with the explicit attributes gives operator-supplied values priority while still
-	// picking up free metadata.
+	// The resource detectors below read OTEL_RESOURCE_ATTRIBUTES,
+	// OTEL_SERVICE_NAME, host, and process info. Merging with the explicit
+	// attributes gives operator-supplied values priority while still picking
+	// up free metadata.
 	return resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithHost(),

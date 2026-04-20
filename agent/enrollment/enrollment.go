@@ -199,7 +199,11 @@ func (p *provider) enroll(ctx context.Context) error {
 		hostID = derived
 	}
 
-	client, err := p.httpClient()
+	// httpClient() is pure config assembly (TLS options + http.Client struct). It
+	// takes no context because it does no I/O or cancellable work, so the
+	// contextcheck traversal through BuildTLSConfig's VerifyPeerCertificate closure
+	// is a known false positive.
+	client, err := p.httpClient() //nolint:contextcheck // see comment above.
 	if err != nil {
 		return err
 	}
@@ -309,7 +313,10 @@ func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.L
 	// fingerprint-equality check. The callback is guaranteed to run on every handshake
 	// because SessionTicketsDisabled above prevents resume.
 	tlsCfg.InsecureSkipVerify = true //nolint:gosec // We implement our own verification below.
-	tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	// VerifyPeerCertificate is invoked by the TLS stack during the handshake with
+	// no request context available, so the warn log here intentionally uses
+	// context.Background().
+	tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error { //nolint:contextcheck // see comment above.
 		if len(rawCerts) == 0 {
 			return errors.New("tls: no peer certificates")
 		}

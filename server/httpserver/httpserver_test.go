@@ -93,7 +93,7 @@ func TestBuild_HonoursInboundTraceparent(t *testing.T) {
 	inboundTP := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/probe", nil)
 	require.NoError(t, err)
-	req.Header.Set("traceparent", inboundTP)
+	req.Header.Set("Traceparent", inboundTP)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	t.Cleanup(func() { resp.Body.Close() })

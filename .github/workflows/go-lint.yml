@@ -8,6 +8,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".golangci.yml"
+      - "Taskfile.yml"
       - ".github/workflows/go-lint.yml"
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".golangci.yml"
+      - "Taskfile.yml"
       - ".github/workflows/go-lint.yml"
   workflow_dispatch:
 
@@ -43,6 +45,22 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Install task so the CI entry point matches what developers run locally.
+      # Keeps `task lint:go` as the single source of truth for how to invoke
+      # golangci-lint across the project (paths, build tags, flags).
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Install + cache the pinned golangci-lint binary. `install-mode: goinstall`
+      # is faster than the binary release for pinned versions on actionlint-cached
+      # runners; `install-only: true` skips the action's built-in `golangci-lint
+      # run` so we can delegate the actual invocation to Taskfile below.
       - uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
         with:
           version: v2.11
+          install-only: "true"
+
+      - name: Run golangci-lint via Taskfile
+        run: task lint:go

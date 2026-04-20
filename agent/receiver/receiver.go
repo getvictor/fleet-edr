@@ -16,6 +16,7 @@ import "C"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -105,7 +106,7 @@ func (r *Receiver) Connect() error {
 	defer r.mu.Unlock()
 
 	if r.connected {
-		return fmt.Errorf("already connected")
+		return errors.New("already connected")
 	}
 
 	// Register in the global map so C callbacks can find us.
@@ -142,14 +143,14 @@ func (r *Receiver) Connect() error {
 // window is tiny, but explicit is safer than "probably can't happen".
 func (r *Receiver) SendPolicy(payload []byte) error {
 	if len(payload) == 0 {
-		return fmt.Errorf("empty policy payload")
+		return errors.New("empty policy payload")
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if !r.connected || r.handle < 0 {
-		return fmt.Errorf("receiver not connected")
+		return errors.New("receiver not connected")
 	}
 	rc := int(C.xpc_bridge_send_policy(C.int(r.handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
 	if rc != 0 {

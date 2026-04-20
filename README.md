@@ -1,5 +1,10 @@
 # Fleet EDR
 
+![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
+[![Go test](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-test.yml?branch=main&label=Go%20test&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-test.yml)
+[![govulncheck](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-vulncheck.yml?branch=main&label=govulncheck&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
+
 A macOS Endpoint Detection and Response (EDR) system. It provides
 real-time process monitoring, network attribution, behavioral detection, and response capabilities.
 
@@ -28,33 +33,84 @@ real-time process monitoring, network attribution, behavioral detection, and res
 extension/edr/       Swift system extension + network extension (Xcode project)
 agent/               Go agent daemon (XPC receiver, SQLite queue, uploader)
 server/              Go server (ingestion, processor, detection, REST API)
+internal/            Shared packages (envparse, etc.)
 ui/                  React/TypeScript frontend (Vite, D3.js process tree)
+docs/adr/            Architecture Decision Records -- the "why" behind non-obvious choices
+```
+
+## First-time setup
+
+### 0a. Install mise (pick one)
+
+```bash
+curl https://mise.run | sh      # any Unix; installs to ~/.local/bin/mise
+# --- OR ---
+brew install mise               # macOS with Homebrew
+```
+
+Only run **one** of those two lines. Running both will put two copies of
+`mise` on disk and leave an extra entry on PATH. If mise is already installed,
+skip to 0b. See <https://mise.jdx.dev/getting-started.html> for other
+installers.
+
+### 0b. Activate mise in your shell (one-time, per shell)
+
+```bash
+echo 'eval "$(mise activate zsh)"'  >> ~/.zshrc    # zsh
+# --- OR ---
+echo 'eval "$(mise activate bash)"' >> ~/.bashrc   # bash
+```
+
+Then open a new terminal (or `exec $SHELL`) so the activation takes effect.
+Without this step `mise install` downloads tools but they don't appear on
+PATH -- `which task` / `which lefthook` come up empty.
+
+### 1. Install every pinned tool
+
+```bash
+mise install   # reads .tool-versions; asdf users: asdf install
+```
+
+Fetches Go, Node, golangci-lint, lefthook, and task at the versions pinned in
+`.tool-versions`. CI installs the same pins for Go + Node + golangci-lint
+(`go-version-file: go.mod`, explicit `node-version`, pinned `golangci-lint`);
+the Task and Lefthook installers in CI track the same minor series but aren't
+byte-for-byte locked to the patch version.
+
+### 2. Install git hooks
+
+```bash
+lefthook install   # format + lint on commit, build + tsc on push
+```
+
+### 3. Discover available commands
+
+```bash
+task --list
 ```
 
 ## Quick start
 
 ```bash
-# Start MySQL
-docker compose up mysql -d
+# Start MySQL (local dev + test on ports 3316/3317)
+task db:up
+
+# Build the UI (embedded in the server binary via server/ui/dist/)
+task build:ui
 
 # Run the server
-go run ./server/cmd/fleet-edr-server/
-
-# Build the UI (embedded in the server binary)
-cd ui && npm run build
-
-# Open http://localhost:8088/ui/
+task dev:server
+# Then open http://localhost:8088/ui/
 ```
 
 ## Running tests
 
 ```bash
-# Server (requires MySQL)
-EDR_TEST_DSN="root@tcp(127.0.0.1:3316)/edr_test?parseTime=true" go test ./server/...
-
-# Agent
-go test ./agent/... ./internal/...
-
-# UI lint
-cd ui && npx eslint .
+task test        # everything (Go + UI) -- requires MySQL
+task test:go     # Go with race detector
+task test:ui     # Vitest
+task lint        # golangci-lint, eslint, swiftlint, actionlint
 ```
+
+Prefer `task --list` over memorising commands; the Taskfile is the source of truth
+for reproducible invocations.

@@ -1,0 +1,237 @@
+# Task runner (https://taskfile.dev). Self-documenting: `task --list` shows
+# every public task. Prefer adding tasks here over adding ad-hoc shell
+# scripts, so newcomers (human or AI) can discover what's runnable.
+#
+# Conventions:
+# - Tasks are grouped by verb (build:*, test:*, lint:*, dev:*, db:*, qa:*).
+# - Tasks that need a real DB or an MDM-signed artifact document the
+#   prerequisite in `desc:` rather than failing silently.
+# - No task here should mutate production-ish state (the explicit carve-out
+#   is db:reset, which requires confirmation).
+
+version: "3"
+
+vars:
+  SERVER_PKG: ./server/cmd/fleet-edr-server
+  INGEST_PKG: ./server/cmd/fleet-edr-ingest
+  AGENT_PKG: ./agent/cmd/fleet-edr-agent
+  SERVER_BIN: server/tmp/fleet-edr-server
+  INGEST_BIN: server/tmp/fleet-edr-ingest
+  AGENT_BIN: agent/tmp/fleet-edr-agent
+
+tasks:
+  default:
+    desc: Show task list
+    cmds:
+      - task --list
+
+  # -------- build --------
+
+  build:
+    desc: Build server, ingest, agent, and UI
+    cmds:
+      - task: build:ui
+      - task: build:server
+      - task: build:ingest
+      - task: build:agent
+
+  build:server:
+    desc: Build the main fleet-edr-server binary into server/tmp/
+    cmds:
+      - go build -o {{.SERVER_BIN}} {{.SERVER_PKG}}
+
+  build:ingest:
+    desc: Build the standalone ingest binary into server/tmp/
+    cmds:
+      - go build -o {{.INGEST_BIN}} {{.INGEST_PKG}}
+
+  build:agent:
+    desc: Build the macOS agent binary into agent/tmp/
+    cmds:
+      - go build -o {{.AGENT_BIN}} {{.AGENT_PKG}}
+
+  build:ui:
+    desc: Build the React UI; output embedded in the server binary via server/ui/dist/
+    dir: ui
+    cmds:
+      - npm run build
+
+  build:extension:
+    desc: Build the macOS system + network extensions via xcodebuild
+    dir: extension/edr
+    cmds:
+      - xcodebuild -project edr.xcodeproj -scheme edr -configuration Debug -sdk macosx -derivedDataPath build
+
+  # -------- test --------
+
+  test:
+    desc: Run every Go + UI test (requires MySQL; see db:up)
+    deps: [test:go, test:ui]
+
+  test:go:
+    desc: |
+      Run Go tests with race detector (server + agent + internal). Uses
+      $EDR_TEST_DSN from the environment if set; otherwise defaults to the
+      docker-compose mysql_test service on port 3317 (see db:up). Pointing at
+      the dev DB on 3316 by accident is a common foot-gun because dev tests
+      truncate tables. CI sets its own DSN.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+    cmds:
+      - go test -race -count=1 -timeout=10m ./server/... ./agent/... ./internal/...
+
+  test:go:agent:
+    desc: |
+      Run Go tests with race detector for agent + shared code only. No DB
+      required. Use from CI's agent-test job so the server tests don't run
+      on a runner that doesn't have MySQL.
+    cmds:
+      - go test -race -count=1 -timeout=10m ./agent/... ./internal/...
+
+  test:go:server:
+    desc: |
+      Run Go tests with race detector for the server + shared code. Requires
+      $EDR_TEST_DSN set or the docker-compose mysql_test on port 3317.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+    cmds:
+      - go test -race -count=1 -timeout=10m ./server/... ./internal/...
+
+  test:ui:
+    desc: Run Vitest suite
+    dir: ui
+    cmds:
+      - npm test -- --run
+
+  test:short:
+    desc: Fast Go tests only (no -race, no DB-dependent suites)
+    cmds:
+      - go test -short -count=1 ./server/... ./agent/... ./internal/...
+
+  # -------- lint --------
+
+  lint:
+    desc: |
+      Run every fast linter. Does NOT include lint:nilaway (inter-procedural
+      analysis, ~tens of seconds) or lint:vulncheck (network-bound; queries
+      the vulnerability DB); run those explicitly when needed.
+    deps: [lint:go, lint:ui, lint:swift, lint:actions]
+
+  lint:go:
+    desc: golangci-lint across the whole Go module
+    cmds:
+      - golangci-lint run ./server/... ./agent/... ./internal/... ./test/...
+
+  lint:go:fix:
+    desc: golangci-lint with --fix for auto-fixable findings
+    cmds:
+      - golangci-lint run --fix ./server/... ./agent/... ./internal/... ./test/...
+
+  lint:ui:
+    desc: ESLint + tsc --noEmit across the React UI
+    dir: ui
+    cmds:
+      - npm run lint
+      - npx tsc --noEmit
+
+  lint:swift:
+    desc: swiftlint on the macOS extensions (requires `brew install swiftlint`)
+    cmds:
+      - swiftlint lint --strict
+
+  lint:c:
+    desc: clang-tidy + clang-format --dry-run on the CGo bridge (requires `brew install llvm`)
+    cmds:
+      - find agent/xpcbridge \( -name '*.c' -o -name '*.h' \) -exec "$(brew --prefix llvm)/bin/clang-tidy" {} +
+      - find agent \( -name '*.c' -o -name '*.h' \) -exec "$(brew --prefix llvm)/bin/clang-format" --dry-run --Werror {} +
+
+  lint:vulncheck:
+    desc: govulncheck against both binaries (installs govulncheck if missing)
+    deps: [lint:vulncheck:agent, lint:vulncheck:server]
+
+  lint:vulncheck:agent:
+    desc: govulncheck scoped to the agent binary's transitive deps
+    cmds:
+      - go tool govulncheck ./agent/... ./internal/...
+
+  lint:vulncheck:server:
+    desc: govulncheck scoped to the server binary's transitive deps
+    cmds:
+      - go tool govulncheck ./server/...
+
+  lint:actions:
+    desc: actionlint on GitHub Actions workflows (requires `brew install actionlint`)
+    cmds:
+      - actionlint
+
+  lint:nilaway:
+    desc: |
+      uber-go/nilaway inter-procedural nil-dereference analysis (slow; separate
+      from golangci-lint). Scoped to project dirs rather than ./... so the
+      gitignored tmp/ scratch area never gates lint runs.
+    cmds:
+      - go tool nilaway -include-pkgs="github.com/fleetdm/edr" ./server/... ./agent/... ./internal/... ./test/...
+
+  # -------- dev loops --------
+
+  dev:server:
+    desc: Run the server against local MySQL with insecure HTTP for dev
+    env:
+      EDR_DSN: "root:toor@tcp(127.0.0.1:3316)/edr?parseTime=true"
+      EDR_ENROLL_SECRET: dev-enroll-secret
+      EDR_ALLOW_INSECURE_HTTP: "1"
+      EDR_LISTEN_ADDR: "127.0.0.1:8088"
+      EDR_LOG_FORMAT: text
+    cmds:
+      - go run {{.SERVER_PKG}}
+
+  dev:ui:
+    desc: Run the UI Vite dev server with HMR (proxies /api/v1 to the backend)
+    dir: ui
+    cmds:
+      - npm run dev
+
+  # -------- database --------
+
+  db:up:
+    desc: Start local MySQL (dev + test) via docker-compose
+    cmds:
+      - docker compose up -d mysql mysql_test
+
+  db:down:
+    desc: Stop local MySQL
+    cmds:
+      - docker compose down
+
+  db:reset:
+    desc: |
+      DESTRUCTIVE: drop the dev database and recreate empty. Requires explicit
+      confirmation (Taskfile's prompt:). Use only when the schema is out of
+      sync with current migrations; routine dev never needs this.
+      Credentials match the dev:server DSN (root:toor on port 3316).
+    prompt: About to DROP DATABASE edr. Continue?
+    cmds:
+      - mysql -uroot -ptoor -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+
+  # -------- install tools / hooks --------
+
+  install:
+    desc: Install pinned tools (go, node, golangci-lint, lefthook) via mise (https://mise.jdx.dev) or asdf
+    cmds:
+      - mise install || asdf install
+      - lefthook install
+
+  hooks:
+    desc: Install the project's git hooks (runs lefthook install)
+    cmds:
+      - lefthook install
+
+  # -------- QA smoke --------
+
+  qa:
+    desc: |
+      Build every binary + UI. Does NOT run a runtime smoke test today; see
+      docs/testing.md (or start dev:server in another terminal and exercise
+      the login/enroll/ingest/logout path by hand). A scripted smoke harness
+      is tracked as future work.
+    deps: [build]

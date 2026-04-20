@@ -7,12 +7,16 @@ on:
       - "agent/**/*.c"
       - "agent/**/*.h"
       - ".clang-tidy"
+      - ".clang-format"
+      - "Taskfile.yml"
       - ".github/workflows/c-lint.yml"
   pull_request:
     paths:
       - "agent/**/*.c"
       - "agent/**/*.h"
       - ".clang-tidy"
+      - ".clang-format"
+      - "Taskfile.yml"
       - ".github/workflows/c-lint.yml"
   workflow_dispatch:
 
@@ -25,18 +29,20 @@ concurrency:
 
 jobs:
   clang-tidy:
-    name: clang-tidy
+    name: clang-tidy + clang-format
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - name: Install LLVM (clang-tidy)
+      - name: Install LLVM
         run: brew install llvm
 
-      - name: Run clang-tidy
-        run: find agent/xpcbridge \( -name '*.c' -o -name '*.h' \) -exec "$(brew --prefix llvm)/bin/clang-tidy" {} +
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check formatting
-        run: find agent \( -name '*.c' -o -name '*.h' \) -exec "$(brew --prefix llvm)/bin/clang-format" --dry-run --Werror {} +
+      - name: Run clang-tidy + clang-format via Taskfile
+        run: task lint:c

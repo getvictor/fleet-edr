@@ -230,7 +230,7 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	// outer HTTP server's write timeout + some slack. gosec G118 flags this pattern —
 	// the nolint below is the honest marker that we intentionally decouple the
 	// background work from the request lifetime.
-	go func(hostID string) { //nolint:gosec // G118: intentional detached context so best-effort fanout survives client cancellation.
+	go func(hostID string) { //nolint:gosec,contextcheck // G118 + contextcheck: intentional detached context so best-effort fanout survives client cancellation.
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		h.enqueueInitialPolicy(bgCtx, hostID)

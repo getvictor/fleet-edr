@@ -7,7 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,11 +24,11 @@ import (
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/logging"
 	"github.com/fleetdm/edr/agent/metrics"
-	"github.com/fleetdm/edr/agent/observability"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/uploader"
+	"github.com/fleetdm/edr/internal/observability"
 )
 
 // Build info injected via -ldflags at build time.
@@ -475,7 +475,7 @@ func (d *policyDispatcher) clear() {
 func (d *policyDispatcher) SendPolicy(payload []byte) error {
 	r := d.cur.Load()
 	if r == nil {
-		return fmt.Errorf("policy dispatcher: no receiver connected")
+		return errors.New("policy dispatcher: no receiver connected")
 	}
 	return r.SendPolicy(payload)
 }

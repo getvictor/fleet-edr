@@ -204,13 +204,17 @@ floor for any project that wants enterprise adoption.
   the gate evaluates vacuously)
 - [ ] **Codecov / Coveralls** with PR comments and coverage diff
 - [ ] **`go vet -vettool=fieldalignment`** -- catches struct padding waste in hot structs
-- [ ] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
+- [x] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
   panics that `staticcheck` and `govet -nilness` miss because nilaway tracks nilability
-  across function boundaries
+  across function boundaries. Wired as `task lint:nilaway` locally and as a gating CI job
+  `.github/workflows/go-nilaway.yml`. False positives from tests or map-aliasing are
+  addressed by restructuring the code (explicit `require.NotNil` / `ok :=` guards) rather
+  than adding a blanket suppression, so the gate stays honest.
 - [ ] **`go-licenses` / `licensed`** to enforce dep license policy
 - [ ] **Spell-check** (`codespell`, `misspell`) in CI
 - [ ] **Markdown linter** (`markdownlint-cli2`) for the docs
-- [ ] **Pre-commit hooks** (`lefthook` or `pre-commit`) so format+lint runs before push
+- [x] **Pre-commit hooks** via `lefthook` (`lefthook.yml`) running gofmt, eslint, and
+  swiftformat on staged files; pre-push runs `go build`, fast golangci-lint, and `tsc`
 - [ ] **`gci` import-grouping** + `goimports` enforced
 - [ ] **Go test build tags** to separate integration / e2e / unit
 - [ ] **Mutation testing** for the detection engine (`go-mutesting` / Stryker)
@@ -410,22 +414,25 @@ These cost almost nothing and disproportionately drive adoption.
 - [ ] **PR template** with checklist (tests, docs, security review)
 - [ ] **`SUPPORT.md`** explaining where to ask questions
 - [ ] **GitHub Discussions** enabled for design conversations
-- [ ] **Architecture Decision Records** (`docs/adr/NNNN-title.md`) for non-obvious
-  trade-offs (e.g. "why one binary?", "why MySQL?", "why ESF over kext?")
+- [x] **Architecture Decision Records** at `docs/adr/NNNN-title.md` with template +
+  index at `docs/adr/README.md`; seeded with the single-module, Apple-Silicon-only,
+  and standalone-product decisions. Add new ones as non-obvious trade-offs land.
 - [ ] **Public roadmap** (GitHub Projects or `ROADMAP.md`)
 - [ ] **`OWNERS` / governance** doc for once external contributors arrive
 - [ ] **Demo video** or live sandbox linked from README
 - [ ] **`go.dev` package documentation** with examples (godoc-quality comments are present;
   `pkg.go.dev` rendering deserves a pass)
-- [ ] **`.editorconfig`** for cross-IDE / cross-AI-tool formatting consistency
+- [x] **`.editorconfig`** for cross-IDE / cross-AI-tool formatting consistency
 - [ ] **`.gitattributes`** for binary handling, line-ending policy, and language-stat
   hints (so GitHub's language bar reflects reality)
-- [ ] **`.tool-versions` / `mise.toml`** so the toolchain (Go, Node, ...) is pinned and
-  the same locally, in CI, and inside any AI-driven container
+- [x] **`.tool-versions`** so the toolchain (Go, Node, golangci-lint, lefthook) is
+  pinned and the same locally, in CI, and inside any AI-driven container. Works with
+  both `asdf` and `mise`.
 - [ ] **Devcontainer (`.devcontainer/devcontainer.json`)** for reproducible local + cloud
   dev environments; also unlocks GitHub Codespaces and gives AI agents a sandbox
-- [ ] **`Taskfile.yml` or `justfile`** as a self-documenting command runner (`make` works
-  but neither newcomers nor AI agents discover targets cleanly)
+- [x] **`Taskfile.yml`** as a self-documenting command runner at repo root; every
+  build, test, lint, dev-loop, and runtime QA command is discoverable via
+  `task --list`.
 
 ## 13. Compliance and privacy
 
@@ -538,21 +545,21 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 
 | Area                              | Adopted | Total | %    |
 |-----------------------------------|---------|-------|------|
-| Detection content + response      | 6       | 33    | 18%  |
-| Cross-platform reach              | 1       | 8     | 13%  |
-| AuthN / AuthZ / crypto            | 14      | 25    | 56%  |
-| Supply-chain security             | 9       | 24    | 38%  |
-| Code quality + static analysis    | 12      | 22    | 55%  |
+| Detection content + response      | 6       | 36    | 17%  |
+| Cross-platform reach              | 1       | 8     | 12%  |
+| AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
+| Supply-chain security             | 10      | 27    | 37%  |
+| Code quality + static analysis    | 13      | 22    | 59%  |
 | Testing                           | 6       | 19    | 32%  |
-| Observability + operations        | 16      | 26    | 62%  |
-| API design                        | 4       | 15    | 27%  |
+| Observability + operations        | 15      | 24    | 62%  |
+| API design                        | 4       | 16    | 25%  |
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
-| Build / release / packaging       | 2       | 14    | 14%  |
-| Community signals                 | 5       | 23    | 22%  |
+| Build / release / packaging       | 2       | 12    | 17%  |
+| Community signals                 | 10      | 24    | 42%  |
 | Compliance + privacy              | 0       | 13    | 0%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
-| AI-assisted engineering           | 1.5     | 14    | 11%  |
+| AI-assisted engineering           | 2       | 17    | 12%  |
 
 The standout strengths today are observability, code-quality tooling, and authn /
 session security. The clearest gaps for a "competing with CrowdStrike" pitch are the
