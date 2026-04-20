@@ -105,15 +105,28 @@ func (s *Store) InsertProcess(ctx context.Context, p Process) (int64, error) {
 	return id, nil
 }
 
+// ProcessExecUpdate carries the exec-time metadata patched onto an existing process row.
+// Grouped as a struct so callers don't pass a 10-parameter positional list.
+type ProcessExecUpdate struct {
+	HostID      string
+	PID         int
+	ExecTimeNs  int64
+	Path        string
+	Args        NullRawJSON
+	UID         *int
+	GID         *int
+	CodeSigning NullRawJSON
+	SHA256      *string
+}
+
 // UpdateProcessExec updates an existing process record with exec-time metadata.
-func (s *Store) UpdateProcessExec(ctx context.Context, hostID string, pid int, execTimeNs int64,
-	path string, args NullRawJSON, uid, gid *int, codeSigning NullRawJSON, sha256 *string) error {
+func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, exec_time_ns = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
-		path, args, uid, gid, codeSigning, sha256, execTimeNs,
-		hostID, pid,
+		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.ExecTimeNs,
+		u.HostID, u.PID,
 	)
 	return err
 }

@@ -8,9 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fleetdm/edr/envparse"
 )
 
 // Config is the resolved server configuration.
@@ -99,63 +100,14 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 			"EDR_TLS_CERT_FILE is required (set EDR_ALLOW_INSECURE_HTTP=1 for dev)"))
 	}
 
-	if v := getenv("EDR_ENROLL_RATE_PER_MIN"); v != "" {
-		n, err := strconv.Atoi(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_ENROLL_RATE_PER_MIN=%q: %w", v, err))
-		case n <= 0:
-			errs = append(errs, fmt.Errorf("EDR_ENROLL_RATE_PER_MIN=%d must be positive", n))
-		default:
-			c.EnrollRatePerMin = n
-		}
-	}
-
-	if v := getenv("EDR_LOGIN_RATE_PER_MIN"); v != "" {
-		n, err := strconv.Atoi(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_LOGIN_RATE_PER_MIN=%q: %w", v, err))
-		case n <= 0:
-			errs = append(errs, fmt.Errorf("EDR_LOGIN_RATE_PER_MIN=%d must be positive", n))
-		default:
-			c.LoginRatePerMin = n
-		}
-	}
-
+	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, &errs)
+	envparse.PositiveInt(getenv, "EDR_LOGIN_RATE_PER_MIN", &c.LoginRatePerMin, &errs)
 	// Phase 4: retention window. Allow 0 to disable entirely. Negative = error.
-	if v := getenv("EDR_RETENTION_DAYS"); v != "" {
-		n, err := strconv.Atoi(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_RETENTION_DAYS=%q: %w", v, err))
-		case n < 0:
-			errs = append(errs, fmt.Errorf("EDR_RETENTION_DAYS=%d must be >= 0 (0 disables)", n))
-		default:
-			c.RetentionDays = n
-		}
-	}
-	if v := getenv("EDR_RETENTION_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_RETENTION_INTERVAL=%q: %w", v, err))
-		case d <= 0:
-			errs = append(errs, fmt.Errorf("EDR_RETENTION_INTERVAL=%q must be positive", v))
-		default:
-			c.RetentionInterval = d
-		}
-	}
+	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, &errs)
+	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, &errs)
 
-	if v := getenv("EDR_LAUNCHAGENT_ALLOWLIST"); v != "" {
-		c.LaunchAgentAllowlist = make(map[string]struct{})
-		for p := range strings.SplitSeq(v, ",") {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			c.LaunchAgentAllowlist[p] = struct{}{}
-		}
+	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
+		c.LaunchAgentAllowlist = allowlist
 	}
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
@@ -174,29 +126,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 		errs = append(errs, fmt.Errorf("EDR_LOG_FORMAT=%q must be 'json' or 'text'", c.LogFormat))
 	}
 
-	if v := getenv("EDR_PROCESS_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_PROCESS_INTERVAL=%q: %w", v, err))
-		case d <= 0:
-			// processor.Run feeds this to time.NewTicker, which panics on non-positive values.
-			errs = append(errs, fmt.Errorf("EDR_PROCESS_INTERVAL=%q must be positive", v))
-		default:
-			c.ProcessInterval = d
-		}
-	}
-
-	if v := getenv("EDR_PROCESS_BATCH"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("EDR_PROCESS_BATCH=%q: %w", v, err))
-		} else if n <= 0 {
-			errs = append(errs, fmt.Errorf("EDR_PROCESS_BATCH=%d must be positive", n))
-		} else {
-			c.ProcessBatch = n
-		}
-	}
+	// processor.Run feeds ProcessInterval into time.NewTicker, which panics on non-positive values.
+	envparse.PositiveDuration(getenv, "EDR_PROCESS_INTERVAL", &c.ProcessInterval, &errs)
+	envparse.PositiveInt(getenv, "EDR_PROCESS_BATCH", &c.ProcessBatch, &errs)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

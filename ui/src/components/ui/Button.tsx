@@ -6,10 +6,10 @@ export type ButtonVariant = "primary" | "alert" | "inverse" | "text-link";
 export type ButtonSize = "default" | "small";
 
 interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "size"> {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  isLoading?: boolean;
-  children: ReactNode;
+  readonly variant?: ButtonVariant;
+  readonly size?: ButtonSize;
+  readonly isLoading?: boolean;
+  readonly children: ReactNode;
 }
 
 export function Button({
@@ -33,9 +33,12 @@ export function Button({
     className,
   );
 
+  let buttonType: "submit" | "reset" | "button" = "button";
+  if (type === "submit") buttonType = "submit";
+  else if (type === "reset") buttonType = "reset";
   return (
     <button
-      type={type === "submit" ? "submit" : type === "reset" ? "reset" : "button"}
+      type={buttonType}
       className={fullClassName}
       disabled={disabled || isLoading}
       {...rest}

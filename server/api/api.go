@@ -10,12 +10,19 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/store"
 )
 
 var errNotFound = sql.ErrNoRows
+
+const (
+	msgInternalError   = "internal error"
+	msgNotFound        = "not found"
+	msgInvalidJSONBody = "invalid JSON body"
+)
 
 // alertDetailResponse extends Alert with linked event IDs for the detail endpoint.
 type alertDetailResponse struct {
@@ -61,7 +68,7 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	hosts, err := h.query.ListHosts(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list hosts", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if hosts == nil {
@@ -91,7 +98,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	roots, err := h.query.BuildTree(ctx, hostID, tr, limit)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if roots == nil {
@@ -116,11 +123,11 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	detail, err := h.query.GetDetail(ctx, hostID, pid, atTime)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if detail == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, msgNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -140,7 +147,7 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts, err := h.store.ListAlerts(ctx, f)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list alerts", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if alerts == nil {
@@ -161,18 +168,18 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	alert, err := h.store.GetAlert(ctx, id)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get alert", "id", id, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if alert == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, msgNotFound, http.StatusNotFound)
 		return
 	}
 
 	eventIDs, err := h.store.GetAlertEventIDs(ctx, id)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get alert event ids", "id", id, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if eventIDs == nil {
@@ -193,7 +200,7 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
 		return
 	}
 
@@ -212,20 +219,20 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	userID, _ := authn.UserIDFromContext(ctx)
 	if err := h.store.UpdateAlertStatus(ctx, id, body.Status, userID); err != nil {
 		if errors.Is(err, errNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			http.Error(w, msgNotFound, http.StatusNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "update alert status", "id", id, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 
 	if userID > 0 {
 		h.logger.InfoContext(ctx, "alert status updated",
-			"edr.admin.action", "alert_update",
+			attrkeys.AdminAction, "alert_update",
 			"edr.alert.id", id,
 			"edr.alert.status", body.Status,
-			"edr.user.id", userID,
+			attrkeys.UserID, userID,
 		)
 	}
 
@@ -243,11 +250,11 @@ func (h *Handler) handleGetCommand(w http.ResponseWriter, r *http.Request) {
 	cmd, err := h.store.GetCommand(ctx, id)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get command", "id", id, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if cmd == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, msgNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -272,7 +279,7 @@ func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	// poll re-tries the upsert. The UI treats hosts with last_seen_ns older than 5 min
 	// as "offline".
 	if err := h.store.UpdateHostLastSeen(ctx, hostID, time.Now()); err != nil {
-		h.logger.WarnContext(ctx, "update host last_seen", "err", err, "edr.host_id", hostID)
+		h.logger.WarnContext(ctx, "update host last_seen", "err", err, attrkeys.HostID, hostID)
 	}
 
 	status := r.URL.Query().Get("status")
@@ -280,7 +287,7 @@ func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	commands, err := h.store.ListCommands(ctx, hostID, status)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list commands", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if commands == nil {
@@ -297,7 +304,7 @@ func (h *Handler) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 		Payload     json.RawMessage `json:"payload"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
 		return
 	}
 	if body.HostID == "" || body.CommandType == "" {
@@ -313,7 +320,7 @@ func (h *Handler) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.logger.ErrorContext(ctx, "create command", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 
@@ -336,7 +343,7 @@ func (h *Handler) UpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
 		Result json.RawMessage `json:"result,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
 		return
 	}
 
@@ -358,20 +365,20 @@ func (h *Handler) UpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
 	existing, getErr := h.store.GetCommand(ctx, id)
 	if getErr != nil {
 		h.logger.ErrorContext(ctx, "update command lookup", "id", id, "err", getErr)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if existing == nil || existing.HostID != ctxHostID {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, msgNotFound, http.StatusNotFound)
 		return
 	}
 	if err := h.store.UpdateCommandStatus(ctx, id, body.Status, body.Result); err != nil {
 		if errors.Is(err, errNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			http.Error(w, msgNotFound, http.StatusNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "update command status", "id", id, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 

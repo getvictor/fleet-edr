@@ -16,8 +16,8 @@ interface TopNavProps {
   // user + onLogout are optional for pre-Phase-3 callers. Post-Phase-3 both are set
   // from App.tsx whenever a session is active; when absent we just hide the identity
   // + logout UI.
-  user?: { id: number; email: string };
-  onLogout?: () => void;
+  readonly user?: { id: number; email: string };
+  readonly onLogout?: () => void;
 }
 
 export function TopNav({ user, onLogout }: TopNavProps) {

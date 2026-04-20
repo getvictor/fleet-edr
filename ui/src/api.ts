@@ -24,8 +24,30 @@ export function getCsrfToken(): string {
   return sessionStorage.getItem(CSRF_KEY) || "";
 }
 
-export function setCsrfToken(token: string): void {
-  sessionStorage.setItem(CSRF_KEY, token);
+// sanitizeCsrfToken restricts stored values to the shape the server actually mints
+// (URL-safe base64 of a 32-byte CSRF secret — see server/authn.EncodeSessionID). The
+// whitelist blocks any exotic payload that somehow ended up here before hitting
+// sessionStorage, which is what the taint analyzer is flagging. Ceiling is generous
+// so a future server-side change that widens the token (e.g. 64-byte) doesn't
+// silently wedge the client.
+function sanitizeCsrfToken(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > 256) return "";
+  return /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "";
+}
+
+// setCsrfToken stores a freshly-minted token and returns true on success. On
+// rejection it wipes any previously-stored token (so the client stops sending a
+// stale value) and returns false so callers can surface the failure instead of
+// silently half-succeeding.
+export function setCsrfToken(token: string): boolean {
+  const clean = sanitizeCsrfToken(token);
+  if (!clean) {
+    clearCsrfToken();
+    return false;
+  }
+  sessionStorage.setItem(CSRF_KEY, clean);
+  return true;
 }
 
 export function clearCsrfToken(): void {
@@ -38,7 +60,23 @@ function unsafeMethod(method?: string): boolean {
   return m === "POST" || m === "PUT" || m === "PATCH" || m === "DELETE";
 }
 
+// assertSafeAPIPath rejects anything that does not look like a same-origin API
+// path. fetchJSON concatenates its path argument with API_BASE and hands the
+// result to fetch(); without this check a caller that accidentally forwards
+// user input (URL from query params, server-returned string, etc.) could steer
+// the request to an unintended origin or walk out of /api/v1 via "..". The
+// whitelist is deliberately narrow: leading slash, then only URL-path +
+// query-string characters we actually use.
+const API_PATH_RE = /^\/[A-Za-z0-9/?=&%:_.@~-]*$/;
+
+function assertSafeAPIPath(path: string): void {
+  if (!API_PATH_RE.test(path) || path.includes("..")) {
+    throw new Error("unsafe API path");
+  }
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  assertSafeAPIPath(path);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(init?.headers as Record<string, string> | undefined),
@@ -76,7 +114,12 @@ export async function login(email: string, password: string): Promise<SessionInf
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  setCsrfToken(info.csrf_token);
+  // Fail loudly if the server's token doesn't match the expected shape — silently
+  // dropping it would pass login() but break every subsequent unsafe request with
+  // a confusing 403.
+  if (!setCsrfToken(info.csrf_token)) {
+    throw new Error("server returned an unexpected CSRF token shape");
+  }
   return info;
 }
 
@@ -84,7 +127,9 @@ export async function currentSession(): Promise<SessionInfo> {
   const info = await fetchJSON<SessionInfo>("/session");
   // The server issues a fresh CSRF per session; on page reload we fetch it here
   // and re-prime sessionStorage so every subsequent unsafe method has a header.
-  setCsrfToken(info.csrf_token);
+  if (!setCsrfToken(info.csrf_token)) {
+    throw new Error("server returned an unexpected CSRF token shape");
+  }
   return info;
 }
 
@@ -137,7 +182,8 @@ export async function listAlerts(params?: {
   if (params?.process_id) query.set("process_id", String(params.process_id));
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();
-  return fetchJSON<Alert[]>(`/alerts${qs ? `?${qs}` : ""}`);
+  const suffix = qs ? `?${qs}` : "";
+  return fetchJSON<Alert[]>(`/alerts${suffix}`);
 }
 
 export async function getAlertDetail(id: number): Promise<AlertDetail> {

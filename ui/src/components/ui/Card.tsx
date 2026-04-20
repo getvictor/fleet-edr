@@ -3,8 +3,8 @@ import type { HTMLAttributes, ReactNode } from "react";
 import "./Card.scss";
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
-  padding?: "small" | "medium" | "large";
-  children: ReactNode;
+  readonly padding?: "small" | "medium" | "large";
+  readonly children: ReactNode;
 }
 
 export function Card({

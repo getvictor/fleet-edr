@@ -3,6 +3,7 @@ module github.com/fleetdm/edr/agent
 go 1.26
 
 require (
+	github.com/fleetdm/edr/envparse v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.18.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
@@ -48,3 +49,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/fleetdm/edr/envparse => ../envparse

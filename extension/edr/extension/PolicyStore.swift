@@ -68,6 +68,9 @@ final class PolicyStore {
         qos: .utility
     )
 
+    // Private to enforce the singleton pattern — callers reach the store via
+    // PolicyStore.shared. No per-instance state to initialise beyond the default
+    // storedProperty values above.
     private init() {}
 
     /// loadFromDisk populates the in-memory snapshot from the persisted file. Called from

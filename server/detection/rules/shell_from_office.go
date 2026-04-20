@@ -39,55 +39,60 @@ type shellFromOfficePayload struct {
 func (r *ShellFromOffice) Evaluate(ctx context.Context, events []store.Event, s *store.Store) ([]detection.Finding, error) {
 	var findings []detection.Finding
 	for _, evt := range events {
-		if evt.EventType != "exec" {
-			continue
-		}
-		var p shellFromOfficePayload
-		if err := json.Unmarshal(evt.Payload, &p); err != nil {
-			continue
-		}
-		if !shellPaths[p.Path] {
-			continue
-		}
-
-		parent, err := s.GetProcessByPID(ctx, evt.HostID, p.PPID, evt.TimestampNs)
+		f, err := r.evalEvent(ctx, evt, s)
 		if err != nil {
-			return nil, fmt.Errorf("get parent pid %d: %w", p.PPID, err)
+			return nil, err
 		}
-		if parent == nil {
-			// Parent not yet materialised. The processor marks the whole batch processed
-			// after Evaluate returns, so a re-feed does not happen automatically — this
-			// miss is accepted for Phase 2. In practice the graph builder lands parents
-			// before exec-driven rules because the fork + exec events are in the same
-			// batch and the builder runs before the detection engine. A deferred retry
-			// queue ("evaluate later when the parent shows up") is Phase 4 scope. This
-			// same trade-off applies to the other rules (suspicious_exec, persistence_*)
-			// that depend on process lookups; see claude/mvp/plan.md Phase 4 notes.
-			continue
+		if f != nil {
+			findings = append(findings, *f)
 		}
-		if !officeBinaries[parent.Path] {
-			continue
-		}
-
-		proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
-		if err != nil {
-			return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
-		}
-		if proc == nil {
-			continue
-		}
-
-		findings = append(findings, detection.Finding{
-			HostID:      evt.HostID,
-			RuleID:      r.ID(),
-			Severity:    detection.SeverityHigh,
-			Title:       "Shell spawned from Office app",
-			Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parent.Path), p.Path),
-			ProcessID:   proc.ID,
-			EventIDs:    []string{evt.EventID},
-		})
 	}
 	return findings, nil
+}
+
+// evalEvent returns a finding for a single event, or nil when the event doesn't match.
+// Splitting this out of Evaluate keeps the per-event short-circuits (non-exec, bad JSON,
+// non-shell path, non-Office parent) from stacking cognitive complexity on the caller.
+func (r *ShellFromOffice) evalEvent(ctx context.Context, evt store.Event, s *store.Store) (*detection.Finding, error) {
+	if evt.EventType != "exec" {
+		return nil, nil
+	}
+	var p shellFromOfficePayload
+	if err := json.Unmarshal(evt.Payload, &p); err != nil {
+		return nil, nil
+	}
+	if !shellPaths[p.Path] {
+		return nil, nil
+	}
+
+	parent, err := s.GetProcessByPID(ctx, evt.HostID, p.PPID, evt.TimestampNs)
+	if err != nil {
+		return nil, fmt.Errorf("get parent pid %d: %w", p.PPID, err)
+	}
+	// Parent not yet materialised, or not an Office binary. The processor marks the
+	// whole batch processed after Evaluate returns, so a re-feed does not happen
+	// automatically — missing-parent cases are accepted for Phase 2; a deferred retry
+	// queue is Phase 4 scope (see claude/mvp/plan.md).
+	if parent == nil || !officeBinaries[parent.Path] {
+		return nil, nil
+	}
+
+	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	if err != nil {
+		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+	}
+	if proc == nil {
+		return nil, nil
+	}
+	return &detection.Finding{
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    detection.SeverityHigh,
+		Title:       "Shell spawned from Office app",
+		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parent.Path), p.Path),
+		ProcessID:   proc.ID,
+		EventIDs:    []string{evt.EventID},
+	}, nil
 }
 
 // prettyOfficeParent strips the /Applications/… prefix so the alert description stays

@@ -12,9 +12,9 @@ export type BadgeVariant =
   | "neutral";
 
 interface BadgeProps {
-  variant?: BadgeVariant;
-  children: ReactNode;
-  className?: string;
+  readonly variant?: BadgeVariant;
+  readonly children: ReactNode;
+  readonly className?: string;
 }
 
 export function Badge({ variant = "neutral", children, className }: BadgeProps) {

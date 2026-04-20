@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import NetworkExtension
 import os.log
 
@@ -48,27 +49,10 @@ final class NetworkFilter: NEFilterDataProvider {
         default: proto = "ip-\(socketFlow.socketProtocol)"
         }
 
-        // Extract remote endpoint.
-        let remoteHost: String
-        let remotePort: UInt16
-        if let remote = socketFlow.remoteEndpoint as? NWHostEndpoint {
-            remoteHost = remote.hostname
-            remotePort = UInt16(remote.port) ?? 0
-        } else {
-            remoteHost = ""
-            remotePort = 0
-        }
-
-        // Extract local endpoint.
-        let localHost: String
-        let localPort: UInt16
-        if let local = socketFlow.localEndpoint as? NWHostEndpoint {
-            localHost = local.hostname
-            localPort = UInt16(local.port) ?? 0
-        } else {
-            localHost = ""
-            localPort = 0
-        }
+        // Extract remote + local endpoints off the modern Network.NWEndpoint
+        // accessors (macOS 15+); the legacy NWHostEndpoint casts are deprecated.
+        let (remoteHost, remotePort) = hostPort(from: socketFlow.remoteFlowEndpoint)
+        let (localHost, localPort) = hostPort(from: socketFlow.localFlowEndpoint)
 
         // Extract hostname from flow URL (available via SNI for HTTPS).
         let hostname = flow.url?.host ?? ""
@@ -92,4 +76,25 @@ final class NetworkFilter: NEFilterDataProvider {
 
         return .allow()
     }
+}
+
+/// hostPort destructures a Network.NWEndpoint.hostPort into (host-string, port).
+/// Returns ("", 0) for nil or for non-hostPort variants (service, unix-path, url)
+/// — none of which we emit into the network_connect telemetry today.
+private func hostPort(from endpoint: Network.NWEndpoint?) -> (String, UInt16) {
+    guard let endpoint, case let .hostPort(host, port) = endpoint else {
+        return ("", 0)
+    }
+    let hostStr: String
+    switch host {
+    case .name(let name, _):
+        hostStr = name
+    case .ipv4(let addr):
+        hostStr = addr.debugDescription
+    case .ipv6(let addr):
+        hostStr = addr.debugDescription
+    @unknown default:
+        hostStr = String(describing: host)
+    }
+    return (hostStr, port.rawValue)
 }

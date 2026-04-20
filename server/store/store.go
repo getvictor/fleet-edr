@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,79 +176,88 @@ type Store struct {
 // New opens a connection to MySQL and ensures the schema exists.
 // The dsn should be in go-sql-driver/mysql format, e.g. "user:pass@tcp(127.0.0.1:3316)/edr?parseTime=true".
 func New(ctx context.Context, dsn string) (*Store, error) {
-	if !strings.Contains(dsn, "parseTime") {
-		sep := "?"
-		if strings.Contains(dsn, "?") {
-			sep = "&"
-		}
-		dsn += sep + "parseTime=true"
+	sqldb, err := openInstrumentedDB(ensureParseTime(dsn))
+	if err != nil {
+		return nil, err
 	}
+	db := sqlx.NewDb(sqldb, "mysql")
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping db: %w", err)
+	}
+	if err := applySchema(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
 
-	// Open the driver through otelsql so each query emits a span. The no-op tracer provider
-	// keeps this cheap when OTel is disabled.
-	sqldb, err := otelsql.Open("mysql", dsn, otelsql.WithAttributes(
-		semconv.DBSystemNameMySQL,
-	))
+// ensureParseTime appends parseTime=true to a MySQL DSN if it is missing, so
+// sql.DB returns time.Time for DATETIME columns instead of raw bytes.
+func ensureParseTime(dsn string) string {
+	if strings.Contains(dsn, "parseTime") {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "parseTime=true"
+}
+
+// openInstrumentedDB opens the MySQL driver through otelsql (so every query emits a
+// span + connection metrics) and returns the raw *sql.DB. Keeping this split out of
+// New keeps New focused on lifecycle.
+func openInstrumentedDB(dsn string) (*sql.DB, error) {
+	sqldb, err := otelsql.Open("mysql", dsn, otelsql.WithAttributes(semconv.DBSystemNameMySQL))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	// Register db.client.connection metrics (idle/in_use/max) via the global meter provider.
-	// observability.Init installs a real MeterProvider when OTEL_EXPORTER_OTLP_ENDPOINT is set;
-	// otherwise these register against the SDK's no-op meter and cost nothing.
-	_, err = otelsql.RegisterDBStatsMetrics(sqldb, otelsql.WithAttributes(
-		semconv.DBSystemNameMySQL,
-	))
-	if err != nil {
-		// Surface both the registration failure and any close-path issue rather than swallowing
-		// the latter — a stuck close is often what explains the underlying problem.
+	if _, err := otelsql.RegisterDBStatsMetrics(sqldb, otelsql.WithAttributes(semconv.DBSystemNameMySQL)); err != nil {
+		// Surface both the registration failure and any close-path issue rather than
+		// swallowing the latter — a stuck close is often what explains the problem.
 		if cerr := sqldb.Close(); cerr != nil {
 			return nil, fmt.Errorf("register db stats metrics: %w (close: %w)", err, cerr)
 		}
 		return nil, fmt.Errorf("register db stats metrics: %w", err)
 	}
+	return sqldb, nil
+}
 
-	db := sqlx.NewDb(sqldb, "mysql")
-
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("ping db: %w", err)
-	}
-
+// applySchema runs initial CREATE TABLEs, idempotent ALTERs, and post-schema backfills.
+func applySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("create schema: %w", err)
+			return fmt.Errorf("create schema: %w", err)
 		}
 	}
-
-	// Run idempotent migrations for schema changes to existing tables.
 	for _, m := range migrations {
-		if _, err := db.ExecContext(ctx, m); err != nil {
-			var mysqlErr *mysql.MySQLError
-			// Already-applied variants:
-			//   1060 = duplicate column
-			//   1061 = duplicate key name
-			//   1826 = duplicate FK name
-			//   1022 = duplicate key on add (older MySQL error code for FK name clash)
-			if errors.As(err, &mysqlErr) &&
-				(mysqlErr.Number == 1060 || mysqlErr.Number == 1061 ||
-					mysqlErr.Number == 1826 || mysqlErr.Number == 1022) {
-				continue
-			}
-			db.Close()
-			return nil, fmt.Errorf("migration: %w", err)
+		if _, err := db.ExecContext(ctx, m); err != nil && !isAlreadyAppliedMigration(err) {
+			return fmt.Errorf("migration: %w", err)
 		}
 	}
-
-	// Post-schema data migrations (backfills, etc.). Safe to re-run.
 	for _, m := range postSchemaMigrations {
 		if _, err := db.ExecContext(ctx, m); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("post-schema migration: %w", err)
+			return fmt.Errorf("post-schema migration: %w", err)
 		}
 	}
+	return nil
+}
 
-	return &Store{db: db}, nil
+// isAlreadyAppliedMigration returns true when err is one of the MySQL "this ALTER is
+// already applied" codes, so we can treat the re-run as a no-op.
+func isAlreadyAppliedMigration(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	// 1060 duplicate column, 1061 duplicate key name, 1826 duplicate FK name,
+	// 1022 duplicate key on add (older MySQL code for FK name clash).
+	switch mysqlErr.Number {
+	case 1060, 1061, 1826, 1022:
+		return true
+	}
+	return false
 }
 
 // migrations are idempotent ALTER TABLE statements applied after initial schema creation.

@@ -3,7 +3,7 @@ import classnames from "classnames";
 import "./Input.scss";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
-  label?: string;
+  readonly label?: string;
 }
 
 export function Input({ label, id, className, ...rest }: InputProps) {
@@ -20,8 +20,8 @@ export function Input({ label, id, className, ...rest }: InputProps) {
 }
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
-  label?: string;
-  children: ReactNode;
+  readonly label?: string;
+  readonly children: ReactNode;
 }
 
 export function Select({ label, id, className, children, ...rest }: SelectProps) {

@@ -113,8 +113,17 @@ func (b *Builder) handleExec(ctx context.Context, evt store.Event) error {
 	}
 
 	// Try to update an existing process record (from a prior fork).
-	err := b.store.UpdateProcessExec(ctx, evt.HostID, p.PID, evt.TimestampNs,
-		p.Path, p.Args, p.UID, p.GID, p.CodeSigning, p.SHA256)
+	err := b.store.UpdateProcessExec(ctx, store.ProcessExecUpdate{
+		HostID:      evt.HostID,
+		PID:         p.PID,
+		ExecTimeNs:  evt.TimestampNs,
+		Path:        p.Path,
+		Args:        p.Args,
+		UID:         p.UID,
+		GID:         p.GID,
+		CodeSigning: p.CodeSigning,
+		SHA256:      p.SHA256,
+	})
 	if err != nil {
 		return err
 	}

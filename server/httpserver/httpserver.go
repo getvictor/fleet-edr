@@ -88,12 +88,13 @@ func hstsHeader() func(http.Handler) http.Handler {
 // or to the inbound X-Request-ID header when it is present and no span is running.
 // This header is for humans (curl output, load balancer logs) and does not drive correlation.
 func xRequestIDEcho() func(http.Handler) http.Handler {
+	const header = "X-Request-ID"
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
-				w.Header().Set("X-Request-ID", sc.TraceID().String())
-			} else if v := r.Header.Get("X-Request-ID"); v != "" {
-				w.Header().Set("X-Request-ID", v)
+				w.Header().Set(header, sc.TraceID().String())
+			} else if v := r.Header.Get(header); v != "" {
+				w.Header().Set(header, v)
 			}
 			next.ServeHTTP(w, r)
 		})

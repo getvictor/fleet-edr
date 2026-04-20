@@ -15,8 +15,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
+)
+
+const (
+	attrEnrollReason = "edr.enroll.reason"
+	attrEnrollResult = "edr.enroll.result"
 )
 
 // PolicyGetter is the minimal read interface the enrollment handler needs to queue an
@@ -135,39 +141,42 @@ const maxEnrollBodyBytes = 4 << 10
 func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attribute.String("edr.remote_addr", r.RemoteAddr))
 
 	ip := remoteIP(r, h.trimHost)
+	// attrkeys.RemoteAddr is documented as port-stripped; attaching r.RemoteAddr
+	// would explode span cardinality with ephemeral client ports.
+	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 	if !h.limiter.allow(ip) {
 		w.Header().Set("Retry-After", "60")
-		h.failf(ctx, w, http.StatusTooManyRequests, "rate_limited", "", ip, "",
-			"edr.enroll.reason", "rate_limited")
+		h.failf(ctx, w, http.StatusTooManyRequests, "rate_limited", enrollFailInfo{IP: ip},
+			attrEnrollReason, "rate_limited")
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxEnrollBodyBytes)
 	var req enrollRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.failf(ctx, w, http.StatusBadRequest, "bad_body", "", ip, "",
-			"edr.enroll.reason", "bad_body", "err", err.Error())
+		h.failf(ctx, w, http.StatusBadRequest, "bad_body", enrollFailInfo{IP: ip},
+			attrEnrollReason, "bad_body", "err", err.Error())
 		return
 	}
 	// Fast field-presence check — we want a single "bad_body" code for any shape issue.
 	if req.EnrollSecret == "" || req.HardwareUUID == "" || req.Hostname == "" ||
 		req.OSVersion == "" || req.AgentVersion == "" {
-		h.failf(ctx, w, http.StatusBadRequest, "bad_body", "", ip, "",
-			"edr.enroll.reason", "bad_body", "missing_fields", true)
+		h.failf(ctx, w, http.StatusBadRequest, "bad_body", enrollFailInfo{IP: ip},
+			attrEnrollReason, "bad_body", "missing_fields", true)
 		return
 	}
 	if !uuidPattern.MatchString(req.HardwareUUID) {
-		h.failf(ctx, w, http.StatusBadRequest, "hardware_uuid_invalid", "", ip, "",
-			"edr.enroll.reason", "hardware_uuid_invalid")
+		h.failf(ctx, w, http.StatusBadRequest, "hardware_uuid_invalid", enrollFailInfo{IP: ip},
+			attrEnrollReason, "hardware_uuid_invalid")
 		return
 	}
 	// Constant-time secret compare. Never log or span-attribute the secret value.
 	if subtle.ConstantTimeCompare([]byte(req.EnrollSecret), []byte(h.secret)) != 1 {
-		h.failf(ctx, w, http.StatusUnauthorized, "secret_mismatch", req.HardwareUUID, ip, req.AgentVersion,
-			"edr.enroll.reason", "secret_mismatch")
+		h.failf(ctx, w, http.StatusUnauthorized, "secret_mismatch",
+			enrollFailInfo{HostID: req.HardwareUUID, IP: ip, AgentVersion: req.AgentVersion},
+			attrEnrollReason, "secret_mismatch")
 		return
 	}
 
@@ -180,23 +189,24 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.logger.ErrorContext(ctx, "enroll register", "err", err)
-		h.failf(ctx, w, http.StatusInternalServerError, "internal", req.HardwareUUID, ip, req.AgentVersion,
-			"edr.enroll.reason", "internal")
+		h.failf(ctx, w, http.StatusInternalServerError, "internal",
+			enrollFailInfo{HostID: req.HardwareUUID, IP: ip, AgentVersion: req.AgentVersion},
+			attrEnrollReason, "internal")
 		return
 	}
 
 	span.SetAttributes(
-		attribute.String("edr.enroll.result", "success"),
-		attribute.String("edr.host_id", result.HostID),
-		attribute.String("edr.agent_version", req.AgentVersion),
+		attribute.String(attrEnrollResult, "success"),
+		attribute.String(attrkeys.HostID, result.HostID),
+		attribute.String(attrkeys.AgentVersion, req.AgentVersion),
 		attribute.String("edr.os_version", req.OSVersion),
 	)
 	h.logger.InfoContext(ctx, "enrolled",
-		"edr.enroll.result", "success",
-		"edr.host_id", result.HostID,
-		"edr.agent_version", req.AgentVersion,
+		attrEnrollResult, "success",
+		attrkeys.HostID, result.HostID,
+		attrkeys.AgentVersion, req.AgentVersion,
 		"edr.os_version", req.OSVersion,
-		"edr.remote_addr", ip,
+		attrkeys.RemoteAddr, ip,
 	)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -243,13 +253,13 @@ func (h *Handler) enqueueInitialPolicy(ctx context.Context, hostID string) {
 	}
 	p, err := h.policy.Get(ctx, policy.DefaultName)
 	if err != nil {
-		h.logger.WarnContext(ctx, "initial policy fetch failed", "edr.host_id", hostID, "err", err)
+		h.logger.WarnContext(ctx, "initial policy fetch failed", attrkeys.HostID, hostID, "err", err)
 		return
 	}
 	if len(p.Blocklist.Paths) == 0 && len(p.Blocklist.Hashes) == 0 {
 		// Seed policy (v1 empty) or operator explicitly cleared. Nothing to push.
 		h.logger.InfoContext(ctx, "initial policy skipped — blocklist empty",
-			"edr.host_id", hostID, "edr.policy.version", p.Version)
+			attrkeys.HostID, hostID, "edr.policy.version", p.Version)
 		return
 	}
 	payload, err := json.Marshal(policyCommandPayload{
@@ -259,7 +269,7 @@ func (h *Handler) enqueueInitialPolicy(ctx context.Context, hostID string) {
 		Hashes:  p.Blocklist.Hashes,
 	})
 	if err != nil {
-		h.logger.WarnContext(ctx, "initial policy marshal failed", "edr.host_id", hostID, "err", err)
+		h.logger.WarnContext(ctx, "initial policy marshal failed", attrkeys.HostID, hostID, "err", err)
 		return
 	}
 	if _, err := h.commands.InsertCommand(ctx, store.Command{
@@ -267,11 +277,11 @@ func (h *Handler) enqueueInitialPolicy(ctx context.Context, hostID string) {
 		CommandType: "set_blocklist",
 		Payload:     payload,
 	}); err != nil {
-		h.logger.WarnContext(ctx, "initial policy enqueue failed", "edr.host_id", hostID, "err", err)
+		h.logger.WarnContext(ctx, "initial policy enqueue failed", attrkeys.HostID, hostID, "err", err)
 		return
 	}
 	h.logger.InfoContext(ctx, "initial policy queued",
-		"edr.host_id", hostID,
+		attrkeys.HostID, hostID,
 		"edr.policy.version", p.Version,
 		"edr.policy.path_count", len(p.Blocklist.Paths),
 	)
@@ -287,30 +297,36 @@ type policyCommandPayload struct {
 	Hashes  []string `json:"hashes"`
 }
 
-// failf writes a structured JSON error + audit log + span attributes. hostID and agentVersion
-// are best-effort; pass "" when the payload failed to parse.
-func (h *Handler) failf(
-	ctx context.Context, w http.ResponseWriter, status int, code, hostID, ip, agentVersion string,
-	logAttrs ...any,
-) {
+// enrollFailInfo carries the identity + audit fields for a failed enrollment. Grouped
+// as a struct so failf() stays under the 7-param limit and call sites read better.
+type enrollFailInfo struct {
+	HostID       string
+	IP           string
+	AgentVersion string
+}
+
+// failf writes a structured JSON error + audit log + span attributes. info.HostID and
+// info.AgentVersion are best-effort; leave them zero when the payload failed to parse.
+func (h *Handler) failf(ctx context.Context, w http.ResponseWriter, status int, code string, info enrollFailInfo, logAttrs ...any) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
-		attribute.String("edr.enroll.result", "fail"),
+		attribute.String(attrEnrollResult, "fail"),
+		attribute.String(attrEnrollReason, code),
 		attribute.Int("http.response.status_code", status),
 	)
-	if hostID != "" {
-		span.SetAttributes(attribute.String("edr.host_id", hostID))
+	if info.HostID != "" {
+		span.SetAttributes(attribute.String(attrkeys.HostID, info.HostID))
 	}
 	// Audit at WARN: operators page on suspicious-enroll spikes.
 	attrs := append([]any{
-		"edr.enroll.result", "fail",
-		"edr.remote_addr", ip,
+		attrEnrollResult, "fail",
+		attrkeys.RemoteAddr, info.IP,
 	}, logAttrs...)
-	if hostID != "" {
-		attrs = append(attrs, "edr.host_id", hostID)
+	if info.HostID != "" {
+		attrs = append(attrs, attrkeys.HostID, info.HostID)
 	}
-	if agentVersion != "" {
-		attrs = append(attrs, "edr.agent_version", agentVersion)
+	if info.AgentVersion != "" {
+		attrs = append(attrs, attrkeys.AgentVersion, info.AgentVersion)
 	}
 	h.logger.WarnContext(ctx, "enroll failed", attrs...)
 

@@ -41,71 +41,81 @@ type osascriptPayload struct {
 }
 
 func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []store.Event, s *store.Store) ([]detection.Finding, error) {
-	const windowNs = int64(30_000_000_000) // 30 seconds
 	var findings []detection.Finding
 	for _, evt := range events {
-		if evt.EventType != "exec" {
-			continue
-		}
-		var p osascriptPayload
-		if err := json.Unmarshal(evt.Payload, &p); err != nil {
-			continue
-		}
-		if !osascriptPaths[p.Path] {
-			continue
-		}
-
-		tr := store.TimeRange{FromNs: evt.TimestampNs, ToNs: evt.TimestampNs + windowNs}
-		descendants, err := collectDescendants(ctx, s, evt.HostID, p.PID, tr)
+		f, err := r.evalEvent(ctx, evt, s)
 		if err != nil {
 			return nil, err
 		}
-		if len(descendants) == 0 {
-			continue
+		if f != nil {
+			findings = append(findings, *f)
 		}
-
-		// Chain detection: at least one downloader AND at least one exec out of a
-		// suspicious path (same allowlist as suspicious_exec, via isSuspiciousPath).
-		// Walk the full descendant set because real droppers often route through an
-		// intermediate shell (`osascript → sh → curl → /tmp/stage2`) and a direct-
-		// children-only scan misses those.
-		var downloader *store.Process
-		var tempExec *store.Process
-		for i := range descendants {
-			c := &descendants[i]
-			if downloader == nil && downloadBinaries[c.Path] {
-				downloader = c
-			}
-			if tempExec == nil && isSuspiciousPath(c.Path) {
-				tempExec = c
-			}
-			if downloader != nil && tempExec != nil {
-				break
-			}
-		}
-		if downloader == nil || tempExec == nil {
-			continue
-		}
-
-		// The finding links to the temp-path process — that's the thing responders need
-		// to investigate first. EventIDs includes just the triggering osascript exec
-		// because that is the event this detector saw in the batch; child exec events
-		// are reachable from the linked ProcessID via the process tree query and the
-		// server-side alert detail view renders the full chain from there.
-		findings = append(findings, detection.Finding{
-			HostID:   evt.HostID,
-			RuleID:   r.ID(),
-			Severity: detection.SeverityCritical,
-			Title:    "osascript download-and-exec chain",
-			Description: fmt.Sprintf(
-				"osascript → %s → %s",
-				downloader.Path, tempExec.Path,
-			),
-			ProcessID: tempExec.ID,
-			EventIDs:  []string{evt.EventID},
-		})
 	}
 	return findings, nil
+}
+
+const osascriptWindowNs = int64(30_000_000_000) // 30 seconds
+
+// evalEvent returns a finding for a single event or nil when the chain doesn't match.
+func (r *OsascriptNetworkExec) evalEvent(ctx context.Context, evt store.Event, s *store.Store) (*detection.Finding, error) {
+	if evt.EventType != "exec" {
+		return nil, nil
+	}
+	var p osascriptPayload
+	if err := json.Unmarshal(evt.Payload, &p); err != nil {
+		return nil, nil
+	}
+	if !osascriptPaths[p.Path] {
+		return nil, nil
+	}
+
+	tr := store.TimeRange{FromNs: evt.TimestampNs, ToNs: evt.TimestampNs + osascriptWindowNs}
+	descendants, err := collectDescendants(ctx, s, evt.HostID, p.PID, tr)
+	if err != nil {
+		return nil, err
+	}
+	if len(descendants) == 0 {
+		return nil, nil
+	}
+
+	downloader, tempExec := findDownloaderAndTempExec(descendants)
+	if downloader == nil || tempExec == nil {
+		return nil, nil
+	}
+	// The finding links to the temp-path process — that's the thing responders need
+	// to investigate first. EventIDs includes just the triggering osascript exec
+	// because that is the event this detector saw in the batch; child exec events
+	// are reachable from the linked ProcessID via the process tree query and the
+	// server-side alert detail view renders the full chain from there.
+	return &detection.Finding{
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    detection.SeverityCritical,
+		Title:       "osascript download-and-exec chain",
+		Description: fmt.Sprintf("osascript → %s → %s", downloader.Path, tempExec.Path),
+		ProcessID:   tempExec.ID,
+		EventIDs:    []string{evt.EventID},
+	}, nil
+}
+
+// findDownloaderAndTempExec walks the descendant set looking for the download + temp-
+// exec pair. Walks the full set because real droppers often route through an
+// intermediate shell (`osascript → sh → curl → /tmp/stage2`) and a direct-children-only
+// scan misses those.
+func findDownloaderAndTempExec(descendants []store.Process) (downloader, tempExec *store.Process) {
+	for i := range descendants {
+		c := &descendants[i]
+		if downloader == nil && downloadBinaries[c.Path] {
+			downloader = c
+		}
+		if tempExec == nil && isSuspiciousPath(c.Path) {
+			tempExec = c
+		}
+		if downloader != nil && tempExec != nil {
+			return downloader, tempExec
+		}
+	}
+	return downloader, tempExec
 }
 
 // collectDescendants runs a bounded breadth-first traversal rooted at rootPID, returning

@@ -21,13 +21,11 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         pendingCount = extensionIDs.count
 
         for extensionID in extensionIDs {
-            let request: OSSystemExtensionRequest
-            switch action {
-            case "deactivate":
-                request = OSSystemExtensionRequest.deactivationRequest(
+            let request: OSSystemExtensionRequest = if action == "deactivate" {
+                OSSystemExtensionRequest.deactivationRequest(
                     forExtensionWithIdentifier: extensionID, queue: .main)
-            default:
-                request = OSSystemExtensionRequest.activationRequest(
+            } else {
+                OSSystemExtensionRequest.activationRequest(
                     forExtensionWithIdentifier: extensionID, queue: .main)
             }
             request.delegate = self
@@ -37,14 +35,14 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     }
 
     func request(
-        _ request: OSSystemExtensionRequest,
-        actionForReplacingExtension existing: OSSystemExtensionProperties,
-        withExtension ext: OSSystemExtensionProperties
+        _: OSSystemExtensionRequest,
+        actionForReplacingExtension _: OSSystemExtensionProperties,
+        withExtension _: OSSystemExtensionProperties
     ) -> OSSystemExtensionRequest.ReplacementAction {
         .replace
     }
 
-    func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
+    func requestNeedsUserApproval(_: OSSystemExtensionRequest) {
         logger.info("Waiting for user approval in System Settings")
     }
 

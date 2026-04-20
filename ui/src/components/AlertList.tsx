@@ -50,17 +50,17 @@ export function AlertList() {
     return () => { cancelled = true; };
   }, [statusFilter, severityFilter]);
 
+  const applyStatus = (prev: Alert[], alertId: number, newStatus: string): Alert[] => {
+    // If the current filter no longer matches, remove the row instead of just patching it.
+    if (statusFilter && newStatus !== statusFilter) {
+      return prev.filter((a) => a.id !== alertId);
+    }
+    return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
+  };
+
   const handleStatusChange = (alertId: number, newStatus: string) => {
     updateAlertStatus(alertId, newStatus)
-      .then(() => {
-        setAlerts((prev) => {
-          // If the current filter no longer matches, remove the row instead of just patching it.
-          if (statusFilter && newStatus !== statusFilter) {
-            return prev.filter((a) => a.id !== alertId);
-          }
-          return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
-        });
-      })
+      .then(() => { setAlerts((prev) => applyStatus(prev, alertId, newStatus)); })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Failed to update status");
       });
@@ -129,9 +129,12 @@ export function AlertList() {
                     className="link-button"
                     onClick={() => {
                       const atMs = new Date(a.created_at).getTime();
-                      void navigate(
+                      const result = navigate(
                         `/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(atMs)}`,
                       );
+                      // navigate() may return void or Promise<void> in react-router v7.
+                      // Swallow the promise path; the router already handles cancellation.
+                      if (result instanceof Promise) result.catch(() => { /* ignored */ });
                     }}
                   >
                     {a.title}

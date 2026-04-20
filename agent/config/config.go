@@ -9,9 +9,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fleetdm/edr/envparse"
 )
 
 const (
@@ -71,26 +72,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	c.AllowInsecure = getenv("EDR_ALLOW_INSECURE") == "1"
 	if c.ServerURL != "" {
-		// Parse the URL properly rather than doing a prefix match on "http://". This catches
-		// typos, missing schemes, case variants ("HTTP://..."), and unsupported schemes such as
-		// "ws://" or "gopher://" that would otherwise slip past the insecure-scheme gate.
-		u, err := url.Parse(c.ServerURL)
-		switch {
-		case err != nil || u.Host == "":
-			errs = append(errs, fmt.Errorf("EDR_SERVER_URL=%q must be a valid http(s) URL", c.ServerURL))
-		default:
-			switch strings.ToLower(u.Scheme) {
-			case "https":
-				// ok
-			case "http":
-				if !c.AllowInsecure {
-					errs = append(errs, errors.New(
-						"EDR_SERVER_URL uses http://; set EDR_ALLOW_INSECURE=1 for dev or use an https:// URL"))
-				}
-			default:
-				errs = append(errs, fmt.Errorf("EDR_SERVER_URL=%q must use http or https", c.ServerURL))
-			}
-		}
+		validateServerURL(c.ServerURL, c.AllowInsecure, &errs)
 	}
 
 	optional(&c.HostIDOverride, "EDR_HOST_ID", getenv)
@@ -98,58 +80,16 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	optional(&c.XPCService, "EDR_XPC_SERVICE", getenv)
 	optional(&c.NetXPCService, "EDR_NET_XPC_SERVICE", getenv)
 
-	if v := getenv("EDR_BATCH_SIZE"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("EDR_BATCH_SIZE=%q: %w", v, err))
-		} else if n <= 0 {
-			errs = append(errs, fmt.Errorf("EDR_BATCH_SIZE=%d must be positive", n))
-		} else {
-			c.BatchSize = n
-		}
-	}
-
-	if v := getenv("EDR_UPLOAD_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_UPLOAD_INTERVAL=%q: %w", v, err))
-		case d <= 0:
-			// uploader.Run feeds this to time.NewTicker, which panics on non-positive values.
-			errs = append(errs, fmt.Errorf("EDR_UPLOAD_INTERVAL=%q must be positive", v))
-		default:
-			c.UploadInterval = d
-		}
-	}
-
-	if v := getenv("EDR_PRUNE_AGE"); v != "" {
-		d, err := time.ParseDuration(v)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_PRUNE_AGE=%q: %w", v, err))
-		case d <= 0:
-			// A zero or negative prune age computes a future cutoff and deletes nearly every
-			// uploaded row; outright reject.
-			errs = append(errs, fmt.Errorf("EDR_PRUNE_AGE=%q must be positive", v))
-		default:
-			c.PruneAge = d
-		}
-	}
-
+	envparse.PositiveInt(getenv, "EDR_BATCH_SIZE", &c.BatchSize, &errs)
+	// uploader.Run feeds UploadInterval into time.NewTicker, which panics on non-positive values.
+	envparse.PositiveDuration(getenv, "EDR_UPLOAD_INTERVAL", &c.UploadInterval, &errs)
+	// A zero or negative prune age computes a future cutoff and deletes nearly every uploaded
+	// row; outright reject.
+	envparse.PositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
 	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB
 	// is set above and applies when the env var is unset; setting it explicitly to 0
 	// restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
-	if v := getenv("EDR_AGENT_QUEUE_MAX_BYTES"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("EDR_AGENT_QUEUE_MAX_BYTES=%q: %w", v, err))
-		case n < 0:
-			errs = append(errs, fmt.Errorf("EDR_AGENT_QUEUE_MAX_BYTES=%d must be >= 0", n))
-		default:
-			c.QueueMaxBytes = n
-		}
-	}
+	envparse.NonNegativeInt64(getenv, "EDR_AGENT_QUEUE_MAX_BYTES", &c.QueueMaxBytes, &errs)
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
 		// Normalize to canonical lowercase so downstream slog handlers see one of the documented
@@ -185,4 +125,25 @@ func validLogLevel(lvl string) bool {
 		return true
 	}
 	return false
+}
+
+// validateServerURL rejects typos, missing schemes, case variants ("HTTP://..."), and
+// unsupported schemes such as "ws://" that would slip past a naive prefix match.
+func validateServerURL(serverURL string, allowInsecure bool, errs *[]error) {
+	u, err := url.Parse(serverURL)
+	if err != nil || u.Host == "" {
+		*errs = append(*errs, fmt.Errorf("EDR_SERVER_URL=%q must be a valid http(s) URL", serverURL))
+		return
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		// ok
+	case "http":
+		if !allowInsecure {
+			*errs = append(*errs, errors.New(
+				"EDR_SERVER_URL uses http://; set EDR_ALLOW_INSECURE=1 for dev or use an https:// URL"))
+		}
+	default:
+		*errs = append(*errs, fmt.Errorf("EDR_SERVER_URL=%q must use http or https", serverURL))
+	}
 }

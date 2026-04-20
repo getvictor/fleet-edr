@@ -253,23 +253,7 @@ export function ProcessTreeView() {
     const svg = d3.select(svgRef.current);
     const q = query.toLowerCase().trim();
 
-    // Compute matches and the set of nodes on the ancestor path of any match.
-    const matches: D3PointNode[] = [];
-    const pathNodes = new Set<D3PointNode>();
-    if (q) {
-      for (const n of layoutNodesRef.current) {
-        const d = n.data;
-        if (d.pid === 0) continue; // synthetic root when tree has multiple real roots
-        if (nodeMatchesQuery(d, q)) {
-          matches.push(n);
-          let cur: D3PointNode | null = n;
-          while (cur) {
-            pathNodes.add(cur);
-            cur = cur.parent;
-          }
-        }
-      }
-    }
+    const { matches, pathNodes } = collectMatches(layoutNodesRef.current, q);
     matchesRef.current = matches;
     /* eslint-disable react-hooks/set-state-in-effect -- derived from DOM walk after tree render */
     setMatchCount(matches.length);
@@ -314,8 +298,8 @@ export function ProcessTreeView() {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
     };
-    window.addEventListener("keydown", handler);
-    return () => { window.removeEventListener("keydown", handler); };
+    globalThis.addEventListener("keydown", handler);
+    return () => { globalThis.removeEventListener("keydown", handler); };
   }, []);
 
   const stepMatch = useCallback((delta: number) => {
@@ -355,7 +339,8 @@ export function ProcessTreeView() {
           </span>
         )}
       </div>
-      <div className="process-tree__range" role="group" aria-label="Time range">
+      <fieldset className="process-tree__range">
+        <legend className="visually-hidden">Time range</legend>
         {TIME_RANGES.map((r, i) => (
           <button
             key={r.label}
@@ -366,7 +351,7 @@ export function ProcessTreeView() {
             {r.label}
           </button>
         ))}
-      </div>
+      </fieldset>
       <label
         className="process-tree__toggle"
         title={showSystem ? "System processes shown" : "System processes hidden"}
@@ -448,6 +433,29 @@ export function ProcessTreeView() {
   );
 }
 
+// collectMatches walks the laid-out nodes and returns every node whose payload matches
+// q (by name/path/pid/args) plus the set of nodes on the ancestor path of any match,
+// used to dim non-matching subtrees while keeping the context to the match visible.
+function collectMatches(
+  nodes: D3PointNode[],
+  q: string,
+): { matches: D3PointNode[]; pathNodes: Set<D3PointNode> } {
+  const matches: D3PointNode[] = [];
+  const pathNodes = new Set<D3PointNode>();
+  if (!q) return { matches, pathNodes };
+  for (const n of nodes) {
+    if (n.data.pid === 0) continue; // synthetic root when tree has multiple real roots
+    if (!nodeMatchesQuery(n.data, q)) continue;
+    matches.push(n);
+    let cur: D3PointNode | null = n;
+    while (cur) {
+      pathNodes.add(cur);
+      cur = cur.parent;
+    }
+  }
+  return { matches, pathNodes };
+}
+
 function nodeMatchesQuery(d: D3Node, q: string): boolean {
   if (d.name.toLowerCase().includes(q)) return true;
   if (d.path.toLowerCase().includes(q)) return true;
@@ -485,7 +493,7 @@ function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<number> {
     for (const n of nodes) {
       const next = [...acc, n];
       if (n.id === targetDbId) { path = next; return true; }
-      if (n.children && findPath(n.children, next)) return true;
+      if (n.children?.length && findPath(n.children, next)) return true;
     }
     return false;
   };

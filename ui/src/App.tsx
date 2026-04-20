@@ -30,13 +30,12 @@ export function App() {
         if (!controller.signal.aborted) setAuth({ status: "authed", user: info.user });
       } catch (err) {
         if (controller.signal.aborted) return;
-        if (err instanceof Unauthorized401Error) {
-          setAuth({ status: "anon" });
-        } else {
-          // Unknown error (network, 5xx) — fall back to the login page rather than
-          // render with no data. The user can retry after fixing the network.
-          setAuth({ status: "anon" });
+        // 401 -> not logged in; network/5xx -> we also fall back to the login page
+        // rather than render with no data. The user can retry after reconnecting.
+        if (!(err instanceof Unauthorized401Error)) {
+          console.warn("session probe failed", err);
         }
+        setAuth({ status: "anon" });
       }
     })();
     return () => { controller.abort(); };
