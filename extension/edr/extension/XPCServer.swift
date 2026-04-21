@@ -4,8 +4,8 @@ import os.log
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer")
 
 /// Code signing requirement that peers must satisfy to connect to the XPC service.
-/// Accepts any binary signed with the Fleet Device Management team ID (8VBZ3948LU).
-private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"8VBZ3948LU\""
+/// Accepts any binary signed with the Fleet Device Management team ID (FDG8Q7N4CC).
+private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
 
 /// XPCServer vends a Mach service that the Go agent connects to.
 /// Serialized ESF events are broadcast to all connected peers as

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    productbuild distribution file for the Fleet EDR installer.
+
+    Enforces Apple Silicon (arm64) and macOS 13+. The three component packages
+    (agent, app, support) are built separately by build.sh and combined here
+    into a single .pkg that the MDM uploads or the operator double-clicks.
+
+    `customize="never"` means the installer UI doesn't expose per-component
+    toggles; the operator can't install just the agent without the sysext, for
+    example. The whole product installs atomically.
+-->
+<installer-gui-script minSpecVersion="2">
+    <title>Fleet EDR</title>
+    <organization>com.fleetdm.edr</organization>
+
+    <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
+    <allowed-os-versions>
+        <os-version min="13.0"/>
+    </allowed-os-versions>
+
+    <!--
+        Script-driven installation gate: refuse to install on Intel Macs or on
+        pre-13 OS. hostArchitectures=arm64 above handles Intel on recent macOS
+        installer versions, but the JS is a belt-and-suspenders check that
+        runs on anything that honors volume selection.
+    -->
+    <installation-check script="installationCheck()"/>
+    <volume-check script="volumeCheck()"/>
+
+    <script><![CDATA[
+function installationCheck() {
+    if (system.sysctl('hw.optional.arm64') !== '1') {
+        my.result.title = 'Unsupported processor';
+        my.result.message = 'Fleet EDR requires Apple Silicon (M1 or later).';
+        my.result.type = 'Fatal';
+        return false;
+    }
+    return true;
+}
+
+function volumeCheck() {
+    var ver = system.version.ProductVersion.split('.');
+    var major = parseInt(ver[0], 10);
+    if (isNaN(major) || major < 13) {
+        my.result.title = 'Unsupported macOS';
+        my.result.message = 'Fleet EDR requires macOS 13 (Ventura) or later.';
+        my.result.type = 'Fatal';
+        return false;
+    }
+    return true;
+}
+    ]]></script>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="agent"/>
+            <line choice="app"/>
+            <line choice="support"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+    <choice id="agent"   visible="false" title="Agent">   <pkg-ref id="com.fleetdm.edr.agent"/></choice>
+    <choice id="app"     visible="false" title="App">     <pkg-ref id="com.fleetdm.edr.app"/></choice>
+    <choice id="support" visible="false" title="Support"> <pkg-ref id="com.fleetdm.edr.support"/></choice>
+
+    <pkg-ref id="com.fleetdm.edr.agent"   version="__VERSION__" onConclusion="none">agent.pkg</pkg-ref>
+    <pkg-ref id="com.fleetdm.edr.app"     version="__VERSION__" onConclusion="none">app.pkg</pkg-ref>
+    <pkg-ref id="com.fleetdm.edr.support" version="__VERSION__" onConclusion="none">support.pkg</pkg-ref>
+</installer-gui-script>

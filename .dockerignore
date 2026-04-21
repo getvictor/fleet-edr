@@ -1,0 +1,43 @@
+# Build contexts for every image in this repo.
+# The server Dockerfile lives in server/ but runs with the repo root as its
+# build context so it can pull in internal/envparse (referenced via go.work).
+# Keep this list tight because every ignored entry skips stat + hash work on
+# every `docker build`.
+
+# Local scratch + logs.
+tmp/
+claude/
+.DS_Store
+
+# Test caches.
+**/testdata/output/
+**/*.test
+
+# Toolchain + IDE state.
+.idea/
+.vscode/
+.claude/
+*.iml
+
+# Agent binary artifacts (not needed for the server image).
+agent/cmd/*/dist/
+agent/cmd/m3-queue-stuffer/
+
+# Xcode build outputs (very large).
+extension/edr/build/
+extension/edr/DerivedData/
+extension/edr/*.xcworkspace/xcuserdata/
+extension/edr/*.xcodeproj/xcuserdata/
+extension/edr/*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Provisioning profiles are not needed by the server image (agent-side).
+packaging/provisioning/
+
+# UI build output lives in server/ui/dist — that one IS needed because the
+# server embeds it. Do NOT ignore server/ui/dist/.
+ui/node_modules/
+ui/dist/
+
+# VCS.
+.git/
+.github/

@@ -1,0 +1,41 @@
+#!/bin/sh
+# Post-install script for Fleet EDR.
+#
+# Runs after pkg payload is laid down. Loads the LaunchDaemon (which activates
+# the sysext via the host app's XPC request on first run) and ensures var/db +
+# var/log directories exist.
+#
+# Fleet's install-script contract writes /etc/fleet-edr.conf BEFORE invoking
+# `installer`, so by the time we run, the agent has its enroll secret + server
+# URL ready to read. Standalone installs may not have /etc/fleet-edr.conf yet;
+# the agent will log "EDR_ENROLL_SECRET unset" and exit, then the operator
+# writes the conf file and `launchctl kickstart -k system/com.fleetdm.edr.agent`
+# picks it up.
+
+set -e
+
+LABEL=com.fleetdm.edr.agent
+PLIST=/Library/LaunchDaemons/${LABEL}.plist
+LOG=/var/log/fleet-edr-agent.log
+VAR_DB=/var/db/fleet-edr
+
+# Runtime directories. Permissions are 0750 so only root + members of the
+# wheel group can read the queue DB (holds un-uploaded events). The agent
+# runs as root via LaunchDaemon, so 0750 is fine.
+mkdir -p "$VAR_DB"
+chown root:wheel "$VAR_DB"
+chmod 0750 "$VAR_DB"
+
+# Logs: world-readable so Apple's `log show` and MDM log collectors work
+# without privilege escalation. No secrets live in the agent log (token is
+# redacted at write time).
+touch "$LOG"
+chown root:wheel "$LOG"
+chmod 0644 "$LOG"
+
+# Start the agent. bootstrap returns 37 on "already loaded"; swallow that
+# case so an MDM-driven re-install is idempotent.
+/bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+/bin/launchctl kickstart -k "system/${LABEL}"
+
+exit 0

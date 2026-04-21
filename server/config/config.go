@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -67,8 +68,13 @@ func defaults() Config {
 
 // Load reads configuration from the environment. It returns an error aggregating every validation
 // problem so the operator can fix all of them at once rather than playing whack-a-mole.
+//
+// Every string env var transparently supports a `*_FILE` sibling (Docker-secret
+// convention): when `KEY` is unset but `KEY_FILE` points at a readable file, the
+// file's trimmed contents are used as the value. Wired here so docker-compose
+// + `secrets:` mounts work without plaintext in the compose env block.
 func Load() (*Config, error) {
-	return loadFrom(os.Getenv)
+	return loadFrom(fileBackedGetenv(os.Getenv, slog.Default()))
 }
 
 // loadFrom is the testable core of Load; it takes a lookup function so tests can provide a fake env.

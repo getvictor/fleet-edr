@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pre-install script for Fleet EDR.
+#
+# Runs before pkg payload is laid down. On upgrade, stops the running agent
+# cleanly so we can overwrite /usr/local/bin/fleet-edr-agent without busy-file
+# errors. On fresh installs it is a no-op.
+#
+# Never fails hard: any single step can miss (e.g. no LaunchDaemon yet on a
+# fresh install) without blocking the rest of the installer.
+
+set -e
+
+LABEL=com.fleetdm.edr.agent
+PLIST=/Library/LaunchDaemons/${LABEL}.plist
+SYSEXT_BUNDLE=/Applications/Fleet\ EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension
+
+# Stop + unload the LaunchDaemon if it exists. `bootout` replaces the
+# deprecated `unload`; both return non-zero when the target is not loaded, so
+# we swallow the exit code.
+if [ -f "$PLIST" ]; then
+    /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+fi
+
+# Deactivate the running system extension so the bundle can be replaced. A
+# fresh install or a corrupted sysext state returns non-zero; treat that as
+# "nothing to do" and continue.
+if [ -d "$SYSEXT_BUNDLE" ]; then
+    /usr/bin/systemextensionsctl deactivate FDG8Q7N4CC com.fleetdm.edr.securityextension 2>/dev/null || true
+fi
+
+exit 0
