@@ -16,10 +16,20 @@ ARG BUILDTIME=
 
 WORKDIR /src
 
-# Go workspace: the server module depends on the internal/envparse shared
-# module via go.work. Copy the full tree; dependencies are small and the
-# Docker layer cache keeps mod downloads fast across builds.
-COPY . .
+# Explicit copies rather than `COPY . .` so the build context only ever
+# contains what the server binary actually needs. The .dockerignore already
+# excludes secrets and scratch dirs, but enumerating sources here bounds
+# the image from a Dockerfile-only read (defense in depth) and satisfies
+# the "recursively copying context directories" scanner rule.
+#
+# Server binary dependencies:
+#   go.mod + go.sum  — module graph
+#   server/          — the server code + embedded UI assets
+#   internal/        — shared helpers (envparse, observability) referenced
+#                      by both server and agent packages in the monorepo
+COPY go.mod go.sum ./
+COPY server ./server
+COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
