@@ -34,8 +34,18 @@ chown root:wheel "$LOG"
 chmod 0644 "$LOG"
 
 # Start the agent. bootstrap returns 37 on "already loaded"; swallow that
-# case so an MDM-driven re-install is idempotent.
-/bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+# exact code so MDM-driven re-installs are idempotent. Any other non-zero
+# exit is a real failure (malformed plist, permission denied, unknown
+# domain) and must surface with its original stderr rather than getting
+# masked into a confusing kickstart error downstream.
+set +e
+/bin/launchctl bootstrap system "$PLIST"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 37 ]; then
+    echo "postinstall: launchctl bootstrap failed with exit $rc" >&2
+    exit "$rc"
+fi
 /bin/launchctl kickstart -k "system/${LABEL}"
 
 exit 0

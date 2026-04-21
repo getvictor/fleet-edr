@@ -58,8 +58,14 @@ echo "Imported identities:"
 /usr/bin/security find-identity -p codesigning -v "$KC_FILE"
 /usr/bin/security find-identity -p basic -v "$KC_FILE" | grep 'Developer ID Installer' || true
 
-# Publish to the GitHub Actions step env so downstream steps can reference it.
+# Publish to the GitHub Actions step env so downstream steps can reference
+# it. Values written to $GITHUB_ENV are NOT automatically masked; emit an
+# ::add-mask:: directive first so any later step that echoes env (`env`,
+# `set -x`, debug dumps) does not splash the keychain password into the
+# log. Defense in depth — the keychain itself is ephemeral and torn down
+# at job end.
 if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "::add-mask::$KC_PW"
     {
         echo "CI_KEYCHAIN=$KC_FILE"
         echo "CI_KEYCHAIN_PW=$KC_PW"

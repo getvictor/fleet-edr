@@ -2,9 +2,9 @@ package config
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -49,9 +49,10 @@ func fileBackedGetenv(base func(string) string, logger *slog.Logger) func(string
 // WriteSecretFile is a tiny helper for tests and docker-compose fixtures: it
 // writes the given value to a tempfile with 0600 perms and returns the path.
 // Kept in the non-test file so integration tests that live outside the
-// server/config package can reach it.
+// server/config package can reach it. Uses filepath.Join so trailing
+// slashes on dir and OS path separators are handled correctly.
 func WriteSecretFile(dir, name, value string) (string, error) {
-	path := fmt.Sprintf("%s/%s", dir, name)
+	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 		return "", err
 	}

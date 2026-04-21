@@ -33,7 +33,18 @@ if [ -f "$PLIST" ]; then
 fi
 
 echo "==> deactivating system extension"
-/usr/bin/systemextensionsctl deactivate FDG8Q7N4CC com.fleetdm.edr.securityextension 2>/dev/null || true
+# Derive the team ID from the installed host app rather than hardcoding; an
+# operator who re-signed with a different team ID (fork, team migration)
+# needs `systemextensionsctl deactivate` to use that team ID, not ours.
+if [ -d "$APP" ]; then
+    TEAM_ID=$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 \
+        | /usr/bin/awk -F= '/^TeamIdentifier=/{print $2; exit}')
+    if [ -n "$TEAM_ID" ]; then
+        /usr/bin/systemextensionsctl deactivate "$TEAM_ID" com.fleetdm.edr.securityextension 2>/dev/null || true
+    else
+        echo "uninstall: could not determine Team ID from $APP; skipping sysext deactivate" >&2
+    fi
+fi
 
 echo "==> removing binaries"
 rm -f "$AGENT_BIN"

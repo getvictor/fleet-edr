@@ -35,7 +35,10 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 ## Verify
 
 ```sh
+# TLS-enabled deployments (default):
 curl -sk https://localhost:8088/readyz | jq .
+# For EDR_ALLOW_INSECURE_HTTP=1 dev deployments, use http:// instead:
+curl -s http://localhost:8088/readyz | jq .
 # {"status":"ok","checks":{"db":{"status":"ok","latency_ms":N}}}
 ```
 
@@ -55,11 +58,17 @@ NOT EXISTS` throughout.
 
 ## Secret rotation
 
-**Enroll secret**. Overwrite `secrets/enroll_secret` with a new value and
-`docker compose kill -s HUP server` (restart picks it up; `HUP` is a no-op
-for this binary, full restart is what happens). Existing per-host tokens are
-not affected by enroll-secret rotation because they were derived at enroll
-time, not at every auth.
+**Enroll secret**. Overwrite `secrets/enroll_secret` with the new value and
+restart the server so it re-reads the secret file:
+
+```sh
+docker compose -f docker-compose.prod.yml --env-file .env restart server
+```
+
+Existing per-host tokens are not affected by enroll-secret rotation because
+they were derived at enroll time, not re-verified against the secret on
+every auth. SIGHUP is NOT wired for secret reload; only TLS cert reload
+responds to it.
 
 **MySQL root password**. Overwrite both `secrets/mysql_root` and
 `secrets/edr_dsn` with the new password, then `docker compose up -d

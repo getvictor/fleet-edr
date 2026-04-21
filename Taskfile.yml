@@ -258,11 +258,18 @@ tasks:
       For routine releases, push a v* tag instead and let CI do this.
     vars:
       TAG: '{{.TAG}}'
+    # Separate preconditions per env var so each missing one reports itself.
+    # A concatenation like `test -n "${A}${B}${C}"` is true when any single
+    # var is set and would let the build proceed partway before failing.
     preconditions:
       - sh: test -n "{{.TAG}}"
         msg: "TAG is required, e.g. `task pkg:release TAG=v0.5.0`"
-      - sh: test -n "${APPLE_NOTARY_APPLE_ID}${APPLE_NOTARY_APP_PASSWORD}${APPLE_TEAM_ID}"
-        msg: "APPLE_NOTARY_APPLE_ID, APPLE_NOTARY_APP_PASSWORD, and APPLE_TEAM_ID must be exported"
+      - sh: test -n "${APPLE_NOTARY_APPLE_ID:-}"
+        msg: "APPLE_NOTARY_APPLE_ID must be exported"
+      - sh: test -n "${APPLE_NOTARY_APP_PASSWORD:-}"
+        msg: "APPLE_NOTARY_APP_PASSWORD must be exported"
+      - sh: test -n "${APPLE_TEAM_ID:-}"
+        msg: "APPLE_TEAM_ID must be exported"
     cmds:
       - ./packaging/pkg/build.sh {{.TAG}}
 

@@ -27,13 +27,16 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # Read-only default; individual jobs escalate for release uploads + ghcr push.
   contents: read
 
 jobs:
   macos-pkg:
+    name: Build + sign + notarize pkg
     runs-on: macos-14
     environment: release-signing
     permissions:
+      # Writes the GitHub Release on tag push; no other surface needed.
       contents: write
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '--dry-run' || '' }}
@@ -68,11 +71,12 @@ jobs:
           # directly into the run shell so a crafted tag cannot inject
           # shell syntax (zizmor:template-injection).
           RELEASE_TAG: ${{ github.ref_name }}
-        # $DRY_RUN is deliberately unquoted so that an empty value expands
-        # to zero positional args; quoting would pass an empty-string arg
-        # that build.sh misinterprets.
-        # shellcheck disable=SC2086
-        run: ./packaging/pkg/build.sh "$RELEASE_TAG" $DRY_RUN
+        run: |
+          if [ -n "$DRY_RUN" ]; then
+            ./packaging/pkg/build.sh "$RELEASE_TAG" --dry-run
+          else
+            ./packaging/pkg/build.sh "$RELEASE_TAG"
+          fi
 
       - name: Sign mobileconfig profiles
         if: env.DRY_RUN == ''
@@ -127,9 +131,12 @@ jobs:
           fi
 
   docker-server:
+    name: Build + push server image
     runs-on: ubuntu-latest
     permissions:
+      # Read source for build context.
       contents: read
+      # Push the multi-arch image to ghcr.io/getvictor/fleet-edr-server.
       packages: write
     env:
       RELEASE_TAG: ${{ github.ref_name }}

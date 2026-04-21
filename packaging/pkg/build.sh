@@ -159,6 +159,11 @@ else
     # ES_NEW_CLIENT_RESULT_ERR_NOT_ENTITLED; NE fails to register with
     # NetworkExtension framework.
     SYSEXT="$STAGE/app-root/Applications/Fleet EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension"
+    if [ ! -d "$SYSEXT" ]; then
+        echo "ERROR: expected sysext bundle at $SYSEXT but it does not exist." >&2
+        echo "       Check the Xcode project's embedded-targets settings." >&2
+        exit 5
+    fi
     cp "$PROFILE_SYSEXT" "$SYSEXT/Contents/embedded.provisionprofile"
 
     PROFILE_NET="$ROOT/packaging/provisioning/networkextension.provisionprofile"
@@ -235,9 +240,18 @@ cp "$ROOT/packaging/pkg/scripts/postinstall" "$SCRIPTS_DIR/postinstall"
 chmod 0755 "$SCRIPTS_DIR/preinstall" "$SCRIPTS_DIR/postinstall"
 
 DIST_XML="$STAGE/distribution.xml"
-sed "s/__VERSION__/$VERSION/g" "$ROOT/packaging/pkg/distribution.xml" > "$DIST_XML"
+# Git tags are legal shell input but can contain characters that are
+# meaningful to sed replacement (notably `&`, `\`, and the `/` delimiter).
+# Escape any of those in the replacement value and use `|` as the delimiter
+# so a tag like `release/v1.2` does not collide with the default `/`.
+ESCAPED_VERSION=$(printf '%s' "$VERSION" | sed 's/[&|\\]/\\&/g')
+sed "s|__VERSION__|$ESCAPED_VERSION|g" "$ROOT/packaging/pkg/distribution.xml" > "$DIST_XML"
 
-PKG_OUT="$DIST/fleet-edr-${VERSION}.pkg"
+# Filename-safe variant of $VERSION: replace `/` with `-` so a namespaced
+# git tag like `release/v1.2` produces `fleet-edr-release-v1.2.pkg` rather
+# than trying to write into a subdirectory that does not exist.
+SAFE_VERSION=$(printf '%s' "$VERSION" | tr '/' '-')
+PKG_OUT="$DIST/fleet-edr-${SAFE_VERSION}.pkg"
 sign_pkg productbuild \
     --distribution "$DIST_XML" \
     --package-path "$STAGE" \

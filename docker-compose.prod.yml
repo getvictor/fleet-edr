@@ -1,16 +1,13 @@
 # Reference production compose stack for the EDR server + MySQL.
-# Distinct from docker-compose.yml (dev MySQL only). Boot with:
+# Distinct from docker-compose.yml (dev MySQL only). Full setup +
+# secret-file generation documented in docker-compose.prod.README.md.
+# Boot shortcut:
 #
-#   cp docker-compose.prod.yml.env.example .env         # set EDR_VERSION + OTEL_EXPORTER_OTLP_ENDPOINT
-#   mkdir -p secrets tls
-#   echo 'a-strong-password' > secrets/mysql_root
-#   echo 'pilot-enroll-secret' > secrets/enroll_secret
-#   # drop TLS fullchain.pem + privkey.pem into ./tls or set EDR_ALLOW_INSECURE_HTTP=1
 #   docker compose -f docker-compose.prod.yml --env-file .env up -d
 #
 # The server image is pulled from ghcr.io/getvictor/fleet-edr-server; a local
-# build uses `docker compose -f docker-compose.prod.yml build server` against
-# the fleet-edr-server:${EDR_VERSION} tag (for smoke tests / air-gapped sites).
+# build uses the docker-compose.prod.build.yml override for smoke tests and
+# air-gapped sites.
 
 services:
   mysql:
@@ -75,15 +72,13 @@ services:
       - edr_dsn
     ports:
       - "${EDR_LISTEN:-8088}:8088"
-    healthcheck:
-      # /readyz returns 200 with DB ping latency; we use curl from the mysql
-      # image since the server image has no shell. Unused by the server
-      # itself — start/stop ordering only depends on mysql's health.
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8088/readyz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 5s
+    # No server-side HEALTHCHECK: the distroless/static base has no shell
+    # and no wget/curl, so `CMD-SHELL` healthchecks always fail. Nothing
+    # depends_on the server here, so operator-side readiness checks
+    # (curl http(s)://host:${EDR_LISTEN}/readyz) are the canonical path.
+    # If we ever need container-level health, compile a tiny static
+    # healthcheck binary into the image and invoke it via
+    # `HEALTHCHECK ["CMD", "/usr/local/bin/healthcheck"]` (no shell).
 
 volumes:
   edr-mysql-data:

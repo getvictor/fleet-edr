@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   dryrun:
+    name: Pkg build dry-run
     runs-on: macos-14
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -42,16 +43,21 @@ jobs:
           go-version-file: go.mod
 
       - name: Prime Xcode Debug build (dry-run pkg reuses it)
+        # Scheme `edr` (host app + embedded extensions), not `extension`
+        # (sysext alone). build.sh --dry-run looks for
+        # extension/edr/build/Debug/edr.app; route xcodebuild's output there
+        # via CONFIGURATION_BUILD_DIR so both sides agree without DerivedData
+        # path math.
         run: |
           xcodebuild \
             -project extension/edr/edr.xcodeproj \
-            -scheme extension \
+            -scheme edr \
             -configuration Debug \
             -destination 'generic/platform=macOS' \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            -derivedDataPath extension/edr/build \
+            CONFIGURATION_BUILD_DIR=${{ github.workspace }}/extension/edr/build/Debug \
             build
 
       - name: Run pkg build dry-run

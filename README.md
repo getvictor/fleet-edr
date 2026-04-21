@@ -118,7 +118,8 @@ mkdir -p secrets tls
 MYSQL_PASS=$(openssl rand -hex 24)
 printf '%s' "$MYSQL_PASS" > secrets/mysql_root
 printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > secrets/edr_dsn
-printf 'pilot-enroll-secret' > secrets/enroll_secret
+ENROLL_SECRET=$(openssl rand -hex 32)
+printf '%s' "$ENROLL_SECRET" > secrets/enroll_secret
 chmod 0600 secrets/*
 
 docker compose -f docker-compose.prod.yml --env-file .env up -d

@@ -21,11 +21,18 @@ if [ -f "$PLIST" ]; then
     /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
 fi
 
-# Deactivate the running system extension so the bundle can be replaced. A
-# fresh install or a corrupted sysext state returns non-zero; treat that as
-# "nothing to do" and continue.
+# Deactivate the running system extension so the bundle can be replaced.
+# Derive the team ID from the installed host app's codesign output so this
+# script tracks whatever team ID the previous install was signed under,
+# even when that differs from the team ID of the incoming pkg (e.g. a
+# fork operator switched teams between releases). A fresh install or a
+# corrupted sysext state returns non-zero; treat that as "nothing to do".
 if [ -d "$SYSEXT_BUNDLE" ]; then
-    /usr/bin/systemextensionsctl deactivate FDG8Q7N4CC com.fleetdm.edr.securityextension 2>/dev/null || true
+    TEAM_ID=$(/usr/bin/codesign -dv --verbose=4 "/Applications/Fleet EDR.app" 2>&1 \
+        | /usr/bin/awk -F= '/^TeamIdentifier=/{print $2; exit}')
+    if [ -n "$TEAM_ID" ]; then
+        /usr/bin/systemextensionsctl deactivate "$TEAM_ID" com.fleetdm.edr.securityextension 2>/dev/null || true
+    fi
 fi
 
 exit 0
