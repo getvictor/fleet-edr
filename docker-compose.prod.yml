@@ -1,0 +1,94 @@
+# Reference production compose stack for the EDR server + MySQL.
+# Distinct from docker-compose.yml (dev MySQL only). Full setup +
+# secret-file generation documented in docker-compose.prod.README.md.
+# Boot shortcut:
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d
+#
+# The server image is pulled from ghcr.io/getvictor/fleet-edr-server; a local
+# build uses the docker-compose.prod.build.yml override for smoke tests and
+# air-gapped sites.
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      # MySQL 8.4 reads these _FILE variants natively. Avoids root password in
+      # any compose env block or docker inspect output.
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root
+      MYSQL_DATABASE: edr
+    volumes:
+      - edr-mysql-data:/var/lib/mysql
+    secrets:
+      - mysql_root
+    healthcheck:
+      # --silent and redirecting stderr keeps healthcheck logs out of the main
+      # service log. The 10s start_period lets InnoDB recover before we gate on
+      # a successful ping.
+      test: ["CMD-SHELL", "mysqladmin ping --silent 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  server:
+    # Set EDR_VERSION in .env to pin a release tag (recommended). `latest` is
+    # fine for dev but unsafe for production because image digests can drift.
+    # For a local source build instead of a pull, layer the build override:
+    #   docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml up -d --build
+    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      # The MySQL DSN needs the runtime root password that MYSQL reads from
+      # the same secret file. We consume it via *_FILE (see server/config/
+      # file_env.go) rather than interpolating so the password never lands in
+      # `docker inspect` output. The env key is blank here so the *_FILE path
+      # wins unconditionally; the server's fileBackedGetenv wrapper does the
+      # rest.
+      EDR_DSN: ""
+      EDR_DSN_FILE: /run/secrets/edr_dsn
+      EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
+      # TLS cert paths only wired when the operator has mounted ./tls with
+      # the matching files; otherwise left unset and EDR_ALLOW_INSECURE_HTTP
+      # controls whether TLS is required. Leaving these blank when no cert is
+      # mounted avoids the server refusing to start on "cert file missing".
+      EDR_TLS_CERT_FILE: ${EDR_TLS_CERT_FILE:-}
+      EDR_TLS_KEY_FILE: ${EDR_TLS_KEY_FILE:-}
+      EDR_ALLOW_INSECURE_HTTP: ${EDR_ALLOW_INSECURE_HTTP:-0}
+      EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
+      EDR_LOG_FORMAT: "json"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: fleet-edr-server
+    volumes:
+      # Optional: mount a tls dir if fullchain.pem + privkey.pem exist. The
+      # `:ro` flag + `tls:` default-empty env makes this safe when unused.
+      - ${EDR_TLS_DIR:-./tls}:/tls:ro
+    secrets:
+      - enroll_secret
+      - edr_dsn
+    ports:
+      - "${EDR_LISTEN:-8088}:8088"
+    # No server-side HEALTHCHECK: the distroless/static base has no shell
+    # and no wget/curl, so `CMD-SHELL` healthchecks always fail. Nothing
+    # depends_on the server here, so operator-side readiness checks
+    # (curl http(s)://host:${EDR_LISTEN}/readyz) are the canonical path.
+    # If we ever need container-level health, compile a tiny static
+    # healthcheck binary into the image and invoke it via
+    # `HEALTHCHECK ["CMD", "/usr/local/bin/healthcheck"]` (no shell).
+
+volumes:
+  edr-mysql-data:
+
+secrets:
+  mysql_root:
+    file: ./secrets/mysql_root
+  enroll_secret:
+    file: ./secrets/enroll_secret
+  # edr_dsn is derived from mysql_root at `docker compose up` time via a
+  # compose-secret hack: the operator writes it once. See README.
+  edr_dsn:
+    file: ./secrets/edr_dsn

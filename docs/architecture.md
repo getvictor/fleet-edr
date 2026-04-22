@@ -260,10 +260,10 @@ decoupling means the ingest path has no dependencies on processing speed.
 
 ## Code signing and XPC trust model
 
-All on-device binaries are signed with the Fleet Device Management team
-certificate (team ID `8VBZ3948LU`). The system extension XPC servers validate
+All on-device binaries are signed with the Victor Lyuboslavsky personal
+Developer ID team certificate (team ID `FDG8Q7N4CC`). The system extension XPC servers validate
 connecting peers via `xpc_connection_set_peer_code_signing_requirement`,
-requiring `anchor apple generic and certificate leaf[subject.OU] = "8VBZ3948LU"`.
+requiring `anchor apple generic and certificate leaf[subject.OU] = "FDG8Q7N4CC"`.
 
 The agent binary must be signed with `--options runtime` (hardened runtime) for
 XPC peer validation to work at the kernel level.

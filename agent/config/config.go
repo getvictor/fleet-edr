@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	defaultXPCService    = "8VBZ3948LU.com.fleetdm.edr.securityextension.xpc"
+	defaultXPCService    = "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc"
 	defaultNetXPCService = "group.com.fleetdm.edr.networkextension"
 	defaultQueueDBPath   = "/var/db/fleet-edr/events.db"
 )
@@ -40,9 +41,19 @@ type Config struct {
 	AllowInsecure     bool
 }
 
-// Load reads configuration from the environment and validates it.
+// Load reads configuration from the environment and validates it. The
+// environment is layered on top of /etc/fleet-edr.conf (override path via
+// EDR_CONF_FILE for dev and tests) so the MDM-managed conf file sets baseline
+// values and operator-scoped env vars override a single host without editing
+// the file. Missing or malformed entries in the conf file are logged and the
+// load continues with env-only values.
 func Load() (*Config, error) {
-	return loadFrom(os.Getenv)
+	confPath := os.Getenv("EDR_CONF_FILE")
+	if confPath == "" {
+		confPath = DefaultConfFile
+	}
+	confMap := loadConfFile(confPath, slog.Default())
+	return loadFrom(layeredGetenv(confMap))
 }
 
 func loadFrom(getenv func(string) string) (*Config, error) {

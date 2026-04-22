@@ -1,0 +1,169 @@
+# Release workflow. Fires when a tag matching v* pushes. Produces:
+#
+# - Signed + notarized macOS .pkg (darwin/arm64) attached to the GitHub Release
+# - Two signed .mobileconfig profiles (System Extensions + TCC FDA)
+# - SHA256SUMS for all uploaded artifacts
+# - ghcr.io/getvictor/fleet-edr-server:{tag,latest} for linux/amd64 + arm64
+#
+# The macos-pkg job is gated on the `release-signing` environment so the
+# Developer ID certs + notarytool credentials only decrypt when this workflow
+# runs against an allowed tag. Branch protection on the environment must list
+# `v*` as the only allowed ref (see claude/mvp/phase-5-apple-signing-setup.md).
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual trigger for dry-run / unsigned builds from a topic branch. The job
+  # below short-circuits to dry-run mode when triggered this way so a
+  # workflow_dispatch does NOT burn notary submissions or touch the
+  # release-signing environment secrets.
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  # Read-only default; individual jobs escalate for release uploads + ghcr push.
+  contents: read
+
+jobs:
+  macos-pkg:
+    name: Build + sign + notarize pkg
+    runs-on: macos-14
+    environment: release-signing
+    permissions:
+      # Writes the GitHub Release on tag push; no other surface needed.
+      contents: write
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '--dry-run' || '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          # Release builds run on tag push + workflow_dispatch; cache reuse
+          # for rare events risks cache poisoning and does not meaningfully
+          # speed up a human-waited release.
+          cache: false
+
+      - name: Import signing identities
+        if: env.DRY_RUN == ''
+        env:
+          APPLE_DEV_ID_APP_P12_BASE64: ${{ secrets.APPLE_DEV_ID_APP_P12_BASE64 }}
+          APPLE_DEV_ID_APP_P12_PASSWORD: ${{ secrets.APPLE_DEV_ID_APP_P12_PASSWORD }}
+          APPLE_DEV_ID_INSTALLER_P12_BASE64: ${{ secrets.APPLE_DEV_ID_INSTALLER_P12_BASE64 }}
+          APPLE_DEV_ID_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_DEV_ID_INSTALLER_P12_PASSWORD }}
+        run: ./packaging/pkg/ci-setup.sh
+
+      - name: Build, sign, notarize, staple pkg
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+          # Route github.ref_name through an env var instead of interpolating
+          # directly into the run shell so a crafted tag cannot inject
+          # shell syntax (zizmor:template-injection).
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [ -n "$DRY_RUN" ]; then
+            ./packaging/pkg/build.sh "$RELEASE_TAG" --dry-run
+          else
+            ./packaging/pkg/build.sh "$RELEASE_TAG"
+          fi
+
+      - name: Sign mobileconfig profiles
+        if: env.DRY_RUN == ''
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./packaging/profiles/sign.sh
+
+      - name: Render unsigned profiles (dry-run)
+        if: env.DRY_RUN != ''
+        env:
+          APPLE_TEAM_ID: FDG8Q7N4CC
+        run: ./packaging/profiles/sign.sh --dry-run
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          shasum -a 256 ./fleet-edr-*.pkg ./*.mobileconfig > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload artifacts (dry-run)
+        if: env.DRY_RUN != ''
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: fleet-edr-dryrun-${{ github.sha }}
+          path: |
+            dist/fleet-edr-*.pkg
+            dist/*.mobileconfig
+            dist/SHA256SUMS
+          retention-days: 7
+
+      - name: Create GitHub Release
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        # Use `gh release` directly instead of a third-party action: keeps the
+        # token scope bounded and removes one unpinned external dependency.
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --generate-notes \
+            --title "$RELEASE_TAG" \
+            dist/fleet-edr-*.pkg \
+            dist/edr-system-extension.mobileconfig \
+            dist/edr-tcc-fda.mobileconfig \
+            dist/SHA256SUMS
+
+      - name: Teardown keychain
+        if: always() && env.DRY_RUN == ''
+        run: |
+          if [ -n "${CI_KEYCHAIN:-}" ]; then
+            security delete-keychain "$CI_KEYCHAIN" || true
+          fi
+
+  docker-server:
+    name: Build + push server image
+    runs-on: ubuntu-latest
+    permissions:
+      # Read source for build context.
+      contents: read
+      # Push the multi-arch image to ghcr.io/getvictor/fleet-edr-server.
+      packages: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: |
+            ghcr.io/getvictor/fleet-edr-server:${{ env.RELEASE_TAG }}
+            ${{ startsWith(github.ref, 'refs/tags/v') && 'ghcr.io/getvictor/fleet-edr-server:latest' || '' }}
+          build-args: |
+            VERSION=${{ env.RELEASE_TAG }}
+            COMMIT=${{ github.sha }}

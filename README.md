@@ -103,6 +103,38 @@ task dev:server
 # Then open http://localhost:8088/ui/
 ```
 
+## Production deployment
+
+For pilot deployments, pull a signed `.pkg` and both `.mobileconfig`
+profiles from the [Releases page](https://github.com/getvictor/fleet-edr/releases)
+and hand them to any MDM. The server runs as a container stack:
+
+```bash
+# Pick a pinned release; `latest` is fine for dev but not safe for prod.
+echo 'EDR_VERSION=v0.5.0' > .env
+
+# See docker-compose.prod.README.md for the full secret + TLS setup.
+mkdir -p secrets tls
+MYSQL_PASS=$(openssl rand -hex 24)
+printf '%s' "$MYSQL_PASS" > secrets/mysql_root
+printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > secrets/edr_dsn
+ENROLL_SECRET=$(openssl rand -hex 32)
+printf '%s' "$ENROLL_SECRET" > secrets/enroll_secret
+chmod 0600 secrets/*
+
+docker compose -f docker-compose.prod.yml --env-file .env up -d
+```
+
+On each agent host the MDM pushes:
+- `edr-system-extension.mobileconfig` (pre-approves the ES sysext)
+- `edr-tcc-fda.mobileconfig` (grants Full Disk Access)
+- `fleet-edr-<version>.pkg` (the agent + host app + sysext)
+- Optionally: `/etc/fleet-edr.conf` with `EDR_SERVER_URL` and `EDR_ENROLL_SECRET`
+  written by the install script before `installer -pkg` runs.
+
+Fleet's install-script contract is the shape the MDM writes the conf file
+in; any other MDM can replicate it with a one-liner preinstall.
+
 ## Running tests
 
 ```bash

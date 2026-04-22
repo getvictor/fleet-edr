@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    System Extensions allow-list. Pre-approves the Fleet EDR Endpoint Security
+    extension so it activates without the "System Extension Blocked" dialog.
+    Deploy via MDM custom settings. Signed with Developer ID Installer cert at
+    release time (see packaging/profiles/sign.sh); the __TEAM_ID__ token is
+    substituted with the value of APPLE_TEAM_ID.
+
+    Identifiers here match the actual bundle IDs shipped by the pkg. If those
+    change, update both the host app Info.plist + the AllowedSystemExtensions
+    array below together.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.system-extension-policy</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>Fleet EDR System Extensions</string>
+            <key>PayloadDescription</key>
+            <string>Allows the Fleet EDR Endpoint Security extension to load without user approval.</string>
+            <key>PayloadIdentifier</key>
+            <string>com.fleetdm.edr.system-extensions</string>
+            <key>PayloadUUID</key>
+            <string>0B47FA1D-70EA-4A2D-8E37-1C24F9D3F7F8</string>
+            <key>AllowedSystemExtensions</key>
+            <dict>
+                <key>__TEAM_ID__</key>
+                <array>
+                    <string>com.fleetdm.edr.securityextension</string>
+                    <string>com.fleetdm.edr.networkextension</string>
+                </array>
+            </dict>
+            <key>AllowedSystemExtensionTypes</key>
+            <dict>
+                <key>__TEAM_ID__</key>
+                <array>
+                    <string>EndpointSecurityExtension</string>
+                    <string>NetworkExtension</string>
+                </array>
+            </dict>
+            <key>AllowUserOverrides</key>
+            <false/>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>Fleet EDR — System Extensions (__TEAM_ID__)</string>
+    <key>PayloadDescription</key>
+    <string>Approves Fleet EDR's Endpoint Security and Network Extension bundles. Team ID __TEAM_ID__.</string>
+    <key>PayloadIdentifier</key>
+    <string>com.fleetdm.edr.profile.system-extension</string>
+    <key>PayloadOrganization</key>
+    <string>Fleet EDR</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>6E2B26C5-9E68-4C45-B22E-1B1D4F04E2FB</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>ConsentText</key>
+    <dict>
+        <key>default</key>
+        <string>This profile allows the Fleet EDR system extension to monitor process activity for threat detection.</string>
+    </dict>
+</dict>
+</plist>

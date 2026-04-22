@@ -1,0 +1,20 @@
+# Override layer: build the server image from the checkout instead of pulling
+# from ghcr. Use in dev + for local smoke tests:
+#
+#   docker compose -f docker-compose.prod.yml \
+#                  -f docker-compose.prod.build.yml \
+#                  --env-file .env \
+#                  up -d --build
+
+services:
+  server:
+    build:
+      # Relative to the file that references it via -f. When compose merges,
+      # this context resolves against the directory containing
+      # docker-compose.prod.build.yml — keep both files checked in together
+      # so operators can invoke them from the repo root without surprise.
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: ${EDR_VERSION:-dev}
+        COMMIT: ${EDR_COMMIT:-unknown}

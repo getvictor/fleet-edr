@@ -235,3 +235,78 @@ tasks:
       the login/enroll/ingest/logout path by hand). A scripted smoke harness
       is tracked as future work.
     deps: [build]
+
+  # -------- Phase 5 packaging --------
+
+  pkg:dryrun:
+    desc: |
+      Build an unsigned .pkg locally using ad-hoc signing + the existing
+      Xcode Debug build output. Does not notarize. Useful for verifying
+      distribution.xml + script layout before a real release tag fires CI.
+      Expects extension/edr/build/Debug/edr.app to exist (run
+      build:extension once to seed).
+    vars:
+      TAG: '{{.TAG | default "v0.0.0-local"}}'
+    cmds:
+      - APPLE_TEAM_ID=FDG8Q7N4CC ./packaging/pkg/build.sh {{.TAG}} --dry-run
+
+  pkg:release:
+    desc: |
+      Build a signed + notarized .pkg locally. Requires Developer ID
+      Application + Installer certs installed in the login keychain and
+      the APPLE_* env vars set (see claude/mvp/phase-5-apple-signing-setup.md).
+      For routine releases, push a v* tag instead and let CI do this.
+    vars:
+      TAG: '{{.TAG}}'
+    # Separate preconditions per env var so each missing one reports itself.
+    # A concatenation like `test -n "${A}${B}${C}"` is true when any single
+    # var is set and would let the build proceed partway before failing.
+    preconditions:
+      - sh: test -n "{{.TAG}}"
+        msg: "TAG is required, e.g. `task pkg:release TAG=v0.5.0`"
+      - sh: test -n "${APPLE_NOTARY_APPLE_ID:-}"
+        msg: "APPLE_NOTARY_APPLE_ID must be exported"
+      - sh: test -n "${APPLE_NOTARY_APP_PASSWORD:-}"
+        msg: "APPLE_NOTARY_APP_PASSWORD must be exported"
+      - sh: test -n "${APPLE_TEAM_ID:-}"
+        msg: "APPLE_TEAM_ID must be exported"
+    cmds:
+      - ./packaging/pkg/build.sh {{.TAG}}
+
+  profiles:render:
+    desc: Render the two .mobileconfig templates with APPLE_TEAM_ID substituted (unsigned).
+    cmds:
+      - APPLE_TEAM_ID={{.APPLE_TEAM_ID | default "FDG8Q7N4CC"}} ./packaging/profiles/sign.sh --dry-run
+
+  profiles:sign:
+    desc: |
+      Render + sign both .mobileconfig profiles with the Developer ID
+      Installer cert. Requires APPLE_TEAM_ID env var and the installer cert
+      in the login keychain.
+    preconditions:
+      - sh: test -n "${APPLE_TEAM_ID}"
+        msg: "APPLE_TEAM_ID must be exported"
+    cmds:
+      - ./packaging/profiles/sign.sh
+
+  docker:server:
+    desc: |
+      Build the server container image locally as fleet-edr-server:dev.
+      Uses the multi-stage Dockerfile; no push. For the prod-compose stack,
+      see docker-compose.prod.yml and docker-compose.prod.README.md.
+    cmds:
+      - docker build -f server/Dockerfile -t fleet-edr-server:dev --build-arg VERSION=dev .
+
+  docker:prod:up:
+    desc: |
+      Boot the reference prod compose stack (MySQL + server) from the
+      checkout. Operator must populate ./secrets/ per docker-compose.prod.README.md
+      first. Idempotent: brings the stack up if down, leaves it alone if
+      already running.
+    cmds:
+      - docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env-file .env up -d --build
+
+  docker:prod:down:
+    desc: Tear down the prod compose stack and remove its MySQL data volume.
+    cmds:
+      - docker compose -f docker-compose.prod.yml --env-file .env down -v

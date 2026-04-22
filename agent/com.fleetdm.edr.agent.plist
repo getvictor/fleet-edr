@@ -5,16 +5,30 @@
 	<key>Label</key>
 	<string>com.fleetdm.edr.agent</string>
 
+	<!--
+	    All tunables come from /etc/fleet-edr.conf (loaded by the agent on
+	    startup) or from the operator's LaunchDaemon env overrides below.
+	    No CLI flags: the agent main.go dropped flag parsing in phase 5.
+	-->
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/local/bin/fleet-edr-agent</string>
-		<string>-xpc-service</string>
-		<string>8VBZ3948LU.com.fleetdm.edr.securityextension.xpc</string>
-		<string>-db</string>
-		<string>/var/db/fleet-edr/events.db</string>
-		<string>-server-url</string>
-		<string>https://edr.example.com</string>
 	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!--
+		    Defaults that every install needs. Anything the operator puts in
+		    /etc/fleet-edr.conf (EDR_SERVER_URL, EDR_ENROLL_SECRET, etc.)
+		    layers underneath these env entries; real env vars win. Adjust
+		    per-host by editing this plist and `launchctl kickstart -k` the
+		    daemon to pick up changes.
+		-->
+		<key>EDR_QUEUE_DB_PATH</key>
+		<string>/var/db/fleet-edr/events.db</string>
+		<key>EDR_TOKEN_FILE</key>
+		<string>/var/db/fleet-edr/enrolled.plist</string>
+	</dict>
 
 	<key>RunAtLoad</key>
 	<true/>
@@ -30,5 +44,8 @@
 
 	<key>WorkingDirectory</key>
 	<string>/var/db/fleet-edr</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
 </dict>
 </plist>

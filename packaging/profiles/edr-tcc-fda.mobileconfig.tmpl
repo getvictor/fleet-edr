@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    PPPC (Privacy Preferences Policy Control) profile that grants Full Disk
+    Access to the Fleet EDR agent and sysext. Required for the ES client to
+    receive exec + open events on SIP-enabled systems; otherwise es_new_client
+    returns ES_NEW_CLIENT_RESULT_ERR_NOT_PERMITTED at startup.
+
+    The CodeRequirement strings pin to Developer ID Application signing + our
+    team ID. Regenerated via `codesign -d -r -` on the real binaries if
+    entitlements or the team ID changes.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.TCC.configuration-profile-policy</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.fleetdm.edr.tcc.fda</string>
+            <key>PayloadUUID</key>
+            <string>7C8EB928-9C69-4FBF-8E6F-5F0A7C0B7A83</string>
+            <key>PayloadDisplayName</key>
+            <string>Fleet EDR — Full Disk Access</string>
+            <key>PayloadDescription</key>
+            <string>Grants Full Disk Access to the Fleet EDR agent and sysext so the ES client can observe filesystem events.</string>
+            <key>Services</key>
+            <dict>
+                <key>SystemPolicyAllFiles</key>
+                <array>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>/usr/local/bin/fleet-edr-agent</string>
+                        <key>IdentifierType</key>
+                        <string>path</string>
+                        <key>CodeRequirement</key>
+                        <string>anchor apple generic and identifier "fleet-edr-agent" and certificate leaf[subject.OU] = "__TEAM_ID__"</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>Comment</key>
+                        <string>Agent daemon binary.</string>
+                    </dict>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>com.fleetdm.edr.securityextension</string>
+                        <key>IdentifierType</key>
+                        <string>bundleID</string>
+                        <key>CodeRequirement</key>
+                        <string>anchor apple generic and identifier "com.fleetdm.edr.securityextension" and certificate leaf[subject.OU] = "__TEAM_ID__"</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>Comment</key>
+                        <string>ES client sysext.</string>
+                    </dict>
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>Fleet EDR — Full Disk Access (__TEAM_ID__)</string>
+    <key>PayloadDescription</key>
+    <string>Grants Full Disk Access via PPPC so the ES client sees filesystem events. Team ID __TEAM_ID__.</string>
+    <key>PayloadIdentifier</key>
+    <string>com.fleetdm.edr.profile.tcc-fda</string>
+    <key>PayloadOrganization</key>
+    <string>Fleet EDR</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>8B1D2A3F-2E4A-4E5C-9E77-06E4F2C9A11C</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+</dict>
+</plist>

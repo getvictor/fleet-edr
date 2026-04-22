@@ -6,7 +6,7 @@ import EndpointSecurity
 // subscribe and loadFromDisk would be incorrectly allowed.
 PolicyStore.shared.loadFromDisk()
 
-let server = XPCServer(serviceName: "8VBZ3948LU.com.fleetdm.edr.securityextension.xpc")
+let server = XPCServer(serviceName: "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc")
 server.start()
 
 let subscriber = ESFSubscriber()
