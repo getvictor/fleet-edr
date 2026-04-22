@@ -30,13 +30,23 @@
 
     <script><![CDATA[
 function installationCheck() {
-    if (system.sysctl('hw.optional.arm64') !== '1') {
-        my.result.title = 'Unsupported processor';
-        my.result.message = 'Fleet EDR requires Apple Silicon (M1 or later).';
-        my.result.type = 'Fatal';
-        return false;
+    // system.sysctl() returns the kernel value in its native type. For
+    // hw.optional.arm64 that's a numeric 1 on Apple Silicon, not the
+    // string '1'. Compare with loose equality so both numeric and string
+    // return shapes are accepted, and check hw.machine as a fallback for
+    // older macOS versions where hw.optional.arm64 may behave differently.
+    var arm64 = system.sysctl('hw.optional.arm64');
+    if (arm64 == 1) {                     // eslint-disable-line eqeqeq
+        return true;
     }
-    return true;
+    var machine = system.sysctl('hw.machine') || '';
+    if (machine.indexOf('arm') === 0) {   // "arm64"
+        return true;
+    }
+    my.result.title = 'Unsupported processor';
+    my.result.message = 'Fleet EDR requires Apple Silicon (M1 or later).';
+    my.result.type = 'Fatal';
+    return false;
 }
 
 function volumeCheck() {
