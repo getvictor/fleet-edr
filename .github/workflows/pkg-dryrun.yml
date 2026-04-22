@@ -88,12 +88,24 @@ jobs:
             packaging/profiles/sign.sh
 
       - name: Summarize dry-run output
+        # pkgutil --expand explodes each component pkg into a DIRECTORY (Bom +
+        # PackageInfo + Payload + optional Scripts/), so the structural checks
+        # below use `test -d` for component pkgs and look for scripts under
+        # `agent.pkg/Scripts/` where `pkgbuild --scripts` places them.
+        # The top-level Scripts/ path that `productbuild --scripts` would
+        # produce is intentionally unused — see packaging/pkg/build.sh for
+        # why that layout was abandoned (Installer.app never invoked those).
         run: |
           ls -la dist/
           pkgutil --expand dist/fleet-edr-*.pkg /tmp/expanded
           echo "=== pkg top level ==="
           ls /tmp/expanded/
-          echo "=== component pkgs present ==="
-          test -f /tmp/expanded/agent.pkg && test -f /tmp/expanded/app.pkg && test -f /tmp/expanded/support.pkg && echo OK
-          echo "=== scripts present ==="
-          test -f /tmp/expanded/Scripts/preinstall && test -f /tmp/expanded/Scripts/postinstall && echo OK
+          echo "=== three component pkgs present ==="
+          test -d /tmp/expanded/agent.pkg && \
+          test -d /tmp/expanded/app.pkg && \
+          test -d /tmp/expanded/support.pkg && \
+            echo OK
+          echo "=== install scripts attached to agent.pkg ==="
+          test -f /tmp/expanded/agent.pkg/Scripts/preinstall && \
+          test -f /tmp/expanded/agent.pkg/Scripts/postinstall && \
+            echo OK
