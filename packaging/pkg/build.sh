@@ -73,6 +73,7 @@ sign_pkg() {
     else
         "$tool" "$@" --sign "$INSTALLER_IDENTITY"
     fi
+    return 0
 }
 
 DIST="$ROOT/dist"

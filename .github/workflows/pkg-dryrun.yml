@@ -32,7 +32,7 @@ concurrency:
 jobs:
   dryrun:
     name: Pkg build dry-run
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -41,6 +41,12 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+
+      - name: Xcode version
+        # Log which Xcode the runner is using. The project's objectVersion is
+        # 77 (Xcode 16.3+); a runner with only Xcode 15 will surface a clear
+        # "future Xcode project file format" error rather than a cryptic one.
+        run: xcodebuild -version
 
       - name: Prime Xcode Debug build (dry-run pkg reuses it)
         # Scheme `edr` (host app + embedded extensions), not `extension`
