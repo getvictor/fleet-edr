@@ -63,7 +63,7 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            CONFIGURATION_BUILD_DIR=${{ github.workspace }}/extension/edr/build/Debug \
+            CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/extension/edr/build/Debug" \
             build
 
       - name: Run pkg build dry-run

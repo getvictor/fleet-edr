@@ -36,8 +36,8 @@ jobs:
     runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
     environment: release-signing
     permissions:
-      # Writes the GitHub Release on tag push; no other surface needed.
-      contents: write
+      contents: write  # gh release create: publish pkg + profiles on tag push
+
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '--dry-run' || '' }}
     steps:
@@ -145,10 +145,8 @@ jobs:
     name: Build + push server image
     runs-on: ubuntu-latest
     permissions:
-      # Read source for build context.
-      contents: read
-      # Push the multi-arch image to ghcr.io/getvictor/fleet-edr-server.
-      packages: write
+      contents: read   # checkout source for the build context
+      packages: write  # push multi-arch image to ghcr.io/getvictor/fleet-edr-server
     env:
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
