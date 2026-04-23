@@ -1,8 +1,8 @@
 #!/bin/sh
 # Import the Developer ID .p12 files into an ephemeral keychain so codesign +
-# productbuild + productsign can find them during a release build. Designed
-# for GitHub Actions macos-14 runners; the keychain is torn down when the
-# job exits (the tempdir the runner uses gets wiped).
+# productbuild + productsign + `security cms` can find them during a release
+# build. Designed for GitHub Actions macos-15 runners; the keychain is torn
+# down when the job exits (the tempdir the runner uses gets wiped).
 #
 # Required env (set from the `release-signing` environment's secrets):
 #   APPLE_DEV_ID_APP_P12_BASE64
@@ -39,10 +39,24 @@ INST_P12="${RUNNER_TEMP:-/tmp}/dev-id-installer.p12"
 printf '%s' "$APPLE_DEV_ID_APP_P12_BASE64" | base64 --decode > "$APP_P12"
 printf '%s' "$APPLE_DEV_ID_INSTALLER_P12_BASE64" | base64 --decode > "$INST_P12"
 
+# `-T` grants each binary listed permission to use the imported private key
+# without a GUI prompt. `/usr/bin/security` must be in the list because
+# `security cms -S` (used by profiles/sign.sh to sign .mobileconfig files)
+# is implemented as a subcommand of the security binary itself. Missing
+# that entry causes `security cms` to hang forever in CI waiting on a
+# Keychain Access dialog that has no GUI to display.
 /usr/bin/security import "$APP_P12" -k "$KC_FILE" -P "$APPLE_DEV_ID_APP_P12_PASSWORD" \
-    -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/productsign -T /usr/bin/pkgbuild
+    -T /usr/bin/codesign \
+    -T /usr/bin/productbuild \
+    -T /usr/bin/productsign \
+    -T /usr/bin/pkgbuild \
+    -T /usr/bin/security
 /usr/bin/security import "$INST_P12" -k "$KC_FILE" -P "$APPLE_DEV_ID_INSTALLER_P12_PASSWORD" \
-    -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/productsign -T /usr/bin/pkgbuild
+    -T /usr/bin/codesign \
+    -T /usr/bin/productbuild \
+    -T /usr/bin/productsign \
+    -T /usr/bin/pkgbuild \
+    -T /usr/bin/security
 
 rm -f "$APP_P12" "$INST_P12"
 

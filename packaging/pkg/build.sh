@@ -73,6 +73,11 @@ sign_pkg() {
     else
         "$tool" "$@" --sign "$INSTALLER_IDENTITY"
     fi
+    # Propagate the tool's exit code. `return 0` here would mask pkgbuild /
+    # productbuild failures and let the script continue into notarization
+    # against a broken artifact. Explicit `return $?` satisfies Sonar's
+    # "explicit return" rule without lying about the outcome.
+    return $?
 }
 
 DIST="$ROOT/dist"
@@ -99,11 +104,22 @@ echo "==> codesigning fleet-edr-agent"
 codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG "$AGENT_ROOT/usr/local/bin/fleet-edr-agent"
 
 echo "==> packaging agent component pkg"
+# Install scripts (preinstall + postinstall) attach to the COMPONENT pkg via
+# `pkgbuild --scripts`. `productbuild --scripts` exists but Installer.app's
+# script-execution phase only fires for scripts attached at the component
+# level; distribution-level scripts get bundled into the distribution pkg
+# but never invoked at install time.
+AGENT_SCRIPTS_DIR="$STAGE/agent-scripts"
+mkdir -p "$AGENT_SCRIPTS_DIR"
+cp "$ROOT/packaging/pkg/scripts/preinstall" "$AGENT_SCRIPTS_DIR/preinstall"
+cp "$ROOT/packaging/pkg/scripts/postinstall" "$AGENT_SCRIPTS_DIR/postinstall"
+chmod 0755 "$AGENT_SCRIPTS_DIR/preinstall" "$AGENT_SCRIPTS_DIR/postinstall"
 sign_pkg pkgbuild \
     --identifier com.fleetdm.edr.agent \
     --version "$VERSION" \
     --root "$AGENT_ROOT" \
     --install-location / \
+    --scripts "$AGENT_SCRIPTS_DIR" \
     "$STAGE/agent.pkg"
 
 # ---------------------------------------------------------------
@@ -233,11 +249,10 @@ sign_pkg pkgbuild \
 # Product build: combine components with preinstall + postinstall.
 # ---------------------------------------------------------------
 echo "==> building distribution pkg"
-SCRIPTS_DIR="$STAGE/scripts"
-mkdir -p "$SCRIPTS_DIR"
-cp "$ROOT/packaging/pkg/scripts/preinstall" "$SCRIPTS_DIR/preinstall"
-cp "$ROOT/packaging/pkg/scripts/postinstall" "$SCRIPTS_DIR/postinstall"
-chmod 0755 "$SCRIPTS_DIR/preinstall" "$SCRIPTS_DIR/postinstall"
+# NOTE: install scripts live on the agent.pkg component (see `pkgbuild
+# --scripts` above), not on productbuild. `productbuild --scripts` bundles
+# scripts into the distribution pkg but Installer.app never invokes them,
+# so attaching here would silently fail at install time.
 
 DIST_XML="$STAGE/distribution.xml"
 # Git tags are legal shell input but can contain characters that are
@@ -255,7 +270,6 @@ PKG_OUT="$DIST/fleet-edr-${SAFE_VERSION}.pkg"
 sign_pkg productbuild \
     --distribution "$DIST_XML" \
     --package-path "$STAGE" \
-    --scripts "$SCRIPTS_DIR" \
     "$PKG_OUT"
 
 echo "==> pkg signature"

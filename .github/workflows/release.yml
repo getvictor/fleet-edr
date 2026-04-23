@@ -33,7 +33,7 @@ permissions:
 jobs:
   macos-pkg:
     name: Build + sign + notarize pkg
-    runs-on: macos-14
+    runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
     environment: release-signing
     permissions:
       # Writes the GitHub Release on tag push; no other surface needed.
