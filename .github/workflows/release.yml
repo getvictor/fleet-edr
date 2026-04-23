@@ -115,9 +115,20 @@ jobs:
         # Use `gh release` directly instead of a third-party action: keeps the
         # token scope bounded and removes one unpinned external dependency.
         run: |
+          # SemVer 2.0 pre-release tags contain a hyphen (v0.1.0-rc.1,
+          # v1.0.0-beta.2). Mark those as GitHub pre-releases so they don't
+          # show up as the default "Latest" on the releases page and don't
+          # trigger release notifications for watchers who asked for
+          # stable-only. GA tags (v0.1.0, v1.2.3) become the Latest release.
+          PRERELEASE_FLAG=""
+          case "$RELEASE_TAG" in
+              *-*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
+          # shellcheck disable=SC2086
           gh release create "$RELEASE_TAG" \
             --generate-notes \
             --title "$RELEASE_TAG" \
+            $PRERELEASE_FLAG \
             dist/fleet-edr-*.pkg \
             dist/edr-system-extension.mobileconfig \
             dist/edr-tcc-fda.mobileconfig \
