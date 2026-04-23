@@ -33,10 +33,16 @@ extension/edr/*.xcodeproj/project.xcworkspace/xcuserdata/
 # Provisioning profiles are not needed by the server image (agent-side).
 packaging/provisioning/
 
-# UI build output lives in server/ui/dist — that one IS needed because the
-# server embeds it. Do NOT ignore server/ui/dist/.
+# UI: the ui-build stage in server/Dockerfile runs `npm ci && npm run build`
+# and writes to /src/server/ui/dist inside the container. We don't need the
+# host's server/ui/dist in the build context — that would just waste time
+# stat'ing files we're about to overwrite. The previous instance of this
+# list left server/ui/dist IN because the single-stage Dockerfile relied on
+# the operator pre-building locally; the multi-stage build makes that
+# unnecessary.
 ui/node_modules/
 ui/dist/
+server/ui/dist/
 
 # VCS.
 .git/

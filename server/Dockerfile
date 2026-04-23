@@ -1,12 +1,41 @@
 # syntax=docker/dockerfile:1.7
 
-# Multi-stage build for the fleet-edr-server. The binary is pure Go (the
-# MySQL driver is go-sql-driver/mysql, no cgo) so the final image can live on
-# distroless/static. Build args VERSION and COMMIT become -ldflags for the
-# /livez + /readyz responses and for observability resource attributes.
+# Multi-stage build for the fleet-edr-server.
+#
+# Stage 1 (ui-build): Node builds the React UI. Vite's `outDir` is
+# `../server/ui/dist` (see ui/vite.config.ts), so vite writes directly into
+# the location `server/ui/embed.go`'s `//go:embed all:dist` expects.
+#
+# Stage 2 (build): Go compiles the server. The server binary is pure Go
+# (go-sql-driver/mysql is CGo-free) so we can land on distroless/static
+# in the final stage. VERSION and COMMIT build args become -ldflags for
+# /livez + /readyz responses and observability resource attributes.
+#
+# Stage 3 (runtime): distroless/static-debian12:nonroot. CA bundles +
+# tzdata + nonroot user, no shell, no package manager.
 #
 # Built for linux/amd64 and linux/arm64 via `docker buildx --platform`.
 
+# ---------------------------------------------------------------
+# Stage 1: UI bundle
+# ---------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM node:20 AS ui-build
+WORKDIR /src
+# package*.json first for layer-cache reuse: npm ci only reruns when
+# dependencies change, not every source edit.
+COPY ui/package.json ui/package-lock.json ./ui/
+RUN --mount=type=cache,target=/root/.npm \
+    cd ui && npm ci --ignore-scripts
+# Vite writes to `../server/ui/dist` (relative to /src/ui) = /src/server/ui/dist.
+# Pre-create that parent so vite can emptyOutDir without tripping on EACCES.
+RUN mkdir -p /src/server/ui
+COPY ui ./ui
+RUN cd ui && npm run build
+# Output: /src/server/ui/dist/{index.html,assets/...}
+
+# ---------------------------------------------------------------
+# Stage 2: Go binary
+# ---------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 ARG TARGETOS
 ARG TARGETARCH
@@ -30,6 +59,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY server ./server
 COPY internal ./internal
+# Drop in the UI bundle from stage 1 so //go:embed all:dist finds content.
+COPY --from=ui-build /src/server/ui/dist ./server/ui/dist
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -40,9 +71,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/fleet-edr-server \
         ./server/cmd/fleet-edr-server
 
-# distroless/static gives us CA bundles + tzdata + nonroot user without a
-# shell or package manager. The server opens no local files beyond TLS certs
-# and makes outbound MySQL + OTLP connections; nothing needs glibc.
+# ---------------------------------------------------------------
+# Stage 3: runtime
+# ---------------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # Non-secret defaults. Operators override via compose env or EDR_*_FILE mounts.
