@@ -161,9 +161,14 @@ jobs:
           file: server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          # `:latest` only advances on stable releases. SemVer 2.0 pre-release
+          # tags (e.g. v0.1.0-rc.1, v0.1.0-beta.2) contain a `-` so
+          # `!contains(RELEASE_TAG, '-')` treats them as non-stable and skips
+          # advancing `:latest`. Pilot operators pulling `:latest` get the
+          # most recent GA, not whatever RC shipped last.
           tags: |
             ghcr.io/getvictor/fleet-edr-server:${{ env.RELEASE_TAG }}
-            ${{ startsWith(github.ref, 'refs/tags/v') && 'ghcr.io/getvictor/fleet-edr-server:latest' || '' }}
+            ${{ startsWith(github.ref, 'refs/tags/v') && !contains(env.RELEASE_TAG, '-') && 'ghcr.io/getvictor/fleet-edr-server:latest' || '' }}
           build-args: |
             VERSION=${{ env.RELEASE_TAG }}
             COMMIT=${{ github.sha }}
