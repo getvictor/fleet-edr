@@ -30,8 +30,12 @@ concurrency:
 
 jobs:
   # --------------------------------------------------------------
-  # Go: server + agent + internal/. Pure Go (no CGo required for the
-  # server) so build-mode: none is sufficient and fast (~3-5 min total).
+  # Go: server + agent + internal/. CodeQL's Go extractor requires an
+  # actual build (build-mode: none is JS/TS/Python-only). autobuild runs
+  # `go build ./...` which covers every package in the module. CGo in the
+  # agent's receiver package builds on Linux only with the macOS-specific
+  # tags missing, so the extractor sees the server + agent interfaces even
+  # though macOS-only files are skipped.
   # --------------------------------------------------------------
   go:
     name: CodeQL Go
@@ -55,8 +59,11 @@ jobs:
         uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3.35.2
         with:
           languages: go
-          build-mode: none  # CodeQL 2.16+ indexes Go source without compiling
+          build-mode: autobuild
           queries: security-extended  # adds dataflow-heavy queries beyond default
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3.35.2
 
       - name: Analyze
         uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3.35.2
