@@ -75,6 +75,15 @@ var (
 // modtime and ServeContent only uses it for Last-Modified when non-zero.
 var epoch = time.Time{}
 
+// Header names used more than once across handlers. Extracted so the
+// raw strings live in one place (Sonar go:S1192 / Go-idiomatic).
+const (
+	headerContentType   = "Content-Type"
+	headerCacheControl  = "Cache-Control"
+	headerNoSniff       = "X-Content-Type-Options"
+	cacheControlNoCache = "no-cache"
+)
+
 func mustReadAsset(path string) []byte {
 	b, err := assets.ReadFile(path)
 	if err != nil {
@@ -137,16 +146,16 @@ func RegisterRoutes(mux *http.ServeMux) {
 // asset handler prevents a browser from interpreting, say, a spec file
 // shipped with the wrong Content-Type as an executable script.
 func setSecurityHeaders(w http.ResponseWriter) {
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set(headerNoSniff, "nosniff")
 }
 
 func serveIndex(w http.ResponseWriter, _ *http.Request) {
 	setSecurityHeaders(w)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set(headerContentType, "text/html; charset=utf-8")
 	// No caching on the index — cheap to regenerate and means a new
 	// bundleHash rolls out on the next request. The heavy JS bundle
 	// gets long caching via its hash-busted URL.
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, "no-store")
 	if _, err := fmt.Fprint(w, indexHTML()); err != nil {
 		_ = err // client already has partial bytes; can't usefully surface
 	}
@@ -154,32 +163,32 @@ func serveIndex(w http.ResponseWriter, _ *http.Request) {
 
 func serveBundle(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set(headerContentType, "application/javascript; charset=utf-8")
 	// Bundle URL carries its own ?v=<hash> cache-buster, so a long max-age
 	// is safe — the browser can serve the cached copy without revalidating
 	// until we bump Redoc, at which point the URL itself changes.
-	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set(headerCacheControl, "public, max-age=3600")
 	http.ServeContent(w, r, "redoc.standalone.js", epoch, bytes.NewReader(bundleBytes))
 }
 
 func serveLogo(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
-	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set(headerContentType, "image/svg+xml")
 	// Logo URL is embedded inside the bundle as a bare path (no cache-
 	// buster), so use ETag + revalidation instead of a long max-age.
 	// Customers updating the brand mark don't wait for TTLs to expire.
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set(headerCacheControl, cacheControlNoCache)
 	w.Header().Set("ETag", logoETag)
 	http.ServeContent(w, r, "logo-mini.svg", epoch, bytes.NewReader(logoBytes))
 }
 
 func serveSpec(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
-	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set(headerContentType, "application/yaml; charset=utf-8")
 	// Spec URL in the HTML is also a bare path; revalidate-every-load is
 	// the simplest way to guarantee no stale spec after a server upgrade.
 	// 304 responses carry no body, so the cost is one round-trip.
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set(headerCacheControl, cacheControlNoCache)
 	w.Header().Set("ETag", specETag)
 	http.ServeContent(w, r, "openapi.yaml", epoch, bytes.NewReader(specBytes))
 }
