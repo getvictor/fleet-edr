@@ -43,7 +43,9 @@ jobs:
 
       - name: Install UI dependencies
         working-directory: ui
-        run: npm ci
+        # --ignore-scripts: matches test.yml and closes the S6505 hotspot
+        # surface; none of our UI deps need lifecycle scripts.
+        run: npm ci --ignore-scripts
 
       - name: Lint + type-check via Taskfile
         run: task lint:ui

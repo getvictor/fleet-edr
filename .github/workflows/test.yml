@@ -152,7 +152,10 @@ jobs:
 
       - name: Install UI dependencies
         working-directory: ui
-        run: npm ci
+        # --ignore-scripts: our deps (sass, vitest, jsdom, etc.) are pure JS
+        # and don't need pre/post-install scripts; skipping them closes the
+        # arbitrary-code-execution surface flagged by Sonar rule S6505.
+        run: npm ci --ignore-scripts
 
       - name: Run UI tests with coverage
         working-directory: ui
