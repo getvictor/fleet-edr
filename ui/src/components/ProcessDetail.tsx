@@ -225,7 +225,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
 
       {loading && <p className="process-detail__loading">Loading network data...</p>}
 
-      {detail && detail.re_exec_chain && detail.re_exec_chain.length > 0 && (
+      {detail?.re_exec_chain && detail.re_exec_chain.length > 0 && (
         <div className="process-detail__reexec">
           <h4 className="process-detail__reexec-title">
             Re-exec chain{" "}
