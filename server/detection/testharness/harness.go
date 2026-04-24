@@ -134,8 +134,14 @@ func runCase(t *testing.T, rule detection.Rule, path string) {
 	// deterministic order (iteration over sorted event batches); if a
 	// rule ever goes non-deterministic we should address it in the rule
 	// itself, not here.
-	for i, want := range c.ExpectedFindings {
-		got := findings[i]
+	//
+	// Range over findings rather than ExpectedFindings so nilaway can
+	// see that we never index a nil slice — rule.Evaluate returns a nil
+	// []Finding for no-match cases, which is Go-idiomatic but trips
+	// nilaway's can-be-nil flow without this rewrite. The require.Len
+	// above guarantees ExpectedFindings[i] is in range.
+	for i, got := range findings {
+		want := c.ExpectedFindings[i]
 		assert.Equal(t, want.RuleID, got.RuleID, "finding[%d].rule_id", i)
 		assert.Equal(t, want.Severity, got.Severity, "finding[%d].severity", i)
 		if want.DescriptionContains != "" {
