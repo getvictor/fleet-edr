@@ -8,6 +8,23 @@
 A macOS Endpoint Detection and Response (EDR) system. It provides
 real-time process monitoring, network attribution, behavioral detection, and response capabilities.
 
+## Operator docs
+
+Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):
+
+- [`docs/install-server.md`](docs/install-server.md) -- stand up the
+  Docker Compose stack.
+- [`docs/install-agent-manual.md`](docs/install-agent-manual.md) --
+  evaluate on 1-5 Macs without an MDM.
+- [`docs/mdm-deployment.md`](docs/mdm-deployment.md) -- deploy via any
+  MDM (Jamf, Kandji, Intune, mosyle, Fleet).
+- [`docs/fleet-deployment.md`](docs/fleet-deployment.md) -- Fleet
+  MDM-specific recipe.
+- [`docs/operations.md`](docs/operations.md) -- day-2 ops runbook
+  (upgrades, rotations, backups, troubleshooting).
+- [`docs/api.md`](docs/api.md) + [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
+  -- HTTP API reference.
+
 ## Architecture
 
 ### On-device

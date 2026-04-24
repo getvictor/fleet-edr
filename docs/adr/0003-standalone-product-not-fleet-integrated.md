@@ -112,4 +112,4 @@ customers who don't run Fleet.
 ## References
 
 - Jamf Protect + Jamf Pro as the two-independent-products reference model.
-- MVP plan (local, `claude/mvp/plan.md`) with the deployment contract spec.
+- MVP plan at `claude/mvp/plan.md` (gitignored, local) with the deployment contract spec.
