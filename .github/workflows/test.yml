@@ -157,16 +157,15 @@ jobs:
         # arbitrary-code-execution surface flagged by Sonar rule S6505.
         run: npm ci --ignore-scripts
 
+      # vitest's v8 provider skips writing coverage/lcov.info entirely when
+      # zero test files exist (passWithNoTests). The `|| ... : > lcov.info`
+      # fallback guarantees Sonar has a path to read at
+      # sonar.javascript.lcov.reportPaths; empty lcov parses as "no data".
       - name: Run UI tests with coverage
         working-directory: ui
-        run: npm run test:coverage
-
-      # vitest's v8 provider skips lcov emission when no test files exist
-      # (passWithNoTests). Touch an empty file so Sonar has a path to read
-      # at sonar.javascript.lcov.reportPaths; empty lcov parses as "no data".
-      - name: Ensure lcov file exists
-        working-directory: ui
-        run: mkdir -p coverage && touch coverage/lcov.info
+        run: |
+          npm run test:coverage
+          [ -f coverage/lcov.info ] || { mkdir -p coverage && : > coverage/lcov.info; }
 
       - uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7.1.0
         env:

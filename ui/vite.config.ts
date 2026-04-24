@@ -30,6 +30,11 @@ export default defineConfig(({ mode }) => ({
       provider: "v8",
       reporter: ["text", "lcov"],
       reportsDirectory: "./coverage",
+      // Scope to application sources so ambient files (vite.config.ts,
+      // test setup, generated code) don't distort the Sonar baseline once
+      // real tests land. No-op today with zero tests.
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**"],
     },
   },
 }));

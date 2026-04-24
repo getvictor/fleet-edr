@@ -130,11 +130,14 @@ tasks:
     desc: |
       Run the UI test suite with coverage; emits ui/coverage/lcov.info in
       the format SonarCloud expects via sonar.javascript.lcov.reportPaths.
-      Passes clean with zero UI tests today (vitest passWithNoTests is on);
-      the lcov output is valid-but-empty.
+      With zero tests vitest's v8 provider skips the lcov write entirely,
+      so the task falls back to creating an empty file; Sonar treats empty
+      lcov as "no data" rather than an error, and CI's upload-artifact
+      step always has a file to read.
     dir: ui
     cmds:
       - npm run test:coverage
+      - '[ -f coverage/lcov.info ] || { mkdir -p coverage && : > coverage/lcov.info; }'
 
   # -------- lint --------
 
