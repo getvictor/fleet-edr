@@ -20,3 +20,8 @@ build/
 # Phase 5 release-build output: signed pkg + signed profiles + checksums.
 # Regenerated on every `packaging/pkg/build.sh` run; never committed.
 /dist/
+
+# Coverage artifacts written by `task test:go:coverage` and the CI
+# SonarCloud job. Regenerated on every run; never committed.
+/coverage.out
+/ui/coverage/
