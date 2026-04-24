@@ -38,6 +38,7 @@ type Recorder struct {
 	alertsCreated        metric.Int64Counter
 	dbQueryDuration      metric.Float64Histogram
 	retentionRowsDeleted metric.Int64Counter
+	processesReconciled  metric.Int64Counter
 	queueDropped         metric.Int64Counter
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
@@ -95,6 +96,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.retention.rows_deleted",
 		metric.WithDescription("Total rows deleted by the event retention job since server start."),
 		metric.WithUnit("{row}"),
+	)
+	r.processesReconciled, _ = meter.Int64Counter(
+		"edr.processes.ttl_reconciled",
+		metric.WithDescription("Processes whose exit_time_ns was synthesized by the freshness-TTL reconciler (missed-exit-event fallback)."),
+		metric.WithUnit("{process}"),
 	)
 	r.queueDropped, _ = meter.Int64Counter(
 		"edr.agent.queue.dropped",
@@ -177,6 +183,16 @@ func (r *Recorder) RetentionRowsDeleted(ctx context.Context, n int64) {
 		return
 	}
 	r.retentionRowsDeleted.Add(ctx, n)
+}
+
+// ProcessesTTLReconciled satisfies processttl.MetricsRecorder. A non-zero
+// rate of this indicates the fleet is losing exit events (agent drops,
+// kernel back-pressure, queue pruning) — investigate the affected hosts.
+func (r *Recorder) ProcessesTTLReconciled(ctx context.Context, n int64) {
+	if r == nil || r.processesReconciled == nil || n <= 0 {
+		return
+	}
+	r.processesReconciled.Add(ctx, n)
 }
 
 // QueueDropped satisfies queue.MetricsRecorder. A single counter with a `lossy` attribute

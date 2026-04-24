@@ -41,6 +41,13 @@ func (r *SuspiciousExec) ID() string {
 	return "suspicious_exec"
 }
 
+// Techniques: T1059 (Command and Scripting Interpreter), T1105 (Ingress
+// Tool Transfer). The rule fires on "shell with outbound network" plus
+// "shell spawns binary in /tmp" — both high-confidence dropper shapes.
+func (r *SuspiciousExec) Techniques() []string {
+	return []string{"T1059", "T1105"}
+}
+
 // execPayload is the subset of exec event payload fields needed for detection.
 type execPayload struct {
 	PID  int    `json:"pid"`
@@ -129,14 +136,21 @@ func (r *SuspiciousExec) evaluateShellExec(ctx context.Context, shell shellExecI
 		}, nil
 	}
 
-	// Query child processes of the shell within a 30-second window.
-	windowNs := int64(30_000_000_000) // 30 seconds in nanoseconds
-	tr := store.TimeRange{
+	// Parent/child causality is an on-host property, so the child lookup runs
+	// on kernel time. Network events are cross-source (ES + NE) and so run on
+	// server-stamped ingest time (issue #7). We build two windows of the same
+	// 30-second width but anchored to different clocks.
+	const windowNs = int64(30_000_000_000)
+	kernelTR := store.TimeRange{
 		FromNs: shell.event.TimestampNs,
 		ToNs:   shell.event.TimestampNs + windowNs,
 	}
+	ingestTR := store.TimeRange{
+		FromNs: shell.event.IngestedAtNs,
+		ToNs:   shell.event.IngestedAtNs + windowNs,
+	}
 
-	children, err := s.GetChildProcesses(ctx, shell.event.HostID, shell.payload.PID, tr)
+	children, err := s.GetChildProcesses(ctx, shell.event.HostID, shell.payload.PID, kernelTR)
 	if err != nil {
 		return nil, fmt.Errorf("get children: %w", err)
 	}
@@ -161,7 +175,7 @@ func (r *SuspiciousExec) evaluateShellExec(ctx context.Context, shell shellExecI
 
 	// Check for outbound network connections from the shell or its children.
 	// This catches reverse shells, download-and-execute chains, and curl|sh patterns.
-	finding, err := r.checkNetworkActivity(ctx, shell, parent, shellProc, children, tr, s)
+	finding, err := r.checkNetworkActivity(ctx, shell, parent, shellProc, children, ingestTR, s)
 	if err != nil {
 		return nil, fmt.Errorf("check network activity: %w", err)
 	}

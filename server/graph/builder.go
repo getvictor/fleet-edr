@@ -85,12 +85,14 @@ func (b *Builder) handleFork(ctx context.Context, evt store.Event) error {
 		b.logger.WarnContext(ctx, "failed to get parent path", "host_id", evt.HostID, "parent_pid", p.ParentPID, "err", err)
 	}
 
+	forkIngested := evt.IngestedAtNs
 	_, err = b.store.InsertProcess(ctx, store.Process{
-		HostID:     evt.HostID,
-		PID:        p.ChildPID,
-		PPID:       p.ParentPID,
-		Path:       parentPath,
-		ForkTimeNs: evt.TimestampNs,
+		HostID:           evt.HostID,
+		PID:              p.ChildPID,
+		PPID:             p.ParentPID,
+		Path:             parentPath,
+		ForkTimeNs:       evt.TimestampNs,
+		ForkIngestedAtNs: &forkIngested,
 	})
 	return err
 }
@@ -140,18 +142,20 @@ func (b *Builder) handleExec(ctx context.Context, evt store.Event) error {
 		if p.PPID != 0 {
 			ppid = p.PPID
 		}
+		forkIngested := evt.IngestedAtNs
 		_, err = b.store.InsertProcess(ctx, store.Process{
-			HostID:      evt.HostID,
-			PID:         p.PID,
-			PPID:        ppid,
-			Path:        p.Path,
-			Args:        p.Args,
-			UID:         p.UID,
-			GID:         p.GID,
-			CodeSigning: p.CodeSigning,
-			SHA256:      p.SHA256,
-			ForkTimeNs:  evt.TimestampNs,
-			ExecTimeNs:  &evt.TimestampNs,
+			HostID:           evt.HostID,
+			PID:              p.PID,
+			PPID:             ppid,
+			Path:             p.Path,
+			Args:             p.Args,
+			UID:              p.UID,
+			GID:              p.GID,
+			CodeSigning:      p.CodeSigning,
+			SHA256:           p.SHA256,
+			ForkTimeNs:       evt.TimestampNs,
+			ForkIngestedAtNs: &forkIngested,
+			ExecTimeNs:       &evt.TimestampNs,
 		})
 		return err
 	}
@@ -169,5 +173,5 @@ func (b *Builder) handleExit(ctx context.Context, evt store.Event) error {
 		return err
 	}
 
-	return b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, p.ExitCode)
+	return b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode)
 }

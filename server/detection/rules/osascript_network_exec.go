@@ -23,6 +23,14 @@ type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
+// Techniques: T1059.002 (Command and Scripting Interpreter → AppleScript)
+// + T1105 (Ingress Tool Transfer). The rule specifically flags osascript
+// invoking a curl/wget that stages an executable to /tmp — the exact
+// shape of a T1105 dropper.
+func (r *OsascriptNetworkExec) Techniques() []string {
+	return []string{"T1059.002", "T1105"}
+}
+
 var osascriptPaths = map[string]bool{
 	"/usr/bin/osascript": true,
 }
@@ -69,6 +77,9 @@ func (r *OsascriptNetworkExec) evalEvent(ctx context.Context, evt store.Event, s
 		return nil, nil
 	}
 
+	// Kernel-time window — the descendant walk uses GetChildProcesses, which
+	// indexes on fork_time_ns. Parent/child causality is on-host, not a
+	// cross-source concern, so issue #7's ingest-time correction doesn't apply.
 	tr := store.TimeRange{FromNs: evt.TimestampNs, ToNs: evt.TimestampNs + osascriptWindowNs}
 	descendants, err := collectDescendants(ctx, s, evt.HostID, p.PID, tr)
 	if err != nil {

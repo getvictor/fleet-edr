@@ -33,12 +33,29 @@ type CommandInserter interface {
 	InsertCommand(ctx context.Context, c store.Command) (int64, error)
 }
 
+// RuleCatalog enumerates every registered detection rule's ATT&CK mapping.
+// Satisfied by *detection.Engine in production; isolated to an interface so
+// admin tests don't need a full engine.
+type RuleCatalog interface {
+	Catalog() []RuleMetadata
+}
+
+// RuleMetadata is the minimal per-rule descriptor the Navigator-export
+// endpoint needs. Mirrors detection.RuleMetadata; duplicated here so admin
+// doesn't import detection (which would pull the whole engine into admin's
+// build graph + tests).
+type RuleMetadata struct {
+	ID         string
+	Techniques []string
+}
+
 // Handler serves the admin endpoints. Construct it with the enrollment + policy stores,
 // the command inserter used to fan out policy pushes, and a slog logger.
 type Handler struct {
 	enrollments *enrollment.Store
 	policy      *policy.Store
 	commands    CommandInserter
+	catalog     RuleCatalog
 	logger      *slog.Logger
 }
 
@@ -49,7 +66,10 @@ type Handler struct {
 // policy Store + CommandInserter for /policy. Fail-fast at construction mirrors the
 // enrollment.NewHandler pattern — a misconfigured handler otherwise blows up only on the
 // first request, after the server is already accepting connections.
-func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, logger *slog.Logger) *Handler {
+//
+// catalog may be nil; the ATT&CK coverage endpoint then returns an empty layer rather
+// than 500, which makes unit tests of the legacy admin surface easier to write.
+func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog RuleCatalog, logger *slog.Logger) *Handler {
 	if es == nil {
 		panic("admin.New: enrollment store must not be nil")
 	}
@@ -62,7 +82,7 @@ func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, logger *slo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{enrollments: es, policy: ps, commands: ci, logger: logger}
+	return &Handler{enrollments: es, policy: ps, commands: ci, catalog: catalog, logger: logger}
 }
 
 // RegisterRoutes wires the endpoints onto the mux. Callers wrap the returned handler in the
@@ -72,6 +92,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/enrollments/{host_id}/revoke", h.handleRevoke)
 	mux.HandleFunc("GET /api/v1/admin/policy", h.handleGetPolicy)
 	mux.HandleFunc("PUT /api/v1/admin/policy", h.handlePutPolicy)
+	mux.HandleFunc("GET /api/v1/admin/attack-coverage", h.handleATTACKCoverage)
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +312,60 @@ type policyCommandPayload struct {
 	Version int64    `json:"version"`
 	Paths   []string `json:"paths"`
 	Hashes  []string `json:"hashes"`
+}
+
+// handleATTACKCoverage returns a MITRE ATT&CK Navigator layer document that
+// enumerates the techniques covered by the registered detection rules. The
+// output is dropped directly into https://mitre-attack.github.io/attack-navigator/
+// to render as a heatmap on the matrix — one of the more reliable signals a
+// security buyer asks for in an eval. Score is 1 for "any rule covers it",
+// the list of covering rule IDs is in the technique's `comment`.
+func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var catalog []RuleMetadata
+	if h.catalog != nil {
+		catalog = h.catalog.Catalog()
+	}
+	// technique -> rule IDs that cover it.
+	coverage := make(map[string][]string)
+	for _, rule := range catalog {
+		for _, t := range rule.Techniques {
+			coverage[t] = append(coverage[t], rule.ID)
+		}
+	}
+
+	type navigatorTechnique struct {
+		TechniqueID string `json:"techniqueID"`
+		Score       int    `json:"score"`
+		Color       string `json:"color,omitempty"`
+		Comment     string `json:"comment,omitempty"`
+	}
+	type navigatorLayer struct {
+		Name        string               `json:"name"`
+		Versions    map[string]string    `json:"versions"`
+		Domain      string               `json:"domain"`
+		Description string               `json:"description"`
+		Techniques  []navigatorTechnique `json:"techniques"`
+	}
+
+	techniques := make([]navigatorTechnique, 0, len(coverage))
+	for tid, rules := range coverage {
+		techniques = append(techniques, navigatorTechnique{
+			TechniqueID: tid,
+			Score:       1,
+			Color:       "#31a354",
+			Comment:     "Covered by: " + strings.Join(rules, ", "),
+		})
+	}
+
+	layer := navigatorLayer{
+		Name:        "Fleet EDR coverage",
+		Versions:    map[string]string{"attack": "14", "navigator": "4.9.1", "layer": "4.5"},
+		Domain:      "enterprise-attack",
+		Description: "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
+		Techniques:  techniques,
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, layer)
 }
 
 // isValidationError reports whether err is a blocklist-shape violation returned by

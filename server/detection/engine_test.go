@@ -19,7 +19,8 @@ type stubRule struct {
 	err      error
 }
 
-func (r *stubRule) ID() string { return r.id }
+func (r *stubRule) ID() string           { return r.id }
+func (r *stubRule) Techniques() []string { return nil }
 func (r *stubRule) Evaluate(_ context.Context, _ []store.Event, _ *store.Store) ([]Finding, error) {
 	return r.findings, r.err
 }

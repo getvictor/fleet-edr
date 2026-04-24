@@ -40,6 +40,17 @@ type Config struct {
 	// RetentionInterval is how often the retention runner wakes up. Default 1h.
 	RetentionInterval time.Duration
 
+	// Phase 7 / issue #6: process-tree freshness TTL.
+	//
+	// StaleProcessTTL is the fork-time age past which a still-running
+	// process is force-exited by the reconciler. 0 disables the runner.
+	// Default 6h — long enough to cover normal analyst-session work but
+	// short enough that overnight greens are gone by morning.
+	StaleProcessTTL time.Duration
+	// StaleProcessInterval is how often the process-TTL reconciler runs.
+	// Default 10m.
+	StaleProcessInterval time.Duration
+
 	// LaunchAgentAllowlist is the set of plist paths the `persistence_launchagent` rule
 	// should silently accept. Populated from EDR_LAUNCHAGENT_ALLOWLIST (comma-separated
 	// absolute paths). Empty by default — every plist load fires.
@@ -54,15 +65,17 @@ func (c Config) TLSEnabled() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:        ":8088",
-		LogLevel:          "info",
-		LogFormat:         "json",
-		ProcessInterval:   500 * time.Millisecond,
-		ProcessBatch:      500,
-		EnrollRatePerMin:  30,
-		LoginRatePerMin:   6,
-		RetentionDays:     30,
-		RetentionInterval: time.Hour,
+		ListenAddr:           ":8088",
+		LogLevel:             "info",
+		LogFormat:            "json",
+		ProcessInterval:      500 * time.Millisecond,
+		ProcessBatch:         500,
+		EnrollRatePerMin:     30,
+		LoginRatePerMin:      6,
+		RetentionDays:        30,
+		RetentionInterval:    time.Hour,
+		StaleProcessTTL:      6 * time.Hour,
+		StaleProcessInterval: 10 * time.Minute,
 	}
 }
 
@@ -111,6 +124,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	// Phase 4: retention window. Allow 0 to disable entirely. Negative = error.
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, &errs)
 	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, &errs)
+	// Phase 7 / issue #6: stale-process TTL. 0 disables the reconciler.
+	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, &errs)
+	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, &errs)
 
 	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
 		c.LaunchAgentAllowlist = allowlist

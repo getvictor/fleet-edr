@@ -20,6 +20,11 @@ type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 
+// Techniques: T1566.001 (Phishing → Spearphishing Attachment) + T1059.004
+// (Command and Scripting Interpreter → Unix Shell). The chain "Office app
+// → shell" is a textbook post-phish execution step.
+func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
+
 // officeBinaries is the set of macOS Office executable paths that, as a parent, make a
 // shell exec suspicious. We match full paths, not substrings, so a user-named file
 // like `/tmp/Microsoft Word` cannot accidentally silence or spoof a finding.

@@ -51,22 +51,38 @@ func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs 
 		return nil, nil
 	}
 
-	// Build a time range from the process lifetime. We pad the lower bound by 5 seconds
-	// because our Endpoint Security and Network Extension timestamp sources are not always
-	// in lockstep — in practice we've seen NE-emitted network_connect events arrive with
-	// timestamps ~50-100ms *before* the ES-emitted fork event for the same pid. Without
-	// the pad, short-lived tools like `nc` would correctly fire a detection rule (which
-	// uses a broader shell-exec-forward window) but the ProcessDetail panel would show
-	// "No network activity" because the strict fork-bounded query excluded the event.
-	// Within 5s of fork, macOS pid reuse is not a concern.
-	const skewPadNs = int64(5 * 1_000_000_000)
-	fromNs := max(proc.ForkTimeNs-skewPadNs, 0)
-	tr := store.TimeRange{FromNs: fromNs}
-	if proc.ExitTimeNs != nil {
-		tr.ToNs = *proc.ExitTimeNs
+	// Build an ingest-time window from the process lifetime. We used to bound
+	// by the ES kernel-stamped fork_time_ns with a 5-second pad to compensate
+	// for ES/NE clock drift (NE-emitted network_connect events routinely
+	// arrived 50-100 ms *before* the ES-emitted fork for the same pid). With
+	// issue #7 the events table carries a server-stamped ingested_at_ns, and
+	// processes carry fork_ingested_at_ns; we correlate on those instead so
+	// the clock is single-authority and monotonic per server. A small 1s pad
+	// remains to absorb intra-batch ordering slop.
+	const intraBatchPadNs = int64(1 * 1_000_000_000)
+	var forkAnchorNs int64
+	if proc.ForkIngestedAtNs != nil {
+		forkAnchorNs = *proc.ForkIngestedAtNs
 	} else {
-		// Process still running — use a 30-day bound.
-		tr.ToNs = proc.ForkTimeNs + 30*86400_000_000_000
+		// Pre-migration rows: fall back to kernel fork time. The
+		// postSchemaMigrations backfill populates fork_ingested_at_ns from
+		// fork_time_ns for historical rows, so this path only fires during
+		// a race between migration apply and first query.
+		forkAnchorNs = proc.ForkTimeNs
+	}
+	fromNs := max(forkAnchorNs-intraBatchPadNs, 0)
+	tr := store.TimeRange{FromNs: fromNs}
+	switch {
+	case proc.ExitIngestedAtNs != nil:
+		// Both sides anchored on server-stamped ingest time.
+		tr.ToNs = *proc.ExitIngestedAtNs + intraBatchPadNs
+	case proc.ExitTimeNs != nil:
+		// Pre-migration row: kernel exit time is the best upper bound we
+		// have. Pad to absorb the ES/NE ingest-time-vs-kernel-time gap.
+		tr.ToNs = *proc.ExitTimeNs + intraBatchPadNs
+	default:
+		// Process still running — use a 30-day bound anchored on ingest time.
+		tr.ToNs = forkAnchorNs + 30*86400_000_000_000
 	}
 
 	netEvents, err := q.store.GetNetworkEventsForProcess(ctx, hostID, pid, tr)

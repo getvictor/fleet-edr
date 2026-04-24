@@ -104,6 +104,25 @@ func PositiveDuration(getenv Getenv, key string, dst *time.Duration, errs *[]err
 	}
 }
 
+// NonNegativeDuration parses key as a Go duration and requires it to be >= 0.
+// "0" / "0s" explicitly disables the feature gated by this setting — use when
+// the caller treats zero as "off" (e.g. disable a TTL reconciler entirely).
+func NonNegativeDuration(getenv Getenv, key string, dst *time.Duration, errs *[]error) {
+	v := getenv(key)
+	if v == "" {
+		return
+	}
+	d, err := time.ParseDuration(v)
+	switch {
+	case err != nil:
+		*errs = append(*errs, fmt.Errorf(errFmt, key, v, err))
+	case d < 0:
+		*errs = append(*errs, fmt.Errorf("%s=%q must be >= 0", key, v))
+	default:
+		*dst = d
+	}
+}
+
 // Allowlist turns a comma-separated string into a set, trimming whitespace and
 // dropping empty entries. Returns nil for empty input so the caller can detect
 // "operator didn't set it" and keep the package-local default.

@@ -1,0 +1,54 @@
+name: OpenSSF Scorecard
+
+on:
+  # Run on each push to main so the badge + code-scanning tab stay fresh.
+  push:
+    branches: [main]
+  # Weekly rescan catches new advisories about unchanged code.
+  schedule:
+    - cron: "43 2 * * 1"
+  # Lets us re-run after fixing a finding without pushing an empty commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read # minimum needed to check out the repo
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload SARIF to the Security tab
+      id-token: write # Sigstore-keyless signing when publish_results=true
+      contents: read # required by scorecard-action to read the repo
+      actions: read # Branch-Protection + Webhooks checks inspect Actions via API
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@99c09fe975337306107572b4fdf4db224cf8e2f2 # v2.4.3
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          # Publishes the scorecard to https://scorecard.dev/. The public
+          # registry is how buyers' procurement automation sees the score
+          # without auth; leave on for that enterprise-signal.
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad7386f0249f # v7.0.0
+        with:
+          name: Scorecard-SARIF
+          path: scorecard-results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@cdefb33c0f6224e58673d9004f47f7cb3e328b89 # v4.31.10
+        with:
+          sarif_file: scorecard-results.sarif
