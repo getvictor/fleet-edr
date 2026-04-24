@@ -21,7 +21,8 @@ build/
 # Regenerated on every `packaging/pkg/build.sh` run; never committed.
 /dist/
 
-# Coverage artifacts written by `task test:go:coverage` and the CI
-# SonarCloud job. Regenerated on every run; never committed.
-/coverage.out
+# Coverage artifacts written by the `task test:go:*:coverage` tasks and
+# the CI Sonar scan job. Regenerated on every run; never committed.
+/coverage-agent.out
+/coverage-server.out
 /ui/coverage/

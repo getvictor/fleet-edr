@@ -88,6 +88,14 @@ tasks:
     cmds:
       - go test -race -count=1 -timeout=10m ./agent/... ./internal/...
 
+  test:go:agent:coverage:
+    desc: |
+      Agent + shared coverage flavor of test:go:agent. Emits coverage-agent.out
+      which CI uploads as an artifact for the Sonar scan job.
+    cmds:
+      - go test -race -count=1 -timeout=10m -coverprofile=coverage-agent.out -covermode=atomic ./agent/... ./internal/...
+      - go tool cover -func=coverage-agent.out | tail -1
+
   test:go:server:
     desc: |
       Run Go tests with race detector for the server + shared code. Requires
@@ -96,6 +104,16 @@ tasks:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./internal/...
+
+  test:go:server:coverage:
+    desc: |
+      Server + shared coverage flavor of test:go:server. Emits coverage-server.out
+      which CI uploads as an artifact for the Sonar scan job.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+    cmds:
+      - go test -race -count=1 -timeout=10m -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/...
+      - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:
     desc: Run Vitest suite
@@ -108,24 +126,12 @@ tasks:
     cmds:
       - go test -short -count=1 ./server/... ./agent/... ./internal/...
 
-  test:go:coverage:
-    desc: |
-      Run the full Go test suite and emit a coverprofile at ./coverage.out.
-      CI uses this before the SonarCloud scan; locally it's a quick way to
-      see which packages drag the overall coverage number down. Requires
-      $EDR_TEST_DSN or the docker-compose mysql_test service on port 3317.
-    env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
-    cmds:
-      - go test -race -count=1 -timeout=10m -coverprofile=coverage.out -covermode=atomic ./server/... ./agent/... ./internal/...
-      - go tool cover -func=coverage.out | tail -1
-
   test:ui:coverage:
     desc: |
       Run the UI test suite with coverage; emits ui/coverage/lcov.info in
       the format SonarCloud expects via sonar.javascript.lcov.reportPaths.
-      Passes clean with zero UI tests today (vitest passWithNoTests is on)
-      — the lcov output is valid-but-empty.
+      Passes clean with zero UI tests today (vitest passWithNoTests is on);
+      the lcov output is valid-but-empty.
     dir: ui
     cmds:
       - npm run test:coverage
