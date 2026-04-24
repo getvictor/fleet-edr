@@ -1,0 +1,849 @@
+openapi: 3.1.0
+info:
+  title: Fleet EDR API
+  version: "0.1.0"
+  description: |
+    HTTP API for Fleet EDR. Three audience tiers:
+
+    - **Agents** (macOS endpoints) authenticate with a per-host bearer
+      token obtained at enrollment. They call `POST /api/v1/enroll`,
+      `POST /api/v1/events`, and the host-scoped `/commands` endpoints.
+    - **Browsers** (admin UI) authenticate with an `edr_session` cookie
+      (HttpOnly, Secure, SameSite=Lax) plus an `X-CSRF-Token` header on
+      unsafe methods. They call the session-protected endpoints.
+    - **Operators** hit `/livez`, `/readyz`, `/health` with no auth.
+
+    For prose context see [api.md](../api.md). For a human-readable
+    host/agent install guide see
+    [install-agent-manual.md](../install-agent-manual.md).
+  license:
+    name: Fleet EDR License
+    url: https://github.com/getvictor/fleet-edr/blob/main/LICENSE
+servers:
+  - url: https://edr.example.com
+    description: Your EDR server
+tags:
+  - name: Health
+    description: Liveness / readiness probes (no auth)
+  - name: Agent
+    description: Endpoints called by the macOS agent
+  - name: Session
+    description: Browser login / logout
+  - name: Hosts
+    description: Host + process graph (UI)
+  - name: Alerts
+    description: Detection alerts (UI)
+  - name: Commands
+    description: Command queue (UI + Agent)
+  - name: Admin
+    description: Enrollment + policy management (UI, admin-only)
+
+paths:
+  /livez:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: Returns 200 as long as the process is up. Does not touch the DB.
+      security: []
+      responses:
+        "200":
+          description: Process alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LivenessResponse"
+
+  /readyz:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: |
+        Returns 200 only when the server is ready to handle traffic. Fails
+        with 503 if the DB is unreachable. Use this behind a load balancer.
+      security: []
+      responses:
+        "200":
+          description: Server ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: Server not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Alias for /readyz
+      description: Retained for human convenience and existing monitors.
+      security: []
+      responses:
+        "200":
+          description: Server ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+  /api/v1/enroll:
+    post:
+      tags: [Agent]
+      summary: Enroll a new host
+      description: |
+        Exchanges the shared enroll secret + hardware fingerprint for a
+        per-host bearer token. Re-enrollment of an existing hardware UUID
+        returns the existing token and bumps `enrolled_at`.
+
+        Rate-limited per-IP at `EDR_ENROLL_RATE_PER_MIN` (default 30).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollRequest"
+      responses:
+        "200":
+          description: Enrolled or re-enrolled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollResponse"
+        "400":
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Wrong enroll secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Enrollment revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/events:
+    post:
+      tags: [Agent]
+      summary: Ingest a batch of endpoint security events
+      description: |
+        Agents post newline-delimited JSON events here. Each event's
+        `host_id` must match the token's authenticated host_id; mismatches
+        are rejected. The server returns the count of events accepted.
+      security:
+        - HostToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventBatch"
+      responses:
+        "202":
+          description: Events accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Invalid JSON or schema violation
+        "401":
+          description: Missing or invalid host token
+        "403":
+          description: Event host_id does not match token host
+
+  /api/v1/session:
+    post:
+      tags: [Session]
+      summary: Log in with email + password
+      description: |
+        Validates credentials, creates a session row, sets `edr_session`
+        cookie, returns the user + CSRF token. Rate-limited per-IP at
+        `EDR_LOGIN_RATE_PER_MIN` (default 6).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Logged in
+          headers:
+            Set-Cookie:
+              description: Session cookie (HttpOnly, Secure, SameSite=Lax)
+              schema:
+                type: string
+                example: edr_session=<opaque>; Path=/; HttpOnly; Secure; SameSite=Lax
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Malformed request
+        "401":
+          description: Wrong email or password
+        "429":
+          description: Rate limited
+    get:
+      tags: [Session]
+      summary: Get the current session
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Not logged in
+    delete:
+      tags: [Session]
+      summary: Log out
+      description: Clears the session row and expires the cookie.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: Logged out
+
+  /api/v1/hosts:
+    get:
+      tags: [Hosts]
+      summary: List hosts
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Host summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HostSummary"
+
+  /api/v1/hosts/{host_id}/tree:
+    get:
+      tags: [Hosts]
+      summary: Process tree for a host
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/HostID"
+        - name: from
+          in: query
+          schema: {type: integer, format: int64}
+          description: Lower bound, ns since epoch. Default `now - 1h`.
+        - name: to
+          in: query
+          schema: {type: integer, format: int64}
+          description: Upper bound, ns since epoch. Default `now`.
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 5000, default: 2000}
+      responses:
+        "200":
+          description: Forest of process roots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roots:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProcessNode"
+
+  /api/v1/hosts/{host_id}/processes/{pid}:
+    get:
+      tags: [Hosts]
+      summary: Process detail
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/HostID"
+        - name: pid
+          in: path
+          required: true
+          schema: {type: integer}
+        - name: at
+          in: query
+          schema: {type: integer, format: int64}
+          description: Point-in-time ns since epoch. Default `now`.
+      responses:
+        "200":
+          description: Process detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Process"
+        "404":
+          description: No process found at the given coordinates
+
+  /api/v1/alerts:
+    get:
+      tags: [Alerts]
+      summary: List alerts
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: host_id
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, acknowledged, resolved]
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: process_id
+          in: query
+          schema: {type: integer, format: int64}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, default: 100}
+      responses:
+        "200":
+          description: Alert list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+
+  /api/v1/alerts/{id}:
+    get:
+      tags: [Alerts]
+      summary: Alert detail (with event IDs)
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        "200":
+          description: Alert with linked events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertDetail"
+        "404":
+          description: Alert not found
+    put:
+      tags: [Alerts]
+      summary: Update alert status
+      security:
+        - SessionCookie: []
+          CSRF: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [open, acknowledged, resolved]
+      responses:
+        "204":
+          description: Status updated
+        "400":
+          description: Invalid status value
+        "404":
+          description: Alert not found
+
+  /api/v1/commands:
+    get:
+      tags: [Commands]
+      summary: List commands for the authenticated host
+      description: |
+        Host-token-only. The `host_id` is always the authenticated host's
+        id; any query parameter is ignored. Polling this endpoint also
+        refreshes the host's `last_seen` timestamp.
+      security:
+        - HostToken: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, acked, completed, failed]
+      responses:
+        "200":
+          description: Command list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Command"
+    post:
+      tags: [Commands]
+      summary: Enqueue a command for a host (admin)
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host_id, command_type]
+              properties:
+                host_id: {type: string}
+                command_type: {type: string}
+                payload: {type: object, additionalProperties: true}
+      responses:
+        "201":
+          description: Command created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: integer, format: int64}
+
+  /api/v1/commands/{id}:
+    get:
+      tags: [Commands]
+      summary: Get a single command (admin)
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        "200":
+          description: Command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+        "404":
+          description: Not found
+    put:
+      tags: [Commands]
+      summary: Update command status (agent)
+      description: |
+        Agents call this with `status=acked` once they pick up a command
+        and with `status=completed` or `status=failed` once they finish.
+        The handler enforces that the command belongs to the authenticated
+        host — agent A cannot touch agent B's commands.
+      security:
+        - HostToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [acked, completed, failed]
+                result:
+                  type: object
+                  description: Command-type-specific result blob, free-form JSON
+      responses:
+        "204":
+          description: Status updated
+        "400":
+          description: Invalid status
+        "404":
+          description: Command not found (or not owned by authenticated host)
+
+  /api/v1/admin/enrollments:
+    get:
+      tags: [Admin]
+      summary: List enrollments
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Enrollment rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Enrollment"
+
+  /api/v1/admin/enrollments/{host_id}/revoke:
+    post:
+      tags: [Admin]
+      summary: Revoke a host enrollment
+      description: |
+        After revocation the host's token stops working on all
+        host-token endpoints. A revoked host cannot re-enroll without
+        admin approval (reusing the same hardware UUID still returns
+        403).
+      security:
+        - SessionCookie: []
+          CSRF: []
+      parameters:
+        - $ref: "#/components/parameters/HostID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: {type: string}
+                actor: {type: string}
+      responses:
+        "204":
+          description: Revoked
+        "404":
+          description: Host not found
+
+  /api/v1/admin/policy:
+    get:
+      tags: [Admin]
+      summary: Current blocklist policy
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Current policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+    put:
+      tags: [Admin]
+      summary: Replace blocklist policy
+      description: |
+        Replaces the entire policy atomically and fans out a
+        `policy.update` command to every active host. The response
+        reports how many hosts received the fan-out; failed hosts will
+        pick it up on their next poll.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paths:
+                  type: array
+                  items: {type: string}
+                hashes:
+                  type: array
+                  items: {type: string}
+                reason: {type: string}
+                actor: {type: string}
+      responses:
+        "200":
+          description: Policy updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyUpdateResult"
+
+components:
+  securitySchemes:
+    HostToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Per-host bearer token issued by `POST /api/v1/enroll`. Pass as
+        `Authorization: Bearer <host_token>`.
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: edr_session
+      description: |
+        HttpOnly cookie set by `POST /api/v1/session`. The browser
+        attaches it automatically.
+    CSRF:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        Required on unsafe methods (`POST`, `PUT`, `DELETE`) for
+        session-cookie-authenticated endpoints. Value comes from the
+        login response's `csrf_token` field.
+
+  parameters:
+    HostID:
+      name: host_id
+      in: path
+      required: true
+      description: Host identifier (UUID-shaped opaque string)
+      schema: {type: string}
+
+  schemas:
+    LivenessResponse:
+      type: object
+      required: [status, uptime_seconds]
+      properties:
+        status: {type: string, enum: [ok]}
+        version: {type: string}
+        commit: {type: string}
+        build_time: {type: string}
+        uptime_seconds: {type: integer, format: int64}
+
+    ReadinessResponse:
+      type: object
+      required: [status, uptime_seconds, checks]
+      properties:
+        status: {type: string, enum: [ok, error]}
+        version: {type: string}
+        commit: {type: string}
+        build_time: {type: string}
+        uptime_seconds: {type: integer, format: int64}
+        checks:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/CheckResult"
+
+    CheckResult:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [ok, error, unavailable]}
+        latency_ms: {type: integer, format: int64}
+        error: {type: string}
+
+    EnrollRequest:
+      type: object
+      required: [enroll_secret, hardware_uuid, hostname]
+      properties:
+        enroll_secret: {type: string}
+        hardware_uuid: {type: string}
+        hostname: {type: string}
+        os_version: {type: string}
+        agent_version: {type: string}
+
+    EnrollResponse:
+      type: object
+      required: [host_id, host_token, enrolled_at]
+      properties:
+        host_id: {type: string}
+        host_token:
+          type: string
+          description: Opaque bearer token. Store securely; do not log.
+        enrolled_at: {type: string, format: date-time}
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string, format: password}
+
+    LoginResponse:
+      type: object
+      required: [user, csrf_token]
+      properties:
+        user:
+          type: object
+          required: [id, email]
+          properties:
+            id: {type: integer, format: int64}
+            email: {type: string, format: email}
+        csrf_token: {type: string}
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+
+    EventBatch:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventEnvelope"
+
+    EventEnvelope:
+      type: object
+      required: [event_id, host_id, timestamp_ns, event_type, payload]
+      properties:
+        event_id: {type: string, format: uuid}
+        host_id: {type: string}
+        timestamp_ns: {type: integer, format: int64}
+        event_type:
+          type: string
+          enum: [exec, fork, exit, open, network_connect, dns_query]
+        payload:
+          type: object
+          description: Event-type-specific body; see schema/events.json in the repo
+
+    IngestResponse:
+      type: object
+      properties:
+        accepted: {type: integer}
+        rejected: {type: integer}
+
+    HostSummary:
+      type: object
+      properties:
+        host_id: {type: string}
+        event_count: {type: integer, format: int64}
+        last_seen_ns: {type: integer, format: int64}
+
+    Process:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        host_id: {type: string}
+        pid: {type: integer}
+        ppid: {type: integer}
+        path: {type: string}
+        args: {type: array, items: {type: string}}
+        uid: {type: integer}
+        gid: {type: integer}
+        code_signing:
+          type: object
+          properties:
+            team_id: {type: string}
+            signing_id: {type: string}
+            flags: {type: integer}
+            is_platform_binary: {type: boolean}
+        sha256: {type: string}
+        fork_time_ns: {type: integer, format: int64}
+        exec_time_ns: {type: integer, format: int64}
+        exit_time_ns: {type: integer, format: int64}
+        exit_code: {type: integer}
+
+    ProcessNode:
+      allOf:
+        - $ref: "#/components/schemas/Process"
+        - type: object
+          properties:
+            children:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProcessNode"
+
+    Alert:
+      type: object
+      required: [id, host_id, rule_id, severity, title, process_id, status, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        host_id: {type: string}
+        rule_id: {type: string}
+        severity: {type: string, enum: [low, medium, high, critical]}
+        title: {type: string}
+        description: {type: string}
+        process_id: {type: integer, format: int64}
+        status: {type: string, enum: [open, acknowledged, resolved]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        resolved_at: {type: string, format: date-time}
+
+    AlertDetail:
+      allOf:
+        - $ref: "#/components/schemas/Alert"
+        - type: object
+          properties:
+            event_ids:
+              type: array
+              items: {type: string, format: uuid}
+
+    Command:
+      type: object
+      required: [id, host_id, command_type, status, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        host_id: {type: string}
+        command_type: {type: string}
+        payload:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [queued, acked, completed, failed]
+        created_at: {type: string, format: date-time}
+        acked_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+        result:
+          type: object
+          additionalProperties: true
+
+    Enrollment:
+      type: object
+      properties:
+        host_id: {type: string}
+        hostname: {type: string}
+        agent_version: {type: string}
+        os_version: {type: string}
+        source_ip: {type: string}
+        enrolled_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        revoke_reason: {type: string}
+        revoked_by: {type: string}
+
+    Policy:
+      type: object
+      properties:
+        version: {type: integer, format: int64}
+        blocklist:
+          type: object
+          properties:
+            paths:
+              type: array
+              items: {type: string}
+            hashes:
+              type: array
+              items: {type: string}
+
+    PolicyUpdateResult:
+      type: object
+      properties:
+        version: {type: integer, format: int64}
+        fanout_hosts: {type: integer}
+        fanout_failed: {type: integer}
