@@ -1,0 +1,33 @@
+{
+  "events": [
+    {
+      "event_id": "kdv-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {"child_pid": 4300, "parent_pid": 1}
+    },
+    {
+      "event_id": "kdv-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 4300,
+        "ppid": 1,
+        "path": "/usr/bin/security",
+        "args": ["security", "-v", "dump-keychain", "/Library/Keychains/System.keychain"],
+        "uid": 501,
+        "gid": 20
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "credential_keychain_dump",
+      "severity": "high",
+      "description_contains": "/usr/bin/security",
+      "event_ids": ["kdv-exec"]
+    }
+  ]
+}

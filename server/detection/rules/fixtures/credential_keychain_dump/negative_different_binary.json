@@ -1,0 +1,26 @@
+{
+  "events": [
+    {
+      "event_id": "kd-nb-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4000,
+      "event_type": "fork",
+      "payload": {"child_pid": 4500, "parent_pid": 1}
+    },
+    {
+      "event_id": "kd-nb-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 4500,
+        "ppid": 1,
+        "path": "/usr/bin/fakecheck",
+        "args": ["fakecheck", "dump-keychain"],
+        "uid": 501,
+        "gid": 20
+      }
+    }
+  ],
+  "expected_findings": []
+}
