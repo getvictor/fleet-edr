@@ -62,10 +62,11 @@ func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
 		path           string
 		wantMimePrefix string
 		wantHeadBytes  string // a substring the beginning of the file should contain
+		wantETag       bool   // spec + logo revalidate via ETag; bundle uses URL-bust
 	}{
-		{"/api/openapi.yaml", "application/yaml", "openapi: 3.1.0"},
-		{"/api/docs/redoc.standalone.js", "application/javascript", "For license information"},
-		{"/api/docs/logo-mini.svg", "image/svg+xml", "<svg"},
+		{"/api/openapi.yaml", "application/yaml", "openapi: 3.1.0", true},
+		{"/api/docs/redoc.standalone.js", "application/javascript", "For license information", false},
+		{"/api/docs/logo-mini.svg", "image/svg+xml", "<svg", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -77,9 +78,51 @@ func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			assert.True(t, strings.HasPrefix(resp.Header.Get("Content-Type"), tc.wantMimePrefix),
 				"got Content-Type %q", resp.Header.Get("Content-Type"))
+			assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"),
+				"every asset handler must set X-Content-Type-Options: nosniff")
+			if tc.wantETag {
+				assert.NotEmpty(t, resp.Header.Get("ETag"),
+					"spec and logo must carry ETag for revalidation")
+				assert.Equal(t, "no-cache", resp.Header.Get("Cache-Control"),
+					"revalidating assets use Cache-Control: no-cache")
+			}
 			body, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
 			assert.Contains(t, string(body[:min(len(body), 400)]), tc.wantHeadBytes)
+		})
+	}
+}
+
+// TestETagRevalidation_Returns304 confirms that a conditional GET with a
+// matching If-None-Match skips the body — the key win of the ETag
+// strategy for the spec and logo. Saves bandwidth on repeat loads while
+// still guaranteeing a correct spec after a server upgrade.
+func TestETagRevalidation_Returns304(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	paths := []string{"/api/openapi.yaml", "/api/docs/logo-mini.svg"}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			first, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+			require.NoError(t, err)
+			firstResp, err := http.DefaultClient.Do(first)
+			require.NoError(t, err)
+			_, _ = io.Copy(io.Discard, firstResp.Body)
+			firstResp.Body.Close()
+			etag := firstResp.Header.Get("ETag")
+			require.NotEmpty(t, etag)
+
+			second, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+			require.NoError(t, err)
+			second.Header.Set("If-None-Match", etag)
+			secondResp, err := http.DefaultClient.Do(second)
+			require.NoError(t, err)
+			defer secondResp.Body.Close()
+			assert.Equal(t, http.StatusNotModified, secondResp.StatusCode,
+				"matching If-None-Match must produce 304 Not Modified")
 		})
 	}
 }

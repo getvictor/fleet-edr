@@ -25,6 +25,10 @@ Both endpoints are unauthenticated (the spec is already public on the
 GitHub release page) and served from the same binary with no external
 network calls.
 
+Scheme depends on deployment — production runs behind TLS so both URLs
+use `https://`; a dev instance started with `EDR_ALLOW_INSECURE_HTTP=1`
+serves them over `http://`. Examples in this doc assume TLS.
+
 ## Base URL
 
 ```

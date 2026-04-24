@@ -13,9 +13,10 @@ info:
       unsafe methods. They call the session-protected endpoints.
     - **Operators** hit `/livez`, `/readyz`, `/health` with no auth.
 
-    For prose context see [api.md](../api.md). For a human-readable
-    host/agent install guide see
-    [install-agent-manual.md](../install-agent-manual.md).
+    For prose context see
+    [docs/api.md](https://github.com/getvictor/fleet-edr/blob/main/docs/api.md).
+    For a human-readable host/agent install guide see
+    [docs/install-agent-manual.md](https://github.com/getvictor/fleet-edr/blob/main/docs/install-agent-manual.md).
   license:
     name: Fleet EDR License
     url: https://github.com/getvictor/fleet-edr/blob/main/LICENSE
@@ -607,6 +608,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/PolicyUpdateResult"
 
+  /api/v1/admin/attack-coverage:
+    get:
+      tags: [Admin]
+      summary: MITRE ATT&CK coverage (Navigator layer)
+      description: |
+        Returns a MITRE ATT&CK Navigator layer document enumerating the
+        techniques covered by currently-registered detection rules. Drop
+        the response directly into
+        https://mitre-attack.github.io/attack-navigator/ to visualise
+        coverage as a heatmap. Output is deterministic (sorted technique
+        IDs + sorted, dedup'd rule ID lists), so responses are
+        byte-identical across requests and safe to ETag.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Navigator layer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NavigatorLayer"
+
 components:
   securitySchemes:
     HostToken:
@@ -864,3 +887,40 @@ components:
         version: {type: integer, format: int64}
         fanout_hosts: {type: integer}
         fanout_failed: {type: integer}
+
+    NavigatorLayer:
+      type: object
+      description: MITRE ATT&CK Navigator 4.5 layer document.
+      required: [name, versions, domain, techniques]
+      properties:
+        name:
+          type: string
+          example: "Fleet EDR coverage"
+        versions:
+          type: object
+          additionalProperties: {type: string}
+          example:
+            attack: "14"
+            navigator: "4.9.1"
+            layer: "4.5"
+        domain:
+          type: string
+          example: "enterprise-attack"
+        description: {type: string}
+        techniques:
+          type: array
+          items:
+            type: object
+            required: [techniqueID, score]
+            properties:
+              techniqueID:
+                type: string
+                example: "T1574.006"
+              score: {type: integer, example: 1}
+              color:
+                type: string
+                example: "#31a354"
+              comment:
+                type: string
+                description: Human-readable note naming the rules that cover this technique.
+                example: "Covered by: dyld_insert"
