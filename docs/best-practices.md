@@ -292,12 +292,21 @@ genuine differentiator versus most competitors.
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration
   time so the policy is reviewable in `main.go`
-- [ ] **OpenAPI 3.1 spec** committed under `docs/api/` and rendered via Redoc / Stoplight;
-  use `oapi-codegen` to generate handlers + client code (no spec drift)
+- [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml` and prose overview at
+  `docs/api.md`. Still missing: hosted rendering (Redoc / Stoplight / Swagger UI) and
+  handler/client codegen via `oapi-codegen` / `openapi-typescript`, so today the spec and
+  the Go handlers can drift without CI catching it
 - [ ] **AsyncAPI 3.0 spec** for the event envelope (the JSON Schema covers payload but not
   the upload contract)
-- [ ] **Spectral** linting of the OpenAPI spec in CI
-- [ ] **API contract tests** generated from OpenAPI via `schemathesis` or `dredd`
+- [ ] **OpenAPI lint in CI** -- either `@redocly/cli lint` (what this repo uses ad-hoc
+  today) or `stoplightio/spectral` with a shared ruleset. Both enforce structural validity
+  + style rules (`operationId`, `4XX` coverage, `tags`, descriptions); Redocly has a
+  lighter default ruleset and integrates with Redocly Portal if we ever host rendered docs.
+  Spectral has a larger community ruleset ecosystem. Pick one, pin the version in CI, fail
+  the build on errors
+- [ ] **API contract tests** generated from OpenAPI via `schemathesis` (property-based,
+  hits a live server, catches handler/spec drift) or `dredd`. Pairs naturally with the
+  lint job above
 - [ ] **Pagination contract** (cursor-based) with documented limit defaults across all
   list endpoints
 - [ ] **Idempotency keys** on the event upload endpoint so retries are safe end-to-end
@@ -403,7 +412,9 @@ These cost almost nothing and disproportionately drive adoption.
 - [x] Lessons-and-gotchas log (`docs/lessons-and-gotchas.md`)
 - [x] Go conventions doc (`docs/go-conventions.md`)
 - [x] DNS monitoring design doc (`docs/dns-monitoring.md`)
-- [x] Issue templates (per `.claude/skills/create-*` skills referencing `.github/ISSUE_TEMPLATE/`)
+- [ ] Issue templates at `.github/ISSUE_TEMPLATE/` (bug, story, reliability). Not committed
+  yet; slash-skills that reference them (`create-bug`, `create-story`, `create-reliability`)
+  live in the user's global `~/.claude/skills/` only.
 - [ ] **`LICENSE`** file at the repo root (unclear which license applies today; pick one
   -- MIT, Apache-2.0, AGPL-3.0 are the obvious candidates and the choice signals
   intent to commercial adopters)
