@@ -75,6 +75,13 @@ type Process struct {
 	ExitIngestedAtNs *int64      `db:"exit_ingested_at_ns" json:"exit_ingested_at_ns,omitempty"`
 	ExitReason       *string     `db:"exit_reason" json:"exit_reason,omitempty"`
 	ExitCode         *int        `db:"exit_code" json:"exit_code,omitempty"`
+	// PreviousExecID points at the row representing the prior generation in
+	// a same-PID re-exec chain (issue #10). A process that calls execve()
+	// multiple times without forking (e.g. `python → sh → bash → payload`
+	// via shell exec-optimization) keeps its PID, so the processor inserts
+	// a new row per exec and links it backward via this field. The first
+	// exec after a fork has PreviousExecID == nil — that's the chain root.
+	PreviousExecID *int64 `db:"previous_exec_id" json:"previous_exec_id,omitempty"`
 }
 
 // ExitReason values for Process.ExitReason.
@@ -82,6 +89,7 @@ const (
 	ExitReasonEvent             = "event"              // normal — populated from an observed ES exit event
 	ExitReasonTTLReconciliation = "ttl_reconciliation" // synthesized — process stayed "running" past the TTL; server forced a gray
 	ExitReasonPIDReuse          = "pid_reuse"          // synthesized — an incoming fork on the same PID forced closure of the prior row
+	ExitReasonReExec            = "reexec"             // synthesized — superseded by a new execve() on the same PID (issue #10 chain)
 )
 
 // HostSummary provides an overview of a host's event activity.
@@ -107,11 +115,11 @@ func (s *Store) InsertProcess(ctx context.Context, p Process) (int64, error) {
 		INSERT INTO processes
 			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-			 exit_ingested_at_ns, exit_code)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 exit_ingested_at_ns, exit_code, previous_exec_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
 		p.CodeSigning, p.SHA256, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
-		p.ExitIngestedAtNs, p.ExitCode,
+		p.ExitIngestedAtNs, p.ExitCode, p.PreviousExecID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert process: %w", err)
@@ -196,6 +204,56 @@ func (s *Store) ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs 
 	return res.RowsAffected()
 }
 
+// CloseReExecGeneration finalizes the prior generation of a same-PID
+// re-exec chain when a new execve() on that PID lands. The row's
+// exit_time_ns is set to the new exec's kernel time and exit_reason to
+// ExitReasonReExec so analytics can distinguish "died by re-exec" from
+// normal exits, PID-reuse closes, and TTL reconciliations.
+func (s *Store) CloseReExecGeneration(ctx context.Context, rowID int64, exitTimeNs, exitIngestedAtNs int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE processes
+		SET exit_time_ns = ?, exit_ingested_at_ns = ?, exit_reason = ?
+		WHERE id = ? AND exit_time_ns IS NULL`,
+		exitTimeNs, exitIngestedAtNs, ExitReasonReExec, rowID,
+	)
+	return err
+}
+
+// GetExecChain walks previous_exec_id backward from the given current row
+// and returns the chain oldest-first (NOT including the current row). For
+// a non-re-exec process the result is an empty slice. Bounded to
+// maxChainLen rows to stop a cycle (shouldn't happen — previous_exec_id
+// is strictly decreasing — but FK cycles from bad data shouldn't lock up
+// a query).
+func (s *Store) GetExecChain(ctx context.Context, current Process) ([]Process, error) {
+	const maxChainLen = 64
+	var chain []Process
+	prevID := current.PreviousExecID
+	for depth := 0; prevID != nil && depth < maxChainLen; depth++ {
+		var p Process
+		err := s.db.GetContext(ctx, &p, `
+			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+			       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
+			FROM processes WHERE id = ?`, *prevID)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("walk exec chain at id=%d: %w", *prevID, err)
+		}
+		chain = append(chain, p)
+		prevID = p.PreviousExecID
+	}
+	// Result is newest-first from the walk; reverse so the caller gets
+	// chronological order (oldest exec first). Callers rendering a timeline
+	// want that ordering implicitly.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
 // CloseStaleProcess force-closes a process record that hasn't exited yet.
 // Used to handle PID reuse: when a fork arrives for a PID that already has an
 // active (non-exited) record, close the old one first. closedAtNs is treated
@@ -243,7 +301,7 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr TimeRange,
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
 		FROM processes
 		WHERE host_id = ?
 		  AND (
@@ -267,7 +325,7 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	err := s.db.GetContext(ctx, &proc, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
@@ -294,7 +352,7 @@ func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, 
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
 		FROM processes
 		WHERE host_id = ? AND ppid = ? AND fork_time_ns >= ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns`,

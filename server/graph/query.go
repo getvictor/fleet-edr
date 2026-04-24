@@ -19,6 +19,12 @@ type ProcessDetail struct {
 	Process            store.Process `json:"process"`
 	NetworkConnections []store.Event `json:"network_connections"`
 	DNSQueries         []store.Event `json:"dns_queries"`
+	// ReExecChain is the list of prior exec generations on the same PID
+	// (issue #10), oldest-first. Empty for processes that only exec'd
+	// once after fork — the common case. The UI renders this as a visual
+	// chain (python → sh → bash → current) so analysts see the full
+	// exec sequence instead of just the final path.
+	ReExecChain []store.Process `json:"re_exec_chain,omitempty"`
 }
 
 // Query provides process tree and detail lookups.
@@ -101,11 +107,16 @@ func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs 
 	if err != nil {
 		return nil, err
 	}
+	chain, err := q.store.GetExecChain(ctx, *proc)
+	if err != nil {
+		return nil, err
+	}
 
 	detail := &ProcessDetail{
 		Process:            *proc,
 		NetworkConnections: filterByType(netEvents, "network_connect"),
 		DNSQueries:         filterByType(netEvents, "dns_query"),
+		ReExecChain:        chain,
 	}
 	return detail, nil
 }

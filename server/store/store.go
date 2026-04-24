@@ -51,6 +51,7 @@ var schemaStatements = []string{
 		exit_ingested_at_ns  BIGINT,
 		exit_reason          VARCHAR(32),
 		exit_code            INT,
+		previous_exec_id     BIGINT,
 		INDEX idx_processes_host_pid (host_id, pid, fork_time_ns),
 		INDEX idx_processes_host_ppid (host_id, ppid, fork_time_ns),
 		INDEX idx_processes_host_time (host_id, fork_time_ns)
@@ -311,6 +312,12 @@ var migrations = []string{
 	// and existing pre-migration rows shouldn't be touched — the UI treats
 	// missing + empty as "no techniques declared".
 	`ALTER TABLE alerts ADD COLUMN techniques JSON NULL`,
+	// Phase 7 / issue #10: same-PID re-exec chains. previous_exec_id points
+	// at the prior generation's row when a process execs multiple times on
+	// the same PID without forking (shell exec-optimization). Nullable; the
+	// first generation in any chain has NULL here.
+	`ALTER TABLE processes ADD COLUMN previous_exec_id BIGINT NULL`,
+	`ALTER TABLE processes ADD INDEX idx_processes_previous_exec (previous_exec_id)`,
 }
 
 // postSchemaMigrations run after schema creation and idempotent ALTER migrations. They use INSERT IGNORE / INSERT ...

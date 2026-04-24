@@ -114,52 +114,97 @@ func (b *Builder) handleExec(ctx context.Context, evt store.Event) error {
 		return err
 	}
 
-	// Try to update an existing process record (from a prior fork).
-	err := b.store.UpdateProcessExec(ctx, store.ProcessExecUpdate{
-		HostID:      evt.HostID,
-		PID:         p.PID,
-		ExecTimeNs:  evt.TimestampNs,
-		Path:        p.Path,
-		Args:        p.Args,
-		UID:         p.UID,
-		GID:         p.GID,
-		CodeSigning: p.CodeSigning,
-		SHA256:      p.SHA256,
-	})
+	// Resolve the running-at-this-moment row for the PID. Three shapes:
+	//   (a) no row            — exec-without-fork (synthesize a root row).
+	//   (b) row, exec_time_ns NULL  — first exec after fork; UPDATE in place.
+	//   (c) row, exec_time_ns set   — same-PID re-exec (issue #10): close the
+	//       prior generation and INSERT a new linked row. Without this branch,
+	//       shell exec-optimization chains (python→sh→bash→/tmp/payload) get
+	//       collapsed into the final exec only.
+	current, err := b.store.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return err
 	}
 
-	// Exec-without-fork: if no matching fork record exists, create a partial process record.
-	// We detect this by checking if any row was updated. Since MySQL doesn't easily return
-	// rows affected for "matched but unchanged" vs "no match", we do a lookup.
-	proc, err := b.store.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
-	if err != nil {
-		return err
+	if current == nil {
+		return b.insertExecWithoutFork(ctx, evt, p)
 	}
-	if proc == nil {
-		ppid := 0
-		if p.PPID != 0 {
-			ppid = p.PPID
-		}
-		forkIngested := evt.IngestedAtNs
-		_, err = b.store.InsertProcess(ctx, store.Process{
-			HostID:           evt.HostID,
-			PID:              p.PID,
-			PPID:             ppid,
-			Path:             p.Path,
-			Args:             p.Args,
-			UID:              p.UID,
-			GID:              p.GID,
-			CodeSigning:      p.CodeSigning,
-			SHA256:           p.SHA256,
-			ForkTimeNs:       evt.TimestampNs,
-			ForkIngestedAtNs: &forkIngested,
-			ExecTimeNs:       &evt.TimestampNs,
+	if current.ExecTimeNs == nil {
+		return b.store.UpdateProcessExec(ctx, store.ProcessExecUpdate{
+			HostID: evt.HostID, PID: p.PID, ExecTimeNs: evt.TimestampNs,
+			Path: p.Path, Args: p.Args,
+			UID: p.UID, GID: p.GID,
+			CodeSigning: p.CodeSigning, SHA256: p.SHA256,
 		})
-		return err
 	}
-	return nil
+	return b.insertReExec(ctx, evt, p, current)
+}
+
+// insertExecWithoutFork synthesizes a root process row when an exec event
+// arrives for a PID we've never seen fork for. fork_time_ns is set to the
+// exec time as a best effort; downstream queries treat it as the earliest
+// moment this process could have been alive.
+func (b *Builder) insertExecWithoutFork(ctx context.Context, evt store.Event, p execPayload) error {
+	ppid := 0
+	if p.PPID != 0 {
+		ppid = p.PPID
+	}
+	forkIngested := evt.IngestedAtNs
+	_, err := b.store.InsertProcess(ctx, store.Process{
+		HostID:           evt.HostID,
+		PID:              p.PID,
+		PPID:             ppid,
+		Path:             p.Path,
+		Args:             p.Args,
+		UID:              p.UID,
+		GID:              p.GID,
+		CodeSigning:      p.CodeSigning,
+		SHA256:           p.SHA256,
+		ForkTimeNs:       evt.TimestampNs,
+		ForkIngestedAtNs: &forkIngested,
+		ExecTimeNs:       &evt.TimestampNs,
+	})
+	return err
+}
+
+// insertReExec handles the issue #10 branch: a process called execve() again
+// on the same PID without forking in between. Close the prior generation
+// (marked exit_reason=reexec) and insert the new generation linked back via
+// previous_exec_id.
+func (b *Builder) insertReExec(ctx context.Context, evt store.Event, p execPayload, prior *store.Process) error {
+	if err := b.store.CloseReExecGeneration(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs); err != nil {
+		return fmt.Errorf("close prior re-exec generation id=%d: %w", prior.ID, err)
+	}
+	priorID := prior.ID
+	_, err := b.store.InsertProcess(ctx, store.Process{
+		HostID: evt.HostID,
+		PID:    p.PID,
+		// Preserve the parent linkage from the original fork — a re-exec
+		// doesn't change PPID on macOS. Falls back to whatever the exec
+		// event carries if the prior row somehow has ppid=0.
+		PPID:             pickPPID(prior.PPID, p.PPID),
+		Path:             p.Path,
+		Args:             p.Args,
+		UID:              p.UID,
+		GID:              p.GID,
+		CodeSigning:      p.CodeSigning,
+		SHA256:           p.SHA256,
+		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
+		ForkIngestedAtNs: prior.ForkIngestedAtNs,
+		ExecTimeNs:       &evt.TimestampNs,
+		PreviousExecID:   &priorID,
+	})
+	return err
+}
+
+// pickPPID prefers a non-zero prior PPID. macOS ES reports PPID on every
+// NOTIFY_EXEC and it should be identical for re-execs on the same pid, but
+// staying defensive: if prior has it and the event doesn't, use prior.
+func pickPPID(prior, fromEvent int) int {
+	if prior != 0 {
+		return prior
+	}
+	return fromEvent
 }
 
 type exitPayload struct {

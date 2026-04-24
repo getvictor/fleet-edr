@@ -225,6 +225,35 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
 
       {loading && <p className="process-detail__loading">Loading network data...</p>}
 
+      {detail && detail.re_exec_chain && detail.re_exec_chain.length > 0 && (
+        <div className="process-detail__reexec">
+          <h4 className="process-detail__reexec-title">
+            Re-exec chain{" "}
+            <span className="process-detail__reexec-count">
+              ({detail.re_exec_chain.length} prior
+              {detail.re_exec_chain.length === 1 ? " generation" : " generations"})
+            </span>
+          </h4>
+          <ol className="process-detail__reexec-list">
+            {detail.re_exec_chain.map((gen) => (
+              <li key={gen.id} className="process-detail__reexec-item">
+                <code className="process-detail__break">{gen.path || "(unknown)"}</code>
+                {gen.exec_time_ns && (
+                  <span className="process-detail__reexec-time">
+                    {" — exec @ "}
+                    {formatTimestamp(gen.exec_time_ns)}
+                  </span>
+                )}
+              </li>
+            ))}
+            <li className="process-detail__reexec-item process-detail__reexec-item--current">
+              <code className="process-detail__break">{node.path || "(unknown)"}</code>
+              <span className="process-detail__reexec-time"> — current</span>
+            </li>
+          </ol>
+        </div>
+      )}
+
       {detail && (
         <NetworkConnections
           connections={detail.network_connections}
