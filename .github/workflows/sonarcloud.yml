@@ -15,6 +15,12 @@ concurrency:
 jobs:
   sonarcloud:
     name: SonarCloud scan
+    # Dependabot-triggered PR runs cannot access Actions secrets (deliberate
+    # GitHub policy: prevents a compromised upstream action from stealing
+    # SONAR_TOKEN via a dep bump). Without the token the scanner can't reach a
+    # private project, so it's guaranteed to fail. The bumps also don't touch
+    # any source Sonar analyses, so skipping it loses zero signal.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     environment: sonarcloud
     timeout-minutes: 15
