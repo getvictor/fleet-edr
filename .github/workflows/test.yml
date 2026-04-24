@@ -108,45 +108,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  ui-test:
-    name: UI tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install UI dependencies
-        working-directory: ui
-        run: npm ci
-
-      - name: Run UI tests with coverage
-        working-directory: ui
-        run: npm run test:coverage
-
-      # vitest's v8 provider skips lcov emission when no test files exist
-      # (passWithNoTests). Touch an empty file so the Sonar job always has
-      # something to download; Sonar treats empty lcov as "no data" gracefully.
-      - name: Ensure lcov artifact exists
-        working-directory: ui
-        run: mkdir -p coverage && touch coverage/lcov.info
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: coverage-ui
-          path: ui/coverage/lcov.info
-          if-no-files-found: error
-          retention-days: 1
-
   sonarcloud:
     name: SonarCloud scan
-    needs: [agent-test, server-test, ui-test]
+    needs: [agent-test, server-test]
     # Dependabot-triggered PR runs cannot access Actions secrets (deliberate
     # GitHub policy: prevents a compromised upstream action from stealing
     # SONAR_TOKEN via a dep bump). Without the token the scanner can't reach a
@@ -175,11 +139,31 @@ jobs:
         with:
           name: coverage-server
 
-      - name: Download UI coverage
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      # UI coverage is generated here rather than pulled from the ts-lint
+      # workflow's artifact: cross-workflow artifact access is brittle and
+      # vitest on ubuntu finishes in under 30s, so re-running it in-place is
+      # cheaper than the plumbing. ts-lint.yml still uploads its own copy of
+      # ui/coverage/lcov.info as an artifact for humans who want to inspect.
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          name: coverage-ui
-          path: ui/coverage
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Run UI tests with coverage
+        working-directory: ui
+        run: npm run test:coverage
+
+      # vitest's v8 provider skips lcov emission when no test files exist
+      # (passWithNoTests). Touch an empty file so Sonar has a path to read
+      # at sonar.javascript.lcov.reportPaths; empty lcov parses as "no data".
+      - name: Ensure lcov file exists
+        working-directory: ui
+        run: mkdir -p coverage && touch coverage/lcov.info
 
       - uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7.1.0
         env:
