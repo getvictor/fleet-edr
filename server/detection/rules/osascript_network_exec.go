@@ -23,10 +23,10 @@ type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
-// Techniques: T1059.002 (Command and Scripting Interpreter → AppleScript)
-// + T1105 (Ingress Tool Transfer). The rule specifically flags osascript
-// invoking a curl/wget that stages an executable to /tmp — the exact
-// shape of a T1105 dropper.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1059.002
+// (Command and Scripting Interpreter → AppleScript) + T1105 (Ingress Tool
+// Transfer). The rule specifically flags osascript invoking a curl/wget
+// that stages an executable to /tmp — the exact shape of a T1105 dropper.
 func (r *OsascriptNetworkExec) Techniques() []string {
 	return []string{"T1059.002", "T1105"}
 }

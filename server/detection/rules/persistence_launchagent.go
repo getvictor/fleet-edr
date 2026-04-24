@@ -25,9 +25,10 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
-// Techniques: T1543.001 (Create or Modify System Process → Launch Agent).
-// The rule fires on `launchctl load` of user LaunchAgent plists, which is
-// exactly this sub-technique's scope.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1543.001
+// (Create or Modify System Process → Launch Agent). The rule fires on
+// `launchctl load` of user LaunchAgent plists, which is exactly this
+// sub-technique's scope.
 func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.001"} }
 
 // launchctlPaths covers the common macOS launchctl binary locations.

@@ -39,7 +39,9 @@ func TestHandleATTACKCoverage_EmitsNavigatorLayer(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/api/v1/admin/attack-coverage")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/admin/attack-coverage", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -91,7 +93,10 @@ func TestHandleATTACKCoverage_IsDeterministic(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	fetch := func() []byte {
-		resp, err := http.Get(srv.URL + "/api/v1/admin/attack-coverage")
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			srv.URL+"/api/v1/admin/attack-coverage", nil)
+		require.NoError(t, err)
+		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
@@ -116,7 +121,9 @@ func TestHandleATTACKCoverage_EmptyCatalogStillReturnsLayer(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/api/v1/admin/attack-coverage")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/admin/attack-coverage", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)

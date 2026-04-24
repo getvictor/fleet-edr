@@ -25,9 +25,10 @@ type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
 
-// Techniques: T1574.006 (Hijack Execution Flow → Dynamic Linker Hijacking).
-// Sub-technique chosen deliberately: the rule catches DYLD_* env-var abuse
-// specifically, not the broader "Hijack Execution Flow" parent.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1574.006
+// (Hijack Execution Flow → Dynamic Linker Hijacking). Sub-technique chosen
+// deliberately: the rule catches DYLD_* env-var abuse specifically, not the
+// broader "Hijack Execution Flow" parent.
 func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 
 // Dangerous env prefixes. DYLD_FRAMEWORK_PATH + DYLD_FALLBACK_* also exist but are

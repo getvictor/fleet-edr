@@ -41,9 +41,10 @@ func (r *SuspiciousExec) ID() string {
 	return "suspicious_exec"
 }
 
-// Techniques: T1059 (Command and Scripting Interpreter), T1105 (Ingress
-// Tool Transfer). The rule fires on "shell with outbound network" plus
-// "shell spawns binary in /tmp" — both high-confidence dropper shapes.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1059
+// (Command and Scripting Interpreter) + T1105 (Ingress Tool Transfer).
+// The rule fires on "shell with outbound network" plus "shell spawns
+// binary in /tmp" — both high-confidence dropper shapes.
 func (r *SuspiciousExec) Techniques() []string {
 	return []string{"T1059", "T1105"}
 }
