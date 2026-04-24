@@ -30,6 +30,7 @@ import (
 	"github.com/fleetdm/edr/server/metrics"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/processor"
+	"github.com/fleetdm/edr/server/processttl"
 	"github.com/fleetdm/edr/server/retention"
 	"github.com/fleetdm/edr/server/seed"
 	"github.com/fleetdm/edr/server/session"
@@ -147,7 +148,7 @@ func run() error {
 		PolicyStore:   policyStore,
 		CommandStore:  s,
 	})
-	adminHandler := admin.New(enrollStore, policyStore, s, logger)
+	adminHandler := admin.New(enrollStore, policyStore, s, catalogFromEngine(det), logger)
 	sessionHandler := session.New(userStore, sessionStore, session.Options{
 		RatePerMinute: cfg.LoginRatePerMin,
 		CookieSecure:  cfg.TLSEnabled(),
@@ -174,6 +175,15 @@ func run() error {
 		Metrics:       metricsRec,
 	})
 	go retentionRunner.Loop(ctx)
+	// Phase 7 / issue #6: force-exit processes whose exit event never
+	// arrived. Skipped entirely when StaleProcessTTL == 0.
+	processTTLRunner := processttl.New(s, processttl.Options{
+		MaxAge:   cfg.StaleProcessTTL,
+		Interval: cfg.StaleProcessInterval,
+		Logger:   logger,
+		Metrics:  metricsRec,
+	})
+	go processTTLRunner.Loop(ctx)
 	go runSessionCleanup(ctx, sessionStore, logger)
 	go runProcessor(ctx, proc, logger)
 
@@ -317,6 +327,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
 		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
 		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
+		"GET /api/v1/admin/attack-coverage",
 		"GET /api/v1/session",
 	} {
 		mux.Handle(p, sessionProtected)
@@ -356,4 +367,24 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
+}
+
+// engineCatalogAdapter bridges *detection.Engine.Catalog (returning
+// detection.RuleMetadata) to admin.Cataloger (which expects
+// []admin.RuleMetadata). The two types are deliberately duplicated — see
+// admin.RuleMetadata for the rationale — so this copy is the conversion
+// boundary.
+type engineCatalogAdapter struct{ engine *detection.Engine }
+
+func (a engineCatalogAdapter) Catalog() []admin.RuleMetadata {
+	src := a.engine.Catalog()
+	out := make([]admin.RuleMetadata, len(src))
+	for i, r := range src {
+		out[i] = admin.RuleMetadata{ID: r.ID, Techniques: r.Techniques}
+	}
+	return out
+}
+
+func catalogFromEngine(e *detection.Engine) admin.Cataloger {
+	return engineCatalogAdapter{engine: e}
 }

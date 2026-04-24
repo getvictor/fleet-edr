@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/XSAM/otelsql"
 	"github.com/go-sql-driver/mysql"
@@ -18,33 +19,38 @@ import (
 // schemaStatements are executed sequentially to bootstrap the database.
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS events (
-		event_id     VARCHAR(255) PRIMARY KEY,
-		host_id      VARCHAR(255) NOT NULL,
-		timestamp_ns BIGINT       NOT NULL,
-		event_type   VARCHAR(64)  NOT NULL,
-		payload      JSON         NOT NULL,
-		processed    TINYINT(1)   NOT NULL DEFAULT 0,
-		created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		event_id        VARCHAR(255) PRIMARY KEY,
+		host_id         VARCHAR(255) NOT NULL,
+		timestamp_ns    BIGINT       NOT NULL,
+		ingested_at_ns  BIGINT       NOT NULL DEFAULT 0,
+		event_type      VARCHAR(64)  NOT NULL,
+		payload         JSON         NOT NULL,
+		processed       TINYINT(1)   NOT NULL DEFAULT 0,
+		created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_events_host_id (host_id),
 		INDEX idx_events_type (event_type),
 		INDEX idx_events_timestamp (timestamp_ns),
+		INDEX idx_events_host_type_ingested (host_id, event_type, ingested_at_ns),
 		INDEX idx_events_processed (processed, host_id, timestamp_ns)
 	)`,
 	`CREATE TABLE IF NOT EXISTS processes (
-		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
-		host_id      VARCHAR(255) NOT NULL,
-		pid          INT          NOT NULL,
-		ppid         INT          NOT NULL,
-		path         TEXT         NOT NULL,
-		args         JSON,
-		uid          INT,
-		gid          INT,
-		code_signing JSON,
-		sha256       VARCHAR(64),
-		fork_time_ns BIGINT       NOT NULL,
-		exec_time_ns BIGINT,
-		exit_time_ns BIGINT,
-		exit_code    INT,
+		id                   BIGINT AUTO_INCREMENT PRIMARY KEY,
+		host_id              VARCHAR(255) NOT NULL,
+		pid                  INT          NOT NULL,
+		ppid                 INT          NOT NULL,
+		path                 TEXT         NOT NULL,
+		args                 JSON,
+		uid                  INT,
+		gid                  INT,
+		code_signing         JSON,
+		sha256               VARCHAR(64),
+		fork_time_ns         BIGINT       NOT NULL,
+		fork_ingested_at_ns  BIGINT,
+		exec_time_ns         BIGINT,
+		exit_time_ns         BIGINT,
+		exit_ingested_at_ns  BIGINT,
+		exit_reason          VARCHAR(32),
+		exit_code            INT,
 		INDEX idx_processes_host_pid (host_id, pid, fork_time_ns),
 		INDEX idx_processes_host_ppid (host_id, ppid, fork_time_ns),
 		INDEX idx_processes_host_time (host_id, fork_time_ns)
@@ -57,6 +63,7 @@ var schemaStatements = []string{
 		title        VARCHAR(512) NOT NULL,
 		description  TEXT         NOT NULL,
 		process_id   BIGINT       NOT NULL,
+		techniques   JSON         NULL,
 		status       ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
 		created_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		updated_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -160,12 +167,20 @@ var schemaStatements = []string{
 }
 
 // Event represents the canonical event envelope.
+//
+// TimestampNs is the source-kernel time recorded by the emitting extension
+// (ES or NE). IngestedAtNs is the server-side wall-clock stamp set by
+// InsertEvents when the row lands. Cross-source correlation queries
+// (ProcessDetail network window, detection windows, tree time-range) use
+// IngestedAtNs because the ES and NE clocks drift by tens of milliseconds
+// and can even invert order on a single host.
 type Event struct {
-	EventID     string          `db:"event_id" json:"event_id"`
-	HostID      string          `db:"host_id" json:"host_id"`
-	TimestampNs int64           `db:"timestamp_ns" json:"timestamp_ns"`
-	EventType   string          `db:"event_type" json:"event_type"`
-	Payload     json.RawMessage `db:"payload" json:"payload"`
+	EventID      string          `db:"event_id" json:"event_id"`
+	HostID       string          `db:"host_id" json:"host_id"`
+	TimestampNs  int64           `db:"timestamp_ns" json:"timestamp_ns"`
+	IngestedAtNs int64           `db:"ingested_at_ns" json:"ingested_at_ns,omitempty"`
+	EventType    string          `db:"event_type" json:"event_type"`
+	Payload      json.RawMessage `db:"payload" json:"payload"`
 }
 
 // Store manages event persistence in MySQL.
@@ -278,6 +293,24 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
 	`ALTER TABLE alerts ADD INDEX idx_alerts_updated_by (updated_by)`,
 	`ALTER TABLE alerts ADD CONSTRAINT fk_alerts_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL`,
+	// Phase 7 / issue #7: server-stamped ingest time. ES and NE clocks drift,
+	// so cross-source correlation queries have to run off a clock we control.
+	// Default 0 keeps the migration cheap; a backfill in postSchemaMigrations
+	// copies timestamp_ns into old rows so historical data still correlates.
+	`ALTER TABLE events ADD COLUMN ingested_at_ns BIGINT NOT NULL DEFAULT 0`,
+	`ALTER TABLE events ADD INDEX idx_events_host_type_ingested (host_id, event_type, ingested_at_ns)`,
+	`ALTER TABLE processes ADD COLUMN fork_ingested_at_ns BIGINT NULL`,
+	`ALTER TABLE processes ADD COLUMN exit_ingested_at_ns BIGINT NULL`,
+	// Phase 7 / issue #6: freshness TTL reconciliation. exit_reason
+	// distinguishes observed exits (NULL or "event") from synthesized ones
+	// ("ttl_reconciliation") so analysts don't misread a stale green node
+	// that the server later forced-gray as a confirmed clean exit.
+	`ALTER TABLE processes ADD COLUMN exit_reason VARCHAR(32) NULL`,
+	// Phase 7 / MITRE ATT&CK mapping on alerts. Nullable because the rule
+	// engine can register rules whose author hasn't supplied a mapping yet,
+	// and existing pre-migration rows shouldn't be touched — the UI treats
+	// missing + empty as "no techniques declared".
+	`ALTER TABLE alerts ADD COLUMN techniques JSON NULL`,
 }
 
 // postSchemaMigrations run after schema creation and idempotent ALTER migrations. They use INSERT IGNORE / INSERT ...
@@ -289,6 +322,15 @@ var postSchemaMigrations = []string{
 	 ON DUPLICATE KEY UPDATE
 	   event_count = VALUES(event_count),
 	   last_seen_ns = GREATEST(hosts.last_seen_ns, VALUES(last_seen_ns))`,
+	// Phase 7 / issue #7: backfill ingested_at_ns for pre-migration rows.
+	// Uses timestamp_ns as a lower-fidelity proxy so correlation queries on
+	// old data still return something reasonable; new rows get a real
+	// server-stamped value from InsertEvents. Idempotent: already-backfilled
+	// rows have ingested_at_ns != 0 and are skipped.
+	`UPDATE events SET ingested_at_ns = timestamp_ns WHERE ingested_at_ns = 0`,
+	// Mirror backfill on processes: anchor fork_ingested_at_ns to fork_time_ns
+	// where the column is still NULL (pre-migration rows).
+	`UPDATE processes SET fork_ingested_at_ns = fork_time_ns WHERE fork_ingested_at_ns IS NULL`,
 }
 
 // Close closes the database connection.
@@ -302,7 +344,21 @@ func (s *Store) PingContext(ctx context.Context) error {
 }
 
 // InsertEvents upserts a batch of events. Duplicates (by event_id) are ignored.
+// Each row is stamped with a server-controlled ingested_at_ns; the caller's
+// Event.IngestedAtNs is ignored so agents can't set it.
 func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
+	return s.insertEventsAt(ctx, events, time.Now().UnixNano())
+}
+
+// InsertEventsAt is a test-only variant that takes a deterministic ingest
+// timestamp. Production callers go through InsertEvents; this path exists
+// so cross-source correlation tests can simulate the ES/NE clock-drift
+// scenario (issue #7) without relying on wall-clock timing.
+func (s *Store) InsertEventsAt(ctx context.Context, events []Event, ingestedAtNs int64) error {
+	return s.insertEventsAt(ctx, events, ingestedAtNs)
+}
+
+func (s *Store) insertEventsAt(ctx context.Context, events []Event, ingestedAtNs int64) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -314,21 +370,40 @@ func (s *Store) InsertEvents(ctx context.Context, events []Event) error {
 	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, event_type, payload)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer stmt.Close()
 
-	for _, e := range events {
-		payloadBytes, err := json.Marshal(e.Payload)
+	// Stamp the caller's slice with the server-chosen ingest time so callers
+	// that hand the same slice straight to the graph builder (tests, the
+	// in-process processor when we add one) see the persisted value.
+	//
+	// Only stamp rows that were actually INSERTed. INSERT IGNORE silently
+	// drops duplicates, and in that case the DB already holds a different
+	// ingested_at_ns from the original insert — mutating the caller's slice
+	// to a value that doesn't match the persisted row would silently break
+	// any correlation the caller tries to do in-memory (e.g. an idempotent
+	// retry feeding the same events to the graph builder).
+	for i := range events {
+		payloadBytes, err := json.Marshal(events[i].Payload)
 		if err != nil {
-			return fmt.Errorf("marshal payload for %s: %w", e.EventID, err)
+			return fmt.Errorf("marshal payload for %s: %w", events[i].EventID, err)
 		}
-		if _, err := stmt.ExecContext(ctx, e.EventID, e.HostID, e.TimestampNs, e.EventType, payloadBytes); err != nil {
-			return fmt.Errorf("insert %s: %w", e.EventID, err)
+		res, err := stmt.ExecContext(ctx, events[i].EventID, events[i].HostID, events[i].TimestampNs,
+			ingestedAtNs, events[i].EventType, payloadBytes)
+		if err != nil {
+			return fmt.Errorf("insert %s: %w", events[i].EventID, err)
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected for %s: %w", events[i].EventID, err)
+		}
+		if rowsAffected > 0 {
+			events[i].IngestedAtNs = ingestedAtNs
 		}
 	}
 
@@ -367,7 +442,7 @@ func (s *Store) FetchUnprocessed(ctx context.Context, limit int) ([]Event, error
 
 	var events []Event
 	err = tx.SelectContext(ctx, &events, `
-		SELECT event_id, host_id, timestamp_ns, event_type, payload
+		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
 		FROM events
 		WHERE processed = 0
 		ORDER BY host_id, timestamp_ns

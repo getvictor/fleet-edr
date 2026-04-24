@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,19 +13,60 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// JSONStringSlice is a []string persisted as a JSON array in a MySQL JSON
+// column. NULL + SQL empty-string round-trip to a nil slice; the JSON
+// marshal path keeps the field omitted when empty.
+type JSONStringSlice []string
+
+// Scan implements sql.Scanner.
+func (s *JSONStringSlice) Scan(value any) error {
+	if value == nil {
+		*s = nil
+		return nil
+	}
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		return fmt.Errorf("JSONStringSlice.Scan: unsupported type %T", value)
+	}
+	if len(b) == 0 {
+		*s = nil
+		return nil
+	}
+	return json.Unmarshal(b, s)
+}
+
+// Value implements driver.Valuer. Returns NULL for nil/empty so a technique-
+// less alert takes zero extra bytes per row.
+func (s JSONStringSlice) Value() (driver.Value, error) {
+	if len(s) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(s)
+}
+
 // Alert represents a detection alert linked to a process and triggering events.
 type Alert struct {
-	ID          int64      `db:"id" json:"id"`
-	HostID      string     `db:"host_id" json:"host_id"`
-	RuleID      string     `db:"rule_id" json:"rule_id"`
-	Severity    string     `db:"severity" json:"severity"`
-	Title       string     `db:"title" json:"title"`
-	Description string     `db:"description" json:"description"`
-	ProcessID   int64      `db:"process_id" json:"process_id"`
-	Status      string     `db:"status" json:"status"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
-	ResolvedAt  *time.Time `db:"resolved_at" json:"resolved_at,omitempty"`
+	ID          int64  `db:"id" json:"id"`
+	HostID      string `db:"host_id" json:"host_id"`
+	RuleID      string `db:"rule_id" json:"rule_id"`
+	Severity    string `db:"severity" json:"severity"`
+	Title       string `db:"title" json:"title"`
+	Description string `db:"description" json:"description"`
+	ProcessID   int64  `db:"process_id" json:"process_id"`
+	// Techniques is the MITRE ATT&CK technique ID list the firing rule
+	// maps to (e.g. ["T1059.002", "T1105"]). Persisted as a JSON array so
+	// the alert row carries the mapping it fired under even if the rule's
+	// metadata is later refined; the UI + Navigator export read it as-is.
+	Techniques JSONStringSlice `db:"techniques" json:"techniques,omitempty"`
+	Status     string          `db:"status" json:"status"`
+	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
+	ResolvedAt *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
 }
 
 // AlertFilter controls which alerts are returned by ListAlerts.
@@ -49,9 +92,9 @@ func (s *Store) InsertAlert(ctx context.Context, a Alert, eventIDs []string) (in
 	defer tx.Rollback() //nolint:errcheck
 
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO alerts (host_id, rule_id, severity, title, description, process_id)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		a.HostID, a.RuleID, a.Severity, a.Title, a.Description, a.ProcessID,
+		INSERT INTO alerts (host_id, rule_id, severity, title, description, process_id, techniques)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		a.HostID, a.RuleID, a.Severity, a.Title, a.Description, a.ProcessID, a.Techniques,
 	)
 	if err != nil {
 		if isDuplicateKeyErr(err) {
@@ -116,7 +159,7 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]Alert, error) 
 		f.Limit = 100
 	}
 
-	query := "SELECT id, host_id, rule_id, severity, title, description, process_id, status, created_at, updated_at, resolved_at FROM alerts WHERE 1=1"
+	query := "SELECT id, host_id, rule_id, severity, title, description, process_id, techniques, status, created_at, updated_at, resolved_at FROM alerts WHERE 1=1"
 	var args []any
 
 	if f.HostID != "" {
@@ -150,7 +193,7 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]Alert, error) 
 func (s *Store) GetAlert(ctx context.Context, id int64) (*Alert, error) {
 	var a Alert
 	err := s.db.GetContext(ctx, &a,
-		`SELECT id, host_id, rule_id, severity, title, description, process_id, status, created_at, updated_at, resolved_at
+		`SELECT id, host_id, rule_id, severity, title, description, process_id, techniques, status, created_at, updated_at, resolved_at
 		 FROM alerts WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

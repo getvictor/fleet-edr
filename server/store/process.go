@@ -58,21 +58,31 @@ func (n *NullRawJSON) UnmarshalJSON(data []byte) error {
 
 // Process represents a materialized process record built from fork/exec/exit events.
 type Process struct {
-	ID          int64       `db:"id" json:"id"`
-	HostID      string      `db:"host_id" json:"host_id"`
-	PID         int         `db:"pid" json:"pid"`
-	PPID        int         `db:"ppid" json:"ppid"`
-	Path        string      `db:"path" json:"path"`
-	Args        NullRawJSON `db:"args" json:"args,omitempty"`
-	UID         *int        `db:"uid" json:"uid,omitempty"`
-	GID         *int        `db:"gid" json:"gid,omitempty"`
-	CodeSigning NullRawJSON `db:"code_signing" json:"code_signing,omitempty"`
-	SHA256      *string     `db:"sha256" json:"sha256,omitempty"`
-	ForkTimeNs  int64       `db:"fork_time_ns" json:"fork_time_ns"`
-	ExecTimeNs  *int64      `db:"exec_time_ns" json:"exec_time_ns,omitempty"`
-	ExitTimeNs  *int64      `db:"exit_time_ns" json:"exit_time_ns,omitempty"`
-	ExitCode    *int        `db:"exit_code" json:"exit_code,omitempty"`
+	ID               int64       `db:"id" json:"id"`
+	HostID           string      `db:"host_id" json:"host_id"`
+	PID              int         `db:"pid" json:"pid"`
+	PPID             int         `db:"ppid" json:"ppid"`
+	Path             string      `db:"path" json:"path"`
+	Args             NullRawJSON `db:"args" json:"args,omitempty"`
+	UID              *int        `db:"uid" json:"uid,omitempty"`
+	GID              *int        `db:"gid" json:"gid,omitempty"`
+	CodeSigning      NullRawJSON `db:"code_signing" json:"code_signing,omitempty"`
+	SHA256           *string     `db:"sha256" json:"sha256,omitempty"`
+	ForkTimeNs       int64       `db:"fork_time_ns" json:"fork_time_ns"`
+	ForkIngestedAtNs *int64      `db:"fork_ingested_at_ns" json:"fork_ingested_at_ns,omitempty"`
+	ExecTimeNs       *int64      `db:"exec_time_ns" json:"exec_time_ns,omitempty"`
+	ExitTimeNs       *int64      `db:"exit_time_ns" json:"exit_time_ns,omitempty"`
+	ExitIngestedAtNs *int64      `db:"exit_ingested_at_ns" json:"exit_ingested_at_ns,omitempty"`
+	ExitReason       *string     `db:"exit_reason" json:"exit_reason,omitempty"`
+	ExitCode         *int        `db:"exit_code" json:"exit_code,omitempty"`
 }
+
+// ExitReason values for Process.ExitReason.
+const (
+	ExitReasonEvent             = "event"              // normal — populated from an observed ES exit event
+	ExitReasonTTLReconciliation = "ttl_reconciliation" // synthesized — process stayed "running" past the TTL; server forced a gray
+	ExitReasonPIDReuse          = "pid_reuse"          // synthesized — an incoming fork on the same PID forced closure of the prior row
+)
 
 // HostSummary provides an overview of a host's event activity.
 type HostSummary struct {
@@ -88,12 +98,20 @@ type TimeRange struct {
 }
 
 // InsertProcess inserts a new process record (typically from a fork event).
+// The caller is expected to pass the ingest timestamp of the originating fork
+// event in ForkIngestedAtNs so cross-source correlation queries can anchor
+// against a server-controlled clock; nil is tolerated for back-compat with
+// pre-migration callers.
 func (s *Store) InsertProcess(ctx context.Context, p Process) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO processes (host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, fork_time_ns, exec_time_ns, exit_time_ns, exit_code)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO processes
+			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+			 exit_ingested_at_ns, exit_code)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
-		p.CodeSigning, p.SHA256, p.ForkTimeNs, p.ExecTimeNs, p.ExitTimeNs, p.ExitCode,
+		p.CodeSigning, p.SHA256, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
+		p.ExitIngestedAtNs, p.ExitCode,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert process: %w", err)
@@ -132,24 +150,65 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 }
 
 // UpdateProcessExit sets the exit timestamp and code for a running process.
-func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int, exitTimeNs int64, exitCode int) error {
+// exitIngestedAtNs is the server-stamped ingest time of the originating exit
+// event and anchors the upper bound of correlation queries against a
+// server-controlled clock (issue #7). exit_reason is set to ExitReasonEvent
+// so the TTL reconciler can tell observed exits from synthesized ones.
+func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
+	exitTimeNs, exitIngestedAtNs int64, exitCode int) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE processes SET exit_time_ns = ?, exit_code = ?
+		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?,
+		                    exit_reason = ?, exit_code = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
-		exitTimeNs, exitCode, hostID, pid,
+		exitTimeNs, exitIngestedAtNs, ExitReasonEvent, exitCode, hostID, pid,
 	)
 	return err
 }
 
+// ReconcileStaleProcesses forces an exit_time_ns on processes that have
+// been "running" (no observed exit event) for longer than maxAgeNs since
+// their fork. Addresses issue #6: agent drops, kernel back-pressure, and
+// SQLite-queue pruning all cause exit events to go missing, leaving rows
+// green forever. The synthesized exit is marked ExitReasonTTLReconciliation
+// so the UI can show a "forced gray" badge rather than pretending it was an
+// observed clean exit.
+//
+// cutoffNs is the fork-time cutoff: rows with fork_time_ns < cutoffNs and
+// still no exit_time_ns are reconciled. maxAgeNs is the TTL delta added to
+// fork_time_ns to form the synthesized exit_time_ns (so the UI shows the
+// node as having exited at roughly the TTL boundary, not "just now", which
+// would otherwise clump every reconciled row into one visual row at the
+// current wall-clock moment). Returns rows affected.
+func (s *Store) ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE processes
+		SET exit_time_ns = fork_time_ns + ?,
+		    exit_ingested_at_ns = COALESCE(fork_ingested_at_ns, fork_time_ns) + ?,
+		    exit_reason = ?
+		WHERE exit_time_ns IS NULL
+		  AND fork_time_ns < ?`,
+		maxAgeNs, maxAgeNs, ExitReasonTTLReconciliation, cutoffNs,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile stale processes: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // CloseStaleProcess force-closes a process record that hasn't exited yet.
 // Used to handle PID reuse: when a fork arrives for a PID that already has an
-// active (non-exited) record, close the old one first.
+// active (non-exited) record, close the old one first. closedAtNs is treated
+// as both the kernel exit time and the ingest anchor because the close is
+// synthesized from the new fork, not from an actual exit event. exit_reason
+// is set to ExitReasonPIDReuse so analysts can distinguish this synthesis
+// path from both observed exits (ExitReasonEvent) and the TTL reconciler
+// (ExitReasonTTLReconciliation).
 func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE processes SET exit_time_ns = ?
+		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?, exit_reason = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL`,
-		closedAtNs, hostID, pid,
+		closedAtNs, closedAtNs, ExitReasonPIDReuse, hostID, pid,
 	)
 	return err
 }
@@ -183,7 +242,8 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr TimeRange,
 	// survives the limit.
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
-		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
+		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		       exit_ingested_at_ns, exit_reason, exit_code
 		FROM processes
 		WHERE host_id = ?
 		  AND (
@@ -206,7 +266,8 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	var proc Process
 	err := s.db.GetContext(ctx, &proc, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
-		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
+		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		       exit_ingested_at_ns, exit_reason, exit_code
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
@@ -223,12 +284,17 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	return &proc, nil
 }
 
-// GetChildProcesses returns processes whose PPID matches the given PID and were forked within the given time range.
+// GetChildProcesses returns processes whose PPID matches the given PID and were
+// forked within the given time range. The range is kernel-time (fork_time_ns)
+// because parent/child causality is an on-host property, not a server-clock
+// one — that is the opposite of GetNetworkEventsForProcess (issue #7), whose
+// cross-source correlation has to run on ingest time.
 func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, tr TimeRange) ([]Process, error) {
 	var procs []Process
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
-		       fork_time_ns, exec_time_ns, exit_time_ns, exit_code
+		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		       exit_ingested_at_ns, exit_reason, exit_code
 		FROM processes
 		WHERE host_id = ? AND ppid = ? AND fork_time_ns >= ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns`,
@@ -242,13 +308,20 @@ func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, 
 
 // GetNetworkEventsForProcess returns network_connect and dns_query events
 // attributed to the given PID within a time range.
+//
+// The range is filtered on ingested_at_ns (server-stamped) rather than on
+// the source-kernel timestamp_ns, because ES and NE clocks drift by tens of
+// milliseconds and NE-sourced events can arrive with timestamps before the
+// ES-sourced fork event of the same process. See issue #7. Results are still
+// ORDER BY timestamp_ns so the UI renders them in the order they happened
+// on the host, not the order the server saw them.
 func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr TimeRange) ([]Event, error) {
 	var events []Event
 	err := s.db.SelectContext(ctx, &events, `
-		SELECT event_id, host_id, timestamp_ns, event_type, payload
+		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
 		FROM events
 		WHERE host_id = ? AND event_type IN ('network_connect', 'dns_query')
-		  AND timestamp_ns >= ? AND timestamp_ns <= ?
+		  AND ingested_at_ns >= ? AND ingested_at_ns <= ?
 		  AND JSON_EXTRACT(payload, '$.pid') = ?
 		ORDER BY timestamp_ns`,
 		hostID, tr.FromNs, tr.ToNs, pid,

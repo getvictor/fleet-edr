@@ -25,7 +25,7 @@ func newAdminServer(t *testing.T) (*httptest.Server, *enrollment.Store, *store.S
 	ps := policy.New(s.DB())
 
 	mux := http.NewServeMux()
-	h := New(es, ps, s, slog.Default())
+	h := New(es, ps, s, nil /* catalog not needed for existing tests */, slog.Default())
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

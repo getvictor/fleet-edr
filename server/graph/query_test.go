@@ -186,3 +186,70 @@ func TestGetDetailRunningProcess(t *testing.T) {
 	assert.Nil(t, detail.Process.ExitTimeNs, "process should still be running")
 	assert.Len(t, detail.NetworkConnections, 1, "expected 1 network connection")
 }
+
+// TestGetDetailCrossSourceClockSkew reproduces the scenario from issue #7:
+// an NE-emitted network_connect event arrives with a source-kernel
+// timestamp_ns BEFORE the ES-emitted fork event of the same process
+// (typical ~50-100ms inversion observed on real hardware). Pre-fix this
+// made ProcessDetail drop the event entirely. Post-fix the server stamps
+// ingest times independently and correlates on those, so the event
+// surfaces even though its kernel timestamp is inverted.
+func TestGetDetailCrossSourceClockSkew(t *testing.T) {
+	s := store.OpenTestStore(t)
+	b := NewBuilder(s, slog.Default())
+	q := NewQuery(s)
+	ctx := t.Context()
+
+	const hostID = "skew-host"
+
+	// Batch 1: NE-emitted network_connect arrives first at the server, with
+	// a kernel timestamp 100ms *before* the still-unseen fork.
+	netEvents := []store.Event{
+		{
+			EventID: "skew-net", HostID: hostID,
+			TimestampNs: 999_900_000_000, // fork_time - 100ms
+			EventType:   "network_connect",
+			Payload: json.RawMessage(
+				`{"pid": 70, "path": "/usr/bin/nc", "uid": 501, "protocol": "tcp", ` +
+					`"direction": "outbound", "remote_address": "1.1.1.1", "remote_port": 443}`),
+		},
+	}
+	require.NoError(t, s.InsertEventsAt(ctx, netEvents, 1_000_000_000))
+
+	// Batch 2: ES-emitted fork+exec+exit arrive in a later upload. Their
+	// kernel times are all *after* the network_connect's kernel time, but
+	// their server ingest time is higher than the network_connect's too —
+	// that's the key property we correlate on.
+	procEvents := []store.Event{
+		{
+			EventID: "skew-fork", HostID: hostID, TimestampNs: 1_000_000_000_000,
+			EventType: "fork",
+			Payload:   json.RawMessage(`{"child_pid": 70, "parent_pid": 1}`),
+		},
+		{
+			EventID: "skew-exec", HostID: hostID, TimestampNs: 1_000_000_100_000,
+			EventType: "exec",
+			Payload: json.RawMessage(
+				`{"pid": 70, "ppid": 1, "path": "/usr/bin/nc", "args": ["nc","1.1.1.1","443"], "uid": 501, "gid": 20}`),
+		},
+		{
+			EventID: "skew-exit", HostID: hostID, TimestampNs: 1_000_001_000_000,
+			EventType: "exit",
+			Payload:   json.RawMessage(`{"pid": 70, "exit_code": 0}`),
+		},
+	}
+	require.NoError(t, s.InsertEventsAt(ctx, procEvents, 2_000_000_000))
+
+	// Processor materializes the process row from the fork batch.
+	require.NoError(t, b.ProcessBatch(ctx, procEvents))
+
+	// GetDetail must surface the network_connect despite its kernel time
+	// being earlier than the fork kernel time, because correlation runs on
+	// server-stamped ingest times.
+	detail, err := q.GetDetail(ctx, hostID, 70, 1_000_000_100_000)
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, "/usr/bin/nc", detail.Process.Path)
+	assert.Len(t, detail.NetworkConnections, 1,
+		"network_connect with inverted kernel timestamp must still surface via ingest-time correlation")
+}

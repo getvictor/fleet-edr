@@ -1,0 +1,39 @@
+name: OSV-Scanner
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly rescan catches new CVEs against unchanged dependencies.
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+# SARIF upload requires security-events:write; granted only to the reusable
+# workflow invocation below so the default token (for checkouts etc.) stays
+# minimal.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: osv-scanner
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
+    permissions:
+      actions: read # reusable workflow reads workflow context for SARIF categorization
+      contents: read # required to check out the repo for scanning
+      security-events: write # required to upload SARIF to GitHub code scanning
+    with:
+      # Recursive scan of every manifest in the repo: go.mod (agent + server),
+      # ui/package-lock.json, and .github/workflows pins.
+      scan-args: |-
+        --recursive
+        ./
+      # Don't fail the PR on a new CVE — we want visibility in the Security
+      # tab without blocking merges for upstream advisories we can't fix on
+      # our side. Flip to true once we've triaged the initial scan.
+      fail-on-vuln: false
