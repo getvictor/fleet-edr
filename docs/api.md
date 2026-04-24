@@ -27,9 +27,10 @@ UI. There is no versioning header; when v2 lands it gets a parallel
 
 ## Content type
 
-Every request and response body is `application/json; charset=utf-8`.
-Event ingest accepts gzip-encoded requests if `Content-Encoding: gzip`
-is set.
+Request bodies are `application/json; charset=utf-8`. Response bodies,
+when present, use the same type; several endpoints return `204 No
+Content` with an empty body. Compressed request bodies are not
+currently supported — do not set `Content-Encoding: gzip`.
 
 ## Auth models
 

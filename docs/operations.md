@@ -9,14 +9,19 @@ start with [install-server.md](install-server.md) and
 
 | Task | Command |
 |---|---|
-| Server health | `curl -sk https://<server>/readyz \| jq .` |
-| Server version | `curl -sk https://<server>/readyz \| jq -r .version` |
+| Server health | `curl -s https://<server>/readyz \| jq .` |
+| Server version | `curl -s https://<server>/readyz \| jq -r .version` |
 | Tail server log | `docker compose logs -f server` |
 | Tail agent log (on Mac) | `sudo tail -f /var/log/fleet-edr-agent.log` |
 | Agent state (on Mac) | `sudo launchctl print system/com.fleetdm.edr.agent` |
 | Reload TLS cert | `docker compose kill -s HUP server` |
 | Restart server | `docker compose restart server` |
 | Backup DB | `docker compose exec -T mysql mysqldump --single-transaction -uroot -p"$(cat secrets/mysql_root)" edr \| gzip > edr-$(date +%F).sql.gz` |
+
+The `curl` examples below verify the server's TLS certificate. If you
+deploy with a self-signed cert (lab / air-gapped pilot), either add
+the CA to the machine's trust store or pass `--cacert /path/to/ca.pem`
+rather than bypassing verification with `-k`.
 
 ## Upgrade the server
 
@@ -35,7 +40,7 @@ docker compose -f docker-compose.prod.yml --env-file .env pull server
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 
 # 4. Verify.
-curl -sk https://<server>/readyz | jq .
+curl -s https://<server>/readyz | jq .
 ```
 
 There is no downtime tolerated by MySQL during this. The server
@@ -264,7 +269,7 @@ list.
 
 ```sh
 # View current policy.
-curl -sk -b cookies.txt https://<server>/api/v1/admin/policy | jq .
+curl -s -b cookies.txt https://<server>/api/v1/admin/policy | jq .
 
 # Update policy (requires login + CSRF token).
 # Easier via the admin UI: Settings > Policy > Blocklist.

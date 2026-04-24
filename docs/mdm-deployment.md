@@ -116,10 +116,12 @@ EDR_SERVER_URL="${EDR_SERVER_URL:-https://edr.example.com}"
 EDR_ENROLL_SECRET="${EDR_ENROLL_SECRET:?EDR_ENROLL_SECRET must be set}"
 
 # Optional: pin the server's TLS cert by SHA-256 fingerprint.
-# Useful for self-signed certs in isolated deployments.
-# EDR_SERVER_FINGERPRINT="sha256//..."
+# Useful for self-signed certs in isolated deployments. Output of
+# `openssl x509 -noout -fingerprint -sha256` pasted directly; the
+# `sha256:` prefix and `:` byte separators are accepted but not required.
+# EDR_SERVER_FINGERPRINT="sha256:AA:BB:CC:DD:EE:FF:..."
 
-install -m 0644 /dev/null /etc/fleet-edr.conf
+install -m 0600 /dev/null /etc/fleet-edr.conf
 cat > /etc/fleet-edr.conf <<EOF
 EDR_SERVER_URL=$EDR_SERVER_URL
 EDR_ENROLL_SECRET=$EDR_ENROLL_SECRET
@@ -133,8 +135,9 @@ inline it in the script in your MDM repo.
 
 ## Step 4: push the pkg
 
-Upload `fleet-edr-v<version>.pkg` to your MDM as a software installer
-and scope to the same Macs.
+Upload `fleet-edr-<version>.pkg` to your MDM as a software installer
+and scope to the same Macs. The release tag is part of the filename
+verbatim (e.g., tag `v0.1.0` ships as `fleet-edr-v0.1.0.pkg`).
 
 The pkg's install flow:
 

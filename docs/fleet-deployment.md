@@ -96,7 +96,7 @@ set -eu
 EDR_SERVER_URL="${FLEET_SECRET_EDR_SERVER_URL:-https://edr.example.com}"
 EDR_ENROLL_SECRET="$FLEET_SECRET_EDR_ENROLL_SECRET"
 
-install -m 0644 /dev/null /etc/fleet-edr.conf
+install -m 0600 /dev/null /etc/fleet-edr.conf
 cat > /etc/fleet-edr.conf <<CONF
 EDR_SERVER_URL=$EDR_SERVER_URL
 EDR_ENROLL_SECRET=$EDR_ENROLL_SECRET

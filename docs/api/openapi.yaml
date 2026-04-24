@@ -88,6 +88,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: Server not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
 
   /api/v1/enroll:
     post:
@@ -133,6 +139,10 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "429":
           description: Rate limited
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: {type: integer}
           content:
             application/json:
               schema:
@@ -143,9 +153,10 @@ paths:
       tags: [Agent]
       summary: Ingest a batch of endpoint security events
       description: |
-        Agents post newline-delimited JSON events here. Each event's
-        `host_id` must match the token's authenticated host_id; mismatches
-        are rejected. The server returns the count of events accepted.
+        Agents POST a JSON array of event envelopes. Each event's
+        `host_id` must match the token's authenticated host_id;
+        mismatches reject the whole batch. The body is capped at 10 MB.
+        The server returns the count of events persisted.
       security:
         - HostToken: []
       requestBody:
@@ -153,20 +164,20 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/EventBatch"
+              type: array
+              items:
+                $ref: "#/components/schemas/EventEnvelope"
       responses:
-        "202":
-          description: Events accepted
+        "200":
+          description: Events persisted
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/IngestResponse"
         "400":
-          description: Invalid JSON or schema violation
+          description: Invalid JSON, missing required fields, or host_id mismatch
         "401":
           description: Missing or invalid host token
-        "403":
-          description: Event host_id does not match token host
 
   /api/v1/session:
     post:
@@ -202,6 +213,14 @@ paths:
           description: Wrong email or password
         "429":
           description: Rate limited
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: {type: integer}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     get:
       tags: [Session]
       summary: Get the current session
@@ -222,6 +241,7 @@ paths:
       description: Clears the session row and expires the cookie.
       security:
         - SessionCookie: []
+          CSRF: []
       responses:
         "204":
           description: Logged out
@@ -635,7 +655,7 @@ components:
       type: object
       required: [status, uptime_seconds, checks]
       properties:
-        status: {type: string, enum: [ok, error]}
+        status: {type: string, enum: [ok, degraded]}
         version: {type: string}
         commit: {type: string}
         build_time: {type: string}
@@ -655,10 +675,12 @@ components:
 
     EnrollRequest:
       type: object
-      required: [enroll_secret, hardware_uuid, hostname]
+      required: [enroll_secret, hardware_uuid, hostname, os_version, agent_version]
       properties:
         enroll_secret: {type: string}
-        hardware_uuid: {type: string}
+        hardware_uuid:
+          type: string
+          description: Apple hardware UUID; validated server-side against a UUID regex.
         hostname: {type: string}
         os_version: {type: string}
         agent_version: {type: string}
@@ -698,20 +720,13 @@ components:
       properties:
         error: {type: string}
 
-    EventBatch:
-      type: object
-      required: [events]
-      properties:
-        events:
-          type: array
-          items:
-            $ref: "#/components/schemas/EventEnvelope"
-
     EventEnvelope:
       type: object
       required: [event_id, host_id, timestamp_ns, event_type, payload]
       properties:
-        event_id: {type: string, format: uuid}
+        event_id:
+          type: string
+          description: Opaque unique event identifier (the agent emits UUIDs; the server treats it as an opaque string).
         host_id: {type: string}
         timestamp_ns: {type: integer, format: int64}
         event_type:
@@ -723,9 +738,11 @@ components:
 
     IngestResponse:
       type: object
+      required: [accepted]
       properties:
-        accepted: {type: integer}
-        rejected: {type: integer}
+        accepted:
+          type: integer
+          description: Number of events successfully persisted.
 
     HostSummary:
       type: object

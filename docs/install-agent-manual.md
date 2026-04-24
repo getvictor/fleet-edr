@@ -77,10 +77,12 @@ EDR_SERVER_URL=https://edr.example.com
 EDR_ENROLL_SECRET=paste-the-enroll-secret-here
 # Optional: pin the server's TLS cert by SHA-256 fingerprint. Leave blank
 # to validate against the system trust store. Use this when the server
-# uses a self-signed cert (lab / air-gapped pilot).
-# EDR_SERVER_FINGERPRINT=sha256//abc...
+# uses a self-signed cert (lab / air-gapped pilot). Accepts the output
+# of `openssl x509 -noout -fingerprint -sha256` (hex, optionally with
+# `sha256:` prefix and/or `:` separators).
+# EDR_SERVER_FINGERPRINT=sha256:AA:BB:CC:DD:EE:FF:...
 EOF
-sudo chmod 0644 /etc/fleet-edr.conf
+sudo chmod 0600 /etc/fleet-edr.conf
 ```
 
 Replace `https://edr.example.com` with your server URL and
@@ -243,10 +245,11 @@ trailing newline). Restart with
 **Agent log shows `tls: failed to verify certificate: x509: ...`.**
 Server's TLS cert isn't trusted by the system. Either install the CA
 that signed it into the system trust store, or use the
-`EDR_SERVER_FINGERPRINT` pin (computed via
-`openssl x509 -in fullchain.pem -noout -fingerprint -sha256`, formatted
-as `sha256//<base64>`). Don't set `EDR_ALLOW_INSECURE=1` unless you're
-in a lab.
+`EDR_SERVER_FINGERPRINT` pin. Compute the value with
+`openssl x509 -in fullchain.pem -noout -fingerprint -sha256` and paste
+the hex output into the config file (optionally with a `sha256:`
+prefix; the `:` separators between bytes are accepted too). Don't set
+`EDR_ALLOW_INSECURE=1` unless you're in a lab.
 
 **System extension stays in `activated waiting for user` forever.**
 Someone disabled Automation + extensions in the OS. Easiest fix: revoke

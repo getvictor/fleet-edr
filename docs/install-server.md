@@ -127,8 +127,13 @@ pulls from ghcr.io and comes up.
 TLS-terminated deployment:
 
 ```sh
-curl -sk https://edr.example.com/readyz | jq .
+curl -s https://edr.example.com/readyz | jq .
 ```
+
+If you're running with a self-signed cert (lab / air-gapped pilot),
+either add the CA to the local trust store, pass
+`--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe.
+Don't paper over a trust failure with `-k` in an automation script.
 
 Insecure-HTTP deployment (dev / behind-proxy):
 
@@ -216,10 +221,17 @@ Datadog OTel, etc.). The server exports:
 
 - **Traces** for every HTTP request + DB query.
 - **Logs** via `otelslog` with `service.name=fleet-edr-server`.
-- **Metrics** listed in `claude/mvp/phase-4-lifecycle-observability.md`
-  (`edr.events.ingested`, `edr.alerts.created`,
-  `edr.enrolled.hosts`, `edr.offline.hosts`, `edr.retention.rows_deleted`,
-  `edr.db.query.duration`).
+- **Metrics**:
+  - `edr.events.ingested` (counter, by `host_id`) — accepted events.
+  - `edr.alerts.created` (counter, by `rule_id` + `severity`).
+  - `edr.enrolled.hosts` (gauge) — current enrolled count.
+  - `edr.offline.hosts` (gauge) — hosts unseen >5 min.
+  - `edr.retention.rows_deleted` (counter) — rows pruned per run.
+  - `edr.db.query.duration` (histogram, by `op`).
+  - `edr.agent.queue.dropped` (counter) — agent-side drops reported back.
+
+  See [operations.md](operations.md#metrics-and-monitoring) for what to
+  alert on.
 
 There is no Prometheus scrape endpoint; this is OTel-only.
 
