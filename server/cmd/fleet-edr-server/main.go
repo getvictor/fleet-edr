@@ -18,6 +18,7 @@ import (
 
 	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
+	apidocs "github.com/fleetdm/edr/server/api/docs"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
@@ -282,6 +283,10 @@ func buildMux(d muxDeps) *http.ServeMux {
 	// POST /api/v1/session is public — there is no session yet. The session handler
 	// does its own rate-limit + audit log so it does not need a wrapper.
 	d.sessionHandler.RegisterPublicRoutes(mux)
+	// Self-hosted Redoc at /api/docs (the matching spec at /api/openapi.yaml).
+	// Public on purpose: same content is on the GitHub release page and
+	// procurement teams browse it pre-eval.
+	apidocs.RegisterRoutes(mux)
 
 	registerHostRoutes(mux, d)
 	registerSessionRoutes(mux, d)

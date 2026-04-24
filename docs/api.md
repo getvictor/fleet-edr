@@ -15,6 +15,20 @@ The machine-consumable spec is
 [`api/openapi.yaml`](api/openapi.yaml). The OpenAPI 3.1 file is the
 source of truth — this doc is the human overview.
 
+Every running server also hosts a live browsable copy of the spec via
+Redoc:
+
+- `https://<your-server>/api/docs` — rendered docs page
+- `https://<your-server>/api/openapi.yaml` — raw spec
+
+Both endpoints are unauthenticated (the spec is already public on the
+GitHub release page) and served from the same binary with no external
+network calls.
+
+Scheme depends on deployment — production runs behind TLS so both URLs
+use `https://`; a dev instance started with `EDR_ALLOW_INSECURE_HTTP=1`
+serves them over `http://`. Examples in this doc assume TLS.
+
 ## Base URL
 
 ```
