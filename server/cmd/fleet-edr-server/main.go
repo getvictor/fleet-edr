@@ -370,7 +370,7 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 }
 
 // engineCatalogAdapter bridges *detection.Engine.Catalog (returning
-// detection.RuleMetadata) to admin.RuleCatalog (which expects
+// detection.RuleMetadata) to admin.Cataloger (which expects
 // []admin.RuleMetadata). The two types are deliberately duplicated — see
 // admin.RuleMetadata for the rationale — so this copy is the conversion
 // boundary.
@@ -385,6 +385,6 @@ func (a engineCatalogAdapter) Catalog() []admin.RuleMetadata {
 	return out
 }
 
-func catalogFromEngine(e *detection.Engine) admin.RuleCatalog {
+func catalogFromEngine(e *detection.Engine) admin.Cataloger {
 	return engineCatalogAdapter{engine: e}
 }

@@ -34,10 +34,11 @@ type CommandInserter interface {
 	InsertCommand(ctx context.Context, c store.Command) (int64, error)
 }
 
-// RuleCatalog enumerates every registered detection rule's ATT&CK mapping.
+// Cataloger enumerates every registered detection rule's ATT&CK mapping.
 // Satisfied by *detection.Engine in production; isolated to an interface so
-// admin tests don't need a full engine.
-type RuleCatalog interface {
+// admin tests don't need a full engine. Named per Go's single-method
+// interface convention (the name is the verb the method performs).
+type Cataloger interface {
 	Catalog() []RuleMetadata
 }
 
@@ -56,7 +57,7 @@ type Handler struct {
 	enrollments *enrollment.Store
 	policy      *policy.Store
 	commands    CommandInserter
-	catalog     RuleCatalog
+	catalog     Cataloger
 	logger      *slog.Logger
 }
 
@@ -70,7 +71,7 @@ type Handler struct {
 //
 // catalog may be nil; the ATT&CK coverage endpoint then returns an empty layer rather
 // than 500, which makes unit tests of the legacy admin surface easier to write.
-func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog RuleCatalog, logger *slog.Logger) *Handler {
+func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog Cataloger, logger *slog.Logger) *Handler {
 	if es == nil {
 		panic("admin.New: enrollment store must not be nil")
 	}

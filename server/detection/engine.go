@@ -66,38 +66,48 @@ func (e *Engine) Evaluate(ctx context.Context, events []store.Event) error {
 			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
 			continue
 		}
-
 		techniques := rule.Techniques()
 		for _, f := range findings {
-			// Stamp findings with the rule's ATT&CK techniques so the
-			// historical alert keeps the mapping it fired under even if
-			// the rule metadata is later refined.
-			if f.Techniques == nil {
-				f.Techniques = techniques
-			}
-			_, created, err := e.store.InsertAlert(ctx, store.Alert{
-				HostID:      f.HostID,
-				RuleID:      f.RuleID,
-				Severity:    f.Severity,
-				Title:       f.Title,
-				Description: f.Description,
-				ProcessID:   f.ProcessID,
-				Techniques:  f.Techniques,
-			}, f.EventIDs)
-			if err != nil {
-				return fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
-			}
-			if created {
-				e.logger.InfoContext(ctx, "detection alert created",
-					"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-				// Only count NEW alerts — the dedup-skip path (same rule + process + host)
-				// is evaluator noise, not a new finding. Operators care about the new-
-				// alert rate.
-				if e.metrics != nil {
-					e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
-				}
+			if err := e.persistFinding(ctx, f, techniques); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+// persistFinding inserts a single finding as an alert, stamping it with the
+// rule's ATT&CK techniques and emitting the new-alert log line + metric only
+// when the insert wasn't deduped away. Extracted from Evaluate so that method
+// stays under the project cognitive-complexity cap.
+func (e *Engine) persistFinding(ctx context.Context, f Finding, techniques []string) error {
+	// Stamp findings with the rule's ATT&CK techniques so the historical
+	// alert keeps the mapping it fired under even if the rule metadata is
+	// later refined.
+	if f.Techniques == nil {
+		f.Techniques = techniques
+	}
+	_, created, err := e.store.InsertAlert(ctx, store.Alert{
+		HostID:      f.HostID,
+		RuleID:      f.RuleID,
+		Severity:    f.Severity,
+		Title:       f.Title,
+		Description: f.Description,
+		ProcessID:   f.ProcessID,
+		Techniques:  f.Techniques,
+	}, f.EventIDs)
+	if err != nil {
+		return fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
+	}
+	if !created {
+		// Dedup-skip path (same rule + process + host) — evaluator noise,
+		// not a new finding. Operators care about the new-alert rate.
+		return nil
+	}
+	e.logger.InfoContext(ctx, "detection alert created",
+		"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+	if e.metrics != nil {
+		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
 	}
 	return nil
 }
