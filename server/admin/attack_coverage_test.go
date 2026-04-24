@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -70,6 +71,38 @@ func TestHandleATTACKCoverage_EmitsNavigatorLayer(t *testing.T) {
 	// both so an analyst can jump from a heatmap cell to the rules.
 	assert.Contains(t, byTechnique["T1059"], "alpha")
 	assert.Contains(t, byTechnique["T1059"], "beta")
+}
+
+func TestHandleATTACKCoverage_IsDeterministic(t *testing.T) {
+	// Same catalog, many calls — the body must be byte-identical across
+	// requests so the endpoint is ETag-friendly and snapshot-testable.
+	s := store.OpenTestStore(t)
+	es := enrollment.NewStore(s.DB())
+	ps := policy.New(s.DB())
+	catalog := &stubCatalog{rules: []RuleMetadata{
+		{ID: "z_rule", Techniques: []string{"T1105", "T1059"}},
+		{ID: "a_rule", Techniques: []string{"T1059"}},
+		{ID: "m_rule", Techniques: []string{"T1574.006"}},
+	}}
+	h := New(es, ps, s, catalog, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	fetch := func() []byte {
+		resp, err := http.Get(srv.URL + "/api/v1/admin/attack-coverage")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return b
+	}
+	first := fetch()
+	for range 5 {
+		assert.Equal(t, string(first), string(fetch()),
+			"Navigator layer must be byte-identical across requests")
+	}
 }
 
 func TestHandleATTACKCoverage_EmptyCatalogStillReturnsLayer(t *testing.T) {

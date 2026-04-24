@@ -15,6 +15,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -348,8 +349,21 @@ func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 		Techniques  []navigatorTechnique `json:"techniques"`
 	}
 
-	techniques := make([]navigatorTechnique, 0, len(coverage))
-	for tid, rules := range coverage {
+	// Emit techniques + per-technique rule lists in sorted order so the JSON
+	// is byte-identical across requests. This makes the endpoint safe to
+	// ETag, diff, and snapshot-test. Dedup rule IDs so a rule declaring the
+	// same technique twice doesn't produce a noisy "Covered by: X, X" comment.
+	techniqueIDs := make([]string, 0, len(coverage))
+	for tid := range coverage {
+		techniqueIDs = append(techniqueIDs, tid)
+	}
+	slices.Sort(techniqueIDs)
+
+	techniques := make([]navigatorTechnique, 0, len(techniqueIDs))
+	for _, tid := range techniqueIDs {
+		rules := slices.Clone(coverage[tid])
+		slices.Sort(rules)
+		rules = slices.Compact(rules)
 		techniques = append(techniques, navigatorTechnique{
 			TechniqueID: tid,
 			Score:       1,

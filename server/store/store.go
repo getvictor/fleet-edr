@@ -381,16 +381,30 @@ func (s *Store) insertEventsAt(ctx context.Context, events []Event, ingestedAtNs
 	// Stamp the caller's slice with the server-chosen ingest time so callers
 	// that hand the same slice straight to the graph builder (tests, the
 	// in-process processor when we add one) see the persisted value.
+	//
+	// Only stamp rows that were actually INSERTed. INSERT IGNORE silently
+	// drops duplicates, and in that case the DB already holds a different
+	// ingested_at_ns from the original insert — mutating the caller's slice
+	// to a value that doesn't match the persisted row would silently break
+	// any correlation the caller tries to do in-memory (e.g. an idempotent
+	// retry feeding the same events to the graph builder).
 	for i := range events {
 		payloadBytes, err := json.Marshal(events[i].Payload)
 		if err != nil {
 			return fmt.Errorf("marshal payload for %s: %w", events[i].EventID, err)
 		}
-		if _, err := stmt.ExecContext(ctx, events[i].EventID, events[i].HostID, events[i].TimestampNs,
-			ingestedAtNs, events[i].EventType, payloadBytes); err != nil {
+		res, err := stmt.ExecContext(ctx, events[i].EventID, events[i].HostID, events[i].TimestampNs,
+			ingestedAtNs, events[i].EventType, payloadBytes)
+		if err != nil {
 			return fmt.Errorf("insert %s: %w", events[i].EventID, err)
 		}
-		events[i].IngestedAtNs = ingestedAtNs
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected for %s: %w", events[i].EventID, err)
+		}
+		if rowsAffected > 0 {
+			events[i].IngestedAtNs = ingestedAtNs
+		}
 	}
 
 	return tx.Commit()

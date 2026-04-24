@@ -60,29 +60,41 @@ func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs 
 	// the clock is single-authority and monotonic per server. A small 1s pad
 	// remains to absorb intra-batch ordering slop.
 	const intraBatchPadNs = int64(1 * 1_000_000_000)
-	var forkAnchorNs int64
+	const thirtyDayBoundNs = int64(30 * 86400 * 1_000_000_000)
+	var (
+		forkAnchorNs int64
+		mixedAnchor  bool
+	)
 	if proc.ForkIngestedAtNs != nil {
 		forkAnchorNs = *proc.ForkIngestedAtNs
 	} else {
-		// Pre-migration rows: fall back to kernel fork time. The
-		// postSchemaMigrations backfill populates fork_ingested_at_ns from
-		// fork_time_ns for historical rows, so this path only fires during
-		// a race between migration apply and first query.
+		// Pre-migration row: no server ingest time exists for the fork, so
+		// we fall back to the on-host kernel timestamp as an approximate
+		// lower bound. The postSchemaMigrations backfill copies fork_time_ns
+		// into fork_ingested_at_ns for historical rows, so in steady state
+		// this branch only fires during a brief window right after the
+		// migration lands. Mark the anchor as mixed so the upper bound
+		// doesn't also rely on an ingest-time comparison.
 		forkAnchorNs = proc.ForkTimeNs
+		mixedAnchor = true
 	}
 	fromNs := max(forkAnchorNs-intraBatchPadNs, 0)
 	tr := store.TimeRange{FromNs: fromNs}
 	switch {
+	case mixedAnchor:
+		// We already lost precision on the lower bound by using a kernel
+		// timestamp against an ingest-time predicate; using kernel ExitTimeNs
+		// as the upper bound compounds the risk (it can silently truncate
+		// network events that landed well after the process exited on-host).
+		// Prefer the wide 30-day bound, which is already how still-running
+		// processes are handled and matches the pre-issue-7 behavior.
+		tr.ToNs = forkAnchorNs + thirtyDayBoundNs
 	case proc.ExitIngestedAtNs != nil:
 		// Both sides anchored on server-stamped ingest time.
 		tr.ToNs = *proc.ExitIngestedAtNs + intraBatchPadNs
-	case proc.ExitTimeNs != nil:
-		// Pre-migration row: kernel exit time is the best upper bound we
-		// have. Pad to absorb the ES/NE ingest-time-vs-kernel-time gap.
-		tr.ToNs = *proc.ExitTimeNs + intraBatchPadNs
 	default:
 		// Process still running — use a 30-day bound anchored on ingest time.
-		tr.ToNs = forkAnchorNs + 30*86400_000_000_000
+		tr.ToNs = forkAnchorNs + thirtyDayBoundNs
 	}
 
 	netEvents, err := q.store.GetNetworkEventsForProcess(ctx, hostID, pid, tr)

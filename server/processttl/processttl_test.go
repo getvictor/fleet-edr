@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ type fakeReconciler struct {
 	calls      []call
 	fixedN     int64
 	forceError error
+	callCount  atomic.Int64 // goroutine-safe counter for Loop tests
 }
 
 type call struct {
@@ -25,6 +27,7 @@ type call struct {
 
 func (f *fakeReconciler) ReconcileStaleProcesses(_ context.Context, cutoffNs, maxAgeNs int64) (int64, error) {
 	f.calls = append(f.calls, call{cutoffNs: cutoffNs, maxAgeNs: maxAgeNs})
+	f.callCount.Add(1)
 	if f.forceError != nil {
 		return 0, f.forceError
 	}
@@ -104,12 +107,12 @@ func TestRunner_NewPanicsOnNilStore(t *testing.T) {
 	})
 }
 
-func TestRunner_Loop_ExitsOnCtxCancelAndSkipsWhenDisabled(t *testing.T) {
+func TestRunner_Loop_SkipsWhenDisabled(t *testing.T) {
 	fake := &fakeReconciler{}
 	r := New(fake, Options{MaxAge: 0, Logger: quietLogger()})
 
-	// Disabled runner should return immediately even without cancelling ctx,
-	// because Loop's first branch handles the no-op case.
+	// Disabled runner (MaxAge == 0) should return immediately without ever
+	// calling the store.
 	done := make(chan struct{})
 	go func() {
 		r.Loop(t.Context())
@@ -121,4 +124,32 @@ func TestRunner_Loop_ExitsOnCtxCancelAndSkipsWhenDisabled(t *testing.T) {
 		t.Fatal("disabled Loop didn't return promptly")
 	}
 	assert.Empty(t, fake.calls)
+}
+
+func TestRunner_Loop_ExitsOnCtxCancel(t *testing.T) {
+	fake := &fakeReconciler{}
+	r := New(fake, Options{
+		MaxAge:   time.Hour,
+		Interval: 10 * time.Millisecond,
+		Logger:   quietLogger(),
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		r.Loop(ctx)
+		close(done)
+	}()
+
+	// Wait for the immediate first-run to land before cancelling so we prove
+	// the loop was actually active, not just blocked at the disabled guard.
+	require.Eventually(t, func() bool { return fake.callCount.Load() >= 1 },
+		2*time.Second, 5*time.Millisecond, "Loop's initial run should fire")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Loop did not exit after ctx cancel")
+	}
 }

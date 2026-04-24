@@ -81,6 +81,7 @@ type Process struct {
 const (
 	ExitReasonEvent             = "event"              // normal — populated from an observed ES exit event
 	ExitReasonTTLReconciliation = "ttl_reconciliation" // synthesized — process stayed "running" past the TTL; server forced a gray
+	ExitReasonPIDReuse          = "pid_reuse"          // synthesized — an incoming fork on the same PID forced closure of the prior row
 )
 
 // HostSummary provides an overview of a host's event activity.
@@ -199,12 +200,15 @@ func (s *Store) ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs 
 // Used to handle PID reuse: when a fork arrives for a PID that already has an
 // active (non-exited) record, close the old one first. closedAtNs is treated
 // as both the kernel exit time and the ingest anchor because the close is
-// synthesized from the new fork, not from an actual exit event.
+// synthesized from the new fork, not from an actual exit event. exit_reason
+// is set to ExitReasonPIDReuse so analysts can distinguish this synthesis
+// path from both observed exits (ExitReasonEvent) and the TTL reconciler
+// (ExitReasonTTLReconciliation).
 func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?
+		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?, exit_reason = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL`,
-		closedAtNs, closedAtNs, hostID, pid,
+		closedAtNs, closedAtNs, ExitReasonPIDReuse, hostID, pid,
 	)
 	return err
 }
