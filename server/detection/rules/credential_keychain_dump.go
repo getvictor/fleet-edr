@@ -38,8 +38,11 @@ func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump"
 func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.001"} }
 
 // securityBinaryPaths is the set of `security` binary locations we'll
-// flag. /usr/bin/security is canonical; the others appear on SIP-
-// disabled or symlinked installs we've seen in QA.
+// flag. Canonical-only by design: /usr/bin/security is where the tool
+// lives on every shipping macOS SKU; SIP guarantees it. If a pilot
+// customer surfaces a legitimate alternate path (symlink farm on a
+// locked-down dev VM, for example), extend the map here rather than
+// loosening the match.
 var securityBinaryPaths = map[string]bool{
 	"/usr/bin/security": true,
 }
@@ -82,9 +85,14 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []store.Ev
 			return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
 		}
 		if proc == nil {
-			// Defensive: ES emitted an exec without a matching
-			// materialised row (e.g. exec-without-fork not yet
-			// processed). Skip — we'll catch the next emission.
+			// Defensive: the exec event landed but the process row
+			// isn't materialised (e.g. a race where ingestion
+			// delivered the exec before the builder's ProcessBatch
+			// ran). Skip this event — we have no process_id to
+			// link the finding to, and the engine won't re-feed
+			// this batch. In practice the processor loop always
+			// materialises before detection runs, so this branch
+			// is a defensive guard, not a dropped-alert path.
 			continue
 		}
 
@@ -102,18 +110,31 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []store.Ev
 }
 
 // findDumpKeychainArg returns the matched subcommand (e.g.
-// "dump-keychain") and true if any argv token matches, or empty+false.
-// Scans ALL argv tokens rather than just argv[1] because shell wrappers
-// often prepend flags: `security -v dump-keychain`.
+// "dump-keychain") and true when argv invokes a flagged subcommand as
+// the security tool's actual subcommand — i.e. the first non-flag token
+// after argv[0]. argv[0] is the binary itself and is skipped; flag
+// tokens (leading `-`) are skipped so `security -v dump-keychain` still
+// matches. A subcommand like `help` that merely mentions the string
+// `dump-keychain` in its arguments (`security help dump-keychain`)
+// does NOT match, because `help` is the first non-flag token.
 func findDumpKeychainArg(argv []string) (string, bool) {
-	for _, a := range argv {
-		// Trim any leading `--`/`-` for flag-style invocations; the
-		// security tool accepts subcommands bare but some scripts
-		// prefix them.
-		token := strings.TrimLeft(a, "-")
-		if dumpKeychainArgTokens[token] {
-			return token, true
+	for i, a := range argv {
+		if i == 0 {
+			// argv[0] is the invocation name, not a subcommand.
+			continue
 		}
+		if strings.HasPrefix(a, "-") {
+			// Flag, not a subcommand.
+			continue
+		}
+		if dumpKeychainArgTokens[a] {
+			return a, true
+		}
+		// First non-flag token after argv[0] is the subcommand the
+		// security tool will act on; if it's not one we flag, don't
+		// keep scanning for a later match (avoids matching a path
+		// arg that happens to contain "dump-keychain").
+		return "", false
 	}
 	return "", false
 }

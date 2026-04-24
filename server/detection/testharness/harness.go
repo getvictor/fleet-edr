@@ -29,6 +29,7 @@ package testharness
 
 import (
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -67,27 +68,36 @@ type ExpectedFinding struct {
 	EventIDs            []string `json:"event_ids,omitempty"`
 }
 
-// Replay discovers every *.json file under fixtureDir, runs each as a
-// sub-test, and asserts the findings match. Fails t if fixtureDir is
-// missing or has no cases — a silent pass when all cases accidentally
-// get moved is worse than a loud fail.
+// Replay discovers every *.json file at or below fixtureDir
+// (recursively), runs each as a sub-test, and asserts the findings
+// match. Fails t if fixtureDir is missing or has no cases — a silent
+// pass when all cases accidentally get moved is worse than a loud fail.
+//
+// Sub-tests are named by the fixture's path relative to fixtureDir with
+// the `.json` suffix stripped, so a file at
+// `<dir>/sudoers/positive_overwrite.json` renders as sub-test name
+// `sudoers/positive_overwrite` and scoping via `-run` works naturally.
 func Replay(t *testing.T, rule detection.Rule, fixtureDir string) {
 	t.Helper()
-	entries, err := os.ReadDir(fixtureDir)
-	require.NoError(t, err, "fixture dir not found: %s", fixtureDir)
 
 	var cases []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	err := filepath.WalkDir(fixtureDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		cases = append(cases, e.Name())
-	}
-	require.NotEmpty(t, cases, "no *.json fixtures in %s", fixtureDir)
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
+			return nil
+		}
+		cases = append(cases, path)
+		return nil
+	})
+	require.NoError(t, err, "walk fixture dir: %s", fixtureDir)
+	require.NotEmpty(t, cases, "no *.json fixtures under %s", fixtureDir)
 
-	for _, name := range cases {
-		caseName := strings.TrimSuffix(name, ".json")
-		path := filepath.Join(fixtureDir, name)
+	for _, path := range cases {
+		rel, err := filepath.Rel(fixtureDir, path)
+		require.NoError(t, err)
+		caseName := strings.TrimSuffix(rel, ".json")
 		t.Run(caseName, func(t *testing.T) {
 			runCase(t, rule, path)
 		})
