@@ -31,6 +31,12 @@ export interface Process {
   exec_time_ns?: number;
   exit_time_ns?: number;
   exit_code?: number;
+  // Phase 7 additions. exit_reason distinguishes observed exits from
+  // synthesized ones (TTL reconciliation, pid reuse, re-exec chain).
+  // previous_exec_id links back to the prior generation in a same-pid
+  // re-exec chain — see ReExecChain on ProcessDetail.
+  exit_reason?: string;
+  previous_exec_id?: number;
 }
 
 export interface ProcessNode extends Process {
@@ -78,6 +84,11 @@ export interface ProcessDetail {
   process: Process;
   network_connections: EventRecord[];
   dns_queries: EventRecord[];
+  // Oldest-first list of prior exec generations on the same PID — populated
+  // when a process called execve() more than once without forking in
+  // between (e.g. shell exec-optimization chains). Empty for the common
+  // single-exec case. See server/store/process.go GetExecChain.
+  re_exec_chain?: Process[];
 }
 
 export interface TreeResponse {
