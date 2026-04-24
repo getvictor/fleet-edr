@@ -112,6 +112,7 @@ func run() error {
 	det.Register(&rules.DyldInsert{})
 	det.Register(&rules.ShellFromOffice{})
 	det.Register(&rules.OsascriptNetworkExec{})
+	det.Register(&rules.CredentialKeychainDump{})
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)

@@ -1,0 +1,33 @@
+{
+  "events": [
+    {
+      "event_id": "kd-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {"child_pid": 4200, "parent_pid": 1}
+    },
+    {
+      "event_id": "kd-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 4200,
+        "ppid": 1,
+        "path": "/usr/bin/security",
+        "args": ["security", "dump-keychain"],
+        "uid": 501,
+        "gid": 20
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "credential_keychain_dump",
+      "severity": "high",
+      "description_contains": "dump-keychain",
+      "event_ids": ["kd-exec"]
+    }
+  ]
+}

@@ -31,6 +31,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	//   - dyld_insert: ls with DYLD_INSERT_LIBRARIES= prefix (host A)
 	//   - shell_from_office: Microsoft Word -> /bin/bash (host B)
 	//   - osascript_network_exec: osascript -> curl + /tmp/stage2 (host A)
+	//   - credential_keychain_dump: /usr/bin/security dump-keychain (host A)
 	events := []store.Event{
 		// Chain 1: suspicious_exec (python → sh → /tmp/payload)
 		{EventID: "fork-py", HostID: hostA, TimestampNs: 1000, EventType: "fork",
@@ -85,6 +86,12 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 			Payload: json.RawMessage(`{"child_pid":1000,"parent_pid":900}`)},
 		{EventID: "exec-wordbash", HostID: hostB, TimestampNs: 10100, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":1000,"ppid":900,"path":"/bin/bash","args":["bash"],"uid":501,"gid":20}`)},
+
+		// Chain 6: credential_keychain_dump (security dump-keychain) on host A
+		{EventID: "fork-sec", HostID: hostA, TimestampNs: 11000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":1100,"parent_pid":1}`)},
+		{EventID: "exec-sec", HostID: hostA, TimestampNs: 11100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1100,"ppid":1,"path":"/usr/bin/security","args":["security","dump-keychain"],"uid":501,"gid":20}`)},
 	}
 	require.NoError(t, s.InsertEvents(ctx, events))
 	materialize(t, s, events)
@@ -95,17 +102,19 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	engine.Register(&DyldInsert{})
 	engine.Register(&ShellFromOffice{})
 	engine.Register(&OsascriptNetworkExec{})
+	engine.Register(&CredentialKeychainDump{})
 	require.NoError(t, engine.Evaluate(ctx, events))
 
 	// Each rule should have produced at least one alert. We query by rule_id rather than
 	// by count because some rules (suspicious_exec) can legitimately fire on multiple
 	// chains if our fixtures overlap — we only care that no rule was silently skipped.
 	wantRules := map[string]string{
-		"suspicious_exec":         "high",
-		"persistence_launchagent": "high",
-		"dyld_insert":             "high",
-		"shell_from_office":       "high",
-		"osascript_network_exec":  "critical",
+		"suspicious_exec":          "high",
+		"persistence_launchagent":  "high",
+		"dyld_insert":              "high",
+		"shell_from_office":        "high",
+		"osascript_network_exec":   "critical",
+		"credential_keychain_dump": "high",
 	}
 
 	alerts, err := s.ListAlerts(ctx, store.AlertFilter{})
