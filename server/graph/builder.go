@@ -168,15 +168,11 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt store.Event, p 
 }
 
 // insertReExec handles the issue #10 branch: a process called execve() again
-// on the same PID without forking in between. Close the prior generation
-// (marked exit_reason=reexec) and insert the new generation linked back via
-// previous_exec_id.
+// on the same PID without forking in between. The store's ReExec helper
+// wraps the close + insert in a single transaction so we can never leave
+// the PID appearing exited with no current generation (partial failure).
 func (b *Builder) insertReExec(ctx context.Context, evt store.Event, p execPayload, prior *store.Process) error {
-	if err := b.store.CloseReExecGeneration(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs); err != nil {
-		return fmt.Errorf("close prior re-exec generation id=%d: %w", prior.ID, err)
-	}
-	priorID := prior.ID
-	_, err := b.store.InsertProcess(ctx, store.Process{
+	_, reLinked, err := b.store.ReExec(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs, store.Process{
 		HostID: evt.HostID,
 		PID:    p.PID,
 		// Preserve the parent linkage from the original fork — a re-exec
@@ -192,9 +188,19 @@ func (b *Builder) insertReExec(ctx context.Context, evt store.Event, p execPaylo
 		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
 		ForkIngestedAtNs: prior.ForkIngestedAtNs,
 		ExecTimeNs:       &evt.TimestampNs,
-		PreviousExecID:   &priorID,
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("re-exec prior id=%d: %w", prior.ID, err)
+	}
+	if !reLinked {
+		// Prior row was terminally closed (observed exit or pid reuse),
+		// not a TTL-reconciled synthesis — we anchored a fresh chain
+		// instead of chaining through. Log so ingestion anomalies are
+		// visible; not fatal.
+		b.logger.WarnContext(ctx, "re-exec arrived after prior generation was terminally closed",
+			"host_id", evt.HostID, "pid", p.PID, "prior_row_id", prior.ID)
+	}
+	return nil
 }
 
 // pickPPID prefers a non-zero prior PPID. macOS ES reports PPID on every

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -204,19 +205,80 @@ func (s *Store) ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs 
 	return res.RowsAffected()
 }
 
-// CloseReExecGeneration finalizes the prior generation of a same-PID
-// re-exec chain when a new execve() on that PID lands. The row's
-// exit_time_ns is set to the new exec's kernel time and exit_reason to
-// ExitReasonReExec so analytics can distinguish "died by re-exec" from
-// normal exits, PID-reuse closes, and TTL reconciliations.
-func (s *Store) CloseReExecGeneration(ctx context.Context, rowID int64, exitTimeNs, exitIngestedAtNs int64) error {
-	_, err := s.db.ExecContext(ctx, `
+// ReExec finalizes the prior generation of a same-PID re-exec chain AND
+// inserts the new generation in a single transaction. Prior to this the
+// close + insert were two separate statements; if the insert failed, the
+// PID would appear exited with no current generation row, losing the
+// process's running state.
+//
+// The prior-row UPDATE predicate accepts two prior-row states:
+//
+//	(a) exit_time_ns IS NULL — the normal case, prior row is live.
+//	(b) exit_reason = ExitReasonTTLReconciliation — the TTL reconciler
+//	    synthesized an exit that turned out to be wrong (the process was
+//	    still alive and just re-exec'd). We overwrite the TTL guess with
+//	    the real re-exec close so the chain semantics are correct.
+//
+// When RowsAffected is 0 (prior row was observed-exited or pid-reused —
+// real terminal states we must NOT overwrite), the new row is still
+// inserted but with previous_exec_id = NULL so it anchors a fresh chain.
+// Caller gets reLinked=false to log that edge.
+//
+// newRow.PreviousExecID is ignored and set by this method.
+func (s *Store) ReExec(
+	ctx context.Context, priorID int64,
+	exitTimeNs, exitIngestedAtNs int64,
+	newRow Process,
+) (newID int64, reLinked bool, err error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, false, fmt.Errorf("begin tx for re-exec: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE processes
 		SET exit_time_ns = ?, exit_ingested_at_ns = ?, exit_reason = ?
-		WHERE id = ? AND exit_time_ns IS NULL`,
-		exitTimeNs, exitIngestedAtNs, ExitReasonReExec, rowID,
+		WHERE id = ?
+		  AND (exit_time_ns IS NULL OR exit_reason = ?)`,
+		exitTimeNs, exitIngestedAtNs, ExitReasonReExec, priorID, ExitReasonTTLReconciliation,
 	)
-	return err
+	if err != nil {
+		return 0, false, fmt.Errorf("close prior re-exec row id=%d: %w", priorID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, false, fmt.Errorf("close prior re-exec rows affected id=%d: %w", priorID, err)
+	}
+	reLinked = rows > 0
+	if reLinked {
+		newRow.PreviousExecID = &priorID
+	} else {
+		newRow.PreviousExecID = nil
+	}
+
+	ins, err := tx.ExecContext(ctx, `
+		INSERT INTO processes
+			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+			 exit_ingested_at_ns, exit_code, previous_exec_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		newRow.HostID, newRow.PID, newRow.PPID, newRow.Path, newRow.Args, newRow.UID, newRow.GID,
+		newRow.CodeSigning, newRow.SHA256, newRow.ForkTimeNs, newRow.ForkIngestedAtNs,
+		newRow.ExecTimeNs, newRow.ExitTimeNs, newRow.ExitIngestedAtNs, newRow.ExitCode,
+		newRow.PreviousExecID,
+	)
+	if err != nil {
+		return 0, false, fmt.Errorf("insert new re-exec generation: %w", err)
+	}
+	newID, err = ins.LastInsertId()
+	if err != nil {
+		return 0, false, fmt.Errorf("insert new re-exec LastInsertId: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("commit re-exec tx: %w", err)
+	}
+	return newID, reLinked, nil
 }
 
 // GetExecChain walks previous_exec_id backward from the given current row
@@ -225,6 +287,11 @@ func (s *Store) CloseReExecGeneration(ctx context.Context, rowID int64, exitTime
 // maxChainLen rows to stop a cycle (shouldn't happen — previous_exec_id
 // is strictly decreasing — but FK cycles from bad data shouldn't lock up
 // a query).
+//
+// The SELECT is scoped by host_id as well as id so a corrupted
+// previous_exec_id value can never surface a row from a different host
+// (defense-in-depth; the builder always writes the same-host id, but a
+// future bulk-import or manual fix might not).
 func (s *Store) GetExecChain(ctx context.Context, current Process) ([]Process, error) {
 	const maxChainLen = 64
 	var chain []Process
@@ -235,7 +302,7 @@ func (s *Store) GetExecChain(ctx context.Context, current Process) ([]Process, e
 			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 			       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
-			FROM processes WHERE id = ?`, *prevID)
+			FROM processes WHERE id = ? AND host_id = ?`, *prevID, current.HostID)
 		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
@@ -248,9 +315,7 @@ func (s *Store) GetExecChain(ctx context.Context, current Process) ([]Process, e
 	// Result is newest-first from the walk; reverse so the caller gets
 	// chronological order (oldest exec first). Callers rendering a timeline
 	// want that ordering implicitly.
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
+	slices.Reverse(chain)
 	return chain, nil
 }
 

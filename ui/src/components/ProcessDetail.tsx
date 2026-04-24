@@ -238,7 +238,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
             {detail.re_exec_chain.map((gen) => (
               <li key={gen.id} className="process-detail__reexec-item">
                 <code className="process-detail__break">{gen.path || "(unknown)"}</code>
-                {gen.exec_time_ns && (
+                {gen.exec_time_ns !== undefined && (
                   <span className="process-detail__reexec-time">
                     {" — exec @ "}
                     {formatTimestamp(gen.exec_time_ns)}
