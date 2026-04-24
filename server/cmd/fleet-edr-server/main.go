@@ -327,6 +327,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
 		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
 		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
+		"GET /api/v1/admin/attack-coverage",
 		"GET /api/v1/session",
 	} {
 		mux.Handle(p, sessionProtected)
