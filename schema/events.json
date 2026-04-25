@@ -59,7 +59,11 @@
         "uid": { "type": "integer" },
         "gid": { "type": "integer" },
         "code_signing": { "$ref": "#/definitions/code_signing" },
-        "sha256": { "type": "string" }
+        "sha256": { "type": "string" },
+        "snapshot": {
+          "type": "boolean",
+          "description": "True for synthetic exec events emitted at extension startup to materialise processes that existed before ESF subscription (issue #11). Detection rules skip snapshot events because they describe historical state, not new attacker activity."
+        }
       }
     },
     "fork_payload": {
