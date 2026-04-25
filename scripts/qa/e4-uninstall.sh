@@ -33,7 +33,7 @@
 # re-install half. The pkg path is the local file on this workstation
 # we'll scp to the VM.
 
-set -uo pipefail
+set -uEo pipefail
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
 trap 'rc=$?; echo "[e4] step at line $LINENO exited $rc — continuing"' ERR
 
@@ -53,8 +53,10 @@ case "${1:-}" in
     [ -f "$REINSTALL_PKG" ] || { echo "[e4] --reinstall pkg not found: $REINSTALL_PKG" >&2; exit 2; };;
 esac
 
-WORKDIR="${TMPDIR:-/tmp}/edr-e4-uninstall"
-mkdir -p "$WORKDIR"
+# Private workdir: cookie jar + login response carry an admin session.
+umask 077
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/edr-e4-uninstall.XXXXXX")
+chmod 700 "$WORKDIR"
 COOKIE_JAR="$WORKDIR/cookies"
 
 hr() { printf '\n%s\n' '────────────────────────────────────────────────────────'; }
@@ -79,15 +81,23 @@ echo -n "[vm] uninstaller present: "
 test -x "/Library/Application Support/com.fleetdm.edr/uninstall.sh" && echo ok || echo MISSING
 echo -n "[vm] /etc/fleet-edr.conf present: "
 test -f /etc/fleet-edr.conf && echo ok || echo MISSING
-echo -n "[vm] queue.db present: "
-test -f /var/db/fleet-edr/queue.db && echo ok || echo MISSING
+echo -n "[vm] events.db present: "
+test -f /var/db/fleet-edr/events.db && echo ok || echo MISSING
 EOF
 
 # Capture the host_id BEFORE the uninstall removes the enrolled
-# plist, so we can later look up the host on the server side.
+# plist, so we can later look up the host on the server side. Bail
+# eagerly on empty: a downstream `select(.host_id==$id)` with $id=""
+# matches nothing and would silently report "host offline" without
+# ever talking to the server about a real host.
 HOST_ID=$(ssh -o BatchMode=yes "$VM_SSH_TARGET" \
   "sudo /usr/bin/plutil -extract host_id raw -o - /var/db/fleet-edr/enrolled.plist 2>/dev/null" \
   | tr -d '[:space:]')
+if [ -z "$HOST_ID" ]; then
+  echo "[e4] could not read host_id from /var/db/fleet-edr/enrolled.plist" >&2
+  echo "[e4] step 4's offline check would be meaningless without it; aborting." >&2
+  exit 1
+fi
 echo "[e4] host_id=$HOST_ID"
 
 # Run the uninstaller.
@@ -115,8 +125,8 @@ echo -n "[vm] sysext deactivated: "
   | /usr/bin/grep -q 'activated.*com.fleetdm.edr' && echo STILL-ACTIVATED || echo ok
 echo -n "[vm] agent binary removed: "
 test -x /usr/local/bin/fleet-edr-agent && echo STILL-PRESENT || echo ok
-echo -n "[vm] queue.db removed: "
-test -f /var/db/fleet-edr/queue.db && echo STILL-PRESENT || echo ok
+echo -n "[vm] events.db removed: "
+test -f /var/db/fleet-edr/events.db && echo STILL-PRESENT || echo ok
 echo -n "[vm] /var/db/fleet-edr removed: "
 test -d /var/db/fleet-edr && echo STILL-PRESENT || echo ok
 echo -n "[vm] /etc/fleet-edr.conf preserved (intended): "
@@ -132,25 +142,31 @@ http_code=$(curl -sS -o "$WORKDIR/login.json" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg e "$EDR_ADMIN_EMAIL" --arg p "$EDR_ADMIN_PASSWORD" '{email:$e,password:$p}')" \
   "$EDR_SERVER_URL/api/v1/session" || echo "000")
-[ "$http_code" = "200" ] || echo "[e4] login HTTP $http_code; offline check skipped"
-deadline=$(( $(date +%s) + 360 ))
-last_seen=""
-while [ "$(date +%s)" -lt "$deadline" ]; do
-  last_seen=$(curl -sS -b "$COOKIE_JAR" \
-    "$EDR_SERVER_URL/api/v1/hosts" 2>/dev/null \
-    | jq -r --arg id "$HOST_ID" '.hosts[]? | select(.host_id==$id) | .last_seen_ns // ""' \
-    | tr -d '[:space:]')
-  if [ -z "$last_seen" ]; then
-    echo "[e4] host no longer in /api/v1/hosts list (or offline filter applied)"
-    break
-  fi
-  age_s=$(( $(date +%s) - last_seen / 1000000000 ))
-  if [ "$age_s" -ge 300 ]; then
-    echo "[e4] host last_seen is $age_s s old → considered offline"
-    break
-  fi
-  sleep 30
-done
+if [ "$http_code" != "200" ]; then
+  echo "[e4] login HTTP $http_code; offline check skipped"
+else
+  # /api/v1/hosts returns a top-level JSON array of HostSummary objects
+  # per the OpenAPI spec — not an object with a `.hosts` field. Iterate
+  # the array root.
+  deadline=$(( $(date +%s) + 360 ))
+  last_seen=""
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    last_seen=$(curl -sS -b "$COOKIE_JAR" \
+      "$EDR_SERVER_URL/api/v1/hosts" 2>/dev/null \
+      | jq -r --arg id "$HOST_ID" '.[]? | select(.host_id==$id) | .last_seen_ns // ""' \
+      | tr -d '[:space:]')
+    if [ -z "$last_seen" ]; then
+      echo "[e4] host no longer in /api/v1/hosts list (or offline filter applied)"
+      break
+    fi
+    age_s=$(( $(date +%s) - last_seen / 1000000000 ))
+    if [ "$age_s" -ge 300 ]; then
+      echo "[e4] host last_seen is $age_s s old → considered offline"
+      break
+    fi
+    sleep 30
+  done
+fi
 
 # Optional re-install half.
 if [ -n "$REINSTALL_PKG" ]; then

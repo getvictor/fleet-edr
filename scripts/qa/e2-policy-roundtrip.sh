@@ -30,8 +30,11 @@
 # All four variables are required; we fail fast if any is missing so
 # operators don't spend ten minutes wondering why curl is silent.
 
-set -uo pipefail
+set -uEo pipefail
 
+# -E (errtrace) so the ERR trap fires inside helper functions and
+# command substitutions too — without it, failures in subshells stay
+# silent.
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
 trap 'rc=$?; echo "[e2] step at line $LINENO exited $rc — continuing"' ERR
 
@@ -46,8 +49,11 @@ require_env() {
 }
 require_env EDR_SERVER_URL EDR_ADMIN_EMAIL EDR_ADMIN_PASSWORD VM_SSH_TARGET
 
-WORKDIR="${TMPDIR:-/tmp}/edr-e2-policy"
-mkdir -p "$WORKDIR"
+# umask + private mktemp so the session cookie + login response don't
+# leak to other local users on a permissive default-umask host.
+umask 077
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/edr-e2-policy.XXXXXX")
+chmod 700 "$WORKDIR"
 COOKIE_JAR="$WORKDIR/cookies"
 SYNTHETIC_PATH="/tmp/edr-e2-blocked-payload"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -88,16 +94,50 @@ echo "[e2] logged in; got CSRF token"
 hr
 echo "[e2] step 2: capture existing policy + push the synthetic block"
 ORIG_POLICY="$WORKDIR/policy-original.json"
-curl -sS -b "$COOKIE_JAR" -o "$ORIG_POLICY" \
-  "$EDR_SERVER_URL/api/v1/admin/policy" || true
+# Fail-fast on the GET. Silent failure here would let step 6 PUT an
+# empty `paths`/`hashes` payload back, permanently wiping whatever
+# blocklist the operator actually had configured.
+get_code=$(curl -sS -o "$ORIG_POLICY" -w '%{http_code}' -b "$COOKIE_JAR" \
+  "$EDR_SERVER_URL/api/v1/admin/policy" || echo "000")
+if [ "$get_code" != "200" ] || ! jq -e '(.blocklist.paths // []) | type == "array"' "$ORIG_POLICY" >/dev/null 2>&1; then
+  echo "[e2] GET admin/policy failed (HTTP $get_code); refusing to push a synthetic policy" >&2
+  cat "$ORIG_POLICY" >&2 || true
+  exit 1
+fi
 echo "[e2] original policy captured at $ORIG_POLICY"
 
+# Register the restore as an EXIT trap right after the GET succeeds, so
+# any early `exit` from later steps (timeout in step 3, exec failure in
+# step 4, network blip, Ctrl-C) still rolls the server's blocklist
+# back to what we found. Set RESTORE_DONE=1 from step 6 to skip the
+# trap-driven duplicate restore.
+RESTORE_DONE=0
+restore_policy() {
+  if [ "$RESTORE_DONE" = "1" ]; then return 0; fi
+  echo "[e2] EXIT trap: restoring original policy"
+  payload=$(jq --arg reason "phase-7 e2 cleanup $TIMESTAMP" \
+               --arg actor "$EDR_ADMIN_EMAIL" \
+              '{paths: (.blocklist.paths // []),
+                hashes: (.blocklist.hashes // []),
+                reason: $reason, actor: $actor}' "$ORIG_POLICY") || return 0
+  curl -sS -o /dev/null -w '%{http_code}\n' -b "$COOKIE_JAR" \
+    -X PUT \
+    -H 'Content-Type: application/json' \
+    -H "X-CSRF-Token: ${CSRF_TOKEN:-}" \
+    -d "$payload" \
+    "$EDR_SERVER_URL/api/v1/admin/policy" >&2 || true
+}
+trap restore_policy EXIT
+
+# GET returns `{version, blocklist:{paths,hashes}}` per the OpenAPI
+# Policy schema. PUT expects a flat `{paths, hashes, reason, actor}`
+# body. Read from `.blocklist.*` and rewrite into the flat PUT shape.
 NEW_POLICY="$WORKDIR/policy-with-block.json"
 jq --arg path "$SYNTHETIC_PATH" \
    --arg reason "phase-7 e2 dogfood QA $TIMESTAMP" \
    --arg actor "$EDR_ADMIN_EMAIL" \
-  '{paths: ((.paths // []) + [$path] | unique),
-    hashes: (.hashes // []),
+  '{paths: ((.blocklist.paths // []) + [$path] | unique),
+    hashes: (.blocklist.hashes // []),
     reason: $reason,
     actor: $actor}' \
   "$ORIG_POLICY" > "$NEW_POLICY"
@@ -111,7 +151,9 @@ put_resp=$(curl -sS -w '\n%{http_code}' -b "$COOKIE_JAR" \
 put_code=$(printf '%s' "$put_resp" | tail -n1)
 if [ "$put_code" != "200" ]; then
   echo "[e2] PUT policy failed: HTTP $put_code" >&2
-  printf '%s\n' "$put_resp" | head -n-1 >&2
+  # `head -n-1` is GNU-only; BSD head on macOS errors. `sed '$d'`
+  # ("delete last line") is portable and produces the same result.
+  printf '%s\n' "$put_resp" | sed '$d' >&2
   exit 1
 fi
 echo "[e2] policy pushed; server fanned out command to active hosts"
@@ -133,7 +175,12 @@ if ! ssh -o BatchMode=yes "$VM_SSH_TARGET" \
        "sudo /usr/bin/grep -q '$SYNTHETIC_PATH' /var/db/com.fleetdm.edr/policy.json 2>/dev/null"; then
   echo "[e2] policy.json never received the new path within 60s" >&2
   echo "[e2] check the agent log: sudo tail /var/log/fleet-edr-agent.log" >&2
+  echo "[e2] aborting before step 4 — without the policy in place, the exec attempt below" >&2
+  echo "[e2] would succeed and produce a misleading 'block was not enforced' failure." >&2
+  echo "[e2] step 6 (policy restore) still runs via the EXIT trap below." >&2
+  POLICY_PUSH_FAILED=1
 fi
+POLICY_PUSH_FAILED="${POLICY_PUSH_FAILED:-0}"
 
 # Plant a benign synthetic binary at the blocked path on the VM, then
 # try to exec it. Expect denial via ES_AUTH_RESULT_DENY. We don't care
@@ -141,6 +188,10 @@ fi
 # starting.
 hr
 echo "[e2] step 4: try to execute the blocked path on the VM"
+if [ "$POLICY_PUSH_FAILED" = "1" ]; then
+  echo "[e2] SKIPPED — policy never reached the agent in step 3"
+  exit 1
+fi
 # shellcheck disable=SC2087  # heredoc with explicit shell escaping; quoted EOF, no interpolation
 ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<EOF
 set -uo pipefail
@@ -179,12 +230,14 @@ else
 fi
 
 # Restore: PUT the original policy back so we leave the server how we
-# found it. This runs even if earlier steps tripped the ERR trap.
+# found it. The EXIT trap above handles early-exit paths; this is the
+# happy-path explicit restore so the operator sees a clear status line.
 hr
 echo "[e2] step 6: restore original policy"
 restore_payload=$(jq --arg reason "phase-7 e2 cleanup $TIMESTAMP" \
                      --arg actor "$EDR_ADMIN_EMAIL" \
-                     '{paths: (.paths // []), hashes: (.hashes // []),
+                     '{paths: (.blocklist.paths // []),
+                       hashes: (.blocklist.hashes // []),
                        reason: $reason, actor: $actor}' "$ORIG_POLICY")
 restore_code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" \
   -X PUT \
@@ -194,6 +247,7 @@ restore_code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" \
   "$EDR_SERVER_URL/api/v1/admin/policy" || echo "000")
 if [ "$restore_code" = "200" ]; then
   echo "[e2] original policy restored"
+  RESTORE_DONE=1
 else
   echo "[e2] WARNING: original policy restore returned HTTP $restore_code"
   echo "[e2] check the policy in the admin UI before walking away"

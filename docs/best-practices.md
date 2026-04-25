@@ -254,8 +254,10 @@ floor for any project that wants enterprise adoption.
   unreachable, agent disk full, clock skew)
 - [ ] **Load-test in CI** on a schedule with a regression bound
 - [ ] **Mutation-testing baseline** to catch over-mocked tests
-- [ ] **Test coverage measured** (currently disabled in Sonar; flip on once the floor is
-  decided)
+- [x] **Test coverage measured** via SonarCloud (Go via
+  `sonar.go.coverage.reportPaths`, UI via
+  `sonar.javascript.lcov.reportPaths`). C7 deliverable; see §5 for the
+  per-PR ≥80% gate.
 - [ ] **Smoke test against macOS VM** in CI (the SIP-disabled VM exists locally; could be
   scripted into a self-hosted runner)
 
@@ -570,7 +572,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
 | Supply-chain security             | 15.5    | 27    | 57%  |
 | Code quality + static analysis    | 14      | 22    | 64%  |
-| Testing                           | 6       | 19    | 32%  |
+| Testing                           | 7       | 19    | 37%  |
 | Observability + operations        | 15      | 24    | 62%  |
 | API design                        | 5.5     | 16    | 34%  |
 | Frontend                          | 6       | 14    | 43%  |

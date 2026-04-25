@@ -25,9 +25,10 @@ Before running any script:
   prompt — either keys in `~/.ssh/authorized_keys` or `sshpass` in
   the wrapper. The scripts use `BatchMode=yes` so a missing key
   fails fast rather than hanging.
-- **Tooling on this workstation**: `bash` 4+, `curl`, `jq`,
-  `ssh`, `scp`, `shellcheck` (optional — only for editing the
-  scripts).
+- **Tooling on this workstation**: `bash`, `curl`, `jq`, `ssh`,
+  `scp`, `shellcheck` (optional — only for editing the scripts).
+  The scripts avoid bash-4-only features so macOS's bundled
+  bash 3.2 works.
 - **Tooling on the VM**: `sqlite3` (for E3 queue depth checks),
   `pfctl` (for E3 partition; ships with macOS), `plutil` (for
   reading `host_id` from the persisted enrollment). All present in
@@ -35,8 +36,8 @@ Before running any script:
 
 ## Common environment variables
 
-Every script reads the same five env vars (E3 also wants
-`EDR_SERVER_IP`):
+Every script reads the same four env vars; E3 additionally requires
+`EDR_SERVER_IP`:
 
 ```sh
 export EDR_SERVER_URL='https://edr.local:8088'   # NO trailing slash
@@ -52,8 +53,12 @@ note in `docs/install-server.md`.
 
 ## Running the suite
 
-Run the four scripts in order. Each is idempotent — running it twice
-won't leave the system in a worse state than running it once.
+Run the four scripts in order. They're rerunnable for QA, but not
+strictly idempotent — some intentionally change VM state. E2 captures
+the original blocklist on entry and restores it on exit (including
+early-exit paths). E3 records pf's enabled/disabled state before the
+partition and rolls back to that state on exit. E4 removes the agent
+by design; rerun with `--reinstall` to put it back.
 
 ```sh
 bash scripts/qa/attack-runbook.sh             # E1

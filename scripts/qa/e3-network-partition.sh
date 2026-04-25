@@ -2,24 +2,33 @@
 #
 # Phase-7 dogfood QA E3: 10-minute network partition.
 #
-# What it proves: the agent's offline queue holds events while the
-# server is unreachable, and drains them cleanly once the partition
-# heals. The plan calls for "no duplicates after restore"; SQLite's
-# UNIQUE(event_id) on the queue side plus the server's
-# `INSERT IGNORE` on `events` (see server/store/store.go) gives us
-# that for free as long as the agent doesn't crash mid-flush.
+# What it proves: the agent's offline queue grows while the server is
+# unreachable, and drains cleanly once the partition heals. The plan
+# calls for "no duplicates after restore"; the queue itself does NOT
+# enforce uniqueness (its schema is `events(id INTEGER PRIMARY KEY
+# AUTOINCREMENT, event_json, created_at, uploaded)` per
+# agent/queue/queue.go — no event_id column, no UNIQUE constraint), so
+# that guarantee currently rests on the server's `INSERT IGNORE` on
+# `events` (see server/store/store.go) when flushed. A precise
+# duplicate check is out of scope for a script that drives only public
+# APIs; see scripts/qa/README.md "Known gaps."
 #
 # Steps:
-#  1. Snapshot the agent's queue depth via SQL on /var/db/fleet-edr/queue.db.
-#  2. Capture the server-side event count for this host as the baseline.
-#  3. Drop a pf anchor rule on the VM that blocks the server's IP.
-#  4. Generate ~30 synthetic processes on the VM (each is one fork+exec
-#     event pair, fully observable). Wait 10 minutes; the agent's
-#     uploader retries every ~60s and accumulates events in the queue.
+#  1. Snapshot the agent's queue depth via SQL on
+#     /var/db/fleet-edr/events.db.
+#  2. Drop a pf anchor rule on the VM that blocks the server's IP.
+#  3. Generate ~30 synthetic processes on the VM (each is one
+#     fork+exec event pair, fully observable). Wait 10 minutes; the
+#     agent's uploader retries every ~60s and accumulates events in
+#     the queue.
+#  4. Confirm the queue depth grew relative to the baseline while the
+#     partition is in effect (≥ baseline + 60 events: 30 forks + 30
+#     execs).
 #  5. Remove the pf anchor — partition heals.
-#  6. Wait up to 90s for the queue to drain (poll depth → 0).
-#  7. Diff queue depth (must end ≥ baseline + 60 events: 30 forks +
-#     30 execs) and assert no duplicates server-side.
+#  6. Wait up to 90s for the queue to drain back to baseline.
+#  7. Surface the post-recovery alert count for the host. (No precise
+#     server-side "no duplicates" assertion today; the v0.1 admin API
+#     doesn't expose a per-host event-count endpoint.)
 #
 # Usage from this workstation:
 #   EDR_SERVER_URL=https://edr.local:8088 \
@@ -35,7 +44,7 @@
 # workstation keeps working. Pass --short for a 60-second partition
 # instead of 10 minutes; useful for development of the script itself.
 
-set -uo pipefail
+set -uEo pipefail
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
 trap 'rc=$?; echo "[e3] step at line $LINENO exited $rc — continuing"' ERR
 
@@ -54,12 +63,35 @@ case "${1:-}" in
   --short) PARTITION_SECS=60; echo "[e3] --short: 60s partition";;
 esac
 
-WORKDIR="${TMPDIR:-/tmp}/edr-e3-partition"
-mkdir -p "$WORKDIR"
+# Private workdir: cookie jar holds an admin session.
+umask 077
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/edr-e3-partition.XXXXXX")
+chmod 700 "$WORKDIR"
 COOKIE_JAR="$WORKDIR/cookies"
 PF_ANCHOR="com.fleetdm.edr.e3"
+# Captured before we touch pf so the cleanup trap can roll back to the
+# operator's original PF state instead of leaving it enabled.
+PF_WAS_ENABLED=""
 
 hr() { printf '\n%s\n' '────────────────────────────────────────────────────────'; }
+
+# pf cleanup trap: flush our anchor regardless of how the script exits
+# (Ctrl-C in the long sleep, ssh hiccup, ERR trap continuing into a
+# fatal step). If pf was disabled before we ran, also disable it again
+# so the VM's networking config matches what we found.
+cleanup_pf() {
+  if [ -z "$PF_WAS_ENABLED" ]; then return 0; fi
+  # shellcheck disable=SC2087  # client-side expansion of $PF_ANCHOR + $PF_WAS_ENABLED is intended
+  ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" >&2 <<EOF || \
+    echo "[e3] WARNING: pf cleanup over SSH failed; check the VM" >&2
+sudo /sbin/pfctl -a "$PF_ANCHOR" -F all 2>/dev/null || true
+sudo rm -f /tmp/edr-e3.pf.rules 2>/dev/null || true
+if [ "$PF_WAS_ENABLED" = "no" ]; then
+  sudo /sbin/pfctl -d 2>/dev/null || true
+fi
+EOF
+}
+trap cleanup_pf EXIT
 
 # Authenticate so we can query alerts + the host's event count
 # afterwards. The PUT to admin/policy isn't needed in this scenario
@@ -79,22 +111,25 @@ HOST_ID=$(ssh -o BatchMode=yes "$VM_SSH_TARGET" \
 [ -n "$HOST_ID" ] || { echo "[e3] could not read host_id from VM"; exit 1; }
 echo "[e3] host_id=$HOST_ID"
 
-# Snapshot baselines.
+# Snapshot baseline + record pf state for the cleanup trap.
 hr
 echo "[e3] step 2: snapshot baselines"
 queue_depth() {
   ssh -o BatchMode=yes "$VM_SSH_TARGET" \
-    "sudo /usr/bin/sqlite3 /var/db/fleet-edr/queue.db 'SELECT COUNT(*) FROM events;' 2>/dev/null" \
-    | tr -d '[:space:]'
-}
-host_event_count() {
-  ssh -o BatchMode=yes "$VM_SSH_TARGET" \
-    "sudo /usr/bin/sqlite3 /var/db/fleet-edr/queue.db 'SELECT COUNT(*) FROM events WHERE acked = 1;' 2>/dev/null" \
+    "sudo /usr/bin/sqlite3 /var/db/fleet-edr/events.db 'SELECT COUNT(*) FROM events;' 2>/dev/null" \
     | tr -d '[:space:]'
 }
 
 baseline_queue=$(queue_depth)
 echo "[e3] queue depth at start: $baseline_queue"
+
+# Was pf already enabled? cleanup_pf uses this to roll back.
+if ssh -o BatchMode=yes "$VM_SSH_TARGET" 'sudo /sbin/pfctl -s info 2>&1 | grep -q "Status: Enabled"'; then
+  PF_WAS_ENABLED=yes
+else
+  PF_WAS_ENABLED=no
+fi
+echo "[e3] pf was previously enabled: $PF_WAS_ENABLED"
 
 # Drop the partition.
 hr
