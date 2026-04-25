@@ -1,0 +1,15 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-orphan-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 8000,
+      "event_type": "open",
+      "payload": {
+        "pid": 9700,
+        "path": "/Library/LaunchDaemons/com.race.persistence.plist",
+        "flags": 1537
+      }
+    }
+  ]
+}

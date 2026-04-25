@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,6 +56,18 @@ func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1
 // so the rule stays focused on the actual drop site.
 var launchDaemonPath = regexp.MustCompile(`^/Library/LaunchDaemons/[^/]+\.plist$`)
 
+// launchDaemonsBytes is the substring fast-path filter applied to the raw
+// JSON payload before json.Unmarshal. ESF NOTIFY_OPEN fires on every file
+// open in the kernel — thousands per second on a busy host — and well
+// over 99.99% of those opens never touch /Library/LaunchDaemons. Skipping
+// the JSON decode for opens that obviously don't qualify cuts the rule's
+// CPU cost from "one unmarshal per open" to "one bytes.Contains per
+// open". The substring can over-match (e.g. an open whose `path` happens
+// to mention the directory name elsewhere in the JSON), but
+// launchDaemonPath.MatchString below tightens it to the canonical drop
+// site, so the gate is purely an optimisation, not a correctness check.
+var launchDaemonsBytes = []byte("/Library/LaunchDaemons/")
+
 // Bits 0 and 1 of the open(2) flags hold the access mode: O_RDONLY=0,
 // O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits means the
 // file descriptor can be written. This matches the kernel's interpretation
@@ -98,6 +111,12 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	ctx context.Context, evt store.Event, s *store.Store,
 ) (*detection.Finding, error) {
 	if evt.EventType != "open" {
+		return nil, nil
+	}
+	// Substring fast-path: skip the JSON decode for the overwhelming
+	// majority of opens that don't touch /Library/LaunchDaemons at all.
+	// See launchDaemonsBytes for the rationale.
+	if !bytes.Contains(evt.Payload, launchDaemonsBytes) {
 		return nil, nil
 	}
 	var p openPayload
@@ -146,11 +165,13 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 
 // allowed returns true when the writing process's code-signing identity
 // is on the operator's allowlist or is a platform binary. Both branches
-// short-circuit the finding. NullRawJSON is a json.RawMessage alias, so
-// length==0 means "no code_signing on the process row" — typically an
-// unsigned binary, which we treat as in-scope (let the finding fire).
+// short-circuit the finding. NullRawJSON is a json.RawMessage alias;
+// both an empty slice (DB NULL → store.NullRawJSON.Scan zeros it) and
+// the literal JSON value `null` (4 bytes) mean "no code_signing on the
+// process row" — typically an unsigned binary, which we treat as
+// in-scope so the finding fires.
 func (r *PrivilegeLaunchdPlistWrite) allowed(raw store.NullRawJSON) bool {
-	if len(raw) == 0 {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return false
 	}
 	var cs codeSigningJSON
