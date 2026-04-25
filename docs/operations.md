@@ -288,6 +288,14 @@ server's `persistence_launchagent` detection rule which LaunchAgent
 paths are benign and should not trigger alerts. Set it as a
 comma-separated list of absolute paths.
 
+`EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` is the parallel knob for the
+`privilege_launchd_plist_write` rule. Apple-signed platform binaries
+(installd, system_installd, ...) are always allowed; this list is for
+non-Apple agents that legitimately drop daemons under
+`/Library/LaunchDaemons/` (Munki, Kandji, JumpCloud, etc.). Set it as
+a comma-separated list of code-signing team IDs, e.g.
+`T4SK8ZXCXG,XYZW0KL1Q9`.
+
 `EDR_SUDOERS_WRITER_ALLOWLIST` is the parallel knob for the
 `sudoers_tamper` rule. Direct writes to `/etc/sudoers` or
 `/etc/sudoers.d/*` always fire unless the writing process's path is

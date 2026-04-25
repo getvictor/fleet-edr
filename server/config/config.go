@@ -56,6 +56,15 @@ type Config struct {
 	// absolute paths). Empty by default — every plist load fires.
 	LaunchAgentAllowlist map[string]struct{}
 
+	// LaunchDaemonTeamIDAllowlist is the set of code-signing team IDs the
+	// `privilege_launchd_plist_write` rule should silently accept when they
+	// write to /Library/LaunchDaemons. Populated from
+	// EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST (comma-separated team IDs).
+	// Apple-signed platform binaries (installd, system_installd, ...) are
+	// always allowed; this list is for non-Apple MDM agents that legitimately
+	// drop daemons (Munki, Kandji, JumpCloud, ...). Empty by default.
+	LaunchDaemonTeamIDAllowlist map[string]struct{}
+
 	// SudoersWriterAllowlist is the set of writer-process absolute paths
 	// the `sudoers_tamper` rule should silently accept. Populated from
 	// EDR_SUDOERS_WRITER_ALLOWLIST (comma-separated). Empty by default.
@@ -138,6 +147,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
 		c.LaunchAgentAllowlist = allowlist
+	}
+	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST")); allowlist != nil {
+		c.LaunchDaemonTeamIDAllowlist = allowlist
 	}
 	if allowlist := envparse.Allowlist(getenv("EDR_SUDOERS_WRITER_ALLOWLIST")); allowlist != nil {
 		c.SudoersWriterAllowlist = allowlist

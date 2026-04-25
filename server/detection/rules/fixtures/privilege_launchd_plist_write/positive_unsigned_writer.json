@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-uns-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7000,
+      "event_type": "fork",
+      "payload": {"child_pid": 9600, "parent_pid": 1}
+    },
+    {
+      "event_id": "ldp-uns-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 9600,
+        "ppid": 1,
+        "path": "/tmp/raw_dropper",
+        "args": ["/tmp/raw_dropper"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "ldp-uns-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7200,
+      "event_type": "open",
+      "payload": {
+        "pid": 9600,
+        "path": "/Library/LaunchDaemons/com.unsigned.persistence.plist",
+        "flags": 1537
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "privilege_launchd_plist_write",
+      "severity": "high",
+      "description_contains": "/Library/LaunchDaemons/com.unsigned.persistence.plist",
+      "event_ids": ["ldp-uns-open"]
+    }
+  ]
+}

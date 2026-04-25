@@ -32,6 +32,8 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	//   - shell_from_office: Microsoft Word -> /bin/bash (host B)
 	//   - osascript_network_exec: osascript -> curl + /tmp/stage2 (host A)
 	//   - credential_keychain_dump: /usr/bin/security dump-keychain (host A)
+	//   - privilege_launchd_plist_write: non-platform-binary writes
+	//     /Library/LaunchDaemons/com.evil.persistence.plist (host A)
 	//   - sudoers_tamper: non-allowlisted writer opens /etc/sudoers.d/evil (host A)
 	events := []store.Event{
 		// Chain 1: suspicious_exec (python → sh → /tmp/payload)
@@ -94,14 +96,26 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 		{EventID: "exec-sec", HostID: hostA, TimestampNs: 11100, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":1100,"ppid":1,"path":"/usr/bin/security","args":["security","dump-keychain"],"uid":501,"gid":20}`)},
 
-		// Chain 7: sudoers_tamper — non-allowlisted writer opens
-		// /etc/sudoers.d/<x> in write mode.
-		{EventID: "fork-sud", HostID: hostA, TimestampNs: 12000, EventType: "fork",
+		// Chain 7: privilege_launchd_plist_write (non-platform binary writes
+		// /Library/LaunchDaemons/<x>.plist with O_WRONLY|O_CREAT|O_TRUNC)
+		{EventID: "fork-ldp", HostID: hostA, TimestampNs: 12000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":1200,"parent_pid":1}`)},
-		{EventID: "exec-sud", HostID: hostA, TimestampNs: 12100, EventType: "exec",
-			Payload: json.RawMessage(`{"pid":1200,"ppid":1,"path":"/bin/bash","args":["bash","-c","echo evil >> /etc/sudoers.d/evil"],"uid":0,"gid":0}`)},
-		{EventID: "open-sud", HostID: hostA, TimestampNs: 12200, EventType: "open",
-			Payload: json.RawMessage(`{"pid":1200,"path":"/etc/sudoers.d/evil","flags":1537}`)},
+		{EventID: "exec-ldp", HostID: hostA, TimestampNs: 12100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1200,"ppid":1,"path":"/tmp/dropper","args":["/tmp/dropper"],"uid":0,"gid":0,"code_signing":{"team_id":"EVILCORP1","signing_id":"com.evil.dropper","flags":0,"is_platform_binary":false}}`)},
+		{EventID: "open-ldp", HostID: hostA, TimestampNs: 12200, EventType: "open",
+			Payload: json.RawMessage(`{"pid":1200,"path":"/Library/LaunchDaemons/com.evil.persistence.plist","flags":1537}`)},
+
+		// Chain 8: sudoers_tamper — non-allowlisted writer opens
+		// /etc/sudoers.d/<x> in write mode. Renumbered from "Chain 7"
+		// during the merge with PR #38; the launchd-plist chain landed
+		// at the same slot first, so this one moves to PID 1300 /
+		// TimestampNs 13000 to keep the time/PID space disjoint.
+		{EventID: "fork-sud", HostID: hostA, TimestampNs: 13000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":1300,"parent_pid":1}`)},
+		{EventID: "exec-sud", HostID: hostA, TimestampNs: 13100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1300,"ppid":1,"path":"/bin/bash","args":["bash","-c","echo evil >> /etc/sudoers.d/evil"],"uid":0,"gid":0}`)},
+		{EventID: "open-sud", HostID: hostA, TimestampNs: 13200, EventType: "open",
+			Payload: json.RawMessage(`{"pid":1300,"path":"/etc/sudoers.d/evil","flags":1537}`)},
 	}
 	require.NoError(t, s.InsertEvents(ctx, events))
 	materialize(t, s, events)
@@ -113,6 +127,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	engine.Register(&ShellFromOffice{})
 	engine.Register(&OsascriptNetworkExec{})
 	engine.Register(&CredentialKeychainDump{})
+	engine.Register(&PrivilegeLaunchdPlistWrite{})
 	engine.Register(&SudoersTamper{})
 	require.NoError(t, engine.Evaluate(ctx, events))
 
@@ -120,13 +135,14 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	// by count because some rules (suspicious_exec) can legitimately fire on multiple
 	// chains if our fixtures overlap — we only care that no rule was silently skipped.
 	wantRules := map[string]string{
-		"suspicious_exec":          "high",
-		"persistence_launchagent":  "high",
-		"dyld_insert":              "high",
-		"shell_from_office":        "high",
-		"osascript_network_exec":   "critical",
-		"credential_keychain_dump": "high",
-		"sudoers_tamper":           "high",
+		"suspicious_exec":               "high",
+		"persistence_launchagent":       "high",
+		"dyld_insert":                   "high",
+		"shell_from_office":             "high",
+		"osascript_network_exec":        "critical",
+		"credential_keychain_dump":      "high",
+		"privilege_launchd_plist_write": "high",
+		"sudoers_tamper":                "high",
 	}
 
 	alerts, err := s.ListAlerts(ctx, store.AlertFilter{})

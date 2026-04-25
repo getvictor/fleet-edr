@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-pb-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4000,
+      "event_type": "fork",
+      "payload": {"child_pid": 9300, "parent_pid": 1}
+    },
+    {
+      "event_id": "ldp-pb-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 9300,
+        "ppid": 1,
+        "path": "/usr/libexec/installd",
+        "args": ["installd"],
+        "uid": 0,
+        "gid": 0,
+        "code_signing": {
+          "team_id": "",
+          "signing_id": "com.apple.installd",
+          "flags": 0,
+          "is_platform_binary": true
+        }
+      }
+    },
+    {
+      "event_id": "ldp-pb-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4200,
+      "event_type": "open",
+      "payload": {
+        "pid": 9300,
+        "path": "/Library/LaunchDaemons/com.apple.audio.coreaudiod.plist",
+        "flags": 1537
+      }
+    }
+  ]
+}

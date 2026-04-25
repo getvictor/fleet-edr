@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-ro-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3000,
+      "event_type": "fork",
+      "payload": {"child_pid": 9200, "parent_pid": 1}
+    },
+    {
+      "event_id": "ldp-ro-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 9200,
+        "ppid": 1,
+        "path": "/usr/bin/plutil",
+        "args": ["plutil", "-p", "/Library/LaunchDaemons/com.apple.example.plist"],
+        "uid": 501,
+        "gid": 20,
+        "code_signing": {
+          "team_id": "",
+          "signing_id": "com.apple.plutil",
+          "flags": 0,
+          "is_platform_binary": true
+        }
+      }
+    },
+    {
+      "event_id": "ldp-ro-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3200,
+      "event_type": "open",
+      "payload": {
+        "pid": 9200,
+        "path": "/Library/LaunchDaemons/com.apple.example.plist",
+        "flags": 0
+      }
+    }
+  ]
+}

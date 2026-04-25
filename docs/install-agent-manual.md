@@ -65,6 +65,40 @@ spctl -a -v --type install fleet-edr-v0.1.0.pkg
 If any of these fail, STOP. Don't install. File an issue at
 https://github.com/getvictor/fleet-edr/issues.
 
+### Optional: verify the Sigstore signature
+
+Releases that ship Sigstore signatures also publish a `<file>.sig` and
+`<file>.pem` next to every artifact. The signature ties the artifact
+to the exact GitHub Actions workflow run that produced it, which
+catches the rare attack where a Developer ID cert is stolen but the
+attacker can't push to our GitHub repo. Skip this step if you don't
+have `cosign` installed; the Apple-signature checks above are
+sufficient for most pilots. (Older releases that pre-date the cosign
+roll-out won't have the `.sig` / `.pem` files — `curl` will return
+404, and there's nothing to verify.)
+
+The example below uses the same `v0.1.0` placeholder as Step 1 above;
+substitute whatever release tag you actually downloaded.
+
+```sh
+# Install cosign if you don't have it: brew install cosign
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg.sig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg.pem
+
+cosign verify-blob \
+    --certificate fleet-edr-v0.1.0.pkg.pem \
+    --signature fleet-edr-v0.1.0.pkg.sig \
+    --certificate-identity-regexp '^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+    fleet-edr-v0.1.0.pkg
+# Expect: "Verified OK"
+```
+
+The same pattern (`<file>.sig` + `<file>.pem`) covers `SHA256SUMS` and
+both `.mobileconfig` profiles. If you're verifying the server image
+instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.1.0`
+with the same identity / issuer flags.
+
 ## Step 3: write the config file
 
 The agent reads `/etc/fleet-edr.conf` on every start. Without that file,

@@ -36,7 +36,9 @@ jobs:
     runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
     environment: release-signing
     permissions:
-      contents: write  # gh release create: publish pkg + profiles on tag push
+      contents: write     # gh release create: publish pkg + profiles on tag push
+      id-token: write     # Sigstore keyless signing: GitHub OIDC token used as the cosign identity
+      attestations: write # actions/attest-build-provenance: store provenance against the repo
 
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '--dry-run' || '' }}
@@ -90,10 +92,46 @@ jobs:
           APPLE_TEAM_ID: FDG8Q7N4CC
         run: ./packaging/profiles/sign.sh --dry-run
 
+      # Source-tree SBOMs in both common formats, generated BEFORE
+      # SHA256SUMS so the SBOM files get hashed alongside the pkg and
+      # profiles. SPDX is the OSI-friendly default; CycloneDX is what
+      # most security scanners ingest. Anchore syft sees the workspace
+      # state after `go build` ran above, so the Go module graph + npm
+      # tree are both populated and make it into the manifest. We
+      # publish both flavors to dodge "I only consume X" pushback.
+      - name: Generate SPDX SBOM (source tree)
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action@7b36ad622f042cab6f59a75c2ac24ccb256e9b45 # v0.20.4
+        with:
+          path: '.'
+          format: spdx-json
+          artifact-name: fleet-edr-${{ github.ref_name }}-sbom.spdx.json
+          output-file: dist/fleet-edr-${{ github.ref_name }}-sbom.spdx.json
+          upload-release-assets: false
+
+      - name: Generate CycloneDX SBOM (source tree)
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action@7b36ad622f042cab6f59a75c2ac24ccb256e9b45 # v0.20.4
+        with:
+          path: '.'
+          format: cyclonedx-json
+          artifact-name: fleet-edr-${{ github.ref_name }}-sbom.cdx.json
+          output-file: dist/fleet-edr-${{ github.ref_name }}-sbom.cdx.json
+          upload-release-assets: false
+
       - name: Generate SHA256SUMS
         run: |
           cd dist
-          shasum -a 256 ./fleet-edr-*.pkg ./*.mobileconfig > SHA256SUMS
+          # SBOMs are only present on real (tag-triggered) runs; the
+          # nullglob lets the line below collapse cleanly when they're
+          # absent on a dry-run.
+          shopt -s nullglob
+          shasum -a 256 \
+            ./fleet-edr-*.pkg \
+            ./*.mobileconfig \
+            ./fleet-edr-*-sbom.spdx.json \
+            ./fleet-edr-*-sbom.cdx.json \
+            > SHA256SUMS
           cat SHA256SUMS
 
       - name: Upload artifacts (dry-run)
@@ -132,6 +170,84 @@ jobs:
             dist/fleet-edr-*.pkg \
             dist/edr-system-extension.mobileconfig \
             dist/edr-tcc-fda.mobileconfig \
+            "dist/fleet-edr-${RELEASE_TAG}-sbom.spdx.json" \
+            "dist/fleet-edr-${RELEASE_TAG}-sbom.cdx.json" \
+            dist/SHA256SUMS
+
+      # Sigstore keyless signing of every release artifact. Skipped on
+      # workflow_dispatch (DRY_RUN): a successful sign appends to Rekor's
+      # public transparency log, so dry-runs would leak commit SHAs and
+      # synthetic tags into a permanent record. Real tag pushes only.
+      - name: Install cosign
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          cosign-release: 'v2.5.3'
+
+      - name: Sign release artifacts (cosign keyless)
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          # cosign reads the GitHub OIDC request URL/token from
+          # ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, which the runner exposes
+          # automatically because the job declares `id-token: write`.
+          # COSIGN_YES skips the interactive "are you sure?" confirmation
+          # for non-interactive CI runs — equivalent to passing --yes on
+          # every cosign invocation below.
+          COSIGN_YES: 'true'
+        # `cosign sign-blob` emits a .sig and a .pem (the ephemeral signing
+        # cert from Fulcio) per artifact. Every shipped file gets the same
+        # treatment — pkg, mobileconfigs, SHA256SUMS, AND both SBOMs — so
+        # a tampered SBOM is just as detectable as a tampered pkg. Both
+        # the .sig and the .pem land on the release; verifiers run
+        # `cosign verify-blob --certificate <file>.pem --signature
+        # <file>.sig --certificate-identity ... --certificate-oidc-issuer
+        # https://token.actions.githubusercontent.com <file>` without
+        # contacting our infrastructure.
+        run: |
+          cd dist
+          for f in \
+              fleet-edr-*.pkg \
+              edr-system-extension.mobileconfig \
+              edr-tcc-fda.mobileconfig \
+              "fleet-edr-${RELEASE_TAG}-sbom.spdx.json" \
+              "fleet-edr-${RELEASE_TAG}-sbom.cdx.json" \
+              SHA256SUMS; do
+            cosign sign-blob \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+          gh release upload "$RELEASE_TAG" \
+            ./fleet-edr-*.pkg.sig ./fleet-edr-*.pkg.pem \
+            ./edr-system-extension.mobileconfig.sig ./edr-system-extension.mobileconfig.pem \
+            ./edr-tcc-fda.mobileconfig.sig ./edr-tcc-fda.mobileconfig.pem \
+            "./fleet-edr-${RELEASE_TAG}-sbom.spdx.json.sig" \
+            "./fleet-edr-${RELEASE_TAG}-sbom.spdx.json.pem" \
+            "./fleet-edr-${RELEASE_TAG}-sbom.cdx.json.sig" \
+            "./fleet-edr-${RELEASE_TAG}-sbom.cdx.json.pem" \
+            ./SHA256SUMS.sig ./SHA256SUMS.pem
+
+      # SLSA build provenance for every shipped artifact. The action
+      # produces an in-toto v1.0 statement signed by Sigstore (keyless via
+      # OIDC, same identity model as the cosign step above) and stores it
+      # as a GitHub Attestation that anyone can resolve via
+      # `gh attestation verify <file> --owner getvictor`. We claim build
+      # level 2 in practice: the macOS runner is GitHub-hosted but the
+      # Apple notary submission is a network call that violates SLSA L3's
+      # hermeticity requirement. Documenting the gap rather than over-
+      # claiming.
+      - name: Attest pkg + profiles + SBOMs + SHA256SUMS
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: |
+            dist/fleet-edr-*.pkg
+            dist/edr-system-extension.mobileconfig
+            dist/edr-tcc-fda.mobileconfig
+            dist/fleet-edr-*-sbom.spdx.json
+            dist/fleet-edr-*-sbom.cdx.json
             dist/SHA256SUMS
 
       - name: Teardown keychain
@@ -145,8 +261,10 @@ jobs:
     name: Build + push server image
     runs-on: ubuntu-latest
     permissions:
-      contents: read   # checkout source for the build context
-      packages: write  # push multi-arch image to ghcr.io/getvictor/fleet-edr-server
+      contents: read      # checkout source for the build context
+      packages: write     # push multi-arch image to ghcr.io/getvictor/fleet-edr-server
+      id-token: write     # Sigstore keyless signing of the pushed image
+      attestations: write # actions/attest-build-provenance for the image
     env:
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
@@ -164,6 +282,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -181,3 +300,69 @@ jobs:
           build-args: |
             VERSION=${{ env.RELEASE_TAG }}
             COMMIT=${{ github.sha }}
+
+      # Sigstore keyless signing of the pushed image. Pinning to the digest
+      # (not the tag) means a future malicious overwrite of `:RELEASE_TAG`
+      # cannot pass `cosign verify` against this signature; verifiers either
+      # pull by digest or accept that a tag mutation invalidates the proof.
+      - name: Install cosign
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          cosign-release: 'v2.5.3'
+
+      - name: Sign image (cosign keyless)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          COSIGN_YES: 'true'
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign \
+            "ghcr.io/getvictor/fleet-edr-server@${IMAGE_DIGEST}"
+
+      # SBOM of the pushed image (manifest digest pinning means the SBOM
+      # describes the exact bits a customer pulls, not whatever happens
+      # to be at the tag later). Generation is split from publication:
+      # anchore/sbom-action only produces the file and uploads it as a
+      # workflow artifact; the next step is what actually pushes it to
+      # the OCI registry as a cosign attestation, which is what makes
+      # `cosign download sbom <ref>` work for downstream verifiers.
+      #
+      # upload-release-assets: false is load-bearing — the action's
+      # default would race the parallel macos-pkg job for the GitHub
+      # Release that owns the source-tree SBOMs. The image SBOM lives
+      # in the registry, not in the Release.
+      - name: Generate image SBOM (SPDX)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action@7b36ad622f042cab6f59a75c2ac24ccb256e9b45 # v0.20.4
+        with:
+          image: ghcr.io/getvictor/fleet-edr-server@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: fleet-edr-server-${{ env.RELEASE_TAG }}-sbom.spdx.json
+          output-file: /tmp/fleet-edr-server-sbom.spdx.json
+          upload-release-assets: false
+
+      - name: Attach image SBOM as cosign attestation
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          COSIGN_YES: 'true'
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        # `cosign attest` wraps the SBOM in an in-toto envelope, signs it
+        # via the same Fulcio OIDC identity used for the image signature,
+        # and pushes it to the registry alongside the manifest. Verifiers
+        # then resolve it with `cosign download sbom <ref>` (returns the
+        # raw predicate) or `cosign verify-attestation --type spdxjson
+        # <ref>` (returns + verifies the signed envelope).
+        run: |
+          cosign attest \
+            --predicate /tmp/fleet-edr-server-sbom.spdx.json \
+            --type spdxjson \
+            "ghcr.io/getvictor/fleet-edr-server@${IMAGE_DIGEST}"
+
+      - name: Attest image build provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ghcr.io/getvictor/fleet-edr-server
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-allow-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 5000,
+      "event_type": "fork",
+      "payload": {"child_pid": 9400, "parent_pid": 1}
+    },
+    {
+      "event_id": "ldp-allow-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 5100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 9400,
+        "ppid": 1,
+        "path": "/usr/local/munki/munki-managed-installer",
+        "args": ["munki-managed-installer"],
+        "uid": 0,
+        "gid": 0,
+        "code_signing": {
+          "team_id": "FIXTURE-ALLOW",
+          "signing_id": "com.googlecode.munki.managedsoftwareupdate",
+          "flags": 0,
+          "is_platform_binary": false
+        }
+      }
+    },
+    {
+      "event_id": "ldp-allow-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 5200,
+      "event_type": "open",
+      "payload": {
+        "pid": 9400,
+        "path": "/Library/LaunchDaemons/com.example.managed.plist",
+        "flags": 1537
+      }
+    }
+  ]
+}
