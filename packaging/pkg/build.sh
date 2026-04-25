@@ -184,23 +184,60 @@ else
 
     PROFILE_NET="$ROOT/packaging/provisioning/networkextension.provisionprofile"
     NETEXT="$STAGE/app-root/Applications/Fleet EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.networkextension.systemextension"
-    if [ -f "$PROFILE_NET" ] && [ -d "$NETEXT" ]; then
+    # Whenever the NE bundle is present we re-sign it below with restricted
+    # entitlements. Without an embedded provisioning profile that re-sign
+    # produces a NE that fails activation on SIP-on hosts — the exact bug
+    # the entitlements re-sign exists to fix on the sysext side. Fail-fast
+    # rather than silently shipping the same broken shape.
+    if [ -d "$NETEXT" ]; then
+        if [ ! -f "$PROFILE_NET" ]; then
+            echo "ERROR: NE bundle present at $NETEXT but $PROFILE_NET is missing." >&2
+            echo "       A NE re-signed without an embedded profile fails activation on SIP-on hosts." >&2
+            exit 8
+        fi
         cp "$PROFILE_NET" "$NETEXT/Contents/embedded.provisionprofile"
     fi
 
     # Re-sign every bundle the edr.app embeds, bottom-up, with the hardened
-    # runtime flag. Notary rejects any Mach-O inside the outer bundle that
-    # lacks `--options runtime`, so all three inner bundles + the app bundle
-    # itself get re-signed after the provisioning profile embed above (which
-    # invalidates the Xcode-time signature).
+    # runtime flag AND the per-binary entitlements. Notary rejects any
+    # Mach-O inside the outer bundle that lacks `--options runtime`, so
+    # all three inner bundles + the app bundle itself get re-signed after
+    # the provisioning profile embed above (which invalidates the
+    # Xcode-time signature).
+    #
+    # `--entitlements` is load-bearing: a bare `codesign --sign` strips
+    # whatever entitlements the Xcode build embedded, leaving the binaries
+    # signed but with an empty entitlements blob. On SIP-disabled dev
+    # Macs that's fine — entitlements aren't enforced — but on a SIP-on
+    # pilot Mac OSSystemExtensionRequest fails before sysextd can stage
+    # the extension, with the user-visible symptom being "I never got the
+    # System Settings approval prompt." The entitlement plists below are
+    # the ones the Xcode targets reference; keep this codesign call in
+    # sync with the project's CODE_SIGN_ENTITLEMENTS settings.
+    SYSEXT_ENTITLEMENTS="$ROOT/extension/edr/extension/extension.entitlements"
+    NETEXT_ENTITLEMENTS="$ROOT/extension/edr/networkextension/networkextension.entitlements"
+    APP_ENTITLEMENTS="$ROOT/extension/edr/edr/edr.entitlements"
+    for f in "$SYSEXT_ENTITLEMENTS" "$APP_ENTITLEMENTS"; do
+        [ -f "$f" ] || { echo "missing entitlements file: $f" >&2; exit 6; }
+    done
+    # NETEXT entitlements only required when the NE bundle is present.
+    # Distinct exit code so CI triage can tell which precondition failed.
+    if [ -d "$NETEXT" ] && [ ! -f "$NETEXT_ENTITLEMENTS" ]; then
+        echo "missing entitlements file: $NETEXT_ENTITLEMENTS" >&2
+        exit 7
+    fi
+
     # shellcheck disable=SC2086
-    codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG "$SYSEXT"
+    codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+        --entitlements "$SYSEXT_ENTITLEMENTS" "$SYSEXT"
     if [ -d "$NETEXT" ]; then
         # shellcheck disable=SC2086
-        codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG "$NETEXT"
+        codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+            --entitlements "$NETEXT_ENTITLEMENTS" "$NETEXT"
     fi
     # shellcheck disable=SC2086
     codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+        --entitlements "$APP_ENTITLEMENTS" \
         "$STAGE/app-root/Applications/Fleet EDR.app"
 fi
 
