@@ -206,6 +206,7 @@ unset uses the documented default.
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
 | `EDR_RETENTION_INTERVAL` | no | 1h | How often the retention job runs |
 | `EDR_LAUNCHAGENT_ALLOWLIST` | no | — | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
+| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | — | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | — | `host:port` of an OTLP/gRPC collector; unset disables metrics export |

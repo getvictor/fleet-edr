@@ -32,6 +32,8 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	//   - shell_from_office: Microsoft Word -> /bin/bash (host B)
 	//   - osascript_network_exec: osascript -> curl + /tmp/stage2 (host A)
 	//   - credential_keychain_dump: /usr/bin/security dump-keychain (host A)
+	//   - privilege_launchd_plist_write: non-platform-binary writes
+	//     /Library/LaunchDaemons/com.evil.persistence.plist (host A)
 	events := []store.Event{
 		// Chain 1: suspicious_exec (python → sh → /tmp/payload)
 		{EventID: "fork-py", HostID: hostA, TimestampNs: 1000, EventType: "fork",
@@ -92,6 +94,15 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 			Payload: json.RawMessage(`{"child_pid":1100,"parent_pid":1}`)},
 		{EventID: "exec-sec", HostID: hostA, TimestampNs: 11100, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":1100,"ppid":1,"path":"/usr/bin/security","args":["security","dump-keychain"],"uid":501,"gid":20}`)},
+
+		// Chain 7: privilege_launchd_plist_write (non-platform binary writes
+		// /Library/LaunchDaemons/<x>.plist with O_WRONLY|O_CREAT|O_TRUNC)
+		{EventID: "fork-ldp", HostID: hostA, TimestampNs: 12000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":1200,"parent_pid":1}`)},
+		{EventID: "exec-ldp", HostID: hostA, TimestampNs: 12100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1200,"ppid":1,"path":"/tmp/dropper","args":["/tmp/dropper"],"uid":0,"gid":0,"code_signing":{"team_id":"EVILCORP1","signing_id":"com.evil.dropper","flags":0,"is_platform_binary":false}}`)},
+		{EventID: "open-ldp", HostID: hostA, TimestampNs: 12200, EventType: "open",
+			Payload: json.RawMessage(`{"pid":1200,"path":"/Library/LaunchDaemons/com.evil.persistence.plist","flags":1537}`)},
 	}
 	require.NoError(t, s.InsertEvents(ctx, events))
 	materialize(t, s, events)
@@ -103,18 +114,20 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	engine.Register(&ShellFromOffice{})
 	engine.Register(&OsascriptNetworkExec{})
 	engine.Register(&CredentialKeychainDump{})
+	engine.Register(&PrivilegeLaunchdPlistWrite{})
 	require.NoError(t, engine.Evaluate(ctx, events))
 
 	// Each rule should have produced at least one alert. We query by rule_id rather than
 	// by count because some rules (suspicious_exec) can legitimately fire on multiple
 	// chains if our fixtures overlap — we only care that no rule was silently skipped.
 	wantRules := map[string]string{
-		"suspicious_exec":          "high",
-		"persistence_launchagent":  "high",
-		"dyld_insert":              "high",
-		"shell_from_office":        "high",
-		"osascript_network_exec":   "critical",
-		"credential_keychain_dump": "high",
+		"suspicious_exec":               "high",
+		"persistence_launchagent":       "high",
+		"dyld_insert":                   "high",
+		"shell_from_office":             "high",
+		"osascript_network_exec":        "critical",
+		"credential_keychain_dump":      "high",
+		"privilege_launchd_plist_write": "high",
 	}
 
 	alerts, err := s.ListAlerts(ctx, store.AlertFilter{})
