@@ -37,6 +37,7 @@ jobs:
     environment: release-signing
     permissions:
       contents: write  # gh release create: publish pkg + profiles on tag push
+      id-token: write  # Sigstore keyless signing: GitHub OIDC token used as the cosign identity
 
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '--dry-run' || '' }}
@@ -134,6 +135,45 @@ jobs:
             dist/edr-tcc-fda.mobileconfig \
             dist/SHA256SUMS
 
+      # Sigstore keyless signing of every release artifact. Skipped on
+      # workflow_dispatch (DRY_RUN): a successful sign appends to Rekor's
+      # public transparency log, so dry-runs would leak commit SHAs and
+      # synthetic tags into a permanent record. Real tag pushes only.
+      - name: Install cosign
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        uses: sigstore/cosign-installer@d7d6e4ba87bcca47ddee71866b8a0e4a47ab3d2c # v3.10.1
+        with:
+          cosign-release: 'v2.5.3'
+
+      - name: Sign release artifacts (cosign keyless)
+        if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          # cosign-installer wires the GitHub OIDC token URL into the env for
+          # us; explicit set kept here as a contract for future cosign minor
+          # bumps that may stop reading it implicitly.
+          COSIGN_YES: 'true'
+        # `cosign sign-blob` emits a .sig and a .pem (the ephemeral signing
+        # cert from Fulcio) per artifact. Both go onto the release so anyone
+        # can `cosign verify-blob --certificate <file>.pem --signature
+        # <file>.sig --certificate-identity ... --certificate-oidc-issuer
+        # https://token.actions.githubusercontent.com <file>` without
+        # contacting our infrastructure.
+        run: |
+          cd dist
+          for f in fleet-edr-*.pkg edr-system-extension.mobileconfig edr-tcc-fda.mobileconfig SHA256SUMS; do
+            cosign sign-blob \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+          gh release upload "$RELEASE_TAG" \
+            ./fleet-edr-*.pkg.sig ./fleet-edr-*.pkg.pem \
+            ./edr-system-extension.mobileconfig.sig ./edr-system-extension.mobileconfig.pem \
+            ./edr-tcc-fda.mobileconfig.sig ./edr-tcc-fda.mobileconfig.pem \
+            ./SHA256SUMS.sig ./SHA256SUMS.pem
+
       - name: Teardown keychain
         if: always() && env.DRY_RUN == ''
         run: |
@@ -147,6 +187,7 @@ jobs:
     permissions:
       contents: read   # checkout source for the build context
       packages: write  # push multi-arch image to ghcr.io/getvictor/fleet-edr-server
+      id-token: write  # Sigstore keyless signing of the pushed image
     env:
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
@@ -164,6 +205,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -181,3 +223,22 @@ jobs:
           build-args: |
             VERSION=${{ env.RELEASE_TAG }}
             COMMIT=${{ github.sha }}
+
+      # Sigstore keyless signing of the pushed image. Pinning to the digest
+      # (not the tag) means a future malicious overwrite of `:RELEASE_TAG`
+      # cannot pass `cosign verify` against this signature; verifiers either
+      # pull by digest or accept that a tag mutation invalidates the proof.
+      - name: Install cosign
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: sigstore/cosign-installer@d7d6e4ba87bcca47ddee71866b8a0e4a47ab3d2c # v3.10.1
+        with:
+          cosign-release: 'v2.5.3'
+
+      - name: Sign image (cosign keyless)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          COSIGN_YES: 'true'
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign \
+            "ghcr.io/getvictor/fleet-edr-server@${IMAGE_DIGEST}"
