@@ -32,6 +32,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	//   - shell_from_office: Microsoft Word -> /bin/bash (host B)
 	//   - osascript_network_exec: osascript -> curl + /tmp/stage2 (host A)
 	//   - credential_keychain_dump: /usr/bin/security dump-keychain (host A)
+	//   - sudoers_tamper: non-allowlisted writer opens /etc/sudoers.d/evil (host A)
 	events := []store.Event{
 		// Chain 1: suspicious_exec (python → sh → /tmp/payload)
 		{EventID: "fork-py", HostID: hostA, TimestampNs: 1000, EventType: "fork",
@@ -92,6 +93,15 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 			Payload: json.RawMessage(`{"child_pid":1100,"parent_pid":1}`)},
 		{EventID: "exec-sec", HostID: hostA, TimestampNs: 11100, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":1100,"ppid":1,"path":"/usr/bin/security","args":["security","dump-keychain"],"uid":501,"gid":20}`)},
+
+		// Chain 7: sudoers_tamper — non-allowlisted writer opens
+		// /etc/sudoers.d/<x> in write mode.
+		{EventID: "fork-sud", HostID: hostA, TimestampNs: 12000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":1200,"parent_pid":1}`)},
+		{EventID: "exec-sud", HostID: hostA, TimestampNs: 12100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1200,"ppid":1,"path":"/bin/bash","args":["bash","-c","echo evil >> /etc/sudoers.d/evil"],"uid":0,"gid":0}`)},
+		{EventID: "open-sud", HostID: hostA, TimestampNs: 12200, EventType: "open",
+			Payload: json.RawMessage(`{"pid":1200,"path":"/etc/sudoers.d/evil","flags":1537}`)},
 	}
 	require.NoError(t, s.InsertEvents(ctx, events))
 	materialize(t, s, events)
@@ -103,6 +113,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	engine.Register(&ShellFromOffice{})
 	engine.Register(&OsascriptNetworkExec{})
 	engine.Register(&CredentialKeychainDump{})
+	engine.Register(&SudoersTamper{})
 	require.NoError(t, engine.Evaluate(ctx, events))
 
 	// Each rule should have produced at least one alert. We query by rule_id rather than
@@ -115,6 +126,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 		"shell_from_office":        "high",
 		"osascript_network_exec":   "critical",
 		"credential_keychain_dump": "high",
+		"sudoers_tamper":           "high",
 	}
 
 	alerts, err := s.ListAlerts(ctx, store.AlertFilter{})

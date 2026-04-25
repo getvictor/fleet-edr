@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "event_id": "sud-other-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11500, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-other-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11500,
+        "ppid": 1,
+        "path": "/bin/bash",
+        "args": ["bash", "-c", "echo hi > /etc/sudoers.example"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-other-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11500,
+        "path": "/etc/sudoers.example",
+        "flags": 1537
+      }
+    }
+  ]
+}

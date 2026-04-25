@@ -288,6 +288,15 @@ server's `persistence_launchagent` detection rule which LaunchAgent
 paths are benign and should not trigger alerts. Set it as a
 comma-separated list of absolute paths.
 
+`EDR_SUDOERS_WRITER_ALLOWLIST` is the parallel knob for the
+`sudoers_tamper` rule. Direct writes to `/etc/sudoers` or
+`/etc/sudoers.d/*` always fire unless the writing process's path is
+on this list. visudo / sudoedit don't need to be allowlisted — they
+write a temp file and atomically rename it, so the rule never sees
+their open events. The typical use case is allowlisting an MDM
+agent's binary path. Set it as a comma-separated list of absolute
+paths, e.g. `/usr/local/bin/munki-managed-installer`.
+
 ## Common troubleshooting
 
 **Readyz says `db: error`.**

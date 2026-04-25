@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "event_id": "sud-priv-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11200, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-priv-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11200,
+        "ppid": 1,
+        "path": "/usr/bin/tee",
+        "args": ["tee", "/private/etc/sudoers.d/backdoor"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-priv-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11200,
+        "path": "/private/etc/sudoers.d/backdoor",
+        "flags": 1537
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "sudoers_tamper",
+      "severity": "high",
+      "description_contains": "/private/etc/sudoers.d/backdoor",
+      "event_ids": ["sud-priv-open"]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "event_id": "sud-redir-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11000, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-redir-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11000,
+        "ppid": 1,
+        "path": "/bin/bash",
+        "args": ["bash", "-c", "echo 'evil ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/evil"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-redir-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11000,
+        "path": "/etc/sudoers.d/evil",
+        "flags": 1537
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "sudoers_tamper",
+      "severity": "high",
+      "description_contains": "/etc/sudoers.d/evil",
+      "event_ids": ["sud-redir-open"]
+    }
+  ]
+}
