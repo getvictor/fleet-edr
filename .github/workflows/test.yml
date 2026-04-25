@@ -9,16 +9,6 @@ on:
 permissions:
   contents: read
 
-# Opt the whole workflow into Node 24 for any JS action that still
-# targets Node 20. arduino/setup-task v2.0.0 (the latest upstream tag
-# as of writing) declares `using: node20`; until they cut a Node-24
-# release we set this so the runner's deprecation warning goes away
-# and we land cleanly past GitHub's June 2026 forced-default cutover.
-# Drop the env block once arduino/setup-task v3+ ships and the pin
-# below is bumped.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -40,7 +30,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -72,7 +62,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}

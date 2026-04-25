@@ -17,12 +17,6 @@ on:
 permissions:
   contents: read
 
-# Force Node 24 for the JS actions that still target Node 20 (notably
-# arduino/setup-task v2.0.0, the latest upstream release). Drop once
-# all pinned actions ship native Node-24 support.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -42,7 +36,7 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}

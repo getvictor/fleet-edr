@@ -84,11 +84,11 @@ step_suspicious_exec() {
 # Benign synthetic payload for EDR runbook. Does nothing.
 echo "synthetic payload ran $(date -u)" >> "$0.log"
 PAYLOAD
-  chmod 0755 "$payload"
+  chmod 0700 "$payload"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "[runbook] python3 not installed — skipping suspicious_exec step"
     EXPECTED_ALERTS+=("suspicious_exec — SKIPPED (no python3 on this host)")
-    return
+    return 0
   fi
   /usr/bin/env python3 -c "import subprocess; subprocess.Popen(['/bin/sh', '-c', '$payload && true']).wait()" || true
   EXPECTED_ALERTS+=("suspicious_exec — python3 → /bin/sh → $payload")
@@ -156,7 +156,7 @@ step_osascript_network_exec() {
 # Benign synthetic stage2 for EDR runbook. Does nothing.
 echo "synthetic stage2 ran $(date -u)" >> "$0.log"
 STAGE2
-  chmod 0755 "$stage2"
+  chmod 0700 "$stage2"
   /usr/bin/osascript -e "do shell script \"/usr/bin/curl -m 2 -o /dev/null http://127.0.0.1:9/edr-runbook-synthetic 2>/dev/null; $stage2\"" 2>/dev/null || true
   EXPECTED_ALERTS+=("osascript_network_exec — osascript → (curl + $stage2)")
   return 0
@@ -191,7 +191,7 @@ step_privilege_launchd_plist_write() {
   if ! command -v go >/dev/null 2>&1; then
     echo "[runbook] go not installed — skipping privilege_launchd_plist_write step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no Go toolchain on this host)")
-    return
+    return 0
   fi
   local src="$WORKDIR/synthetic_dropper.go"
   local bin="$WORKDIR/synthetic_dropper"
@@ -225,7 +225,7 @@ GO
   if ! go build -o "$bin" "$src"; then
     echo "[runbook] go build failed — skipping step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (go build failed)")
-    return
+    return 0
   fi
   if [[ "$(id -u)" -ne 0 ]]; then
     echo "[runbook] this step needs root to write into /Library/LaunchDaemons; trying sudo -n"
@@ -238,7 +238,7 @@ GO
     if ! sudo -n "$bin"; then
       echo "[runbook] sudo -n unavailable or dropper failed — alert may not have fired"
       EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no NOPASSWD sudo)")
-      return
+      return 0
     fi
   else
     "$bin" || echo "[runbook] dropper failed — alert may not have fired"
