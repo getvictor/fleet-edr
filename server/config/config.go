@@ -64,6 +64,14 @@ type Config struct {
 	// always allowed; this list is for non-Apple MDM agents that legitimately
 	// drop daemons (Munki, Kandji, JumpCloud, ...). Empty by default.
 	LaunchDaemonTeamIDAllowlist map[string]struct{}
+
+	// SudoersWriterAllowlist is the set of writer-process absolute paths
+	// the `sudoers_tamper` rule should silently accept. Populated from
+	// EDR_SUDOERS_WRITER_ALLOWLIST (comma-separated). Empty by default.
+	// visudo doesn't need to be here — it writes via temp-file + rename
+	// and never opens /etc/sudoers in write mode, so the rule never
+	// sees it.
+	SudoersWriterAllowlist map[string]struct{}
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -142,6 +150,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	}
 	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST")); allowlist != nil {
 		c.LaunchDaemonTeamIDAllowlist = allowlist
+	}
+	if allowlist := envparse.Allowlist(getenv("EDR_SUDOERS_WRITER_ALLOWLIST")); allowlist != nil {
+		c.SudoersWriterAllowlist = allowlist
 	}
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {

@@ -114,6 +114,7 @@ func run() error {
 	det.Register(&rules.OsascriptNetworkExec{})
 	det.Register(&rules.CredentialKeychainDump{})
 	det.Register(&rules.PrivilegeLaunchdPlistWrite{AllowedTeamIDs: cfg.LaunchDaemonTeamIDAllowlist})
+	det.Register(&rules.SudoersTamper{AllowedWriters: cfg.SudoersWriterAllowlist})
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)

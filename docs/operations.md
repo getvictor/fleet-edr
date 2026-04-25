@@ -296,6 +296,20 @@ non-Apple agents that legitimately drop daemons under
 a comma-separated list of code-signing team IDs, e.g.
 `T4SK8ZXCXG,XYZW0KL1Q9`.
 
+`EDR_SUDOERS_WRITER_ALLOWLIST` is the parallel knob for the
+`sudoers_tamper` rule. Direct writes to `/etc/sudoers`,
+`/etc/sudoers.d/*`, `/private/etc/sudoers`, or
+`/private/etc/sudoers.d/*` always fire unless the writing process's
+path is on this list. The two path forms are the same file —
+`/etc` is a symlink to `/private/etc` on macOS and ES reports
+whichever path the caller opened — so alerts can surface either,
+but the allowlist still applies in both cases. visudo / sudoedit
+don't need to be allowlisted — they write a temp file and
+atomically rename it, so the rule never sees their open events.
+The typical use case is allowlisting an MDM agent's binary path.
+Set it as a comma-separated list of absolute paths, e.g.
+`/usr/local/bin/munki-managed-installer`.
+
 ## Common troubleshooting
 
 **Readyz says `db: error`.**

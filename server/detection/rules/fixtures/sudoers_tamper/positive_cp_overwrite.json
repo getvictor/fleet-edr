@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "event_id": "sud-cp-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11100, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-cp-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11100,
+        "ppid": 1,
+        "path": "/bin/cp",
+        "args": ["cp", "/tmp/evil", "/etc/sudoers"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-cp-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11100,
+        "path": "/etc/sudoers",
+        "flags": 1537
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "sudoers_tamper",
+      "severity": "high",
+      "description_contains": "/etc/sudoers",
+      "event_ids": ["sud-cp-open"]
+    }
+  ]
+}

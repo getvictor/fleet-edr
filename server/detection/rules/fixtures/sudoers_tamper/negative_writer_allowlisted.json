@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "event_id": "sud-allow-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 5000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11400, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-allow-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 5100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11400,
+        "ppid": 1,
+        "path": "/usr/local/bin/fixture-allowed-writer",
+        "args": ["fixture-allowed-writer"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-allow-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 5200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11400,
+        "path": "/etc/sudoers.d/managed",
+        "flags": 1537
+      }
+    }
+  ]
+}

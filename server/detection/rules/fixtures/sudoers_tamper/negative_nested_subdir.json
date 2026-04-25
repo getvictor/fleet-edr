@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "event_id": "sud-nest-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11600, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-nest-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11600,
+        "ppid": 1,
+        "path": "/bin/cp",
+        "args": ["cp", "/tmp/x", "/etc/sudoers.d/staging/x"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-nest-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11600,
+        "path": "/etc/sudoers.d/staging/x",
+        "flags": 1537
+      }
+    }
+  ]
+}

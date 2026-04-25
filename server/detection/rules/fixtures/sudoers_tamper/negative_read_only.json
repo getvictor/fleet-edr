@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "event_id": "sud-ro-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11300, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-ro-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11300,
+        "ppid": 1,
+        "path": "/usr/bin/sudo",
+        "args": ["sudo", "-l"],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "sud-ro-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11300,
+        "path": "/etc/sudoers",
+        "flags": 0
+      }
+    }
+  ]
+}

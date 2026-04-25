@@ -34,6 +34,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	//   - credential_keychain_dump: /usr/bin/security dump-keychain (host A)
 	//   - privilege_launchd_plist_write: non-platform-binary writes
 	//     /Library/LaunchDaemons/com.evil.persistence.plist (host A)
+	//   - sudoers_tamper: non-allowlisted writer opens /etc/sudoers.d/evil (host A)
 	events := []store.Event{
 		// Chain 1: suspicious_exec (python → sh → /tmp/payload)
 		{EventID: "fork-py", HostID: hostA, TimestampNs: 1000, EventType: "fork",
@@ -103,6 +104,18 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 			Payload: json.RawMessage(`{"pid":1200,"ppid":1,"path":"/tmp/dropper","args":["/tmp/dropper"],"uid":0,"gid":0,"code_signing":{"team_id":"EVILCORP1","signing_id":"com.evil.dropper","flags":0,"is_platform_binary":false}}`)},
 		{EventID: "open-ldp", HostID: hostA, TimestampNs: 12200, EventType: "open",
 			Payload: json.RawMessage(`{"pid":1200,"path":"/Library/LaunchDaemons/com.evil.persistence.plist","flags":1537}`)},
+
+		// Chain 8: sudoers_tamper — non-allowlisted writer opens
+		// /etc/sudoers.d/<x> in write mode. Renumbered from "Chain 7"
+		// during the merge with PR #38; the launchd-plist chain landed
+		// at the same slot first, so this one moves to PID 1300 /
+		// TimestampNs 13000 to keep the time/PID space disjoint.
+		{EventID: "fork-sud", HostID: hostA, TimestampNs: 13000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":1300,"parent_pid":1}`)},
+		{EventID: "exec-sud", HostID: hostA, TimestampNs: 13100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1300,"ppid":1,"path":"/bin/bash","args":["bash","-c","echo evil >> /etc/sudoers.d/evil"],"uid":0,"gid":0}`)},
+		{EventID: "open-sud", HostID: hostA, TimestampNs: 13200, EventType: "open",
+			Payload: json.RawMessage(`{"pid":1300,"path":"/etc/sudoers.d/evil","flags":1537}`)},
 	}
 	require.NoError(t, s.InsertEvents(ctx, events))
 	materialize(t, s, events)
@@ -115,6 +128,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 	engine.Register(&OsascriptNetworkExec{})
 	engine.Register(&CredentialKeychainDump{})
 	engine.Register(&PrivilegeLaunchdPlistWrite{})
+	engine.Register(&SudoersTamper{})
 	require.NoError(t, engine.Evaluate(ctx, events))
 
 	// Each rule should have produced at least one alert. We query by rule_id rather than
@@ -128,6 +142,7 @@ func TestAllRulesWireUpAndFire(t *testing.T) {
 		"osascript_network_exec":        "critical",
 		"credential_keychain_dump":      "high",
 		"privilege_launchd_plist_write": "high",
+		"sudoers_tamper":                "high",
 	}
 
 	alerts, err := s.ListAlerts(ctx, store.AlertFilter{})
