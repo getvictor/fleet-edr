@@ -20,17 +20,17 @@
 # Stage 1: UI bundle
 # ---------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM node:20 AS ui-build
-WORKDIR /src
 # package*.json first for layer-cache reuse: npm ci only reruns when
 # dependencies change, not every source edit.
-COPY ui/package.json ui/package-lock.json ./ui/
+WORKDIR /src/ui
+COPY ui/package.json ui/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    cd ui && npm ci --ignore-scripts
+    npm ci --ignore-scripts
 # Vite writes to `../server/ui/dist` (relative to /src/ui) = /src/server/ui/dist.
 # Pre-create that parent so vite can emptyOutDir without tripping on EACCES.
 RUN mkdir -p /src/server/ui
-COPY ui ./ui
-RUN cd ui && npm run build
+COPY ui ./
+RUN npm run build
 # Output: /src/server/ui/dist/{index.html,assets/...}
 
 # ---------------------------------------------------------------

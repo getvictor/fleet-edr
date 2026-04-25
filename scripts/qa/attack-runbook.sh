@@ -62,7 +62,10 @@ mkdir -p "$WORKDIR"
 EXPECTED_ALERTS=()
 
 # Ascii separator between steps so the operator can scroll the SSH session.
-hr() { printf '\n%s\n' '────────────────────────────────────────────────────────'; }
+hr() {
+  printf '\n%s\n' '────────────────────────────────────────────────────────'
+  return 0
+}
 
 step_suspicious_exec() {
   hr
@@ -76,19 +79,23 @@ step_suspicious_exec() {
   # example in the Phase-7 plan) so the chain becomes
   # python3 → /bin/sh → /tmp/synthetic_payload.
   local payload="$WORKDIR/synthetic_payload"
+  # Pre-create the file at mode 0700 in one step; the subsequent `cat >`
+  # truncates and refills content but preserves mode, so the payload is
+  # never visible to other users at any point.
+  install -m 0700 /dev/null "$payload"
   cat > "$payload" <<'PAYLOAD'
 #!/bin/sh
 # Benign synthetic payload for EDR runbook. Does nothing.
 echo "synthetic payload ran $(date -u)" >> "$0.log"
 PAYLOAD
-  chmod +x "$payload"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "[runbook] python3 not installed — skipping suspicious_exec step"
     EXPECTED_ALERTS+=("suspicious_exec — SKIPPED (no python3 on this host)")
-    return
+    return 0
   fi
   /usr/bin/env python3 -c "import subprocess; subprocess.Popen(['/bin/sh', '-c', '$payload && true']).wait()" || true
   EXPECTED_ALERTS+=("suspicious_exec — python3 → /bin/sh → $payload")
+  return 0
 }
 
 step_persistence_launchagent() {
@@ -116,6 +123,7 @@ EOF
   /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
   rm -f "$plist_path"
   EXPECTED_ALERTS+=("persistence_launchagent — launchctl load $plist_path")
+  return 0
 }
 
 step_dyld_insert() {
@@ -131,6 +139,7 @@ step_dyld_insert() {
   # `/usr/bin/env` to get the assignment into argv as a literal token.
   /usr/bin/env DYLD_INSERT_LIBRARIES=/tmp/synthetic-not-a-real-dylib.dylib /usr/bin/true || true
   EXPECTED_ALERTS+=("dyld_insert — /usr/bin/env DYLD_INSERT_LIBRARIES=... /usr/bin/true")
+  return 0
 }
 
 step_osascript_network_exec() {
@@ -145,14 +154,16 @@ step_osascript_network_exec() {
   # /tmp/* exec the rule needs, then have osascript invoke both curl
   # (kept harmless via 127.0.0.1:9) and the pre-staged binary.
   local stage2="/tmp/synthetic_stage2"
+  # See step_suspicious_exec for the install + truncate-write rationale.
+  install -m 0700 /dev/null "$stage2"
   cat > "$stage2" <<'STAGE2'
 #!/bin/sh
 # Benign synthetic stage2 for EDR runbook. Does nothing.
 echo "synthetic stage2 ran $(date -u)" >> "$0.log"
 STAGE2
-  chmod +x "$stage2"
   /usr/bin/osascript -e "do shell script \"/usr/bin/curl -m 2 -o /dev/null http://127.0.0.1:9/edr-runbook-synthetic 2>/dev/null; $stage2\"" 2>/dev/null || true
   EXPECTED_ALERTS+=("osascript_network_exec — osascript → (curl + $stage2)")
+  return 0
 }
 
 step_credential_keychain_dump() {
@@ -164,6 +175,7 @@ step_credential_keychain_dump() {
   # hanging. Rule fires on exec regardless of dump success.
   /usr/bin/security dump-keychain </dev/null >/dev/null 2>&1 || true
   EXPECTED_ALERTS+=("credential_keychain_dump — /usr/bin/security dump-keychain")
+  return 0
 }
 
 step_privilege_launchd_plist_write() {
@@ -183,7 +195,7 @@ step_privilege_launchd_plist_write() {
   if ! command -v go >/dev/null 2>&1; then
     echo "[runbook] go not installed — skipping privilege_launchd_plist_write step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no Go toolchain on this host)")
-    return
+    return 0
   fi
   local src="$WORKDIR/synthetic_dropper.go"
   local bin="$WORKDIR/synthetic_dropper"
@@ -217,9 +229,9 @@ GO
   if ! go build -o "$bin" "$src"; then
     echo "[runbook] go build failed — skipping step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (go build failed)")
-    return
+    return 0
   fi
-  if [ "$(id -u)" -ne 0 ]; then
+  if [[ "$(id -u)" -ne 0 ]]; then
     echo "[runbook] this step needs root to write into /Library/LaunchDaemons; trying sudo -n"
     # -n (non-interactive) bails immediately when sudo would otherwise
     # prompt for a password. The runbook is meant to be invoked over SSH
@@ -230,12 +242,13 @@ GO
     if ! sudo -n "$bin"; then
       echo "[runbook] sudo -n unavailable or dropper failed — alert may not have fired"
       EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no NOPASSWD sudo)")
-      return
+      return 0
     fi
   else
     "$bin" || echo "[runbook] dropper failed — alert may not have fired"
   fi
   EXPECTED_ALERTS+=("privilege_launchd_plist_write — synthetic-dropper wrote /Library/LaunchDaemons/com.synthetic.edr-runbook.plist")
+  return 0
 }
 
 step_shell_from_office_note() {
@@ -248,6 +261,7 @@ step_shell_from_office_note() {
   # here so the runbook output makes the deliberate omission explicit
   # rather than silently leaving operators wondering.
   EXPECTED_ALERTS+=("shell_from_office — INTENTIONALLY NOT exercised (no Office on the VM)")
+  return 0
 }
 
 main() {
@@ -269,6 +283,7 @@ main() {
   echo "[runbook] Verify in the admin UI:"
   echo "    open '<your-edr-url>/ui/alerts'"
   echo "[runbook] Cleanup: rm -rf $WORKDIR (/Library/LaunchDaemons drop is removed by the dropper itself)"
+  return 0
 }
 
 main "$@"
