@@ -1,0 +1,50 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {"child_pid": 9001, "parent_pid": 1}
+    },
+    {
+      "event_id": "ldp-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 9001,
+        "ppid": 1,
+        "path": "/tmp/dropper",
+        "args": ["/tmp/dropper"],
+        "uid": 0,
+        "gid": 0,
+        "code_signing": {
+          "team_id": "EVILCORP1",
+          "signing_id": "com.evil.dropper",
+          "flags": 0,
+          "is_platform_binary": false
+        }
+      }
+    },
+    {
+      "event_id": "ldp-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 9001,
+        "path": "/Library/LaunchDaemons/com.evil.persistence.plist",
+        "flags": 1
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "privilege_launchd_plist_write",
+      "severity": "high",
+      "description_contains": "/Library/LaunchDaemons/com.evil.persistence.plist",
+      "event_ids": ["ldp-open"]
+    }
+  ]
+}
