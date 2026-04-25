@@ -152,16 +152,25 @@ floor for any project that wants enterprise adoption.
 - [x] Dependabot for `gomod` (agent + server), `npm` (ui), and `github-actions`
 - [x] Dependabot `cooldown` (10 days default, 30 for majors) plus version grouping
 - [x] Major-version updates ignored for code deps (security overrides bypass)
-- [ ] **Sigstore / cosign** signed release artifacts (binaries + container images)
-- [ ] **SLSA Build Level 3** provenance attestations on releases
-  (`slsa-framework/slsa-github-generator`)
-- [ ] **SBOM generation** at build time (CycloneDX or SPDX via `syft` or `cyclonedx-gomod`),
-  attached to releases
-- [ ] **OpenSSF Scorecard** workflow + badge in README
+- [x] **Sigstore / cosign** signed release artifacts via keyless OIDC: every pkg,
+  mobileconfig, SHA256SUMS, SBOM, AND the GHCR server image gets a `.sig` + `.pem`
+  on each release tag (`.github/workflows/release.yml`)
+- [~] **SLSA Build Level 3** provenance attestations on releases via
+  `actions/attest-build-provenance`. We claim **build level 2** in practice — Apple
+  notarization breaks SLSA L3's hermeticity requirement (notarytool reaches Apple's
+  network). Documented in the workflow comment; revisit if Apple ever offers an
+  offline notary path
+- [x] **SBOM generation** at build time -- both CycloneDX and SPDX via
+  `anchore/sbom-action` (syft underneath), attached to releases. Server image SBOM
+  also pushed as a cosign attestation on the registry side
+- [x] **OpenSSF Scorecard** workflow + badge in README
+  (`.github/workflows/scorecard.yml`)
 - [ ] **OpenSSF Best Practices Badge** (CII) -- silver minimum
-- [ ] **CodeQL** SAST workflow (Go + TypeScript + Swift)
+- [x] **CodeQL** SAST workflow (Go + TypeScript + Swift) at
+  `.github/workflows/codeql.yml`
 - [ ] **Semgrep** with security rulesets (catches things golangci-lint / ESLint miss)
-- [ ] **OSV-Scanner** in CI (broader than `govulncheck`; covers indirect npm deps too)
+- [x] **OSV-Scanner** in CI (broader than `govulncheck`; covers indirect npm deps too)
+  at `.github/workflows/osv-scanner.yml`
 - [ ] **Trivy / Grype** scan of release container images
 - [ ] **Verified-commit policy** (signed commits or DCO required on `main`)
 - [ ] **Branch protection ruleset** committed as `.github/rulesets/*.json` (so the
@@ -200,8 +209,10 @@ floor for any project that wants enterprise adoption.
 - [x] SonarCloud for cross-language quality + security hot spots
   (`sonar-project.properties`, dedicated `SonarCloud` workflow)
 - [x] Multi-module Go workspace with clear boundaries (`agent/`, `server/`)
-- [ ] **Test-coverage thresholds** uploaded to SonarCloud (today coverage is excluded so
-  the gate evaluates vacuously)
+- [x] **Test-coverage thresholds** uploaded to SonarCloud. Both Go and TS coverage
+  reports flow through (`sonar.go.coverage.reportPaths`,
+  `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to
+  ≥80% and applies per PR. C7 deliverable
 - [ ] **Codecov / Coveralls** with PR comments and coverage diff
 - [ ] **`go vet -vettool=fieldalignment`** -- catches struct padding waste in hot structs
 - [x] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
@@ -292,18 +303,16 @@ genuine differentiator versus most competitors.
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration
   time so the policy is reviewable in `main.go`
-- [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml` and prose overview at
-  `docs/api.md`. Still missing: hosted rendering (Redoc / Stoplight / Swagger UI) and
-  handler/client codegen via `oapi-codegen` / `openapi-typescript`, so today the spec and
-  the Go handlers can drift without CI catching it
+- [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml`, prose overview at
+  `docs/api.md`, AND hosted rendering at `/api/docs` via embedded Redoc (D1
+  deliverable: zero external network calls, served from `server/api/docs/embed`).
+  Still missing: handler/client codegen via `oapi-codegen` /
+  `openapi-typescript`, so today the spec and the Go handlers can still drift
+  without CI catching it
 - [ ] **AsyncAPI 3.0 spec** for the event envelope (the JSON Schema covers payload but not
   the upload contract)
-- [ ] **OpenAPI lint in CI** -- either `@redocly/cli lint` (what this repo uses ad-hoc
-  today) or `stoplightio/spectral` with a shared ruleset. Both enforce structural validity
-  + style rules (`operationId`, `4XX` coverage, `tags`, descriptions); Redocly has a
-  lighter default ruleset and integrates with Redocly Portal if we ever host rendered docs.
-  Spectral has a larger community ruleset ecosystem. Pick one, pin the version in CI, fail
-  the build on errors
+- [x] **OpenAPI lint in CI** -- `@redocly/cli lint` runs on every PR + push at
+  `.github/workflows/openapi-lint.yml`. Failures gate the merge
 - [ ] **API contract tests** generated from OpenAPI via `schemathesis` (property-based,
   hits a live server, catches handler/spec drift) or `dredd`. Pairs naturally with the
   lint job above
@@ -559,11 +568,11 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | Detection content + response      | 6       | 36    | 17%  |
 | Cross-platform reach              | 1       | 8     | 12%  |
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
-| Supply-chain security             | 10      | 27    | 37%  |
-| Code quality + static analysis    | 13      | 22    | 59%  |
+| Supply-chain security             | 15.5    | 27    | 57%  |
+| Code quality + static analysis    | 14      | 22    | 64%  |
 | Testing                           | 6       | 19    | 32%  |
 | Observability + operations        | 15      | 24    | 62%  |
-| API design                        | 4       | 16    | 25%  |
+| API design                        | 5.5     | 16    | 34%  |
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
 | Build / release / packaging       | 2       | 12    | 17%  |
@@ -572,10 +581,13 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | macOS platform hygiene            | 6       | 12    | 50%  |
 | AI-assisted engineering           | 2       | 17    | 12%  |
 
-The standout strengths today are observability, code-quality tooling, and authn /
-session security. The clearest gaps for a "competing with CrowdStrike" pitch are the
-detection-content surface (ATT&CK mapping, Sigma / YARA, IOC management, OCSF), the
-supply-chain story (Sigstore, SLSA, SBOM, Scorecard), the open-source community basics
-(LICENSE, SECURITY.md, CONTRIBUTING.md, CHANGELOG), and the AI-era hygiene that
-enterprise procurement is starting to ask for (CISA Secure by Design, OWASP LLM Top 10,
-AI provenance policy).
+Phase-7 supply-chain track shipped Sigstore signing (C4), SBOMs (C5), SLSA build
+provenance (C6, level 2 due to Apple notarization), Scorecard (C2), OSV-Scanner
+(C3), and a real SonarCloud coverage gate (C7). That moved §4 from 37% → 57% and
+§5 from 59% → 64%. D1 hosted Redoc at `/api/docs` and added Redocly OpenAPI lint,
+moving §8 from 25% → 34%. The remaining big gaps that buyers ask about are
+LICENSE / SECURITY.md / CONTRIBUTING.md (Phase 7b — user-gated on license
+choice), the detection-content surface (ATT&CK mapping is in via B1 but Sigma /
+YARA / IOC management still wait for v1.1), and the AI-era hygiene that
+enterprise procurement is starting to ask for (CISA Secure by Design, OWASP LLM
+Top 10, AI provenance policy).
