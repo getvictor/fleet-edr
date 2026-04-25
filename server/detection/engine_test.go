@@ -32,8 +32,11 @@ type recordingRule struct {
 	seen []store.Event
 }
 
-func (r *recordingRule) ID() string           { return r.id }
-func (r *recordingRule) Techniques() []string { return nil }
+func (r *recordingRule) ID() string { return r.id }
+
+// Techniques returns an empty slice (not nil) to match the Rule interface
+// contract; the production rules all do the same.
+func (r *recordingRule) Techniques() []string { return []string{} }
 func (r *recordingRule) Evaluate(_ context.Context, events []store.Event, _ *store.Store) ([]Finding, error) {
 	r.seen = append(r.seen, events...)
 	return nil, nil
@@ -134,27 +137,36 @@ func TestEngineEvaluateRuleError(t *testing.T) {
 }
 
 // TestFilterSnapshotEvents pins the contract of the snapshot filter:
-// snapshot=true exec events drop, everything else passes through. This
-// keeps the per-event peek behaviour deterministic so future filters
-// can stack without reordering surprises.
+// snapshot=true exec events drop, everything else passes through. The
+// fast-path gate keys on just the field name `"snapshot"`, so JSON
+// formatting differences (whitespace, key ordering) cannot regress the
+// filter behaviour — the JSON-aware unmarshal probe is the final word
+// on the boolean value.
 func TestFilterSnapshotEvents(t *testing.T) {
 	cases := []struct {
 		name   string
 		input  store.Event
 		filter bool
 	}{
-		{"exec snapshot=true",
+		{"exec snapshot=true (compact)",
 			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1,"snapshot":true}`)}, true},
 		{"exec snapshot=true with whitespace",
-			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1, "snapshot": true }`)}, false},
+			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1, "snapshot": true }`)}, true},
+		{"exec snapshot=true with reordered keys",
+			store.Event{EventType: "exec", Payload: jsonObj(`{"snapshot":true,"pid":1}`)}, true},
 		{"exec snapshot=false",
 			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1,"snapshot":false}`)}, false},
 		{"exec without snapshot field",
 			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1}`)}, false},
-		{"open with snapshot:true substring (other event type)",
+		{"open with snapshot:true (other event type)",
 			store.Event{EventType: "open", Payload: jsonObj(`{"pid":1,"snapshot":true}`)}, false},
-		{"exec mentions snapshot in args (false-positive guard)",
-			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1,"args":["echo","\"snapshot\":true"]}`)}, false},
+		{"exec nested snapshot=true (false-positive guard)",
+			// Substring `"snapshot"` is present so the gate passes, but
+			// the unmarshal probe sees it nested under `meta` rather
+			// than at the top level — Snapshot stays false, event passes
+			// through. Pins the gate's fail-closed behaviour against
+			// non-canonical payloads.
+			store.Event{EventType: "exec", Payload: jsonObj(`{"pid":1,"meta":{"snapshot":true}}`)}, false},
 		{"exec malformed JSON containing marker",
 			store.Event{EventType: "exec", Payload: jsonObj(`{"snapshot":true,`)}, false},
 	}
@@ -168,21 +180,24 @@ func TestFilterSnapshotEvents(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// Whitespace-tolerant case: the bytes.Contains gate is intentionally
-	// strict on the canonical Go-encoded shape. ESF events come from a
-	// well-typed Swift encoder that emits no extra whitespace, so
-	// "snapshot": true (with a space) wouldn't appear in production
-	// payloads. The probe-decode follow-up doesn't run when the gate
-	// rejects, so the spaced form falls through as "not snapshot". This
-	// is documented behaviour, not a bug — flag it if Swift's encoder
-	// ever changes its formatting.
-	t.Run("whitespaced form passes through (gate is byte-exact)", func(t *testing.T) {
-		out := filterSnapshotEvents([]store.Event{
-			{EventType: "exec", Payload: jsonObj(`{"snapshot": true}`)},
-		})
-		assert.Len(t, out, 1)
-	})
+// TestFilterSnapshotEvents_NoCopy_ZeroAlloc proves the steady-state
+// shape — when no snapshot exec is in the batch — returns the input
+// slice verbatim. Engine.Evaluate runs on every processor batch, so a
+// copy-per-batch in the common path would be real overhead; this pins
+// the optimisation so a careless refactor doesn't quietly reintroduce it.
+func TestFilterSnapshotEvents_NoCopy(t *testing.T) {
+	in := []store.Event{
+		{EventType: "exec", Payload: jsonObj(`{"pid":1}`)},
+		{EventType: "fork", Payload: jsonObj(`{"child_pid":2,"parent_pid":1}`)},
+	}
+	out := filterSnapshotEvents(in)
+	require.Len(t, out, 2)
+	// Backing array identity check: when nothing was filtered, we hand
+	// the input slice straight back (no allocation).
+	assert.Same(t, &in[0], &out[0],
+		"filter must return the input slice unchanged when no snapshot exec is present")
 }
 
 // TestEngineEvaluateDropsSnapshotExecs proves Engine.Evaluate hands

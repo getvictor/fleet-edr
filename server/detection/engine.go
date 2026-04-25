@@ -88,16 +88,16 @@ func (e *Engine) Evaluate(ctx context.Context, events []store.Event) error {
 	return nil
 }
 
-// snapshotMarker is the substring fast-path used to short-circuit the
+// snapshotMarker is the field-name fast-path used to short-circuit the
 // snapshot-exec filter. The vast majority of exec events don't carry the
-// snapshot field at all, so we want to skip the JSON decode for them.
-// bytes.Contains is roughly O(n) in the payload size and finishes in
-// ~hundreds of nanoseconds; an unmarshal would cost an order of
-// magnitude more. False positives from the substring (a payload that
-// mentions the literal "snapshot":true elsewhere — extremely unlikely
-// for ESF exec events whose schema is fixed) get filtered out by the
-// follow-up unmarshal probe.
-var snapshotMarker = []byte(`"snapshot":true`)
+// snapshot field at all, so we skip the JSON decode for them. We gate on
+// just the field name (not the value) so the filter stays robust to
+// encoder formatting differences — whitespace around the colon, key
+// reordering, pretty-printing, all of which would silently break a
+// byte-exact `"snapshot":true` gate and let snapshot events back into
+// rule evaluation. The unmarshal probe below is JSON-spec aware and is
+// the source of truth on the boolean value.
+var snapshotMarker = []byte(`"snapshot"`)
 
 type snapshotProbe struct {
 	Snapshot bool `json:"snapshot"`
@@ -107,15 +107,31 @@ type snapshotProbe struct {
 // should evaluate. Currently the only filter is for `snapshot=true` exec
 // events (issue #11); future filters can stack here without rules
 // needing to repeat the check.
+//
+// The common case — no snapshot exec in the batch — returns the input
+// slice verbatim, so Engine.Evaluate pays zero per-batch allocation in
+// steady state. Only the first dropped event triggers a copy.
 func filterSnapshotEvents(events []store.Event) []store.Event {
-	out := make([]store.Event, 0, len(events))
-	for _, evt := range events {
-		if isSnapshotExec(evt) {
+	for i, evt := range events {
+		if !isSnapshotExec(evt) {
 			continue
 		}
-		out = append(out, evt)
+		// First snapshot found at index i: copy the prefix that already
+		// passed and continue scanning the suffix. Capacity sized for
+		// "everything but this one event" — a reasonable guess that
+		// avoids a second alloc when only one snapshot is present, which
+		// is the typical extension-startup shape.
+		out := make([]store.Event, 0, len(events)-1)
+		out = append(out, events[:i]...)
+		for _, evt := range events[i+1:] {
+			if isSnapshotExec(evt) {
+				continue
+			}
+			out = append(out, evt)
+		}
+		return out
 	}
-	return out
+	return events
 }
 
 func isSnapshotExec(evt store.Event) bool {
