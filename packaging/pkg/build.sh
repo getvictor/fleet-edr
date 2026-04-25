@@ -198,6 +198,21 @@ else
         cp "$PROFILE_NET" "$NETEXT/Contents/embedded.provisionprofile"
     fi
 
+    # Host app needs its own embedded profile because
+    # `com.apple.developer.system-extension.install` is a restricted entitlement.
+    # On SIP-on hosts AMFI rejects the binary at launch with "No matching
+    # profile found" (-413); the visible symptom on a pilot Mac is the host
+    # app silently exiting 137 (SIGKILL) before OSSystemExtensionRequest can
+    # fire, so the System Settings approval prompt never appears. SIP-off dev
+    # VMs don't enforce restricted entitlements, which is what masked this
+    # gap from rc.3/rc.4 (the empty-entitlements bug below was hit first).
+    PROFILE_HOST="$ROOT/packaging/provisioning/edr.provisionprofile"
+    if [ ! -f "$PROFILE_HOST" ]; then
+        echo "missing $PROFILE_HOST" >&2
+        exit 9
+    fi
+    cp "$PROFILE_HOST" "$STAGE/app-root/Applications/Fleet EDR.app/Contents/embedded.provisionprofile"
+
     # Re-sign every bundle the edr.app embeds, bottom-up, with the hardened
     # runtime flag AND the per-binary entitlements. Notary rejects any
     # Mach-O inside the outer bundle that lacks `--options runtime`, so
