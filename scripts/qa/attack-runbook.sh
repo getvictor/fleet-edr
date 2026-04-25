@@ -79,14 +79,18 @@ step_suspicious_exec() {
   # example in the Phase-7 plan) so the chain becomes
   # python3 → /bin/sh → /tmp/synthetic_payload.
   local payload="$WORKDIR/synthetic_payload"
-  # umask 077 so `cat >` creates the file 0600; closes the brief window
-  # where a default-umask file would be 0644 between create and chmod.
-  (umask 077; cat > "$payload") <<'PAYLOAD'
+  # Restrictive umask + create + chmod stay grouped so the file is never
+  # readable by other users (it would briefly sit at 0644 if the chmod
+  # ran outside the umask scope).
+  (
+    umask 077
+    cat > "$payload" <<'PAYLOAD'
 #!/bin/sh
 # Benign synthetic payload for EDR runbook. Does nothing.
 echo "synthetic payload ran $(date -u)" >> "$0.log"
 PAYLOAD
-  chmod u+x "$payload"
+    chmod u+x "$payload"
+  )
   if ! command -v python3 >/dev/null 2>&1; then
     echo "[runbook] python3 not installed — skipping suspicious_exec step"
     EXPECTED_ALERTS+=("suspicious_exec — SKIPPED (no python3 on this host)")
@@ -153,13 +157,16 @@ step_osascript_network_exec() {
   # /tmp/* exec the rule needs, then have osascript invoke both curl
   # (kept harmless via 127.0.0.1:9) and the pre-staged binary.
   local stage2="/tmp/synthetic_stage2"
-  # umask 077: see step_suspicious_exec for rationale (avoid 0644 race).
-  (umask 077; cat > "$stage2") <<'STAGE2'
+  # See step_suspicious_exec for the umask + grouped-chmod rationale.
+  (
+    umask 077
+    cat > "$stage2" <<'STAGE2'
 #!/bin/sh
 # Benign synthetic stage2 for EDR runbook. Does nothing.
 echo "synthetic stage2 ran $(date -u)" >> "$0.log"
 STAGE2
-  chmod u+x "$stage2"
+    chmod u+x "$stage2"
+  )
   /usr/bin/osascript -e "do shell script \"/usr/bin/curl -m 2 -o /dev/null http://127.0.0.1:9/edr-runbook-synthetic 2>/dev/null; $stage2\"" 2>/dev/null || true
   EXPECTED_ALERTS+=("osascript_network_exec — osascript → (curl + $stage2)")
   return 0
