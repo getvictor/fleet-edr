@@ -45,10 +45,12 @@
 #    minute between runs if you want fresh alerts.
 #  - A fuzzer. The synthetic events are exact rule triggers.
 
-set -uo pipefail
+set -uEo pipefail
 
 # Strict mode minus -e: we want to keep going past a failed step so the
 # operator gets a complete picture of which rules fired and which didn't.
+# -E (errtrace) makes the trap inherit into shell functions; without it
+# only top-level errors fire the trap and per-step failures stay silent.
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
 trap 'rc=$?; echo "[runbook] step at line $LINENO exited $rc — continuing"' ERR
 
@@ -62,10 +64,15 @@ hr() { printf '\n%s\n' '──────────────────�
 
 step_suspicious_exec() {
   hr
-  echo "[runbook] suspicious_exec — shell parent → /tmp/<binary> child"
-  # Rule trigger: a shell ( /bin/sh / /bin/bash / /bin/zsh ) forks a child
-  # whose path is under /tmp/, /var/tmp/, or /private/tmp/ within 30s. Drop
-  # an executable into /tmp and run it via the shell.
+  echo "[runbook] suspicious_exec — non-shell parent → /bin/sh → /tmp/<binary>"
+  # Rule trigger: a shell (/bin/sh / /bin/bash / /bin/zsh) whose PARENT is
+  # NOT itself a shell forks a child under /tmp/* within 30s. The rule
+  # explicitly skips shell→shell→/tmp chains (suspicious_exec.go:110), so
+  # we cannot just call `/bin/sh -c "$payload"` from this bash script —
+  # the runbook's bash would be the shell parent and the alert would
+  # never fire. Use python3 as a non-shell launcher (the canonical
+  # example in the Phase-7 plan) so the chain becomes
+  # python3 → /bin/sh → /tmp/synthetic_payload.
   local payload="$WORKDIR/synthetic_payload"
   cat > "$payload" <<'PAYLOAD'
 #!/bin/sh
@@ -73,8 +80,13 @@ step_suspicious_exec() {
 echo "synthetic payload ran $(date -u)" >> "$0.log"
 PAYLOAD
   chmod +x "$payload"
-  /bin/sh -c "$payload" || true
-  EXPECTED_ALERTS+=("suspicious_exec — /bin/sh child execed $payload")
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[runbook] python3 not installed — skipping suspicious_exec step"
+    EXPECTED_ALERTS+=("suspicious_exec — SKIPPED (no python3 on this host)")
+    return
+  fi
+  /usr/bin/env python3 -c "import subprocess; subprocess.Popen(['/bin/sh', '-c', '$payload && true']).wait()" || true
+  EXPECTED_ALERTS+=("suspicious_exec — python3 → /bin/sh → $payload")
 }
 
 step_persistence_launchagent() {
@@ -106,29 +118,39 @@ EOF
 
 step_dyld_insert() {
   hr
-  echo "[runbook] dyld_insert — exec with DYLD_INSERT_LIBRARIES= argv prefix"
-  # Rule trigger: exec event whose argv[0..N] contains a leading
-  # "DYLD_INSERT_LIBRARIES=..." token. Note this requires SIP disabled OR
-  # the target binary to be unsigned/non-restricted; on edr-dev (SIP off)
-  # /usr/bin/true accepts the env injection. On edr-qa (SIP on) the env
-  # is stripped, but the EXEC event still records the argv prefix that the
-  # rule reads — so the alert fires regardless.
-  DYLD_INSERT_LIBRARIES=/tmp/synthetic-not-a-real-dylib.dylib /usr/bin/true || true
-  EXPECTED_ALERTS+=("dyld_insert — DYLD_INSERT_LIBRARIES prefix on /usr/bin/true")
+  echo "[runbook] dyld_insert — /usr/bin/env DYLD_INSERT_LIBRARIES=... <binary>"
+  # Rule trigger: an exec event whose `args` array carries a leading
+  # `DYLD_INSERT_LIBRARIES=` (or `DYLD_LIBRARY_PATH=`) assignment in a
+  # position the rule treats as exec-time env (dyld_insert.go:matchDyldArg).
+  # The rule's "VAR=val target" branch only sees the assignment when ESF
+  # captures it in the exec's argv — and ESF only captures argv, NOT envp.
+  # Shell prefix syntax (`DYLD_…=… /usr/bin/true`) puts the assignment in
+  # envp, which the rule never sees, so the runbook MUST go through
+  # `/usr/bin/env` to get the assignment into argv as a literal token.
+  /usr/bin/env DYLD_INSERT_LIBRARIES=/tmp/synthetic-not-a-real-dylib.dylib /usr/bin/true || true
+  EXPECTED_ALERTS+=("dyld_insert — /usr/bin/env DYLD_INSERT_LIBRARIES=... /usr/bin/true")
 }
 
 step_osascript_network_exec() {
   hr
   echo "[runbook] osascript_network_exec — osascript → curl → /tmp/<file>"
-  # Rule trigger: osascript spawns a curl/wget subtree that drops a binary
-  # path into /tmp within 30s. We curl localhost so the network call
-  # never leaves the host — works even on a fully air-gapped VM. The rule
-  # only inspects the EXEC chain (osascript → curl → /tmp/stage2 path
-  # appearing as a downstream exec), not whether the HTTP request
-  # succeeded.
-  local stage2="$WORKDIR/synthetic_stage2"
-  /usr/bin/osascript -e "do shell script \"/usr/bin/curl -m 2 -o $stage2 http://127.0.0.1:9/edr-runbook-synthetic 2>/dev/null; chmod +x $stage2 2>/dev/null; $stage2 2>/dev/null\"" 2>/dev/null || true
-  EXPECTED_ALERTS+=("osascript_network_exec — osascript → curl → $stage2")
+  # Rule trigger: osascript spawns a process tree containing both a
+  # curl/wget descendant AND a downstream exec whose path is under /tmp/
+  # within 30s. The rule keys on the EXEC event for the /tmp/* binary,
+  # not on the curl response — so we MUST actually run a binary that
+  # lives in /tmp (curl writing to /tmp is not enough; the file has to
+  # be exec'd). Pre-create a benign stage2 binary so the chain has the
+  # /tmp/* exec the rule needs, then have osascript invoke both curl
+  # (kept harmless via 127.0.0.1:9) and the pre-staged binary.
+  local stage2="/tmp/synthetic_stage2"
+  cat > "$stage2" <<'STAGE2'
+#!/bin/sh
+# Benign synthetic stage2 for EDR runbook. Does nothing.
+echo "synthetic stage2 ran $(date -u)" >> "$0.log"
+STAGE2
+  chmod +x "$stage2"
+  /usr/bin/osascript -e "do shell script \"/usr/bin/curl -m 2 -o /dev/null http://127.0.0.1:9/edr-runbook-synthetic 2>/dev/null; $stage2\"" 2>/dev/null || true
+  EXPECTED_ALERTS+=("osascript_network_exec — osascript → (curl + $stage2)")
 }
 
 step_credential_keychain_dump() {
@@ -152,6 +174,10 @@ step_privilege_launchd_plist_write() {
   # build a tiny Go writer in the runbook's working dir; an unsigned local
   # binary is the closest stand-in for "an attacker dropper" without
   # smuggling actual malware.
+  #
+  # The rule itself ships in B3 round 2 (PR #38). On a server that
+  # predates that PR the dropper still runs cleanly, but no alert
+  # fires — the runbook step is forward-compatible.
   if ! command -v go >/dev/null 2>&1; then
     echo "[runbook] go not installed — skipping privilege_launchd_plist_write step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no Go toolchain on this host)")
@@ -192,8 +218,18 @@ GO
     return
   fi
   if [ "$(id -u)" -ne 0 ]; then
-    echo "[runbook] this step needs root to write into /Library/LaunchDaemons; re-running with sudo"
-    sudo "$bin" || echo "[runbook] sudo dropper failed — alert may not have fired"
+    echo "[runbook] this step needs root to write into /Library/LaunchDaemons; trying sudo -n"
+    # -n (non-interactive) bails immediately when sudo would otherwise
+    # prompt for a password. The runbook is meant to be invoked over SSH
+    # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive
+    # password prompt would deadlock the entire script — every other step
+    # past this one would never run. Operators who need this step on a
+    # host without NOPASSWD can re-run the whole script under `sudo`.
+    if ! sudo -n "$bin"; then
+      echo "[runbook] sudo -n unavailable or dropper failed — alert may not have fired"
+      EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no NOPASSWD sudo)")
+      return
+    fi
   else
     "$bin" || echo "[runbook] dropper failed — alert may not have fired"
   fi
