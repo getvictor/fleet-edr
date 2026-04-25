@@ -67,12 +67,18 @@ https://github.com/getvictor/fleet-edr/issues.
 
 ### Optional: verify the Sigstore signature
 
-Releases since v0.1.1 are also signed via Sigstore keyless (cosign +
-GitHub OIDC). The signature ties the artifact to the exact GitHub
-Actions workflow run that produced it, which catches the rare attack
-where a Developer ID cert is stolen but the attacker can't push to our
-GitHub repo. Skip this step if you don't have `cosign` installed; the
-Apple-signature checks above are sufficient for most pilots.
+Releases that ship Sigstore signatures also publish a `<file>.sig` and
+`<file>.pem` next to every artifact. The signature ties the artifact
+to the exact GitHub Actions workflow run that produced it, which
+catches the rare attack where a Developer ID cert is stolen but the
+attacker can't push to our GitHub repo. Skip this step if you don't
+have `cosign` installed; the Apple-signature checks above are
+sufficient for most pilots. (Older releases that pre-date the cosign
+roll-out won't have the `.sig` / `.pem` files — `curl` will return
+404, and there's nothing to verify.)
+
+The example below uses the same `v0.1.0` placeholder as Step 1 above;
+substitute whatever release tag you actually downloaded.
 
 ```sh
 # Install cosign if you don't have it: brew install cosign

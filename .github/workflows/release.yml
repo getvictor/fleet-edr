@@ -142,7 +142,7 @@ jobs:
       # synthetic tags into a permanent record. Real tag pushes only.
       - name: Install cosign
         if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
-        uses: sigstore/cosign-installer@d7d6e4ba87bcca47ddee71866b8a0e4a47ab3d2c # v3.10.1
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
         with:
           cosign-release: 'v2.5.3'
 
@@ -151,9 +151,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-          # cosign-installer wires the GitHub OIDC token URL into the env for
-          # us; explicit set kept here as a contract for future cosign minor
-          # bumps that may stop reading it implicitly.
+          # cosign reads the GitHub OIDC request URL/token from
+          # ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, which the runner exposes
+          # automatically because the job declares `id-token: write`.
+          # COSIGN_YES skips the interactive "are you sure?" confirmation
+          # for non-interactive CI runs — equivalent to passing --yes on
+          # every cosign invocation below.
           COSIGN_YES: 'true'
         # `cosign sign-blob` emits a .sig and a .pem (the ephemeral signing
         # cert from Fulcio) per artifact. Both go onto the release so anyone
@@ -220,7 +223,7 @@ jobs:
       # claiming.
       - name: Attest pkg + profiles + SHA256SUMS
         if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@977bb373ede947662f9c0c3ae1092d1f12490830 # v3.0.0
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: |
             dist/fleet-edr-*.pkg
@@ -285,7 +288,7 @@ jobs:
       # pull by digest or accept that a tag mutation invalidates the proof.
       - name: Install cosign
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: sigstore/cosign-installer@d7d6e4ba87bcca47ddee71866b8a0e4a47ab3d2c # v3.10.1
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
         with:
           cosign-release: 'v2.5.3'
 
@@ -315,7 +318,7 @@ jobs:
 
       - name: Attest image build provenance
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@977bb373ede947662f9c0c3ae1092d1f12490830 # v3.0.0
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-name: ghcr.io/getvictor/fleet-edr-server
           subject-digest: ${{ steps.build.outputs.digest }}
