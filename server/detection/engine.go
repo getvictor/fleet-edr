@@ -1,7 +1,9 @@
 package detection
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -59,9 +61,19 @@ func (e *Engine) Catalog() []RuleMetadata {
 // Evaluate runs all registered rules against the event batch.
 // Findings are persisted as alerts. Rule evaluation failures are logged and skipped,
 // but alert persistence failures are returned so the caller can retry the batch.
+//
+// Snapshot exec events (issue #11: ESF baseline enumeration) are filtered
+// out before rule evaluation. Those events describe processes that existed
+// before the extension subscribed to ESF — they're stitched into the
+// process tree by graph.Builder.insertExecWithoutFork so an analyst can
+// see Safari, Slack, Finder, etc., but they represent historical state,
+// not new attacker activity. Letting rules see them would generate false
+// positives every time the extension restarts (e.g. dyld_insert firing
+// on a Safari debug-build with DYLD_INSERT_LIBRARIES set).
 func (e *Engine) Evaluate(ctx context.Context, events []store.Event) error {
+	live := filterSnapshotEvents(events)
 	for _, rule := range e.rules {
-		findings, err := rule.Evaluate(ctx, events, e.store)
+		findings, err := rule.Evaluate(ctx, live, e.store)
 		if err != nil {
 			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
 			continue
@@ -74,6 +86,50 @@ func (e *Engine) Evaluate(ctx context.Context, events []store.Event) error {
 		}
 	}
 	return nil
+}
+
+// snapshotMarker is the substring fast-path used to short-circuit the
+// snapshot-exec filter. The vast majority of exec events don't carry the
+// snapshot field at all, so we want to skip the JSON decode for them.
+// bytes.Contains is roughly O(n) in the payload size and finishes in
+// ~hundreds of nanoseconds; an unmarshal would cost an order of
+// magnitude more. False positives from the substring (a payload that
+// mentions the literal "snapshot":true elsewhere — extremely unlikely
+// for ESF exec events whose schema is fixed) get filtered out by the
+// follow-up unmarshal probe.
+var snapshotMarker = []byte(`"snapshot":true`)
+
+type snapshotProbe struct {
+	Snapshot bool `json:"snapshot"`
+}
+
+// filterSnapshotEvents returns the subset of events that detection rules
+// should evaluate. Currently the only filter is for `snapshot=true` exec
+// events (issue #11); future filters can stack here without rules
+// needing to repeat the check.
+func filterSnapshotEvents(events []store.Event) []store.Event {
+	out := make([]store.Event, 0, len(events))
+	for _, evt := range events {
+		if isSnapshotExec(evt) {
+			continue
+		}
+		out = append(out, evt)
+	}
+	return out
+}
+
+func isSnapshotExec(evt store.Event) bool {
+	if evt.EventType != "exec" {
+		return false
+	}
+	if !bytes.Contains(evt.Payload, snapshotMarker) {
+		return false
+	}
+	var probe snapshotProbe
+	if err := json.Unmarshal(evt.Payload, &probe); err != nil {
+		return false
+	}
+	return probe.Snapshot
 }
 
 // persistFinding inserts a single finding as an alert, stamping it with the
