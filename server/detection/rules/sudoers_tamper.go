@@ -143,7 +143,7 @@ func (r *SudoersTamper) evalEvent(
 		Severity: detection.SeverityHigh,
 		Title:    "Sudoers tamper",
 		Description: fmt.Sprintf(
-			"%s wrote %s — sudo escalation surface (MITRE T1548.003)",
+			"%s opened %s for writing — sudo escalation surface (MITRE T1548.003)",
 			proc.Path, p.Path,
 		),
 		ProcessID: proc.ID,
