@@ -24,8 +24,10 @@
 #   scp scripts/qa/attack-runbook.sh victor@192.168.64.5:/tmp/
 #   ssh victor@192.168.64.5 'bash /tmp/attack-runbook.sh'
 #
-# Then watch alerts in the admin UI at http://192.168.64.5:8088/ui/alerts
-# (or wherever the server runs). Expected alert count is printed at the end.
+# Then watch alerts in the admin UI at <your-edr-url>/ui/alerts
+# (whatever URL your server is reachable on — TLS for prod, plain HTTP
+# is fine for the lab VM behind a closed network). Expected alert count
+# is printed at the end.
 #
 # Prerequisites on the target host
 # --------------------------------
@@ -265,7 +267,7 @@ main() {
   done
   hr
   echo "[runbook] Verify in the admin UI:"
-  echo "    open 'http://<server>:8088/ui/alerts'"
+  echo "    open '<your-edr-url>/ui/alerts'"
   echo "[runbook] Cleanup: rm -rf $WORKDIR (/Library/LaunchDaemons drop is removed by the dropper itself)"
 }
 
