@@ -1,0 +1,37 @@
+{
+  "_comment": "macOS sudo opens /etc/sudoers with O_WRONLY (no O_TRUNC/O_APPEND/O_CREAT) so it can take a LOCK_EX flock for serialised reads. Flags=5 = O_WRONLY|O_NONBLOCK. The rule must treat this as a non-tamper because the fd is never written to (sudo only locks-then-reads). Without this guard every `sudo` invocation on the host fires a false-positive alert (observed: 30 hits in 15 min during rc.6 QA on edr-qa).",
+  "events": [
+    {
+      "event_id": "sud-flock-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6000,
+      "event_type": "fork",
+      "payload": {"child_pid": 11500, "parent_pid": 1}
+    },
+    {
+      "event_id": "sud-flock-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 11500,
+        "ppid": 1,
+        "path": "/usr/bin/sudo",
+        "args": ["sudo", "ls"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sud-flock-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6200,
+      "event_type": "open",
+      "payload": {
+        "pid": 11500,
+        "path": "/private/etc/sudoers",
+        "flags": 5
+      }
+    }
+  ]
+}

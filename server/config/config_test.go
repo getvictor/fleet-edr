@@ -196,6 +196,37 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name: "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST parsed and trimmed",
+			env: withExtra(minEnv, map[string]string{
+				// Mixed whitespace + an empty entry to exercise envparse.Allowlist's
+				// trim/empty-skip behaviour, same way every other allowlist env var
+				// is documented to behave.
+				"EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST": "/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal,,/Applications/iTerm.app/Contents/MacOS/iTerm2",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Len(t, c.SuspiciousExecParentAllowlist, 3,
+					"allowlist must skip the empty entry")
+				for _, want := range []string{
+					"/usr/libexec/sshd-session",
+					"/Applications/Terminal.app/Contents/MacOS/Terminal",
+					"/Applications/iTerm.app/Contents/MacOS/iTerm2",
+				} {
+					_, ok := c.SuspiciousExecParentAllowlist[want]
+					assert.True(t, ok, "allowlist must trim whitespace and contain %q", want)
+				}
+			},
+		},
+		{
+			name: "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST empty leaves nil map",
+			env:  minEnv,
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Nil(t, c.SuspiciousExecParentAllowlist,
+					"unset env should leave the map nil so the rule treats every parent as not allowlisted")
+			},
+		},
+		{
 			name: "invalid login rate rejected",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_LOGIN_RATE_PER_MIN": "banana",

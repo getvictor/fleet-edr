@@ -86,6 +86,27 @@ type sudoersOpenPayload struct {
 // don't affect the access mode.
 const sudoersWriteAccessMask = 0x3
 
+// O_TRUNC (0x400) | O_APPEND (0x8) | O_CREAT (0x200) — the bits an
+// attacker who actually wants to mutate /etc/sudoers reaches for in
+// the common case (cp / tee / shell `>` / shell `>>` / dd / vi-direct-
+// save all set at least one of these three). macOS sudo opens
+// /etc/sudoers with O_WRONLY (sometimes plus O_NONBLOCK or O_CLOEXEC)
+// to take a LOCK_EX flock for serialised reads — write-mode by access,
+// but no intent to modify content. The intent-mask check below
+// suppresses sudo's flock pattern; we scope that suppression to
+// `/usr/bin/sudo` specifically (see evalEvent) so a non-sudo writer
+// using bare O_WRONLY still fires.
+//
+// Known limitation: a custom binary that opens /etc/sudoers with
+// only O_WRONLY (no O_TRUNC/O_APPEND/O_CREAT) and writes a NOPASSWD
+// entry from offset 0 is sufficient to plant the escalation, and
+// neither the intent-mask gate (because the writer isn't sudo) nor
+// the existing rename gap closes on it. Correlating on
+// NOTIFY_WRITE / NOTIFY_CLOSE_MODIFIED instead of inferring intent
+// from open(2) flags is the real fix; tracked for Phase 8 alongside
+// the rename limitation noted above.
+const sudoersWriteIntentMask = 0x400 | 0x8 | 0x200
+
 func (r *SudoersTamper) Evaluate(
 	ctx context.Context, events []store.Event, s *store.Store,
 ) ([]detection.Finding, error) {
@@ -131,6 +152,18 @@ func (r *SudoersTamper) evalEvent(
 	if proc == nil {
 		// Defensive: race against process materialisation. Same shape
 		// as credential_keychain_dump / privilege_launchd_plist_write.
+		return nil, nil
+	}
+
+	// Narrow the intent-mask suppression to /usr/bin/sudo specifically. sudo
+	// is the one writer we know opens with O_WRONLY-only as part of its
+	// LOCK_EX flock pattern (never actually writes); any other writer
+	// reaching write-mode against /etc/sudoers stays on the unhappy path
+	// even when no intent bit is set, so a custom binary doing
+	// open(O_WRONLY) → write() at offset 0 still alerts. (The known-gap
+	// note up at the top of the file describes the residual case where
+	// the writer IS sudo but is doing something other than flocking.)
+	if proc.Path == "/usr/bin/sudo" && p.Flags&sudoersWriteIntentMask == 0 {
 		return nil, nil
 	}
 	if r.allowed(proc.Path) {
