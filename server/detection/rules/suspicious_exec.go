@@ -54,18 +54,20 @@ var suspiciousPrefixes = []string{
 // MITRE ATT&CK: T1059 (Command and Scripting Interpreter), T1204 (User Execution).
 type SuspiciousExec struct {
 	// AllowedNonShellParents is the set of non-shell parent paths the rule
-	// should treat as benign roots even when they spawn a shell that runs
-	// a temp-path binary. The canonical case is `/usr/libexec/sshd-session`
-	// — admins SSH in, run a script from /tmp/, leave; the chain matches
-	// the rule's shape verbatim but is operationally normal.
+	// should treat as benign roots — for BOTH the temp-path-exec arm AND
+	// the outbound-network-connect arm. The canonical case is
+	// `/usr/libexec/sshd-session`: admins SSH in, run a script from
+	// /tmp/ AND/OR curl a tool, leave; both chains match the rule's
+	// shape verbatim but are operationally normal.
 	//
-	// The trade-off is real: an attacker who pivots into the host via a
-	// compromised SSH credential follows the same chain shape, so
-	// allowlisting sshd-session reduces noise but also blinds the rule
-	// to that one attacker pattern. Empty by default — operators opt in
-	// via EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST for the fleets where the
-	// noise reduction matters more than the residual attacker coverage.
-	// On servers where interactive SSH is unusual, leaving this empty is
+	// The trade-off is real: an attacker who pivots into the host via
+	// a compromised SSH credential follows the same chain shape on
+	// either arm, so allowlisting sshd-session reduces noise but also
+	// blinds the rule to those attacker patterns from that parent.
+	// Empty by default — operators opt in via
+	// EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST for fleets where the noise
+	// reduction matters more than the residual attacker coverage. On
+	// servers where interactive SSH is unusual, leaving this empty is
 	// the right call.
 	AllowedNonShellParents map[string]struct{}
 }
@@ -328,9 +330,13 @@ func (r *SuspiciousExec) evalNetwork(
 
 // findShellWithNonShellAncestor walks the PPID chain inclusively starting at
 // startPID looking for a shell process whose own parent is non-shell. Returns
-// the matched shell and its non-shell parent (parent may be nil if the shell's
-// parent is launchd / unmaterialised — that still counts as a match because
-// launchd is non-shell).
+// the matched shell and its non-shell parent. The parent return value is nil
+// only when the shell's parent is launchd (PPID <= 1) — that still counts as
+// a match because launchd is structurally non-shell. PPID > 1 with a missing
+// parent record means "ancestry incomplete, defer rather than fire" — this
+// keeps the rule from alerting on partial data and, in particular, keeps the
+// AllowedNonShellParents allowlist effective when the entry-point process
+// hasn't been materialised yet.
 //
 // The walk is "inclusive" — startPID itself is the first candidate. Callers
 // that pass the temp-exec's own PID get the trivial first-iteration skip
@@ -345,11 +351,20 @@ func (r *SuspiciousExec) findShellWithNonShellAncestor(
 	}
 	for steps := 0; current != nil && steps < maxSuspiciousAncestorWalkSteps; steps++ {
 		if shellPaths[current.Path] {
-			parent, err := r.lookupAncestor(ctx, s, hostID, current.PPID, asOfNs)
-			if err != nil {
-				return nil, nil, err
+			// Distinguish "shell launched by launchd" (a valid non-shell
+			// ancestor) from "shell's parent record not yet materialised"
+			// (incomplete ancestry — defer).
+			if current.PPID <= 1 {
+				return current, nil, nil
 			}
-			if parent == nil || !shellPaths[parent.Path] {
+			parent, err := s.GetProcessByPID(ctx, hostID, current.PPID, asOfNs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
+			}
+			if parent == nil {
+				return nil, nil, nil
+			}
+			if !shellPaths[parent.Path] {
 				return current, parent, nil
 			}
 			// Shell-to-shell layering is normal (sudo bash, su -c bash, ...).

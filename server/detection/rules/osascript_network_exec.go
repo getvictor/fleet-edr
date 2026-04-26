@@ -211,34 +211,45 @@ func (r *OsascriptNetworkExec) findOsascriptAncestor(
 	return nil, nil
 }
 
-// looksLikeTempExec reports whether the exec event represents a binary
-// running out of /tmp (or one of the other temp-prefix paths) OR a shell
-// invoked with a `#!/bin/sh`-style script path in argv[1]. Both shapes
-// signal the same intent: stage-2 from a tempdir. Reading argv directly off
-// the event payload (rather than the materialised process record) avoids a
-// race against args being persisted to the processes table.
+// shebangScriptArg returns the script path argument from a shebang-shell
+// invocation (`/bin/sh /tmp/stage2.sh`), or "" if the argv shape is
+// `-c <command>` / flags-only / empty / non-shell. Both the gating
+// predicate (looksLikeTempExec) and the description renderer
+// (displayTempExec) derive from this so they cannot disagree about which
+// argv slot the analyst sees.
 //
-// `sh -c <command>` is deliberately excluded because the next argv slot
-// is a command string, not a path — running isSuspiciousPath against it
+// `sh -c <command>` returns "" on purpose because the next argv slot is
+// a command string, not a path — running isSuspiciousPath against it
 // false-positives on arbitrary text containing `..`.
-func looksLikeTempExec(p osascriptPayload) bool {
-	if isSuspiciousPath(p.Path) {
-		return true
-	}
+func shebangScriptArg(p osascriptPayload) string {
 	if !shebangShellPaths[p.Path] {
-		return false
+		return ""
 	}
 	for i := 1; i < len(p.Args); i++ {
 		a := p.Args[i]
 		if a == "-c" {
-			return false
+			return ""
 		}
 		if strings.HasPrefix(a, "-") {
 			continue
 		}
-		return isSuspiciousPath(a)
+		return a
 	}
-	return false
+	return ""
+}
+
+// looksLikeTempExec reports whether the exec event represents a binary
+// running out of /tmp (or one of the other temp-prefix paths) OR a shell
+// invoked with a `#!/bin/sh`-style script path in argv[1+]. Both shapes
+// signal the same intent: stage-2 from a tempdir. Reading argv directly
+// off the event payload (rather than the materialised process record)
+// avoids a race against args being persisted to the processes table.
+func looksLikeTempExec(p osascriptPayload) bool {
+	if isSuspiciousPath(p.Path) {
+		return true
+	}
+	script := shebangScriptArg(p)
+	return script != "" && isSuspiciousPath(script)
 }
 
 // displayTempExec renders the operator-friendly path for the finding's
@@ -249,18 +260,8 @@ func displayTempExec(p osascriptPayload) string {
 	if isSuspiciousPath(p.Path) {
 		return p.Path
 	}
-	for i := 1; i < len(p.Args); i++ {
-		a := p.Args[i]
-		if a == "-c" {
-			return p.Path
-		}
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
-		if isSuspiciousPath(a) {
-			return fmt.Sprintf("%s %s", p.Path, a)
-		}
-		break
+	if script := shebangScriptArg(p); script != "" && isSuspiciousPath(script) {
+		return fmt.Sprintf("%s %s", p.Path, script)
 	}
 	return p.Path
 }

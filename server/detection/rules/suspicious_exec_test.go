@@ -345,6 +345,73 @@ func TestIsSuspiciousPath(t *testing.T) {
 	}
 }
 
+// Shebang stage-2: the kernel resolves `#!/bin/sh` to /bin/sh, so the
+// temp-binary's exec event lands with payload.path = /bin/sh and the
+// actual script path in argv[1]. The runbook's `python3 -> sh -c
+// "/tmp/edr-attack-runbook/synthetic_payload && true"` chain on edr-qa
+// surfaces this shape because bash interprets the synthetic_payload
+// shebang line, and without argv-aware temp-path detection the rule
+// silently misses the attack. This test pins the shebang detection
+// AND its negative twin (`sh -c <command>` argv[1] = "-c", not a path).
+func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
+	s := store.OpenTestStore(t)
+	ctx := t.Context()
+
+	// python3 (50) -> /bin/sh as shebang interpreter for /tmp/payload.sh (200).
+	// payload.path = /bin/sh, argv[1] = /tmp/payload.sh — the kernel-resolved
+	// shebang shape.
+	events := []store.Event{
+		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "fork-shebang", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":50}`)},
+		{EventID: "exec-shebang", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":50,"path":"/bin/sh","args":["/bin/sh","/tmp/payload.sh"],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	rule := &SuspiciousExec{}
+	findings, err := rule.Evaluate(ctx, events, s)
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "shebang script in argv[1] must match the temp-exec arm")
+	assert.Equal(t, "Suspicious exec from temp path", findings[0].Title)
+	assert.Contains(t, findings[0].Description, "/usr/bin/python3")
+	assert.Contains(t, findings[0].Description, "/tmp/payload.sh", "description must surface the argv script path, not just /bin/sh")
+}
+
+// Negative twin of the shebang case: `sh -c <command>` puts the COMMAND
+// STRING in argv[2], not a script path. Treating that argv slot as a
+// path would false-positive on any command containing `..` (e.g. an
+// IPv4 octet sequence in a curl URL). The shebang detector must bail
+// the moment it sees `-c`.
+func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
+	s := store.OpenTestStore(t)
+	ctx := t.Context()
+
+	events := []store.Event{
+		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		// argv[2] is the -c command body — happens to contain ".." which
+		// an unguarded path-traversal heuristic would mistake for a path.
+		{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh","-c","echo 192.168.1.1..."],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	rule := &SuspiciousExec{}
+	findings, err := rule.Evaluate(ctx, events, s)
+	require.NoError(t, err)
+	assert.Empty(t, findings, "sh -c <command> argv must NOT be treated as a script path")
+}
+
 // Allowlist suppression: the canonical "non-shell -> shell -> /tmp/binary"
 // shape is also what an admin SSH-ing in and running a script from /tmp/
 // looks like. Operators can opt-in to suppression of that flow per

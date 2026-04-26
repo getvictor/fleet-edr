@@ -311,21 +311,24 @@ Set it as a comma-separated list of absolute paths, e.g.
 `/usr/local/bin/munki-managed-installer`.
 
 `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` tunes the `suspicious_exec`
-rule. The rule fires on the shape `non-shell → shell → /tmp/binary`
-within 30 seconds, which captures the canonical commodity-dropper
-flow but also matches interactive admin SSH sessions running scripts
-from `/tmp/` (the chain `/usr/libexec/sshd-session → /bin/zsh →
-/bin/bash /tmp/script.sh` is identical at the syscall level to an
-attacker pivoting in via a compromised SSH key). The allowlist
-suppresses the rule when the **non-shell ancestor's path** is on
-the list — the shell and the temp-binary still need to be there
-in their normal positions, this knob only changes which root
-processes count as benign.
+rule. The rule has two trigger shapes within a 30-second window of
+the shell's exec: `non-shell → shell → /tmp/binary` (the dropper
+form), and `non-shell → shell` followed by an outbound network
+connection from that shell or a descendant (the curl-pipe-sh form).
+Both shapes capture commodity-attack patterns AND match interactive
+admin SSH sessions running scripts from `/tmp/` or curling tools
+(the chain `/usr/libexec/sshd-session → /bin/zsh → /bin/bash
+/tmp/script.sh` is identical at the syscall level to an attacker
+pivoting in via a compromised SSH key). The allowlist suppresses
+the rule when the **non-shell ancestor's path** is on the list, for
+both trigger shapes — the shell and the temp-binary or outbound
+connection still need to be there in their normal positions, this
+knob only changes which root processes count as benign.
 
 For developer fleets and admin-managed hosts where interactive SSH
 is normal, the recommended value is
 
-```
+```sh
 EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST=/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2
 ```
 
