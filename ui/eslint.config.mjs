@@ -1,15 +1,17 @@
 import js from "@eslint/js";
+import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import security from "eslint-plugin-security";
 import noUnsanitized from "eslint-plugin-no-unsanitized";
 
-// `tseslint.config([...])` (single-array form) replaces the variadic
-// `tseslint.config(..., ...)` signature, which is deprecated as of
-// typescript-eslint v8 (Sonar javascript:S1874). Same config payload;
-// the wrapping `[...]` is the only behavioural change.
-export default tseslint.config([
+// `tseslint.config()` is deprecated in typescript-eslint v8 (Sonar
+// javascript:S1874); the upstream recommendation is to use ESLint
+// core's `defineConfig` from `eslint/config` instead. We still pull
+// `tseslint.configs.strictTypeChecked` for the rule set, just route
+// the array assembly through the non-deprecated helper.
+export default defineConfig([
   { ignores: ["dist"] },
   {
     files: ["**/*.{ts,tsx}"],

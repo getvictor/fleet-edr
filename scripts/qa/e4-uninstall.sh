@@ -56,6 +56,9 @@ BASH_S='bash -s'
 REINSTALL_PKG=""
 case "${1:-}" in
   --reinstall) shift; REINSTALL_PKG="${1:-}"; shift || true
+    # Distinguish missing-arg from missing-file: a wrapper that drops args
+    # would otherwise produce the confusing `pkg not found:` (no path) line.
+    [[ -n "$REINSTALL_PKG" ]] || { echo "[e4] --reinstall requires a path to the .pkg" >&2; exit 2; }
     [[ -f "$REINSTALL_PKG" ]] || { echo "[e4] --reinstall pkg not found: $REINSTALL_PKG" >&2; exit 2; };;
   *) ;;
 esac

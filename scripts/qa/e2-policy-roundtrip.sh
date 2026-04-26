@@ -62,6 +62,10 @@ TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 # de-duplicating the literal keeps the curl invocations scannable and
 # satisfies the Sonar S1192 minor finding.
 CT_JSON='Content-Type: application/json'
+# Mirror the BASH_S constant from e3/e4 even though there's only one
+# `bash -s` site here today — keeps the three QA scripts consistent so a
+# future ssh-driven step doesn't grow a duplicate literal.
+BASH_S='bash -s'
 
 hr() {
   printf '\n%s\n' '────────────────────────────────────────────────────────'
@@ -202,7 +206,7 @@ if [[ "$POLICY_PUSH_FAILED" = "1" ]]; then
   exit 1
 fi
 # shellcheck disable=SC2087  # heredoc with explicit shell escaping; quoted EOF, no interpolation
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<EOF
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<EOF
 set -uo pipefail
 target='$SYNTHETIC_PATH'
 sudo tee "\$target" >/dev/null <<'PAYLOAD'
