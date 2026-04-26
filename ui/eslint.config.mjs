@@ -5,7 +5,11 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import security from "eslint-plugin-security";
 import noUnsanitized from "eslint-plugin-no-unsanitized";
 
-export default tseslint.config(
+// `tseslint.config([...])` (single-array form) replaces the variadic
+// `tseslint.config(..., ...)` signature, which is deprecated as of
+// typescript-eslint v8 (Sonar javascript:S1874). Same config payload;
+// the wrapping `[...]` is the only behavioural change.
+export default tseslint.config([
   { ignores: ["dist"] },
   {
     files: ["**/*.{ts,tsx}"],
@@ -43,4 +47,4 @@ export default tseslint.config(
       "react-hooks/exhaustive-deps": "error",
     },
   },
-);
+]);

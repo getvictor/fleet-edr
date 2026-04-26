@@ -6,7 +6,7 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   readonly label?: string;
 }
 
-export function Input({ label, id, className, ...rest }: InputProps) {
+export function Input({ label, id, className, ...rest }: Readonly<InputProps>) {
   return (
     <div className="field">
       {label && (
@@ -24,7 +24,7 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   readonly children: ReactNode;
 }
 
-export function Select({ label, id, className, children, ...rest }: SelectProps) {
+export function Select({ label, id, className, children, ...rest }: Readonly<SelectProps>) {
   return (
     <div className="field field--inline">
       {label && (

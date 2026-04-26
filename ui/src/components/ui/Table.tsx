@@ -6,7 +6,7 @@ interface TableProps extends HTMLAttributes<HTMLTableElement> {
   readonly children: ReactNode;
 }
 
-export function Table({ className, children, ...rest }: TableProps) {
+export function Table({ className, children, ...rest }: Readonly<TableProps>) {
   return (
     <div className="table-wrapper">
       <table className={classnames("table", className)} {...rest}>

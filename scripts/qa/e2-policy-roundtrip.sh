@@ -40,12 +40,13 @@ trap 'rc=$?; echo "[e2] step at line $LINENO exited $rc — continuing"' ERR
 
 require_env() {
   for v in "$@"; do
-    if [ -z "${!v:-}" ]; then
+    if [[ -z "${!v:-}" ]]; then
       echo "[e2] missing required env var: $v" >&2
       echo "[e2] see the header comment for the full list" >&2
       exit 2
     fi
   done
+  return 0
 }
 require_env EDR_SERVER_URL EDR_ADMIN_EMAIL EDR_ADMIN_PASSWORD VM_SSH_TARGET
 
@@ -57,8 +58,15 @@ chmod 700 "$WORKDIR"
 COOKIE_JAR="$WORKDIR/cookies"
 SYNTHETIC_PATH="/tmp/edr-e2-blocked-payload"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+# Constant for the JSON Content-Type header used on every POST/PUT below;
+# de-duplicating the literal keeps the curl invocations scannable and
+# satisfies the Sonar S1192 minor finding.
+CT_JSON='Content-Type: application/json'
 
-hr() { printf '\n%s\n' '────────────────────────────────────────────────────────'; }
+hr() {
+  printf '\n%s\n' '────────────────────────────────────────────────────────'
+  return 0
+}
 
 # Login: POST /api/v1/session with {email, password} → returns user +
 # csrf_token JSON, sets edr_session cookie. Response includes the CSRF
@@ -70,18 +78,18 @@ http_code=$(curl -sS \
   -o "$LOGIN_BODY" \
   -w '%{http_code}' \
   -c "$COOKIE_JAR" \
-  -H 'Content-Type: application/json' \
+  -H "$CT_JSON" \
   -d "$(printf '{"email":%s,"password":%s}' \
         "$(printf '%s' "$EDR_ADMIN_EMAIL" | jq -R .)" \
         "$(printf '%s' "$EDR_ADMIN_PASSWORD" | jq -R .)")" \
   "$EDR_SERVER_URL/api/v1/session" || echo "000")
-if [ "$http_code" != "200" ]; then
+if [[ "$http_code" != "200" ]]; then
   echo "[e2] login failed: HTTP $http_code" >&2
   cat "$LOGIN_BODY" >&2
   exit 1
 fi
 CSRF_TOKEN=$(jq -r '.csrf_token // ""' "$LOGIN_BODY")
-if [ -z "$CSRF_TOKEN" ]; then
+if [[ -z "$CSRF_TOKEN" ]]; then
   echo "[e2] login response missing csrf_token; body was:" >&2
   cat "$LOGIN_BODY" >&2
   exit 1
@@ -99,7 +107,7 @@ ORIG_POLICY="$WORKDIR/policy-original.json"
 # blocklist the operator actually had configured.
 get_code=$(curl -sS -o "$ORIG_POLICY" -w '%{http_code}' -b "$COOKIE_JAR" \
   "$EDR_SERVER_URL/api/v1/admin/policy" || echo "000")
-if [ "$get_code" != "200" ] || ! jq -e '(.blocklist.paths // []) | type == "array"' "$ORIG_POLICY" >/dev/null 2>&1; then
+if [[ "$get_code" != "200" ]] || ! jq -e '(.blocklist.paths // []) | type == "array"' "$ORIG_POLICY" >/dev/null 2>&1; then
   echo "[e2] GET admin/policy failed (HTTP $get_code); refusing to push a synthetic policy" >&2
   cat "$ORIG_POLICY" >&2 || true
   exit 1
@@ -113,7 +121,7 @@ echo "[e2] original policy captured at $ORIG_POLICY"
 # trap-driven duplicate restore.
 RESTORE_DONE=0
 restore_policy() {
-  if [ "$RESTORE_DONE" = "1" ]; then return 0; fi
+  if [[ "$RESTORE_DONE" = "1" ]]; then return 0; fi
   echo "[e2] EXIT trap: restoring original policy"
   payload=$(jq --arg reason "phase-7 e2 cleanup $TIMESTAMP" \
                --arg actor "$EDR_ADMIN_EMAIL" \
@@ -122,10 +130,11 @@ restore_policy() {
                 reason: $reason, actor: $actor}' "$ORIG_POLICY") || return 0
   curl -sS -o /dev/null -w '%{http_code}\n' -b "$COOKIE_JAR" \
     -X PUT \
-    -H 'Content-Type: application/json' \
+    -H "$CT_JSON" \
     -H "X-CSRF-Token: ${CSRF_TOKEN:-}" \
     -d "$payload" \
     "$EDR_SERVER_URL/api/v1/admin/policy" >&2 || true
+  return 0
 }
 trap restore_policy EXIT
 
@@ -144,12 +153,12 @@ jq --arg path "$SYNTHETIC_PATH" \
 
 put_resp=$(curl -sS -w '\n%{http_code}' -b "$COOKIE_JAR" \
   -X PUT \
-  -H 'Content-Type: application/json' \
+  -H "$CT_JSON" \
   -H "X-CSRF-Token: $CSRF_TOKEN" \
   --data-binary "@$NEW_POLICY" \
   "$EDR_SERVER_URL/api/v1/admin/policy" || echo $'\n000')
 put_code=$(printf '%s' "$put_resp" | tail -n1)
-if [ "$put_code" != "200" ]; then
+if [[ "$put_code" != "200" ]]; then
   echo "[e2] PUT policy failed: HTTP $put_code" >&2
   # `head -n-1` is GNU-only; BSD head on macOS errors. `sed '$d'`
   # ("delete last line") is portable and produces the same result.
@@ -163,7 +172,7 @@ echo "[e2] policy pushed; server fanned out command to active hosts"
 hr
 echo "[e2] step 3: wait ≤60s for agent to materialise the new policy"
 deadline=$(( $(date +%s) + 60 ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
+while [[ "$(date +%s)" -lt "$deadline" ]]; do
   if ssh -o BatchMode=yes -o ConnectTimeout=5 "$VM_SSH_TARGET" \
        "sudo /usr/bin/grep -q '$SYNTHETIC_PATH' /var/db/com.fleetdm.edr/policy.json 2>/dev/null"; then
     echo "[e2] agent's policy.json contains the synthetic path"
@@ -188,7 +197,7 @@ POLICY_PUSH_FAILED="${POLICY_PUSH_FAILED:-0}"
 # starting.
 hr
 echo "[e2] step 4: try to execute the blocked path on the VM"
-if [ "$POLICY_PUSH_FAILED" = "1" ]; then
+if [[ "$POLICY_PUSH_FAILED" = "1" ]]; then
   echo "[e2] SKIPPED — policy never reached the agent in step 3"
   exit 1
 fi
@@ -204,7 +213,7 @@ sudo chmod +x "\$target"
 echo "[vm] attempting to exec \$target — expect denial"
 out=\$( "\$target" 2>&1 ) || rc=\$?
 rc=\${rc:-0}
-if [ "\$rc" -eq 0 ]; then
+if [[ "\$rc" -eq 0 ]]; then
   echo "[vm] FAIL: exec succeeded (rc=0). Block was not enforced. Output: \$out"
   sudo rm -f "\$target"
   exit 1
@@ -221,7 +230,7 @@ hr
 echo "[e2] step 5: list alerts on this host since the policy push (informational)"
 HOST_ID=$(ssh -o BatchMode=yes "$VM_SSH_TARGET" \
   "sudo /usr/bin/plutil -extract host_id raw -o - /var/db/fleet-edr/enrolled.plist 2>/dev/null" | tr -d '[:space:]') || HOST_ID=""
-if [ -n "$HOST_ID" ]; then
+if [[ -n "$HOST_ID" ]]; then
   curl -sS -b "$COOKIE_JAR" \
     "$EDR_SERVER_URL/api/v1/alerts?host_id=$HOST_ID&status=open" | \
     jq '[.alerts[]? | {rule_id, severity, title, created_at}] | .[]' || true
@@ -241,11 +250,11 @@ restore_payload=$(jq --arg reason "phase-7 e2 cleanup $TIMESTAMP" \
                        reason: $reason, actor: $actor}' "$ORIG_POLICY")
 restore_code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" \
   -X PUT \
-  -H 'Content-Type: application/json' \
+  -H "$CT_JSON" \
   -H "X-CSRF-Token: $CSRF_TOKEN" \
   -d "$restore_payload" \
   "$EDR_SERVER_URL/api/v1/admin/policy" || echo "000")
-if [ "$restore_code" = "200" ]; then
+if [[ "$restore_code" = "200" ]]; then
   echo "[e2] original policy restored"
   RESTORE_DONE=1
 else

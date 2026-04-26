@@ -39,18 +39,25 @@ trap 'rc=$?; echo "[e4] step at line $LINENO exited $rc — continuing"' ERR
 
 require_env() {
   for v in "$@"; do
-    if [ -z "${!v:-}" ]; then
+    if [[ -z "${!v:-}" ]]; then
       echo "[e4] missing required env var: $v" >&2
       exit 2
     fi
   done
+  return 0
 }
 require_env EDR_SERVER_URL EDR_ADMIN_EMAIL EDR_ADMIN_PASSWORD VM_SSH_TARGET
+
+# Constant for the SSH stdin-driver argument used on every remote-bash
+# block below — Sonar S1192 flags `'bash -s'` four times; one constant
+# satisfies it without changing behaviour.
+BASH_S='bash -s'
 
 REINSTALL_PKG=""
 case "${1:-}" in
   --reinstall) shift; REINSTALL_PKG="${1:-}"; shift || true
-    [ -f "$REINSTALL_PKG" ] || { echo "[e4] --reinstall pkg not found: $REINSTALL_PKG" >&2; exit 2; };;
+    [[ -f "$REINSTALL_PKG" ]] || { echo "[e4] --reinstall pkg not found: $REINSTALL_PKG" >&2; exit 2; };;
+  *) ;;
 esac
 
 # Private workdir: cookie jar + login response carry an admin session.
@@ -59,13 +66,16 @@ WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/edr-e4-uninstall.XXXXXX")
 chmod 700 "$WORKDIR"
 COOKIE_JAR="$WORKDIR/cookies"
 
-hr() { printf '\n%s\n' '────────────────────────────────────────────────────────'; }
+hr() {
+  printf '\n%s\n' '────────────────────────────────────────────────────────'
+  return 0
+}
 
 # Pre-state. Each check prints "ok" or what was wrong; we don't bail
 # on the first failure because the operator wants the whole picture.
 hr
 echo "[e4] step 1: verify pre-uninstall state on $VM_SSH_TARGET"
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<'EOF'
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<'EOF'
 set -uo pipefail
 echo -n "[vm] LaunchDaemon present: "
 test -f /Library/LaunchDaemons/com.fleetdm.edr.agent.plist && echo ok || echo MISSING
@@ -93,7 +103,7 @@ EOF
 HOST_ID=$(ssh -o BatchMode=yes "$VM_SSH_TARGET" \
   "sudo /usr/bin/plutil -extract host_id raw -o - /var/db/fleet-edr/enrolled.plist 2>/dev/null" \
   | tr -d '[:space:]')
-if [ -z "$HOST_ID" ]; then
+if [[ -z "$HOST_ID" ]]; then
   echo "[e4] could not read host_id from /var/db/fleet-edr/enrolled.plist" >&2
   echo "[e4] step 4's offline check would be meaningless without it; aborting." >&2
   exit 1
@@ -104,7 +114,7 @@ echo "[e4] host_id=$HOST_ID"
 hr
 echo "[e4] step 2: run uninstall.sh on the VM"
 # shellcheck disable=SC2087
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<EOF
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<EOF
 set -uo pipefail
 sudo "/Library/Application Support/com.fleetdm.edr/uninstall.sh" || \
   echo "[vm] uninstall.sh exited non-zero (some operations may be best-effort)"
@@ -113,7 +123,7 @@ EOF
 # Post-state. Each line is a single assertion the operator can scan.
 hr
 echo "[e4] step 3: verify post-uninstall state"
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<'EOF'
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<'EOF'
 set -uo pipefail
 echo -n "[vm] LaunchDaemon plist removed: "
 test -f /Library/LaunchDaemons/com.fleetdm.edr.agent.plist && echo STILL-PRESENT || echo ok
@@ -142,7 +152,7 @@ http_code=$(curl -sS -o "$WORKDIR/login.json" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg e "$EDR_ADMIN_EMAIL" --arg p "$EDR_ADMIN_PASSWORD" '{email:$e,password:$p}')" \
   "$EDR_SERVER_URL/api/v1/session" || echo "000")
-if [ "$http_code" != "200" ]; then
+if [[ "$http_code" != "200" ]]; then
   echo "[e4] login HTTP $http_code; offline check skipped"
 else
   # /api/v1/hosts returns a top-level JSON array of HostSummary objects
@@ -150,17 +160,17 @@ else
   # the array root.
   deadline=$(( $(date +%s) + 360 ))
   last_seen=""
-  while [ "$(date +%s)" -lt "$deadline" ]; do
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
     last_seen=$(curl -sS -b "$COOKIE_JAR" \
       "$EDR_SERVER_URL/api/v1/hosts" 2>/dev/null \
       | jq -r --arg id "$HOST_ID" '.[]? | select(.host_id==$id) | .last_seen_ns // ""' \
       | tr -d '[:space:]')
-    if [ -z "$last_seen" ]; then
+    if [[ -z "$last_seen" ]]; then
       echo "[e4] host no longer in /api/v1/hosts list (or offline filter applied)"
       break
     fi
     age_s=$(( $(date +%s) - last_seen / 1000000000 ))
-    if [ "$age_s" -ge 300 ]; then
+    if [[ "$age_s" -ge 300 ]]; then
       echo "[e4] host last_seen is $age_s s old → considered offline"
       break
     fi
@@ -169,13 +179,13 @@ else
 fi
 
 # Optional re-install half.
-if [ -n "$REINSTALL_PKG" ]; then
+if [[ -n "$REINSTALL_PKG" ]]; then
   hr
   echo "[e4] step 5: re-install from $REINSTALL_PKG"
   scp -o BatchMode=yes "$REINSTALL_PKG" "$VM_SSH_TARGET:/tmp/"
   pkg_basename=$(basename "$REINSTALL_PKG")
   # shellcheck disable=SC2087  # client-side expansion of $pkg_basename is intended
-  ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<EOF
+  ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<EOF
 set -uo pipefail
 sudo /usr/sbin/installer -pkg "/tmp/$pkg_basename" -target /
 EOF

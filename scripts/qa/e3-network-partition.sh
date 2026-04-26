@@ -50,17 +50,25 @@ trap 'rc=$?; echo "[e3] step at line $LINENO exited $rc — continuing"' ERR
 
 require_env() {
   for v in "$@"; do
-    if [ -z "${!v:-}" ]; then
+    if [[ -z "${!v:-}" ]]; then
       echo "[e3] missing required env var: $v" >&2
       exit 2
     fi
   done
+  return 0
 }
 require_env EDR_SERVER_URL EDR_ADMIN_EMAIL EDR_ADMIN_PASSWORD VM_SSH_TARGET EDR_SERVER_IP
+
+# Constant for the SSH stdin-driver argument used on every remote-bash
+# block below. Sonar's S1192 (de-duplicate string literals) flags
+# `'bash -s'` four times; one constant satisfies it without changing
+# behaviour.
+BASH_S='bash -s'
 
 PARTITION_SECS=600
 case "${1:-}" in
   --short) PARTITION_SECS=60; echo "[e3] --short: 60s partition";;
+  *) ;;
 esac
 
 # Private workdir: cookie jar holds an admin session.
@@ -73,23 +81,27 @@ PF_ANCHOR="com.fleetdm.edr.e3"
 # operator's original PF state instead of leaving it enabled.
 PF_WAS_ENABLED=""
 
-hr() { printf '\n%s\n' '────────────────────────────────────────────────────────'; }
+hr() {
+  printf '\n%s\n' '────────────────────────────────────────────────────────'
+  return 0
+}
 
 # pf cleanup trap: flush our anchor regardless of how the script exits
 # (Ctrl-C in the long sleep, ssh hiccup, ERR trap continuing into a
 # fatal step). If pf was disabled before we ran, also disable it again
 # so the VM's networking config matches what we found.
 cleanup_pf() {
-  if [ -z "$PF_WAS_ENABLED" ]; then return 0; fi
+  if [[ -z "$PF_WAS_ENABLED" ]]; then return 0; fi
   # shellcheck disable=SC2087  # client-side expansion of $PF_ANCHOR + $PF_WAS_ENABLED is intended
-  ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" >&2 <<EOF || \
+  ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" >&2 <<EOF || \
     echo "[e3] WARNING: pf cleanup over SSH failed; check the VM" >&2
 sudo /sbin/pfctl -a "$PF_ANCHOR" -F all 2>/dev/null || true
 sudo rm -f /tmp/edr-e3.pf.rules 2>/dev/null || true
-if [ "$PF_WAS_ENABLED" = "no" ]; then
+if [[ "$PF_WAS_ENABLED" = "no" ]]; then
   sudo /sbin/pfctl -d 2>/dev/null || true
 fi
 EOF
+  return 0
 }
 trap cleanup_pf EXIT
 
@@ -104,11 +116,11 @@ http_code=$(curl -sS -o "$WORKDIR/login.json" -w '%{http_code}' \
   -d "$(jq -n --arg e "$EDR_ADMIN_EMAIL" --arg p "$EDR_ADMIN_PASSWORD" \
        '{email:$e,password:$p}')" \
   "$EDR_SERVER_URL/api/v1/session" || echo "000")
-[ "$http_code" = "200" ] || { echo "[e3] login failed HTTP $http_code"; exit 1; }
+[[ "$http_code" = "200" ]] || { echo "[e3] login failed HTTP $http_code"; exit 1; }
 HOST_ID=$(ssh -o BatchMode=yes "$VM_SSH_TARGET" \
   "sudo /usr/bin/plutil -extract host_id raw -o - /var/db/fleet-edr/enrolled.plist" \
   | tr -d '[:space:]')
-[ -n "$HOST_ID" ] || { echo "[e3] could not read host_id from VM"; exit 1; }
+[[ -n "$HOST_ID" ]] || { echo "[e3] could not read host_id from VM"; exit 1; }
 echo "[e3] host_id=$HOST_ID"
 
 # Snapshot baseline + record pf state for the cleanup trap.
@@ -118,6 +130,7 @@ queue_depth() {
   ssh -o BatchMode=yes "$VM_SSH_TARGET" \
     "sudo /usr/bin/sqlite3 /var/db/fleet-edr/events.db 'SELECT COUNT(*) FROM events;' 2>/dev/null" \
     | tr -d '[:space:]'
+  return 0
 }
 
 baseline_queue=$(queue_depth)
@@ -135,7 +148,7 @@ echo "[e3] pf was previously enabled: $PF_WAS_ENABLED"
 hr
 echo "[e3] step 3: install pf anchor blocking $EDR_SERVER_IP"
 # shellcheck disable=SC2087  # client-side expansion is intended; $EDR_SERVER_IP and $PF_ANCHOR live on this workstation
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<EOF
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<EOF
 set -euo pipefail
 sudo /sbin/pfctl -E 2>/dev/null || true
 echo "block out quick to $EDR_SERVER_IP" | sudo tee /tmp/edr-e3.pf.rules >/dev/null
@@ -146,7 +159,7 @@ EOF
 # Generate synthetic events on the VM.
 hr
 echo "[e3] step 4: generate 30 synthetic processes on the VM"
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<'EOF'
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<'EOF'
 for i in $(seq 1 30); do /usr/bin/true; done
 echo "[vm] 30 /usr/bin/true execs done — agent should see fork+exec events"
 EOF
@@ -160,7 +173,7 @@ sleep "$PARTITION_SECS"
 mid_queue=$(queue_depth)
 echo "[e3] queue depth during partition: $mid_queue"
 expected_at_least=$((baseline_queue + 60))
-if [ "$mid_queue" -lt "$expected_at_least" ]; then
+if [[ "$mid_queue" -lt "$expected_at_least" ]]; then
   echo "[e3] WARNING: expected queue ≥ $expected_at_least, got $mid_queue."
   echo "[e3] events may not have been observed by ESF — check /var/log/fleet-edr-agent.log"
 fi
@@ -169,7 +182,7 @@ fi
 hr
 echo "[e3] step 6: remove pf anchor"
 # shellcheck disable=SC2087  # client-side expansion of $PF_ANCHOR is intended
-ssh -o BatchMode=yes "$VM_SSH_TARGET" "bash -s" <<EOF
+ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<EOF
 sudo /sbin/pfctl -a "$PF_ANCHOR" -F all
 sudo rm -f /tmp/edr-e3.pf.rules
 echo "[vm] pf anchor cleared"
@@ -181,15 +194,15 @@ hr
 echo "[e3] step 7: wait ≤90s for queue to drain"
 deadline=$(( $(date +%s) + 90 ))
 final_queue=$mid_queue
-while [ "$(date +%s)" -lt "$deadline" ]; do
+while [[ "$(date +%s)" -lt "$deadline" ]]; do
   final_queue=$(queue_depth)
-  if [ "$final_queue" -le "$baseline_queue" ]; then
+  if [[ "$final_queue" -le "$baseline_queue" ]]; then
     echo "[e3] queue drained to baseline ($final_queue events)"
     break
   fi
   sleep 5
 done
-if [ "$final_queue" -gt "$baseline_queue" ]; then
+if [[ "$final_queue" -gt "$baseline_queue" ]]; then
   echo "[e3] FAIL: queue still has $final_queue events (baseline was $baseline_queue)"
 fi
 
