@@ -54,3 +54,16 @@ func (t *Table) Size() int {
 	t.mu.RUnlock()
 	return n
 }
+
+// Snapshot returns a copy of the current PID-to-info map. The reconciliation
+// loop iterates this copy outside the table mutex so a long kill(pid,0) sweep
+// over thousands of PIDs doesn't block exec/exit event ingestion.
+func (t *Table) Snapshot() map[int32]ProcessInfo {
+	t.mu.RLock()
+	out := make(map[int32]ProcessInfo, len(t.entries))
+	for pid, info := range t.entries {
+		out[pid] = info
+	}
+	t.mu.RUnlock()
+	return out
+}

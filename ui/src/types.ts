@@ -31,10 +31,13 @@ export interface Process {
   exec_time_ns?: number;
   exit_time_ns?: number;
   exit_code?: number;
-  // Phase 7 additions. exit_reason distinguishes observed exits from
-  // synthesized ones (TTL reconciliation, pid reuse, re-exec chain).
+  // Phase 7 additions. exit_reason distinguishes observed exits ("event")
+  // from synthesized ones: "ttl_reconciliation" (server-side TTL force-grey),
+  // "pid_reuse" (closed by an incoming fork on the same PID), "reexec"
+  // (superseded by a re-exec on the same PID — see ReExecChain), or
+  // "host_reconciled" (agent-side kill(pid,0) confirmed the PID is gone).
   // previous_exec_id links back to the prior generation in a same-pid
-  // re-exec chain — see ReExecChain on ProcessDetail.
+  // re-exec chain.
   exit_reason?: string;
   previous_exec_id?: number;
 }

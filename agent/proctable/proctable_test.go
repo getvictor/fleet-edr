@@ -59,6 +59,25 @@ func TestUpdateOverwrites(t *testing.T) {
 	assert.Equal(t, "/usr/bin/cat", info.Path)
 }
 
+func TestSnapshotIsCopy(t *testing.T) {
+	pt := New()
+	pt.Update(1, ProcessInfo{Path: "/bin/sh"})
+	pt.Update(2, ProcessInfo{Path: "/bin/bash"})
+
+	snap := pt.Snapshot()
+	require.Len(t, snap, 2)
+	assert.Equal(t, "/bin/sh", snap[1].Path)
+
+	// Mutating the snapshot must not affect the live table.
+	snap[3] = ProcessInfo{Path: "/bin/zsh"}
+	delete(snap, 1)
+	assert.Equal(t, 2, pt.Size(), "snapshot must be independent of the table")
+	_, ok := pt.Lookup(1)
+	assert.True(t, ok, "table entry must survive snapshot mutation")
+	_, ok = pt.Lookup(3)
+	assert.False(t, ok, "snapshot insert must not leak into the table")
+}
+
 func TestConcurrentAccess(t *testing.T) {
 	pt := New()
 	var wg sync.WaitGroup

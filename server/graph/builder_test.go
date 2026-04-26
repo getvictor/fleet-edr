@@ -49,6 +49,74 @@ func TestProcessBatchForkExecExit(t *testing.T) {
 	assert.Equal(t, int64(3000), *proc.ExitTimeNs)
 }
 
+func TestProcessBatchExitHonoursHostReconciledReason(t *testing.T) {
+	s := store.OpenTestStore(t)
+	b := NewBuilder(s, slog.Default())
+
+	events := []store.Event{
+		{
+			EventID: "fork-hr", HostID: "host-hr", TimestampNs: 1000,
+			EventType: "fork",
+			Payload:   json.RawMessage(`{"child_pid": 555, "parent_pid": 1}`),
+		},
+		{
+			EventID: "exec-hr", HostID: "host-hr", TimestampNs: 2000,
+			EventType: "exec",
+			Payload:   json.RawMessage(`{"pid": 555, "ppid": 1, "path": "/bin/sleep", "args": ["sleep", "1"], "uid": 0, "gid": 0}`),
+		},
+		{
+			EventID: "exit-hr", HostID: "host-hr", TimestampNs: 4000,
+			EventType: "exit",
+			Payload:   json.RawMessage(`{"pid": 555, "exit_code": -1, "exit_reason": "host_reconciled"}`),
+		},
+	}
+
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	require.NoError(t, b.ProcessBatch(ctx, events))
+
+	proc, err := s.GetProcessByPID(ctx, "host-hr", 555, 3000)
+	require.NoError(t, err)
+	require.NotNil(t, proc)
+	require.NotNil(t, proc.ExitReason)
+	assert.Equal(t, store.ExitReasonHostReconciled, *proc.ExitReason,
+		"agent-emitted exit_reason=host_reconciled must reach the processes row")
+}
+
+func TestProcessBatchExitRejectsServerOnlyReason(t *testing.T) {
+	s := store.OpenTestStore(t)
+	b := NewBuilder(s, slog.Default())
+
+	events := []store.Event{
+		{
+			EventID: "fork-spoof", HostID: "host-spoof", TimestampNs: 1000,
+			EventType: "fork",
+			Payload:   json.RawMessage(`{"child_pid": 666, "parent_pid": 1}`),
+		},
+		{
+			EventID: "exec-spoof", HostID: "host-spoof", TimestampNs: 2000,
+			EventType: "exec",
+			Payload:   json.RawMessage(`{"pid": 666, "ppid": 1, "path": "/bin/sleep", "args": ["sleep", "1"], "uid": 0, "gid": 0}`),
+		},
+		{
+			EventID: "exit-spoof", HostID: "host-spoof", TimestampNs: 4000,
+			EventType: "exit",
+			Payload:   json.RawMessage(`{"pid": 666, "exit_code": 0, "exit_reason": "ttl_reconciliation"}`),
+		},
+	}
+
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	require.NoError(t, b.ProcessBatch(ctx, events))
+
+	proc, err := s.GetProcessByPID(ctx, "host-spoof", 666, 3000)
+	require.NoError(t, err)
+	require.NotNil(t, proc)
+	require.NotNil(t, proc.ExitReason)
+	assert.Equal(t, store.ExitReasonEvent, *proc.ExitReason,
+		"server-only synthetic reasons sent on the wire must collapse to 'event'")
+}
+
 func TestProcessBatchExecWithoutFork(t *testing.T) {
 	s := store.OpenTestStore(t)
 	b := NewBuilder(s, slog.Default())

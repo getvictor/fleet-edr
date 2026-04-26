@@ -44,7 +44,7 @@ func TestReconcileStaleProcesses_ForcesExitOnAgedRunningRow(t *testing.T) {
 		ForkTimeNs: cleanForkNs,
 	})
 	require.NoError(t, err)
-	require.NoError(t, s.UpdateProcessExit(ctx, cleanHost, 300, cleanForkNs+1000, cleanForkNs+2000, 0))
+	require.NoError(t, s.UpdateProcessExit(ctx, cleanHost, 300, cleanForkNs+1000, cleanForkNs+2000, 0, ""))
 
 	maxAge := int64(6 * time.Hour)
 	cutoff := nowNs - maxAge
