@@ -208,6 +208,7 @@ unset uses the documented default.
 | `EDR_LAUNCHAGENT_ALLOWLIST` | no | — | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
 | `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | — | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
 | `EDR_SUDOERS_WRITER_ALLOWLIST` | no | — | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
+| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | no | — | Comma-separated non-shell parent absolute paths the `suspicious_exec` rule treats as benign roots of the `parent → shell → /tmp/binary` chain. Recommended on fleets with interactive admin SSH: `/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on servers where interactive SSH is unusual |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | — | `host:port` of an OTLP/gRPC collector; unset disables metrics export |

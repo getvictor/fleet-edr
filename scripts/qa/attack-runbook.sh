@@ -56,7 +56,12 @@ set -uEo pipefail
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
 trap 'rc=$?; echo "[runbook] step at line $LINENO exited $rc — continuing"' ERR
 
-WORKDIR="${TMPDIR:-/tmp}/edr-attack-runbook"
+# Pin WORKDIR to /tmp/ rather than $TMPDIR. As an unprivileged user $TMPDIR
+# resolves to /var/folders/<gibberish>/T/, which is NOT in the suspicious_exec
+# rule's prefix list — using it would silently render the synthetic_payload
+# step a no-op against the rule. /tmp/ is what real droppers target on macOS
+# and what the rule expects.
+WORKDIR="/tmp/edr-attack-runbook"
 mkdir -p "$WORKDIR"
 
 EXPECTED_ALERTS=()

@@ -107,7 +107,7 @@ func run() error {
 	ingestHandler := ingest.New(s, logger, build)
 	builder := graph.NewBuilder(s, logger)
 	det := detection.NewEngine(s, logger)
-	det.Register(&rules.SuspiciousExec{})
+	det.Register(&rules.SuspiciousExec{AllowedNonShellParents: cfg.SuspiciousExecParentAllowlist})
 	det.Register(&rules.PersistenceLaunchAgent{AllowedPlists: cfg.LaunchAgentAllowlist})
 	det.Register(&rules.DyldInsert{})
 	det.Register(&rules.ShellFromOffice{})

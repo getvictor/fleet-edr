@@ -72,6 +72,18 @@ type Config struct {
 	// and never opens /etc/sudoers in write mode, so the rule never
 	// sees it.
 	SudoersWriterAllowlist map[string]struct{}
+
+	// SuspiciousExecParentAllowlist is the set of non-shell parent paths
+	// the `suspicious_exec` rule should treat as benign roots even when
+	// they sit at the root of a "non-shell -> shell -> /tmp/binary" chain.
+	// Populated from EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST (comma-separated).
+	// Empty by default. The recommended value for fleets that allow
+	// interactive admin SSH is `/usr/libexec/sshd-session,
+	// /Applications/Terminal.app/Contents/MacOS/Terminal,
+	// /Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on
+	// servers where interactive SSH is unusual — the rule's "non-shell
+	// -> shell -> /tmp/" shape is then a clean attacker indicator.
+	SuspiciousExecParentAllowlist map[string]struct{}
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -153,6 +165,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	}
 	if allowlist := envparse.Allowlist(getenv("EDR_SUDOERS_WRITER_ALLOWLIST")); allowlist != nil {
 		c.SudoersWriterAllowlist = allowlist
+	}
+	if allowlist := envparse.Allowlist(getenv("EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST")); allowlist != nil {
+		c.SuspiciousExecParentAllowlist = allowlist
 	}
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {

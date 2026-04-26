@@ -86,6 +86,15 @@ type sudoersOpenPayload struct {
 // don't affect the access mode.
 const sudoersWriteAccessMask = 0x3
 
+// O_TRUNC (0x400) | O_APPEND (0x8) | O_CREAT (0x200) — the bits an
+// attacker actually sets when mutating sudoers. macOS sudo opens
+// /etc/sudoers with O_WRONLY (sometimes plus O_NONBLOCK or O_CLOEXEC)
+// to take an LOCK_EX flock for serialised reads — write-mode by access,
+// but no intent to modify content. cp / tee / shell `>` / shell `>>` /
+// dd / vi-direct-save all set at least one of these three; sudo's
+// flock pattern sets none.
+const sudoersWriteIntentMask = 0x400 | 0x8 | 0x200
+
 func (r *SudoersTamper) Evaluate(
 	ctx context.Context, events []store.Event, s *store.Store,
 ) ([]detection.Finding, error) {
@@ -121,6 +130,13 @@ func (r *SudoersTamper) evalEvent(
 	if p.Flags&sudoersWriteAccessMask == 0 {
 		// Read-only open. cron, sudo itself, and various PAM modules
 		// read /etc/sudoers all the time; none of those are signal.
+		return nil, nil
+	}
+	if p.Flags&sudoersWriteIntentMask == 0 {
+		// Write-mode but no truncate/append/create — sudo opens with
+		// O_WRONLY alone for its LOCK_EX flock pattern, which trips
+		// the access mask above but never actually mutates content.
+		// Real tampering always sets at least one intent bit.
 		return nil, nil
 	}
 

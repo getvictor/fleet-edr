@@ -310,6 +310,44 @@ The typical use case is allowlisting an MDM agent's binary path.
 Set it as a comma-separated list of absolute paths, e.g.
 `/usr/local/bin/munki-managed-installer`.
 
+`EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` tunes the `suspicious_exec`
+rule. The rule fires on the shape `non-shell → shell → /tmp/binary`
+within 30 seconds, which captures the canonical commodity-dropper
+flow but also matches interactive admin SSH sessions running scripts
+from `/tmp/` (the chain `/usr/libexec/sshd-session → /bin/zsh →
+/bin/bash /tmp/script.sh` is identical at the syscall level to an
+attacker pivoting in via a compromised SSH key). The allowlist
+suppresses the rule when the **non-shell ancestor's path** is on
+the list — the shell and the temp-binary still need to be there
+in their normal positions, this knob only changes which root
+processes count as benign.
+
+For developer fleets and admin-managed hosts where interactive SSH
+is normal, the recommended value is
+
+```
+EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST=/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2
+```
+
+Add the absolute path of any other terminal emulator your fleet
+uses (Hyper, kitty, Alacritty, Warp, ...). Tmux and screen don't
+need to be on the list — they appear as the SHELL in the chain
+(non-shell → tmux → /tmp/...), and tmux's parent is always one of
+the entry points already covered.
+
+For servers that **shouldn't** see interactive SSH (production
+databases, build runners with key-based access only), leave this
+empty. The unsuppressed `suspicious_exec` chain is then a
+high-confidence attacker indicator.
+
+The trade-off is real: an attacker who pivots into a host via a
+compromised SSH credential follows the same chain as a legitimate
+admin, so allowlisting `sshd-session` reduces noise but also blinds
+the rule to that one attacker path. Other rules (network beaconing,
+persistence drops, credential access) catch the same actor through
+different signal, but the residual coverage gap is worth knowing
+about.
+
 ## Common troubleshooting
 
 **Readyz says `db: error`.**
