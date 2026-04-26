@@ -207,6 +207,16 @@ export async function listAlertsByProcessId(processId: number): Promise<Alert[]>
   return listAlerts({ process_id: processId });
 }
 
+// fetchAttackNavigatorLayer pulls the MITRE ATT&CK Navigator layer that
+// describes which techniques the registered detection rules cover. Returned
+// JSON is dropped directly into https://mitre-attack.github.io/attack-navigator/
+// to render as a heatmap. Call site is the "ATT&CK coverage" button in the
+// alerts page; the response is also useful for procurement questionnaires
+// (B4 in claude/mvp/phase-7-pilot-hardening.md).
+export async function fetchAttackNavigatorLayer(): Promise<unknown> {
+  return fetchJSON<unknown>("/admin/attack-coverage");
+}
+
 export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {
   return fetchJSON<{ id: number }>("/commands", {
     method: "POST",
