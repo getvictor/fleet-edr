@@ -144,11 +144,11 @@ func (r *OsascriptNetworkExec) evalEvent(
 	// Anchor the descendant window on the osascript exec time, not on the
 	// triggering temp-exec event time, since the curl sibling may have run
 	// before the temp-exec.
-	osaExecTs := osa.ForkTimeNs
+	osaExecTS := osa.ForkTimeNs
 	if osa.ExecTimeNs != nil {
-		osaExecTs = *osa.ExecTimeNs
+		osaExecTS = *osa.ExecTimeNs
 	}
-	tr := store.TimeRange{FromNs: osaExecTs, ToNs: osaExecTs + osascriptWindowNs}
+	tr := store.TimeRange{FromNs: osaExecTS, ToNs: osaExecTS + osascriptWindowNs}
 	descendants, err := collectDescendants(ctx, s, evt.HostID, osa.PID, tr)
 	if err != nil {
 		return nil, 0, err

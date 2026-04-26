@@ -208,37 +208,47 @@ func (r *SuspiciousExec) evalExec(
 		return nil, 0, nil
 	}
 
-	// Arm 1: walk the PPID chain up looking for a shell ancestor whose own
-	// parent is non-shell. This catches the canonical fork+exec dropper
-	// shape where the temp-binary is a SEPARATE process from the shell. We
-	// start the walk at the temp-exec's own PID; the loop's first check is
-	// `shellPaths[current.Path]` which is false for the temp-binary, so it
-	// trivially advances to PPID — the actual candidate parent.
+	if f, shellPID, err := r.evalExecArm1(ctx, evt, s, batch, seenShell, p, tempProc, tempPath); err != nil || f != nil {
+		return f, shellPID, err
+	}
+	return r.evalExecArm2(ctx, evt, s, batch, seenShell, p, tempProc, tempPath)
+}
+
+// evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary
+// is a SEPARATE process from the shell, so the shell sits at the temp-binary's
+// PPID (or higher, through possible shell-to-shell layering). The walk starts
+// at the temp-exec's own PID; the loop's first check is `shellPaths[..]` which
+// is false for the temp-binary, so it trivially advances to PPID on the next
+// step.
+func (r *SuspiciousExec) evalExecArm1(
+	ctx context.Context, evt store.Event, s *store.Store, batch []store.Event,
+	seenShell map[int]struct{}, p execPayload, tempProc *store.Process, tempPath string,
+) (*detection.Finding, int, error) {
 	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return nil, 0, err
 	}
-	if shell != nil {
-		if _, dupe := seenShell[shell.PID]; dupe {
-			return nil, 0, nil
-		}
-		if !shellWithinWindow(shell, evt.TimestampNs) {
-			return nil, 0, nil
-		}
-		if r.parentAllowed(parent) {
-			return nil, 0, nil
-		}
-		return r.makeExecFinding(evt, parent, shell, tempProc, tempPath, batch), shell.PID, nil
+	if shell == nil {
+		return nil, 0, nil
 	}
+	if !r.shouldFire(seenShell, shell, parent, evt.TimestampNs) {
+		return nil, 0, nil
+	}
+	return r.makeExecFinding(evt, parent, shell, tempProc, tempPath, batch), shell.PID, nil
+}
 
-	// Arm 2: same-PID re-exec optimisation. `sh -c "/tmp/foo"` is commonly
-	// implemented by execve(/tmp/foo) at the shell's PID, leaving no fork
-	// boundary between the shell and the payload. The latest exec record at
-	// this PID is /tmp/foo (which is what got us here); the shell stage is
-	// reachable via the previous_exec_id chain. Without this branch the
-	// PPID walk above misses re-exec chains entirely because temp.PPID is
-	// the shell's parent (a non-shell) and the shell itself is on the
-	// re-exec history of the same PID, not in the parent chain.
+// evalExecArm2 handles the same-PID re-exec optimisation. `sh -c "/tmp/foo"`
+// is commonly implemented by execve(/tmp/foo) at the shell's PID, leaving no
+// fork boundary between the shell and the payload. The latest exec record at
+// this PID is /tmp/foo (which is what got us here); the shell stage is
+// reachable via the previous_exec_id chain. Without this branch the PPID walk
+// above misses re-exec chains entirely because temp.PPID is the shell's parent
+// (a non-shell) and the shell itself is on the re-exec history of the same
+// PID, not in the parent chain.
+func (r *SuspiciousExec) evalExecArm2(
+	ctx context.Context, evt store.Event, s *store.Store, batch []store.Event,
+	seenShell map[int]struct{}, p execPayload, tempProc *store.Process, tempPath string,
+) (*detection.Finding, int, error) {
 	chain, err := s.GetExecChain(ctx, *tempProc)
 	if err != nil {
 		return nil, 0, fmt.Errorf("walk exec chain pid %d: %w", p.PID, err)
@@ -255,18 +265,33 @@ func (r *SuspiciousExec) evalExec(
 		if priorParent != nil && shellPaths[priorParent.Path] {
 			continue
 		}
-		if _, dupe := seenShell[prior.PID]; dupe {
-			return nil, 0, nil
-		}
-		if !shellWithinWindow(prior, evt.TimestampNs) {
-			return nil, 0, nil
-		}
-		if r.parentAllowed(priorParent) {
+		if !r.shouldFire(seenShell, prior, priorParent, evt.TimestampNs) {
 			return nil, 0, nil
 		}
 		return r.makeExecFinding(evt, priorParent, prior, tempProc, tempPath, batch), prior.PID, nil
 	}
 	return nil, 0, nil
+}
+
+// shouldFire is the common gate shared by both exec arms (and evalNetwork): a
+// candidate shell only produces a finding when (a) we haven't already fired on
+// it in this batch, (b) the trigger event falls within the shell's 30-second
+// window, and (c) the shell's non-shell parent isn't on the operator's
+// allowlist. Returning false means "skip this candidate, continue / give up";
+// the callers handle the `nil, 0, nil` reply.
+func (r *SuspiciousExec) shouldFire(
+	seenShell map[int]struct{}, shell, parent *store.Process, triggerTS int64,
+) bool {
+	if _, dupe := seenShell[shell.PID]; dupe {
+		return false
+	}
+	if !shellWithinWindow(shell, triggerTS) {
+		return false
+	}
+	if r.parentAllowed(parent) {
+		return false
+	}
+	return true
 }
 
 // evalNetwork inspects an outbound network_connect event and walks UP from the
@@ -290,13 +315,7 @@ func (r *SuspiciousExec) evalNetwork(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	if _, dupe := seenShell[shell.PID]; dupe {
-		return nil, 0, nil
-	}
-	if !shellWithinWindow(shell, evt.TimestampNs) {
-		return nil, 0, nil
-	}
-	if r.parentAllowed(parent) {
+	if !r.shouldFire(seenShell, shell, parent, evt.TimestampNs) {
 		return nil, 0, nil
 	}
 
@@ -350,39 +369,67 @@ func (r *SuspiciousExec) findShellWithNonShellAncestor(
 		return nil, nil, fmt.Errorf("get pid %d: %w", startPID, err)
 	}
 	for steps := 0; current != nil && steps < maxSuspiciousAncestorWalkSteps; steps++ {
-		if shellPaths[current.Path] {
-			// Distinguish "shell launched by launchd" (a valid non-shell
-			// ancestor) from "shell's parent record not yet materialised"
-			// (incomplete ancestry — defer).
-			if current.PPID <= 1 {
-				return current, nil, nil
-			}
-			parent, err := s.GetProcessByPID(ctx, hostID, current.PPID, asOfNs)
-			if err != nil {
-				return nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
-			}
-			if parent == nil {
-				return nil, nil, nil
-			}
-			if !shellPaths[parent.Path] {
-				return current, parent, nil
-			}
-			// Shell-to-shell layering is normal (sudo bash, su -c bash, ...).
-			// Keep climbing — the outermost shell will eventually surface a
-			// non-shell parent (or the chain hits launchd, which also counts).
-			current = parent
-			continue
+		shell, parent, advance, err := r.examineCandidate(ctx, s, hostID, current, asOfNs)
+		if err != nil {
+			return nil, nil, err
 		}
-		if current.PPID <= 1 {
+		if shell != nil {
+			return shell, parent, nil
+		}
+		if advance == nil {
 			return nil, nil, nil
+		}
+		current = advance
+	}
+	return nil, nil, nil
+}
+
+// examineCandidate is the per-step decision for findShellWithNonShellAncestor.
+// It returns one of three terminal shapes:
+//
+//   - (shell, parent, nil, nil) — match: `current` is a shell whose own
+//     parent is non-shell (parent==nil means "shell parented at launchd",
+//     which counts as a match).
+//   - (nil, nil, advance, nil) — keep walking; `advance` is the next
+//     ancestor to examine.
+//   - (nil, nil, nil, nil) — terminate without a match: ran out of
+//     ancestry (PPID<=1 with no shell yet) or the parent record is
+//     missing (defer rather than alert on incomplete data).
+//
+// Splitting this out keeps findShellWithNonShellAncestor's loop body small
+// enough that gocognit / Sonar's cognitive-complexity gates stay green.
+func (r *SuspiciousExec) examineCandidate(
+	ctx context.Context, s *store.Store, hostID string, current *store.Process, asOfNs int64,
+) (shell, parent, advance *store.Process, err error) {
+	if !shellPaths[current.Path] {
+		// Not a shell. Walk up if there's an ancestor to walk to.
+		if current.PPID <= 1 {
+			return nil, nil, nil, nil
 		}
 		next, err := s.GetProcessByPID(ctx, hostID, current.PPID, asOfNs)
 		if err != nil {
-			return nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
+			return nil, nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
 		}
-		current = next
+		return nil, nil, next, nil
 	}
-	return nil, nil, nil
+	// `current` is a shell. Distinguish "launchd parent" (match) from
+	// "parent record missing" (defer) from "non-shell parent" (match)
+	// from "shell parent" (continue walking up).
+	if current.PPID <= 1 {
+		return current, nil, nil, nil
+	}
+	candidate, err := s.GetProcessByPID(ctx, hostID, current.PPID, asOfNs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
+	}
+	if candidate == nil {
+		return nil, nil, nil, nil
+	}
+	if !shellPaths[candidate.Path] {
+		return current, candidate, nil, nil
+	}
+	// Shell-to-shell layering (sudo bash, su -c bash, ...). Keep climbing.
+	return nil, nil, candidate, nil
 }
 
 // lookupAncestor returns nil for PIDs at or below launchd (PPID 1) and
@@ -405,12 +452,12 @@ func (r *SuspiciousExec) lookupAncestor(
 // exec_time_ns when set (preferred — that's the kernel's actual exec moment)
 // and falls back to fork_time_ns otherwise (defensive — should always be set
 // for a fully-materialised process).
-func shellWithinWindow(shell *store.Process, triggerTs int64) bool {
+func shellWithinWindow(shell *store.Process, triggerTS int64) bool {
 	anchor := shell.ForkTimeNs
 	if shell.ExecTimeNs != nil {
 		anchor = *shell.ExecTimeNs
 	}
-	return triggerTs >= anchor && triggerTs <= anchor+suspiciousExecWindowNs
+	return triggerTS >= anchor && triggerTS <= anchor+suspiciousExecWindowNs
 }
 
 // makeExecFinding builds the temp-path finding shared by arm 1 and arm 2.
