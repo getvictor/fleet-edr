@@ -12,7 +12,7 @@ export function Card({
   className,
   children,
   ...rest
-}: CardProps) {
+}: Readonly<CardProps>) {
   const fullClassName = classnames(
     "card",
     `card--padding-${padding}`,
