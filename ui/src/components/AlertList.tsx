@@ -32,7 +32,7 @@ export function AlertList() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch pattern
+    setLoading(true);  
     setError(null);
     listAlerts({
       status: statusFilter || undefined,
@@ -77,13 +77,21 @@ export function AlertList() {
       .then((layer) => {
         const blob = new Blob([JSON.stringify(layer, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "fleet-edr-attack-coverage.json";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        // try/finally so a synchronous DOM error between createObjectURL and
+        // revokeObjectURL doesn't leak the blob for the page lifetime.
+        try {
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "fleet-edr-attack-coverage.json";
+          document.body.appendChild(a);
+          try {
+            a.click();
+          } finally {
+            document.body.removeChild(a);
+          }
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Failed to fetch ATT&CK coverage layer");

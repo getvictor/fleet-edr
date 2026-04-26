@@ -38,7 +38,7 @@ export interface Process {
   // "host_reconciled" (agent-side kill(pid,0) confirmed the PID is gone).
   // previous_exec_id links back to the prior generation in a same-pid
   // re-exec chain.
-  exit_reason?: string;
+  exit_reason?: "event" | "ttl_reconciliation" | "pid_reuse" | "reexec" | "host_reconciled";
   previous_exec_id?: number;
 }
 

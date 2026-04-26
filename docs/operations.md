@@ -205,11 +205,11 @@ ESF is best-effort and exit events go missing under kernel back-pressure,
 sysext crashes, and agent restarts. Two reconcilers cooperate to keep
 the process tree from filling with forever-green ghost rows.
 
-**Server-side TTL** (`EDR_PROCESS_TTL`, default `6h`). On each pass the
-server force-greys any process whose `fork_time_ns` is older than the
-TTL and which still has no `exit_time_ns`. The synthesized exit is tagged
-`exit_reason = ttl_reconciliation`. Set to `0` to disable. Pass cadence
-is controlled by `EDR_PROCESS_TTL_INTERVAL` (default `10m`).
+**Server-side TTL** (`EDR_STALE_PROCESS_TTL`, default `6h`). On each pass
+the server force-greys any process whose `fork_time_ns` is older than
+the TTL and which still has no `exit_time_ns`. The synthesized exit is
+tagged `exit_reason = ttl_reconciliation`. Set to `0` to disable. Pass
+cadence is controlled by `EDR_STALE_PROCESS_INTERVAL` (default `10m`).
 
 **Agent-side `kill(pid, 0)` sweep** (`EDR_PROCESS_RECONCILE_INTERVAL`,
 default `60s` on the agent). Every interval the agent walks its

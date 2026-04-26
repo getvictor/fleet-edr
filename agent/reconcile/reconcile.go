@@ -43,8 +43,11 @@ type KillFunc func(pid int, sig syscall.Signal) error
 
 // Options configures the reconciler. Zero values fall back to defaults.
 type Options struct {
-	// Interval between reconciliation passes. 0 disables the runner.
-	// Default 60s.
+	// Interval between reconciliation passes. Zero or negative values
+	// fall back to the default. Default 60s. Disabling the loop entirely
+	// is a wiring decision — the agent main skips constructing the
+	// runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level
+	// API always runs.
 	Interval time.Duration
 
 	// MinAge filters out PIDs first seen less than this long ago. ESF and

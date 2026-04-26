@@ -3,7 +3,10 @@
 // the agent to enrich network events with process metadata.
 package proctable
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // ProcessInfo holds metadata about a running process.
 type ProcessInfo struct {
@@ -61,9 +64,7 @@ func (t *Table) Size() int {
 func (t *Table) Snapshot() map[int32]ProcessInfo {
 	t.mu.RLock()
 	out := make(map[int32]ProcessInfo, len(t.entries))
-	for pid, info := range t.entries {
-		out[pid] = info
-	}
+	maps.Copy(out, t.entries)
 	t.mu.RUnlock()
 	return out
 }

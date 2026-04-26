@@ -56,6 +56,13 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 		opts.Now = func() time.Time { return time.Unix(0, 1_000_000_000_000) }
 	}
 	if opts.Kill == nil {
+		// Falling back to k.call is a convenience for the common case; if a
+		// test passed nil for both we'd dereference nil in the runner's first
+		// pass. Fail-fast in the helper instead so the diagnostic points at
+		// the test setup, not at a nil-deref panic deep inside the loop.
+		if k == nil {
+			t.Fatal("newRunner: either opts.Kill or k must be non-nil")
+		}
 		opts.Kill = k.call
 	}
 	return New(pt, q, func() string { return hostID }, opts)
@@ -179,6 +186,9 @@ func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 
 	n, err := r.RunOnce(context.Background())
 	require.NoError(t, err)
+	// Map iteration is non-deterministic in Go, so we deliberately assert only
+	// on the count of reaped PIDs and the table size — never on which specific
+	// PIDs survive. Adding "PID X must be reaped" assertions here would flake.
 	assert.Equal(t, 3, n)
 	assert.Equal(t, 7, pt.Size(), "only the cap is reaped per pass")
 }
@@ -199,6 +209,92 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 	assert.Equal(t, 1, pt.Size(), "PID 0 is left alone, not reaped")
+}
+
+func TestNew_PanicsOnNilDependencies(t *testing.T) {
+	pt := proctable.New()
+	q := &recorderQueue{}
+	hostFn := func() string { return "h" }
+
+	cases := []struct {
+		name   string
+		pt     *proctable.Table
+		q      Enqueuer
+		hostFn HostIDProvider
+	}{
+		{"nil proctable", nil, q, hostFn},
+		{"nil queue", pt, nil, hostFn},
+		{"nil host id provider", pt, q, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Panics(t, func() {
+				_ = New(tc.pt, tc.q, tc.hostFn, Options{})
+			})
+		})
+	}
+}
+
+func TestNew_DefaultsForZeroOptions(t *testing.T) {
+	pt := proctable.New()
+	q := &recorderQueue{}
+	r := New(pt, q, func() string { return "h" }, Options{})
+	assert.Equal(t, 60*time.Second, r.interval, "Interval defaults to 60s")
+	assert.Equal(t, 30*time.Second, r.minAge, "MinAge defaults to 30s")
+	assert.Equal(t, 256, r.maxPerPass, "MaxPerPass defaults to 256")
+	assert.NotNil(t, r.logger, "Logger defaults to slog.Default()")
+	assert.NotNil(t, r.now, "Now defaults to time.Now")
+	assert.NotNil(t, r.kill, "Kill defaults to syscall.Kill")
+}
+
+func TestNew_NegativeMinAgeNormalisesToDefault(t *testing.T) {
+	r := New(proctable.New(), &recorderQueue{}, func() string { return "h" }, Options{MinAge: -1 * time.Second})
+	assert.Equal(t, 30*time.Second, r.minAge, "negative MinAge falls back to default")
+}
+
+func TestRun_StopsOnContextCancel(t *testing.T) {
+	pt := proctable.New()
+	q := &recorderQueue{}
+	r := newRunner(t, pt, q, &killer{}, "h", Options{Interval: 50 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+
+	// Let at least one tick elapse, then cancel and confirm the loop exits.
+	time.Sleep(75 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not exit within 1s of ctx cancellation")
+	}
+}
+
+func TestRun_EmitsSyntheticExitDuringLoop(t *testing.T) {
+	pt := proctable.New()
+	pt.Update(99, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
+
+	q := &recorderQueue{}
+	k := &killer{dead: map[int]bool{99: true}}
+	r := newRunner(t, pt, q, k, "h", Options{Interval: 25 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go r.Run(ctx)
+
+	// Wait up to a second for the loop to fire and reap PID 99.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(q.snapshot()) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	assert.NotEmpty(t, q.snapshot(), "Run must emit at least one synthetic exit before the deadline")
 }
 
 func TestNewUUIDv4_FormatAndUniqueness(t *testing.T) {
