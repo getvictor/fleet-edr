@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listAlerts, updateAlertStatus } from "../api";
+import { listAlerts, updateAlertStatus, fetchAttackNavigatorLayer } from "../api";
 import type { Alert } from "../types";
 import { Table, EmptyState } from "./ui/Table";
 import { Badge, type BadgeVariant } from "./ui/Badge";
@@ -32,7 +32,7 @@ export function AlertList() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch pattern
+    setLoading(true);  
     setError(null);
     listAlerts({
       status: statusFilter || undefined,
@@ -66,6 +66,38 @@ export function AlertList() {
       });
   };
 
+  // downloadNavigatorLayer is the ATT&CK Navigator export. It pulls the
+  // server-rendered layer JSON and triggers a file download; the operator
+  // then uploads the file to https://mitre-attack.github.io/attack-navigator/
+  // (or pastes the contents) to see the matrix heatmap of which techniques
+  // the deployed detection rules cover. This is one of the more reliable
+  // demo / procurement signals — see B4 in phase-7-pilot-hardening.md.
+  const downloadNavigatorLayer = () => {
+    fetchAttackNavigatorLayer()
+      .then((layer) => {
+        const blob = new Blob([JSON.stringify(layer, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        // try/finally so a synchronous DOM error between createObjectURL and
+        // revokeObjectURL doesn't leak the blob for the page lifetime.
+        try {
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "fleet-edr-attack-coverage.json";
+          document.body.appendChild(a);
+          try {
+            a.click();
+          } finally {
+            document.body.removeChild(a);
+          }
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Failed to fetch ATT&CK coverage layer");
+      });
+  };
+
   const filters = (
     <div className="alert-filters">
       <Select
@@ -88,6 +120,9 @@ export function AlertList() {
           <option key={s} value={s}>{s || "All"}</option>
         ))}
       </Select>
+      <Button size="small" variant="inverse" onClick={downloadNavigatorLayer}>
+        Download ATT&amp;CK coverage
+      </Button>
     </div>
   );
 

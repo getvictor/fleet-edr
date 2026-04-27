@@ -24,21 +24,22 @@ const (
 
 // Config is the resolved agent configuration.
 type Config struct {
-	ServerURL         string
-	EnrollSecret      string
-	TokenFile         string
-	ServerFingerprint string
-	HostIDOverride    string
-	QueueDBPath       string
-	QueueMaxBytes     int64 // EDR_AGENT_QUEUE_MAX_BYTES; default 500 MiB, 0 = unbounded
-	XPCService        string
-	NetXPCService     string
-	BatchSize         int
-	UploadInterval    time.Duration
-	PruneAge          time.Duration
-	LogLevel          string
-	LogFormat         string
-	AllowInsecure     bool
+	ServerURL                string
+	EnrollSecret             string
+	TokenFile                string
+	ServerFingerprint        string
+	HostIDOverride           string
+	QueueDBPath              string
+	QueueMaxBytes            int64 // EDR_AGENT_QUEUE_MAX_BYTES; default 500 MiB, 0 = unbounded
+	XPCService               string
+	NetXPCService            string
+	BatchSize                int
+	UploadInterval           time.Duration
+	PruneAge                 time.Duration
+	ProcessReconcileInterval time.Duration // EDR_PROCESS_RECONCILE_INTERVAL; default 60s, 0 disables.
+	LogLevel                 string
+	LogFormat                string
+	AllowInsecure            bool
 }
 
 // Load reads configuration from the environment and validates it. The
@@ -59,16 +60,17 @@ func Load() (*Config, error) {
 func loadFrom(getenv func(string) string) (*Config, error) {
 	//nolint:gosec // "enrolled.plist" is a path, not a credential.
 	c := Config{
-		TokenFile:      "/var/db/fleet-edr/enrolled.plist",
-		QueueDBPath:    defaultQueueDBPath,
-		QueueMaxBytes:  500 * 1024 * 1024, // 500 MiB soft cap; 0 via env disables.
-		XPCService:     defaultXPCService,
-		NetXPCService:  defaultNetXPCService,
-		BatchSize:      100,
-		UploadInterval: time.Second,
-		PruneAge:       24 * time.Hour,
-		LogLevel:       "info",
-		LogFormat:      "json",
+		TokenFile:                "/var/db/fleet-edr/enrolled.plist",
+		QueueDBPath:              defaultQueueDBPath,
+		QueueMaxBytes:            500 * 1024 * 1024, // 500 MiB soft cap; 0 via env disables.
+		XPCService:               defaultXPCService,
+		NetXPCService:            defaultNetXPCService,
+		BatchSize:                100,
+		UploadInterval:           time.Second,
+		PruneAge:                 24 * time.Hour,
+		ProcessReconcileInterval: 60 * time.Second,
+		LogLevel:                 "info",
+		LogFormat:                "json",
 	}
 	var errs []error
 
@@ -97,6 +99,11 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	// A zero or negative prune age computes a future cutoff and deletes nearly every uploaded
 	// row; outright reject.
 	envparse.PositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
+	// 0 disables the agent-side process-tree reconciliation loop entirely
+	// (issue #6 client half) — useful for narrow QA where synthetic exits
+	// would distort what a clean ESF feed looks like. Negative values are
+	// rejected.
+	envparse.NonNegativeDuration(getenv, "EDR_PROCESS_RECONCILE_INTERVAL", &c.ProcessReconcileInterval, &errs)
 	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB
 	// is set above and applies when the env var is unset; setting it explicitly to 0
 	// restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.

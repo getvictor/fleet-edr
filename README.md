@@ -2,7 +2,12 @@
 
 ![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
 [![Tests](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/codeql.yml?branch=main&label=CodeQL&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml)
 [![govulncheck](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-vulncheck.yml?branch=main&label=govulncheck&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
+[![OSV-Scanner](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/osv-scanner.yml?branch=main&label=OSV-Scanner&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/getvictor/fleet-edr/badge)](https://scorecard.dev/viewer/?uri=github.com/getvictor/fleet-edr)
+[![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
+[![cosign keyless](https://img.shields.io/badge/cosign-keyless-9cf?style=flat-square&logo=sigstore)](docs/best-practices.md#4-supply-chain-security)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
 
 A macOS Endpoint Detection and Response (EDR) system. It provides

@@ -27,6 +27,7 @@ import (
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
+	"github.com/fleetdm/edr/agent/reconcile"
 	"github.com/fleetdm/edr/agent/uploader"
 	"github.com/fleetdm/edr/internal/observability"
 )
@@ -134,6 +135,7 @@ func run() error {
 
 	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfPolicyDispatcher, agentTransport, logger)
 	go pruneLoop(ctx, q, cfg.PruneAge, logger)
+	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
 	<-ctx.Done()
 	drainAndReport(up, q, logger)
@@ -273,6 +275,29 @@ func startCommander(
 		}
 	}()
 	logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
+}
+
+// startProcessReconciler runs the agent-side kill(pid,0) sweep that closes
+// processes whose kernel exit notification went missing (issue #6 client
+// half). Disabled when EDR_PROCESS_RECONCILE_INTERVAL=0.
+func startProcessReconciler(
+	ctx context.Context,
+	cfg *config.Config,
+	pt *proctable.Table,
+	q *queue.Queue,
+	tokenProvider enrollment.TokenProvider,
+	logger *slog.Logger,
+) {
+	if cfg.ProcessReconcileInterval == 0 {
+		logger.InfoContext(ctx, "process reconciliation disabled",
+			"edr.reconcile.interval_seconds", 0)
+		return
+	}
+	r := reconcile.New(pt, q, tokenProvider.HostID, reconcile.Options{
+		Interval: cfg.ProcessReconcileInterval,
+		Logger:   logger,
+	})
+	go r.Run(ctx)
 }
 
 // pruneLoop periodically prunes uploaded events older than pruneAge from the

@@ -207,6 +207,33 @@ export async function listAlertsByProcessId(processId: number): Promise<Alert[]>
   return listAlerts({ process_id: processId });
 }
 
+// AttackNavigatorLayer mirrors the layer-4.5 schema the upstream Navigator
+// renders. We type it explicitly so future client-side rendering (e.g. an
+// in-app heatmap) gets compile-time guarantees against drift in the server's
+// admin.handleATTACKCoverage response shape.
+export interface AttackNavigatorLayer {
+  name: string;
+  versions: Record<string, string>;
+  domain: string;
+  description: string;
+  techniques: Array<{
+    techniqueID: string;
+    score: number;
+    color?: string;
+    comment?: string;
+  }>;
+}
+
+// fetchAttackNavigatorLayer pulls the MITRE ATT&CK Navigator layer that
+// describes which techniques the registered detection rules cover. Returned
+// JSON is dropped directly into https://mitre-attack.github.io/attack-navigator/
+// to render as a heatmap. Call site is the "ATT&CK coverage" button in the
+// alerts page; the response is also useful for procurement questionnaires
+// (B4 in claude/mvp/phase-7-pilot-hardening.md).
+export async function fetchAttackNavigatorLayer(): Promise<AttackNavigatorLayer> {
+  return fetchJSON<AttackNavigatorLayer>("/admin/attack-coverage");
+}
+
 export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {
   return fetchJSON<{ id: number }>("/commands", {
     method: "POST",

@@ -3,7 +3,10 @@
 // the agent to enrich network events with process metadata.
 package proctable
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // ProcessInfo holds metadata about a running process.
 type ProcessInfo struct {
@@ -53,4 +56,15 @@ func (t *Table) Size() int {
 	n := len(t.entries)
 	t.mu.RUnlock()
 	return n
+}
+
+// Snapshot returns a copy of the current PID-to-info map. The reconciliation
+// loop iterates this copy outside the table mutex so a long kill(pid,0) sweep
+// over thousands of PIDs doesn't block exec/exit event ingestion.
+func (t *Table) Snapshot() map[int32]ProcessInfo {
+	t.mu.RLock()
+	out := make(map[int32]ProcessInfo, len(t.entries))
+	maps.Copy(out, t.entries)
+	t.mu.RUnlock()
+	return out
 }

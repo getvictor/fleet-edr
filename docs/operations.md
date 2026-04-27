@@ -199,6 +199,35 @@ Alerts are NOT deleted by retention. They stay until you delete them
 via the admin UI. A resolved alert pointing at an event that retention
 has purged will still render, with the event references 404ing.
 
+## Process-tree freshness (issue #6)
+
+ESF is best-effort and exit events go missing under kernel back-pressure,
+sysext crashes, and agent restarts. Two reconcilers cooperate to keep
+the process tree from filling with forever-green ghost rows.
+
+**Server-side TTL** (`EDR_STALE_PROCESS_TTL`, default `6h`). On each pass
+the server force-greys any process whose `fork_time_ns` is older than
+the TTL and which still has no `exit_time_ns`. The synthesized exit is
+tagged `exit_reason = ttl_reconciliation`. Set to `0` to disable. Pass
+cadence is controlled by `EDR_STALE_PROCESS_INTERVAL` (default `10m`).
+
+**Agent-side `kill(pid, 0)` sweep** (`EDR_PROCESS_RECONCILE_INTERVAL`,
+default `60s` on the agent). Every interval the agent walks its
+in-memory PID table and probes each tracked PID with `kill(pid, 0)`.
+Any PID that returns `ESRCH` ("no such process") is gone — the agent
+emits a synthetic exit event tagged `exit_reason = host_reconciled`,
+which the server records on the row. PIDs younger than 30s are skipped
+to avoid racing the exec; at most 256 synthetic exits are emitted per
+pass to bound queue pressure on a host that just lost a large burst of
+exits. Set the interval to `0` on the agent (via `/etc/fleet-edr.conf`
+or env) to disable; useful only for narrow QA where synthetic exits
+would distort what a clean ESF feed looks like.
+
+The two reconcilers are complementary: the agent closes rows within
+~minute granularity for hosts that are alive and reachable, and the
+server's TTL is the safety net for hosts that go offline before they
+can reconcile themselves.
+
 ## Metrics and monitoring
 
 Server exports OpenTelemetry metrics via OTLP/gRPC to the endpoint in

@@ -91,6 +91,7 @@ const (
 	ExitReasonTTLReconciliation = "ttl_reconciliation" // synthesized — process stayed "running" past the TTL; server forced a gray
 	ExitReasonPIDReuse          = "pid_reuse"          // synthesized — an incoming fork on the same PID forced closure of the prior row
 	ExitReasonReExec            = "reexec"             // synthesized — superseded by a new execve() on the same PID (issue #10 chain)
+	ExitReasonHostReconciled    = "host_reconciled"    // synthesized — agent's kill(pid,0) confirmed the PID is gone; kernel exit event was lost (issue #6 client half)
 )
 
 // HostSummary provides an overview of a host's event activity.
@@ -158,19 +159,25 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 	return err
 }
 
-// UpdateProcessExit sets the exit timestamp and code for a running process.
-// exitIngestedAtNs is the server-stamped ingest time of the originating exit
-// event and anchors the upper bound of correlation queries against a
-// server-controlled clock (issue #7). exit_reason is set to ExitReasonEvent
-// so the TTL reconciler can tell observed exits from synthesized ones.
+// UpdateProcessExit sets the exit timestamp, code, and reason for a running
+// process. exitIngestedAtNs is the server-stamped ingest time of the
+// originating exit event and anchors the upper bound of correlation queries
+// against a server-controlled clock (issue #7). reason distinguishes
+// kernel-observed exits (ExitReasonEvent — the default) from agent-side
+// reconciled ones (ExitReasonHostReconciled — issue #6 client half) so the UI
+// can render the latter with a "reconciled" badge instead of pretending it was
+// a clean observed exit. An empty reason normalises to ExitReasonEvent.
 func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
-	exitTimeNs, exitIngestedAtNs int64, exitCode int) error {
+	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason string) error {
+	if reason == "" {
+		reason = ExitReasonEvent
+	}
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?,
 		                    exit_reason = ?, exit_code = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
-		exitTimeNs, exitIngestedAtNs, ExitReasonEvent, exitCode, hostID, pid,
+		exitTimeNs, exitIngestedAtNs, reason, exitCode, hostID, pid,
 	)
 	return err
 }

@@ -214,8 +214,9 @@ func pickPPID(prior, fromEvent int) int {
 }
 
 type exitPayload struct {
-	PID      int `json:"pid"`
-	ExitCode int `json:"exit_code"`
+	PID        int    `json:"pid"`
+	ExitCode   int    `json:"exit_code"`
+	ExitReason string `json:"exit_reason,omitempty"`
 }
 
 func (b *Builder) handleExit(ctx context.Context, evt store.Event) error {
@@ -224,5 +225,14 @@ func (b *Builder) handleExit(ctx context.Context, evt store.Event) error {
 		return err
 	}
 
-	return b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode)
+	// Whitelist: only the agent-emitted reconciled reason is honoured on the wire.
+	// Anything else (including the server-only synthetic reasons like reexec,
+	// pid_reuse, ttl_reconciliation) collapses to ExitReasonEvent so a
+	// compromised agent can't mark normal exits with a misleading reason.
+	reason := store.ExitReasonEvent
+	if p.ExitReason == store.ExitReasonHostReconciled {
+		reason = store.ExitReasonHostReconciled
+	}
+
+	return b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason)
 }

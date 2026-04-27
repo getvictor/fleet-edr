@@ -79,7 +79,12 @@
       "required": ["pid", "exit_code"],
       "properties": {
         "pid": { "type": "integer" },
-        "exit_code": { "type": "integer" }
+        "exit_code": { "type": "integer" },
+        "exit_reason": {
+          "type": "string",
+          "enum": ["event", "host_reconciled"],
+          "description": "Optional. 'host_reconciled' tags exits synthesized by the agent's kill(pid,0) reconciliation pass when the kernel-observed exit event went missing (issue #6 client half). Absent or 'event' means the kernel observed the exit."
+        }
       }
     },
     "open_payload": {
