@@ -129,8 +129,29 @@ export function ProcessTreeView() {
   // unconditionally (except preserved), optionally restrict to the alert chain, and drop
   // children of collapsed nodes while stashing the hidden-count on the surviving parent so
   // we can render it as "+N". While a search query is active, skip the collapse step so the
-  // user never sees "0 matches" when a match is only hidden inside a collapsed subtree.
+  // user never sees "0 matches" when a match is only hidden inside a collapsed subtree
+  // AND prune to just matches + ancestors so the canvas isn't a wall of dimmed noise.
   const applyCollapse = query.trim() === "";
+  const queryFilterIds = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    const keep = new Set<number>();
+    const visit = (nodes: ProcessNode[], ancestors: number[]): boolean => {
+      let anyMatch = false;
+      for (const n of nodes) {
+        const matches = matchesQueryRaw(n, q);
+        const childMatches = n.children ? visit(n.children, [...ancestors, n.id]) : false;
+        if (matches || childMatches) {
+          keep.add(n.id);
+          for (const a of ancestors) keep.add(a);
+          anyMatch = true;
+        }
+      }
+      return anyMatch;
+    };
+    visit(roots, []);
+    return keep;
+  }, [roots, query]);
   const visibleRoots = useMemo(() => {
     const apply = (nodes: ProcessNode[]): ProcessNode[] => {
       const out: ProcessNode[] = [];
@@ -138,6 +159,10 @@ export function ProcessTreeView() {
         // In alert focus mode, drop anything that isn't on the alert's ancestor/descendant chain.
         if (alertChainIds && !alertChainIds.has(n.id)) continue;
         if (!showSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) continue;
+        // Search filter: hide everything outside the matches-plus-ancestors set so
+        // a query like "60289" reduces a 200-node tree to the few rows that matter,
+        // instead of dimming 195 nodes the user has to visually skip past.
+        if (queryFilterIds && !queryFilterIds.has(n.id)) continue;
         const kids = n.children ? apply(n.children) : undefined;
         if (applyCollapse && collapsedIds.has(n.id) && kids && kids.length > 0) {
           const collapsedTotal = kids.reduce((acc, c) => acc + 1 + countDescendants(c), 0);
@@ -149,7 +174,7 @@ export function ProcessTreeView() {
       return out;
     };
     return apply(roots);
-  }, [roots, showSystem, collapsedIds, preservedIds, applyCollapse, alertChainIds]);
+  }, [roots, showSystem, collapsedIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds]);
 
   const toggleCollapsed = useCallback((nodeId: number) => {
     setCollapsedIds((prev) => {
@@ -168,6 +193,10 @@ export function ProcessTreeView() {
     const atParam = searchParams.get("at");
     const anchorMs = atParam ? Number(atParam) : Date.now();
     const to = anchorMs * 1_000_000;
+    // rangeIdx is the user's pick from the segmented control above; it's
+    // bounded to [0, TIME_RANGES.length-1] by the click handlers, so this
+    // bracket access is safe even though the static analyzer can't prove it.
+    // eslint-disable-next-line security/detect-object-injection
     const range = TIME_RANGES[rangeIdx];
     const from = to - range.ms * 1_000_000;
 
@@ -255,7 +284,6 @@ export function ProcessTreeView() {
 
     const { matches, pathNodes } = collectMatches(layoutNodesRef.current, q);
     matchesRef.current = matches;
-    /* eslint-disable react-hooks/set-state-in-effect -- derived from DOM walk after tree render */
     setMatchCount(matches.length);
     let targetIdx = 0;
     if (matches.length === 0) {
@@ -266,7 +294,6 @@ export function ProcessTreeView() {
         return targetIdx;
       });
     }
-    /* eslint-enable react-hooks/set-state-in-effect */
 
     svg.selectAll<SVGGElement, D3PointNode>("g.node")
       .classed("node--match", (d) => matches.includes(d))
@@ -284,6 +311,9 @@ export function ProcessTreeView() {
           && !(pathNodes.has(d.source as D3PointNode) && pathNodes.has(d.target as D3PointNode)),
       );
 
+    // targetIdx is bounded by matches.length above; the bracket-access here
+    // can't go out of range. eslint's plugin can't prove that.
+    // eslint-disable-next-line security/detect-object-injection
     if (matches.length > 0) zoomToNode(matches[targetIdx]);
   }, [query, visibleRoots, alertProcessIds, zoomToNode]);
 
@@ -307,6 +337,8 @@ export function ProcessTreeView() {
     if (total === 0) return;
     setMatchIdx((prev) => {
       const next = (prev + delta + total) % total;
+      // next is bounded by total via the modulo above.
+      // eslint-disable-next-line security/detect-object-injection
       zoomToNode(matchesRef.current[next]);
       return next;
     });
@@ -376,7 +408,8 @@ export function ProcessTreeView() {
       <PageHeader
         title={
           <span className="process-tree__title">
-            <Link to="/" className="process-tree__back">&larr; Hosts</Link>
+            <Link to="/" className="process-tree__crumb">Hosts</Link>
+            <span className="process-tree__crumb-sep" aria-hidden="true">/</span>
             <span className="process-tree__host">{hostId}</span>
           </span>
         }
@@ -461,6 +494,20 @@ function nodeMatchesQuery(d: D3Node, q: string): boolean {
   if (d.path.toLowerCase().includes(q)) return true;
   if (String(d.pid).includes(q)) return true;
   if (d.data.args?.some((a) => a.toLowerCase().includes(q))) return true;
+  return false;
+}
+
+// matchesQueryRaw is the data-side mirror of nodeMatchesQuery — same matching
+// rules, but operating on raw ProcessNode rows before the d3 layout runs.
+// The visible-tree pre-filter uses this so the canvas only ever lays out the
+// matches-plus-ancestors set, instead of laying out everything and dimming the
+// non-matches in CSS.
+function matchesQueryRaw(n: ProcessNode, q: string): boolean {
+  const name = (n.path.split("/").pop() ?? "").toLowerCase();
+  if (name.includes(q)) return true;
+  if (n.path.toLowerCase().includes(q)) return true;
+  if (String(n.pid).includes(q)) return true;
+  if (n.args?.some((a) => a.toLowerCase().includes(q))) return true;
   return false;
 }
 
@@ -605,9 +652,13 @@ function renderTree(
   // eslint-disable-next-line @typescript-eslint/unbound-method
   sel.call(zoom.transform, d3.zoomIdentity.translate(margin - minY, margin - minX));
 
-  // Links.
+  // Links. Skip the synthetic-root edges: when there are multiple top-level
+  // roots we add a parent node with pid=0 so d3.tree() has a single layout
+  // anchor, but that node isn't drawn — and without this filter the edges
+  // FROM that invisible parent show up in the canvas as ghost lines drifting
+  // off the left side of the tree.
   g.selectAll("path.link")
-    .data(links)
+    .data(links.filter((l) => l.source.data.pid !== 0))
     .join("path")
     .attr("class", "link")
     .attr("fill", "none")

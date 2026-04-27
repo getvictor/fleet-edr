@@ -10,10 +10,20 @@
     gap: $pad-medium;
   }
 
-  &__back {
+  &__crumb {
     font-size: $x-small;
     font-weight: $regular;
     color: $core-fleet-green;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__crumb-sep {
+    font-size: $x-small;
+    color: $ui-fleet-black-25;
   }
 
   &__host {
@@ -235,8 +245,11 @@
   gap: $pad-small;
   padding: $pad-small $pad-medium;
   margin-bottom: $pad-medium;
-  background-color: rgba(255, 232, 236, 0.6);
-  border: 1px solid rgba(255, 92, 131, 0.4);
+  // Neutral grey container — the page already shows alert severity via the
+  // badge inside this row. The previous pink fill + red border read as a
+  // status indicator and confused operators ("is this an error?").
+  background-color: $ui-fleet-black-5;
+  border: 1px solid $ui-fleet-black-10;
   border-radius: $border-radius;
   font-size: $x-small;
   color: $core-fleet-black;

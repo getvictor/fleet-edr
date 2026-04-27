@@ -1,4 +1,5 @@
 @use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
 @use "../styles/var/padding" as *;
 
 .policy-section {
@@ -47,4 +48,59 @@
   border-radius: 4px;
   background: rgba(255, 92, 131, 0.1);
   color: $core-vibrant-red;
+}
+
+.policy-flash {
+  margin: $pad-small 0;
+  padding: $pad-small $pad-medium;
+  border-radius: 4px;
+  background: rgba(0, 154, 125, 0.1);
+  border: 1px solid rgba(0, 154, 125, 0.3);
+  color: $core-fleet-green;
+  font-size: 0.95em;
+}
+
+// Sticky save bar — only renders while policy is dirty. Sits at the bottom of
+// the viewport so the operator never has to scroll-hunt for the Save button
+// after editing rows mid-list. Pattern matches GitHub's branch-protection
+// editor and AWS Console settings flows: explicit "you have unsaved changes"
+// summary on the left, in-line audit reason + Save + Discard on the right.
+.policy-savebar {
+  position: sticky;
+  bottom: 0;
+  margin: $pad-large -#{$pad-page} 0;
+  padding: $pad-medium $pad-page;
+  background: $core-fleet-white;
+  border-top: 2px solid $core-fleet-green;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: $pad-medium;
+  flex-wrap: wrap;
+  z-index: 5;
+
+  &__summary {
+    color: $ui-fleet-black-75;
+    font-size: 0.95em;
+  }
+
+  &__delta {
+    color: $core-fleet-green;
+    font-weight: $bold;
+  }
+
+  &__form {
+    display: flex;
+    align-items: flex-end;
+    gap: $pad-small;
+    flex: 1;
+    min-width: 320px;
+    justify-content: flex-end;
+
+    .field {
+      flex: 1;
+      max-width: 480px;
+    }
+  }
 }

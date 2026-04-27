@@ -31,13 +31,17 @@ function sortedEqual(a: readonly string[], b: readonly string[]): boolean {
 }
 
 // PolicyEditor is the operator-facing surface for the server-driven blocklist
-// (the same Policy that GET/PUT /api/v1/admin/policy serves). The UI deliberately
-// stays bare — list paths and hashes, add a row, remove a row, save with a
-// required reason. Every save bumps the policy version on the server and fans
-// out a set_blocklist command to every active host. The server canonicalises
-// macOS symlink prefixes (/tmp/ → /private/tmp/, /var/ → /private/var/, /etc/
-// → /private/etc/) so an operator who types /tmp/payload still gets a working
-// block at the kernel.
+// (the same Policy that GET/PUT /api/v1/admin/policy serves). The flow follows
+// the pattern most enterprise dashboards use (GitHub, Atlassian, AWS Console):
+// the page edits a *staged* copy of the policy; nothing hits the server until
+// the operator clicks "Save changes" in a sticky footer that only appears when
+// there are unsaved edits. Add/remove buttons mutate the staged copy, not
+// the live policy. The footer also takes the audit reason in-line so the
+// operator sees both controls together.
+//
+// The server canonicalises macOS symlink prefixes (/tmp/ → /private/tmp/,
+// /var/ → /private/var/, /etc/ → /private/etc/) so an operator who types
+// /tmp/payload still gets a working block at the kernel.
 export function PolicyEditor({ actor }: PolicyEditorProps) {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [paths, setPaths] = useState<string[]>([]);
@@ -48,7 +52,7 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +77,13 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
     && (!sortedEqual(paths, policy.blocklist.paths)
       || !sortedEqual(hashes, policy.blocklist.hashes));
 
+  const pathDelta = policy
+    ? paths.length - policy.blocklist.paths.length
+    : 0;
+  const hashDelta = policy
+    ? hashes.length - policy.blocklist.hashes.length
+    : 0;
+
   const addPath = () => {
     const p = newPath.trim();
     if (!p) return;
@@ -87,6 +98,7 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
     setError(null);
     setPaths([...paths, p].sort((a, b) => a.localeCompare(b)));
     setNewPath("");
+    setSavedFlash(false);
   };
 
   const addHash = () => {
@@ -103,14 +115,31 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
     setError(null);
     setHashes([...hashes, h].sort((a, b) => a.localeCompare(b)));
     setNewHash("");
+    setSavedFlash(false);
   };
 
-  const removePath = (p: string) => { setPaths(paths.filter((x) => x !== p)); };
-  const removeHash = (h: string) => { setHashes(hashes.filter((x) => x !== h)); };
+  const removePath = (p: string) => {
+    setPaths(paths.filter((x) => x !== p));
+    setSavedFlash(false);
+  };
+  const removeHash = (h: string) => {
+    setHashes(hashes.filter((x) => x !== h));
+    setSavedFlash(false);
+  };
+
+  const discardChanges = () => {
+    if (!policy) return;
+    setPaths(policy.blocklist.paths);
+    setHashes(policy.blocklist.hashes);
+    setNewPath("");
+    setNewHash("");
+    setReason("");
+    setError(null);
+  };
 
   const handleSave = () => {
     if (!reason.trim()) {
-      setError("Reason is required for every policy change.");
+      setError("A reason is required for the audit log.");
       return;
     }
     setSaving(true);
@@ -121,7 +150,7 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
         setPaths(p.blocklist.paths);
         setHashes(p.blocklist.hashes);
         setReason("");
-        setSavedAt(p.updated_at);
+        setSavedFlash(true);
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Save failed");
@@ -141,6 +170,12 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
 
       {!loading && (
         <>
+          {savedFlash && !dirty && (
+            <div className="policy-flash" role="status">
+              Policy saved. Version {policy?.version}, fanned out to all active hosts.
+            </div>
+          )}
+
           <section className="policy-section">
             <h2>Blocked paths</h2>
             <p className="policy-hint">
@@ -168,16 +203,19 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
                   </tbody>
                 </Table>
               )}
-            <div className="policy-add-row">
+            <form
+              className="policy-add-row"
+              onSubmit={(e) => { e.preventDefault(); addPath(); }}
+            >
               <Input
                 id="new-path"
                 label="Add path:"
                 value={newPath}
                 onChange={(e) => { setNewPath(e.target.value); }}
-                placeholder="/private/tmp/payload"
+                placeholder="e.g. /private/tmp/payload"
               />
-              <Button size="small" onClick={addPath}>Add</Button>
-            </div>
+              <Button size="small" type="submit">Add path</Button>
+            </form>
           </section>
 
           <section className="policy-section">
@@ -205,47 +243,60 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
                   </tbody>
                 </Table>
               )}
-            <div className="policy-add-row">
+            <form
+              className="policy-add-row"
+              onSubmit={(e) => { e.preventDefault(); addHash(); }}
+            >
               <Input
                 id="new-hash"
                 label="Add hash:"
                 value={newHash}
                 onChange={(e) => { setNewHash(e.target.value); }}
-                placeholder="aaaaaaaa..."
+                placeholder="e.g. e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
               />
-              <Button size="small" onClick={addHash}>Add</Button>
-            </div>
+              <Button size="small" type="submit">Add hash</Button>
+            </form>
           </section>
 
-          <section className="policy-section">
-            <h2>Save</h2>
-            <p className="policy-hint">
-              Every save bumps the policy version and fans the new blocklist out
-              to every active host. The reason is recorded in the audit log
-              alongside your account.
+          {policy && (
+            <p className="policy-meta">
+              Currently live: version {policy.version}, last changed{" "}
+              {new Date(policy.updated_at).toLocaleString()} by {policy.updated_by}.
             </p>
-            <Input
-              id="policy-reason"
-              label="Reason:"
-              value={reason}
-              onChange={(e) => { setReason(e.target.value); }}
-              placeholder="why are you changing the policy?"
-            />
-            <div className="policy-save-row">
-              <Button onClick={handleSave} disabled={!dirty || saving || !reason.trim()}>
-                {saving ? "Saving..." : "Save policy"}
-              </Button>
-              {policy && (
-                <span className="policy-meta">
-                  version {policy.version}, last changed{" "}
-                  {new Date(policy.updated_at).toLocaleString()} by {policy.updated_by}
+          )}
+
+          {dirty && (
+            <div className="policy-savebar" role="region" aria-label="unsaved changes">
+              <div className="policy-savebar__summary">
+                <strong>Unsaved changes:</strong>{" "}
+                <span className="policy-savebar__delta">
+                  {pathDelta !== 0 && (
+                    <>{pathDelta > 0 ? `+${String(pathDelta)}` : String(pathDelta)} path{Math.abs(pathDelta) === 1 ? "" : "s"}</>
+                  )}
+                  {pathDelta !== 0 && hashDelta !== 0 && ", "}
+                  {hashDelta !== 0 && (
+                    <>{hashDelta > 0 ? `+${String(hashDelta)}` : String(hashDelta)} hash{Math.abs(hashDelta) === 1 ? "" : "es"}</>
+                  )}
+                  {pathDelta === 0 && hashDelta === 0 && "list reordered"}
                 </span>
-              )}
-              {savedAt && !dirty && (
-                <span className="policy-saved">Saved.</span>
-              )}
+              </div>
+              <div className="policy-savebar__form">
+                <Input
+                  id="policy-reason"
+                  label="Reason:"
+                  value={reason}
+                  onChange={(e) => { setReason(e.target.value); }}
+                  placeholder="e.g. blocking known-bad stage-2 dropper from 2026-04-22 incident"
+                />
+                <Button onClick={handleSave} disabled={saving || !reason.trim()}>
+                  {saving ? "Saving..." : "Save changes"}
+                </Button>
+                <Button variant="inverse" onClick={discardChanges} disabled={saving}>
+                  Discard
+                </Button>
+              </div>
             </div>
-          </section>
+          )}
         </>
       )}
     </>

@@ -1,0 +1,77 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.attack-coverage {
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: $pad-medium;
+  }
+
+  &__navigator-link {
+    color: $core-fleet-green;
+    text-decoration: none;
+    font-weight: $bold;
+    font-size: 0.95em;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__summary {
+    display: flex;
+    gap: $pad-large;
+    margin: $pad-medium 0 $pad-large;
+    flex-wrap: wrap;
+  }
+
+  &__metric {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: $pad-xxsmall;
+    padding: $pad-medium $pad-large;
+    background: $ui-fleet-black-5;
+    border-left: 4px solid $core-fleet-green;
+    border-radius: 4px;
+    min-width: 180px;
+  }
+
+  &__metric-num {
+    font-size: 2rem;
+    font-weight: $bold;
+    color: $core-fleet-black;
+    line-height: 1;
+  }
+
+  &__metric-label {
+    font-size: 0.85em;
+    color: $ui-fleet-black-50;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  &__tactic {
+    margin: $pad-large 0;
+  }
+
+  &__tactic-name {
+    font-size: 1.05rem;
+    margin: 0 0 $pad-small;
+    padding-bottom: $pad-xsmall;
+    border-bottom: 1px solid $ui-fleet-black-10;
+  }
+
+  &__technique-id {
+    color: $core-fleet-green;
+    text-decoration: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: $bold;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
