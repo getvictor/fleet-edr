@@ -77,7 +77,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<HostList />} />
           <Route path="/alerts" element={<AlertList />} />
-          <Route path="/policy" element={<PolicyEditor />} />
+          <Route path="/policy" element={<PolicyEditor actor={auth.user.email} />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

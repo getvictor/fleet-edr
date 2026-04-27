@@ -208,10 +208,28 @@ func (r *SuspiciousExec) evalExec(
 		return nil, 0, nil
 	}
 
-	if f, shellPID, err := r.evalExecArm1(ctx, evt, s, batch, seenShell, p, tempProc, tempPath); err != nil || f != nil {
+	in := &execMatchInputs{
+		evt: evt, batch: batch, seenShell: seenShell, p: p,
+		tempProc: tempProc, tempPath: tempPath,
+	}
+	if f, shellPID, err := r.evalExecArm1(ctx, s, in); err != nil || f != nil {
 		return f, shellPID, err
 	}
-	return r.evalExecArm2(ctx, evt, s, batch, seenShell, p, tempProc, tempPath)
+	return r.evalExecArm2(ctx, s, in)
+}
+
+// execMatchInputs bundles the per-event evaluation state shared by both exec
+// arms. Sonar's go:S107 caps function signatures at 7 parameters; passing
+// these through individually pushed both arms over the limit. Bundling reads
+// cleaner anyway — every field below is "inputs about this single exec event"
+// and they always travel together.
+type execMatchInputs struct {
+	evt       store.Event
+	batch     []store.Event
+	seenShell map[int]struct{}
+	p         execPayload
+	tempProc  *store.Process
+	tempPath  string
 }
 
 // evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary
@@ -221,20 +239,19 @@ func (r *SuspiciousExec) evalExec(
 // is false for the temp-binary, so it trivially advances to PPID on the next
 // step.
 func (r *SuspiciousExec) evalExecArm1(
-	ctx context.Context, evt store.Event, s *store.Store, batch []store.Event,
-	seenShell map[int]struct{}, p execPayload, tempProc *store.Process, tempPath string,
+	ctx context.Context, s *store.Store, in *execMatchInputs,
 ) (*detection.Finding, int, error) {
-	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, p.PID, evt.TimestampNs)
+	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, in.evt.HostID, in.p.PID, in.evt.TimestampNs)
 	if err != nil {
 		return nil, 0, err
 	}
 	if shell == nil {
 		return nil, 0, nil
 	}
-	if !r.shouldFire(seenShell, shell, parent, evt.TimestampNs) {
+	if !r.shouldFire(in.seenShell, shell, parent, in.evt.TimestampNs) {
 		return nil, 0, nil
 	}
-	return r.makeExecFinding(evt, parent, shell, tempProc, tempPath, batch), shell.PID, nil
+	return r.makeExecFinding(in.evt, parent, shell, in.tempProc, in.tempPath, in.batch), shell.PID, nil
 }
 
 // evalExecArm2 handles the same-PID re-exec optimisation. `sh -c "/tmp/foo"`
@@ -246,29 +263,28 @@ func (r *SuspiciousExec) evalExecArm1(
 // (a non-shell) and the shell itself is on the re-exec history of the same
 // PID, not in the parent chain.
 func (r *SuspiciousExec) evalExecArm2(
-	ctx context.Context, evt store.Event, s *store.Store, batch []store.Event,
-	seenShell map[int]struct{}, p execPayload, tempProc *store.Process, tempPath string,
+	ctx context.Context, s *store.Store, in *execMatchInputs,
 ) (*detection.Finding, int, error) {
-	chain, err := s.GetExecChain(ctx, *tempProc)
+	chain, err := s.GetExecChain(ctx, *in.tempProc)
 	if err != nil {
-		return nil, 0, fmt.Errorf("walk exec chain pid %d: %w", p.PID, err)
+		return nil, 0, fmt.Errorf("walk exec chain pid %d: %w", in.p.PID, err)
 	}
 	for i := range chain {
 		prior := &chain[i]
 		if !shellPaths[prior.Path] {
 			continue
 		}
-		priorParent, err := r.lookupAncestor(ctx, s, evt.HostID, prior.PPID, evt.TimestampNs)
+		priorParent, err := r.lookupAncestor(ctx, s, in.evt.HostID, prior.PPID, in.evt.TimestampNs)
 		if err != nil {
 			return nil, 0, err
 		}
 		if priorParent != nil && shellPaths[priorParent.Path] {
 			continue
 		}
-		if !r.shouldFire(seenShell, prior, priorParent, evt.TimestampNs) {
+		if !r.shouldFire(in.seenShell, prior, priorParent, in.evt.TimestampNs) {
 			return nil, 0, nil
 		}
-		return r.makeExecFinding(evt, priorParent, prior, tempProc, tempPath, batch), prior.PID, nil
+		return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
 	}
 	return nil, 0, nil
 }

@@ -311,6 +311,14 @@ USAGE
       *) echo "[runbook] unknown argument: $arg" >&2; exit 2 ;;
     esac
   done
+  # Validate PACE_SECONDS up-front. The downstream `[[ "$PACE_SECONDS" -gt 0 ]]`
+  # and `sleep "$PACE_SECONDS"` calls will explode mid-script on a non-integer
+  # (the trap fires "step at line N exited 2" and a confused operator wonders
+  # why nothing fired). Reject early with a clear message instead.
+  if ! [[ "$PACE_SECONDS" =~ ^[0-9]+$ ]]; then
+    echo "[runbook] invalid PACE_SECONDS=\"$PACE_SECONDS\" — must be a non-negative integer" >&2
+    exit 2
+  fi
 }
 
 main() {

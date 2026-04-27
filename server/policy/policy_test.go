@@ -80,20 +80,32 @@ func TestUpdate_CanonicalizesMacOSSymlinkPaths(t *testing.T) {
 	ctx := t.Context()
 
 	p, err := s.Update(ctx, UpdateRequest{
-		Name:  DefaultName,
-		Paths: []string{"/tmp/payload", "/tmp", "/var/log/foo", "/var", "/opt/keepasis", "/private/tmp/already"},
+		Name: DefaultName,
+		Paths: []string{
+			"/tmp/payload", "/tmp", "/var/log/foo", "/var", "/etc/foo", "/etc",
+			"/opt/keepasis", "/private/tmp/already",
+			// Lookalikes that share a 4-char prefix with /tmp / /var / /etc but
+			// are NOT under those directories. The rewrite must be a
+			// path-segment match (HasPrefix("/tmp/")), never a substring match.
+			"/tmpfoo", "/varlog/x", "/etcetera",
+		},
 		Actor: "qa",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{
+		"/etcetera",
 		"/opt/keepasis",
+		"/private/etc",
+		"/private/etc/foo",
 		"/private/tmp",
 		"/private/tmp/already",
 		"/private/tmp/payload",
 		"/private/var",
 		"/private/var/log/foo",
+		"/tmpfoo",
+		"/varlog/x",
 	}, p.Blocklist.Paths,
-		"every /tmp/* and /var/* prefix must be rewritten to its /private/... canonical form; other paths pass through")
+		"every /tmp/, /var/, and /etc/ prefix must be rewritten to its /private/... canonical form; lookalike paths (/tmpfoo, /varlog, /etcetera) pass through unchanged")
 }
 
 // TestUpdate_RejectsInvalidBlocklistEntries locks in the Phase 2 validation contract: a
