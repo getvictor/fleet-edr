@@ -48,6 +48,15 @@
       border-color: $core-fleet-green;
       box-shadow: 0 0 0 3px rgba(0, 154, 125, 0.15);
     }
+
+    // Placeholder reads as a hint, not as a default value the user must clear.
+    // The previous browser default looked too much like real text — operators
+    // reported clicking on /private/tmp/payload thinking it was already there.
+    &::placeholder {
+      color: $ui-fleet-black-50;
+      font-style: italic;
+      opacity: 1; // Firefox defaults to 0.54; force the colour we set instead.
+    }
   }
 }
 

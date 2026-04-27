@@ -10,6 +10,7 @@ interface NavLink {
 const LINKS: NavLink[] = [
   { to: "/", label: "Hosts" },
   { to: "/alerts", label: "Alerts" },
+  { to: "/coverage", label: "Coverage" },
   { to: "/policy", label: "Policy" },
 ];
 
@@ -53,6 +54,9 @@ export function TopNav({ user, onLogout }: TopNavProps) {
         </ul>
         {user && onLogout && (
           <div className="top-nav__account">
+            <span className="top-nav__avatar" aria-hidden="true">
+              {user.email.charAt(0) || "?"}
+            </span>
             <span className="top-nav__user">{user.email}</span>
             <button
               type="button"
