@@ -224,6 +224,32 @@ export interface AttackNavigatorLayer {
   }>;
 }
 
+// Policy is the operator-managed blocklist. The same shape the server
+// returns from GET /api/v1/admin/policy.
+export interface Policy {
+  name: string;
+  version: number;
+  blocklist: { paths: string[]; hashes: string[] };
+  updated_at: string;
+  updated_by: string;
+}
+
+export async function fetchPolicy(): Promise<Policy> {
+  return fetchJSON<Policy>("/admin/policy");
+}
+
+export async function updatePolicy(
+  paths: string[],
+  hashes: string[],
+  actor: string,
+  reason: string,
+): Promise<Policy> {
+  return fetchJSON<Policy>("/admin/policy", {
+    method: "PUT",
+    body: JSON.stringify({ paths, hashes, actor, reason }),
+  });
+}
+
 // fetchAttackNavigatorLayer pulls the MITRE ATT&CK Navigator layer that
 // describes which techniques the registered detection rules cover. Returned
 // JSON is dropped directly into https://mitre-attack.github.io/attack-navigator/

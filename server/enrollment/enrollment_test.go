@@ -368,7 +368,7 @@ func TestHandler_EnrollQueuesInitialPolicy(t *testing.T) {
 	// actually exercising payload population.
 	_, err := ps.Update(t.Context(), policy.UpdateRequest{
 		Name:  policy.DefaultName,
-		Paths: []string{"/tmp/initial-block"},
+		Paths: []string{"/private/tmp/initial-block"},
 		Actor: "seed",
 	})
 	require.NoError(t, err)
@@ -423,7 +423,7 @@ func TestHandler_EnrollQueuesInitialPolicy(t *testing.T) {
 	require.NoError(t, json.Unmarshal(got[0].Payload, &payload))
 	assert.Equal(t, "default", payload.Name)
 	assert.Equal(t, int64(2), payload.Version)
-	assert.Equal(t, []string{"/tmp/initial-block"}, payload.Paths)
+	assert.Equal(t, []string{"/private/tmp/initial-block"}, payload.Paths)
 }
 
 // TestHandler_EnrollSkipsEmptyPolicy proves the "empty blocklist = no command" contract:

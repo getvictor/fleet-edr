@@ -70,6 +70,32 @@ func TestUpdate_BumpsVersionAndNormalizes(t *testing.T) {
 	assert.Equal(t, []string{}, p2.Blocklist.Hashes)
 }
 
+// TestUpdate_CanonicalizesMacOSSymlinkPaths locks in the rc.7 finding: ESF
+// reports the post-resolve path on AUTH_EXEC, so a blocklist entry of
+// /tmp/foo silently fails to block when the kernel sees /private/tmp/foo.
+// We rewrite at the API boundary so the persisted form matches what the
+// kernel actually compares against, regardless of how the operator typed it.
+func TestUpdate_CanonicalizesMacOSSymlinkPaths(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	p, err := s.Update(ctx, UpdateRequest{
+		Name:  DefaultName,
+		Paths: []string{"/tmp/payload", "/tmp", "/var/log/foo", "/var", "/opt/keepasis", "/private/tmp/already"},
+		Actor: "qa",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"/opt/keepasis",
+		"/private/tmp",
+		"/private/tmp/already",
+		"/private/tmp/payload",
+		"/private/var",
+		"/private/var/log/foo",
+	}, p.Blocklist.Paths,
+		"every /tmp/* and /var/* prefix must be rewritten to its /private/... canonical form; other paths pass through")
+}
+
 // TestUpdate_RejectsInvalidBlocklistEntries locks in the Phase 2 validation contract: a
 // malformed path (relative, empty after trim) or hash (not 64 lowercase hex chars) fails
 // the update before anything is persisted. Without this, bad operator input would be

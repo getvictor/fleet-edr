@@ -66,15 +66,45 @@ mkdir -p "$WORKDIR"
 
 EXPECTED_ALERTS=()
 
+# Demo pacing: how long to pause between steps so a live audience can see each
+# alert land in the UI before the next attack fires. 0 disables (lab use), 8
+# is the right cadence for a live demo. Override with --pace=N or
+# EDR_RUNBOOK_PACE_SECONDS=N.
+PACE_SECONDS="${EDR_RUNBOOK_PACE_SECONDS:-0}"
+
+# Total step count, used so the per-step header reads "Step 3 of 7" and the
+# operator can call out matches live. Increment STEP each step.
+TOTAL_STEPS=7
+STEP=0
+
 # Ascii separator between steps so the operator can scroll the SSH session.
 hr() {
   printf '\n%s\n' '────────────────────────────────────────────────────────'
   return 0
 }
 
-step_suspicious_exec() {
+# step_header prints a presenter-friendly banner: "Step N of M: <title>" with
+# the expected rule_id beneath, so the operator can call out the match in real
+# time. Bumps the global STEP counter as a side effect.
+step_header() {
+  STEP=$((STEP + 1))
+  local title="$1" rule_id="$2"
   hr
-  echo "[runbook] suspicious_exec — non-shell parent → /bin/sh → /tmp/<binary>"
+  printf '[runbook] Step %d of %d: %s\n' "$STEP" "$TOTAL_STEPS" "$title"
+  printf '[runbook]   expecting rule_id=%s in the alerts list\n' "$rule_id"
+}
+
+# step_pace pauses for PACE_SECONDS so the live audience can watch the alert
+# land in the UI before the next step fires. No-op when PACE_SECONDS=0.
+step_pace() {
+  if [[ "$PACE_SECONDS" -gt 0 ]]; then
+    printf '[runbook]   waiting %ds for the alert to land in the UI...\n' "$PACE_SECONDS"
+    sleep "$PACE_SECONDS"
+  fi
+}
+
+step_suspicious_exec() {
+  step_header "Temp-path exec via non-shell parent" "suspicious_exec"
   # Rule trigger: a shell (/bin/sh / /bin/bash / /bin/zsh) whose PARENT is
   # NOT itself a shell forks a child under /tmp/* within 30s. The rule
   # explicitly skips shell→shell→/tmp chains (suspicious_exec.go:110), so
@@ -104,8 +134,7 @@ PAYLOAD
 }
 
 step_persistence_launchagent() {
-  hr
-  echo "[runbook] persistence_launchagent — launchctl load on a fake plist"
+  step_header "LaunchAgent persistence drop + launchctl load" "persistence_launchagent"
   # Rule trigger: exec of `launchctl load <plist>` where plist matches
   # ~/Library/LaunchAgents/<name>.plist or /Library/LaunchAgents/<name>.plist.
   # We DO NOT actually persist anything — the plist is a syntactic
@@ -132,8 +161,7 @@ EOF
 }
 
 step_dyld_insert() {
-  hr
-  echo "[runbook] dyld_insert — /usr/bin/env DYLD_INSERT_LIBRARIES=... <binary>"
+  step_header "DYLD library injection on exec" "dyld_insert"
   # Rule trigger: an exec event whose `args` array carries a leading
   # `DYLD_INSERT_LIBRARIES=` (or `DYLD_LIBRARY_PATH=`) assignment in a
   # position the rule treats as exec-time env (dyld_insert.go:matchDyldArg).
@@ -148,8 +176,7 @@ step_dyld_insert() {
 }
 
 step_osascript_network_exec() {
-  hr
-  echo "[runbook] osascript_network_exec — osascript → curl → /tmp/<file>"
+  step_header "AppleScript-driven download-and-exec chain" "osascript_network_exec"
   # Rule trigger: osascript spawns a process tree containing both a
   # curl/wget descendant AND a downstream exec whose path is under /tmp/
   # within 30s. The rule keys on the EXEC event for the /tmp/* binary,
@@ -172,8 +199,7 @@ STAGE2
 }
 
 step_credential_keychain_dump() {
-  hr
-  echo "[runbook] credential_keychain_dump — security dump-keychain"
+  step_header "Keychain credential dump attempt" "credential_keychain_dump"
   # Rule trigger: exec of /usr/bin/security with "dump-keychain" as the
   # first non-flag argv token. Run with stdin redirected from /dev/null so
   # the binary fails immediately on the password prompt rather than
@@ -184,8 +210,7 @@ step_credential_keychain_dump() {
 }
 
 step_privilege_launchd_plist_write() {
-  hr
-  echo "[runbook] privilege_launchd_plist_write — non-platform writer drops a daemon plist"
+  step_header "LaunchDaemon plist write by non-platform binary" "privilege_launchd_plist_write"
   # Rule trigger: write-mode open() to /Library/LaunchDaemons/<name>.plist
   # by a process whose code-signing is_platform_binary=false AND whose
   # team_id is not in EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST. cp / dd / tee /
@@ -257,8 +282,7 @@ GO
 }
 
 step_shell_from_office_note() {
-  hr
-  echo "[runbook] shell_from_office — NOT exercised by this script"
+  step_header "Office-spawned shell (informational; not exercised)" "shell_from_office"
   # The rule keys on /Applications/Microsoft <App>.app/Contents/MacOS/<App>
   # as the parent process, with /bin/{sh,bash,zsh} as the child within 30s.
   # Office isn't installed on the dev VM. The plan calls out spoofing this
@@ -269,15 +293,39 @@ step_shell_from_office_note() {
   return 0
 }
 
+parse_args() {
+  for arg in "$@"; do
+    case "$arg" in
+      --pace=*) PACE_SECONDS="${arg#--pace=}" ;;
+      --demo)   PACE_SECONDS=8 ;;
+      --help|-h)
+        cat <<USAGE
+Usage: $0 [--pace=N | --demo]
+  --pace=N   Sleep N seconds between steps so an audience can watch each
+             alert land in the UI before the next attack fires. Default 0.
+  --demo     Shorthand for --pace=8 (the default live-demo cadence).
+
+Or set EDR_RUNBOOK_PACE_SECONDS=N in the environment.
+USAGE
+        exit 0 ;;
+      *) echo "[runbook] unknown argument: $arg" >&2; exit 2 ;;
+    esac
+  done
+}
+
 main() {
+  parse_args "$@"
   echo "[runbook] Fleet EDR Phase-7 synthetic attacker — $(date -u)"
   echo "[runbook] working dir: $WORKDIR"
-  step_suspicious_exec
-  step_persistence_launchagent
-  step_dyld_insert
-  step_osascript_network_exec
-  step_credential_keychain_dump
-  step_privilege_launchd_plist_write
+  if [[ "$PACE_SECONDS" -gt 0 ]]; then
+    echo "[runbook] live-demo pacing: ${PACE_SECONDS}s between steps"
+  fi
+  step_suspicious_exec;        step_pace
+  step_persistence_launchagent; step_pace
+  step_dyld_insert;            step_pace
+  step_osascript_network_exec; step_pace
+  step_credential_keychain_dump; step_pace
+  step_privilege_launchd_plist_write; step_pace
   step_shell_from_office_note
   hr
   echo "[runbook] Done. Expected alerts in the admin UI:"
