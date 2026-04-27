@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"syscall"
 	"time"
@@ -83,6 +84,14 @@ type Reconciler struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	kill       KillFunc
+	// newID and marshal are seams for tests so the rare error paths in
+	// emitSyntheticExit are reachable. Default to crypto/rand-backed
+	// newUUIDv4 and stdlib json.Marshal — both effectively never fail in
+	// production on a healthy host. Tests inject failing versions to lock
+	// in our error-handling shape (issue: synthetic exits must surface
+	// queue-affecting failures rather than silently skip a PID).
+	newID   func() (string, error)
+	marshal func(any) ([]byte, error)
 }
 
 // New constructs a Reconciler. Panics on nil pt, q, or hostID.
@@ -127,11 +136,16 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 		logger:     opts.Logger,
 		now:        opts.Now,
 		kill:       opts.Kill,
+		newID:      newUUIDv4,
+		marshal:    json.Marshal,
 	}
 }
 
 // Run loops until ctx is cancelled, emitting one log line per non-zero pass.
-// Blocks; intended for a dedicated goroutine.
+// Blocks; intended for a dedicated goroutine. Per-PID failures inside RunOnce
+// are logged inline and never propagate up — one bad enqueue must not stall
+// the whole pass — so RunOnce returns just the count and Run has nothing to
+// branch on but `n > 0`.
 func (r *Reconciler) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
@@ -145,10 +159,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			n, err := r.RunOnce(ctx)
-			if err != nil {
-				r.logger.WarnContext(ctx, "process reconciliation pass failed", "err", err)
-			} else if n > 0 {
+			if n := r.RunOnce(ctx); n > 0 {
 				r.logger.InfoContext(ctx, "process reconciliation pass",
 					"edr.reconcile.synthetic_exits", n,
 				)
@@ -157,15 +168,18 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce performs a single reconciliation pass. Returns the count of
+// RunOnce performs a single reconciliation pass and returns the count of
 // synthetic exit events enqueued. Exposed for tests and one-shot usage.
-func (r *Reconciler) RunOnce(ctx context.Context) (int, error) {
+// Per-PID failures (enqueue errors, marshal errors, UUID errors) are logged
+// inline so one bad PID can't stall the whole pass — there's nothing the
+// caller can do that the inline log path hasn't already done.
+func (r *Reconciler) RunOnce(ctx context.Context) int {
 	hostID := r.hostID()
 	if hostID == "" {
 		// No host_id yet — the enroll flow hasn't completed. Skip the pass
 		// rather than emit events with an empty host_id (the server's ingest
 		// handler would reject the whole batch on the first one).
-		return 0, nil
+		return 0
 	}
 
 	now := r.now()
@@ -207,7 +221,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) (int, error) {
 			break
 		}
 	}
-	return emitted, nil
+	return emitted
 }
 
 // eventEnvelope is the on-the-wire shape the ingest handler expects. We
@@ -222,9 +236,9 @@ type eventEnvelope struct {
 }
 
 func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid int32, now time.Time) error {
-	id, err := newUUIDv4()
+	id, err := r.newID()
 	if err != nil {
-		return err
+		return fmt.Errorf("generate event id: %w", err)
 	}
 	env := eventEnvelope{
 		EventID:     id,
@@ -237,9 +251,9 @@ func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid i
 			"exit_reason": "host_reconciled",
 		},
 	}
-	body, err := json.Marshal(env)
+	body, err := r.marshal(env)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal exit envelope: %w", err)
 	}
 	return r.q.Enqueue(ctx, body)
 }

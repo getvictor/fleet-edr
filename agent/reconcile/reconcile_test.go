@@ -87,8 +87,7 @@ func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 
 	r := newRunner(t, pt, q, k, "host-A", Options{})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err)
+	n := r.RunOnce(context.Background())
 	assert.Equal(t, 1, n, "exactly one synthetic exit must be emitted")
 
 	events := q.snapshot()
@@ -132,8 +131,7 @@ func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
 		},
 	})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err)
+	n := r.RunOnce(context.Background())
 	assert.Equal(t, 0, n, "only ESRCH must trigger a synthetic exit; EPERM/EINVAL stay live")
 	assert.Empty(t, q.snapshot())
 	assert.Equal(t, 2, pt.Size(), "neither PID may be pruned")
@@ -154,8 +152,7 @@ func TestRunOnce_RespectsMinAge(t *testing.T) {
 		Now:    func() time.Time { return now },
 	})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err)
+	n := r.RunOnce(context.Background())
 	assert.Equal(t, 1, n, "only the older PID is eligible for reconciliation")
 
 	_, ok := pt.Lookup(8)
@@ -174,8 +171,7 @@ func TestRunOnce_NoHostIDSkips(t *testing.T) {
 	r := New(pt, q, func() string { return "" }, Options{Kill: k.call,
 		Now: func() time.Time { return time.Unix(0, 1_000_000_000_000) }})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err)
+	n := r.RunOnce(context.Background())
 	assert.Equal(t, 0, n)
 	assert.Empty(t, q.snapshot())
 	_, ok := pt.Lookup(1)
@@ -193,8 +189,7 @@ func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 	q := &recorderQueue{}
 	r := newRunner(t, pt, q, &killer{dead: dead}, "h", Options{MaxPerPass: 3})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err)
+	n := r.RunOnce(context.Background())
 	// Map iteration is non-deterministic in Go, so we deliberately assert only
 	// on the count of reaped PIDs and the table size — never on which specific
 	// PIDs survive. Adding "PID X must be reaped" assertions here would flake.
@@ -214,8 +209,7 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 		},
 	})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err)
+	n := r.RunOnce(context.Background())
 	assert.Equal(t, 0, n)
 	assert.Equal(t, 1, pt.Size(), "PID 0 is left alone, not reaped")
 }
@@ -313,11 +307,52 @@ func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 	q := &recorderQueue{failNext: errors.New("queue full")}
 	r := newRunner(t, pt, q, &killer{dead: map[int]bool{42: true}}, "h", Options{})
 
-	n, err := r.RunOnce(context.Background())
-	require.NoError(t, err, "RunOnce never returns the per-PID enqueue error to the loop — it logs and continues so one bad enqueue doesn't stall the whole pass")
+	// RunOnce logs the per-PID enqueue error and continues so one bad enqueue
+	// doesn't stall the whole pass — there's no error return to assert on.
+	n := r.RunOnce(context.Background())
 	assert.Equal(t, 0, n)
 	_, ok := pt.Lookup(42)
 	assert.True(t, ok, "PID must stay in the proctable when its synthetic exit failed to enqueue, so the next pass retries it")
+}
+
+func TestEmitSyntheticExit_NewIDError(t *testing.T) {
+	pt := proctable.New()
+	pt.Update(7, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
+
+	q := &recorderQueue{}
+	k := &killer{dead: map[int]bool{7: true}}
+	r := newRunner(t, pt, q, k, "h", Options{})
+	// Inject a UUID generator that always fails. Covers the
+	// emitSyntheticExit→r.newID error branch — in production this fires
+	// only when crypto/rand stops working, which is a fundamental
+	// platform failure we still want to surface rather than swallow.
+	r.newID = func() (string, error) { return "", errors.New("rand unavailable") }
+
+	n := r.RunOnce(context.Background())
+	assert.Equal(t, 0, n, "newID failure must propagate as a per-PID error and not enqueue an event")
+	assert.Empty(t, q.snapshot(), "no event should land in the queue when ID generation fails")
+	_, ok := pt.Lookup(7)
+	assert.True(t, ok, "PID stays in the proctable when emit fails so the next pass can retry")
+}
+
+func TestEmitSyntheticExit_MarshalError(t *testing.T) {
+	pt := proctable.New()
+	pt.Update(8, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
+
+	q := &recorderQueue{}
+	k := &killer{dead: map[int]bool{8: true}}
+	r := newRunner(t, pt, q, k, "h", Options{})
+	// Inject a marshaler that always fails. In production json.Marshal
+	// over a map[string]any of int+int+string can't fail, so the test
+	// is the only way to exercise the error branch — and locks in the
+	// behaviour that a marshal failure does not crash the pass.
+	r.marshal = func(_ any) ([]byte, error) { return nil, errors.New("marshal broken") }
+
+	n := r.RunOnce(context.Background())
+	assert.Equal(t, 0, n, "marshal failure must propagate as a per-PID error and not enqueue garbage")
+	assert.Empty(t, q.snapshot())
+	_, ok := pt.Lookup(8)
+	assert.True(t, ok)
 }
 
 func TestNewUUIDv4_FormatAndUniqueness(t *testing.T) {
