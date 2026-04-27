@@ -30,6 +30,33 @@ function sortedEqual(a: readonly string[], b: readonly string[]): boolean {
   return sa.every((v, i) => v === sb[i]);
 }
 
+// listDiff returns the count of items added vs removed when going from `prev`
+// to `next`. Used by the save bar so the operator sees true change shape (e.g.
+// "+1, -1") rather than just the net length delta.
+function listDiff(next: readonly string[], prev: readonly string[]): { added: number; removed: number } {
+  const prevSet = new Set(prev);
+  const nextSet = new Set(next);
+  let added = 0;
+  let removed = 0;
+  for (const v of next) if (!prevSet.has(v)) added += 1;
+  for (const v of prev) if (!nextSet.has(v)) removed += 1;
+  return { added, removed };
+}
+
+function hasDiff(d: { added: number; removed: number }): boolean {
+  return d.added > 0 || d.removed > 0;
+}
+
+function renderDiff(d: { added: number; removed: number }, singular: string, plural: string): string {
+  if (!hasDiff(d)) return "";
+  const total = d.added + d.removed;
+  const noun = total === 1 ? singular : plural;
+  const parts: string[] = [];
+  if (d.added > 0) parts.push(`+${String(d.added)}`);
+  if (d.removed > 0) parts.push(`-${String(d.removed)}`);
+  return `${parts.join("/")} ${noun}`;
+}
+
 // PolicyEditor is the operator-facing surface for the server-driven blocklist
 // (the same Policy that GET/PUT /api/v1/admin/policy serves). The flow follows
 // the pattern most enterprise dashboards use (GitHub, Atlassian, AWS Console):
@@ -77,12 +104,11 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
     && (!sortedEqual(paths, policy.blocklist.paths)
       || !sortedEqual(hashes, policy.blocklist.hashes));
 
-  const pathDelta = policy
-    ? paths.length - policy.blocklist.paths.length
-    : 0;
-  const hashDelta = policy
-    ? hashes.length - policy.blocklist.hashes.length
-    : 0;
+  // Real add/remove counts (not just net length deltas) — operators often add
+  // one entry while removing another during cleanup, and a length-only delta
+  // would silently report "list reordered" when the content actually changed.
+  const pathDiff = policy ? listDiff(paths, policy.blocklist.paths) : { added: 0, removed: 0 };
+  const hashDiff = policy ? listDiff(hashes, policy.blocklist.hashes) : { added: 0, removed: 0 };
 
   const addPath = () => {
     const p = newPath.trim();
@@ -171,9 +197,9 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
       {!loading && (
         <>
           {savedFlash && !dirty && (
-            <div className="policy-flash" role="status">
+            <output className="policy-flash">
               Policy saved. Version {policy?.version}, fanned out to all active hosts.
-            </div>
+            </output>
           )}
 
           <section className="policy-section">
@@ -266,21 +292,23 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
           )}
 
           {dirty && (
-            <div className="policy-savebar" role="region" aria-label="unsaved changes">
+            <section
+              className="policy-savebar"
+              aria-labelledby="policy-savebar-heading"
+            >
               <div className="policy-savebar__summary">
-                <strong>Unsaved changes:</strong>{" "}
+                <strong id="policy-savebar-heading">Unsaved changes:</strong>{" "}
                 <span className="policy-savebar__delta">
-                  {pathDelta !== 0 && (
-                    <>{pathDelta > 0 ? `+${String(pathDelta)}` : String(pathDelta)} path{Math.abs(pathDelta) === 1 ? "" : "s"}</>
-                  )}
-                  {pathDelta !== 0 && hashDelta !== 0 && ", "}
-                  {hashDelta !== 0 && (
-                    <>{hashDelta > 0 ? `+${String(hashDelta)}` : String(hashDelta)} hash{Math.abs(hashDelta) === 1 ? "" : "es"}</>
-                  )}
-                  {pathDelta === 0 && hashDelta === 0 && "list reordered"}
+                  {renderDiff(pathDiff, "path", "paths")}
+                  {hasDiff(pathDiff) && hasDiff(hashDiff) && ", "}
+                  {renderDiff(hashDiff, "hash", "hashes")}
+                  {!hasDiff(pathDiff) && !hasDiff(hashDiff) && "items reordered"}
                 </span>
               </div>
-              <div className="policy-savebar__form">
+              <form
+                className="policy-savebar__form"
+                onSubmit={(e) => { e.preventDefault(); handleSave(); }}
+              >
                 <Input
                   id="policy-reason"
                   label="Reason:"
@@ -288,14 +316,14 @@ export function PolicyEditor({ actor }: PolicyEditorProps) {
                   onChange={(e) => { setReason(e.target.value); }}
                   placeholder="e.g. blocking known-bad stage-2 dropper from 2026-04-22 incident"
                 />
-                <Button onClick={handleSave} disabled={saving || !reason.trim()}>
+                <Button type="submit" disabled={saving || !reason.trim()}>
                   {saving ? "Saving..." : "Save changes"}
                 </Button>
                 <Button variant="inverse" onClick={discardChanges} disabled={saving}>
                   Discard
                 </Button>
-              </div>
-            </div>
+              </form>
+            </section>
           )}
         </>
       )}

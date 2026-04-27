@@ -153,16 +153,21 @@ export function ProcessTreeView() {
     return keep;
   }, [roots, query]);
   const visibleRoots = useMemo(() => {
+    // Predicate for "is this node visible at all" — pulled out to keep the
+    // recursive walk below under Sonar's cognitive-complexity cap.
+    const isVisible = (n: ProcessNode): boolean => {
+      if (alertChainIds && !alertChainIds.has(n.id)) return false;
+      if (!showSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) return false;
+      // Search filter: hide everything outside the matches-plus-ancestors set so
+      // a query like "60289" reduces a 200-node tree to the few rows that matter,
+      // instead of dimming 195 nodes the user has to visually skip past.
+      if (queryFilterIds && !queryFilterIds.has(n.id)) return false;
+      return true;
+    };
     const apply = (nodes: ProcessNode[]): ProcessNode[] => {
       const out: ProcessNode[] = [];
       for (const n of nodes) {
-        // In alert focus mode, drop anything that isn't on the alert's ancestor/descendant chain.
-        if (alertChainIds && !alertChainIds.has(n.id)) continue;
-        if (!showSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) continue;
-        // Search filter: hide everything outside the matches-plus-ancestors set so
-        // a query like "60289" reduces a 200-node tree to the few rows that matter,
-        // instead of dimming 195 nodes the user has to visually skip past.
-        if (queryFilterIds && !queryFilterIds.has(n.id)) continue;
+        if (!isVisible(n)) continue;
         const kids = n.children ? apply(n.children) : undefined;
         if (applyCollapse && collapsedIds.has(n.id) && kids && kids.length > 0) {
           const collapsedTotal = kids.reduce((acc, c) => acc + 1 + countDescendants(c), 0);
@@ -489,26 +494,27 @@ function collectMatches(
   return { matches, pathNodes };
 }
 
-function nodeMatchesQuery(d: D3Node, q: string): boolean {
-  if (d.name.toLowerCase().includes(q)) return true;
-  if (d.path.toLowerCase().includes(q)) return true;
-  if (String(d.pid).includes(q)) return true;
-  if (d.data.args?.some((a) => a.toLowerCase().includes(q))) return true;
+// matchFields holds the four node fields the search box compares against.
+// Both the d3-layout-time matcher and the data-side pre-filter funnel into
+// this so the matching rules can't drift between them.
+function matchFields(name: string, path: string, pid: number, args: string[] | undefined, q: string): boolean {
+  if (name.toLowerCase().includes(q)) return true;
+  if (path.toLowerCase().includes(q)) return true;
+  if (String(pid).includes(q)) return true;
+  if (args?.some((a) => a.toLowerCase().includes(q))) return true;
   return false;
 }
 
-// matchesQueryRaw is the data-side mirror of nodeMatchesQuery — same matching
-// rules, but operating on raw ProcessNode rows before the d3 layout runs.
-// The visible-tree pre-filter uses this so the canvas only ever lays out the
-// matches-plus-ancestors set, instead of laying out everything and dimming the
-// non-matches in CSS.
+function nodeMatchesQuery(d: D3Node, q: string): boolean {
+  return matchFields(d.name, d.path, d.pid, d.data.args, q);
+}
+
+// matchesQueryRaw is the data-side mirror of nodeMatchesQuery — operates on
+// raw ProcessNode rows before the d3 layout runs. Used by the visible-tree
+// pre-filter so the canvas only ever lays out the matches-plus-ancestors set.
 function matchesQueryRaw(n: ProcessNode, q: string): boolean {
-  const name = (n.path.split("/").pop() ?? "").toLowerCase();
-  if (name.includes(q)) return true;
-  if (n.path.toLowerCase().includes(q)) return true;
-  if (String(n.pid).includes(q)) return true;
-  if (n.args?.some((a) => a.toLowerCase().includes(q))) return true;
-  return false;
+  const name = n.path.split("/").pop() ?? "";
+  return matchFields(name, n.path, n.pid, n.args, q);
 }
 
 function isSystemPath(path: string): boolean {
@@ -656,9 +662,12 @@ function renderTree(
   // roots we add a parent node with pid=0 so d3.tree() has a single layout
   // anchor, but that node isn't drawn — and without this filter the edges
   // FROM that invisible parent show up in the canvas as ghost lines drifting
-  // off the left side of the tree.
+  // off the left side of the tree. The filter is gated on roots.length > 1
+  // so a single real root with pid=0 (rare but legal) still gets its outgoing
+  // edges drawn.
+  const hasSyntheticRoot = roots.length > 1;
   g.selectAll("path.link")
-    .data(links.filter((l) => l.source.data.pid !== 0))
+    .data(links.filter((l) => !hasSyntheticRoot || l.source.depth !== 0))
     .join("path")
     .attr("class", "link")
     .attr("fill", "none")

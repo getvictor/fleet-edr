@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
@@ -29,7 +29,12 @@ interface CoverageGroup {
   techniques: TechniqueWithCoverage[];
 }
 
+// All 14 enterprise tactics in MITRE's canonical kill-chain order. Anything
+// the catalog or server emits that isn't on this list lands at the end via
+// the "leftover" pass below — never silently dropped.
 const TACTIC_ORDER = [
+  "Reconnaissance",
+  "Resource Development",
   "Initial Access",
   "Execution",
   "Persistence",
@@ -75,43 +80,11 @@ export function AttackCoverage() {
     }
   };
 
-  const groups: CoverageGroup[] = [];
-  if (layer) {
-    // Index by technique id, attach catalog metadata, group by tactic.
-    const byTactic = new Map<string, TechniqueWithCoverage[]>();
-    for (const t of layer.techniques) {
-      const meta = TECHNIQUE_CATALOG[t.techniqueID] ?? {
-        id: t.techniqueID,
-        name: t.techniqueID,
-        tactic: "Unmapped",
-      };
-      const rules = parseCoveringRules(t.comment);
-      const row: TechniqueWithCoverage = { ...meta, coveringRules: rules, color: t.color ?? "" };
-      const list = byTactic.get(meta.tactic) ?? [];
-      list.push(row);
-      byTactic.set(meta.tactic, list);
-    }
-    for (const tactic of TACTIC_ORDER) {
-      const list = byTactic.get(tactic);
-      if (list) {
-        list.sort((a, b) => a.id.localeCompare(b.id));
-        groups.push({ tactic, techniques: list });
-      }
-    }
-    const unmapped = byTactic.get("Unmapped");
-    if (unmapped) {
-      unmapped.sort((a, b) => a.id.localeCompare(b.id));
-      groups.push({ tactic: "Unmapped", techniques: unmapped });
-    }
-  }
-
+  const { groups, distinctRules } = useMemo(
+    () => buildCoverageGroups(layer),
+    [layer],
+  );
   const totalCovered = layer?.techniques.length ?? 0;
-  const distinctRules = new Set<string>();
-  if (layer) {
-    for (const t of layer.techniques) {
-      for (const r of parseCoveringRules(t.comment)) distinctRules.add(r);
-    }
-  }
 
   return (
     <>
@@ -204,10 +177,55 @@ export function AttackCoverage() {
 
 // parseCoveringRules pulls rule IDs out of the Navigator-layer "Covered by:"
 // comment string. The server formats it as "Covered by: rule_a, rule_b". We
-// keep this lenient: anything after the first colon, split on ", ".
+// keep this lenient: anything after the first colon, split on "," and trim
+// whitespace from each piece — so a missing space after the comma still
+// parses cleanly.
 function parseCoveringRules(comment: string | undefined): string[] {
   if (!comment) return [];
   const colon = comment.indexOf(":");
   const tail = colon === -1 ? comment : comment.slice(colon + 1);
   return tail.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// buildCoverageGroups runs once per layer fetch (memoised by the caller) and
+// returns the rendered shape: tactics in MITRE order followed by anything
+// else (Unmapped, novel tactics) at the end. It also collects the distinct
+// covering-rule set in the same pass so we don't walk the techniques twice.
+function buildCoverageGroups(
+  layer: AttackNavigatorLayer | null,
+): { groups: CoverageGroup[]; distinctRules: Set<string> } {
+  const distinctRules = new Set<string>();
+  const groups: CoverageGroup[] = [];
+  if (!layer) return { groups, distinctRules };
+
+  const byTactic = new Map<string, TechniqueWithCoverage[]>();
+  for (const t of layer.techniques) {
+    const meta = TECHNIQUE_CATALOG[t.techniqueID] ?? {
+      id: t.techniqueID,
+      name: t.techniqueID,
+      tactic: "Unmapped",
+    };
+    const rules = parseCoveringRules(t.comment);
+    for (const r of rules) distinctRules.add(r);
+    const list = byTactic.get(meta.tactic) ?? [];
+    list.push({ ...meta, coveringRules: rules, color: t.color ?? "" });
+    byTactic.set(meta.tactic, list);
+  }
+
+  const seen = new Set<string>();
+  const push = (tactic: string) => {
+    const list = byTactic.get(tactic);
+    if (!list) return;
+    list.sort((a, b) => a.id.localeCompare(b.id));
+    groups.push({ tactic, techniques: list });
+    seen.add(tactic);
+  };
+  for (const tactic of TACTIC_ORDER) push(tactic);
+  // Render anything that didn't match TACTIC_ORDER at the end (Unmapped,
+  // future ATT&CK additions, casing/spelling drift) so coverage rows can
+  // never silently disappear.
+  for (const tactic of byTactic.keys()) {
+    if (!seen.has(tactic)) push(tactic);
+  }
+  return { groups, distinctRules };
 }

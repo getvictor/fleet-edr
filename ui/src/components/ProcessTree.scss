@@ -245,6 +245,7 @@
   gap: $pad-small;
   padding: $pad-small $pad-medium;
   margin-bottom: $pad-medium;
+
   // Neutral grey container — the page already shows alert severity via the
   // badge inside this row. The previous pink fill + red border read as a
   // status indicator and confused operators ("is this an error?").

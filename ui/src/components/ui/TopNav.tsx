@@ -55,7 +55,7 @@ export function TopNav({ user, onLogout }: TopNavProps) {
         {user && onLogout && (
           <div className="top-nav__account">
             <span className="top-nav__avatar" aria-hidden="true">
-              {user.email.charAt(0)}
+              {user.email.charAt(0) || "?"}
             </span>
             <span className="top-nav__user">{user.email}</span>
             <button
