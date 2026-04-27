@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"syscall"
 	"time"
@@ -237,7 +238,7 @@ type eventEnvelope struct {
 func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid int32, now time.Time) error {
 	id, err := r.newID()
 	if err != nil {
-		return err
+		return fmt.Errorf("generate event id: %w", err)
 	}
 	env := eventEnvelope{
 		EventID:     id,
@@ -252,7 +253,7 @@ func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid i
 	}
 	body, err := r.marshal(env)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal exit envelope: %w", err)
 	}
 	return r.q.Enqueue(ctx, body)
 }
