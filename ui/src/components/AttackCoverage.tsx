@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
@@ -92,19 +92,15 @@ export function AttackCoverage() {
         title="ATT&CK coverage"
         subtitle="MITRE ATT&CK techniques the deployed detection rules cover today."
         actions={
-          <div className="attack-coverage__actions">
-            <Button size="small" variant="inverse" onClick={downloadLayer} disabled={!layer}>
-              Download Navigator layer
-            </Button>
-            <a
-              className="attack-coverage__navigator-link"
-              href="https://mitre-attack.github.io/attack-navigator/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open MITRE Navigator &rarr;
-            </a>
-          </div>
+          <Button
+            size="small"
+            variant="inverse"
+            onClick={downloadLayer}
+            disabled={!layer}
+            title="Export the same data as a MITRE ATT&CK Navigator layer JSON. Useful for procurement / threat-modeling teams who use the upstream Navigator UI; sec ops can read everything they need on this page."
+          >
+            Export JSON
+          </Button>
         }
       />
 
@@ -130,45 +126,60 @@ export function AttackCoverage() {
 
           {groups.length === 0
             ? <EmptyState>No coverage data yet.</EmptyState>
-            : groups.map((g) => (
-              <section key={g.tactic} className="attack-coverage__tactic">
-                <h2 className="attack-coverage__tactic-name">{g.tactic}</h2>
-                <Table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: "11ch" }}>Technique</th>
-                      <th>Name</th>
-                      <th>Covered by</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.techniques.map((t) => (
-                      <tr key={t.id}>
-                        <td>
-                          <a
-                            className="attack-coverage__technique-id"
-                            href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t.id}
-                          </a>
-                        </td>
-                        <td>{t.name}</td>
-                        <td>
-                          {t.coveringRules.map((r, i) => (
-                            <span key={r}>
-                              {i > 0 && ", "}
-                              <code>{r}</code>
-                            </span>
-                          ))}
-                        </td>
+            : (
+              // Single table for the whole page so column widths line up
+              // across tactics (a per-tactic <Table> sized columns from
+              // its own widest cell, producing a different layout per
+              // section). Tactic names land in colspan rows that act as
+              // visual section headers — same pattern Crowdstrike Falcon
+              // and Elastic Security use for their ATT&CK coverage tables.
+              <Table className="attack-coverage__table">
+                <colgroup>
+                  <col className="attack-coverage__col-id" />
+                  <col className="attack-coverage__col-name" />
+                  <col className="attack-coverage__col-rules" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Technique</th>
+                    <th>Name</th>
+                    <th>Covered by</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((g) => (
+                    <Fragment key={g.tactic}>
+                      <tr className="attack-coverage__tactic-row">
+                        <th colSpan={3} scope="colgroup">{g.tactic}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </section>
-            ))}
+                      {g.techniques.map((t) => (
+                        <tr key={t.id}>
+                          <td>
+                            <a
+                              className="attack-coverage__technique-id"
+                              href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {t.id}
+                            </a>
+                          </td>
+                          <td>{t.name}</td>
+                          <td>
+                            {t.coveringRules.map((r, i) => (
+                              <span key={r}>
+                                {i > 0 && ", "}
+                                <code>{r}</code>
+                              </span>
+                            ))}
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </Table>
+            )}
         </>
       )}
     </>

@@ -3,23 +3,6 @@
 @use "../styles/var/padding" as *;
 
 .attack-coverage {
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: $pad-medium;
-  }
-
-  &__navigator-link {
-    color: $core-fleet-green;
-    text-decoration: none;
-    font-weight: $bold;
-    font-size: 0.95em;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-
   &__summary {
     display: flex;
     gap: $pad-large;
@@ -47,21 +30,47 @@
   }
 
   &__metric-label {
-    font-size: 0.85em;
+    font-size: 0.85rem;
     color: $ui-fleet-black-50;
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
 
-  &__tactic {
-    margin: $pad-large 0;
+  // Single-table layout. table-layout:fixed makes the colgroup widths
+  // authoritative so every section's columns line up — without it, each
+  // tactic group inside the table would still default-size from its widest
+  // cell and the visual alignment promise would silently break the day a
+  // long technique name lands in one tactic.
+  &__table {
+    table-layout: fixed;
+    width: 100%;
   }
 
-  &__tactic-name {
-    font-size: 1.05rem;
-    margin: 0 0 $pad-small;
-    padding-bottom: $pad-xsmall;
-    border-bottom: 1px solid $ui-fleet-black-10;
+  &__col-id {
+    width: 12ch;
+  }
+
+  &__col-name {
+    width: auto;
+  }
+
+  &__col-rules {
+    width: 35%;
+  }
+
+  // Tactic header row: re-use a <th> with colspan inside the body so it
+  // groups the techniques visually. The light-grey background + bold name
+  // matches Crowdstrike Falcon and Elastic Security's coverage tables.
+  &__tactic-row {
+    th {
+      background: $ui-fleet-black-5;
+      color: $core-fleet-black;
+      font-weight: $bold;
+      text-transform: none;
+      letter-spacing: 0;
+      padding-top: $pad-medium;
+      padding-bottom: $pad-medium;
+    }
   }
 
   &__technique-id {

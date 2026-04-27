@@ -413,9 +413,14 @@ export function ProcessTreeView() {
       <PageHeader
         title={
           <span className="process-tree__title">
-            <Link to="/" className="process-tree__crumb">Hosts</Link>
-            <span className="process-tree__crumb-sep" aria-hidden="true">/</span>
-            <span className="process-tree__host">{hostId}</span>
+            {/* "Hosts" lives in the top nav already — repeating it here is
+                noise. Link the host id itself to the bare host page so the
+                operator can click out of an alert-context view (drops the
+                ?alert=…&process=…&at=… query params) back to the full host
+                tree without round-tripping through the host list. */}
+            <Link to={`/hosts/${encodeURIComponent(hostId)}`} className="process-tree__host-link">
+              {hostId}
+            </Link>
           </span>
         }
         actions={headerActions}
