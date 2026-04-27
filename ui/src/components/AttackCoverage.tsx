@@ -14,10 +14,10 @@ import "./AttackCoverage.scss";
 // what Crowdstrike Falcon, SentinelOne Singularity, and Elastic Security all
 // expose: tactic columns, technique rows, "covered by" linkable rule list.
 //
-// We still ship the JSON via the "Download Navigator layer" button so an
-// operator can drop it into the upstream MITRE Navigator UI for the full
-// matrix view if they want — that's the right tool for "look at all 14 tactics
-// at once" and there's no point in re-implementing the matrix renderer here.
+// We still ship the JSON via the "Export JSON" button so an operator can
+// drop it into the upstream MITRE Navigator UI for the full matrix view if
+// they want — that's the right tool for "look at all 14 tactics at once" and
+// there's no point in re-implementing the matrix renderer here.
 
 type TechniqueWithCoverage = TechniqueMeta & {
   coveringRules: string[];
@@ -92,19 +92,15 @@ export function AttackCoverage() {
         title="ATT&CK coverage"
         subtitle="MITRE ATT&CK techniques the deployed detection rules cover today."
         actions={
-          <div className="attack-coverage__actions">
-            <Button size="small" variant="inverse" onClick={downloadLayer} disabled={!layer}>
-              Download Navigator layer
-            </Button>
-            <a
-              className="attack-coverage__navigator-link"
-              href="https://mitre-attack.github.io/attack-navigator/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open MITRE Navigator &rarr;
-            </a>
-          </div>
+          <Button
+            size="small"
+            variant="inverse"
+            onClick={downloadLayer}
+            disabled={!layer}
+            title="Export the same data as a MITRE ATT&CK Navigator layer JSON. Useful for procurement / threat-modeling teams who use the upstream Navigator UI; sec ops can read everything they need on this page."
+          >
+            Export JSON
+          </Button>
         }
       />
 
@@ -130,18 +126,36 @@ export function AttackCoverage() {
 
           {groups.length === 0
             ? <EmptyState>No coverage data yet.</EmptyState>
-            : groups.map((g) => (
-              <section key={g.tactic} className="attack-coverage__tactic">
-                <h2 className="attack-coverage__tactic-name">{g.tactic}</h2>
-                <Table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: "11ch" }}>Technique</th>
-                      <th>Name</th>
-                      <th>Covered by</th>
+            : (
+              // Single table for the whole page so column widths line up
+              // across tactics (a per-tactic <Table> sized columns from
+              // its own widest cell, producing a different layout per
+              // section). Tactic names land in colspan rows that act as
+              // visual section headers — same pattern Crowdstrike Falcon
+              // and Elastic Security use for their ATT&CK coverage tables.
+              <Table className="attack-coverage__table">
+                <colgroup>
+                  <col className="attack-coverage__col-id" />
+                  <col className="attack-coverage__col-name" />
+                  <col className="attack-coverage__col-rules" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Technique</th>
+                    <th>Name</th>
+                    <th>Covered by</th>
+                  </tr>
+                </thead>
+                {/* One <tbody> per tactic with scope="rowgroup" on the
+                    header — that's the HTML5 idiom for grouping rows under a
+                    label, which lets screen readers announce the tactic as
+                    context for each technique row. Visually identical to a
+                    Fragment-with-shared-tbody approach. */}
+                {groups.map((g) => (
+                  <tbody key={g.tactic}>
+                    <tr className="attack-coverage__tactic-row">
+                      <th colSpan={3} scope="rowgroup">{g.tactic}</th>
                     </tr>
-                  </thead>
-                  <tbody>
                     {g.techniques.map((t) => (
                       <tr key={t.id}>
                         <td>
@@ -166,9 +180,9 @@ export function AttackCoverage() {
                       </tr>
                     ))}
                   </tbody>
-                </Table>
-              </section>
-            ))}
+                ))}
+              </Table>
+            )}
         </>
       )}
     </>

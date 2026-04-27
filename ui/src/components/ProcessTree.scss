@@ -10,26 +10,16 @@
     gap: $pad-medium;
   }
 
-  &__crumb {
+  &__host-link {
+    color: $core-fleet-black;
     font-size: $x-small;
-    font-weight: $regular;
-    color: $core-fleet-green;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     text-decoration: none;
 
     &:hover {
       text-decoration: underline;
+      color: $core-fleet-green;
     }
-  }
-
-  &__crumb-sep {
-    font-size: $x-small;
-    color: $ui-fleet-black-25;
-  }
-
-  &__host {
-    color: $ui-fleet-black-75;
-    font-size: $x-small;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   &__controls {
