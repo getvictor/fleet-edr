@@ -92,6 +92,7 @@ step_header() {
   hr
   printf '[runbook] Step %d of %d: %s\n' "$STEP" "$TOTAL_STEPS" "$title"
   printf '[runbook]   expecting rule_id=%s in the alerts list\n' "$rule_id"
+  return 0
 }
 
 # step_pace pauses for PACE_SECONDS so the live audience can watch the alert
@@ -101,6 +102,7 @@ step_pace() {
     printf '[runbook]   waiting %ds for the alert to land in the UI...\n' "$PACE_SECONDS"
     sleep "$PACE_SECONDS"
   fi
+  return 0
 }
 
 step_suspicious_exec() {
@@ -319,6 +321,7 @@ USAGE
     echo "[runbook] invalid PACE_SECONDS=\"$PACE_SECONDS\" — must be a non-negative integer" >&2
     exit 2
   fi
+  return 0
 }
 
 main() {

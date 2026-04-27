@@ -18,8 +18,13 @@ const HEX_64 = /^[0-9a-f]{64}$/;
 
 function sortedEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
-  const sa = [...a].sort();
-  const sb = [...b].sort();
+  // Pass an explicit Intl-aware comparator instead of relying on Array.sort's
+  // default lexicographic-by-UTF-16-unit ordering (Sonar typescript:S2871).
+  // For ASCII-only inputs the result is identical; for unicode it's correct
+  // and locale-stable.
+  const cmp = (x: string, y: string) => x.localeCompare(y);
+  const sa = [...a].sort(cmp);
+  const sb = [...b].sort(cmp);
   // Indexed access is safe: i is bounded by sa.length (== sb.length checked above).
   // eslint-disable-next-line security/detect-object-injection
   return sa.every((v, i) => v === sb[i]);
