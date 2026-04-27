@@ -87,7 +87,7 @@ export function AlertList() {
           try {
             a.click();
           } finally {
-            document.body.removeChild(a);
+            a.remove();
           }
         } finally {
           URL.revokeObjectURL(url);

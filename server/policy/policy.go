@@ -215,7 +215,7 @@ func validateBlocklist(bl Blocklist) error {
 // an array, never null.
 func normalizeBlocklist(paths, hashes []string) Blocklist {
 	bl := Blocklist{
-		Paths:  dedupSort(paths, strings.TrimSpace),
+		Paths:  dedupSort(paths, func(s string) string { return canonicalizeMacOSPath(strings.TrimSpace(s)) }),
 		Hashes: dedupSort(hashes, func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }),
 	}
 	if bl.Paths == nil {
@@ -243,4 +243,31 @@ func dedupSort(in []string, norm func(string) string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// canonicalizeMacOSPath rewrites the legacy /tmp, /var, and /etc symlink
+// prefixes to their /private/... canonical forms. ESF reports the
+// post-resolve path on AUTH_EXEC, so a blocklist entry of /tmp/payload
+// silently fails to deny when the executable resolves to /private/tmp/payload.
+// Operators consistently type /tmp/foo and /etc/foo and expect those to
+// work; we rewrite at the API boundary so the wire form matches what the
+// kernel will compare against. Trailing /tmpfoo or /varlog (no slash before
+// the rest) are NOT prefixes — they pass through unchanged. Other paths
+// also pass through unchanged.
+func canonicalizeMacOSPath(p string) string {
+	switch {
+	case strings.HasPrefix(p, "/tmp/"):
+		return "/private/tmp/" + p[len("/tmp/"):]
+	case p == "/tmp":
+		return "/private/tmp"
+	case strings.HasPrefix(p, "/var/"):
+		return "/private/var/" + p[len("/var/"):]
+	case p == "/var":
+		return "/private/var"
+	case strings.HasPrefix(p, "/etc/"):
+		return "/private/etc/" + p[len("/etc/"):]
+	case p == "/etc":
+		return "/private/etc"
+	}
+	return p
 }

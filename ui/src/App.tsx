@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
+import { PolicyEditor } from "./components/PolicyEditor";
 import { Login } from "./components/Login";
 import { TopNav } from "./components/ui/TopNav";
 import { currentSession, logout, Unauthorized401Error, SessionInfo } from "./api";
@@ -76,6 +77,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<HostList />} />
           <Route path="/alerts" element={<AlertList />} />
+          <Route path="/policy" element={<PolicyEditor actor={auth.user.email} />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

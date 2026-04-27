@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"syscall"
 	"testing"
@@ -17,11 +18,19 @@ import (
 type recorderQueue struct {
 	mu     sync.Mutex
 	events [][]byte
+	// failNext, when non-nil, makes the next Enqueue call return this error
+	// instead of recording. Used to exercise the reconciler's enqueue-error
+	// branch without standing up a real queue.
+	failNext error
 }
 
 func (r *recorderQueue) Enqueue(_ context.Context, payload []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.failNext; err != nil {
+		r.failNext = nil
+		return err
+	}
 	cp := make([]byte, len(payload))
 	copy(cp, payload)
 	r.events = append(r.events, cp)
@@ -295,6 +304,20 @@ func TestRun_EmitsSyntheticExitDuringLoop(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	assert.NotEmpty(t, q.snapshot(), "Run must emit at least one synthetic exit before the deadline")
+}
+
+func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
+	pt := proctable.New()
+	pt.Update(42, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
+
+	q := &recorderQueue{failNext: errors.New("queue full")}
+	r := newRunner(t, pt, q, &killer{dead: map[int]bool{42: true}}, "h", Options{})
+
+	n, err := r.RunOnce(context.Background())
+	require.NoError(t, err, "RunOnce never returns the per-PID enqueue error to the loop — it logs and continues so one bad enqueue doesn't stall the whole pass")
+	assert.Equal(t, 0, n)
+	_, ok := pt.Lookup(42)
+	assert.True(t, ok, "PID must stay in the proctable when its synthetic exit failed to enqueue, so the next pass retries it")
 }
 
 func TestNewUUIDv4_FormatAndUniqueness(t *testing.T) {

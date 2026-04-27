@@ -1,0 +1,50 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/padding" as *;
+
+.policy-section {
+  margin: $pad-xlarge 0;
+
+  h2 {
+    margin: 0 0 $pad-small;
+    font-size: 1.1rem;
+  }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.85em;
+  }
+}
+
+.policy-hint {
+  margin: 0 0 $pad-medium;
+  color: $ui-fleet-black-50;
+  font-size: 0.9em;
+  max-width: 60ch;
+}
+
+.policy-add-row,
+.policy-save-row {
+  display: flex;
+  align-items: flex-end;
+  gap: $pad-small;
+  margin-top: $pad-medium;
+  flex-wrap: wrap;
+}
+
+.policy-meta {
+  color: $ui-fleet-black-50;
+  font-size: 0.85em;
+}
+
+.policy-saved {
+  color: $core-fleet-green;
+  font-size: 0.85em;
+}
+
+.form-error {
+  margin: $pad-small 0;
+  padding: $pad-small $pad-medium;
+  border-radius: 4px;
+  background: rgba(255, 92, 131, 0.1);
+  color: $core-vibrant-red;
+}
