@@ -37,7 +37,7 @@ jobs:
 
       - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
         with:
-          version: 3.x
+          version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run SwiftLint via Taskfile
