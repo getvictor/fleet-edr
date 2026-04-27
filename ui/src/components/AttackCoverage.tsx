@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
@@ -14,10 +14,10 @@ import "./AttackCoverage.scss";
 // what Crowdstrike Falcon, SentinelOne Singularity, and Elastic Security all
 // expose: tactic columns, technique rows, "covered by" linkable rule list.
 //
-// We still ship the JSON via the "Download Navigator layer" button so an
-// operator can drop it into the upstream MITRE Navigator UI for the full
-// matrix view if they want — that's the right tool for "look at all 14 tactics
-// at once" and there's no point in re-implementing the matrix renderer here.
+// We still ship the JSON via the "Export JSON" button so an operator can
+// drop it into the upstream MITRE Navigator UI for the full matrix view if
+// they want — that's the right tool for "look at all 14 tactics at once" and
+// there's no point in re-implementing the matrix renderer here.
 
 type TechniqueWithCoverage = TechniqueMeta & {
   coveringRules: string[];
@@ -146,38 +146,41 @@ export function AttackCoverage() {
                     <th>Covered by</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {groups.map((g) => (
-                    <Fragment key={g.tactic}>
-                      <tr className="attack-coverage__tactic-row">
-                        <th colSpan={3} scope="colgroup">{g.tactic}</th>
+                {/* One <tbody> per tactic with scope="rowgroup" on the
+                    header — that's the HTML5 idiom for grouping rows under a
+                    label, which lets screen readers announce the tactic as
+                    context for each technique row. Visually identical to a
+                    Fragment-with-shared-tbody approach. */}
+                {groups.map((g) => (
+                  <tbody key={g.tactic}>
+                    <tr className="attack-coverage__tactic-row">
+                      <th colSpan={3} scope="rowgroup">{g.tactic}</th>
+                    </tr>
+                    {g.techniques.map((t) => (
+                      <tr key={t.id}>
+                        <td>
+                          <a
+                            className="attack-coverage__technique-id"
+                            href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {t.id}
+                          </a>
+                        </td>
+                        <td>{t.name}</td>
+                        <td>
+                          {t.coveringRules.map((r, i) => (
+                            <span key={r}>
+                              {i > 0 && ", "}
+                              <code>{r}</code>
+                            </span>
+                          ))}
+                        </td>
                       </tr>
-                      {g.techniques.map((t) => (
-                        <tr key={t.id}>
-                          <td>
-                            <a
-                              className="attack-coverage__technique-id"
-                              href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {t.id}
-                            </a>
-                          </td>
-                          <td>{t.name}</td>
-                          <td>
-                            {t.coveringRules.map((r, i) => (
-                              <span key={r}>
-                                {i > 0 && ", "}
-                                <code>{r}</code>
-                              </span>
-                            ))}
-                          </td>
-                        </tr>
-                      ))}
-                    </Fragment>
-                  ))}
-                </tbody>
+                    ))}
+                  </tbody>
+                ))}
               </Table>
             )}
         </>
