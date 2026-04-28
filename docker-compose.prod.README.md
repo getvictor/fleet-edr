@@ -10,7 +10,7 @@ own instance.
 ```sh
 # 1. Pin a released version. `latest` works for dev but is not safe for prod
 #    because image digests drift silently.
-echo 'EDR_VERSION=v0.5.0' > .env
+echo 'EDR_VERSION=v0.1.0' > .env
 echo 'OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317' >> .env
 
 # 2. Generate two secret files. The MySQL root password + the full DSN that
@@ -53,7 +53,7 @@ docker compose -f docker-compose.prod.yml --env-file .env pull server
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-No DB migration needed within the v0.5.x series; schema is `CREATE TABLE IF
+No DB migration needed within the v0.1.x series; schema is `CREATE TABLE IF
 NOT EXISTS` throughout.
 
 ## Secret rotation
