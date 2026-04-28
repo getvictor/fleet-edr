@@ -434,7 +434,18 @@ export function ProcessTreeView() {
           <Badge variant={SEVERITY_VARIANTS[alertDetail.severity] ?? "neutral"}>
             {alertDetail.severity}
           </Badge>
-          <span className="alert-breadcrumb__title">{alertDetail.title}</span>
+          {/* Title links to the rule's documentation page so an analyst
+              standing in front of a fired alert can jump straight to "what
+              does this rule do" without losing the process-tree context.
+              The link sits next to the title rather than replacing it so
+              the breadcrumb still reads as a label, not a CTA. */}
+          <Link
+            to={`/rules/${encodeURIComponent(alertDetail.rule_id)}`}
+            className="alert-breadcrumb__title alert-breadcrumb__title--link"
+            title={`Open documentation for the ${alertDetail.rule_id} rule`}
+          >
+            {alertDetail.title}
+          </Link>
           <span className="alert-breadcrumb__time">
             {new Date(alertDetail.created_at).toLocaleString()}
           </span>
