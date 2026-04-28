@@ -32,5 +32,10 @@ jobs:
         with:
           node-version: 22
 
+      # `--ignore-scripts` blocks any postinstall hook in @redocly/cli or its
+      # transitive deps from running on the runner — closes Sonar
+      # githubactions:S6505 ("supply-chain hook execution"). The lint CLI
+      # itself only reads the OpenAPI YAML; it has no legitimate need for
+      # install-time scripts to fire.
       - name: Run redocly lint
-        run: npx -y @redocly/cli@2.29.2 lint docs/api/openapi.yaml
+        run: npx --ignore-scripts -y @redocly/cli@2.29.2 lint docs/api/openapi.yaml
