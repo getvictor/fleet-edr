@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { listAlerts, updateAlertStatus } from "../api";
 import type { Alert } from "../types";
 import { Table, EmptyState } from "./ui/Table";
@@ -28,7 +28,6 @@ export function AlertList() {
   // one click away via the Status dropdown but don't clutter the default view.
   const [statusFilter, setStatusFilter] = useState("open");
   const [severityFilter, setSeverityFilter] = useState("");
-  const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
@@ -139,22 +138,17 @@ export function AlertList() {
                   </Link>
                 </td>
                 <td>
-                  <button
-                    type="button"
+                  {/* Link, not a button — preserves middle-click-open-in-new-tab,
+                      cmd/ctrl-click, copy-link-address, and a href that screen
+                      readers announce as a link rather than an action button
+                      (Copilot review on PR #59). */}
+                  <Link
                     className="link-button"
-                    onClick={() => {
-                      const atMs = new Date(a.created_at).getTime();
-                      const result = navigate(
-                        `/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(atMs)}`,
-                      );
-                      // navigate() may return void or Promise<void> in react-router v7.
-                      // Swallow the promise path; the router already handles cancellation.
-                      if (result instanceof Promise) result.catch(() => { /* ignored */ });
-                    }}
+                    to={`/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(new Date(a.created_at).getTime())}`}
                     title="Open process tree on this host at the alert time"
                   >
                     {a.host_id}
-                  </button>
+                  </Link>
                 </td>
                 <td>{formatTime(a.created_at)}</td>
                 <td>

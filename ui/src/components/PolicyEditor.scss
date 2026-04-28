@@ -47,7 +47,11 @@
 
   .field__input {
     width: 100%;
-    min-width: 64ch;
+    // Cap the floor at the viewport width so the input doesn't force a
+    // horizontal scrollbar on narrow layouts (Copilot review on PR #59).
+    // On any normal desktop the 64ch ceiling wins and the canonical macOS
+    // bundle path / 64-char hash fit end-to-end without truncating.
+    min-width: min(64ch, 100%);
   }
 }
 
