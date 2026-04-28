@@ -78,5 +78,4 @@ direction.
 
 - `docs/best-practices.md` section 2 (Cross-platform reach) captures the
   partial-adoption state.
-- `claude/mvp/plan.md` -- approved MVP plan (gitignored, local).
 - Apple [deprecation of kernel extensions](https://developer.apple.com/support/kernel-extensions/).

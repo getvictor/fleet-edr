@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { listAlerts, updateAlertStatus } from "../api";
 import type { Alert } from "../types";
 import { Table, EmptyState } from "./ui/Table";
@@ -124,6 +124,21 @@ export function AlertList() {
                   </Badge>
                 </td>
                 <td>
+                  {/* Title links to the rule's documentation page so an
+                      analyst seeing an unfamiliar finding can read what the
+                      rule does, why it's almost always malicious, and what
+                      the false-positive sources are without leaving the
+                      app. The host process-tree pivot moved to the Host
+                      column below. */}
+                  <Link
+                    className="link-button"
+                    to={`/rules/${encodeURIComponent(a.rule_id)}`}
+                    title={`Open documentation for the ${a.rule_id} rule`}
+                  >
+                    {a.title}
+                  </Link>
+                </td>
+                <td>
                   <button
                     type="button"
                     className="link-button"
@@ -136,11 +151,11 @@ export function AlertList() {
                       // Swallow the promise path; the router already handles cancellation.
                       if (result instanceof Promise) result.catch(() => { /* ignored */ });
                     }}
+                    title="Open process tree on this host at the alert time"
                   >
-                    {a.title}
+                    {a.host_id}
                   </button>
                 </td>
-                <td>{a.host_id}</td>
                 <td>{formatTime(a.created_at)}</td>
                 <td>
                   <span className={`status-text status-text--${a.status}`}>

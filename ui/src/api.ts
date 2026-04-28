@@ -254,8 +254,7 @@ export async function updatePolicy(
 // describes which techniques the registered detection rules cover. Returned
 // JSON is dropped directly into https://mitre-attack.github.io/attack-navigator/
 // to render as a heatmap. Call site is the "ATT&CK coverage" button in the
-// alerts page; the response is also useful for procurement questionnaires
-// (B4 in claude/mvp/phase-7-pilot-hardening.md).
+// alerts page; the response is also useful for procurement questionnaires.
 export async function fetchAttackNavigatorLayer(): Promise<AttackNavigatorLayer> {
   return fetchJSON<AttackNavigatorLayer>("/admin/attack-coverage");
 }
