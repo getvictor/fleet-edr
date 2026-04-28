@@ -19,7 +19,12 @@
 # ---------------------------------------------------------------
 # Stage 1: UI bundle
 # ---------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:20 AS ui-build
+# Image SHAs are pinned alongside the human-readable tag so OpenSSF Scorecard's
+# Pinned-Dependencies check sees a digest. Refresh by running e.g.
+# `docker manifest inspect node:20 --verbose` and copying the manifest digest.
+# Dependabot's docker ecosystem keeps these current; do not strip the digest
+# during a tag bump.
+FROM --platform=$BUILDPLATFORM node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5 AS ui-build
 # package*.json first for layer-cache reuse: npm ci only reruns when
 # dependencies change, not every source edit.
 WORKDIR /src/ui
@@ -36,7 +41,7 @@ RUN npm run build
 # ---------------------------------------------------------------
 # Stage 2: Go binary
 # ---------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26@sha256:b54cbf583d390341599d7bcbc062425c081105cc5ef6d170ced98ef9d047c716 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
@@ -74,7 +79,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ---------------------------------------------------------------
 # Stage 3: runtime
 # ---------------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1
 
 # Non-secret defaults. Operators override via compose env or EDR_*_FILE mounts.
 ENV EDR_LISTEN_ADDR=":8088" \
