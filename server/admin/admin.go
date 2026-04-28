@@ -42,13 +42,37 @@ type Cataloger interface {
 	Catalog() []RuleMetadata
 }
 
-// RuleMetadata is the minimal per-rule descriptor the Navigator-export
-// endpoint needs. Mirrors detection.RuleMetadata; duplicated here so admin
-// doesn't import detection (which would pull the whole engine into admin's
-// build graph + tests).
+// RuleMetadata is the per-rule descriptor the admin endpoints render.
+// Mirrors detection.RuleMetadata; duplicated here so admin doesn't import
+// detection (which would pull the whole engine into admin's build graph
+// + tests). Doc carries the operator-facing documentation surfaced by
+// GET /api/v1/admin/rules and the markdown generator.
 type RuleMetadata struct {
 	ID         string
 	Techniques []string
+	Doc        RuleDoc
+}
+
+// RuleDoc mirrors detection.Documentation. Same duplication rationale as
+// RuleMetadata above. Field tags match what the UI consumes from
+// GET /api/v1/admin/rules.
+type RuleDoc struct {
+	Title          string       `json:"title"`
+	Summary        string       `json:"summary"`
+	Description    string       `json:"description"`
+	Severity       string       `json:"severity"`
+	EventTypes     []string     `json:"event_types"`
+	FalsePositives []string     `json:"false_positives,omitempty"`
+	Limitations    []string     `json:"limitations,omitempty"`
+	Config         []RuleConfig `json:"config,omitempty"`
+}
+
+// RuleConfig mirrors detection.ConfigKnob.
+type RuleConfig struct {
+	EnvVar      string `json:"env_var"`
+	Type        string `json:"type"`
+	Default     string `json:"default"`
+	Description string `json:"description"`
 }
 
 // Handler serves the admin endpoints. Construct it with the enrollment + policy stores,
@@ -95,6 +119,37 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/policy", h.handleGetPolicy)
 	mux.HandleFunc("PUT /api/v1/admin/policy", h.handlePutPolicy)
 	mux.HandleFunc("GET /api/v1/admin/attack-coverage", h.handleATTACKCoverage)
+	mux.HandleFunc("GET /api/v1/admin/rules", h.handleListRules)
+}
+
+// handleListRules returns the structured per-rule documentation for every
+// registered detection rule. Used by the UI's rule-detail page and by the
+// `tools/gen-rule-docs` markdown generator. Order is the engine's
+// registration order so the response is deterministic and snapshot-testable.
+//
+// Stable wire shape — the UI's RuleDetail.tsx and the generator both depend
+// on this; field renames here ripple through both. Add new fields, don't
+// remove or rename existing ones.
+func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	type ruleResponse struct {
+		ID         string   `json:"id"`
+		Techniques []string `json:"techniques"`
+		Doc        RuleDoc  `json:"doc"`
+	}
+	var catalog []RuleMetadata
+	if h.catalog != nil {
+		catalog = h.catalog.Catalog()
+	}
+	// Field-for-field conversion: ruleResponse exists only to attach the
+	// JSON tags the wire shape needs without putting json tags on the
+	// public RuleMetadata struct (which is also used by the navigator
+	// endpoint and would be over-serialised there).
+	out := make([]ruleResponse, 0, len(catalog))
+	for _, rm := range catalog {
+		out = append(out, ruleResponse(rm))
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {

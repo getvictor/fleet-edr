@@ -107,14 +107,14 @@ func run() error {
 	ingestHandler := ingest.New(s, logger, build)
 	builder := graph.NewBuilder(s, logger)
 	det := detection.NewEngine(s, logger)
-	det.Register(&rules.SuspiciousExec{AllowedNonShellParents: cfg.SuspiciousExecParentAllowlist})
-	det.Register(&rules.PersistenceLaunchAgent{AllowedPlists: cfg.LaunchAgentAllowlist})
-	det.Register(&rules.DyldInsert{})
-	det.Register(&rules.ShellFromOffice{})
-	det.Register(&rules.OsascriptNetworkExec{})
-	det.Register(&rules.CredentialKeychainDump{})
-	det.Register(&rules.PrivilegeLaunchdPlistWrite{AllowedTeamIDs: cfg.LaunchDaemonTeamIDAllowlist})
-	det.Register(&rules.SudoersTamper{AllowedWriters: cfg.SudoersWriterAllowlist})
+	for _, r := range rules.All(rules.RegistryOptions{
+		SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
+		LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
+		LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
+		SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
+	}) {
+		det.Register(r)
+	}
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)
@@ -336,6 +336,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
 		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
 		"GET /api/v1/admin/attack-coverage",
+		"GET /api/v1/admin/rules",
 		"GET /api/v1/session",
 	} {
 		mux.Handle(p, sessionProtected)
@@ -388,7 +389,29 @@ func (a engineCatalogAdapter) Catalog() []admin.RuleMetadata {
 	src := a.engine.Catalog()
 	out := make([]admin.RuleMetadata, len(src))
 	for i, r := range src {
-		out[i] = admin.RuleMetadata{ID: r.ID, Techniques: r.Techniques}
+		cfg := make([]admin.RuleConfig, len(r.Doc.Config))
+		for j, c := range r.Doc.Config {
+			cfg[j] = admin.RuleConfig{
+				EnvVar:      c.EnvVar,
+				Type:        c.Type,
+				Default:     c.Default,
+				Description: c.Description,
+			}
+		}
+		out[i] = admin.RuleMetadata{
+			ID:         r.ID,
+			Techniques: r.Techniques,
+			Doc: admin.RuleDoc{
+				Title:          r.Doc.Title,
+				Summary:        r.Doc.Summary,
+				Description:    r.Doc.Description,
+				Severity:       r.Doc.Severity,
+				EventTypes:     r.Doc.EventTypes,
+				FalsePositives: r.Doc.FalsePositives,
+				Limitations:    r.Doc.Limitations,
+				Config:         cfg,
+			},
+		}
 	}
 	return out
 }

@@ -51,6 +51,40 @@ func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 // (Abuse Elevation Control Mechanism: Sudo and Sudo Caching).
 func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *SudoersTamper) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*)",
+		Summary: "Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.",
+		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
+			"`/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as " +
+			"root.\n\n" +
+			"Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries — " +
+			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
+			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +
+			"admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.\n\n" +
+			"`visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the " +
+			"rule does not see them at all.",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"open"},
+		FalsePositives: []string{
+			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Allowlist their absolute writer paths.",
+		},
+		Limitations: []string{
+			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked for Phase 8.",
+		},
+		Config: []detection.ConfigKnob{
+			{
+				EnvVar:      "EDR_SUDOERS_WRITER_ALLOWLIST",
+				Type:        "csv-paths",
+				Default:     "",
+				Description: "Comma-separated absolute writer-process paths to silently accept (e.g. `/usr/local/bin/ansible`).",
+			},
+		},
+	}
+}
+
 // sudoersPath matches /etc/sudoers itself and any direct child of
 // /etc/sudoers.d/. ESF reports both forms (/etc/...  and
 // /private/etc/... since /etc is a symlink); we accept either. Nested

@@ -80,6 +80,41 @@ func (r *SuspiciousExec) Techniques() []string {
 	return []string{"T1059", "T1105"}
 }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *SuspiciousExec) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "Suspicious exec chain (non-shell → shell → temp/network)",
+		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.",
+		Description: "Detects two related chain shapes that share a single attribution chain:\n\n" +
+			"1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)\n" +
+			"2. non-shell parent → shell child → outbound network_connect\n\n" +
+			"The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the " +
+			"shell's exec. That makes it race-immune across the agent's flush boundaries — a chain that completes " +
+			"in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor " +
+			"chain has already been ingested by the time the trigger event lands.\n\n" +
+			"30 seconds is the temporal cap between the shell exec and the trigger event.",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"exec", "network_connect"},
+		FalsePositives: []string{
+			"Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Use EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST to silence sshd-session if that's a routine workflow on the host class.",
+			"Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.",
+		},
+		Limitations: []string{
+			"30s window is hard-coded; long-tail post-shell activity is missed by design.",
+			"Allowlisting a parent silences BOTH arms of the rule for that parent — the trade-off is documented on AllowedNonShellParents.",
+		},
+		Config: []detection.ConfigKnob{
+			{
+				EnvVar:      "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST",
+				Type:        "csv-paths",
+				Default:     "",
+				Description: "Comma-separated absolute parent-process paths the rule should treat as benign roots (both temp-exec and network arms). Canonical use: `/usr/libexec/sshd-session` on hosts where interactive SSH is normal.",
+			},
+		},
+	}
+}
+
 const (
 	// suspiciousExecWindowNs bounds the temporal distance between the shell
 	// exec and the trigger event (temp-exec or network_connect). Real chains

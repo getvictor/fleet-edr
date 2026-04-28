@@ -45,6 +45,33 @@ func (r *OsascriptNetworkExec) Techniques() []string {
 	return []string{"T1059.002", "T1105"}
 }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *OsascriptNetworkExec) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "AppleScript dropper (osascript → curl/wget → temp exec)",
+		Summary: "Critical-severity catch on the canonical macOS commodity-dropper chain: osascript fetches a stage-2 over the network and runs it from /tmp.",
+		Description: "Fires on the LAST link of the chain — an exec from a temp directory whose process tree has " +
+			"both an osascript ancestor and a curl/wget sibling within the osascript's 30-second descendant window. " +
+			"This shape is the recognisable signature of macOS commodity malware staged via AppleScript.\n\n" +
+			"Reverse-direction triggering is deliberate: by the time the temp-exec event lands, the entire ancestor " +
+			"chain has already been ingested and materialised by earlier batches, so the rule is race-immune. " +
+			"Forward triggering (fire on the osascript exec, look for descendants) misses chains that complete " +
+			"across an agent flush boundary.\n\n" +
+			"The rule requires both halves of the chain to be present, so download-only or temp-exec-only flows do " +
+			"not fire here — those overlap with suspicious_exec.",
+		Severity:   detection.SeverityCritical,
+		EventTypes: []string{"exec"},
+		FalsePositives: []string{
+			"Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript — extremely rare in managed fleets.",
+		},
+		Limitations: []string{
+			"30-second descendant window is hard-coded; longer-running chains are missed by design.",
+			"Does not cover Python URL fetches or AppleScript built-in URL access — only flags the explicit curl/wget shape.",
+		},
+	}
+}
+
 var osascriptPaths = map[string]bool{
 	"/usr/bin/osascript": true,
 }

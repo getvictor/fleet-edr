@@ -260,6 +260,44 @@ export async function fetchAttackNavigatorLayer(): Promise<AttackNavigatorLayer>
   return fetchJSON<AttackNavigatorLayer>("/admin/attack-coverage");
 }
 
+// RuleConfig describes one operator-tuning env var. Wire shape matches
+// admin.RuleConfig in the server.
+export interface RuleConfig {
+  env_var: string;
+  type: string;
+  default: string;
+  description: string;
+}
+
+// RuleDoc is the structured per-rule documentation surfaced by GET
+// /api/v1/admin/rules. Mirrors detection.Documentation on the server, with
+// the JSON tag spellings the wire format uses.
+export interface RuleDoc {
+  title: string;
+  summary: string;
+  description: string;
+  severity: string;
+  event_types: string[];
+  false_positives?: string[];
+  limitations?: string[];
+  config?: RuleConfig[];
+}
+
+export interface RuleDocEntry {
+  id: string;
+  techniques: string[];
+  doc: RuleDoc;
+}
+
+// fetchRuleDocs returns every registered detection rule with its operator-
+// facing documentation. Drives the /ui/rules/<id> sub-page and the rule-name
+// links on /ui/coverage. Order mirrors the server's registration order, so
+// the UI can iterate without resorting.
+export async function fetchRuleDocs(): Promise<RuleDocEntry[]> {
+  const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/admin/rules");
+  return body.rules;
+}
+
 export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {
   return fetchJSON<{ id: number }>("/commands", {
     method: "POST",
