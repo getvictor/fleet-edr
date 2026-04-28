@@ -266,6 +266,33 @@
     font-weight: $bold;
   }
 
+  // When the title is rendered as an anchor (linking to /ui/rules/<id>),
+  // strip the default browser underline + colour so it still reads as a
+  // breadcrumb label, and reveal the link affordance only on hover or
+  // keyboard focus. Keeps the bar visually identical to the previous
+  // span-based version while exposing middle-click + copy-link-address
+  // through the underlying <a>.
+  &__title--link {
+    color: inherit;
+    text-decoration: none;
+
+    &:hover {
+      color: $core-fleet-green;
+      text-decoration: underline;
+    }
+
+    // Keyboard users tabbing to the breadcrumb need a visible focus
+    // indicator. Without :focus-visible the link is invisible to
+    // anyone navigating without a mouse (Copilot review on PR #61).
+    &:focus-visible {
+      color: $core-fleet-green;
+      text-decoration: underline;
+      outline: 2px solid $core-fleet-green;
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+  }
+
   &__time {
     color: $ui-fleet-black-50;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

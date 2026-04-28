@@ -123,29 +123,30 @@ export function AlertList() {
                   </Badge>
                 </td>
                 <td>
-                  {/* Title links to the rule's documentation page so an
-                      analyst seeing an unfamiliar finding can read what the
-                      rule does, why it's almost always malicious, and what
-                      the false-positive sources are without leaving the
-                      app. The host process-tree pivot moved to the Host
-                      column below. */}
+                  {/* Title is the primary alert pivot — it opens the host's
+                      process tree pinned to the moment the alert fired, with
+                      the alert breadcrumb visible. The "what does this rule
+                      do" link to /ui/rules/<id> lives inside that breadcrumb,
+                      not here, so an analyst clicks the title once to land
+                      on the alert's investigation surface and gets the doc
+                      jump as a sibling control. */}
                   <Link
                     className="link-button"
-                    to={`/rules/${encodeURIComponent(a.rule_id)}`}
-                    title={`Open documentation for the ${a.rule_id} rule`}
+                    to={`/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(new Date(a.created_at).getTime())}`}
+                    title="Open this alert's process tree at the alert time"
                   >
                     {a.title}
                   </Link>
                 </td>
                 <td>
-                  {/* Link, not a button — preserves middle-click-open-in-new-tab,
-                      cmd/ctrl-click, copy-link-address, and a href that screen
-                      readers announce as a link rather than an action button
-                      (Copilot review on PR #59). */}
+                  {/* Host links to the host's full process tree without
+                      pinning to any particular alert. Distinct destination
+                      from the title above: title = "this alert", host =
+                      "the whole host". */}
                   <Link
                     className="link-button"
-                    to={`/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(new Date(a.created_at).getTime())}`}
-                    title="Open process tree on this host at the alert time"
+                    to={`/hosts/${encodeURIComponent(a.host_id)}`}
+                    title="Open the full process tree for this host"
                   >
                     {a.host_id}
                   </Link>
