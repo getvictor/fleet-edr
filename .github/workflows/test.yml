@@ -144,7 +144,7 @@ jobs:
       # vitest on ubuntu finishes in under 30s, so re-running it in-place is
       # cheaper than the plumbing. ts-lint.yml still uploads its own copy of
       # ui/coverage/lcov.info as an artifact for humans who want to inspect.
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: npm

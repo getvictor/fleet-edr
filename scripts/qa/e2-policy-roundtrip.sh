@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-7 dogfood QA E2: blocklist policy round-trip.
+# Pre-pilot dogfood QA: blocklist policy round-trip.
 #
 # Drives a full round-trip of the blocklist:
 #  1. Authenticate to the EDR admin API and pick up the CSRF token.
@@ -17,7 +17,7 @@
 #     test window, mostly for the operator's eye — there's no
 #     `blocked_exec` rule shipping with the MVP detection pack today.
 #     The actual block lives in the kernel via the AUTH callback;
-#     surfacing a paired alert in the UI is an open Phase 8 item.
+#     surfacing a paired alert in the UI is open future work.
 #  6. Restore the original policy so the script is idempotent.
 #
 # Usage from this workstation (NOT the VM):
@@ -268,6 +268,6 @@ fi
 
 hr
 echo "[e2] done. expected outcome: step 4 reported 'exec denied as expected'."
-echo "[e2] open Phase 7 issue: no alert fires on a blocked exec today;"
-echo "[e2] the AUTH callback is silent. Tracked for Phase 8."
+echo "[e2] known gap: no alert fires on a blocked exec today;"
+echo "[e2] the AUTH callback is silent. Tracked as future work."
 echo "[e2] cleanup: rm -rf $WORKDIR"
