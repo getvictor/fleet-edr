@@ -315,7 +315,8 @@ Test your restore path quarterly.
 **"unknown database 'edr'"** at server startup — MySQL booted but
 didn't create the `edr` schema. The compose file sets
 `MYSQL_DATABASE: edr` so this means MySQL initialized earlier without
-that var set (pre-Phase-5 behavior) and its volume persisted.
+that var set (an earlier compose file shipped without it) and its volume
+persisted.
 
 ```sh
 docker compose -f docker-compose.prod.yml exec mysql \

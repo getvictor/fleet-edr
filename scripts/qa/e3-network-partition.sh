@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-7 dogfood QA E3: 10-minute network partition.
+# Pre-pilot dogfood QA: 10-minute network partition.
 #
 # What it proves: the agent's offline queue grows while the server is
 # unreachable, and drains cleanly once the partition heals. The plan

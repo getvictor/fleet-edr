@@ -122,7 +122,7 @@ The matching dylib path is redacted in alert text (a sensitive payload location)
 
 ### Limitations
 
-- Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked in Phase 4.
+- Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.
 - DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched — higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.
 
 ## shell_from_office
@@ -242,7 +242,7 @@ To stay high-precision, writes by Apple-signed platform binaries (installd, syst
 
 ### Limitations
 
-- Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked for Phase 8.
+- Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.
 - Drops via Apple platform binaries (e.g. `sudo cp` where cp is Apple-signed) are skipped here — pair with suspicious_exec for parent-shell visibility.
 
 ## sudoers_tamper
@@ -277,5 +277,5 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 
 ### Limitations
 
-- Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked for Phase 8.
+- Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.
 

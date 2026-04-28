@@ -17,7 +17,7 @@ build/
 # UI build output (embedded via server/ui/embed.go)
 /server/ui/dist/
 
-# Phase 5 release-build output: signed pkg + signed profiles + checksums.
+# Release-build output: signed pkg + signed profiles + checksums.
 # Regenerated on every `packaging/pkg/build.sh` run; never committed.
 /dist/
 

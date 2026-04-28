@@ -72,7 +72,7 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
 			"Custom in-house pkg installers signed by your developer team — same allowlist applies.",
 		},
 		Limitations: []string{
-			"Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked for Phase 8.",
+			"Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
 			"Drops via Apple platform binaries (e.g. `sudo cp` where cp is Apple-signed) are skipped here — pair with suspicious_exec for parent-shell visibility.",
 		},
 		Config: []detection.ConfigKnob{
