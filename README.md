@@ -141,7 +141,7 @@ and hand them to any MDM. The server runs as a container stack:
 
 ```bash
 # Pick a pinned release; `latest` is fine for dev but not safe for prod.
-echo 'EDR_VERSION=v0.5.0' > .env
+echo 'EDR_VERSION=v0.1.0' > .env
 
 # See docker-compose.prod.README.md for the full secret + TLS setup.
 mkdir -p secrets tls
