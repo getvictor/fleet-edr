@@ -26,10 +26,32 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pull a fixed actionlint version from a published release (instead of the
+      # `bash <(curl …main/download-actionlint.bash)` pattern that OpenSSF
+      # Scorecard's Pinned-Dependencies check flags as `downloadThenRun`). The
+      # tarball + checksum are published per release on the rhysd/actionlint
+      # repo; Dependabot's github-actions ecosystem keeps this version current.
+      #
+      # `--proto =https` rejects any redirect to a non-HTTPS scheme, closing
+      # the Sonar `githubactions:S6506` "redirection to insecure website"
+      # hotspot. We install into `$HOME/.local/bin` and prepend it to
+      # `$GITHUB_PATH` so the step works under the unprivileged `runner`
+      # user without sudo (Copilot review on PR #55).
       - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
         run: |
-          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          echo "." >> "$GITHUB_PATH"
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --proto '=https' --retry 3 -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          bindir="$HOME/.local/bin"
+          mkdir -p "$bindir"
+          install -m 0755 actionlint "$bindir/actionlint"
+          echo "$bindir" >> "$GITHUB_PATH"
 
       - name: Run actionlint
         run: actionlint

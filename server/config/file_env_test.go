@@ -70,6 +70,51 @@ func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
 	assert.Contains(t, buf.String(), "failed to read *_FILE env var")
 }
 
+// TestFileBackedGetenv_NilLoggerUsesDefault locks in the safe-fallback path so
+// callers (e.g. early bootstrap code that hasn't built a logger yet) can pass
+// nil and still get a working decorator. Drives the missing-_FILE branch
+// specifically — that branch is the only one that exercises the nil-logger
+// fallback (`logger.WarnContext` would panic on a nil logger if the fallback
+// weren't applied), so a regression there must be observable in this test.
+func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
+	base := func(k string) string {
+		if k == "EDR_ENROLL_SECRET_FILE" {
+			return filepath.Join(t.TempDir(), "missing")
+		}
+		return ""
+	}
+	get := fileBackedGetenv(base, nil)
+	assert.NotPanics(t, func() { _ = get("EDR_ENROLL_SECRET") })
+	assert.Empty(t, get("EDR_ENROLL_SECRET"))
+}
+
+// TestWriteSecretFile drives the small helper that compose-fixture tests use to
+// stage a docker-secret-style file. We assert the content is written verbatim
+// and the perms are 0600 (the rest of the security model assumes secrets are
+// not world-readable).
+func TestWriteSecretFile(t *testing.T) {
+	dir := t.TempDir()
+	path, err := WriteSecretFile(dir, "enroll-secret", "supersecret\n")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "enroll-secret"), path)
+
+	got, err := os.ReadFile(path) //nolint:gosec // path produced by the helper under test
+	require.NoError(t, err)
+	assert.Equal(t, "supersecret\n", string(got))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestWriteSecretFile_BadDir(t *testing.T) {
+	// Pointing at a path under a non-existent parent surfaces the os.WriteFile
+	// error rather than swallowing it — operators tracing config issues need to
+	// see the path-not-found error verbatim.
+	_, err := WriteSecretFile(filepath.Join(t.TempDir(), "missing-dir"), "x", "v")
+	require.Error(t, err)
+}
+
 func TestFileBackedGetenv_TrimsOnlyOuterWhitespace(t *testing.T) {
 	// Docker secrets often trail a newline. We strip leading + trailing whitespace
 	// but preserve interior characters. A DSN like

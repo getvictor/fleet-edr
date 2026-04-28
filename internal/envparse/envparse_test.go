@@ -1,6 +1,7 @@
 package envparse
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +206,38 @@ func TestAllowlist(t *testing.T) {
 		// because the caller compares against actual filesystem paths.
 		got := Allowlist("/Foo,/foo")
 		assert.Len(t, got, 2)
+	})
+}
+
+// FuzzAllowlist drives the path-set parser with random comma-separated input.
+// The invariant: never panic, never produce an empty-string key, never include
+// untrimmed whitespace in a key. These match the runtime guarantees the
+// uploader's allowlist matcher relies on.
+func FuzzAllowlist(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"   ",
+		"/usr/libexec/sshd-session",
+		"a,b,c",
+		" /a , /b ,, /c ,",
+		"\t\n",
+		",,,",
+		"\u00a0/a,\u00a0/b\u00a0",     // non-breaking spaces; strings.TrimSpace must strip them
+		"\u2003/a,\u2002/b",           // em + en spaces
+		"\u2028/a\u2029,\u00a0/b\t/c", // line + paragraph separators interleaved with tabs
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		got := Allowlist(in)
+		for k := range got {
+			if k == "" {
+				t.Fatalf("Allowlist returned empty key from input %q", in)
+			}
+			if k != strings.TrimSpace(k) {
+				t.Fatalf("Allowlist key %q has untrimmed whitespace from input %q", k, in)
+			}
+		}
 	})
 }
 

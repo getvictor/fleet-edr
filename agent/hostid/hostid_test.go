@@ -93,6 +93,25 @@ func TestGet_ExecError(t *testing.T) {
 	assert.Contains(t, err.Error(), "run ioreg")
 }
 
+// FuzzParseIORegOutput drives the regex-based parser with random bytes. The
+// invariant we care about is "must not panic on any input" — a malformed
+// ioreg(1) output (truncated buffer, encoding glitch) should turn into a
+// "not found" error, never crash the agent's startup path.
+func FuzzParseIORegOutput(f *testing.F) {
+	for _, seed := range []string{
+		`"IOPlatformUUID" = "AAA"`,
+		`"IOPlatformUUID"="BBB"`,
+		`no uuid here`,
+		``,
+		`"IOPlatformUUID" = "" garbage`,
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, in []byte) {
+		_, _ = parseIORegOutput(in)
+	})
+}
+
 // TestGet_NoUUIDInOutput covers the case where ioreg ran but its output is
 // missing the IOPlatformUUID line — Get bubbles up the parse error verbatim.
 func TestGet_NoUUIDInOutput(t *testing.T) {

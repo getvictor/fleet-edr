@@ -94,3 +94,21 @@ updates:
     labels: ["dependencies", "ci"]
     commit-message:
       prefix: "deps(ci)"
+
+  # Docker base images for the server runtime. We pin both the tag and the
+  # manifest digest in Dockerfile FROM lines so OpenSSF Scorecard's
+  # Pinned-Dependencies check is satisfied; Dependabot keeps the digest in
+  # sync as upstream tags get rebuilt with security updates.
+  - package-ecosystem: "docker"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
