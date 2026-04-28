@@ -19,7 +19,7 @@ is everything in the closing section.
 
 ## Trust boundaries
 
-```
+```text
 +--------------------------------------------------------------------------+
 |                       Endpoint (macOS, root)                             |
 |  +---------------------+  +-----------------+  +-------------------+    |
@@ -67,7 +67,7 @@ Trust assumptions:
 
 | Category | Threat | Mitigation |
 | --- | --- | --- |
-| Spoofing | Unprivileged process impersonates the agent over XPC to the sysext. | Agent's XPC client connects to a Mach service registered by `launchd` (`MachServices` in the LaunchDaemon plist); the sysext checks `audit_token` to verify code-signing identity before trusting the peer. |
+| Spoofing | Unprivileged process impersonates the agent over XPC to the sysext. | The sysext registers its Mach service via `NSEndpointSecurityMachServiceName` in `extension/edr/extension/Info.plist` (system-extension-side, not a LaunchDaemon `MachServices` entry). Every accepted peer is constrained by `xpc_connection_set_peer_code_signing_requirement` (see `extension/edr/extension/XPCServer.swift`) with the agent's expected team-ID code-signing requirement; connections that don't satisfy the requirement are dropped before any message is processed. |
 | Tampering | Local attacker overwrites the agent binary or LaunchDaemon plist. | SIP protects the install path; the agent binary is Developer-ID-signed and notarized; modification breaks the signature and macOS refuses to launch. |
 | Repudiation | Command lifecycle goes unlogged. | Every command transitions (`pending` → `running` → `success`/`failure`) are persisted both locally (slog) and server-side (`commands` table). Admin actions emit a WARN-level audit log line. |
 | Information disclosure | Sensitive payload data leaks to the agent log. | `os.log` argv redaction; agent's slog handler does not print full event payloads at INFO level; sensitive fields stay at DEBUG (off by default). |
@@ -136,7 +136,7 @@ Trust assumptions:
 | Spoofing | Attacker pushes a fake `.pkg` claiming to be the EDR. | Pkg is Developer-ID-signed and Apple-notarized; macOS verifies the signature at install; the `.mobileconfig` profile binds the team ID expected for the system extension. |
 | Tampering | Malicious post-install scripts. | Pkg post-install scripts live in `packaging/pkg/` and are reviewable; build is via the signed CI release workflow; no `curl \| bash` at install time. |
 | Repudiation | Install / uninstall not logged. | macOS records `/var/log/install.log`; agent enrollment logs the host's hardware UUID + first-seen time on the server side. |
-| Information disclosure | Enroll secret leaks via process listing. | Today the agent reads `EDR_ENROLL_SECRET` from its environment via the LaunchDaemon plist. **GAP, low**: planned migration (per ADR 0003) to a root-owned `/etc/fleet-edr.conf` so the secret is not in env-listing output. |
+| Information disclosure | Enroll secret leaks via process listing or shell history. | The pkg postinstall script (and Fleet's install-script contract — see `packaging/pkg/scripts/postinstall`) writes the enroll secret to root-owned `/etc/fleet-edr.conf`; the agent reads that file via the layering in `agent/config/conffile.go` and `agent/config/config.go`, with env vars only as an override. The conf-file path keeps the secret out of `launchctl print` output. Residual risk is bounded to local root-equivalent access or incorrect file permissions on the conf file. |
 | Denial of service | MDM-driven mass uninstall. | Out of scope (the MDM is a trust anchor); the agent has no self-uninstall path. |
 | Elevation of privilege | Pre / post-install scripts have a bug, run as root. | Scripts are minimal (write conf file, kickstart LaunchDaemon); reviewed; signed pkg gates execution. |
 
@@ -191,8 +191,6 @@ pilot-deployment impact, not theoretical worst case.
 - Per-tenant / per-host rate limits beyond per-route caps (component 4).
 - Pagination contract on list endpoints (component 5).
 - `edr.network.events.dropped` counter (component 3).
-- Migrate enroll secret from env var to root-owned `/etc/fleet-edr.conf`
-  per ADR 0003 (component 7).
 
 ## Out of scope
 
