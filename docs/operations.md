@@ -243,15 +243,15 @@ Core metrics to chart:
 | `edr.enrolled.hosts` | gauge | Should match your MDM's scoped Mac count |
 | `edr.offline.hosts` | gauge | Hosts whose `last_seen` is older than 5 min. Keep near zero |
 | `edr.retention.rows_deleted` | counter | Should tick up every `EDR_RETENTION_INTERVAL` |
-| `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. Steady, low rate is normal; sustained zero on a fleet with churn means the process-prune job has wedged |
+| `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. The counter only increments when the reconciler synthesises an exit (it no-ops when there's nothing stale), so a non-zero rate or spike means the reconciler is firing — typically because a host missed an exec/exit pair. A sustained zero is ambiguous (either no stale processes to reconcile, or the reconciler has wedged); rely on logs/traces or a separate heartbeat to distinguish |
 | `edr.db.query.duration` | histogram | p99 creeping up = DB overloaded or a slow query regressed |
 | `edr.agent.queue.dropped` | counter | Non-zero = agent's local SQLite queue hit its cap. Investigate connectivity |
 
 Policy fan-out failures are emitted as the span attribute
 `edr.policy.fanout_failed` on the `policy_update` admin span (and the
-matching slog key on the audit log line), not as a counter — query for
-`edr.policy.fanout_failed > 0` in your trace UI's failed-span filter
-when rolling out a blocklist change.
+matching slog key on the audit log line), not as a counter — filter
+spans on the attribute `edr.policy.fanout_failed > 0` in your trace
+UI when rolling out a blocklist change.
 
 Recommended alerts (SigNoz, Grafana, wherever your OTel backend lives):
 
