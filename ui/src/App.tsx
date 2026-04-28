@@ -5,6 +5,7 @@ import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
 import { PolicyEditor } from "./components/PolicyEditor";
 import { AttackCoverage } from "./components/AttackCoverage";
+import { RuleDetail } from "./components/RuleDetail";
 import { Login } from "./components/Login";
 import { TopNav } from "./components/ui/TopNav";
 import { currentSession, logout, Unauthorized401Error, SessionInfo } from "./api";
@@ -80,6 +81,7 @@ export function App() {
           <Route path="/alerts" element={<AlertList />} />
           <Route path="/policy" element={<PolicyEditor actor={auth.user.email} />} />
           <Route path="/coverage" element={<AttackCoverage />} />
+          <Route path="/rules/:ruleId" element={<RuleDetail />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

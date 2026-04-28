@@ -50,6 +50,42 @@ func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_pli
 // (Boot or Logon Autostart Execution → Launch Daemon).
 func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1543.004"} }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "LaunchDaemon plist drop (/Library/LaunchDaemons write)",
+		Summary: "Flags a non-platform-binary write to any *.plist directly under /Library/LaunchDaemons.",
+		Description: "Detects the canonical system-domain persistence drop: writing a plist into " +
+			"`/Library/LaunchDaemons/`. Once that lands, the next `launchctl bootstrap system/<name>` (or a reboot) " +
+			"gives the attacker root-running persistence.\n\n" +
+			"Paired with `persistence_launchagent` — that rule catches user-domain LaunchAgent activation via " +
+			"`launchctl load`, this one catches the system-domain drop step. We catch this at the file-write rather " +
+			"than the activation step because LaunchDaemon activation is often deferred until reboot.\n\n" +
+			"To stay high-precision, writes by Apple-signed platform binaries (installd, system_installd, " +
+			"sysadminctl, package post-flight scripts) are skipped — they're the legitimate path. Non-Apple MDM " +
+			"agents (Munki, JumpCloud, Kandji's daemon) need their team ID allowlisted.",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"open_write"},
+		FalsePositives: []string{
+			"Non-Apple MDM agent installations dropping their own LaunchDaemon. Allowlist the agent's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
+			"Custom in-house pkg installers signed by your developer team — same allowlist applies.",
+		},
+		Limitations: []string{
+			"Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked for Phase 8.",
+			"Drops via Apple platform binaries (e.g. `sudo cp` where cp is Apple-signed) are skipped here — pair with suspicious_exec for parent-shell visibility.",
+		},
+		Config: []detection.ConfigKnob{
+			{
+				EnvVar:      "EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST",
+				Type:        "csv-team-ids",
+				Default:     "",
+				Description: "Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose code-signed binaries may write to /Library/LaunchDaemons silently.",
+			},
+		},
+	}
+}
+
 // launchDaemonPath matches a plist directly under /Library/LaunchDaemons.
 // The trailing `[^/]+` excludes nested paths (e.g.
 // /Library/LaunchDaemons/foo/bar.plist isn't a real LaunchDaemon location)

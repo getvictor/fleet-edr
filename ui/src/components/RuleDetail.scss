@@ -1,0 +1,106 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.rule-detail {
+  &__id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.95rem;
+    color: $ui-fleet-black-75;
+  }
+
+  &__summary {
+    font-size: 1.05rem;
+    line-height: 1.5;
+    margin: $pad-medium 0 $pad-large;
+    color: $core-fleet-black;
+  }
+
+  // The Severity / ATT&CK / Event-types meta block: small inline table with
+  // labels in the left column and values on the right.
+  &__meta {
+    width: auto;
+    margin-bottom: $pad-large;
+
+    th, td {
+      padding-top: $pad-small;
+      padding-bottom: $pad-small;
+    }
+
+    th[scope="row"] {
+      text-align: left;
+      font-weight: $bold;
+      color: $ui-fleet-black-75;
+      padding-right: $pad-large;
+      width: 1%;
+      white-space: nowrap;
+    }
+  }
+
+  &__config th {
+    text-align: left;
+  }
+
+  &__list {
+    padding-left: $pad-large;
+    line-height: 1.5;
+
+    li {
+      margin-bottom: $pad-xsmall;
+    }
+  }
+
+  &__para {
+    line-height: 1.5;
+    margin: 0 0 $pad-medium;
+    color: $core-fleet-black;
+  }
+
+  &__muted {
+    color: $ui-fleet-black-50;
+  }
+
+  &__back {
+    margin-top: $pad-large;
+
+    a {
+      color: $core-fleet-green;
+      text-decoration: none;
+
+      &:hover { text-decoration: underline; }
+    }
+  }
+
+  // Severity pill — same colour vocabulary as the alerts page so an analyst
+  // moving between alert rows and rule details sees a consistent visual.
+  &__sev {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: $bold;
+    text-transform: capitalize;
+    background: $ui-fleet-black-10;
+    color: $core-fleet-black;
+
+    &--low {
+      background: rgba(0, 154, 125, 0.15);
+      color: #006858;
+    }
+
+    &--medium {
+      background: rgba(255, 200, 0, 0.18);
+      color: #806100;
+    }
+
+    &--high {
+      background: rgba(255, 92, 0, 0.15);
+      color: #983400;
+    }
+
+    &--critical {
+      background: rgba(207, 0, 0, 0.18);
+      color: #8a0000;
+    }
+  }
+}

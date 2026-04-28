@@ -31,6 +31,39 @@ func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" 
 // sub-technique's scope.
 func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.001"} }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *PersistenceLaunchAgent) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "LaunchAgent persistence (launchctl load/bootstrap)",
+		Summary: "Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/LaunchAgents or /Library/LaunchAgents.",
+		Description: "Detects the canonical user-domain persistence step on macOS: an attacker drops a plist into a " +
+			"LaunchAgents directory and then activates it via `launchctl load <plist>` or `launchctl bootstrap " +
+			"gui/<uid> <plist>`. We catch the activation rather than the file write so the alert ties to the moment " +
+			"the persistence becomes effective.\n\n" +
+			"Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plist path and tolerates " +
+			"flag-like args between `load` and the plist (`-w`, `-F`, etc.).",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"exec"},
+		FalsePositives: []string{
+			"MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Allowlist their plist paths via EDR_LAUNCHAGENT_ALLOWLIST.",
+			"Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.",
+		},
+		Limitations: []string{
+			"Does not cover `launchctl bootout` or `launchctl unload` — those undo persistence rather than create it.",
+			"Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.",
+		},
+		Config: []detection.ConfigKnob{
+			{
+				EnvVar:      "EDR_LAUNCHAGENT_ALLOWLIST",
+				Type:        "csv-paths",
+				Default:     "",
+				Description: "Comma-separated absolute plist paths the rule should silently accept. Use exact paths; case-sensitive.",
+			},
+		},
+	}
+}
+
 // launchctlPaths covers the common macOS launchctl binary locations.
 var launchctlPaths = map[string]bool{
 	"/bin/launchctl":     true,

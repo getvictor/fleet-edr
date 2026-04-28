@@ -40,12 +40,13 @@ func (e *Engine) Register(r Rule) {
 }
 
 // RuleMetadata describes a registered rule for callers outside the engine
-// (e.g. the Navigator-export handler in server/admin). Kept intentionally
-// minimal — ID + Techniques — because any more structure pulls detection
-// concerns into the admin surface.
+// (e.g. the Navigator-export handler in server/admin). Carries the structured
+// Documentation so the admin /rules endpoint and the markdown generator both
+// see the same data without each having to reach back into the rule slice.
 type RuleMetadata struct {
 	ID         string
 	Techniques []string
+	Doc        Documentation
 }
 
 // Catalog returns the metadata for every registered rule. Order matches
@@ -53,7 +54,11 @@ type RuleMetadata struct {
 func (e *Engine) Catalog() []RuleMetadata {
 	out := make([]RuleMetadata, 0, len(e.rules))
 	for _, r := range e.rules {
-		out = append(out, RuleMetadata{ID: r.ID(), Techniques: r.Techniques()})
+		out = append(out, RuleMetadata{
+			ID:         r.ID(),
+			Techniques: r.Techniques(),
+			Doc:        r.Doc(),
+		})
 	}
 	return out
 }

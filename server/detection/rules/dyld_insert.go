@@ -31,6 +31,32 @@ func (r *DyldInsert) ID() string { return "dyld_insert" }
 // broader "Hijack Execution Flow" parent.
 func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *DyldInsert) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "DYLD injection on exec",
+		Summary: "Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).",
+		Description: "Detects the classic macOS code-injection primitive: launching a process with " +
+			"`DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into " +
+			"the new process before main(). The rule fires on the leading argv slot only — `VAR=value /path/to/bin` " +
+			"shell form, or `env VAR=value /path/to/bin` — so substring noise (curl POST data, echo, etc.) does " +
+			"not false-positive.\n\n" +
+			"The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw " +
+			"event payload for responders.",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"exec"},
+		FalsePositives: []string{
+			"Local development of code that itself uses DYLD_INSERT_LIBRARIES (rare; usually scoped to non-managed dev hosts).",
+			"Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch — investigate why an admin script is setting these vars at all.",
+		},
+		Limitations: []string{
+			"Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked in Phase 4.",
+			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched — higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.",
+		},
+	}
+}
+
 // Dangerous env prefixes. DYLD_FRAMEWORK_PATH + DYLD_FALLBACK_* also exist but are
 // higher-false-positive (SIP disables them for Apple binaries anyway); we leave them
 // out for MVP and revisit if pilot customers surface real evasion.

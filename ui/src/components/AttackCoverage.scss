@@ -83,4 +83,20 @@
       text-decoration: underline;
     }
   }
+
+  // Rule names in the "Covered by" column link to /rules/<id>. Style
+  // matches the technique-id link colour so the row reads as two parallel
+  // jump-off points (technique → MITRE; rule → in-app docs).
+  &__rule-link {
+    color: $core-fleet-green;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      color: inherit;
+    }
+  }
 }

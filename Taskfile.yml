@@ -62,6 +62,13 @@ tasks:
     cmds:
       - xcodebuild -project edr.xcodeproj -scheme edr -configuration Debug -sdk macosx -derivedDataPath build
 
+  # -------- generate --------
+
+  docs:rules:
+    desc: Regenerate docs/detection-rules.md from the registered rule catalogue.
+    cmds:
+      - go run ./tools/gen-rule-docs
+
   # -------- test --------
 
   test:

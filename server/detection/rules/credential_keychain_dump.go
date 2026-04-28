@@ -37,6 +37,30 @@ func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump"
 // and MITRE explicitly cites it on the technique page.
 func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.001"} }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *CredentialKeychainDump) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "Keychain dump (security dump-keychain)",
+		Summary: "Flags exec of /usr/bin/security dump-keychain — the canonical macOS Keychain export command.",
+		Description: "Fires when a process invokes `/usr/bin/security` with the `dump-keychain` subcommand. " +
+			"That command exports Keychain entries (saved passwords, private keys) and is the macOS-native equivalent " +
+			"of credential-dumping tooling on Windows. Admin scripts virtually never invoke it; offensive playbooks do.\n\n" +
+			"Match shape is exact-path + exact-subcommand to keep the rule high-precision. A shell wrapper " +
+			"(`sh -c \"security dump-keychain\"`) still surfaces because ESF emits a NOTIFY_EXEC for each execve(), " +
+			"so the security binary always shows up as its own exec event regardless of parent.",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"exec"},
+		FalsePositives: []string{
+			"An IT admin running a one-off keychain audit. Rare in managed fleets; confirm with the user before treating as benign.",
+		},
+		Limitations: []string{
+			"Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.",
+			"Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w) — left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.",
+		},
+	}
+}
+
 // securityBinaryPaths is the set of `security` binary locations we'll
 // flag. Canonical-only by design: /usr/bin/security is where the tool
 // lives on every shipping macOS SKU; SIP guarantees it. If a pilot

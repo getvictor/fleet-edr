@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
@@ -173,7 +174,13 @@ export function AttackCoverage() {
                           {t.coveringRules.map((r, i) => (
                             <span key={r}>
                               {i > 0 && ", "}
-                              <code>{r}</code>
+                              <Link
+                                className="attack-coverage__rule-link"
+                                to={`/rules/${r}`}
+                                title="Open this detection rule's documentation"
+                              >
+                                <code>{r}</code>
+                              </Link>
                             </span>
                           ))}
                         </td>

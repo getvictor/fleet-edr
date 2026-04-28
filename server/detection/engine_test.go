@@ -21,6 +21,9 @@ type stubRule struct {
 
 func (r *stubRule) ID() string           { return r.id }
 func (r *stubRule) Techniques() []string { return nil }
+func (r *stubRule) Doc() Documentation {
+	return Documentation{Title: r.id, Severity: SeverityHigh}
+}
 func (r *stubRule) Evaluate(_ context.Context, _ []store.Event, _ *store.Store) ([]Finding, error) {
 	return r.findings, r.err
 }
@@ -37,6 +40,9 @@ func (r *recordingRule) ID() string { return r.id }
 // Techniques returns an empty slice (not nil) to match the Rule interface
 // contract; the production rules all do the same.
 func (r *recordingRule) Techniques() []string { return []string{} }
+func (r *recordingRule) Doc() Documentation {
+	return Documentation{Title: r.id, Severity: SeverityHigh}
+}
 func (r *recordingRule) Evaluate(_ context.Context, events []store.Event, _ *store.Store) ([]Finding, error) {
 	r.seen = append(r.seen, events...)
 	return nil, nil

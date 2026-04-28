@@ -26,6 +26,30 @@ func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 // post-phish execution step.
 func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
 
+// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// the generated docs/detection-rules.md.
+func (r *ShellFromOffice) Doc() detection.Documentation {
+	return detection.Documentation{
+		Title:   "Shell spawned by Microsoft Office",
+		Summary: "Flags any /bin/sh, /bin/bash, /bin/zsh (etc.) whose parent is Word, Excel, PowerPoint, or Outlook.",
+		Description: "Detects the textbook post-phishing execution step: a macro-laden Office document opens, the macro " +
+			"shells out, and the second stage takes off from there. The match is on the parent process being one of " +
+			"the four standard macOS Office binaries (full path, not substring) and the child being a known shell.\n\n" +
+			"Office apps almost never need to shell out in normal use; when they do, it's an admin-side automation " +
+			"that's worth surfacing anyway.",
+		Severity:   detection.SeverityHigh,
+		EventTypes: []string{"exec"},
+		FalsePositives: []string{
+			"Office's internal `Get Started` first-run flow has historically shelled out to fetch help content. Confirm by inspecting argv on the alert.",
+			"Admin-driven user-environment scripts that template Office settings via shell.",
+		},
+		Limitations: []string{
+			"Does not catch non-shell payloads (osascript, python, ruby) launched directly from Office. Pair with osascript_network_exec for the AppleScript variant.",
+			"Office binary path matching is exact: `/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word`. Apps installed elsewhere (e.g. on an external volume) are missed by design.",
+		},
+	}
+}
+
 // officeBinaries is the set of macOS Office executable paths that, as a parent, make a
 // shell exec suspicious. We match full paths, not substrings, so a user-named file
 // like `/tmp/Microsoft Word` cannot accidentally silence or spoof a finding.

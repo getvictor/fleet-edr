@@ -32,6 +32,9 @@ Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):
   MDM-specific recipe.
 - [`docs/operations.md`](docs/operations.md) -- day-2 ops runbook
   (upgrades, rotations, backups, troubleshooting).
+- [`docs/detection-rules.md`](docs/detection-rules.md) -- per-rule
+  behaviour, ATT&CK mapping, severity, and configuration env vars.
+  Generated from the rule source via `go run ./tools/gen-rule-docs`.
 - [`docs/api.md`](docs/api.md) + [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
   -- HTTP API reference.
 
