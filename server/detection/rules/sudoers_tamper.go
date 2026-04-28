@@ -67,7 +67,7 @@ func (r *SudoersTamper) Doc() detection.Documentation {
 			"`visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the " +
 			"rule does not see them at all.",
 		Severity:   detection.SeverityHigh,
-		EventTypes: []string{"open_write"},
+		EventTypes: []string{"open"},
 		FalsePositives: []string{
 			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Allowlist their absolute writer paths.",
 		},

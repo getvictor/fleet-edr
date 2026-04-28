@@ -107,14 +107,14 @@ func run() error {
 	ingestHandler := ingest.New(s, logger, build)
 	builder := graph.NewBuilder(s, logger)
 	det := detection.NewEngine(s, logger)
-	det.Register(&rules.SuspiciousExec{AllowedNonShellParents: cfg.SuspiciousExecParentAllowlist})
-	det.Register(&rules.PersistenceLaunchAgent{AllowedPlists: cfg.LaunchAgentAllowlist})
-	det.Register(&rules.DyldInsert{})
-	det.Register(&rules.ShellFromOffice{})
-	det.Register(&rules.OsascriptNetworkExec{})
-	det.Register(&rules.CredentialKeychainDump{})
-	det.Register(&rules.PrivilegeLaunchdPlistWrite{AllowedTeamIDs: cfg.LaunchDaemonTeamIDAllowlist})
-	det.Register(&rules.SudoersTamper{AllowedWriters: cfg.SudoersWriterAllowlist})
+	for _, r := range rules.All(rules.RegistryOptions{
+		SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
+		LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
+		LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
+		SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
+	}) {
+		det.Register(r)
+	}
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)

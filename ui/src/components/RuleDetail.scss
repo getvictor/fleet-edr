@@ -54,6 +54,12 @@
     line-height: 1.5;
     margin: 0 0 $pad-medium;
     color: $core-fleet-black;
+    // Preserve single newlines inside a paragraph so list-style content
+    // (e.g. "1. ...\n2. ..." in suspicious_exec's description) survives
+    // rendering. Blank-line splitting still happens at the React level
+    // — this rule only protects the in-paragraph linebreaks HTML would
+    // otherwise collapse into a space.
+    white-space: pre-line;
   }
 
   &__muted {
@@ -83,24 +89,34 @@
     background: $ui-fleet-black-10;
     color: $core-fleet-black;
 
+    // Severity colours pair a tinted pill background with a fully-opaque
+    // dark foreground that hits WCAG AA contrast (4.5:1+) against the
+    // composited pill. Earlier iterations layered alpha tints over white,
+    // which Sonar (css:S7924) and a colour-contrast checker both flagged
+    // as <4.5:1 in some browsers.
     &--low {
-      background: rgba(0, 154, 125, 0.15);
-      color: #006858;
+      background: #d0eee7;
+      color: #08443a;
     }
 
     &--medium {
-      background: rgba(255, 200, 0, 0.18);
-      color: #806100;
+      background: #f7e6b3;
+      color: #5a4500;
     }
 
     &--high {
-      background: rgba(255, 92, 0, 0.15);
-      color: #983400;
+      background: #f7d7c2;
+      color: #6b2400;
     }
 
     &--critical {
-      background: rgba(207, 0, 0, 0.18);
-      color: #8a0000;
+      background: #f1c2c2;
+      color: #5d0000;
+    }
+
+    &--unknown {
+      background: $ui-fleet-black-10;
+      color: $core-fleet-black;
     }
   }
 }

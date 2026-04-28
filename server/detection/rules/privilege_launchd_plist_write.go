@@ -66,7 +66,7 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
 			"sysadminctl, package post-flight scripts) are skipped — they're the legitimate path. Non-Apple MDM " +
 			"agents (Munki, JumpCloud, Kandji's daemon) need their team ID allowlisted.",
 		Severity:   detection.SeverityHigh,
-		EventTypes: []string{"open_write"},
+		EventTypes: []string{"open"},
 		FalsePositives: []string{
 			"Non-Apple MDM agent installations dropping their own LaunchDaemon. Allowlist the agent's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
 			"Custom in-house pkg installers signed by your developer team — same allowlist applies.",

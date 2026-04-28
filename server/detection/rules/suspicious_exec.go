@@ -85,7 +85,7 @@ func (r *SuspiciousExec) Techniques() []string {
 func (r *SuspiciousExec) Doc() detection.Documentation {
 	return detection.Documentation{
 		Title:   "Suspicious exec chain (non-shell → shell → temp/network)",
-		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, exec's from /tmp or makes an outbound network connection.",
+		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.",
 		Description: "Detects two related chain shapes that share a single attribution chain:\n\n" +
 			"1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)\n" +
 			"2. non-shell parent → shell child → outbound network_connect\n\n" +

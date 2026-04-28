@@ -6,13 +6,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/detection"
 )
 
 // TestEveryRuleHasDocs is the gate that prevents shipping a new detection
 // rule without operator-facing documentation. detection.Rule.Doc() returns
 // a struct, so a rule can technically return the zero value — this test
-// catches that.
+// catches that. Severity is also gated to one of the documented constants
+// so a typo'd value (e.g. "urgent") fails the test instead of silently
+// producing a broken UI severity pill class name and a markdown reference
+// that disagrees with the rest of the codebase.
 func TestEveryRuleHasDocs(t *testing.T) {
+	allowedSeverities := map[string]struct{}{
+		detection.SeverityLow:      {},
+		detection.SeverityMedium:   {},
+		detection.SeverityHigh:     {},
+		detection.SeverityCritical: {},
+	}
 	for _, r := range allRegisteredRules() {
 		t.Run(r.ID(), func(t *testing.T) {
 			d := r.Doc()
@@ -20,6 +31,8 @@ func TestEveryRuleHasDocs(t *testing.T) {
 			assert.NotEmpty(t, d.Summary, "Doc().Summary must be set (one-line tooltip)")
 			assert.NotEmpty(t, d.Description, "Doc().Description must be set (long-form spec)")
 			assert.NotEmpty(t, d.Severity, "Doc().Severity must be set")
+			assert.Contains(t, allowedSeverities, d.Severity,
+				"Doc().Severity must be one of detection.SeverityLow|Medium|High|Critical")
 			assert.NotEmpty(t, d.EventTypes, "Doc().EventTypes must list at least one event type")
 		})
 	}

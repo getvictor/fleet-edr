@@ -7,9 +7,10 @@ import "./RuleDetail.scss";
 
 // RuleDetail renders a single detection rule's documentation: behaviour,
 // severity, ATT&CK mapping, configuration knobs, false-positive sources, and
-// limitations. Data comes from /api/v1/admin/rules — the same JSON the
-// markdown generator consumes — so this page can never drift from the
-// generated docs/detection-rules.md.
+// limitations. This page loads rule docs from /api/v1/admin/rules; the
+// markdown reference at docs/detection-rules.md is generated directly from
+// the same Go-side `detection.Rule.Doc()` definitions, so the two surfaces
+// stay aligned even though they don't share a fetch path.
 //
 // The /ui/coverage page links rule names here; if a future page lists alerts
 // with rule IDs they should link here too. Unknown :ruleId renders an empty
@@ -57,7 +58,7 @@ export function RuleDetail() {
   );
 }
 
-function RuleBody({ entry }: { entry: RuleDocEntry }) {
+function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
   const { doc, techniques } = entry;
   return (
     <div className="rule-detail">
@@ -74,8 +75,12 @@ function RuleBody({ entry }: { entry: RuleDocEntry }) {
             <td>
               {techniques.length === 0
                 ? <span className="rule-detail__muted">no mapping</span>
+                // Composite key (value + index) defends against an upstream
+                // API ever returning a duplicate technique ID by accident —
+                // React would otherwise reuse one DOM node for both entries
+                // and confuse its reconciler.
                 : techniques.map((t, i) => (
-                    <span key={t}>
+                    <span key={`${t}-${String(i)}`}>
                       {i > 0 && ", "}
                       <a
                         href={`https://attack.mitre.org/techniques/${t.replace(".", "/")}/`}
@@ -92,7 +97,7 @@ function RuleBody({ entry }: { entry: RuleDocEntry }) {
             <th scope="row">Event types</th>
             <td>
               {doc.event_types.map((t, i) => (
-                <span key={t}>
+                <span key={`${t}-${String(i)}`}>
                   {i > 0 && ", "}
                   <code>{t}</code>
                 </span>
@@ -104,10 +109,10 @@ function RuleBody({ entry }: { entry: RuleDocEntry }) {
 
       <h2>Description</h2>
       {/* Description is plain text from the Go side; we split on blank lines
-          so paragraphs render. Keying on a stable derivation of the entry
-          ID + paragraph index keeps React's reconciler happy without an
-          array-index lint warning, and is fine here because the paragraph
-          list is a deterministic function of the rule. */}
+          so paragraphs render. The .rule-detail__para class applies
+          `white-space: pre-line` so single newlines inside a paragraph
+          (e.g. the numbered list in suspicious_exec's description) survive
+          rather than collapsing the way HTML normally would. */}
       {doc.description.split("\n\n").map((para, i) => (
         <p key={`${entry.id}-p${String(i)}`} className="rule-detail__para">{para}</p>
       ))}
@@ -142,7 +147,7 @@ function RuleBody({ entry }: { entry: RuleDocEntry }) {
         <>
           <h2>Known false-positive sources</h2>
           <ul className="rule-detail__list">
-            {doc.false_positives.map((fp) => <li key={fp}>{fp}</li>)}
+            {doc.false_positives.map((fp, i) => <li key={`${fp}-${String(i)}`}>{fp}</li>)}
           </ul>
         </>
       )}
@@ -151,7 +156,7 @@ function RuleBody({ entry }: { entry: RuleDocEntry }) {
         <>
           <h2>Limitations</h2>
           <ul className="rule-detail__list">
-            {doc.limitations.map((l) => <li key={l}>{l}</li>)}
+            {doc.limitations.map((l, i) => <li key={`${l}-${String(i)}`}>{l}</li>)}
           </ul>
         </>
       )}
@@ -163,11 +168,22 @@ function RuleBody({ entry }: { entry: RuleDocEntry }) {
   );
 }
 
-// SeverityBadge picks a colour for the severity string. The four levels match
-// the constants in server/detection/rule.go; an unknown level falls back to
-// the neutral pill so a future fifth level renders something rather than
-// crashing.
-function SeverityBadge({ severity }: { severity: string }) {
-  const klass = `rule-detail__sev rule-detail__sev--${severity}`;
+// KNOWN_SEVERITIES gates which class-name modifier we generate so unexpected
+// upstream values cannot inject extra/empty CSS classes (Sonar
+// typescript:S6749 / S7924). Anything outside this allowlist falls back to
+// the unstyled neutral pill.
+const KNOWN_SEVERITIES = ["low", "medium", "high", "critical"] as const;
+type KnownSeverity = typeof KNOWN_SEVERITIES[number];
+function isKnownSeverity(s: string): s is KnownSeverity {
+  return (KNOWN_SEVERITIES as readonly string[]).includes(s);
+}
+
+// SeverityBadge picks a colour for the severity string. The four levels
+// match the constants in server/detection/rule.go; an unknown level falls
+// back to the neutral pill rather than producing a `rule-detail__sev--`
+// class with whitespace or arbitrary content.
+function SeverityBadge({ severity }: Readonly<{ severity: string }>) {
+  const variant = isKnownSeverity(severity) ? severity : "unknown";
+  const klass = `rule-detail__sev rule-detail__sev--${variant}`;
   return <span className={klass}>{severity}</span>;
 }

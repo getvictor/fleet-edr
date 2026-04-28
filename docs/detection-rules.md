@@ -27,7 +27,7 @@ Hand-edits to this file get overwritten on the next regeneration.
 ## suspicious_exec
 
 **Suspicious exec chain (non-shell → shell → temp/network)**  
-Flags a non-shell process that spawns a shell which, within 30 seconds, exec's from /tmp or makes an outbound network connection.
+Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.
 
 | | |
 | --- | --- |
@@ -219,7 +219,7 @@ Flags a non-platform-binary write to any *.plist directly under /Library/LaunchD
 | Rule ID | `privilege_launchd_plist_write` |
 | Severity | `high` |
 | ATT&CK | [`T1543.004`](https://attack.mitre.org/techniques/T1543/004/) |
-| Event types | `open_write` |
+| Event types | `open` |
 
 ### Description
 
@@ -255,7 +255,7 @@ Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in 
 | Rule ID | `sudoers_tamper` |
 | Severity | `high` |
 | ATT&CK | [`T1548.003`](https://attack.mitre.org/techniques/T1548/003/) |
-| Event types | `open_write` |
+| Event types | `open` |
 
 ### Description
 

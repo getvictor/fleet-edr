@@ -20,24 +20,14 @@ import (
 	"github.com/fleetdm/edr/server/detection/rules"
 )
 
-// allRegisteredRules mirrors the registration list in
-// server/cmd/fleet-edr-server/main.go. We intentionally instantiate with EMPTY
-// allowlists here — the documentation is not a function of a particular
-// deployment's tuning, it documents the shape of the knob.
-//
-// Order matches main.go so the generated markdown lists rules in the same
-// order they fire at runtime.
+// allRegisteredRules delegates to rules.All so the docs generator and the
+// production server's main.go are guaranteed to walk the same set of rules
+// in the same order. Documentation is not a function of a particular
+// deployment's tuning, so we pass the zero value of RegistryOptions —
+// allowlists default to empty, which is what the rule structs treat as
+// "no operator tuning yet."
 func allRegisteredRules() []detection.Rule {
-	return []detection.Rule{
-		&rules.SuspiciousExec{},
-		&rules.PersistenceLaunchAgent{},
-		&rules.DyldInsert{},
-		&rules.ShellFromOffice{},
-		&rules.OsascriptNetworkExec{},
-		&rules.CredentialKeychainDump{},
-		&rules.PrivilegeLaunchdPlistWrite{},
-		&rules.SudoersTamper{},
-	}
+	return rules.All(rules.RegistryOptions{})
 }
 
 func main() {
@@ -79,7 +69,7 @@ func render(w io.Writer, rs []detection.Rule) error {
 	b.WriteString("```\n\n")
 	b.WriteString("Hand-edits to this file get overwritten on the next regeneration.\n\n")
 
-	// Index — operators jumping in from a CVE or alert title want a fast\n
+	// Index — operators jumping in from a CVE or alert title want a fast
 	// lookup. ID is what shows up in alert rows; title is the friendly name.
 	b.WriteString("## Index\n\n")
 	b.WriteString("| Rule ID | Title | Severity | ATT&CK |\n")
@@ -87,7 +77,9 @@ func render(w io.Writer, rs []detection.Rule) error {
 	for _, r := range rs {
 		d := r.Doc()
 		fmt.Fprintf(&b, "| [`%s`](#%s) | %s | %s | %s |\n",
-			r.ID(), anchor(r.ID()), d.Title, d.Severity, strings.Join(r.Techniques(), ", "))
+			r.ID(), anchor(r.ID()),
+			mdCell(d.Title), mdCell(d.Severity),
+			mdCell(strings.Join(r.Techniques(), ", ")))
 	}
 	b.WriteString("\n")
 
@@ -99,64 +91,89 @@ func render(w io.Writer, rs []detection.Rule) error {
 	return err
 }
 
+// writeRule is intentionally a thin sequencer over per-section helpers so
+// each helper stays trivially testable and the whole function stays under
+// the project cognitive-complexity cap (Sonar go:S3776). Adding a new
+// section means adding a new helper + a single Fprintf-style call here.
 func writeRule(b *strings.Builder, r detection.Rule) {
 	d := r.Doc()
 	id := r.ID()
+	writeRuleHeading(b, id, d)
+	writeRuleMeta(b, id, d, r.Techniques())
+	writeRuleDescription(b, d)
+	writeRuleConfig(b, d.Config)
+	writeRuleBulletSection(b, "Known false-positive sources", d.FalsePositives)
+	writeRuleBulletSection(b, "Limitations", d.Limitations)
+}
 
+func writeRuleHeading(b *strings.Builder, id string, d detection.Documentation) {
 	fmt.Fprintf(b, "## %s\n\n", id)
 	fmt.Fprintf(b, "**%s**  \n", d.Title)
 	if d.Summary != "" {
 		fmt.Fprintf(b, "%s\n\n", d.Summary)
 	}
+}
 
+func writeRuleMeta(b *strings.Builder, id string, d detection.Documentation, techs []string) {
 	b.WriteString("| | |\n| --- | --- |\n")
 	fmt.Fprintf(b, "| Rule ID | `%s` |\n", id)
 	fmt.Fprintf(b, "| Severity | `%s` |\n", d.Severity)
-	if techs := r.Techniques(); len(techs) > 0 {
+	if len(techs) > 0 {
 		fmt.Fprintf(b, "| ATT&CK | %s |\n", joinTechniqueLinks(techs))
 	}
 	if len(d.EventTypes) > 0 {
 		fmt.Fprintf(b, "| Event types | %s |\n", joinCode(d.EventTypes))
 	}
 	b.WriteString("\n")
+}
 
-	if d.Description != "" {
-		b.WriteString("### Description\n\n")
-		b.WriteString(d.Description)
-		b.WriteString("\n\n")
+func writeRuleDescription(b *strings.Builder, d detection.Documentation) {
+	if d.Description == "" {
+		return
 	}
+	b.WriteString("### Description\n\n")
+	b.WriteString(d.Description)
+	b.WriteString("\n\n")
+}
 
-	if len(d.Config) > 0 {
-		b.WriteString("### Configuration\n\n")
-		b.WriteString("| Env var | Type | Default | Description |\n")
-		b.WriteString("| --- | --- | --- | --- |\n")
-		for _, c := range d.Config {
-			def := c.Default
-			if def == "" {
-				def = "_(unset)_"
-			} else {
-				def = "`" + def + "`"
-			}
-			fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n", c.EnvVar, c.Type, def, c.Description)
+func writeRuleConfig(b *strings.Builder, knobs []detection.ConfigKnob) {
+	if len(knobs) == 0 {
+		return
+	}
+	b.WriteString("### Configuration\n\n")
+	b.WriteString("| Env var | Type | Default | Description |\n")
+	b.WriteString("| --- | --- | --- | --- |\n")
+	for _, c := range knobs {
+		def := "_(unset)_"
+		if c.Default != "" {
+			def = "`" + c.Default + "`"
 		}
-		b.WriteString("\n")
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n", c.EnvVar, c.Type, def, mdCell(c.Description))
 	}
+	b.WriteString("\n")
+}
 
-	if len(d.FalsePositives) > 0 {
-		b.WriteString("### Known false-positive sources\n\n")
-		for _, fp := range d.FalsePositives {
-			fmt.Fprintf(b, "- %s\n", fp)
-		}
-		b.WriteString("\n")
+func writeRuleBulletSection(b *strings.Builder, heading string, items []string) {
+	if len(items) == 0 {
+		return
 	}
+	fmt.Fprintf(b, "### %s\n\n", heading)
+	for _, it := range items {
+		fmt.Fprintf(b, "- %s\n", it)
+	}
+	b.WriteString("\n")
+}
 
-	if len(d.Limitations) > 0 {
-		b.WriteString("### Limitations\n\n")
-		for _, l := range d.Limitations {
-			fmt.Fprintf(b, "- %s\n", l)
-		}
-		b.WriteString("\n")
-	}
+// mdCell escapes a string for safe insertion into a markdown table cell.
+// Pipes have to be backslash-escaped or they end the column; newlines
+// have to become <br> or they break the row. Today's Doc() values are
+// well-behaved, but a future operator who pastes a paragraph containing
+// either character into a Description should not silently corrupt the
+// generated markdown.
+func mdCell(s string) string {
+	s = strings.ReplaceAll(s, "|", `\|`)
+	s = strings.ReplaceAll(s, "\n", "<br>")
+	return s
 }
 
 // anchor produces the GitHub-flavoured-markdown anchor slug for a heading.
