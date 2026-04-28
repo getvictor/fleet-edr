@@ -292,8 +292,8 @@ tasks:
     desc: |
       Build a signed + notarized .pkg locally. Requires Developer ID
       Application + Installer certs installed in the login keychain and
-      the APPLE_* env vars set (see claude/mvp/phase-5-apple-signing-setup.md).
-      For routine releases, push a v* tag instead and let CI do this.
+      the APPLE_* env vars set. For routine releases, push a v* tag
+      instead and let CI do this.
     vars:
       TAG: '{{.TAG}}'
     # Separate preconditions per env var so each missing one reports itself.

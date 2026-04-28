@@ -32,6 +32,29 @@
   flex-wrap: wrap;
 }
 
+// The "Add path" / "Add hash" inputs need to fit a real macOS bundle path
+// without truncating mid-cell — the canonical example
+// `/System/Applications/Calculator.app/Contents/MacOS/Calculator` is 62
+// characters, and SHA-256 hashes are 64 hex chars. Force the wrapping
+// .field to grow into the form's available width and the underlying
+// input to render at least the full canonical path before flex shrinks
+// it on narrow viewports.
+.policy-add-row {
+  .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .field__input {
+    width: 100%;
+    // Cap the floor at the viewport width so the input doesn't force a
+    // horizontal scrollbar on narrow layouts (Copilot review on PR #59).
+    // On any normal desktop the 64ch ceiling wins and the canonical macOS
+    // bundle path / 64-char hash fit end-to-end without truncating.
+    min-width: min(64ch, 100%);
+  }
+}
+
 .policy-meta {
   color: $ui-fleet-black-50;
   font-size: 0.85em;

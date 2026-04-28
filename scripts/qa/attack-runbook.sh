@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-7 dogfood attack runbook (issue: claude/mvp/phase-7-pilot-hardening.md E1).
+# Phase-7 dogfood attack runbook (Track E1).
 #
 # What this is
 # ============

@@ -8,7 +8,7 @@
 # The macos-pkg job is gated on the `release-signing` environment so the
 # Developer ID certs + notarytool credentials only decrypt when this workflow
 # runs against an allowed tag. Branch protection on the environment must list
-# `v*` as the only allowed ref (see claude/mvp/phase-5-apple-signing-setup.md).
+# `v*` as the only allowed ref.
 
 name: release
 

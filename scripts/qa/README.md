@@ -1,7 +1,6 @@
 # Phase-7 dogfood QA scripts
 
-Four scripts plus this README make up the Phase-7 dogfood QA harness
-(plan reference: `claude/mvp/phase-7-pilot-hardening.md` Track E).
+Four scripts plus this README make up the Phase-7 dogfood QA harness.
 Each script is self-contained and runnable from this workstation; the
 work happens via `ssh` to the dev VM.
 
@@ -74,18 +73,14 @@ across the round-trip).
 
 ## Filing the QA report
 
-After running the suite, capture the results in
-`claude/mvp/phase-7-qa-YYYY-MM-DD.md` following the Phase 5 template.
-The report should record:
+After running the suite, capture the results so the Phase-7
+acceptance deliverable has a paper trail. The report should record:
 
 - Per-milestone PASS / FAIL with one-line evidence.
 - Any deviations (e.g. E3 `--short` because the operator was iterating).
 - Anything observed that wasn't in the plan: stale alerts, log
   warnings, UI glitches.
 - Open issues to file before pilot ship-go.
-
-The report is the gating Phase-7 acceptance deliverable
-(`claude/mvp/phase-7-pilot-hardening.md` E5).
 
 ## Known gaps the scripts surface
 
