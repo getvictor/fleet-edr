@@ -63,3 +63,18 @@ func TestNilRecorder_QueueDropped_Safe(t *testing.T) {
 		r.QueueDropped(context.Background(), 1, false)
 	})
 }
+
+// TestNew exercises the production constructor that wires the global OTel meter,
+// covering the path that the agent main package takes at startup. We can't
+// inspect the resulting counter through the global meter without leaking state
+// across tests, so we just verify the Recorder is shaped correctly and that
+// recording against it does not panic — the no-op SDK swallows the sample when
+// no OTLP endpoint is configured.
+func TestNew(t *testing.T) {
+	r := New()
+	require.NotNil(t, r)
+	require.NotNil(t, r.queueDropped)
+	assert.NotPanics(t, func() {
+		r.QueueDropped(context.Background(), 7, true)
+	})
+}

@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -120,4 +121,61 @@ func TestProcessOnceBatchLimit(t *testing.T) {
 	count, err = s.CountUnprocessed(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), count, "all events should be processed after second batch")
+}
+
+// TestNewWithNilLoggerUsesDefault locks in the constructor's nil-logger
+// fallback so callers (e.g. main wiring) can pass nil during tests or when no
+// logger has been configured yet, and still get a valid Processor.
+func TestNewWithNilLoggerUsesDefault(t *testing.T) {
+	s := store.OpenTestStore(t)
+	builder := graph.NewBuilder(s, slog.Default())
+	proc := New(s, builder, nil, nil, time.Second, 500)
+	require.NotNil(t, proc)
+	require.NotNil(t, proc.logger)
+}
+
+// TestRunStopsOnContextCancel proves the ticker loop actually returns when its
+// context is cancelled — without this we'd never cover the `<-ctx.Done()`
+// branch that the agent main relies on for clean shutdown.
+func TestRunStopsOnContextCancel(t *testing.T) {
+	s := store.OpenTestStore(t)
+	builder := graph.NewBuilder(s, slog.Default())
+	proc := New(s, builder, nil, slog.Default(), 50*time.Millisecond, 500)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- proc.Run(ctx) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after context cancel")
+	}
+}
+
+// TestRunDrainsViaTicker covers the `<-ticker.C` case in the Run loop. We use
+// a very short interval and a context that lives just long enough for the
+// ticker to fire at least once with an event already inserted.
+func TestRunDrainsViaTicker(t *testing.T) {
+	s := store.OpenTestStore(t)
+	builder := graph.NewBuilder(s, slog.Default())
+	proc := New(s, builder, nil, slog.Default(), 10*time.Millisecond, 500)
+
+	require.NoError(t, s.InsertEvents(t.Context(), []store.Event{{
+		EventID: "run-fork", HostID: "host-run", TimestampNs: 1000,
+		EventType: "fork",
+		Payload:   json.RawMessage(`{"child_pid": 300, "parent_pid": 1}`),
+	}}))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	require.NoError(t, proc.Run(ctx))
+
+	count, err := s.CountUnprocessed(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, count, "ticker-driven Run should have processed the inserted event")
 }

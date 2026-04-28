@@ -1,6 +1,9 @@
 package hostid
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -53,4 +56,56 @@ func TestParseIORegOutput(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestGet_FromFakeIOReg drives the Get() shell-out path. Real ioreg only runs
+// on macOS and emits non-deterministic data, so we point ioregPath at a tiny
+// shell wrapper that prints a known IOPlatformUUID line. This is the only way
+// to cover the success path of Get without making the test host-dependent.
+func TestGet_FromFakeIOReg(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-ioreg.sh")
+	body := "#!/bin/sh\ncat <<'EOF'\n  \"IOPlatformUUID\" = \"FAKE-UUID-1234\"\nEOF\n"
+	require.NoError(t, os.WriteFile(script, []byte(body), 0o600))
+	// Test fixture: needs the executable bit so exec.CommandContext can run it.
+	// The file lives only under t.TempDir(), wiped at the end of the test.
+	require.NoError(t, os.Chmod(script, 0o700)) //nolint:gosec // exec bit required
+
+	orig := ioregPath
+	ioregPath = script
+	t.Cleanup(func() { ioregPath = orig })
+
+	got, err := Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "FAKE-UUID-1234", got)
+}
+
+// TestGet_ExecError exercises the failure-wrapping branch when ioreg cannot be
+// launched at all (missing binary). The error must mention "run ioreg" so log
+// readers can diagnose.
+func TestGet_ExecError(t *testing.T) {
+	orig := ioregPath
+	ioregPath = filepath.Join(t.TempDir(), "does-not-exist")
+	t.Cleanup(func() { ioregPath = orig })
+
+	_, err := Get(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run ioreg")
+}
+
+// TestGet_NoUUIDInOutput covers the case where ioreg ran but its output is
+// missing the IOPlatformUUID line — Get bubbles up the parse error verbatim.
+func TestGet_NoUUIDInOutput(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-ioreg-empty.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\necho 'no uuid here'\n"), 0o600))
+	require.NoError(t, os.Chmod(script, 0o700)) //nolint:gosec // exec bit required, file in t.TempDir
+
+	orig := ioregPath
+	ioregPath = script
+	t.Cleanup(func() { ioregPath = orig })
+
+	_, err := Get(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "IOPlatformUUID not found")
 }
