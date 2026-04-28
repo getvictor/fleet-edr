@@ -222,6 +222,9 @@ func FuzzAllowlist(f *testing.F) {
 		" /a , /b ,, /c ,",
 		"\t\n",
 		",,,",
+		"\u00a0/a,\u00a0/b\u00a0",     // non-breaking spaces; strings.TrimSpace must strip them
+		"\u2003/a,\u2002/b",           // em + en spaces
+		"\u2028/a\u2029,\u00a0/b\t/c", // line + paragraph separators interleaved with tabs
 	} {
 		f.Add(seed)
 	}

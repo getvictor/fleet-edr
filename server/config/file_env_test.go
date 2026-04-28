@@ -72,16 +72,20 @@ func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
 
 // TestFileBackedGetenv_NilLoggerUsesDefault locks in the safe-fallback path so
 // callers (e.g. early bootstrap code that hasn't built a logger yet) can pass
-// nil and still get a working decorator.
+// nil and still get a working decorator. Drives the missing-_FILE branch
+// specifically — that branch is the only one that exercises the nil-logger
+// fallback (`logger.WarnContext` would panic on a nil logger if the fallback
+// weren't applied), so a regression there must be observable in this test.
 func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
 	base := func(k string) string {
-		if k == "EDR_ENROLL_SECRET" {
-			return "direct"
+		if k == "EDR_ENROLL_SECRET_FILE" {
+			return filepath.Join(t.TempDir(), "missing")
 		}
 		return ""
 	}
 	get := fileBackedGetenv(base, nil)
-	assert.Equal(t, "direct", get("EDR_ENROLL_SECRET"))
+	assert.NotPanics(t, func() { _ = get("EDR_ENROLL_SECRET") })
+	assert.Empty(t, get("EDR_ENROLL_SECRET"))
 }
 
 // TestWriteSecretFile drives the small helper that compose-fixture tests use to

@@ -31,6 +31,12 @@ jobs:
       # Scorecard's Pinned-Dependencies check flags as `downloadThenRun`). The
       # tarball + checksum are published per release on the rhysd/actionlint
       # repo; Dependabot's github-actions ecosystem keeps this version current.
+      #
+      # `--proto =https` rejects any redirect to a non-HTTPS scheme, closing
+      # the Sonar `githubactions:S6506` "redirection to insecure website"
+      # hotspot. We install into `$HOME/.local/bin` and prepend it to
+      # `$GITHUB_PATH` so the step works under the unprivileged `runner`
+      # user without sudo (Copilot review on PR #55).
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"
@@ -38,11 +44,14 @@ jobs:
         run: |
           set -euo pipefail
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 3 -o "$tarball" \
+          curl -fsSL --proto '=https' --retry 3 -o "$tarball" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
-          install -m 0755 actionlint /usr/local/bin/actionlint
+          bindir="$HOME/.local/bin"
+          mkdir -p "$bindir"
+          install -m 0755 actionlint "$bindir/actionlint"
+          echo "$bindir" >> "$GITHUB_PATH"
 
       - name: Run actionlint
         run: actionlint
