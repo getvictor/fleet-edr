@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-7 dogfood QA E4: uninstaller round-trip.
+# Pre-pilot dogfood QA: uninstaller round-trip.
 #
 # What it proves: the bundled `uninstall.sh` tears down everything
 # the .pkg installed and the runtime state under /var/db, deactivates

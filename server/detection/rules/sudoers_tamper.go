@@ -72,7 +72,7 @@ func (r *SudoersTamper) Doc() detection.Documentation {
 			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Allowlist their absolute writer paths.",
 		},
 		Limitations: []string{
-			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked for Phase 8.",
+			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
 		},
 		Config: []detection.ConfigKnob{
 			{

@@ -51,7 +51,7 @@ func (r *DyldInsert) Doc() detection.Documentation {
 			"Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch — investigate why an admin script is setting these vars at all.",
 		},
 		Limitations: []string{
-			"Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked in Phase 4.",
+			"Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.",
 			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched — higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.",
 		},
 	}

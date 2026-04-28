@@ -212,7 +212,7 @@ floor for any project that wants enterprise adoption.
 - [x] **Test-coverage thresholds** uploaded to SonarCloud. Both Go and TS coverage
   reports flow through (`sonar.go.coverage.reportPaths`,
   `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to
-  ≥80% and applies per PR. C7 deliverable
+  ≥80% and applies per PR.
 - [ ] **Codecov / Coveralls** with PR comments and coverage diff
 - [ ] **`go vet -vettool=fieldalignment`** -- catches struct padding waste in hot structs
 - [x] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
@@ -256,8 +256,7 @@ floor for any project that wants enterprise adoption.
 - [ ] **Mutation-testing baseline** to catch over-mocked tests
 - [x] **Test coverage measured** via SonarCloud (Go via
   `sonar.go.coverage.reportPaths`, UI via
-  `sonar.javascript.lcov.reportPaths`). C7 deliverable; see §5 for the
-  per-PR ≥80% gate.
+  `sonar.javascript.lcov.reportPaths`). See §5 for the per-PR ≥80% gate.
 - [ ] **Smoke test against macOS VM** in CI (the SIP-disabled VM exists locally; could be
   scripted into a self-hosted runner)
 
@@ -583,13 +582,18 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | macOS platform hygiene            | 6       | 12    | 50%  |
 | AI-assisted engineering           | 2       | 17    | 12%  |
 
-Phase-7 supply-chain track shipped Sigstore signing (C4), SBOMs (C5), SLSA build
-provenance (C6, level 2 due to Apple notarization), Scorecard (C2), OSV-Scanner
-(C3), and a real SonarCloud coverage gate (C7). That moved §4 from 37% → 57% and
-§5 from 59% → 64%. D1 hosted Redoc at `/api/docs` and added Redocly OpenAPI lint,
-moving §8 from 25% → 34%. The remaining big gaps that buyers ask about are
-LICENSE / SECURITY.md / CONTRIBUTING.md (Phase 7b — user-gated on license
-choice), the detection-content surface (ATT&CK mapping is in via B1 but Sigma /
-YARA / IOC management still wait for v1.1), and the AI-era hygiene that
-enterprise procurement is starting to ask for (CISA Secure by Design, OWASP LLM
-Top 10, AI provenance policy).
+The supply-chain hardening track shipped Sigstore signing (cosign keyless
+on every release artifact), CycloneDX + SPDX SBOMs, SLSA build provenance
+at level 2 (Apple notarization breaks L3's hermeticity requirement),
+OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck.
+A real SonarCloud coverage gate (≥80% on new code, per PR) closed the
+last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59%
+to 64%. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job
+moved §8 from 25% to 34%.
+
+The remaining big gaps that buyers ask about are CONTRIBUTING.md and the
+rest of the §12 community-signals checklist (now unblocked because
+LICENSE has shipped), the detection-content surface (ATT&CK mapping is
+wired but Sigma / YARA / IOC management still wait for v1.1), and the
+AI-era hygiene that enterprise procurement is starting to ask for (CISA
+Secure by Design, OWASP LLM Top 10, AI provenance policy).

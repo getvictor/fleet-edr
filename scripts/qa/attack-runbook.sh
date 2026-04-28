@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-7 dogfood attack runbook (Track E1).
+# Pre-pilot dogfood attack runbook.
 #
 # What this is
 # ============
@@ -112,8 +112,7 @@ step_suspicious_exec() {
   # explicitly skips shell→shell→/tmp chains (suspicious_exec.go:110), so
   # we cannot just call `/bin/sh -c "$payload"` from this bash script —
   # the runbook's bash would be the shell parent and the alert would
-  # never fire. Use python3 as a non-shell launcher (the canonical
-  # example in the Phase-7 plan) so the chain becomes
+  # never fire. Use python3 as a non-shell launcher so the chain becomes
   # python3 → /bin/sh → /tmp/synthetic_payload.
   local payload="$WORKDIR/synthetic_payload"
   # Pre-create the file at mode 0700 in one step; the subsequent `cat >`
@@ -326,7 +325,7 @@ USAGE
 
 main() {
   parse_args "$@"
-  echo "[runbook] Fleet EDR Phase-7 synthetic attacker — $(date -u)"
+  echo "[runbook] Fleet EDR synthetic attacker — $(date -u)"
   echo "[runbook] working dir: $WORKDIR"
   if [[ "$PACE_SECONDS" -gt 0 ]]; then
     echo "[runbook] live-demo pacing: ${PACE_SECONDS}s between steps"

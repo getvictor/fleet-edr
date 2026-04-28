@@ -274,7 +274,7 @@ tasks:
       is tracked as future work.
     deps: [build]
 
-  # -------- Phase 5 packaging --------
+  # -------- packaging --------
 
   pkg:dryrun:
     desc: |

@@ -102,6 +102,6 @@ There is no Prometheus scrape endpoint.
 - No horizontal scaling of the server instance yet. A second replica would
   need a shared enroll-secret rotation mechanism (currently each replica
   reads its own secret file) and a sticky session or shared cookie store.
-  Phase 7+ consideration.
+  Tracked as future work for the post-MVP scaling story.
 - No automatic backup of `edr-mysql-data`. Operators run their own
   `mysqldump` or volume snapshot schedule.
