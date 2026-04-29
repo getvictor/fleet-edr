@@ -57,36 +57,58 @@ response which emails correspond to real accounts, while still recording the dis
 - **THEN** the server responds 401 with the same generic invalid-credentials error as for an unknown email
 - **AND** the audit log records that the password did not match
 
-### Requirement: Passwords are stored as salted hashes
+### Requirement: Passwords are stored as argon2id hashes
 
-The system SHALL persist user passwords as salted password hashes and SHALL verify the presented password by recomputing
-the hash; the system SHALL NOT store plaintext passwords or reversibly encrypted passwords.
+The system SHALL persist user passwords as argon2id hashes computed with time cost 3, memory cost 64 MiB, parallelism 4,
+and a 32-byte derived key, using a fresh 16-byte random salt per password. The system SHALL verify the presented password
+by recomputing argon2id with the stored salt under those same parameters and comparing the result to the stored hash with
+a constant-time equality check. The system SHALL NOT store plaintext passwords or reversibly encrypted passwords.
 
 #### Scenario: Password verification
 
-- **GIVEN** an operator has an account with a stored password hash and salt
+- **GIVEN** an operator has an account with a stored argon2id hash and 16-byte salt
 - **WHEN** the operator logs in with the correct password
-- **THEN** the recomputed hash matches the stored hash under a constant-time comparison
+- **THEN** argon2id is recomputed with the stored salt under the project's parameter set
+- **AND** the result matches the stored hash under a constant-time equality check
 - **AND** the login succeeds
+
+#### Scenario: Wrong password takes the same CPU cost as a correct one
+
+- **GIVEN** an operator presents a known email with a wrong password
+- **WHEN** the verification path runs
+- **THEN** argon2id is computed under the same parameter set as a successful verification
+- **AND** the per-request CPU cost is comparable to a successful login so that timing does not leak whether the password
+  was the cause of the failure
 
 ### Requirement: Initial operator account is bootstrapped at first startup
 
-The system SHALL ensure a single operator account exists when the server starts with an empty users table, generating a
-strong password if no human-set credential is configured, and SHALL surface that password to the operator exactly once.
+The system SHALL ensure a single operator account exists when the server starts with an empty users table by generating a
+random password and SHALL surface that password to the operator exactly once on the standard error stream. The system
+SHALL NOT consult any environment variable to set the seeded password; the password is always randomly generated. The
+seeded account uses a fixed well-known email so the operator knows where to log in. There is no in-product
+password-reset flow; the documented recovery path when the password is lost is to delete the user row and restart the
+server, which re-runs the seeder.
 
 #### Scenario: First-startup seed
 
 - **GIVEN** the server starts and the users table is empty
 - **WHEN** initialization runs
-- **THEN** exactly one operator account is created with a high-entropy generated password
-- **AND** the generated password is written to the server's standard error stream once for the operator to capture
-- **AND** the password is not written to the structured log
+- **THEN** exactly one operator account is created with the well-known seed email
+- **AND** a fresh password equivalent to 24 random bytes (about 192 bits of entropy) is generated and base64url-encoded
+- **AND** a banner containing the email and password is written to the standard error stream as a single write
+- **AND** the password does not appear in the structured log; only the seed event with the user id and email is logged
 
 #### Scenario: Restart with an existing operator
 
 - **GIVEN** the users table already contains at least one row
 - **WHEN** the server starts
 - **THEN** no new account is created and no banner is emitted
+
+#### Scenario: Recovery after a lost password
+
+- **GIVEN** the captured seed banner has been lost and the operator cannot log in
+- **WHEN** the operator deletes the seeded row from the users table and restarts the server
+- **THEN** the seeder runs again and a new banner with a new password is written to the standard error stream
 
 ### Requirement: GET requests authenticate by cookie alone
 
@@ -184,6 +206,27 @@ operators can detect brute-force patterns.
 - **WHEN** the response is sent
 - **THEN** an audit log line is emitted including the source IP, the presented email, and a typed reason
 - **AND** the audit line does not include the presented password
+
+### Requirement: Sessions expire 12 hours after issue
+
+The system SHALL set the session lifetime to exactly 12 hours from the moment the session row is created. The cookie's
+`Expires` and `Max-Age` attributes MUST reflect that 12-hour window so the browser stops sending the cookie after it
+elapses, and the server-side row MUST be treated as expired once 12 hours have passed even if the browser does send the
+cookie. After expiry the operator must re-authenticate; expired sessions are not silently extended on use.
+
+#### Scenario: Cookie carries a 12-hour expiry on login
+
+- **GIVEN** the operator logs in successfully
+- **WHEN** the response sets the session cookie
+- **THEN** the cookie's `Expires` attribute is exactly 12 hours after the issue time
+- **AND** the cookie's `Max-Age` attribute reflects the same 12-hour window in seconds
+
+#### Scenario: A request after the 12-hour window is rejected
+
+- **GIVEN** a session cookie that was issued more than 12 hours ago
+- **WHEN** the client uses that cookie on any session-required endpoint
+- **THEN** the server treats the session as expired and returns 401
+- **AND** the request is not authenticated as the original operator
 
 ### Requirement: Session cookie is HTTP-only and same-site
 

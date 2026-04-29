@@ -13,25 +13,28 @@ OTLP collector remain functional.
 
 ## Requirements
 
-### Requirement: OTLP export is opt-in via environment
+### Requirement: OTLP export is opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`
 
-The system SHALL export traces, metrics, and logs over OTLP/gRPC when the OTLP endpoint environment variable is set, and SHALL
-treat all instrumentation as a no-op when the variable is unset. With the variable unset, every counter add, histogram record,
-and observable-gauge callback MUST succeed silently and the process MUST start, run, and shut down without contacting any
-collector.
+The system SHALL export traces, metrics, and logs over OTLP when the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable
+is non-empty, and SHALL treat all instrumentation as a no-op when that variable is empty or unset. The system reads
+`OTEL_EXPORTER_OTLP_ENDPOINT` directly (the OpenTelemetry SDK convention) rather than introducing an EDR-specific name,
+so any standard OTel-aware collector configuration documented for other services applies here. With the variable
+unset, every counter add, histogram record, and observable-gauge callback MUST succeed silently and the process MUST
+start, run, and shut down without contacting any collector.
 
-#### Scenario: No OTLP endpoint configured
+#### Scenario: `OTEL_EXPORTER_OTLP_ENDPOINT` is unset
 
-- **GIVEN** the server starts with the OTLP endpoint variable unset
+- **GIVEN** the server starts with `OTEL_EXPORTER_OTLP_ENDPOINT` empty or unset
 - **WHEN** instrumentation code increments counters, records histograms, and writes structured logs
 - **THEN** the server runs normally and no telemetry is exported
 - **AND** the server's shutdown hook completes without errors related to telemetry export
 
-#### Scenario: OTLP endpoint configured
+#### Scenario: `OTEL_EXPORTER_OTLP_ENDPOINT` points at a collector
 
-- **GIVEN** the server starts with the OTLP endpoint variable pointing at a reachable collector
+- **GIVEN** the server starts with `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at a reachable collector
 - **WHEN** instrumentation code emits telemetry
-- **THEN** traces, metrics, and logs are exported to the configured collector via OTLP/gRPC
+- **THEN** traces, metrics, and logs are exported to the configured collector via OTLP using the protocol selected by the
+  standard OpenTelemetry SDK environment variables
 
 ### Requirement: Stable counter names
 

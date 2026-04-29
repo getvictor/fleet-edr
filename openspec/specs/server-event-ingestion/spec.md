@@ -64,15 +64,23 @@ A compromised or misbehaving agent MUST NOT be able to submit events that claim 
 
 ### Requirement: Body size limit
 
-The system SHALL enforce a maximum request body size of 10 MB on `POST /api/v1/events`. Bodies that exceed the limit MUST
-be rejected before any parsing or persistence occurs.
+The system SHALL cap the bytes it reads from the request body of `POST /api/v1/events` at 10 MB. Bodies that exceed the
+cap MUST result in HTTP 400 with a typed body-read diagnostic, and no events from that batch are persisted. A well-
+behaved agent is expected to split larger telemetry into multiple batches under the cap rather than rely on the server
+to reject oversized bodies.
 
 #### Scenario: An oversized request body is rejected
 
 - **GIVEN** an authenticated agent
 - **WHEN** the request body exceeds 10 MB
-- **THEN** the system responds with an error status (HTTP 413 or HTTP 400 with a body-too-large diagnostic)
+- **THEN** the system responds with HTTP 400 and a typed body-read diagnostic
 - **AND** no events from that batch are persisted
+
+#### Scenario: A right-at-cap body is accepted
+
+- **GIVEN** an authenticated agent submitting a JSON array whose serialized length is at or below 10 MB
+- **WHEN** the batch is otherwise well-formed
+- **THEN** the system reads the entire body, validates and persists every event, and returns HTTP 200
 
 ### Requirement: Idempotent submission by event_id
 
