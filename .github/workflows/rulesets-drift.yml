@@ -1,0 +1,156 @@
+name: Rulesets drift check
+
+# OPT-IN. Diffs every committed `.github/rulesets/*.json` against the
+# live ruleset of the same `name` on GitHub. The Repository Rulesets
+# read API requires a token with `Repository administration: Read`,
+# which the workflow's GITHUB_TOKEN cannot grant. Without a PAT the
+# workflow short-circuits with a setup notice rather than failing.
+#
+# To enable:
+#   1. Create a fine-grained PAT scoped to this repository only, with
+#      `Repository administration: Read` (no other permissions). Set
+#      a 1-year expiration. Same constraint that drives OpenSSF
+#      Scorecard's branch-protection check; if you set a PAT for
+#      Scorecard, you can reuse it here.
+#   2. Create a GitHub Environment named `rulesets-drift` and store
+#      the PAT there as `RULESETS_READ_PAT`. Using an environment
+#      (instead of a plain repo secret) lets you restrict which refs
+#      can access the token. Match the pattern already used for the
+#      `release-signing` and `sonarcloud` environments in this repo.
+#   3. Re-run this workflow via the Actions tab. From here on it'll
+#      run on every PR that touches `.github/rulesets/**`, on every
+#      push to `main`, and weekly on a schedule.
+#
+# When this fails, either:
+#   (a) somebody clicked around in the UI without updating the JSON.
+#       Reapply the JSON via:
+#         gh api -X PUT /repos/${OWNER}/${REPO}/rulesets/<id> \
+#           --input .github/rulesets/<file>.json
+#   (b) the JSON in the PR is the intended new shape. Apply it the
+#       same way and re-run; once live state matches, the job passes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/rulesets/**"
+      - ".github/workflows/rulesets-drift.yml"
+  pull_request:
+    paths:
+      - ".github/rulesets/**"
+      - ".github/workflows/rulesets-drift.yml"
+  schedule:
+    # Weekly drift sweep at a quiet hour. Catches changes made in the
+    # GitHub UI between PR-driven runs.
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: Diff committed rulesets vs live
+    runs-on: ubuntu-latest
+    environment: rulesets-drift
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Diff each committed ruleset against live state
+        env:
+          GH_TOKEN: ${{ secrets.RULESETS_READ_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::notice::RULESETS_READ_PAT secret is not set; skipping drift check."
+            echo "::notice::See the header comment in this workflow file for setup."
+            exit 0
+          fi
+
+          # Server-generated fields that don't exist in the request body.
+          # Stripped on both sides before the diff so the comparison is
+          # apples-to-apples.
+          STRIP='del(.id, .source, .source_type, .node_id, .created_at, .updated_at, ._links, .current_user_can_bypass)'
+          # Order-independent comparison for arrays whose elements have
+          # no inherent ordering. `rules` is keyed by .type;
+          # bypass_actors by (.actor_id, .actor_type). Inside a
+          # required_status_checks rule, GitHub may attach an
+          # integration_id per check (e.g. when the source app is
+          # known); strip those and sort by .context so a server-side
+          # integration_id annotation doesn't masquerade as drift.
+          NORM="$STRIP"' |
+            .rules |= (
+              map(
+                if .type == "required_status_checks" then
+                  .parameters.required_status_checks |= ((map(del(.integration_id))) | sort_by(.context))
+                else
+                  .
+                end
+              ) | sort_by(.type)
+            ) |
+            .bypass_actors = ((.bypass_actors // []) | sort_by(.actor_id, .actor_type))'
+
+          status=0
+          files=(.github/rulesets/*.json)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No committed rulesets under .github/rulesets/; nothing to check."
+            exit 0
+          fi
+
+          for committed in "${files[@]}"; do
+            name=$(jq -r .name "$committed")
+            echo "::group::Checking $committed (name=$name)"
+
+            # Look up live id by name. Pass the name through `--arg` so
+            # quotes/backslashes in a ruleset name can't break the jq
+            # program. Paginate so a repo with many rulesets doesn't
+            # silently truncate. Empty result means the ruleset is
+            # missing on the GitHub side, which counts as drift; more
+            # than one match means two rulesets share the same name,
+            # which we refuse to silently pick from.
+            mapfile -t matching_ids < <(
+              gh api --paginate "/repos/$REPO/rulesets" \
+                | jq -r --arg name "$name" '.[] | select(.name == $name) | .id'
+            )
+            if [[ ${#matching_ids[@]} -eq 0 ]]; then
+              echo "::error file=$committed::DRIFT: no live ruleset named '$name' on $REPO"
+              status=1
+              echo "::endgroup::"
+              continue
+            fi
+            if [[ ${#matching_ids[@]} -gt 1 ]]; then
+              echo "::error file=$committed::DRIFT: multiple live rulesets named '$name' on $REPO (ids: ${matching_ids[*]})"
+              status=1
+              echo "::endgroup::"
+              continue
+            fi
+            id=${matching_ids[0]}
+
+            committed_norm=$(jq -S "$NORM" "$committed")
+            live_norm=$(gh api "/repos/$REPO/rulesets/$id" | jq -S "$NORM")
+
+            if diff -u <(echo "$committed_norm") <(echo "$live_norm") > diff.out; then
+              echo "OK: $committed matches live ruleset id=$id"
+            else
+              echo "::error file=$committed::DRIFT: $committed differs from live ruleset id=$id"
+              cat diff.out
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+
+          if [[ $status -ne 0 ]]; then
+            echo "::error::Ruleset drift detected. Either update the committed JSON or revert the live change."
+          fi
+          exit $status
