@@ -53,8 +53,9 @@ in response.
 ### Requirement: Host list is the home view
 
 The UI SHALL render an enrolled host list as the home view of the authenticated application. Each row MUST identify the host,
-show whether it is online or offline by comparison of the last-seen timestamp against a documented threshold, and show the
-host's running event count. Activating a row MUST navigate to that host's process tree.
+show whether it is online or offline by comparing the host's last-seen timestamp to the current time, and show the host's
+running event count. A host MUST be classified online when its last-seen timestamp is within the last 5 minutes and offline
+otherwise. Activating a row MUST navigate to that host's process tree.
 
 #### Scenario: Host list renders rows for enrolled hosts
 

@@ -28,8 +28,8 @@ behind admin authentication middleware so that an unauthenticated or non-admin c
 
 #### Scenario: Authenticated admin request proceeds
 
-- **GIVEN** a client holding a valid admin session cookie or admin bearer token
-- **WHEN** the client requests an admin endpoint
+- **GIVEN** a client holding a valid admin session cookie
+- **WHEN** the client requests an admin endpoint and satisfies any required CSRF check for the HTTP method
 - **THEN** the request is dispatched to the corresponding admin handler
 
 ### Requirement: List enrollments
@@ -93,18 +93,23 @@ and `hashes`.
 
 ### Requirement: Persist and fan out a new blocklist policy
 
-The system SHALL expose `PUT /api/v1/admin/policy` that atomically bumps the policy's version, replaces the blocklist, and queues
-a `set_blocklist` command for every active host so all hosts converge on the new policy. The request body MUST carry `actor` and
-`reason` (both required), plus optional `paths` and `hashes` arrays. Paths MUST be absolute (start with `/`); hashes MUST be
-64-character lowercase hex (SHA-256). A request that violates either constraint MUST be rejected with `400 Bad Request` and the
-policy MUST NOT be modified.
+The system SHALL expose `PUT /api/v1/admin/policy` that atomically bumps the policy's version and replaces the blocklist.
+The system SHALL attempt to queue a `set_blocklist` command carrying the new version for every active host on a
+best-effort basis. A failure to enqueue the command for an individual host MUST NOT roll back the policy update; the
+server MUST log the per-host fan-out failures so the next agent poll or admin push can reconcile, and MAY surface
+per-host fan-out diagnostics in the response. The request body MUST carry `actor` and `reason` (both required), plus
+optional `paths` and `hashes` arrays. Paths MUST be absolute (start with `/`); hashes MUST be 64-character lowercase hex
+(SHA-256). A request that violates either constraint MUST be rejected with `400 Bad Request` and the policy MUST NOT be
+modified.
 
 #### Scenario: Valid policy push increments version and fans out
 
 - **GIVEN** a current policy at version `v`
 - **WHEN** the operator PUTs a valid policy with non-empty `actor` and `reason`
 - **THEN** the server returns `200 OK` carrying the new policy at version `v+1`
-- **AND** every active host has a `set_blocklist` command queued carrying the new version and blocklist
+- **AND** the server attempts to queue a `set_blocklist` command for every active host carrying the new version and
+  blocklist
+- **AND** any host whose enqueue fails is logged so a subsequent reconcile can resend
 
 #### Scenario: Invalid path is rejected without persisting
 

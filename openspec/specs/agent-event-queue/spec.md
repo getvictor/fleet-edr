@@ -51,7 +51,11 @@ uploader MAY request up to a caller-supplied batch size; the queue MUST return a
 
 After the uploader successfully posts a batch to the server, it SHALL acknowledge the batch back to the queue by event
 ID. Acknowledged events MUST NOT be returned by subsequent dequeue calls. Acknowledgement of a non-existent ID MUST be
-a no-op rather than an error.
+a no-op rather than an error: the cap-eviction path described under "Bounded storage with operator-visible lossy
+fallback" can drop a pending row out from under an in-flight uploader, so an uploader that holds dequeued event IDs and
+later acknowledges them MUST tolerate the case where some IDs no longer exist. Dequeue does not lock or pin rows
+against eviction; the queue remains a single durable source of truth and the uploader treats acknowledgement as
+best-effort cleanup.
 
 #### Scenario: Successful upload is acknowledged
 
@@ -66,6 +70,14 @@ a no-op rather than an error.
 - **WHEN** the uploader does not acknowledge the batch
 - **THEN** the next dequeue call returns those same events again
 - **AND** the events remain durable until they are successfully uploaded or pruned
+
+#### Scenario: Cap eviction races an in-flight upload
+
+- **GIVEN** the uploader has dequeued a batch and the queue subsequently evicts the oldest pending rows under the byte
+  cap, including some IDs from that in-flight batch
+- **WHEN** the uploader posts the batch to the server and then acknowledges the IDs it dequeued
+- **THEN** acknowledgement is a no-op for the IDs the eviction already removed
+- **AND** the eviction is reported through the lossy-drop metric so operators can see that telemetry was lost
 
 ### Requirement: Bounded storage with operator-visible lossy fallback
 

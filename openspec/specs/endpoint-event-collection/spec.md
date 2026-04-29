@@ -72,9 +72,11 @@ flows on the basis of capture; capture is observation-only.
 
 ### Requirement: DNS query capture
 
-The system SHOULD emit a `dns_query` event for each DNS query seen by the DNS proxy when DNS proxying is enabled, and a
-follow-on `dns_query` event carrying the resolved addresses when the upstream resolver replies. Capture failures MUST
-NOT prevent the query or its response from being forwarded to the originally-intended resolver.
+When DNS proxying is enabled, the system SHALL emit a `dns_query` event for each DNS query seen by the DNS proxy and a
+follow-on `dns_query` event carrying the resolved addresses when the upstream resolver replies. DNS proxying is opt-in
+(see the host-app extension manager capability), so a host with the DNS proxy disabled emits no `dns_query` events at
+all and that absence is not a contract violation. Capture failures MUST NOT prevent the query or its response from
+being forwarded to the originally-intended resolver.
 
 #### Scenario: An application resolves a hostname over UDP
 

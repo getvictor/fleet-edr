@@ -145,14 +145,17 @@ authenticated user performed the change.
 
 ### Requirement: JSON response format and error shape
 
-The system SHALL return successful response bodies as `application/json` with a UTF-8 encoding. Error responses SHALL
-include a human-readable message that the client can surface to the operator without further translation.
+The system SHALL return successful response bodies as `application/json` with a UTF-8 encoding. Error responses SHALL be
+returned as JSON with a single `error` field whose value is a stable typed error code (for example `{"error":
+"unauthorized"}`) so clients can branch on the code without parsing free-form prose. The same `ErrorResponse` shape MUST
+be used for every 4xx and 5xx response defined in this capability.
 
 #### Scenario: An endpoint returns an error
 
 - **GIVEN** a logged-in operator
 - **WHEN** any endpoint defined in this capability fails with a 4xx or 5xx status
-- **THEN** the response carries a body whose message describes the failure in human-readable terms
+- **THEN** the response body is a JSON object with an `error` field carrying a stable typed error code
+- **AND** clients can dispatch on the code without further parsing
 
 #### Scenario: A successful response is JSON
 

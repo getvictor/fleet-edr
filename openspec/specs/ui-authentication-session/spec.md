@@ -11,7 +11,8 @@ operator console.
 The capability uses an HTTP-only session cookie that the browser cannot read from JavaScript, paired with a per-session
 CSRF token that the operator's UI code reads from the login response and echoes on every state-changing request. The cookie
 authenticates the request, the CSRF header proves the request originated from the legitimate UI, and the server-side row
-backing the cookie can be revoked at any time by deleting the row or by restarting the server. The endpoints are
+backing the cookie can be revoked at any time by deleting the row. Sessions are persisted in the database, so restarting
+the server does not invalidate them; revocation goes through the row, not the process lifecycle. The endpoints are
 rate-limited and the failure paths are deliberately ambiguous about whether an account exists, so a brute-force attacker
 cannot use them to enumerate operators.
 
@@ -129,7 +130,7 @@ requiring a CSRF header.
 
 ### Requirement: Unsafe requests require both cookie and CSRF header
 
-The system MUST require both the session cookie and a matching CSRF header on every unsafe-method (POST, PUT, DELETE, PATCH)
+The system MUST require both the session cookie and a matching CSRF header on every unsafe-method (POST, PUT, DELETE)
 request, and SHALL reject requests that present the cookie without a matching CSRF header.
 
 #### Scenario: POST with cookie but no CSRF header
