@@ -28,9 +28,6 @@ on:
     - cron: "23 6 * * 1"  # Mon 06:23 UTC
   workflow_dispatch: {}
 
-permissions:
-  contents: read  # checkout + tree walk only; no write surface at the workflow root
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -39,6 +36,9 @@ jobs:
   changes:
     name: Detect language changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read       # baseline; the detect step doesn't actually checkout
+      pull-requests: read  # gate job reads the PR's file list via gh api pulls/<n>/files
     outputs:
       go: ${{ steps.detect.outputs.go }}
       swift: ${{ steps.detect.outputs.swift }}
@@ -49,19 +49,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
             {
               echo "go=true"
               echo "swift=true"
               echo "typescript=true"
             } >> "$GITHUB_OUTPUT"
-            echo "Triggered by ${{ github.event_name }}; running all three languages."
+            echo "Triggered by $EVENT_NAME; running all three languages."
             exit 0
           fi
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
-          GO_PATTERN='\.go$|^go\.(mod|sum)$|^\.github/workflows/codeql\.yml$'
+          GO_PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.github/workflows/codeql\.yml$'
           SWIFT_PATTERN='\.swift$|^extension/|^\.github/workflows/codeql\.yml$'
           TS_PATTERN='^ui/.*\.(ts|tsx|js|jsx|cjs|mjs|json)$|^\.github/workflows/codeql\.yml$'
           for entry in "go:$GO_PATTERN" "swift:$SWIFT_PATTERN" "typescript:$TS_PATTERN"; do
