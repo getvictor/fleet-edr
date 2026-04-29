@@ -26,9 +26,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  # Read-only default; individual jobs escalate for release uploads + ghcr push.
-  contents: read
+# Permissions are declared per-job below (Sonar githubactions:S8264). The
+# macos-pkg and docker-server jobs each escalate for their specific needs;
+# there's no read-only default to fall back to.
 
 jobs:
   macos-pkg:
