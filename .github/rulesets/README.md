@@ -77,6 +77,14 @@ Dependabot PRs run from a fork-equivalent context that can't read the
 `SONAR_TOKEN` secret. Requiring the check would block every Dependabot
 update.
 
+Currently excluded for runtime reasons: `CodeQL Go`, `CodeQL Swift`,
+and `CodeQL TypeScript`. Each takes 5–15 minutes and runs on every
+PR regardless of which language was touched, so making them required
+adds quarter-hour latency to PRs that don't change any code (e.g.
+docs-only or workflow-only changes). Reinstate them once each CodeQL
+workflow has an always-start gate job that path-checks the diff and
+either runs analysis or no-ops while still posting the check.
+
 Each excluded workflow still runs on PRs that match its condition;
 its pass/fail is advisory only. To promote any of them to required,
 first rewrite the workflow to always start and short-circuit inside

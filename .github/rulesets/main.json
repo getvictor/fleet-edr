@@ -30,10 +30,7 @@
           {"context": "Agent tests"},
           {"context": "osv-scanner / osv-scan"},
           {"context": "actionlint"},
-          {"context": "zizmor"},
-          {"context": "CodeQL Go"},
-          {"context": "CodeQL Swift"},
-          {"context": "CodeQL TypeScript"}
+          {"context": "zizmor"}
         ]
       }
     }
