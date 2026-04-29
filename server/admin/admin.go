@@ -3,9 +3,12 @@
 //   - Phase 1: list enrollments, revoke an individual host.
 //   - Phase 2: get + update the server-driven blocklist policy.
 //
-// All endpoints are gated on the admin token by server-side middleware (not by this
-// package). Every state-changing call emits an audit log + span attributes so SOC teams
-// can reconstruct what changed and when.
+// All endpoints are gated by the operator-session middleware (authn.Session +
+// authn.CSRF on unsafe methods); see buildMux in cmd/fleet-edr-server/main.go for
+// the actual wiring. This package just registers the routes; the caller wraps
+// the mux in the session/CSRF chain before mounting. Every state-changing call
+// emits an audit log + span attributes so SOC teams can reconstruct what changed
+// and when.
 package admin
 
 import (
@@ -112,7 +115,8 @@ func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog Cat
 }
 
 // RegisterRoutes wires the endpoints onto the mux. Callers wrap the returned handler in the
-// admin-token middleware before mounting.
+// session + CSRF middleware (authn.Session, then authn.CSRF) before mounting; see buildMux
+// in cmd/fleet-edr-server/main.go.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/enrollments", h.handleList)
 	mux.HandleFunc("POST /api/v1/admin/enrollments/{host_id}/revoke", h.handleRevoke)
