@@ -1,31 +1,57 @@
 name: Go vulncheck
 
+# See go-lint.yml for the gate-then-analyze pattern rationale.
+
 on:
   push:
     branches: [main]
     paths:
       - "**/*.go"
-      - "go.mod"
-      - "go.sum"
+      - "**/go.mod"
+      - "**/go.sum"
       - "Taskfile.yml"
       - ".github/workflows/go-vulncheck.yml"
   pull_request:
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - "Taskfile.yml"
-      - ".github/workflows/go-vulncheck.yml"
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Go changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read  # gate job reads the PR's file list via gh api pulls/<n>/files
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^Taskfile\.yml$|^\.github/workflows/go-vulncheck\.yml$'
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by $EVENT_NAME; running unconditionally."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; skipping govulncheck."
+          fi
+
   # Two jobs on the same module: the agent's macOS-only CGo compiles only on
   # macOS runners, while the server's Linux-centric stack is cheaper on ubuntu.
   # The per-binary Taskfile tasks (lint:vulncheck:agent, lint:vulncheck:server)
@@ -33,7 +59,11 @@ jobs:
   # vulnerabilities that are present in a shipped artefact.
   vulncheck-agent:
     name: govulncheck (agent)
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -56,7 +86,11 @@ jobs:
 
   vulncheck-server:
     name: govulncheck (server)
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

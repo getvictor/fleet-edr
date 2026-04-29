@@ -59,33 +59,60 @@ workflow's header comment.
 
 ## Required status checks
 
-The `required_status_checks` list in `main.json` names checks that ALWAYS
-run on every PR. Workflows that conditionally skip (path filters, actor
-filters, etc.) are intentionally NOT in the list because GitHub blocks
-merges on required checks that did not run, even when the condition
-would have skipped them.
+The `required_status_checks` list in `main.json` names every check that
+must post a status before a PR can merge. GitHub treats a missing
+required check (workflow never triggered) as a hard block and a skipped
+required check (workflow triggered but its job's `if:` evaluated to
+false) as success. The required list is comprehensive only when every
+listed workflow always triggers on every PR.
 
-Currently excluded for path-filter reasons: `c-lint.yml`,
-`openapi-lint.yml`, `swift-lint.yml`, `go-lint.yml` (golangci-lint),
-`go-nilaway.yml`, `go-vulncheck.yml` (server + agent), `ts-lint.yml`
-(Lint and test), and `pkg-dryrun.yml` (Pkg build dry-run).
+To honor that rule, every conditionally-skipped workflow in this repo
+uses the **gate-then-analyze** pattern:
 
-Currently excluded for actor-filter reasons: the `sonarcloud` job in
-`test.yml`, which posts the `SonarCloud Code Analysis` check. The job
-short-circuits with `if: github.actor != 'dependabot[bot]'` because
-Dependabot PRs run from a fork-equivalent context that can't read the
-`SONAR_TOKEN` secret. Requiring the check would block every Dependabot
-update.
+```yaml
+jobs:
+  changes:
+    name: Detect <kind> changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Inspect the PR's file list (or actor, etc.) and emit
+          # relevant=true|false. Push/schedule/dispatch always emit true.
 
-Currently excluded for runtime reasons: `CodeQL Go`, `CodeQL Swift`,
-and `CodeQL TypeScript`. Each takes 5–15 minutes and runs on every
-PR regardless of which language was touched, so making them required
-adds quarter-hour latency to PRs that don't change any code (e.g.
-docs-only or workflow-only changes). Reinstate them once each CodeQL
-workflow has an always-start gate job that path-checks the diff and
-either runs analysis or no-ops while still posting the check.
+  <analysis>:
+    name: <required-check-name>
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    # ... real work ...
+```
 
-Each excluded workflow still runs on PRs that match its condition;
-its pass/fail is advisory only. To promote any of them to required,
-first rewrite the workflow to always start and short-circuit inside
-its job (so the check name posts a status either way).
+The workflow has no `on.<event>.paths:` filter, so it always triggers.
+The `changes` job inspects `gh api repos/.../pulls/<n>/files` and emits
+a boolean. The analysis job is skipped via `if:` when the boolean is
+false, and a job-level skip posts a `skipped` check that branch
+protection treats as success. PRs that don't touch the relevant
+language pay only the ~10s cost of the gate job; the workflow's full
+cost (Xcode, golangci-lint, govulncheck, etc.) only runs when needed.
+
+Workflows currently using this pattern: `go-lint.yml`,
+`go-nilaway.yml`, `go-vulncheck.yml`, `ts-lint.yml`, `pkg-dryrun.yml`,
+and `codeql.yml` (one gate job, three language outputs feeding three
+analysis jobs).
+
+`test.yml`'s `sonarcloud` job uses a simpler shape because its skip is
+actor-based, not path-based. The job has `if: github.actor !=
+'dependabot[bot]'`; on Dependabot PRs the job is skipped (the
+SonarCloud GitHub App's separate `SonarCloud Code Analysis` check
+never posts because no scan runs). The required check is the
+workflow job's own `SonarCloud scan` name, not the App's; the
+job-level skip on Dependabot still posts as success.
+
+Workflows that are still path-filtered and intentionally NOT in
+required: `c-lint.yml`, `openapi-lint.yml`, `swift-lint.yml`. Their
+scope is narrow enough that gating them is more ceremony than the
+fast feedback is worth; they remain advisory.

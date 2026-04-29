@@ -6,9 +6,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -21,6 +18,8 @@ jobs:
   agent-test:
     name: Agent tests
     runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -48,6 +47,8 @@ jobs:
   server-test:
     name: Server tests
     runs-on: macos-latest
+    permissions:
+      contents: read
     env:
       EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
     steps:

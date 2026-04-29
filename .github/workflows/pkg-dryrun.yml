@@ -6,33 +6,63 @@ name: Pkg dry-run
 # secrets. The real release workflow runs the same script path, so if this
 # is green we have high confidence the release workflow will not blow up
 # during signing.
+#
+# See go-lint.yml for the gate-then-analyze pattern rationale.
 
 on:
-  pull_request:
-    paths:
-      - "packaging/**"
-      - "agent/**/*.go"
-      - "agent/go.mod"
-      - "agent/com.fleetdm.edr.agent.plist"
-      - ".github/workflows/pkg-dryrun.yml"
   push:
     branches: [main]
     paths:
       - "packaging/**"
       - ".github/workflows/pkg-dryrun.yml"
+  pull_request:
   workflow_dispatch: {}
-
-permissions:
-  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect packaging changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read  # gate job reads the PR's file list via gh api pulls/<n>/files
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^packaging/|^agent/.*\.go$|^agent/go\.mod$|^agent/com\.fleetdm\.edr\.agent\.plist$|^\.github/workflows/pkg-dryrun\.yml$'
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by $EVENT_NAME; running unconditionally."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; skipping pkg dry-run."
+          fi
+
   dryrun:
     name: Pkg build dry-run
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -93,7 +123,7 @@ jobs:
         # below use `test -d` for component pkgs and look for scripts under
         # `agent.pkg/Scripts/` where `pkgbuild --scripts` places them.
         # The top-level Scripts/ path that `productbuild --scripts` would
-        # produce is intentionally unused — see packaging/pkg/build.sh for
+        # produce is intentionally unused; see packaging/pkg/build.sh for
         # why that layout was abandoned (Installer.app never invoked those).
         run: |
           ls -la dist/

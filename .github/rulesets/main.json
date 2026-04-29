@@ -18,7 +18,7 @@
         "dismiss_stale_reviews_on_push": true,
         "require_code_owner_review": false,
         "require_last_push_approval": false,
-        "required_review_thread_resolution": true
+        "required_review_thread_resolution": false
       }
     },
     {
@@ -28,9 +28,19 @@
         "required_status_checks": [
           {"context": "Server tests"},
           {"context": "Agent tests"},
+          {"context": "golangci-lint"},
+          {"context": "nilaway"},
+          {"context": "Lint and test"},
+          {"context": "govulncheck (server)"},
+          {"context": "govulncheck (agent)"},
           {"context": "osv-scanner / osv-scan"},
           {"context": "actionlint"},
-          {"context": "zizmor"}
+          {"context": "zizmor"},
+          {"context": "CodeQL Go"},
+          {"context": "CodeQL Swift"},
+          {"context": "CodeQL TypeScript"},
+          {"context": "Pkg build dry-run"},
+          {"context": "SonarCloud scan"}
         ]
       }
     }

@@ -11,9 +11,8 @@ on:
 
 # SARIF upload requires security-events:write; granted only to the reusable
 # workflow invocation below so the default token (for checkouts etc.) stays
-# minimal.
-permissions:
-  contents: read
+# minimal. Permissions are declared per-job, not at workflow level (Sonar
+# githubactions:S8264).
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

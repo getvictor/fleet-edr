@@ -10,9 +10,6 @@ on:
   # Lets us re-run after fixing a finding without pushing an empty commit.
   workflow_dispatch:
 
-permissions:
-  contents: read # minimum needed to check out the repo
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
