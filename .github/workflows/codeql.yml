@@ -9,6 +9,13 @@ name: CodeQL
 #
 # Results upload to GitHub code-scanning in the same dashboard as zizmor +
 # SonarQube + GHAS findings.
+#
+# Gate-then-analyze pattern: a single `changes` job inspects the PR's file
+# list and emits one boolean per language. Each language job is skipped
+# via `if:` when its files weren't touched, which keeps Swift's 15+ minute
+# Xcode build off PRs that only touch Go (and vice versa). A skipped
+# required check is treated as success by branch protection. Pushes,
+# scheduled scans, and workflow_dispatch always run all three.
 
 on:
   push:
@@ -29,6 +36,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect language changes
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.detect.outputs.go }}
+      swift: ${{ steps.detect.outputs.swift }}
+      typescript: ${{ steps.detect.outputs.typescript }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            {
+              echo "go=true"
+              echo "swift=true"
+              echo "typescript=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "Triggered by ${{ github.event_name }}; running all three languages."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          GO_PATTERN='\.go$|^go\.(mod|sum)$|^\.github/workflows/codeql\.yml$'
+          SWIFT_PATTERN='\.swift$|^extension/|^\.github/workflows/codeql\.yml$'
+          TS_PATTERN='^ui/.*\.(ts|tsx|js|jsx|cjs|mjs|json)$|^\.github/workflows/codeql\.yml$'
+          for entry in "go:$GO_PATTERN" "swift:$SWIFT_PATTERN" "typescript:$TS_PATTERN"; do
+            lang=${entry%%:*}
+            pat=${entry#*:}
+            if echo "$files" | grep -qE "$pat"; then
+              echo "$lang=true" >> "$GITHUB_OUTPUT"
+              echo "$lang relevant; will run analysis."
+            else
+              echo "$lang=false" >> "$GITHUB_OUTPUT"
+              echo "$lang not touched; skipping."
+            fi
+          done
+
   # --------------------------------------------------------------
   # Go: server + agent + internal/. CodeQL's Go extractor requires an
   # actual build (build-mode: none is JS/TS/Python-only). autobuild runs
@@ -39,6 +86,8 @@ jobs:
   # --------------------------------------------------------------
   go:
     name: CodeQL Go
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -79,6 +128,8 @@ jobs:
   # --------------------------------------------------------------
   swift:
     name: CodeQL Swift
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
     runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
     timeout-minutes: 30
     permissions:
@@ -124,11 +175,13 @@ jobs:
 
   # --------------------------------------------------------------
   # TypeScript + JavaScript: ui/ React + Vite + vitest surface.
-  # build-mode: none is the default for JS/TS — CodeQL indexes the source
+  # build-mode: none is the default for JS/TS; CodeQL indexes the source
   # without needing npm ci or vite build.
   # --------------------------------------------------------------
   typescript:
     name: CodeQL TypeScript
+    needs: changes
+    if: needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

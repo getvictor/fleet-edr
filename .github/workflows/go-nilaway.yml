@@ -1,19 +1,11 @@
 name: Go nilaway
 
+# See go-lint.yml for the gate-then-analyze pattern rationale.
+
 on:
   push:
     branches: [main]
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/go-nilaway.yml"
   pull_request:
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/go-nilaway.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +16,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Go changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          PATTERN='\.go$|^go\.(mod|sum)$|^\.github/workflows/go-nilaway\.yml$'
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by ${{ github.event_name }}; running unconditionally."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; skipping nilaway."
+          fi
+
   # uber-go/nilaway does inter-procedural nil-dereference analysis that
   # staticcheck + govet -nilness miss because nilaway tracks nilability across
   # function boundaries. Gating check: every PR must stay at zero findings.
@@ -33,6 +54,8 @@ jobs:
   # than adding a global suppression.
   nilaway:
     name: nilaway
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

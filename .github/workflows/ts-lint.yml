@@ -1,17 +1,11 @@
 name: TypeScript lint and test
 
+# See go-lint.yml for the gate-then-analyze pattern rationale.
+
 on:
   push:
     branches: [main]
-    paths:
-      - "ui/**"
-      - "Taskfile.yml"
-      - ".github/workflows/ts-lint.yml"
   pull_request:
-    paths:
-      - "ui/**"
-      - "Taskfile.yml"
-      - ".github/workflows/ts-lint.yml"
   workflow_dispatch:
 
 permissions:
@@ -22,8 +16,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect TS changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          PATTERN='^ui/|^Taskfile\.yml$|^\.github/workflows/ts-lint\.yml$'
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by ${{ github.event_name }}; running unconditionally."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; skipping ts-lint."
+          fi
+
   lint-and-test:
     name: Lint and test
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

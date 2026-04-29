@@ -1,23 +1,16 @@
 name: Go lint
 
+# Two-job gate-then-analyze pattern. The workflow always triggers; the
+# `changes` job inspects the PR's file list and the analysis job is
+# skipped via `if:` when no relevant files changed. A skipped required
+# check is treated as success by branch protection, so this lets the
+# main job stay in `required_status_checks` without making PRs that
+# don't touch Go wait on a 1-2 minute lint run.
+
 on:
   push:
     branches: [main]
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".golangci.yml"
-      - "Taskfile.yml"
-      - ".github/workflows/go-lint.yml"
   pull_request:
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".golangci.yml"
-      - "Taskfile.yml"
-      - ".github/workflows/go-lint.yml"
   workflow_dispatch:
 
 permissions:
@@ -28,8 +21,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Go changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          PATTERN='\.go$|^go\.(mod|sum)$|^\.golangci\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by ${{ github.event_name }}; running unconditionally."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; skipping golangci-lint."
+          fi
+
   golangci-lint:
     name: golangci-lint
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     # macos-latest so the agent's CGo build tags (macOS-only Endpoint Security /
     # XPC bridge code) compile; ubuntu would fail on the CGo headers.
     runs-on: macos-latest
