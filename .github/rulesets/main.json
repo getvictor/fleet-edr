@@ -33,8 +33,7 @@
           {"context": "zizmor"},
           {"context": "CodeQL Go"},
           {"context": "CodeQL Swift"},
-          {"context": "CodeQL TypeScript"},
-          {"context": "SonarCloud Code Analysis"}
+          {"context": "CodeQL TypeScript"}
         ]
       }
     }

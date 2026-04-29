@@ -60,13 +60,24 @@ workflow's header comment.
 ## Required status checks
 
 The `required_status_checks` list in `main.json` names checks that ALWAYS
-run on every PR. Workflows with path filters are intentionally NOT in
-the list because GitHub blocks merges on required checks that did not
-run, even when the path filter would have skipped them. The currently
-excluded path-filtered workflows are `c-lint.yml`, `openapi-lint.yml`,
-`swift-lint.yml`, `go-lint.yml` (golangci-lint), `go-nilaway.yml`,
-`go-vulncheck.yml` (server + agent), `ts-lint.yml` (Lint and test),
-and `pkg-dryrun.yml` (Pkg build dry-run). They still run on PRs that
-touch their relevant paths, but their pass/fail is advisory only. To
-promote any of them to required, first rewrite the workflow to always
-start and short-circuit inside its job.
+run on every PR. Workflows that conditionally skip (path filters, actor
+filters, etc.) are intentionally NOT in the list because GitHub blocks
+merges on required checks that did not run, even when the condition
+would have skipped them.
+
+Currently excluded for path-filter reasons: `c-lint.yml`,
+`openapi-lint.yml`, `swift-lint.yml`, `go-lint.yml` (golangci-lint),
+`go-nilaway.yml`, `go-vulncheck.yml` (server + agent), `ts-lint.yml`
+(Lint and test), and `pkg-dryrun.yml` (Pkg build dry-run).
+
+Currently excluded for actor-filter reasons: the `sonarcloud` job in
+`test.yml`, which posts the `SonarCloud Code Analysis` check. The job
+short-circuits with `if: github.actor != 'dependabot[bot]'` because
+Dependabot PRs run from a fork-equivalent context that can't read the
+`SONAR_TOKEN` secret. Requiring the check would block every Dependabot
+update.
+
+Each excluded workflow still runs on PRs that match its condition;
+its pass/fail is advisory only. To promote any of them to required,
+first rewrite the workflow to always start and short-circuit inside
+its job (so the check name posts a status either way).
