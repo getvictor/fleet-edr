@@ -65,7 +65,7 @@ func Build(handler http.Handler, opts Options) http.Handler {
 	h = otelhttp.NewHandler(h, opts.ServiceName,
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			// otelhttp calls the formatter inside its own handler, so r.Pattern may be empty.
-			// Use method + path; patterns like "/api/v1/hosts/{host_id}/tree" appear as literal
+			// Use method + path; patterns like "/api/hosts/{host_id}/tree" appear as literal
 			// paths, which is acceptable for a pilot-scale product.
 			return r.Method + " " + r.URL.Path
 		}),

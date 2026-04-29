@@ -201,7 +201,7 @@ func postEnroll(t *testing.T, srv *httptest.Server, body any) *http.Response {
 	t.Helper()
 	buf := new(bytes.Buffer)
 	require.NoError(t, json.NewEncoder(buf).Encode(body))
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/enroll", buf)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/enroll", buf)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -251,7 +251,7 @@ func TestEnroll_BadBody(t *testing.T) {
 	srv, _, _ := newHandlerServer(t)
 
 	t.Run("malformed json", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/enroll",
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/enroll",
 			strings.NewReader("not json"))
 		require.NoError(t, err)
 		resp, err := srv.Client().Do(req)

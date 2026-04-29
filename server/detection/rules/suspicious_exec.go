@@ -80,7 +80,7 @@ func (r *SuspiciousExec) Techniques() []string {
 	return []string{"T1059", "T1105"}
 }
 
-// Doc surfaces the operator-facing description in /api/v1/rules and
+// Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
 func (r *SuspiciousExec) Doc() detection.Documentation {
 	return detection.Documentation{

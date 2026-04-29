@@ -299,7 +299,7 @@ genuine differentiator versus most competitors.
 
 ## 8. API and protocol design
 
-- [x] Versioned URL prefix (`/api/v1/`)
+- [x] Versioned URL prefix (`/api/`)
 - [x] JSON event schema (`schema/events.json` -- consumed by both agent and server)
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration

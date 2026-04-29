@@ -50,18 +50,18 @@ func New(q *graph.Query, s *store.Store, logger *slog.Logger) *Handler {
 
 // RegisterRoutes registers the API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/hosts", h.handleListHosts)
-	mux.HandleFunc("GET /api/v1/hosts/{host_id}/tree", h.handleProcessTree)
-	mux.HandleFunc("GET /api/v1/hosts/{host_id}/processes/{pid}", h.handleProcessDetail)
+	mux.HandleFunc("GET /api/hosts", h.handleListHosts)
+	mux.HandleFunc("GET /api/hosts/{host_id}/tree", h.handleProcessTree)
+	mux.HandleFunc("GET /api/hosts/{host_id}/processes/{pid}", h.handleProcessDetail)
 
-	mux.HandleFunc("GET /api/v1/alerts", h.handleListAlerts)
-	mux.HandleFunc("GET /api/v1/alerts/{id}", h.handleGetAlert)
-	mux.HandleFunc("PUT /api/v1/alerts/{id}", h.handleUpdateAlertStatus)
+	mux.HandleFunc("GET /api/alerts", h.handleListAlerts)
+	mux.HandleFunc("GET /api/alerts/{id}", h.handleGetAlert)
+	mux.HandleFunc("PUT /api/alerts/{id}", h.handleUpdateAlertStatus)
 
-	mux.HandleFunc("GET /api/v1/commands", h.ListCommands)
-	mux.HandleFunc("GET /api/v1/commands/{id}", h.handleGetCommand)
-	mux.HandleFunc("POST /api/v1/commands", h.handleCreateCommand)
-	mux.HandleFunc("PUT /api/v1/commands/{id}", h.UpdateCommandStatus)
+	mux.HandleFunc("GET /api/commands", h.ListCommands)
+	mux.HandleFunc("GET /api/commands/{id}", h.handleGetCommand)
+	mux.HandleFunc("POST /api/commands", h.handleCreateCommand)
+	mux.HandleFunc("PUT /api/commands/{id}", h.UpdateCommandStatus)
 }
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +267,7 @@ func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	// This handler is only wired under the host-token middleware (agents polling their own
 	// queue). The host_id is always the authenticated host's id — any query parameter is
 	// ignored so a valid token for host A cannot read commands queued for host B. Admin UI
-	// command listing (Phase 3) will live under a separate /api/v1/hosts/{host_id}/commands
+	// command listing (Phase 3) will live under a separate /api/hosts/{host_id}/commands
 	// path so the two auth domains cannot collide on a single mux pattern.
 	hostID, ok := authn.HostIDFromContext(ctx)
 	if !ok {

@@ -177,8 +177,8 @@ Each package exposes a `RegisterRoutes(mux *http.ServeMux)` method:
 
 ```go
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-    mux.HandleFunc("GET /api/v1/hosts", h.listHosts)
-    mux.HandleFunc("GET /api/v1/hosts/{host_id}/tree", h.getTree)
+    mux.HandleFunc("GET /api/hosts", h.listHosts)
+    mux.HandleFunc("GET /api/hosts/{host_id}/tree", h.getTree)
 }
 ```
 

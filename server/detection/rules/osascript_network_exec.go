@@ -45,7 +45,7 @@ func (r *OsascriptNetworkExec) Techniques() []string {
 	return []string{"T1059.002", "T1105"}
 }
 
-// Doc surfaces the operator-facing description in /api/v1/rules and
+// Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
 func (r *OsascriptNetworkExec) Doc() detection.Documentation {
 	return detection.Documentation{

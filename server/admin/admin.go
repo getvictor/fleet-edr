@@ -49,7 +49,7 @@ type Cataloger interface {
 // Mirrors detection.RuleMetadata; duplicated here so admin doesn't import
 // detection (which would pull the whole engine into admin's build graph
 // + tests). Doc carries the operator-facing documentation surfaced by
-// GET /api/v1/rules and the markdown generator.
+// GET /api/rules and the markdown generator.
 type RuleMetadata struct {
 	ID         string
 	Techniques []string
@@ -58,7 +58,7 @@ type RuleMetadata struct {
 
 // RuleDoc mirrors detection.Documentation. Same duplication rationale as
 // RuleMetadata above. Field tags match what the UI consumes from
-// GET /api/v1/rules.
+// GET /api/rules.
 type RuleDoc struct {
 	Title          string       `json:"title"`
 	Summary        string       `json:"summary"`
@@ -119,12 +119,12 @@ func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog Cat
 // session + CSRF middleware (authn.Session, then authn.CSRF) before mounting; see buildMux
 // in cmd/fleet-edr-server/main.go.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/enrollments", h.handleList)
-	mux.HandleFunc("POST /api/v1/enrollments/{host_id}/revoke", h.handleRevoke)
-	mux.HandleFunc("GET /api/v1/policy", h.handleGetPolicy)
-	mux.HandleFunc("PUT /api/v1/policy", h.handlePutPolicy)
-	mux.HandleFunc("GET /api/v1/attack-coverage", h.handleATTACKCoverage)
-	mux.HandleFunc("GET /api/v1/rules", h.handleListRules)
+	mux.HandleFunc("GET /api/enrollments", h.handleList)
+	mux.HandleFunc("POST /api/enrollments/{host_id}/revoke", h.handleRevoke)
+	mux.HandleFunc("GET /api/policy", h.handleGetPolicy)
+	mux.HandleFunc("PUT /api/policy", h.handlePutPolicy)
+	mux.HandleFunc("GET /api/attack-coverage", h.handleATTACKCoverage)
+	mux.HandleFunc("GET /api/rules", h.handleListRules)
 }
 
 // handleListRules returns the structured per-rule documentation for every
@@ -248,7 +248,7 @@ func (h *Handler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(ctx, h.logger, w, http.StatusOK, p)
 }
 
-// putPolicyRequest is the body shape accepted by PUT /api/v1/policy. `Actor` +
+// putPolicyRequest is the body shape accepted by PUT /api/policy. `Actor` +
 // `Reason` are required for audit. `Paths` + `Hashes` are optional individually but the
 // effective blocklist must be one of those two forms; a completely empty PUT is still
 // accepted so operators have a fast "clear everything" path.

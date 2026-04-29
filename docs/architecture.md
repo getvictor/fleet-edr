@@ -28,7 +28,7 @@ and presents findings through a web UI with response capabilities.
 │         │   - Commander   │                           │
 │         └────────┬────────┘                           │
 └──────────────────│────────────────────────────────────┘
-                   │ HTTPS (POST /api/v1/events)
+                   │ HTTPS (POST /api/events)
                    │
 ┌──────────────────│──── Server ────────────────────────┐
 │         ┌────────▼────────┐                           │
@@ -53,7 +53,7 @@ and presents findings through a web UI with response capabilities.
 │                                                       │
 │         ┌─────────────────┐                           │
 │         │   REST API      │◄──── React UI             │
-│         │   /api/v1/*     │      (embedded)           │
+│         │   /api/*     │      (embedded)           │
 │         └─────────────────┘                           │
 └───────────────────────────────────────────────────────┘
 ```
@@ -144,8 +144,8 @@ agent/
 1. `receiver` connects to extension XPC Mach services
 2. Events arrive as raw JSON bytes on Go channels
 3. Events are written to SQLite `queue` (survives restarts)
-4. `uploader` batches events and POSTs to `/api/v1/events`
-5. `commander` polls `/api/v1/commands` and executes responses
+4. `uploader` batches events and POSTs to `/api/events`
+5. `commander` polls `/api/commands` and executes responses
 
 The agent runs two parallel receiver loops (ESF + Network), each with
 exponential backoff reconnection (1s initial, 30s max).
@@ -154,7 +154,7 @@ exponential backoff reconnection (1s initial, 30s max).
 
 ### Ingest handler (`server/ingest/`)
 
-Stateless HTTP endpoint at `POST /api/v1/events`. Validates required fields
+Stateless HTTP endpoint at `POST /api/events`. Validates required fields
 (`event_id`, `host_id`, `event_type`, `timestamp_ns`), enforces 10 MB request
 limit, and inserts into the `events` table with `INSERT IGNORE` for
 idempotent deduplication.
@@ -214,15 +214,15 @@ Read endpoints for the UI:
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /api/v1/hosts` | Host list with event counts and last-seen |
-| `GET /api/v1/hosts/{id}/tree` | Process forest with children, network events |
-| `GET /api/v1/hosts/{id}/processes/{pid}` | Process detail with network + DNS |
-| `GET /api/v1/alerts` | Filterable alert list |
-| `GET /api/v1/alerts/{id}` | Single alert with linked event IDs |
-| `PUT /api/v1/alerts/{id}` | Update alert status |
-| `GET /api/v1/commands` | Agent command polling |
-| `POST /api/v1/commands` | Create command (from UI) |
-| `PUT /api/v1/commands/{id}` | Agent reports command result |
+| `GET /api/hosts` | Host list with event counts and last-seen |
+| `GET /api/hosts/{id}/tree` | Process forest with children, network events |
+| `GET /api/hosts/{id}/processes/{pid}` | Process detail with network + DNS |
+| `GET /api/alerts` | Filterable alert list |
+| `GET /api/alerts/{id}` | Single alert with linked event IDs |
+| `PUT /api/alerts/{id}` | Update alert status |
+| `GET /api/commands` | Agent command polling |
+| `POST /api/commands` | Create command (from UI) |
+| `PUT /api/commands/{id}` | Agent reports command result |
 | `GET /health` | Health check |
 
 ### Web UI (`ui/`)

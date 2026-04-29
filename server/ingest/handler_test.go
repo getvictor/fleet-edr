@@ -114,7 +114,7 @@ func serveIngest(t *testing.T, h *Handler, hostID string, req *http.Request) *ht
 func TestIngest_RejectsMissingContext(t *testing.T) {
 	// Direct-dispatch without pinning the host_id must 500 so the misconfiguration is loud.
 	h := New(nil, slog.Default(), BuildInfo{})
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", nil)
 	rec := httptest.NewRecorder()
 	h.IngestHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -122,7 +122,7 @@ func TestIngest_RejectsMissingContext(t *testing.T) {
 
 func TestIngest_InvalidJSON(t *testing.T) {
 	h := newHandler(t)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString("not json"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewBufferString("not json"))
 	rec := serveIngest(t, h, "host-a", req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
@@ -132,7 +132,7 @@ func TestIngest_MissingFields(t *testing.T) {
 	events := []store.Event{{EventID: "", HostID: "host-a", TimestampNs: 1, EventType: "exec", Payload: json.RawMessage(`{}`)}}
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewBuffer(body))
 	rec := serveIngest(t, h, "host-a", req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
@@ -145,7 +145,7 @@ func TestIngest_HostIDMismatchRejected(t *testing.T) {
 	}}
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewBuffer(body))
 	rec := serveIngest(t, h, "host-a", req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "host_id_mismatch")
@@ -171,7 +171,7 @@ func TestIngest_LargeBatchNearLimit(t *testing.T) {
 	require.Less(t, len(body), 10*1024*1024)
 	require.Greater(t, len(body), 1*1024*1024)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewBuffer(body))
 	rec := serveIngest(t, h, "host-large", req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
@@ -189,7 +189,7 @@ func TestIngest_DoesNotProcessEvents(t *testing.T) {
 	}
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBuffer(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewBuffer(body))
 	rec := serveIngest(t, h, "host-noproc", req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 

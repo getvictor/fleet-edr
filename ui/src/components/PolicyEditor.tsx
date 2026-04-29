@@ -58,7 +58,7 @@ function renderDiff(d: { added: number; removed: number }, singular: string, plu
 }
 
 // PolicyEditor is the operator-facing surface for the server-driven blocklist
-// (the same Policy that GET/PUT /api/v1/policy serves). The flow follows
+// (the same Policy that GET/PUT /api/policy serves). The flow follows
 // the pattern most enterprise dashboards use (GitHub, Atlassian, AWS Console):
 // the page edits a *staged* copy of the policy; nothing hits the server until
 // the operator clicks "Save changes" in a sticky footer that only appears when

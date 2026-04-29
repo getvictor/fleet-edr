@@ -26,7 +26,7 @@ func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 // post-phish execution step.
 func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
 
-// Doc surfaces the operator-facing description in /api/v1/rules and
+// Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
 func (r *ShellFromOffice) Doc() detection.Documentation {
 	return detection.Documentation{

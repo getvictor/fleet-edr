@@ -29,50 +29,50 @@ rejected before any business logic executes.
 #### Scenario: A state-changing call omits the CSRF token
 
 - **GIVEN** a client with a valid session cookie
-- **WHEN** the client issues `PUT /api/v1/alerts/{id}` without a matching `X-CSRF-Token` header
+- **WHEN** the client issues `PUT /api/alerts/{id}` without a matching `X-CSRF-Token` header
 - **THEN** the system responds with HTTP 403 and the alert is not modified
 
 ### Requirement: List enrolled hosts
 
-The system SHALL expose `GET /api/v1/hosts` returning a JSON array of enrolled hosts. Each entry SHALL include the host
+The system SHALL expose `GET /api/hosts` returning a JSON array of enrolled hosts. Each entry SHALL include the host
 identifier, the count of events seen for that host, and the most recent timestamp at which any event from the host was
 observed.
 
 #### Scenario: An operator opens the hosts dashboard
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client calls `GET /api/v1/hosts`
+- **WHEN** the client calls `GET /api/hosts`
 - **THEN** the system responds with HTTP 200 and a JSON array
 - **AND** every entry contains the host identifier, an event count, and a last-seen timestamp
 
 ### Requirement: Per-host process forest
 
-The system SHALL expose `GET /api/v1/hosts/{host_id}/tree` returning the process forest for that host. The response SHALL
+The system SHALL expose `GET /api/hosts/{host_id}/tree` returning the process forest for that host. The response SHALL
 nest each process under its parent and SHALL attach the network connections and DNS queries that occurred during each
 process's lifetime.
 
 #### Scenario: An operator views a host's process tree
 
 - **GIVEN** a logged-in operator and a known host with recorded activity
-- **WHEN** the client calls `GET /api/v1/hosts/{host_id}/tree`
+- **WHEN** the client calls `GET /api/hosts/{host_id}/tree`
 - **THEN** the system responds with HTTP 200 and a JSON object containing the forest of root processes
 - **AND** each process node carries its child processes and the network connections and DNS queries linked to it
 
 #### Scenario: A time range is supplied
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client calls `GET /api/v1/hosts/{host_id}/tree` with optional `from` or `to` nanosecond bounds
+- **WHEN** the client calls `GET /api/hosts/{host_id}/tree` with optional `from` or `to` nanosecond bounds
 - **THEN** the response is restricted to processes whose lifetime overlaps the specified window
 
 ### Requirement: Per-process detail with re-exec chain
 
-The system SHALL expose `GET /api/v1/hosts/{host_id}/processes/{pid}` returning a single process record together with its
+The system SHALL expose `GET /api/hosts/{host_id}/processes/{pid}` returning a single process record together with its
 network connections, DNS queries, and the ordered re-exec chain of prior generations on the same PID.
 
 #### Scenario: An operator inspects a process detail
 
 - **GIVEN** a logged-in operator and a host plus PID with recorded activity
-- **WHEN** the client calls `GET /api/v1/hosts/{host_id}/processes/{pid}`
+- **WHEN** the client calls `GET /api/hosts/{host_id}/processes/{pid}`
 - **THEN** the system responds with HTTP 200 and a JSON object containing the process record, its network connections, and
   its DNS queries
 - **AND** when the process has prior generations on the same PID the response carries those generations in oldest-first
@@ -81,37 +81,37 @@ network connections, DNS queries, and the ordered re-exec chain of prior generat
 #### Scenario: The PID is not known on the host
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client calls `GET /api/v1/hosts/{host_id}/processes/{pid}` for a PID that has no record on that host
+- **WHEN** the client calls `GET /api/hosts/{host_id}/processes/{pid}` for a PID that has no record on that host
 - **THEN** the system responds with HTTP 404 and an error body
 
 ### Requirement: Filterable alerts list
 
-The system SHALL expose `GET /api/v1/alerts` returning a JSON array of detection alerts. The response SHALL be filterable
+The system SHALL expose `GET /api/alerts` returning a JSON array of detection alerts. The response SHALL be filterable
 by host identifier, status, severity, and linked process identifier.
 
 #### Scenario: An operator filters alerts by host
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client calls `GET /api/v1/alerts?host_id=H`
+- **WHEN** the client calls `GET /api/alerts?host_id=H`
 - **THEN** the system responds with HTTP 200 and a JSON array
 - **AND** every entry's host identifier equals `H`
 
 #### Scenario: An operator combines status and severity filters
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client calls `GET /api/v1/alerts?status=open&severity=critical`
+- **WHEN** the client calls `GET /api/alerts?status=open&severity=critical`
 - **THEN** the response includes only alerts whose status is `open` and whose severity is `critical`
 
 ### Requirement: Alert detail with linked event ids
 
-The system SHALL expose `GET /api/v1/alerts/{id}` returning a single alert. The response SHALL include the alert's host
+The system SHALL expose `GET /api/alerts/{id}` returning a single alert. The response SHALL include the alert's host
 identifier, rule identifier, severity, title, description, linked process identifier, MITRE ATT&CK technique identifiers,
 status, and the list of event identifiers that triggered the alert.
 
 #### Scenario: An operator opens an alert
 
 - **GIVEN** a logged-in operator and an existing alert
-- **WHEN** the client calls `GET /api/v1/alerts/{id}`
+- **WHEN** the client calls `GET /api/alerts/{id}`
 - **THEN** the system responds with HTTP 200 and a JSON object
 - **AND** the object includes the rule identifier, severity, title, description, linked process identifier, technique
   identifiers, status, and the list of triggering event identifiers
@@ -119,19 +119,19 @@ status, and the list of event identifiers that triggered the alert.
 #### Scenario: The alert id is unknown
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client calls `GET /api/v1/alerts/{id}` with an identifier that does not exist
+- **WHEN** the client calls `GET /api/alerts/{id}` with an identifier that does not exist
 - **THEN** the system responds with HTTP 404 and an error body
 
 ### Requirement: Update alert lifecycle status
 
-The system SHALL expose `PUT /api/v1/alerts/{id}` accepting a JSON body that sets the alert status to one of `open`,
+The system SHALL expose `PUT /api/alerts/{id}` accepting a JSON body that sets the alert status to one of `open`,
 `acknowledged`, or `resolved`. Any other status value MUST be rejected. On success the system MUST record which
 authenticated user performed the change.
 
 #### Scenario: An operator resolves an alert
 
 - **GIVEN** a logged-in operator and an existing alert
-- **WHEN** the client issues `PUT /api/v1/alerts/{id}` with body `{"status": "resolved"}`
+- **WHEN** the client issues `PUT /api/alerts/{id}` with body `{"status": "resolved"}`
 - **THEN** the system responds with HTTP 204
 - **AND** the alert's stored status becomes `resolved`
 - **AND** the identity of the operator that performed the change is recorded
@@ -139,7 +139,7 @@ authenticated user performed the change.
 #### Scenario: An invalid status value is supplied
 
 - **GIVEN** a logged-in operator
-- **WHEN** the client issues `PUT /api/v1/alerts/{id}` with a status that is not one of `open`, `acknowledged`, or
+- **WHEN** the client issues `PUT /api/alerts/{id}` with a status that is not one of `open`, `acknowledged`, or
   `resolved`
 - **THEN** the system responds with HTTP 400 and the alert is not modified
 

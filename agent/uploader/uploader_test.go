@@ -29,7 +29,7 @@ func TestUploadBatch(t *testing.T) {
 
 	var received []json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/events" {
+		if r.URL.Path != "/api/events" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 			return

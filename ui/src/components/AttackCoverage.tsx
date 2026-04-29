@@ -9,7 +9,7 @@ import "./AttackCoverage.scss";
 
 // AttackCoverage renders the MITRE ATT&CK technique coverage that the
 // registered detection rules provide. The data comes from the same
-// /api/v1/attack-coverage endpoint that procurement teams ingest as a
+// /api/attack-coverage endpoint that procurement teams ingest as a
 // Navigator layer JSON — but we render it in-app as a tactic-grouped table
 // because a JSON download is unsatisfying as a demo prop. The pattern matches
 // what Crowdstrike Falcon, SentinelOne Singularity, and Elastic Security all

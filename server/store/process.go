@@ -492,7 +492,7 @@ func (s *Store) CountOfflineHosts(ctx context.Context, threshold time.Duration) 
 }
 
 // UpdateHostLastSeen bumps `hosts.last_seen_ns` to `now.UnixNano()` for hostID. Phase 4
-// uses this from the GET /api/v1/commands path so the 5-second commander poll doubles
+// uses this from the GET /api/commands path so the 5-second commander poll doubles
 // as a liveness heartbeat. The GREATEST guard stops a clock-skewed request from
 // regressing an already-observed fresher timestamp.
 //

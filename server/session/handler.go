@@ -1,9 +1,9 @@
 // Package session serves the Phase 3 login / logout / session-check endpoints.
 //
-//	POST   /api/v1/session  — public, rate-limited, validates email+password, creates
+//	POST   /api/session  — public, rate-limited, validates email+password, creates
 //	                          session row, sets Set-Cookie, returns {user, csrf_token}.
-//	GET    /api/v1/session  — session-required, returns the current {user, csrf_token}.
-//	DELETE /api/v1/session  — session-required, deletes the session row, clears cookie.
+//	GET    /api/session  — session-required, returns the current {user, csrf_token}.
+//	DELETE /api/session  — session-required, deletes the session row, clears cookie.
 //
 // The shape of the login response body intentionally returns both the user AND the CSRF
 // token so the UI can store the CSRF for unsafe methods without a round-trip. The
@@ -79,7 +79,7 @@ func New(us *users.Store, ss *sessions.Store, opts Options) *Handler {
 	}
 }
 
-// RegisterPublicRoutes wires POST /api/v1/session (login) and DELETE /api/v1/session
+// RegisterPublicRoutes wires POST /api/session (login) and DELETE /api/session
 // (logout) on the given mux. Both are public because neither has a valid session to
 // authenticate with at call time: login is the mint-it step, logout is permissive by
 // design (a stale / expired / missing cookie still needs to produce a Set-Cookie that
@@ -92,14 +92,14 @@ func New(us *users.Store, ss *sessions.Store, opts Options) *Handler {
 // logout via a forged fetch. A top-level cross-site navigation could send the cookie
 // on DELETE, but the blast radius is "user gets logged out" — annoying, not a breach.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/session", h.handleLogin)
-	mux.HandleFunc("DELETE /api/v1/session", h.handleLogout)
+	mux.HandleFunc("POST /api/session", h.handleLogin)
+	mux.HandleFunc("DELETE /api/session", h.handleLogout)
 }
 
-// RegisterAuthedRoutes wires GET /api/v1/session on the given mux. Caller wraps the
+// RegisterAuthedRoutes wires GET /api/session on the given mux. Caller wraps the
 // mux in `authn.Session` + `authn.CSRF` at mount time — see main.go.
 func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/session", h.handleGet)
+	mux.HandleFunc("GET /api/session", h.handleGet)
 }
 
 type loginRequest struct {

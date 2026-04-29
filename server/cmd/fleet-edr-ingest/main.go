@@ -72,7 +72,7 @@ func run() error {
 	mux := http.NewServeMux()
 	h.RegisterHealthRoutes(mux)
 	enrollHandler.RegisterRoutes(mux)
-	mux.Handle("POST /api/v1/events", hostTokenMW(h.IngestHandler()))
+	mux.Handle("POST /api/events", hostTokenMW(h.IngestHandler()))
 
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:      logger,

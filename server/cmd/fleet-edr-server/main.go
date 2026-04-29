@@ -270,11 +270,11 @@ type muxDeps struct {
 }
 
 // buildMux composes the HTTP surface out of three authorization domains:
-//   - public:  /livez, /readyz, /health, POST /api/v1/enroll, POST /api/v1/session
-//   - host:    POST /api/v1/events, GET /api/v1/commands, PUT /api/v1/commands/{id}
+//   - public:  /livez, /readyz, /health, POST /api/enroll, POST /api/session
+//   - host:    POST /api/events, GET /api/commands, PUT /api/commands/{id}
 //     (wrapped in authn.HostToken — the agent polls for + reports on its own commands)
-//   - session: everything under /api/v1/{hosts,alerts,admin}, POST /api/v1/commands,
-//     GET /api/v1/commands/{id}, GET/DELETE /api/v1/session (wrapped in authn.Session;
+//   - session: everything under /api/{hosts,alerts,admin}, POST /api/commands,
+//     GET /api/commands/{id}, GET/DELETE /api/session (wrapped in authn.Session;
 //     unsafe methods additionally gated by authn.CSRF)
 //
 // Middleware is applied per-handler at registration time so one mux serves the whole
@@ -283,7 +283,7 @@ func buildMux(d muxDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	d.ingestHandler.RegisterHealthRoutes(mux)
 	d.enrollHandler.RegisterRoutes(mux)
-	// POST /api/v1/session is public — there is no session yet. The session handler
+	// POST /api/session is public — there is no session yet. The session handler
 	// does its own rate-limit + audit log so it does not need a wrapper.
 	d.sessionHandler.RegisterPublicRoutes(mux)
 	// Self-hosted Redoc at /api/docs (the matching spec at /api/openapi.yaml).
@@ -302,14 +302,14 @@ func buildMux(d muxDeps) *http.ServeMux {
 func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 	hostTokenMW := authn.HostToken(d.enrollStore, d.logger)
 	hostMux := http.NewServeMux()
-	hostMux.Handle("POST /api/v1/events", d.ingestHandler.IngestHandler())
-	hostMux.HandleFunc("GET /api/v1/commands", d.apiHandler.ListCommands)
-	hostMux.HandleFunc("PUT /api/v1/commands/{id}", d.apiHandler.UpdateCommandStatus)
+	hostMux.Handle("POST /api/events", d.ingestHandler.IngestHandler())
+	hostMux.HandleFunc("GET /api/commands", d.apiHandler.ListCommands)
+	hostMux.HandleFunc("PUT /api/commands/{id}", d.apiHandler.UpdateCommandStatus)
 	hostProtected := hostTokenMW(hostMux)
 	for _, p := range []string{
-		"POST /api/v1/events",
-		"GET /api/v1/commands",
-		"PUT /api/v1/commands/{id}",
+		"POST /api/events",
+		"GET /api/commands",
+		"PUT /api/commands/{id}",
 	} {
 		mux.Handle(p, hostProtected)
 	}
@@ -320,7 +320,7 @@ func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 // agent-facing command protocol. Admin UI command management (POST, GET /{id}) goes
 // here. Session first (reads cookie, pins user + session on ctx), CSRF second (reads
 // session off ctx, validates X-CSRF-Token on unsafe methods). GET + DELETE
-// /api/v1/session live under the same stack; login POST is public.
+// /api/session live under the same stack; login POST is public.
 func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	sessionMW := authn.Session(d.sessionStore, d.logger)
 	csrfMW := authn.CSRF(d.logger)
@@ -330,14 +330,14 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	d.sessionHandler.RegisterAuthedRoutes(apiMux)
 	sessionProtected := sessionMW(csrfMW(apiMux))
 	for _, p := range []string{
-		"GET /api/v1/hosts", "GET /api/v1/hosts/{host_id}/tree", "GET /api/v1/hosts/{host_id}/processes/{pid}",
-		"GET /api/v1/alerts", "GET /api/v1/alerts/{id}", "PUT /api/v1/alerts/{id}",
-		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
-		"GET /api/v1/enrollments", "POST /api/v1/enrollments/{host_id}/revoke",
-		"GET /api/v1/policy", "PUT /api/v1/policy",
-		"GET /api/v1/attack-coverage",
-		"GET /api/v1/rules",
-		"GET /api/v1/session",
+		"GET /api/hosts", "GET /api/hosts/{host_id}/tree", "GET /api/hosts/{host_id}/processes/{pid}",
+		"GET /api/alerts", "GET /api/alerts/{id}", "PUT /api/alerts/{id}",
+		"GET /api/commands/{id}", "POST /api/commands",
+		"GET /api/enrollments", "POST /api/enrollments/{host_id}/revoke",
+		"GET /api/policy", "PUT /api/policy",
+		"GET /api/attack-coverage",
+		"GET /api/rules",
+		"GET /api/session",
 	} {
 		mux.Handle(p, sessionProtected)
 	}
@@ -345,11 +345,11 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 
 // registerUIRoutes serves the embedded React UI at /ui/ and redirects / to /ui/. The bundle
 // itself is intentionally unauthenticated: the React app's Login screen is what collects the
-// email + password via POST /api/v1/session. The server replies with a HttpOnly session
+// email + password via POST /api/session. The server replies with a HttpOnly session
 // cookie and a CSRF token the JS stores in memory. Every subsequent state-changing call
 // carries both the cookie (automatic, HttpOnly) and an X-CSRF-Token header. Gating /ui/
 // itself behind the Session middleware would make the login page unreachable (chicken/egg).
-// The privileged surface is /api/v1/*, which IS session-gated.
+// The privileged surface is /api/*, which IS session-gated.
 func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {

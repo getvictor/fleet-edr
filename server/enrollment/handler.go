@@ -39,7 +39,7 @@ type CommandInserter interface {
 	InsertCommand(ctx context.Context, c store.Command) (int64, error)
 }
 
-// Handler serves POST /api/v1/enroll. Unauthenticated; rate-limited per source IP; emits an
+// Handler serves POST /api/enroll. Unauthenticated; rate-limited per source IP; emits an
 // audit log + OTel span attribute set for every enrollment attempt.
 type Handler struct {
 	store    *Store
@@ -97,7 +97,7 @@ func NewHandler(store *Store, opts Options) *Handler {
 
 // RegisterRoutes wires the enrollment endpoint onto the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/enroll", h.handleEnroll)
+	mux.HandleFunc("POST /api/enroll", h.handleEnroll)
 }
 
 // enrollRequest is the wire payload. NOTE: its String()/fmt.%v must NEVER include the secret —
@@ -132,7 +132,7 @@ type enrollErrorBody struct {
 // emits unhyphenated 32-hex strings, broaden this regex along with a matching agent change.
 var uuidPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
-// maxEnrollBodyBytes caps the enroll request body. /api/v1/enroll is a public, unauthenticated
+// maxEnrollBodyBytes caps the enroll request body. /api/enroll is a public, unauthenticated
 // endpoint; decoding directly from an unbounded r.Body would let any client burn memory/CPU
 // before field validation. The real payload is ~300 bytes; 4 KiB leaves plenty of headroom for
 // metadata but closes the DoS vector.

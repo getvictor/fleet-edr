@@ -52,7 +52,7 @@ type Rule interface {
 }
 
 // Documentation is the structured per-rule descriptor consumed by the markdown
-// generator, the /api/v1/rules endpoint, and the UI's rule detail page.
+// generator, the /api/rules endpoint, and the UI's rule detail page.
 // Single source of truth — the markdown file in docs/ is generated from this,
 // so behaviour and documentation cannot drift.
 type Documentation struct {

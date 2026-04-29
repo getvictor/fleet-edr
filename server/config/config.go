@@ -128,7 +128,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, &errs, true)
 	// Phase 3 removed EDR_ADMIN_TOKEN. UI + admin surfaces now authenticate via the
-	// session cookie minted by POST /api/v1/session. The first-boot seeder prints the
+	// session cookie minted by POST /api/session. The first-boot seeder prints the
 	// admin password once so the operator can log in.
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)

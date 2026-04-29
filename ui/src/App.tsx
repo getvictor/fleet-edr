@@ -15,7 +15,7 @@ type AuthState =
   | { status: "anon" }
   | { status: "authed"; user: SessionInfo["user"] };
 
-// Phase 3: the UI probes GET /api/v1/session on mount. On 200 we render the app; on
+// Phase 3: the UI probes GET /api/session on mount. On 200 we render the app; on
 // 401 we render the Login component. The old sessionStorage "edr_api_key" probe is
 // gone — the cookie is HttpOnly so JS can't see it directly, and the server is the
 // source of truth for "am I logged in?".

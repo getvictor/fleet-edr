@@ -118,7 +118,7 @@ func (c *Commander) pollAndDispatch(ctx context.Context) {
 }
 
 func (c *Commander) fetchPending(ctx context.Context) ([]command, error) {
-	reqURL := fmt.Sprintf("%s/api/v1/commands?host_id=%s&status=pending", c.cfg.ServerURL, url.QueryEscape(c.cfg.HostID))
+	reqURL := fmt.Sprintf("%s/api/commands?host_id=%s&status=pending", c.cfg.ServerURL, url.QueryEscape(c.cfg.HostID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -253,7 +253,7 @@ func marshalResult(errMsg string) json.RawMessage {
 }
 
 func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string, result json.RawMessage) error {
-	reqURL := fmt.Sprintf("%s/api/v1/commands/%d", c.cfg.ServerURL, cmdID)
+	reqURL := fmt.Sprintf("%s/api/commands/%d", c.cfg.ServerURL, cmdID)
 
 	update := statusUpdate{Status: status, Result: result}
 	body, err := json.Marshal(update)
