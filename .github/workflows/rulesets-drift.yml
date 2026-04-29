@@ -12,7 +12,11 @@ name: Rulesets drift check
 #      a 1-year expiration. Same constraint that drives OpenSSF
 #      Scorecard's branch-protection check; if you set a PAT for
 #      Scorecard, you can reuse it here.
-#   2. Add it as a repo secret named `RULESETS_READ_PAT`.
+#   2. Create a GitHub Environment named `rulesets-drift` and store
+#      the PAT there as `RULESETS_READ_PAT`. Using an environment
+#      (instead of a plain repo secret) lets you restrict which refs
+#      can access the token. Match the pattern already used for the
+#      `release-signing` and `sonarcloud` environments in this repo.
 #   3. Re-run this workflow via the Actions tab. From here on it'll
 #      run on every PR that touches `.github/rulesets/**`, on every
 #      push to `main`, and weekly on a schedule.
@@ -52,6 +56,7 @@ jobs:
   drift:
     name: Diff committed rulesets vs live
     runs-on: ubuntu-latest
+    environment: rulesets-drift
     permissions:
       contents: read
     steps:
@@ -79,8 +84,22 @@ jobs:
           STRIP='del(.id, .source, .source_type, .node_id, .created_at, .updated_at, ._links, .current_user_can_bypass)'
           # Order-independent comparison for arrays whose elements have
           # no inherent ordering. `rules` is keyed by .type;
-          # bypass_actors by (.actor_id, .actor_type).
-          NORM="$STRIP"' | .rules |= sort_by(.type) | .bypass_actors = ((.bypass_actors // []) | sort_by(.actor_id, .actor_type))'
+          # bypass_actors by (.actor_id, .actor_type). Inside a
+          # required_status_checks rule, GitHub may attach an
+          # integration_id per check (e.g. when the source app is
+          # known); strip those and sort by .context so a server-side
+          # integration_id annotation doesn't masquerade as drift.
+          NORM="$STRIP"' |
+            .rules |= (
+              map(
+                if .type == "required_status_checks" then
+                  .parameters.required_status_checks |= ((map(del(.integration_id))) | sort_by(.context))
+                else
+                  .
+                end
+              ) | sort_by(.type)
+            ) |
+            .bypass_actors = ((.bypass_actors // []) | sort_by(.actor_id, .actor_type))'
 
           status=0
           files=(.github/rulesets/*.json)
@@ -93,16 +112,30 @@ jobs:
             name=$(jq -r .name "$committed")
             echo "::group::Checking $committed (name=$name)"
 
-            # Look up live id by name. Empty result means the ruleset is
-            # missing on the GitHub side, which counts as drift.
-            id=$(gh api "/repos/$REPO/rulesets" \
-                  --jq ".[] | select(.name == \"$name\") | .id")
-            if [[ -z "$id" ]]; then
+            # Look up live id by name. Pass the name through `--arg` so
+            # quotes/backslashes in a ruleset name can't break the jq
+            # program. Paginate so a repo with many rulesets doesn't
+            # silently truncate. Empty result means the ruleset is
+            # missing on the GitHub side, which counts as drift; more
+            # than one match means two rulesets share the same name,
+            # which we refuse to silently pick from.
+            mapfile -t matching_ids < <(
+              gh api --paginate "/repos/$REPO/rulesets" \
+                | jq -r --arg name "$name" '.[] | select(.name == $name) | .id'
+            )
+            if [[ ${#matching_ids[@]} -eq 0 ]]; then
               echo "::error file=$committed::DRIFT: no live ruleset named '$name' on $REPO"
               status=1
               echo "::endgroup::"
               continue
             fi
+            if [[ ${#matching_ids[@]} -gt 1 ]]; then
+              echo "::error file=$committed::DRIFT: multiple live rulesets named '$name' on $REPO (ids: ${matching_ids[*]})"
+              status=1
+              echo "::endgroup::"
+              continue
+            fi
+            id=${matching_ids[0]}
 
             committed_norm=$(jq -S "$NORM" "$committed")
             live_norm=$(gh api "/repos/$REPO/rulesets/$id" | jq -S "$NORM")

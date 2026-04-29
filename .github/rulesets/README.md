@@ -27,10 +27,13 @@ ships in this repo but is **opt-in**: it short-circuits with a notice
 unless a `RULESETS_READ_PAT` secret is configured. Reading rulesets via
 the API requires `Repository administration: Read`, which the workflow's
 default `GITHUB_TOKEN` cannot grant. Enabling drift-detection means
-creating a fine-grained PAT, storing it as a repo secret, and rotating
-it on the same cadence as any other long-lived credential. That's a
-real ongoing cost, so we leave the choice to the maintainer rather than
-making it implicit. Setup steps are in the workflow's header comment.
+creating a fine-grained PAT, storing it inside a `rulesets-drift`
+GitHub Environment (so the token is scoped the same way as the
+`release-signing` and `sonarcloud` environments already used in this
+repo), and rotating it on the same cadence as any other long-lived
+credential. That's a real ongoing cost, so we leave the choice to the
+maintainer rather than making it implicit. Setup steps are in the
+workflow's header comment.
 
 ## Updating a ruleset
 
@@ -43,8 +46,9 @@ making it implicit. Setup steps are in the workflow's header comment.
    ```
    Look up the ruleset id with
    `gh api /repos/getvictor/fleet-edr/rulesets`.
-3. Open a PR with the JSON change. The drift-detect workflow runs
-   automatically and confirms the live state now matches.
+3. Open a PR with the JSON change. If `RULESETS_READ_PAT` is configured,
+   the drift-detect workflow runs automatically and confirms the live
+   state now matches. Otherwise it exits early with a setup notice.
 
 ## Files
 
@@ -56,9 +60,13 @@ making it implicit. Setup steps are in the workflow's header comment.
 ## Required status checks
 
 The `required_status_checks` list in `main.json` names checks that ALWAYS
-run on every PR. Workflows with path filters (e.g. `c-lint.yml`,
-`openapi-lint.yml`, `swift-lint.yml`) are intentionally NOT in the list
-because GitHub blocks merges on required checks that did not run, even
-when the path filter would have skipped them. Add a path-filtered
-workflow to the list only if the workflow is rewritten to always start
-and short-circuit inside its job.
+run on every PR. Workflows with path filters are intentionally NOT in
+the list because GitHub blocks merges on required checks that did not
+run, even when the path filter would have skipped them. The currently
+excluded path-filtered workflows are `c-lint.yml`, `openapi-lint.yml`,
+`swift-lint.yml`, `go-lint.yml` (golangci-lint), `go-nilaway.yml`,
+`go-vulncheck.yml` (server + agent), `ts-lint.yml` (Lint and test),
+and `pkg-dryrun.yml` (Pkg build dry-run). They still run on PRs that
+touch their relevant paths, but their pass/fail is advisory only. To
+promote any of them to required, first rewrite the workflow to always
+start and short-circuit inside its job.
