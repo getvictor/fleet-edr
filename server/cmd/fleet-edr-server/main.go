@@ -333,10 +333,10 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/v1/hosts", "GET /api/v1/hosts/{host_id}/tree", "GET /api/v1/hosts/{host_id}/processes/{pid}",
 		"GET /api/v1/alerts", "GET /api/v1/alerts/{id}", "PUT /api/v1/alerts/{id}",
 		"GET /api/v1/commands/{id}", "POST /api/v1/commands",
-		"GET /api/v1/admin/enrollments", "POST /api/v1/admin/enrollments/{host_id}/revoke",
-		"GET /api/v1/admin/policy", "PUT /api/v1/admin/policy",
-		"GET /api/v1/admin/attack-coverage",
-		"GET /api/v1/admin/rules",
+		"GET /api/v1/enrollments", "POST /api/v1/enrollments/{host_id}/revoke",
+		"GET /api/v1/policy", "PUT /api/v1/policy",
+		"GET /api/v1/attack-coverage",
+		"GET /api/v1/rules",
 		"GET /api/v1/session",
 	} {
 		mux.Handle(p, sessionProtected)

@@ -15,7 +15,7 @@ import (
 	"github.com/fleetdm/edr/server/store"
 )
 
-// TestHandleListRules_RoundTrips proves the new /api/v1/admin/rules endpoint
+// TestHandleListRules_RoundTrips proves the new /api/v1/rules endpoint
 // renders every field the UI's RuleDetail.tsx consumes, in registration order,
 // without dropping or transforming the documentation payload. Order is
 // load-bearing: the UI uses the catalog order to render the rules index.
@@ -58,7 +58,7 @@ func TestHandleListRules_RoundTrips(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/admin/rules", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/rules", nil)
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestHandleListRules_NilCatalog(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/admin/rules", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/rules", nil)
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

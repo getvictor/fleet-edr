@@ -516,7 +516,7 @@ paths:
         "404":
           description: Command not found (or not owned by authenticated host)
 
-  /api/v1/admin/enrollments:
+  /api/v1/enrollments:
     get:
       tags: [Admin]
       summary: List enrollments
@@ -532,7 +532,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/Enrollment"
 
-  /api/v1/admin/enrollments/{host_id}/revoke:
+  /api/v1/enrollments/{host_id}/revoke:
     post:
       tags: [Admin]
       summary: Revoke a host enrollment
@@ -561,7 +561,7 @@ paths:
         "404":
           description: Host not found
 
-  /api/v1/admin/policy:
+  /api/v1/policy:
     get:
       tags: [Admin]
       summary: Current blocklist policy
@@ -608,7 +608,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PolicyUpdateResult"
 
-  /api/v1/admin/attack-coverage:
+  /api/v1/attack-coverage:
     get:
       tags: [Admin]
       summary: MITRE ATT&CK coverage (Navigator layer)

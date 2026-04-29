@@ -50,7 +50,7 @@ func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_pli
 // (Boot or Logon Autostart Execution → Launch Daemon).
 func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1543.004"} }
 
-// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// Doc surfaces the operator-facing description in /api/v1/rules and
 // the generated docs/detection-rules.md.
 func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
 	return detection.Documentation{

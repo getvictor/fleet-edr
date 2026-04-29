@@ -39,7 +39,7 @@ func TestList_ReturnsEnrollmentRows(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/admin/enrollments", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/enrollments", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestRevoke_HappyPath(t *testing.T) {
 		"actor":  "jane@customer.com",
 	})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		srv.URL+"/api/v1/admin/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
+		srv.URL+"/api/v1/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -84,7 +84,7 @@ func TestRevoke_NotFound(t *testing.T) {
 	srv, _, _ := newAdminServer(t)
 	body, _ := json.Marshal(map[string]string{"reason": "x", "actor": "y"})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		srv.URL+"/api/v1/admin/enrollments/AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA/revoke",
+		srv.URL+"/api/v1/enrollments/AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA/revoke",
 		bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -103,7 +103,7 @@ func TestRevoke_MissingBody(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"reason": ""})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		srv.URL+"/api/v1/admin/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
+		srv.URL+"/api/v1/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -114,7 +114,7 @@ func TestRevoke_MissingBody(t *testing.T) {
 
 func TestGetPolicy_SeedRow(t *testing.T) {
 	srv, _, _ := newAdminServer(t)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/admin/policy", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/policy", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestPutPolicy_HappyPath(t *testing.T) {
 		"actor":  "qa-tester",
 		"reason": "phase-2 smoke",
 	})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/admin/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -178,7 +178,7 @@ func TestPutPolicy_HappyPath(t *testing.T) {
 func TestPutPolicy_MissingActor(t *testing.T) {
 	srv, _, _ := newAdminServer(t)
 	body, _ := json.Marshal(map[string]any{"paths": []string{"/tmp/x"}})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/admin/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -192,7 +192,7 @@ func TestPutPolicy_EmptyBlocklistAccepted(t *testing.T) {
 	// edit so operators have a fast panic-button.
 	srv, _, _ := newAdminServer(t)
 	body, _ := json.Marshal(map[string]any{"actor": "qa-tester", "reason": "clear"})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/admin/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -211,7 +211,7 @@ func TestPutPolicy_InvalidBlocklistReturns400(t *testing.T) {
 		"actor":  "qa-tester",
 		"reason": "phase-2 negative",
 	})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/admin/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -234,7 +234,7 @@ func TestRevoke_IdempotentPreservesFirstActor(t *testing.T) {
 	revoke := func(actor, reason string) int {
 		body, _ := json.Marshal(map[string]string{"reason": reason, "actor": actor})
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-			srv.URL+"/api/v1/admin/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
+			srv.URL+"/api/v1/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
 		require.NoError(t, err)
 		resp, err := srv.Client().Do(req)
 		require.NoError(t, err)

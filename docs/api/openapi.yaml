@@ -516,7 +516,7 @@ paths:
         "404":
           description: Command not found (or not owned by authenticated host)
 
-  /api/v1/admin/enrollments:
+  /api/v1/enrollments:
     get:
       tags: [Admin]
       summary: List enrollments
@@ -532,7 +532,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/Enrollment"
 
-  /api/v1/admin/enrollments/{host_id}/revoke:
+  /api/v1/enrollments/{host_id}/revoke:
     post:
       tags: [Admin]
       summary: Revoke a host enrollment
@@ -561,7 +561,7 @@ paths:
         "404":
           description: Host not found
 
-  /api/v1/admin/policy:
+  /api/v1/policy:
     get:
       tags: [Admin]
       summary: Current blocklist policy
@@ -608,7 +608,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PolicyUpdateResult"
 
-  /api/v1/admin/attack-coverage:
+  /api/v1/attack-coverage:
     get:
       tags: [Admin]
       summary: MITRE ATT&CK coverage (Navigator layer)
@@ -630,7 +630,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/NavigatorLayer"
 
-  /api/v1/admin/rules:
+  /api/v1/rules:
     get:
       tags: [Admin]
       summary: Detection rule documentation
@@ -948,7 +948,7 @@ components:
     RulesResponse:
       type: object
       description: |
-        Wrapper returned by `GET /api/v1/admin/rules`. The `rules` array
+        Wrapper returned by `GET /api/v1/rules`. The `rules` array
         is in engine-registration order; clients should not assume any
         particular ordering beyond "stable across calls in the same
         process".

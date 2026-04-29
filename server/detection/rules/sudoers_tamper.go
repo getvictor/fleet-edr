@@ -51,7 +51,7 @@ func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 // (Abuse Elevation Control Mechanism: Sudo and Sudo Caching).
 func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 
-// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// Doc surfaces the operator-facing description in /api/v1/rules and
 // the generated docs/detection-rules.md.
 func (r *SudoersTamper) Doc() detection.Documentation {
 	return detection.Documentation{

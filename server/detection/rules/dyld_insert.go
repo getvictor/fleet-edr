@@ -31,7 +31,7 @@ func (r *DyldInsert) ID() string { return "dyld_insert" }
 // broader "Hijack Execution Flow" parent.
 func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 
-// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// Doc surfaces the operator-facing description in /api/v1/rules and
 // the generated docs/detection-rules.md.
 func (r *DyldInsert) Doc() detection.Documentation {
 	return detection.Documentation{

@@ -16,13 +16,16 @@ without reading the handler source.
 
 ### Requirement: Authenticated admin boundary
 
-Every admin endpoint SHALL require a caller authenticated as an admin user. The server MUST gate all `/api/v1/admin/*` routes
-behind admin authentication middleware so that an unauthenticated or non-admin caller receives `401 Unauthorized`.
+Every endpoint defined by this capability (`/api/v1/enrollments`, `/api/v1/enrollments/{host_id}/revoke`,
+`/api/v1/policy`, `/api/v1/attack-coverage`, and `/api/v1/rules`) SHALL require a caller authenticated as an operator.
+The server MUST gate these routes behind the operator-session middleware so that an unauthenticated caller receives
+`401 Unauthorized`. The endpoints share an authentication boundary with the rest of the operator API; there is no
+separate "admin" auth mode in the current implementation.
 
 #### Scenario: Unauthenticated request is rejected
 
 - **GIVEN** a client that has not authenticated
-- **WHEN** the client requests any `/api/v1/admin/*` endpoint
+- **WHEN** the client requests any endpoint defined by this capability
 - **THEN** the server returns `401 Unauthorized`
 - **AND** the response body uses the standard error shape `{"error": "..."}`
 
@@ -34,27 +37,27 @@ behind admin authentication middleware so that an unauthenticated or non-admin c
 
 ### Requirement: List enrollments
 
-The system SHALL expose `GET /api/v1/admin/enrollments` returning the set of enrolled hosts known to the server. Each entry MUST
+The system SHALL expose `GET /api/v1/enrollments` returning the set of enrolled hosts known to the server. Each entry MUST
 identify the host and carry the metadata needed for the admin host list (host id, hostname, agent version, OS version, last-seen
 timestamp, enrollment status).
 
 #### Scenario: Operator lists enrolled hosts
 
 - **GIVEN** at least one host has enrolled successfully
-- **WHEN** the operator requests `GET /api/v1/admin/enrollments`
+- **WHEN** the operator requests `GET /api/v1/enrollments`
 - **THEN** the server returns `200 OK` with a JSON array of enrollment rows
 - **AND** every row includes the host id and the host's last-seen timestamp
 
 ### Requirement: Revoke a host enrollment
 
-The system SHALL expose `POST /api/v1/admin/enrollments/{host_id}/revoke` to invalidate a host's bearer token immediately. The
+The system SHALL expose `POST /api/v1/enrollments/{host_id}/revoke` to invalidate a host's bearer token immediately. The
 request body MUST carry an operator-supplied `reason` and `actor`; the server MUST reject the request when either is empty. Once
 revoked, the next authenticated request from that host's agent MUST receive `401 Unauthorized`.
 
 #### Scenario: Revoke a known host
 
 - **GIVEN** a host with a currently valid enrollment
-- **WHEN** the operator POSTs to `/api/v1/admin/enrollments/{host_id}/revoke` with a non-empty `reason` and `actor`
+- **WHEN** the operator POSTs to `/api/v1/enrollments/{host_id}/revoke` with a non-empty `reason` and `actor`
 - **THEN** the server returns `204 No Content`
 - **AND** the host's bearer token is invalidated server-side
 - **AND** the next request that agent makes with that token receives `401 Unauthorized`
@@ -73,7 +76,7 @@ revoked, the next authenticated request from that host's agent MUST receive `401
 
 ### Requirement: Read the current blocklist policy
 
-The system SHALL expose `GET /api/v1/admin/policy` returning the current default policy. The response MUST always include a
+The system SHALL expose `GET /api/v1/policy` returning the current default policy. The response MUST always include a
 `name`, a monotonically increasing `version`, a `blocklist` object with `paths` and `hashes` arrays, plus `updated_at` and
 `updated_by` audit fields. On a freshly-seeded server with no operator changes the policy MUST return cleanly with empty `paths`
 and `hashes`.
@@ -81,19 +84,19 @@ and `hashes`.
 #### Scenario: First-query returns the seeded empty policy
 
 - **GIVEN** a server that has never had a policy push
-- **WHEN** the operator requests `GET /api/v1/admin/policy`
+- **WHEN** the operator requests `GET /api/v1/policy`
 - **THEN** the server returns `200 OK`
 - **AND** the response body's `blocklist.paths` and `blocklist.hashes` are present and empty
 
 #### Scenario: Read after operator changes
 
 - **GIVEN** the operator has previously persisted a non-empty blocklist
-- **WHEN** the operator requests `GET /api/v1/admin/policy`
+- **WHEN** the operator requests `GET /api/v1/policy`
 - **THEN** the response carries the latest persisted version, blocklist contents, and updated-by attribution
 
 ### Requirement: Persist and fan out a new blocklist policy
 
-The system SHALL expose `PUT /api/v1/admin/policy` that atomically bumps the policy's version and replaces the blocklist.
+The system SHALL expose `PUT /api/v1/policy` that atomically bumps the policy's version and replaces the blocklist.
 The system SHALL attempt to queue a `set_blocklist` command carrying the new version for every active host on a
 best-effort basis. A failure to enqueue the command for an individual host MUST NOT roll back the policy update; the
 server MUST log the per-host fan-out failures so the next agent poll or admin push can reconcile, and MAY surface
@@ -154,26 +157,26 @@ SIEM and SigNoz queries can filter on so SOC teams can reconstruct who changed w
 
 ### Requirement: ATT&CK coverage layer endpoint
 
-The system SHALL expose `GET /api/v1/admin/attack-coverage` returning a MITRE ATT&CK Navigator layer JSON document that enumerates
+The system SHALL expose `GET /api/v1/attack-coverage` returning a MITRE ATT&CK Navigator layer JSON document that enumerates
 the techniques covered by the registered detection rules. The document MUST be importable directly into the upstream MITRE
 ATT&CK Navigator. Each covered technique MUST identify the rule (or rules) that cover it.
 
 #### Scenario: Coverage when rules are registered
 
 - **GIVEN** at least one detection rule registered with one or more ATT&CK techniques
-- **WHEN** the operator requests `GET /api/v1/admin/attack-coverage`
+- **WHEN** the operator requests `GET /api/v1/attack-coverage`
 - **THEN** the server returns a Navigator layer JSON whose `techniques` array contains an entry for every covered technique
 - **AND** each entry identifies the rule ids that cover that technique
 
 #### Scenario: Coverage with no rules
 
 - **GIVEN** a server with no rules registered
-- **WHEN** the operator requests `GET /api/v1/admin/attack-coverage`
+- **WHEN** the operator requests `GET /api/v1/attack-coverage`
 - **THEN** the server returns a Navigator layer JSON with an empty `techniques` array rather than an error
 
 ### Requirement: Per-rule documentation endpoint
 
-The system SHALL expose `GET /api/v1/admin/rules` returning the per-rule documentation surface the admin UI's rule-detail page
+The system SHALL expose `GET /api/v1/rules` returning the per-rule documentation surface the admin UI's rule-detail page
 relies on. The response MUST include, for every registered rule, the rule's `id`, the list of ATT&CK `techniques` it covers, and
 a `doc` object carrying at least `title`, `summary`, `description`, `severity`, and `event_types`. When a rule declares operator-
 tunable knobs, false-positive sources, or limitations, those MUST be exposed under `config`, `false_positives`, and `limitations`
@@ -182,7 +185,7 @@ respectively.
 #### Scenario: Operator reads the rule catalog
 
 - **GIVEN** a server with one or more rules registered
-- **WHEN** the operator requests `GET /api/v1/admin/rules`
+- **WHEN** the operator requests `GET /api/v1/rules`
 - **THEN** the server returns `200 OK` with a `rules` array
 - **AND** each entry carries `id`, `techniques`, and a non-empty `doc` block with `title`, `summary`, `description`, `severity`,
   and `event_types`

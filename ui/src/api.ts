@@ -225,7 +225,7 @@ export interface AttackNavigatorLayer {
 }
 
 // Policy is the operator-managed blocklist. The same shape the server
-// returns from GET /api/v1/admin/policy.
+// returns from GET /api/v1/policy.
 export interface Policy {
   name: string;
   version: number;
@@ -269,7 +269,7 @@ export interface RuleConfig {
 }
 
 // RuleDoc is the structured per-rule documentation surfaced by GET
-// /api/v1/admin/rules. Mirrors detection.Documentation on the server, with
+// /api/v1/rules. Mirrors detection.Documentation on the server, with
 // the JSON tag spellings the wire format uses.
 export interface RuleDoc {
   title: string;

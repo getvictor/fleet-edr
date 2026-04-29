@@ -31,7 +31,7 @@ func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" 
 // sub-technique's scope.
 func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.001"} }
 
-// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// Doc surfaces the operator-facing description in /api/v1/rules and
 // the generated docs/detection-rules.md.
 func (r *PersistenceLaunchAgent) Doc() detection.Documentation {
 	return detection.Documentation{

@@ -38,8 +38,9 @@ type Handler struct {
 }
 
 // New creates an API handler. Authorization is NOT enforced in this package anymore; callers
-// wrap the returned mux (or this handler's routes) in the authn.AdminToken middleware (or,
-// when Phase 3 lands, a session-cookie middleware) at registration time.
+// wrap the returned mux (or this handler's routes) in the operator-session middleware
+// (authn.Session, then authn.CSRF on unsafe methods) at registration time. See buildMux in
+// cmd/fleet-edr-server/main.go for the actual wiring.
 func New(q *graph.Query, s *store.Store, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()

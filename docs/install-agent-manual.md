@@ -247,7 +247,7 @@ sudo rm /etc/fleet-edr.conf
 
 After uninstall, the host disappears from the admin UI only after its
 `last_seen` threshold (default 5 min) elapses. You can also revoke the
-enrollment manually via `POST /api/v1/admin/enrollments/{host_id}/revoke`
+enrollment manually via `POST /api/v1/enrollments/{host_id}/revoke`
 (see [api.md](api.md)).
 
 ## Troubleshoot

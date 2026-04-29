@@ -37,7 +37,7 @@ func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump"
 // and MITRE explicitly cites it on the technique page.
 func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.001"} }
 
-// Doc surfaces the operator-facing description in /api/v1/admin/rules and
+// Doc surfaces the operator-facing description in /api/v1/rules and
 // the generated docs/detection-rules.md.
 func (r *CredentialKeychainDump) Doc() detection.Documentation {
 	return detection.Documentation{
