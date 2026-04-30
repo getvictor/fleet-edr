@@ -270,12 +270,16 @@ type muxDeps struct {
 }
 
 // buildMux composes the HTTP surface out of three authorization domains:
-//   - public:  /livez, /readyz, /health, POST /api/enroll, POST /api/session
+//   - public:  /livez, /readyz, /health, POST /api/enroll, POST /api/session,
+//     DELETE /api/session (logout is best-effort and idempotent;
+//     tolerating an unknown session avoids forcing a session probe
+//     before a logout request)
 //   - host:    POST /api/events, GET /api/commands, PUT /api/commands/{id}
 //     (wrapped in authn.HostToken — the agent polls for + reports on its own commands)
-//   - session: everything under /api/{hosts,alerts,admin}, POST /api/commands,
-//     GET /api/commands/{id}, GET/DELETE /api/session (wrapped in authn.Session;
-//     unsafe methods additionally gated by authn.CSRF)
+//   - session: /api/hosts/**, /api/alerts/**, /api/enrollments/**, /api/policy,
+//     /api/attack-coverage, /api/rules, POST /api/commands, GET /api/commands/{id},
+//     GET /api/session (wrapped in authn.Session; unsafe methods additionally
+//     gated by authn.CSRF)
 //
 // Middleware is applied per-handler at registration time so one mux serves the whole
 // surface instead of chaining multiple servers.
@@ -349,7 +353,10 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 // cookie and a CSRF token the JS stores in memory. Every subsequent state-changing call
 // carries both the cookie (automatic, HttpOnly) and an X-CSRF-Token header. Gating /ui/
 // itself behind the Session middleware would make the login page unreachable (chicken/egg).
-// The privileged surface is /api/*, which IS session-gated.
+// The operator surface (everything under /api/* except the agent's host-token
+// endpoints and the public enroll/session pair) IS session-gated; the public
+// agent and login endpoints sit alongside under /api/* but use their own
+// auth.
 func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {

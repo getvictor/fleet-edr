@@ -235,7 +235,7 @@ export interface Policy {
 }
 
 export async function fetchPolicy(): Promise<Policy> {
-  return fetchJSON<Policy>("/admin/policy");
+  return fetchJSON<Policy>("/policy");
 }
 
 export async function updatePolicy(
@@ -244,7 +244,7 @@ export async function updatePolicy(
   actor: string,
   reason: string,
 ): Promise<Policy> {
-  return fetchJSON<Policy>("/admin/policy", {
+  return fetchJSON<Policy>("/policy", {
     method: "PUT",
     body: JSON.stringify({ paths, hashes, actor, reason }),
   });
@@ -256,7 +256,7 @@ export async function updatePolicy(
 // to render as a heatmap. Call site is the "ATT&CK coverage" button in the
 // alerts page; the response is also useful for procurement questionnaires.
 export async function fetchAttackNavigatorLayer(): Promise<AttackNavigatorLayer> {
-  return fetchJSON<AttackNavigatorLayer>("/admin/attack-coverage");
+  return fetchJSON<AttackNavigatorLayer>("/attack-coverage");
 }
 
 // RuleConfig describes one operator-tuning env var. Wire shape matches
@@ -293,7 +293,7 @@ export interface RuleDocEntry {
 // links on /ui/coverage. Order mirrors the server's registration order, so
 // the UI can iterate without resorting.
 export async function fetchRuleDocs(): Promise<RuleDocEntry[]> {
-  const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/admin/rules");
+  const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/rules");
   return body.rules;
 }
 

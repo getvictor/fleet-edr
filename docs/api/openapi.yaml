@@ -7,7 +7,8 @@ info:
 
     - **Agents** (macOS endpoints) authenticate with a per-host bearer
       token obtained at enrollment. They call `POST /api/enroll`,
-      `POST /api/events`, and the host-scoped `/commands` endpoints.
+      `POST /api/events`, and the host-scoped `GET /api/commands` and
+      `PUT /api/commands/{id}` endpoints.
     - **Browsers** (admin UI) authenticate with an `edr_session` cookie
       (HttpOnly, Secure, SameSite=Lax) plus an `X-CSRF-Token` header on
       unsafe methods. They call the session-protected endpoints.

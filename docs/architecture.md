@@ -53,7 +53,7 @@ and presents findings through a web UI with response capabilities.
 │                                                       │
 │         ┌─────────────────┐                           │
 │         │   REST API      │◄──── React UI             │
-│         │   /api/*     │      (embedded)           │
+│         │   /api/*        │      (embedded)           │
 │         └─────────────────┘                           │
 └───────────────────────────────────────────────────────┘
 ```

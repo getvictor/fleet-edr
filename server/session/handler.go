@@ -3,7 +3,10 @@
 //	POST   /api/session  — public, rate-limited, validates email+password, creates
 //	                          session row, sets Set-Cookie, returns {user, csrf_token}.
 //	GET    /api/session  — session-required, returns the current {user, csrf_token}.
-//	DELETE /api/session  — session-required, deletes the session row, clears cookie.
+//	DELETE /api/session  — public (not behind Session middleware), best-effort cookie
+//	                          clear + row delete; safe to call even with a stale cookie
+//	                          since handleLogout idempotently treats unknown sessions
+//	                          as success.
 //
 // The shape of the login response body intentionally returns both the user AND the CSRF
 // token so the UI can store the CSRF for unsafe methods without a round-trip. The
