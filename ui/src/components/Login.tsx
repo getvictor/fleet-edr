@@ -9,7 +9,7 @@ interface LoginProps {
   readonly onLogin: () => void;
 }
 
-// Phase 3 login: email + password → POST /api/v1/session → server sets HttpOnly
+// Phase 3 login: email + password → POST /api/session → server sets HttpOnly
 // session cookie and returns the per-session CSRF token. api.ts stashes the CSRF in
 // sessionStorage; App.tsx re-renders with the logged-in view.
 export function Login({ onLogin }: LoginProps) {

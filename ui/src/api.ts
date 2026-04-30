@@ -1,11 +1,11 @@
 // Phase 3: the UI authenticates with the server via a HttpOnly session cookie
 // (automatic on every fetch when credentials: 'include') + a per-session CSRF token
 // that the JS attaches as X-CSRF-Token on unsafe methods. The old sessionStorage
-// "edr_api_key" bearer is gone; see POST /api/v1/session for the login round-trip
+// "edr_api_key" bearer is gone; see POST /api/session for the login round-trip
 // that issues both the cookie and the CSRF token.
 import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail, Command } from "./types";
 
-const API_BASE = "/api/v1";
+const API_BASE = "/api";
 
 const CSRF_KEY = "edr_csrf_token";
 
@@ -64,7 +64,7 @@ function unsafeMethod(method?: string): boolean {
 // path. fetchJSON concatenates its path argument with API_BASE and hands the
 // result to fetch(); without this check a caller that accidentally forwards
 // user input (URL from query params, server-returned string, etc.) could steer
-// the request to an unintended origin or walk out of /api/v1 via "..". The
+// the request to an unintended origin or walk out of /api via "..". The
 // whitelist is deliberately narrow: leading slash, then only URL-path +
 // query-string characters we actually use.
 const API_PATH_RE = /^\/[A-Za-z0-9/?=&%:_.@~-]*$/;
@@ -108,7 +108,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
-  // DELETE /api/v1/session returns 204 with no body; handle the empty-body case.
+  // DELETE /api/session returns 204 with no body; handle the empty-body case.
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -225,7 +225,7 @@ export interface AttackNavigatorLayer {
 }
 
 // Policy is the operator-managed blocklist. The same shape the server
-// returns from GET /api/v1/admin/policy.
+// returns from GET /api/policy.
 export interface Policy {
   name: string;
   version: number;
@@ -235,7 +235,7 @@ export interface Policy {
 }
 
 export async function fetchPolicy(): Promise<Policy> {
-  return fetchJSON<Policy>("/admin/policy");
+  return fetchJSON<Policy>("/policy");
 }
 
 export async function updatePolicy(
@@ -244,7 +244,7 @@ export async function updatePolicy(
   actor: string,
   reason: string,
 ): Promise<Policy> {
-  return fetchJSON<Policy>("/admin/policy", {
+  return fetchJSON<Policy>("/policy", {
     method: "PUT",
     body: JSON.stringify({ paths, hashes, actor, reason }),
   });
@@ -256,7 +256,7 @@ export async function updatePolicy(
 // to render as a heatmap. Call site is the "ATT&CK coverage" button in the
 // alerts page; the response is also useful for procurement questionnaires.
 export async function fetchAttackNavigatorLayer(): Promise<AttackNavigatorLayer> {
-  return fetchJSON<AttackNavigatorLayer>("/admin/attack-coverage");
+  return fetchJSON<AttackNavigatorLayer>("/attack-coverage");
 }
 
 // RuleConfig describes one operator-tuning env var. Wire shape matches
@@ -269,7 +269,7 @@ export interface RuleConfig {
 }
 
 // RuleDoc is the structured per-rule documentation surfaced by GET
-// /api/v1/admin/rules. Mirrors detection.Documentation on the server, with
+// /api/rules. Mirrors detection.Documentation on the server, with
 // the JSON tag spellings the wire format uses.
 export interface RuleDoc {
   title: string;
@@ -293,7 +293,7 @@ export interface RuleDocEntry {
 // links on /ui/coverage. Order mirrors the server's registration order, so
 // the UI can iterate without resorting.
 export async function fetchRuleDocs(): Promise<RuleDocEntry[]> {
-  const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/admin/rules");
+  const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/rules");
   return body.rules;
 }
 

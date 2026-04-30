@@ -20,7 +20,7 @@ func TestFetchPending(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/commands", r.URL.Path)
+		assert.Equal(t, "/api/commands", r.URL.Path)
 		assert.Equal(t, "host-a", r.URL.Query().Get("host_id"))
 		assert.Equal(t, "pending", r.URL.Query().Get("status"))
 

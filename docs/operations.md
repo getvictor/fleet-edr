@@ -286,7 +286,7 @@ Common causes, in order:
    running`? If not:
    `sudo launchctl kickstart -k system/com.fleetdm.edr.agent`.
 4. **Enrollment revoked.** Check
-   `POST /api/v1/admin/enrollments/{host_id}/revoke` logs. Re-enroll
+   `POST /api/enrollments/{host_id}/revoke` logs. Re-enroll
    by re-running the MDM install-script and restarting the daemon.
 5. **DB clock skew / server down.** `edr.enrolled.hosts` gauge
    returning -1 means the DB query failed.
@@ -304,7 +304,7 @@ list.
 
 ```sh
 # View current policy.
-curl -s -b cookies.txt https://<server>/api/v1/admin/policy | jq .
+curl -s -b cookies.txt https://<server>/api/policy | jq .
 
 # Update policy (requires login + CSRF token).
 # Easier via the admin UI: Settings > Policy > Blocklist.

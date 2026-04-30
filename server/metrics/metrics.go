@@ -78,7 +78,7 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// nil-safe method paths below no-op, so a Recorder from New is always usable.
 	r.eventsIngested, _ = meter.Int64Counter(
 		"edr.events.ingested",
-		metric.WithDescription("Events accepted by POST /api/v1/events, by host_id."),
+		metric.WithDescription("Events accepted by POST /api/events, by host_id."),
 		metric.WithUnit("{event}"),
 	)
 	r.alertsCreated, _ = meter.Int64Counter(

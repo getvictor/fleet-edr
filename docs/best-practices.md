@@ -299,7 +299,7 @@ genuine differentiator versus most competitors.
 
 ## 8. API and protocol design
 
-- [x] Versioned URL prefix (`/api/v1/`)
+- [x] Stable API URL prefix (`/api/`); evolve in place rather than bumping a URL version, since v1 → v2 transitions rarely happen and are the wrong layer for protocol versioning when they do
 - [x] JSON event schema (`schema/events.json` -- consumed by both agent and server)
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration

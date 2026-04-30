@@ -61,7 +61,7 @@ func New(s *store.Store, logger *slog.Logger, info BuildInfo) *Handler {
 // SetMetrics installs the Phase 4 ingest-counter hook. Safe to call after New.
 func (h *Handler) SetMetrics(m MetricsHook) { h.metrics = m }
 
-// IngestHandler returns the POST /api/v1/events handler. Callers wrap it in
+// IngestHandler returns the POST /api/events handler. Callers wrap it in
 // authn.HostToken middleware before mounting.
 func (h *Handler) IngestHandler() http.Handler {
 	return http.HandlerFunc(h.handleIngest)

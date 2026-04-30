@@ -144,7 +144,7 @@ func (u *Uploader) drainOnce(ctx context.Context) error {
 }
 
 func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
-	url := u.cfg.ServerURL + "/api/v1/events"
+	url := u.cfg.ServerURL + "/api/events"
 
 	for attempt := range u.cfg.MaxRetries {
 		err := u.doUpload(ctx, url, body)

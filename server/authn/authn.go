@@ -218,7 +218,7 @@ func Session(store *sessions.Store, logger *slog.Logger) func(http.Handler) http
 // Wire it INSIDE Session so Session runs first (outer middleware runs on the way in)
 // and pins the session on ctx before CSRF reads it:
 //
-//	mux.Handle("PUT /api/v1/alerts/{id}", Session(store, logger)(CSRF(logger)(h)))
+//	mux.Handle("PUT /api/alerts/{id}", Session(store, logger)(CSRF(logger)(h)))
 //
 // Safe methods (GET/HEAD/OPTIONS) pass through without any CSRF check. Callers that
 // expose a non-idempotent GET would be making a mistake regardless of auth.

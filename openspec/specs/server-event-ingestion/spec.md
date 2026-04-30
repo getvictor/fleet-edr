@@ -14,21 +14,21 @@ that traffic spikes from a fleet of agents do not block detection work or the re
 
 ### Requirement: Authenticated batch event submission
 
-The system SHALL expose `POST /api/v1/events` that accepts a JSON array of event envelopes from an enrolled agent. The
+The system SHALL expose `POST /api/events` that accepts a JSON array of event envelopes from an enrolled agent. The
 caller MUST present a per-host bearer token in the `Authorization` header; the system MUST reject requests whose token does
 not resolve to an enrolled host.
 
 #### Scenario: A valid agent posts a batch
 
 - **GIVEN** an enrolled host with a valid bearer token
-- **WHEN** the agent submits a JSON array of well-formed event envelopes to `POST /api/v1/events`
+- **WHEN** the agent submits a JSON array of well-formed event envelopes to `POST /api/events`
 - **THEN** the system responds with HTTP 200 and a JSON body reporting the number of events accepted
 - **AND** every submitted event is persisted before the response is returned
 
 #### Scenario: A request without a host token is rejected
 
 - **GIVEN** a client that omits or supplies an unrecognized bearer token
-- **WHEN** the client submits any payload to `POST /api/v1/events`
+- **WHEN** the client submits any payload to `POST /api/events`
 - **THEN** the system responds with HTTP 401 and does not persist any of the events
 
 ### Requirement: Required field validation
@@ -64,7 +64,7 @@ A compromised or misbehaving agent MUST NOT be able to submit events that claim 
 
 ### Requirement: Body size limit
 
-The system SHALL cap the bytes it reads from the request body of `POST /api/v1/events` at 10 MB. Bodies that exceed the
+The system SHALL cap the bytes it reads from the request body of `POST /api/events` at 10 MB. Bodies that exceed the
 cap MUST result in HTTP 400 with a typed body-read diagnostic, and no events from that batch are persisted. A well-
 behaved agent is expected to split larger telemetry into multiple batches under the cap rather than rely on the server
 to reject oversized bodies.
@@ -111,7 +111,7 @@ or fail because of downstream processing work.
 #### Scenario: Ingestion accepts events while the processor is busy
 
 - **GIVEN** the processor is actively materializing earlier batches
-- **WHEN** an agent submits a new batch to `POST /api/v1/events`
+- **WHEN** an agent submits a new batch to `POST /api/events`
 - **THEN** the system persists the new events and responds with HTTP 200 without waiting for any processing work
 - **AND** the new events become visible to the processor in a subsequent processing cycle
 

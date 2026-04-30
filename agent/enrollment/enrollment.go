@@ -106,7 +106,7 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 		return nil, fmt.Errorf("load token file %q: %w", opts.TokenFile, err)
 	}
 
-	// First boot: need EDR_ENROLL_SECRET to call /api/v1/enroll.
+	// First boot: need EDR_ENROLL_SECRET to call /api/enroll.
 	if opts.EnrollSecret == "" {
 		return nil, fmt.Errorf(
 			"no token file at %q and EDR_ENROLL_SECRET is not set — cannot bootstrap",
@@ -187,7 +187,7 @@ func (p *provider) OnUnauthorized(ctx context.Context) {
 	}
 }
 
-// enroll performs the actual /api/v1/enroll call + persist. Thread-safety is the caller's
+// enroll performs the actual /api/enroll call + persist. Thread-safety is the caller's
 // responsibility: first-boot is single-threaded from Ensure, re-enrolls hold reenrollMu.
 func (p *provider) enroll(ctx context.Context) error {
 	hostID := p.opts.HostIDOverride
@@ -217,7 +217,7 @@ func (p *provider) enroll(ctx context.Context) error {
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.opts.ServerURL+"/api/v1/enroll",
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.opts.ServerURL+"/api/enroll",
 		bytes.NewReader(body))
 	if err != nil {
 		return err

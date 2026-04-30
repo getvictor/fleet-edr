@@ -28,7 +28,7 @@ func setupAlertTestHandler(t *testing.T) (http.Handler, *store.Store) {
 func TestListAlertsEmpty(t *testing.T) {
 	mux, _ := setupAlertTestHandler(t)
 
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/alerts", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/alerts", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -53,7 +53,7 @@ func TestListAlertsWithFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("filter by severity", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/alerts?severity=high", nil)
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/alerts?severity=high", nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -64,7 +64,7 @@ func TestListAlertsWithFilters(t *testing.T) {
 	})
 
 	t.Run("filter by severity no match", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/alerts?severity=low", nil)
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/alerts?severity=low", nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -91,7 +91,7 @@ func TestGetAlertDetail(t *testing.T) {
 	}, []string{"evt-1"})
 	require.NoError(t, err)
 
-	req := httptest.NewRequestWithContext(t.Context(), "GET", fmt.Sprintf("/api/v1/alerts/%d", alertID), nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", fmt.Sprintf("/api/alerts/%d", alertID), nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -106,7 +106,7 @@ func TestGetAlertDetail(t *testing.T) {
 func TestGetAlertNotFoundAPI(t *testing.T) {
 	mux, _ := setupAlertTestHandler(t)
 
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/alerts/99999", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/alerts/99999", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -127,7 +127,7 @@ func TestUpdateAlertStatusAPI(t *testing.T) {
 
 	t.Run("acknowledge", func(t *testing.T) {
 		body := `{"status":"acknowledged"}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/alerts/%d", alertID), strings.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/alerts/%d", alertID), strings.NewReader(body))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNoContent, w.Code)
@@ -139,7 +139,7 @@ func TestUpdateAlertStatusAPI(t *testing.T) {
 
 	t.Run("invalid status", func(t *testing.T) {
 		body := `{"status":"deleted"}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/v1/alerts/%d", alertID), strings.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), "PUT", fmt.Sprintf("/api/alerts/%d", alertID), strings.NewReader(body))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -147,7 +147,7 @@ func TestUpdateAlertStatusAPI(t *testing.T) {
 
 	t.Run("not found", func(t *testing.T) {
 		body := `{"status":"resolved"}`
-		req := httptest.NewRequestWithContext(t.Context(), "PUT", "/api/v1/alerts/99999", strings.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), "PUT", "/api/alerts/99999", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNotFound, w.Code)
@@ -179,7 +179,7 @@ func TestUpdateAlertStatus_CapturesUserID(t *testing.T) {
 
 	body := `{"status":"resolved"}`
 	req := httptest.NewRequestWithContext(t.Context(), "PUT",
-		fmt.Sprintf("/api/v1/alerts/%d", alertID), strings.NewReader(body))
+		fmt.Sprintf("/api/alerts/%d", alertID), strings.NewReader(body))
 	req = req.WithContext(authn.WithUserIDForTest(req.Context(), 42))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)

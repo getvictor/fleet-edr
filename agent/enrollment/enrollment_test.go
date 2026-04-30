@@ -26,7 +26,7 @@ func fakeEnrollServer(t *testing.T, secret, wantToken string, hits *atomic.Int64
 		if hits != nil {
 			hits.Add(1)
 		}
-		if r.URL.Path != "/api/v1/enroll" {
+		if r.URL.Path != "/api/enroll" {
 			http.NotFound(w, r)
 			return
 		}

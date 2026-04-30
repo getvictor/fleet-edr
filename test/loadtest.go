@@ -43,7 +43,7 @@ func main() {
 	log.Printf("load test: %d events/min for %v against %s", *rate, *duration, *serverURL)
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	url := *serverURL + "/api/v1/events"
+	url := *serverURL + "/api/events"
 
 	var (
 		sent       atomic.Int64

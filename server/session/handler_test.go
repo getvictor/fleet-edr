@@ -43,9 +43,9 @@ func setupServer(t *testing.T, ratePerMinute int) (*httptest.Server, *users.Stor
 	authedWrap := authn.Session(ss, slog.Default())(authn.CSRF(slog.Default())(authedSub))
 
 	root := http.NewServeMux()
-	root.Handle("POST /api/v1/session", publicMux)   // login: public
-	root.Handle("DELETE /api/v1/session", publicMux) // logout: public (reads cookie itself)
-	root.Handle("GET /api/v1/session", authedWrap)
+	root.Handle("POST /api/session", publicMux)   // login: public
+	root.Handle("DELETE /api/session", publicMux) // logout: public (reads cookie itself)
+	root.Handle("GET /api/session", authedWrap)
 
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
@@ -69,7 +69,7 @@ func TestLogin_HappyPath(t *testing.T) {
 	_, err := us.Create(t.Context(), users.CreateRequest{Email: "admin@example.com", Password: "rightpassword"})
 	require.NoError(t, err)
 
-	resp := postJSON(t, srv, "/api/v1/session", map[string]string{
+	resp := postJSON(t, srv, "/api/session", map[string]string{
 		"email": "admin@example.com", "password": "rightpassword",
 	})
 	defer resp.Body.Close()
@@ -96,7 +96,7 @@ func TestLogin_WrongPasswordReturnsGeneric401(t *testing.T) {
 	_, err := us.Create(t.Context(), users.CreateRequest{Email: "admin@example.com", Password: "rightpassword"})
 	require.NoError(t, err)
 
-	resp := postJSON(t, srv, "/api/v1/session", map[string]string{
+	resp := postJSON(t, srv, "/api/session", map[string]string{
 		"email": "admin@example.com", "password": "wrong",
 	})
 	defer resp.Body.Close()
@@ -109,7 +109,7 @@ func TestLogin_WrongPasswordReturnsGeneric401(t *testing.T) {
 
 func TestLogin_UnknownEmailReturnsGeneric401(t *testing.T) {
 	srv, _, _ := setupServer(t, 30)
-	resp := postJSON(t, srv, "/api/v1/session", map[string]string{
+	resp := postJSON(t, srv, "/api/session", map[string]string{
 		"email": "nobody@example.com", "password": "anything",
 	})
 	defer resp.Body.Close()
@@ -128,7 +128,7 @@ func TestLogin_RateLimit(t *testing.T) {
 
 	// Burst 2 failures: both 401.
 	for range 2 {
-		resp := postJSON(t, srv, "/api/v1/session", map[string]string{
+		resp := postJSON(t, srv, "/api/session", map[string]string{
 			"email": "admin@example.com", "password": "wrong",
 		})
 		resp.Body.Close()
@@ -136,7 +136,7 @@ func TestLogin_RateLimit(t *testing.T) {
 	}
 
 	// Third burst attempt: the limiter returns false, we respond with 429 + Retry-After.
-	resp := postJSON(t, srv, "/api/v1/session", map[string]string{
+	resp := postJSON(t, srv, "/api/session", map[string]string{
 		"email": "admin@example.com", "password": "wrong",
 	})
 	defer resp.Body.Close()
@@ -146,7 +146,7 @@ func TestLogin_RateLimit(t *testing.T) {
 
 func TestLogin_MalformedBody(t *testing.T) {
 	srv, _, _ := setupServer(t, 30)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/session",
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/session",
 		bytes.NewBufferString("{"))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -163,7 +163,7 @@ func sessionCookie(t *testing.T, srv *httptest.Server, us *users.Store) (*http.C
 	_, err := us.Create(t.Context(), users.CreateRequest{Email: "admin@example.com", Password: "pw"})
 	require.NoError(t, err)
 
-	resp := postJSON(t, srv, "/api/v1/session", map[string]string{
+	resp := postJSON(t, srv, "/api/session", map[string]string{
 		"email": "admin@example.com", "password": "pw",
 	})
 	defer resp.Body.Close()
@@ -180,7 +180,7 @@ func TestGet_ReturnsCurrentSession(t *testing.T) {
 	srv, us, _ := setupServer(t, 30)
 	cookie, csrf := sessionCookie(t, srv, us)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/session", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/session", nil)
 	require.NoError(t, err)
 	req.AddCookie(cookie)
 	resp, err := srv.Client().Do(req)
@@ -195,7 +195,7 @@ func TestGet_ReturnsCurrentSession(t *testing.T) {
 
 func TestGet_MissingCookieReturns401(t *testing.T) {
 	srv, _, _ := setupServer(t, 30)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/session", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/session", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	srv, us, ss := setupServer(t, 30)
 	cookie, _ := sessionCookie(t, srv, us)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, srv.URL+"/api/v1/session", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, srv.URL+"/api/session", nil)
 	require.NoError(t, err)
 	req.AddCookie(cookie)
 	resp, err := srv.Client().Do(req)
@@ -222,7 +222,7 @@ func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	assert.Negative(t, clears[0].MaxAge)
 
 	// Subsequent GET with the old cookie → 401 (session row is gone).
-	req2, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/session", nil)
+	req2, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/session", nil)
 	require.NoError(t, err)
 	req2.AddCookie(cookie)
 	resp2, err := srv.Client().Do(req2)

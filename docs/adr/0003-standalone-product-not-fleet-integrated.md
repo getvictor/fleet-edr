@@ -63,7 +63,7 @@ The EDR is a standalone product. It ships its own server (`fleet-edr-server`),
 agent (`fleet-edr-agent`), UI (embedded in the server binary), and installer
 (signed `.pkg`). It has its own database (MySQL), its own auth (session
 cookies + CSRF for the UI, bearer tokens for agent-to-server), and its own
-API at `/api/v1/*`.
+API at `/api/*`.
 
 Fleet is one of several supported deployment channels. The contract between
 Fleet and the EDR is deliberately thin and consists of three things the MDM

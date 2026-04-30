@@ -35,7 +35,7 @@ serves them over `http://`. Examples in this doc assume TLS.
 https://<your-server>/
 ```
 
-All endpoints are rooted at `/api/v1/` except the health probes and the
+All endpoints are rooted at `/api/` except the health probes and the
 UI. There is no versioning header; when v2 lands it gets a parallel
 `/api/v2/` tree.
 
@@ -50,7 +50,7 @@ currently supported — do not set `Content-Encoding: gzip`.
 
 ### Host token (agents)
 
-An agent POSTs `/api/v1/enroll` once with the shared enroll secret and
+An agent POSTs `/api/enroll` once with the shared enroll secret and
 its hardware UUID. It receives an opaque `host_token`, stored in
 `/var/db/fleet-edr/enrolled.plist`. Every subsequent request carries:
 
@@ -63,13 +63,13 @@ commands or post events with `host_id=B`. Revoking an enrollment via
 the admin UI invalidates the token immediately.
 
 Endpoints that require a host token:
-- `POST /api/v1/events`
-- `GET  /api/v1/commands` (returns only the authenticated host's queue)
-- `PUT  /api/v1/commands/{id}` (only commands owned by the host)
+- `POST /api/events`
+- `GET  /api/commands` (returns only the authenticated host's queue)
+- `PUT  /api/commands/{id}` (only commands owned by the host)
 
 ### Session cookie + CSRF (browsers)
 
-The admin UI posts `/api/v1/session` with email + password. The
+The admin UI posts `/api/session` with email + password. The
 response sets `edr_session` (HttpOnly, Secure, SameSite=Lax) and
 returns a `csrf_token` the UI stores client-side. Subsequent unsafe
 requests (`POST`, `PUT`, `DELETE`) carry:
@@ -79,19 +79,19 @@ Cookie: edr_session=<opaque>
 X-CSRF-Token: <csrf_token>
 ```
 
-GET requests only need the cookie. Logout is `DELETE /api/v1/session`.
+GET requests only need the cookie. Logout is `DELETE /api/session`.
 
 Endpoints that require the session cookie:
-- `GET /api/v1/hosts`, `/api/v1/hosts/{id}/tree`,
-  `/api/v1/hosts/{id}/processes/{pid}`
-- `GET /api/v1/alerts`, `/api/v1/alerts/{id}`; `PUT /api/v1/alerts/{id}`
-- `GET /api/v1/commands/{id}`, `POST /api/v1/commands`
-- `GET /api/v1/admin/enrollments`,
-  `POST /api/v1/admin/enrollments/{host_id}/revoke`
-- `GET /api/v1/admin/policy`, `PUT /api/v1/admin/policy`
-- `GET /api/v1/admin/attack-coverage` -- ATT&CK Navigator layer JSON
+- `GET /api/hosts`, `/api/hosts/{id}/tree`,
+  `/api/hosts/{id}/processes/{pid}`
+- `GET /api/alerts`, `/api/alerts/{id}`; `PUT /api/alerts/{id}`
+- `GET /api/commands/{id}`, `POST /api/commands`
+- `GET /api/enrollments`,
+  `POST /api/enrollments/{host_id}/revoke`
+- `GET /api/policy`, `PUT /api/policy`
+- `GET /api/attack-coverage` -- ATT&CK Navigator layer JSON
   describing which techniques the registered rules cover.
-- `GET /api/v1/admin/rules` -- per-rule documentation surfaced by the
+- `GET /api/rules` -- per-rule documentation surfaced by the
   UI's `/ui/rules/<id>` page; same data feeds `docs/detection-rules.md`.
 
 ### No auth
@@ -106,13 +106,13 @@ Two IP-scoped buckets guard the auth boundary:
 
 | Endpoint | Knob | Default |
 |---|---|---|
-| `POST /api/v1/enroll` | `EDR_ENROLL_RATE_PER_MIN` | 30/min/IP |
-| `POST /api/v1/session` | `EDR_LOGIN_RATE_PER_MIN` | 6/min/IP |
+| `POST /api/enroll` | `EDR_ENROLL_RATE_PER_MIN` | 30/min/IP |
+| `POST /api/session` | `EDR_LOGIN_RATE_PER_MIN` | 6/min/IP |
 
 Over-limit requests return `429 Too Many Requests` with a
 `Retry-After` header.
 
-Ingestion (`POST /api/v1/events`), command polling, and UI read
+Ingestion (`POST /api/events`), command polling, and UI read
 endpoints are not rate limited. If you proxy thousands of agents
 through a single IP (NAT), monitor `edr.enroll.attempts` in OTel
 metrics to confirm you're not hitting the enroll cap.
@@ -156,7 +156,7 @@ openapi-python-client generate --path docs/api/openapi.yaml
 ## What's not in the API (yet)
 
 - Webhook / SIEM push. The server doesn't POST alerts outward;
-  integrators poll `GET /api/v1/alerts`. Outbound integrations ship in
+  integrators poll `GET /api/alerts`. Outbound integrations ship in
   v1.1+.
 - Multi-tenant routing. All endpoints operate on a single customer
   boundary per server instance.

@@ -6,8 +6,9 @@ info:
     HTTP API for Fleet EDR. Three audience tiers:
 
     - **Agents** (macOS endpoints) authenticate with a per-host bearer
-      token obtained at enrollment. They call `POST /api/v1/enroll`,
-      `POST /api/v1/events`, and the host-scoped `/commands` endpoints.
+      token obtained at enrollment. They call `POST /api/enroll`,
+      `POST /api/events`, and the host-scoped `GET /api/commands` and
+      `PUT /api/commands/{id}` endpoints.
     - **Browsers** (admin UI) authenticate with an `edr_session` cookie
       (HttpOnly, Secure, SameSite=Lax) plus an `X-CSRF-Token` header on
       unsafe methods. They call the session-protected endpoints.
@@ -96,7 +97,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReadinessResponse"
 
-  /api/v1/enroll:
+  /api/enroll:
     post:
       tags: [Agent]
       summary: Enroll a new host
@@ -149,7 +150,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /api/v1/events:
+  /api/events:
     post:
       tags: [Agent]
       summary: Ingest a batch of endpoint security events
@@ -180,7 +181,7 @@ paths:
         "401":
           description: Missing or invalid host token
 
-  /api/v1/session:
+  /api/session:
     post:
       tags: [Session]
       summary: Log in with email + password
@@ -247,7 +248,7 @@ paths:
         "204":
           description: Logged out
 
-  /api/v1/hosts:
+  /api/hosts:
     get:
       tags: [Hosts]
       summary: List hosts
@@ -263,7 +264,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/HostSummary"
 
-  /api/v1/hosts/{host_id}/tree:
+  /api/hosts/{host_id}/tree:
     get:
       tags: [Hosts]
       summary: Process tree for a host
@@ -295,7 +296,7 @@ paths:
                     items:
                       $ref: "#/components/schemas/ProcessNode"
 
-  /api/v1/hosts/{host_id}/processes/{pid}:
+  /api/hosts/{host_id}/processes/{pid}:
     get:
       tags: [Hosts]
       summary: Process detail
@@ -321,7 +322,7 @@ paths:
         "404":
           description: No process found at the given coordinates
 
-  /api/v1/alerts:
+  /api/alerts:
     get:
       tags: [Alerts]
       summary: List alerts
@@ -357,7 +358,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/Alert"
 
-  /api/v1/alerts/{id}:
+  /api/alerts/{id}:
     get:
       tags: [Alerts]
       summary: Alert detail (with event IDs)
@@ -407,7 +408,7 @@ paths:
         "404":
           description: Alert not found
 
-  /api/v1/commands:
+  /api/commands:
     get:
       tags: [Commands]
       summary: List commands for the authenticated host
@@ -459,7 +460,7 @@ paths:
                 properties:
                   id: {type: integer, format: int64}
 
-  /api/v1/commands/{id}:
+  /api/commands/{id}:
     get:
       tags: [Commands]
       summary: Get a single command (admin)
@@ -516,7 +517,7 @@ paths:
         "404":
           description: Command not found (or not owned by authenticated host)
 
-  /api/v1/admin/enrollments:
+  /api/enrollments:
     get:
       tags: [Admin]
       summary: List enrollments
@@ -532,7 +533,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/Enrollment"
 
-  /api/v1/admin/enrollments/{host_id}/revoke:
+  /api/enrollments/{host_id}/revoke:
     post:
       tags: [Admin]
       summary: Revoke a host enrollment
@@ -561,7 +562,7 @@ paths:
         "404":
           description: Host not found
 
-  /api/v1/admin/policy:
+  /api/policy:
     get:
       tags: [Admin]
       summary: Current blocklist policy
@@ -608,7 +609,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PolicyUpdateResult"
 
-  /api/v1/admin/attack-coverage:
+  /api/attack-coverage:
     get:
       tags: [Admin]
       summary: MITRE ATT&CK coverage (Navigator layer)
@@ -637,14 +638,14 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: |
-        Per-host bearer token issued by `POST /api/v1/enroll`. Pass as
+        Per-host bearer token issued by `POST /api/enroll`. Pass as
         `Authorization: Bearer <host_token>`.
     SessionCookie:
       type: apiKey
       in: cookie
       name: edr_session
       description: |
-        HttpOnly cookie set by `POST /api/v1/session`. The browser
+        HttpOnly cookie set by `POST /api/session`. The browser
         attaches it automatically.
     CSRF:
       type: apiKey

@@ -21,7 +21,7 @@ func TestListHostsEmpty(t *testing.T) {
 
 	mux := testMux(h)
 
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/hosts", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -40,7 +40,7 @@ func TestProcessTreeEmpty(t *testing.T) {
 
 	mux := testMux(h)
 
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts/nonexistent/tree?from=0&to=999999999999999999", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/hosts/nonexistent/tree?from=0&to=999999999999999999", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -63,7 +63,7 @@ func TestProcessDetailNotFound(t *testing.T) {
 
 	mux := testMux(h)
 
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/hosts/nonexistent/processes/999?at=1000", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/api/hosts/nonexistent/processes/999?at=1000", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
