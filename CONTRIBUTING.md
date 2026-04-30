@@ -18,14 +18,14 @@ Pinned in [`.tool-versions`](.tool-versions). Install [`mise`](https://mise.jdx.
 match local, CI, and AI-agent sandbox versions. Pre-commit hooks live in [`lefthook.yml`](lefthook.yml); install once with
 `lefthook install`.
 
-CI is the backstop, not the floor. If a check fails locally fix it locally; do not push hoping CI will pass.
+CI is the backstop, not the floor. If a check fails locally, fix it before pushing; do not push hoping CI will pass.
 
 ## Style and conventions
 
 | Surface | Source of truth |
 | --- | --- |
 | Go | [`docs/go-conventions.md`](docs/go-conventions.md), [`.golangci.yml`](.golangci.yml) |
-| TypeScript / React | `ui/eslint.config.js`, `ui/tsconfig.json` (strict mode + `eslint-plugin-security`) |
+| TypeScript / React | `ui/eslint.config.mjs`, `ui/tsconfig.json` (strict mode + `eslint-plugin-security`) |
 | Swift | [`.swiftlint.yml`](.swiftlint.yml) (run with `--strict`) |
 | C bridge | [`.clang-tidy`](.clang-tidy), [`.clang-format`](.clang-format) |
 | GitHub Actions | `actionlint` + `zizmor` (security audit) |

@@ -27,8 +27,12 @@ testable, and mapped to a public taxonomy.
 - [x] Server-driven blocklist policy with versioning (`policies` table, agent diffs by
   version)
 - [x] Response action: command queue (kill, block) with ack/complete lifecycle
-- [ ] **MITRE ATT&CK mapping** on every rule (technique IDs as rule metadata, surfaced in UI
-  and exports). Required to talk to SOCs.
+- [x] **MITRE ATT&CK mapping** on every rule. Each detection rule implements
+  `Techniques()` returning the ATT&CK technique IDs it maps to
+  (`server/detection/rule.go`); the engine threads them onto every alert so
+  they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`,
+  `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export
+  (`server/admin/admin.go` `navigatorTechnique`).
 - [ ] **Sigma rule support** (import community rules; transpile to native rule format)
 - [ ] **YARA scanning** for file-based detections (signature + heuristic)
 - [ ] **IOC management**: bulk import of hashes / domains / IPs from STIX/TAXII feeds
@@ -587,7 +591,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 
 | Area                              | Adopted | Total | %    |
 |-----------------------------------|---------|-------|------|
-| Detection content + response      | 6       | 36    | 17%  |
+| Detection content + response      | 7       | 36    | 19%  |
 | Cross-platform reach              | 1       | 8     | 12%  |
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
 | Supply-chain security             | 15.5    | 27    | 57%  |
