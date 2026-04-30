@@ -217,7 +217,17 @@ floor for any project that wants enterprise adoption.
   reports flow through (`sonar.go.coverage.reportPaths`,
   `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to
   ≥80% and applies per PR.
-- [ ] **Codecov / Coveralls** with PR comments and coverage diff
+- [x] **Codecov** with PR comments and coverage diff. Uploaded by the
+  `codecov` job in `.github/workflows/test.yml` after `agent-test`,
+  `server-test`, and `ui-test` finish; `CODECOV_TOKEN` lives in the
+  `codecov` GitHub Environment (same pattern as `sonarcloud` and
+  `release-signing`). Two per-component flags (`agent` and `server`)
+  so the dashboard splits the Go binaries; the UI flag is intentionally
+  off until UI tests land (today `ui/src/**` is in the codecov.yml
+  `ignore` list to mirror `sonar.coverage.exclusions`). Project + patch
+  status thresholds in `codecov.yml` match SonarCloud's 80% /
+  80%-on-new-code gates so the two services agree.
+  `fail_ci_if_error: false` keeps a Codecov outage from blocking merges
 - [ ] **`go vet -vettool=fieldalignment`** -- catches struct padding waste in hot structs
 - [x] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
   panics that `staticcheck` and `govet -nilness` miss because nilaway tracks nilability
@@ -611,7 +621,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | Cross-platform reach              | 1       | 8     | 12%  |
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
 | Supply-chain security             | 15.5    | 27    | 57%  |
-| Code quality + static analysis    | 14      | 22    | 64%  |
+| Code quality + static analysis    | 15      | 22    | 68%  |
 | Testing                           | 7       | 19    | 37%  |
 | Observability + operations        | 15      | 24    | 62%  |
 | API design                        | 5.5     | 16    | 34%  |
@@ -629,7 +639,12 @@ at level 2 (Apple notarization breaks L3's hermeticity requirement),
 OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck.
 A real SonarCloud coverage gate (≥80% on new code, per PR) closed the
 last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59%
-to 64%. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job
+to 64%. Wiring Codecov alongside (CODECOV_TOKEN scoped to the `codecov`
+environment, agent + server flags, thresholds matching the Sonar gate
+so the two never disagree) lifted §5 to 68% and added the
+procurement-recognized Codecov badge to the README without stacking a
+second coverage authority. Hosting Redoc at
+`/api/docs` plus a Redocly OpenAPI lint job
 moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized
 signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing
 the existing hardened-runtime + minimal-entitlements pipeline that

@@ -8,6 +8,7 @@
 ![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
 [![Tests](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
+[![Coverage](https://img.shields.io/codecov/c/github/getvictor/fleet-edr?style=flat-square&logo=codecov)](https://codecov.io/gh/getvictor/fleet-edr)
 
 <!-- Security scanners -->
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/codeql.yml?branch=main&label=CodeQL&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml)

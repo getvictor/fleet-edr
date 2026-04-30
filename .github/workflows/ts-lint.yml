@@ -1,6 +1,11 @@
-name: TypeScript lint and test
+name: TypeScript lint
 
 # See go-lint.yml for the gate-then-analyze pattern rationale.
+#
+# Test execution lives in test.yml's `ui-test` job, not here -- one place
+# runs vitest with coverage and uploads the artifact that sonarcloud +
+# codecov consume. This workflow is the lint gate; the test gate is
+# `UI tests` in test.yml.
 
 on:
   push:
@@ -50,8 +55,8 @@ jobs:
             echo "No relevant changes; skipping ts-lint."
           fi
 
-  lint-and-test:
-    name: Lint and test
+  lint:
+    name: Lint
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -81,17 +86,3 @@ jobs:
 
       - name: Lint + type-check via Taskfile
         run: task lint:ui
-
-      - name: Test + coverage via Taskfile
-        run: task test:ui:coverage
-
-      # Upload for inspection only; the Sonar scan job runs its own UI
-      # coverage pass in-place (vitest finishes in <30s) rather than
-      # reaching across workflow boundaries for the artifact.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: ui-coverage
-          path: ui/coverage/lcov.info
-          if-no-files-found: ignore
-          retention-days: 7

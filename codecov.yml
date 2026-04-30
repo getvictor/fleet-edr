@@ -1,0 +1,71 @@
+# Codecov config. Targets and ignore patterns mirror sonar-project.properties so
+# the two services agree on what's measured. If you change one, change both.
+
+coverage:
+  precision: 1
+  round: nearest
+  range: "70...90"
+
+  status:
+    project:
+      default:
+        # Matches sonar's overall project coverage on main; today ~80%.
+        target: 80%
+        # Allow a 1% drift before failing the project status; smaller deltas are
+        # noise from coverage tool reordering, not regressions.
+        threshold: 1%
+        if_ci_failed: error
+        only_pulls: false
+    patch:
+      default:
+        # Matches sonar's "Coverage on New Code" quality gate (80%).
+        target: 80%
+        threshold: 0%
+        if_ci_failed: error
+
+# Per-component flags so the Codecov dashboard distinguishes Go (agent),
+# Go (server), and TS (ui). Each flag is uploaded by its own action call;
+# see .github/workflows/test.yml.
+flag_management:
+  default_rules:
+    carryforward: true
+    statuses:
+      - type: project
+        target: auto
+        threshold: 1%
+      - type: patch
+        target: 80%
+  individual_flags:
+    - name: agent
+      paths:
+        - agent/
+    - name: server
+      paths:
+        - server/
+    # No `ui` flag yet: ui/src/** is in the global `ignore` list below
+    # because there are zero UI tests today. A flag scoped to an
+    # ignored path is a no-op. Re-add this entry (and remove ui/src/**
+    # from `ignore`, plus the matching sonar.coverage.exclusions entry)
+    # when UI tests land.
+
+comment:
+  layout: "header, diff, flags, components, files"
+  behavior: default
+  require_changes: false
+
+# Mirror sonar.coverage.exclusions so the two services agree. Generated code,
+# main entrypoints, test harnesses, the Swift extensions (no Go coverage),
+# the JSON-Schema sources, and the UI src tree (no UI tests yet) all stay
+# off the coverage surface until they have tests.
+ignore:
+  - "**/cmd/**/main.go"
+  - "server/detection/testharness/**"
+  - "schema/**"
+  - "extension/edr/**"
+  - "agent/receiver/**"
+  - "agent/logging/**"
+  - "server/bootstrap/**"
+  - "server/httpserver/**"
+  - "test/**"
+  - "tools/**"
+  - "ui/src/**"

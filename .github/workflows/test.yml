@@ -109,9 +109,57 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Single source of test execution for the UI bundle. Uploads the
+  # coverage-ui artifact that sonarcloud + codecov below consume.
+  # ts-lint.yml owns lint + type-check; this job owns vitest.
+  ui-test:
+    name: UI tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
+        with:
+          version: 3.50.0
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install UI dependencies
+        working-directory: ui
+        # --ignore-scripts: our deps (sass, vitest, jsdom, etc.) are pure JS
+        # and don't need pre/post-install scripts; skipping them closes the
+        # arbitrary-code-execution surface flagged by Sonar rule S6505.
+        run: npm ci --ignore-scripts
+
+      # task test:ui:coverage runs vitest + writes ui/coverage/lcov.info,
+      # falling back to an empty lcov when zero tests exist (vitest's v8
+      # provider skips the write under passWithNoTests). Sonar/Codecov
+      # both treat empty lcov as "no data" rather than an error.
+      - name: Run UI tests with coverage
+        run: task test:ui:coverage
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-ui
+          path: ui/coverage/lcov.info
+          # Empty lcov.info is allowed (zero tests case); Sonar/Codecov
+          # tolerate empty input. Keep error here so a missing file still
+          # signals a real upload-step failure.
+          if-no-files-found: error
+          retention-days: 1
+
   sonarcloud:
     name: SonarCloud scan
-    needs: [agent-test, server-test]
+    needs: [agent-test, server-test, ui-test]
     # Dependabot-triggered PR runs cannot access Actions secrets (deliberate
     # GitHub policy: prevents a compromised upstream action from stealing
     # SONAR_TOKEN via a dep bump). Without the token the scanner can't reach a
@@ -140,35 +188,80 @@ jobs:
         with:
           name: coverage-server
 
-      # UI coverage is generated here rather than pulled from the ts-lint
-      # workflow's artifact: cross-workflow artifact access is brittle and
-      # vitest on ubuntu finishes in under 30s, so re-running it in-place is
-      # cheaper than the plumbing. ts-lint.yml still uploads its own copy of
-      # ui/coverage/lcov.info as an artifact for humans who want to inspect.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      # ui-test job uploads coverage-ui (ui/coverage/lcov.info). Sonar's
+      # sonar.javascript.lcov.reportPaths in sonar-project.properties expects
+      # the file at that exact path, so re-create the directory layout.
+      - name: Download UI coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install UI dependencies
-        working-directory: ui
-        # --ignore-scripts: our deps (sass, vitest, jsdom, etc.) are pure JS
-        # and don't need pre/post-install scripts; skipping them closes the
-        # arbitrary-code-execution surface flagged by Sonar rule S6505.
-        run: npm ci --ignore-scripts
-
-      # vitest's v8 provider skips writing coverage/lcov.info entirely when
-      # zero test files exist (passWithNoTests). The `|| ... : > lcov.info`
-      # fallback guarantees Sonar has a path to read at
-      # sonar.javascript.lcov.reportPaths; empty lcov parses as "no data".
-      - name: Run UI tests with coverage
-        working-directory: ui
-        run: |
-          npm run test:coverage
-          [ -f coverage/lcov.info ] || { mkdir -p coverage && : > coverage/lcov.info; }
+          name: coverage-ui
+          path: ui/coverage
 
       - uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7.1.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+
+  codecov:
+    name: Codecov upload
+    needs: [agent-test, server-test, ui-test]
+    # Same exclusion logic as sonarcloud: Dependabot PRs cannot read repo
+    # secrets, so a CODECOV_TOKEN-gated upload would always fail. Coverage
+    # files for dep bumps don't change project numbers in any meaningful way,
+    # so skipping the upload loses no signal.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    # CODECOV_TOKEN lives in the `codecov` environment so branch-protection
+    # policies can constrain which refs can read it (same pattern as the
+    # `sonarcloud` and `release-signing` environments).
+    environment: codecov
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Codecov reads git history to attribute coverage to commits;
+          # shallow clones drop blame data the dashboard expects.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download agent coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-agent
+
+      - name: Download server coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-server
+
+      # No UI coverage upload here: codecov.yml ignores ui/src/**
+      # globally (no UI tests yet), so a `ui`-flagged upload would be a
+      # no-op. Sonarcloud still downloads coverage-ui because Sonar reads
+      # the lcov per sonar-project.properties even when empty. Re-add the
+      # download + upload steps when UI tests land.
+      # disable_search: true -- codecov-action otherwise auto-searches
+      # the workspace for *.out / lcov.info files in addition to the
+      # explicit `files:` argument, so a stray coverage file landing in
+      # the repo would silently get double-counted under whichever flag
+      # was uploaded next. Be explicit; don't trust auto-discovery.
+      - name: Upload agent coverage
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: coverage-agent.out
+          flags: agent
+          disable_search: true
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload server coverage
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: coverage-server.out
+          flags: server
+          disable_search: true
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
