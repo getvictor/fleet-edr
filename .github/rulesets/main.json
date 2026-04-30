@@ -30,7 +30,7 @@
           {"context": "Agent tests"},
           {"context": "golangci-lint"},
           {"context": "nilaway"},
-          {"context": "Lint and test"},
+          {"context": "Lint"},
           {"context": "govulncheck (server)"},
           {"context": "govulncheck (agent)"},
           {"context": "osv-scanner / osv-scan"},

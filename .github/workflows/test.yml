@@ -109,11 +109,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # UI tests run here (not pulled from ts-lint.yml's artifact) so the
-  # downstream sonarcloud + codecov jobs can grab one same-workflow
-  # artifact instead of each re-running vitest. ts-lint.yml still runs
-  # eslint + vitest on UI-touching PRs as a fast lint gate; this job
-  # owns the coverage pipeline.
+  # Single source of test execution for the UI bundle. Uploads the
+  # coverage-ui artifact that sonarcloud + codecov below consume.
+  # ts-lint.yml owns lint + type-check; this job owns vitest.
   ui-test:
     name: UI tests
     runs-on: ubuntu-latest
@@ -130,6 +128,11 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
+      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
+        with:
+          version: 3.50.0
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install UI dependencies
         working-directory: ui
         # --ignore-scripts: our deps (sass, vitest, jsdom, etc.) are pure JS
@@ -137,15 +140,12 @@ jobs:
         # arbitrary-code-execution surface flagged by Sonar rule S6505.
         run: npm ci --ignore-scripts
 
-      # vitest's v8 provider skips writing coverage/lcov.info entirely when
-      # zero test files exist (passWithNoTests). The `|| ... : > lcov.info`
-      # fallback guarantees Sonar/Codecov have a path to read at
-      # sonar.javascript.lcov.reportPaths; empty lcov parses as "no data".
+      # task test:ui:coverage runs vitest + writes ui/coverage/lcov.info,
+      # falling back to an empty lcov when zero tests exist (vitest's v8
+      # provider skips the write under passWithNoTests). Sonar/Codecov
+      # both treat empty lcov as "no data" rather than an error.
       - name: Run UI tests with coverage
-        working-directory: ui
-        run: |
-          npm run test:coverage
-          [ -f coverage/lcov.info ] || { mkdir -p coverage && : > coverage/lcov.info; }
+        run: task test:ui:coverage
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
