@@ -406,14 +406,30 @@ genuine differentiator versus most competitors.
   (Developer ID Application + Installer), and notarized via `notarytool` in
   `release.yml`'s `macos-pkg` job; gated on the `release-signing` GitHub
   environment so signing creds only decrypt for `v*` tag pushes
-- [ ] **Apple Hardened Runtime** entitlements on the agent + extension binaries
-- [ ] **Reproducible-build verification** job in CI
+- [x] **Apple Hardened Runtime** with the minimum entitlement set audited.
+  `packaging/pkg/build.sh` re-signs the agent, system extension, network
+  extension, and the outer `Fleet EDR.app` bundle with `--options runtime`
+  + `--timestamp` and per-binary entitlements files. Each entitlements
+  plist carries only what the OS requires for that component to function:
+  `endpoint-security.client` on the sysext;
+  `networking.networkextension` + an app-group on the netext;
+  `system-extension.install` + `networking.networkextension` on the host
+  app. Notary's bottom-up Mach-O scan rejects anything missing the
+  hardened runtime flag, so a successful notarization is itself the gate
+- [ ] **Reproducible-build verification** job in CI (the agent and server
+  builds already pass `-trimpath` + pinned `-ldflags`; what's missing is a
+  job that diffs two independent rebuilds and fails on byte drift)
 - [x] **Multi-arch container image** for the server (linux/amd64, linux/arm64)
   signed by cosign. Built and pushed by the `docker-server` job in
   `release.yml` to `ghcr.io/getvictor/fleet-edr-server:{tag,latest}`; cosign
   keyless signature + SBOM attestation pushed alongside on every tag
 - [ ] **Helm chart** + Kustomize overlays for k8s deployments
-- [ ] **systemd unit** + RPM / DEB for self-hosted Linux deployments
+- [-] **systemd unit** + RPM / DEB for self-hosted Linux deployments --
+  **will not do** for the macOS-only MVP. The agent is Apple-Silicon only
+  per ADR-0002 and there is no Linux endpoint surface yet, so shipping a
+  Linux init-system + distro packaging surface for a server-only deploy
+  duplicates what the existing Docker Compose stack already covers.
+  Reconsider when a Linux agent lands (§2)
 - [-] **In-product auto-update channel** (Sparkle / custom signed-manifest fetcher) --
   **will not do**. Enterprise endpoint software updates flow through the customer's MDM
   channel (Fleet, Jamf, Kandji, Intune); in-product self-update bypasses change management
@@ -601,7 +617,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | API design                        | 5.5     | 16    | 34%  |
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
-| Build / release / packaging       | 4       | 11    | 36%  |
+| Build / release / packaging       | 5       | 10    | 50%  |
 | Community signals                 | 13      | 24    | 54%  |
 | Compliance + privacy              | 1       | 13    | 8%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
@@ -615,9 +631,12 @@ A real SonarCloud coverage gate (≥80% on new code, per PR) closed the
 last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59%
 to 64%. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job
 moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized
-signed `.pkg` plus a multi-arch cosign-signed server image lifted §11
-Build/release from 17% to 36% (with GoReleaser flipped to will-not-do
-since the custom workflow already covers its scope). Adding `LICENSE`
+signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing
+the existing hardened-runtime + minimal-entitlements pipeline that
+notarization already enforces, lifted §11 Build/release from 17% to 50%
+(with GoReleaser and Linux init-system + distro packaging both flipped
+to will-not-do since the custom workflow + Apple-Silicon-only MVP scope
+already cover those). Adding `LICENSE`
 (MIT) + `SECURITY.md` + `CONTRIBUTING.md` lifted §12 Community signals
 from 42% to 54% and unblocked the rest of that section's doc items.
 `docs/threat-model.md` (STRIDE per component)
