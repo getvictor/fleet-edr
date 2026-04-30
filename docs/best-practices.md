@@ -27,8 +27,12 @@ testable, and mapped to a public taxonomy.
 - [x] Server-driven blocklist policy with versioning (`policies` table, agent diffs by
   version)
 - [x] Response action: command queue (kill, block) with ack/complete lifecycle
-- [ ] **MITRE ATT&CK mapping** on every rule (technique IDs as rule metadata, surfaced in UI
-  and exports). Required to talk to SOCs.
+- [x] **MITRE ATT&CK mapping** on every rule. Each detection rule implements
+  `Techniques()` returning the ATT&CK technique IDs it maps to
+  (`server/detection/rule.go`); the engine threads them onto every alert so
+  they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`,
+  `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export
+  (`server/admin/admin.go` `navigatorTechnique`).
 - [ ] **Sigma rule support** (import community rules; transpile to native rule format)
 - [ ] **YARA scanning** for file-based detections (signature + heuristic)
 - [ ] **IOC management**: bulk import of hashes / domains / IPs from STIX/TAXII feeds
@@ -394,14 +398,38 @@ genuine differentiator versus most competitors.
 - [x] Build info (`version`, `commit`, `buildTime`) injected via `-ldflags` and surfaced
   in startup logs + OTel `service.version`
 - [x] Multi-stage local dev (Docker Compose for MySQL; `go run` for server)
-- [ ] **GoReleaser** for cross-arch binary releases with checksums
-- [ ] **Notarized signed `.pkg` installer** (per the MVP plan; not yet automated)
-- [ ] **Apple Hardened Runtime** entitlements on the agent + extension binaries
-- [ ] **Reproducible-build verification** job in CI
-- [ ] **Multi-arch container image** for the server (linux/amd64, linux/arm64) signed by
-  cosign
+- [-] **GoReleaser** -- **will not do**. The custom `release.yml` workflow already
+  ships the same outcomes (signed multi-arch artifacts + `SHA256SUMS` + SBOMs)
+  without taking on the GoReleaser config surface. Reconsider only if releases
+  need to expand to many more cross-platform Go binaries
+- [x] **Notarized signed `.pkg` installer** for darwin/arm64. Built, signed
+  (Developer ID Application + Installer), and notarized via `notarytool` in
+  `release.yml`'s `macos-pkg` job; gated on the `release-signing` GitHub
+  environment so signing creds only decrypt for `v*` tag pushes
+- [x] **Apple Hardened Runtime** with the minimum entitlement set audited.
+  `packaging/pkg/build.sh` re-signs the agent, system extension, network
+  extension, and the outer `Fleet EDR.app` bundle with `--options runtime`
+  + `--timestamp` and per-binary entitlements files. Each entitlements
+  plist carries only what the OS requires for that component to function:
+  `endpoint-security.client` on the sysext;
+  `networking.networkextension` + an app-group on the netext;
+  `system-extension.install` + `networking.networkextension` on the host
+  app. Notary's bottom-up Mach-O scan rejects anything missing the
+  hardened runtime flag, so a successful notarization is itself the gate
+- [ ] **Reproducible-build verification** job in CI (the agent and server
+  builds already pass `-trimpath` + pinned `-ldflags`; what's missing is a
+  job that diffs two independent rebuilds and fails on byte drift)
+- [x] **Multi-arch container image** for the server (linux/amd64, linux/arm64)
+  signed by cosign. Built and pushed by the `docker-server` job in
+  `release.yml` to `ghcr.io/getvictor/fleet-edr-server:{tag,latest}`; cosign
+  keyless signature + SBOM attestation pushed alongside on every tag
 - [ ] **Helm chart** + Kustomize overlays for k8s deployments
-- [ ] **systemd unit** + RPM / DEB for self-hosted Linux deployments
+- [-] **systemd unit** + RPM / DEB for self-hosted Linux deployments --
+  **will not do** for the macOS-only MVP. The agent is Apple-Silicon only
+  per ADR-0002 and there is no Linux endpoint surface yet, so shipping a
+  Linux init-system + distro packaging surface for a server-only deploy
+  duplicates what the existing Docker Compose stack already covers.
+  Reconsider when a Linux agent lands (§2)
 - [-] **In-product auto-update channel** (Sparkle / custom signed-manifest fetcher) --
   **will not do**. Enterprise endpoint software updates flow through the customer's MDM
   channel (Fleet, Jamf, Kandji, Intune); in-product self-update bypasses change management
@@ -434,7 +462,12 @@ These cost almost nothing and disproportionately drive adoption.
   private vulnerability reporting flow (`/security/advisories/new`).
   Scoped to the maintainer-only mailbox without exposing a personal email
   address. Lifts OpenSSF Scorecard's Security-Policy check from 0 → 10.
-- [ ] **`CONTRIBUTING.md`** with build / test / DCO + style pointers
+- [x] **`CONTRIBUTING.md`** at the repo root: pointers to build / test (Taskfile,
+  lefthook, `.tool-versions`), per-language style sources of truth
+  (`docs/go-conventions.md`, `.golangci.yml`, ESLint, swiftlint), Sonar
+  new-code coverage gate, the `Co-Authored-By` policy, and a security-PR
+  checklist tied back to `docs/threat-model.md`. DCO sign-off noted as a
+  future requirement, not enforced today
 - [ ] **`CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1)
 - [ ] **`CODEOWNERS`** for review routing
 - [ ] **PR template** with checklist (tests, docs, security review)
@@ -574,7 +607,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 
 | Area                              | Adopted | Total | %    |
 |-----------------------------------|---------|-------|------|
-| Detection content + response      | 6       | 36    | 17%  |
+| Detection content + response      | 7       | 36    | 19%  |
 | Cross-platform reach              | 1       | 8     | 12%  |
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
 | Supply-chain security             | 15.5    | 27    | 57%  |
@@ -584,8 +617,8 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | API design                        | 5.5     | 16    | 34%  |
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
-| Build / release / packaging       | 2       | 12    | 17%  |
-| Community signals                 | 12      | 24    | 50%  |
+| Build / release / packaging       | 5       | 10    | 50%  |
+| Community signals                 | 13      | 24    | 54%  |
 | Compliance + privacy              | 1       | 13    | 8%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
 | AI-assisted engineering           | 2       | 17    | 12%  |
@@ -597,16 +630,24 @@ OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck.
 A real SonarCloud coverage gate (≥80% on new code, per PR) closed the
 last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59%
 to 64%. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job
-moved §8 from 25% to 34%. Adding `LICENSE` (MIT) + `SECURITY.md` lifted
-§12 Community signals from 42% to 50% and unblocked the rest of that
-section's doc items. `docs/threat-model.md` (STRIDE per component)
+moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized
+signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing
+the existing hardened-runtime + minimal-entitlements pipeline that
+notarization already enforces, lifted §11 Build/release from 17% to 50%
+(with GoReleaser and Linux init-system + distro packaging both flipped
+to will-not-do since the custom workflow + Apple-Silicon-only MVP scope
+already cover those). Adding `LICENSE`
+(MIT) + `SECURITY.md` + `CONTRIBUTING.md` lifted §12 Community signals
+from 42% to 54% and unblocked the rest of that section's doc items.
+`docs/threat-model.md` (STRIDE per component)
 opened §13 Compliance + privacy from 0% to 8% — that section was the
 last fully-empty area on the checklist.
 
 The remaining big gaps that buyers ask about are RBAC + MFA on the UI
 (§3, the highest-severity item left in the top-3 missing list now that
-LICENSE and the threat model have shipped), CONTRIBUTING.md and the
-rest of the §12 community-signals checklist, the detection-content
+LICENSE, the threat model, and CONTRIBUTING.md have shipped), the rest
+of the §12 community-signals checklist (CODE_OF_CONDUCT, CODEOWNERS, PR
+template, OpenSSF CII Best Practices badge), the detection-content
 surface (ATT&CK mapping is wired but Sigma / YARA / IOC management
 still wait for v1.1), and the AI-era hygiene that enterprise
 procurement is starting to ask for (CISA Secure by Design, OWASP LLM

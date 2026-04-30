@@ -1,5 +1,9 @@
 # Fleet EDR
 
+<!-- License & release -->
+[![License: MIT](https://img.shields.io/github/license/getvictor/fleet-edr?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/getvictor/fleet-edr?include_prereleases&style=flat-square)](https://github.com/getvictor/fleet-edr/releases)
+
 <!-- Build & quality -->
 ![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
 [![Tests](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml)
@@ -12,7 +16,7 @@
 
 <!-- Supply chain -->
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/getvictor/fleet-edr/badge)](https://scorecard.dev/viewer/?uri=github.com/getvictor/fleet-edr)
-[![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
+[![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![cosign keyless](https://img.shields.io/badge/cosign-keyless-9cf?style=flat-square&logo=sigstore)](docs/best-practices.md#4-supply-chain-security)
 
 A macOS Endpoint Detection and Response (EDR) system. It provides
