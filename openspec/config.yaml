@@ -1,0 +1,61 @@
+schema: spec-driven
+
+# Project context injected into every artifact prompt so agents know the
+# stack and conventions before drafting proposals or specs.
+context: |
+  Fleet EDR is a standalone macOS endpoint detection and response
+  product. It ships its own server, agent, UI, and installer; Fleet
+  (the MDM product) is one supported deployment channel, not an
+  owner of the data plane.
+
+  Components:
+  - extension/edr/    Swift Xcode project. Endpoint Security system
+                      extension + Network Extension + host app loader.
+                      Communicates with the agent over XPC Mach
+                      services with code-signing peer validation
+                      (anchor apple generic, team ID FDG8Q7N4CC).
+  - agent/            Go daemon. Receives events from the extension
+                      via XPC, queues them in a SQLite WAL store,
+                      uploads to the server with bearer-token auth,
+                      polls for and executes commands, reconciles
+                      missing exit events.
+  - server/           Go ingestion server. Stateless ingest endpoint
+                      writes to MySQL; a separate processor builds
+                      the per-host process forest and runs detection
+                      rules. Embeds the React UI.
+  - ui/               React + TypeScript + D3 frontend, built into
+                      server/ui/dist/ and embedded via server/ui/
+                      embed.go.
+  - schema/events.json  JSON Schema for the event envelope agents
+                        send to /api/v1/events.
+  - packaging/        Sign + notarize .pkg + render .mobileconfig
+                      profiles for MDM distribution.
+
+  Authentication shapes:
+  - Agents use a per-host bearer token issued at /api/v1/enroll.
+  - UI operators use a session cookie + CSRF token issued at
+    POST /api/v1/session.
+  - Tags are protected by the release-tag-protection ruleset; the
+    release workflow gates Apple signing on the release-signing
+    GitHub Environment.
+
+  Targets: Apple Silicon, macOS 13+. Pilot scale 10–500 endpoints.
+
+# Project-wide rules that every artifact must respect.
+rules:
+  specs:
+    - State observable behavior, not implementation. Avoid Go package
+      names, Swift class names, library choices, or step-by-step
+      logic in requirement text.
+    - Every requirement uses SHALL or MUST (RFC 2119); SHOULD and MAY
+      are reserved for genuinely optional behavior.
+    - Every requirement has at least one Scenario in
+      GIVEN/WHEN/THEN form covering the happy path, plus scenarios
+      for the load-bearing edge cases.
+    - Reference real auth + identity boundaries (host token vs
+      session cookie) when behavior depends on them; do not invent
+      new ones.
+  proposal:
+    - State the user-visible problem before the technical approach.
+    - List rollback steps for any change that touches the agent
+      protocol, the events schema, or the persisted host token.
