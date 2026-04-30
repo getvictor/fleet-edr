@@ -42,9 +42,11 @@ flag_management:
     - name: server
       paths:
         - server/
-    - name: ui
-      paths:
-        - ui/src/
+    # No `ui` flag yet: ui/src/** is in the global `ignore` list below
+    # because there are zero UI tests today. A flag scoped to an
+    # ignored path is a no-op. Re-add this entry (and remove ui/src/**
+    # from `ignore`, plus the matching sonar.coverage.exclusions entry)
+    # when UI tests land.
 
 comment:
   layout: "header, diff, flags, components, files"
