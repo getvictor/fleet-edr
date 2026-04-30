@@ -394,12 +394,20 @@ genuine differentiator versus most competitors.
 - [x] Build info (`version`, `commit`, `buildTime`) injected via `-ldflags` and surfaced
   in startup logs + OTel `service.version`
 - [x] Multi-stage local dev (Docker Compose for MySQL; `go run` for server)
-- [ ] **GoReleaser** for cross-arch binary releases with checksums
-- [ ] **Notarized signed `.pkg` installer** (per the MVP plan; not yet automated)
+- [-] **GoReleaser** -- **will not do**. The custom `release.yml` workflow already
+  ships the same outcomes (signed multi-arch artifacts + `SHA256SUMS` + SBOMs)
+  without taking on the GoReleaser config surface. Reconsider only if releases
+  need to expand to many more cross-platform Go binaries
+- [x] **Notarized signed `.pkg` installer** for darwin/arm64. Built, signed
+  (Developer ID Application + Installer), and notarized via `notarytool` in
+  `release.yml`'s `macos-pkg` job; gated on the `release-signing` GitHub
+  environment so signing creds only decrypt for `v*` tag pushes
 - [ ] **Apple Hardened Runtime** entitlements on the agent + extension binaries
 - [ ] **Reproducible-build verification** job in CI
-- [ ] **Multi-arch container image** for the server (linux/amd64, linux/arm64) signed by
-  cosign
+- [x] **Multi-arch container image** for the server (linux/amd64, linux/arm64)
+  signed by cosign. Built and pushed by the `docker-server` job in
+  `release.yml` to `ghcr.io/getvictor/fleet-edr-server:{tag,latest}`; cosign
+  keyless signature + SBOM attestation pushed alongside on every tag
 - [ ] **Helm chart** + Kustomize overlays for k8s deployments
 - [ ] **systemd unit** + RPM / DEB for self-hosted Linux deployments
 - [-] **In-product auto-update channel** (Sparkle / custom signed-manifest fetcher) --
@@ -434,7 +442,12 @@ These cost almost nothing and disproportionately drive adoption.
   private vulnerability reporting flow (`/security/advisories/new`).
   Scoped to the maintainer-only mailbox without exposing a personal email
   address. Lifts OpenSSF Scorecard's Security-Policy check from 0 → 10.
-- [ ] **`CONTRIBUTING.md`** with build / test / DCO + style pointers
+- [x] **`CONTRIBUTING.md`** at the repo root: pointers to build / test (Taskfile,
+  lefthook, `.tool-versions`), per-language style sources of truth
+  (`docs/go-conventions.md`, `.golangci.yml`, ESLint, swiftlint), Sonar
+  new-code coverage gate, the `Co-Authored-By` policy, and a security-PR
+  checklist tied back to `docs/threat-model.md`. DCO sign-off noted as a
+  future requirement, not enforced today
 - [ ] **`CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1)
 - [ ] **`CODEOWNERS`** for review routing
 - [ ] **PR template** with checklist (tests, docs, security review)
@@ -584,8 +597,8 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | API design                        | 5.5     | 16    | 34%  |
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
-| Build / release / packaging       | 2       | 12    | 17%  |
-| Community signals                 | 12      | 24    | 50%  |
+| Build / release / packaging       | 4       | 11    | 36%  |
+| Community signals                 | 13      | 24    | 54%  |
 | Compliance + privacy              | 1       | 13    | 8%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
 | AI-assisted engineering           | 2       | 17    | 12%  |
@@ -597,16 +610,21 @@ OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck.
 A real SonarCloud coverage gate (≥80% on new code, per PR) closed the
 last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59%
 to 64%. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job
-moved §8 from 25% to 34%. Adding `LICENSE` (MIT) + `SECURITY.md` lifted
-§12 Community signals from 42% to 50% and unblocked the rest of that
-section's doc items. `docs/threat-model.md` (STRIDE per component)
+moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized
+signed `.pkg` plus a multi-arch cosign-signed server image lifted §11
+Build/release from 17% to 36% (with GoReleaser flipped to will-not-do
+since the custom workflow already covers its scope). Adding `LICENSE`
+(MIT) + `SECURITY.md` + `CONTRIBUTING.md` lifted §12 Community signals
+from 42% to 54% and unblocked the rest of that section's doc items.
+`docs/threat-model.md` (STRIDE per component)
 opened §13 Compliance + privacy from 0% to 8% — that section was the
 last fully-empty area on the checklist.
 
 The remaining big gaps that buyers ask about are RBAC + MFA on the UI
 (§3, the highest-severity item left in the top-3 missing list now that
-LICENSE and the threat model have shipped), CONTRIBUTING.md and the
-rest of the §12 community-signals checklist, the detection-content
+LICENSE, the threat model, and CONTRIBUTING.md have shipped), the rest
+of the §12 community-signals checklist (CODE_OF_CONDUCT, CODEOWNERS, PR
+template, OpenSSF CII Best Practices badge), the detection-content
 surface (ATT&CK mapping is wired but Sigma / YARA / IOC management
 still wait for v1.1), and the AI-era hygiene that enterprise
 procurement is starting to ask for (CISA Secure by Design, OWASP LLM
