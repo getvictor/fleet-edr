@@ -425,10 +425,15 @@ These cost almost nothing and disproportionately drive adoption.
 - [ ] Issue templates at `.github/ISSUE_TEMPLATE/` (bug, story, reliability). Not committed
   yet; slash-skills that reference them (`create-bug`, `create-story`, `create-reliability`)
   live in the user's global `~/.claude/skills/` only.
-- [ ] **`LICENSE`** file at the repo root (unclear which license applies today; pick one
-  -- MIT, Apache-2.0, AGPL-3.0 are the obvious candidates and the choice signals
-  intent to commercial adopters)
-- [ ] **`SECURITY.md`** with a coordinated-disclosure mailbox + GPG key + response SLA
+- [x] **`LICENSE`** at the repo root: MIT, copyright `Victor Lyuboslavsky and
+  contributors`. Matches Fleet's license choice; permissive enough for any
+  pilot-customer procurement scanner. Future relicensing flexibility
+  hinges on a CLA / DCO before external contributors arrive (separate
+  community-signals item below)
+- [x] **`SECURITY.md`** at the repo root: directs reporters to GitHub's
+  private vulnerability reporting flow (`/security/advisories/new`).
+  Scoped to the maintainer-only mailbox without exposing a personal email
+  address. Lifts OpenSSF Scorecard's Security-Policy check from 0 → 10.
 - [ ] **`CONTRIBUTING.md`** with build / test / DCO + style pointers
 - [ ] **`CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1)
 - [ ] **`CODEOWNERS`** for review routing
@@ -469,8 +474,11 @@ these get asked.
 - [ ] **SOC 2** controls documented (audit logging, change management, access review)
 - [ ] **CIS Benchmark** / NIST 800-53 control mapping for marketing
 - [ ] **HIPAA** considerations (BAA-friendly hosting profile)
-- [ ] **Threat model** committed (`docs/threat-model.md`) with STRIDE per component +
-  documented mitigations
+- [x] **Threat model** committed at [`docs/threat-model.md`](threat-model.md):
+  STRIDE per component (agent, sysext, NE, server, UI, MySQL, MDM/install
+  path), cross-cutting supply-chain + detection-content + insider-threat
+  sections, gap inventory ranked high/medium/low by pilot impact, explicit
+  out-of-scope list, revision policy.
 - [ ] **OWASP ASVS** (Application Security Verification Standard) self-assessment at
   Level 2 for the server, Level 3 for auth-handling code paths
 - [ ] **NIST SSDF** (Secure Software Development Framework, SP 800-218) practice mapping
@@ -577,8 +585,8 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | Frontend                          | 6       | 14    | 43%  |
 | Data layer                        | 9       | 17    | 53%  |
 | Build / release / packaging       | 2       | 12    | 17%  |
-| Community signals                 | 10      | 24    | 42%  |
-| Compliance + privacy              | 0       | 13    | 0%   |
+| Community signals                 | 12      | 24    | 50%  |
+| Compliance + privacy              | 1       | 13    | 8%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
 | AI-assisted engineering           | 2       | 17    | 12%  |
 
@@ -589,11 +597,17 @@ OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck.
 A real SonarCloud coverage gate (≥80% on new code, per PR) closed the
 last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59%
 to 64%. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job
-moved §8 from 25% to 34%.
+moved §8 from 25% to 34%. Adding `LICENSE` (MIT) + `SECURITY.md` lifted
+§12 Community signals from 42% to 50% and unblocked the rest of that
+section's doc items. `docs/threat-model.md` (STRIDE per component)
+opened §13 Compliance + privacy from 0% to 8% — that section was the
+last fully-empty area on the checklist.
 
-The remaining big gaps that buyers ask about are CONTRIBUTING.md and the
-rest of the §12 community-signals checklist (now unblocked because
-LICENSE has shipped), the detection-content surface (ATT&CK mapping is
-wired but Sigma / YARA / IOC management still wait for v1.1), and the
-AI-era hygiene that enterprise procurement is starting to ask for (CISA
-Secure by Design, OWASP LLM Top 10, AI provenance policy).
+The remaining big gaps that buyers ask about are RBAC + MFA on the UI
+(§3, the highest-severity item left in the top-3 missing list now that
+LICENSE and the threat model have shipped), CONTRIBUTING.md and the
+rest of the §12 community-signals checklist, the detection-content
+surface (ATT&CK mapping is wired but Sigma / YARA / IOC management
+still wait for v1.1), and the AI-era hygiene that enterprise
+procurement is starting to ask for (CISA Secure by Design, OWASP LLM
+Top 10, AI provenance policy).
