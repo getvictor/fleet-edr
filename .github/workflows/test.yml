@@ -241,11 +241,17 @@ jobs:
       # no-op. Sonarcloud still downloads coverage-ui because Sonar reads
       # the lcov per sonar-project.properties even when empty. Re-add the
       # download + upload steps when UI tests land.
+      # disable_search: true -- codecov-action otherwise auto-searches
+      # the workspace for *.out / lcov.info files in addition to the
+      # explicit `files:` argument, so a stray coverage file landing in
+      # the repo would silently get double-counted under whichever flag
+      # was uploaded next. Be explicit; don't trust auto-discovery.
       - name: Upload agent coverage
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           files: coverage-agent.out
           flags: agent
+          disable_search: true
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -255,6 +261,7 @@ jobs:
         with:
           files: coverage-server.out
           flags: server
+          disable_search: true
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
