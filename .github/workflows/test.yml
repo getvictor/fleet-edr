@@ -172,3 +172,86 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+
+  codecov:
+    name: Codecov upload
+    needs: [agent-test, server-test]
+    # Same exclusion logic as sonarcloud: Dependabot PRs cannot read repo
+    # secrets, so a CODECOV_TOKEN-gated upload would always fail. Coverage
+    # files for dep bumps don't change project numbers in any meaningful way,
+    # so skipping the upload loses no signal.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # OIDC tokenless upload for public repos (codecov-action v5+); avoids
+      # the chicken-and-egg of requiring CODECOV_TOKEN before the first
+      # workflow run that would seed it.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Codecov reads git history to attribute coverage to commits;
+          # shallow clones drop blame data the dashboard expects.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download agent coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-agent
+
+      - name: Download server coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-server
+
+      # UI coverage is generated inline for the same reason it is in the
+      # sonarcloud job above: cross-workflow artifact access is brittle and
+      # vitest finishes in ~30s. The empty-lcov fallback handles the
+      # zero-tests case (today UI has no `.test.*` files; vitest's v8
+      # provider skips lcov.info under passWithNoTests).
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci --ignore-scripts
+
+      - name: Run UI tests with coverage
+        working-directory: ui
+        run: |
+          npm run test:coverage
+          [ -f coverage/lcov.info ] || { mkdir -p coverage && : > coverage/lcov.info; }
+
+      # Three uploads, one per flag, so the Codecov dashboard separates
+      # agent / server / ui trends. codecov-action's `flags` input is
+      # single-string per invocation; the documented multi-flag pattern is
+      # multiple action calls.
+      - name: Upload agent coverage
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: coverage-agent.out
+          flags: agent
+          use_oidc: true
+          fail_ci_if_error: false
+
+      - name: Upload server coverage
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: coverage-server.out
+          flags: server
+          use_oidc: true
+          fail_ci_if_error: false
+
+      - name: Upload UI coverage
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: ui/coverage/lcov.info
+          flags: ui
+          use_oidc: true
+          fail_ci_if_error: false
