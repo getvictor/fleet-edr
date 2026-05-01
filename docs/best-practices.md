@@ -215,16 +215,18 @@ floor for any project that wants enterprise adoption.
 - [x] Multi-module Go workspace with clear boundaries (`agent/`, `server/`)
 - [ ] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/`
   layout: `api/` (public types and interfaces), `bootstrap/` (DI entry point for
-  `cmd/main` and `test/integration/`), `internal/<module>/` (private, Go-compiler
+  `server/cmd/*` and `test/integration/`), `internal/<module>/` (private, Go-compiler
   enforced). Five contexts: `detection`, `rules`, `response`, `endpoint`, `identity`.
   Cross-context calls go via the imported `api/` package only; no cross-context
-  transactions or foreign keys
+  transactions; no cross-context foreign keys (one such FK exists in the current
+  schema, `fk_alerts_updated_by`, and is dropped during phase 5 in favour of
+  code-level validation)
 - [ ] **Architecture lint** via `arch-go`
   ([github.com/arch-go/arch-go](https://github.com/arch-go/arch-go)). Declarative
   YAML rules at `arch-go.yml`; programmatic API runs from `go test ./test/arch/...`
   so violations break the test job, not just lint. Complements `depguard` (which
-  stays for block-list deps like `pkg/errors`). Wired to lefthook pre-commit and
-  CI
+  stays for block-list deps like `pkg/errors`). Will be wired to lefthook pre-commit
+  and CI when the migration lands
 - [x] **Test-coverage thresholds** uploaded to SonarCloud. Both Go and TS coverage
   reports flow through (`sonar.go.coverage.reportPaths`,
   `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to

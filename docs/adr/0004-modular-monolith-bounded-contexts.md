@@ -58,10 +58,10 @@ Adopt a modular-monolith layout with **five bounded contexts** under
 
 Each context follows this layout:
 
-```
+```text
 server/<context>/
   api/                  # public types + interfaces (importable by any context)
-  bootstrap/            # New(deps), ApplySchema, RegisterRoutes (cmd/main + tests only)
+  bootstrap/            # New(deps), ApplySchema, RegisterRoutes (server/cmd/* + tests only)
   internal/             # private; Go compiler blocks imports from outside
     <module>/           # service, mysql, middleware, engine, etc.
     tests/              # per-context integration tests
@@ -71,9 +71,15 @@ The top-level `server/<context>/` directory contains zero Go files, so
 `import "server/<context>"` fails. Internal modules are protected by Go's
 language-level `internal/` rule from day one (consistent with ADR-0001's
 choice to put shared code at the repo-root `internal/`). Cross-context
-calls go through `<other>/api`. Cross-context HTTP composition happens at
-`cmd/main` wiring, not inside any context. No cross-context transactions
-or foreign keys.
+calls go through `<other>/api`. Cross-context HTTP composition happens
+at the binary entrypoints under `server/cmd/*` (today
+`server/cmd/fleet-edr-server/main.go` and
+`server/cmd/fleet-edr-ingest/main.go`), not inside any context. No
+cross-context transactions, and no cross-context foreign keys after
+the migration completes; one such FK exists in the current schema
+(`fk_alerts_updated_by` linking `alerts.updated_by` to `users.id`)
+and is dropped during phase 5, replaced by code-level validation in
+the alert-update handler.
 
 Three test layers, each with a clear scope and import boundary:
 
@@ -88,15 +94,17 @@ the `internal/` rule. Architecture lint (`arch-go`, programmatic API
 invoked from `go test ./test/arch/...`) covers the rules Go's compiler
 cannot express, namely: which contexts may import which other contexts'
 `api/` packages, that platform packages may not import contexts, and
-that `bootstrap/` packages are imported only by `cmd/main` and
+that `bootstrap/` packages are imported only by `server/cmd/*` and
 `test/integration/`.
 
 The migration runs as seven phases, smallest blast radius first
 (`identity` -> `endpoint` -> `rules` -> `response` -> `detection` ->
 deletions -> arch-lint tightening). Each phase is one PR, ships
-independently, and keeps the test suite green.
-
-Full migration plan in (gitignored) `claude/modular-monolith/plan.md`.
+independently, and keeps the test suite green. Phase-by-phase
+implementation tasks are tracked in the per-phase PRs and their commit
+history rather than embedded in this ADR (an ADR captures the durable
+decision; the file-by-file move list is operational and changes shape
+as the migration proceeds).
 
 ## Consequences
 
