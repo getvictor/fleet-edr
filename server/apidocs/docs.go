@@ -1,4 +1,4 @@
-// Package docs serves the self-hosted OpenAPI documentation: an embedded
+// Package apidocs serves the self-hosted OpenAPI documentation: an embedded
 // Redoc renderer at GET /api/docs and the underlying spec at GET
 // /api/openapi.yaml. Both routes are unauthenticated on purpose — the spec
 // content is already public on the GitHub release page and procurement
@@ -16,7 +16,7 @@
 // The canonical spec lives at docs/api/openapi.yaml in the repo root; the
 // copy in embed/openapi.yaml is refreshed via go generate (see the
 // directive below) and a `task sync:openapi-embed` helper is a follow-up.
-// If you edit the canonical copy, run `go generate ./server/api/docs/...`
+// If you edit the canonical copy, run `go generate ./server/apidocs/...`
 // before building.
 //
 // Cache invalidation strategy across the three assets:
@@ -29,7 +29,7 @@
 //     tradeoff: one extra round-trip per page load vs. URL chaining
 //     through the bundle (which would require regenerating bundleHash
 //     whenever the logo/spec change).
-package docs
+package apidocs
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ import (
 	"time"
 )
 
-//go:generate sh -c "cp ../../../docs/api/openapi.yaml embed/openapi.yaml"
+//go:generate sh -c "cp ../../docs/api/openapi.yaml embed/openapi.yaml"
 
 //go:embed embed/openapi.yaml embed/redoc.standalone.js embed/logo-mini.svg
 var assets embed.FS

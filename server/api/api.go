@@ -13,6 +13,7 @@ import (
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/graph"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/store"
 )
 
@@ -217,7 +218,7 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	// who resolved what. When the handler is invoked outside the session middleware
 	// stack (e.g. direct test harness), UserIDFromContext returns false and we pass 0,
 	// which UpdateAlertStatus treats as "leave updated_by alone".
-	userID, _ := authn.UserIDFromContext(ctx)
+	userID, _ := identityapi.UserIDFromContext(ctx)
 	if err := h.store.UpdateAlertStatus(ctx, id, body.Status, userID); err != nil {
 		if errors.Is(err, errNotFound) {
 			http.Error(w, msgNotFound, http.StatusNotFound)

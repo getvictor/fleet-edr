@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -18,7 +19,7 @@ import (
 
 	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
-	apidocs "github.com/fleetdm/edr/server/api/docs"
+	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
@@ -27,18 +28,16 @@ import (
 	"github.com/fleetdm/edr/server/enrollment"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/httpserver"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
+	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/metrics"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/processor"
 	"github.com/fleetdm/edr/server/processttl"
 	"github.com/fleetdm/edr/server/retention"
-	"github.com/fleetdm/edr/server/seed"
-	"github.com/fleetdm/edr/server/session"
-	"github.com/fleetdm/edr/server/sessions"
 	"github.com/fleetdm/edr/server/store"
 	"github.com/fleetdm/edr/server/ui"
-	"github.com/fleetdm/edr/server/users"
 )
 
 // serverGaugeSource adapts our enrollment + store handles to the metrics.GaugeSource
@@ -96,12 +95,38 @@ func run() error {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
 	}
 
-	s, err := store.New(ctx, cfg.DSN)
+	// Open the shared connection pool first; identity + store both consume it.
+	db, err := store.OpenDB(ctx, cfg.DSN)
+	if err != nil {
+		logger.ErrorContext(ctx, "open db", "err", err)
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	// Identity context (operator users + sessions). ApplySchema MUST run
+	// before store.New because store.applySchema includes the
+	// fk_alerts_updated_by FK that references users(id). Phase 5 drops that
+	// FK and the call ordering will no longer matter.
+	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{
+		DB:              db,
+		Logger:          logger,
+		LoginRatePerMin: cfg.LoginRatePerMin,
+		CookieSecure:    cfg.TLSEnabled(),
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open identity", "err", err)
+		return err
+	}
+	if err := identityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "identity schema", "err", err)
+		return err
+	}
+
+	s, err := store.New(ctx, db)
 	if err != nil {
 		logger.ErrorContext(ctx, "open store", "err", err)
 		return err
 	}
-	defer func() { _ = s.Close() }()
 
 	build := ingest.BuildInfo{Version: version, Commit: commit, BuildTime: buildTime}
 	ingestHandler := ingest.New(s, logger, build)
@@ -122,8 +147,6 @@ func run() error {
 
 	enrollStore := enrollment.NewStore(s.DB())
 	policyStore := policy.New(s.DB())
-	userStore := users.New(s.DB())
-	sessionStore := sessions.New(s.DB(), sessions.Options{})
 
 	// Phase 4: OTel metrics recorder. Instruments register against the global meter
 	// provider wired by observability.Init; counters, histograms, and observable
@@ -137,11 +160,11 @@ func run() error {
 	ingestHandler.SetMetrics(metricsRec)
 	det.SetMetrics(metricsRec)
 
-	// Phase 3: seed the first admin before we bind the HTTP listener. If the operator
-	// is watching, they capture the printed password at boot; if they miss it they can
-	// restart and re-seed by deleting the admin row. Never fatal — a seed failure is
-	// logged but the server still boots (operator can run migrations by hand).
-	if _, _, err := seed.Admin(ctx, userStore, logger, os.Stderr); err != nil {
+	// Seed the first admin before we bind the HTTP listener. ErrAlreadySeeded
+	// is the success-but-noop case (table already populated). Any other error
+	// is logged but non-fatal -- the operator can still run migrations by hand.
+	if _, _, err := identityCtx.Service().SeedAdmin(ctx, os.Stderr); err != nil &&
+		!errors.Is(err, identityapi.ErrAlreadySeeded) {
 		logger.ErrorContext(ctx, "admin seed failed", "err", err)
 	}
 
@@ -153,21 +176,15 @@ func run() error {
 		CommandStore:  s,
 	})
 	adminHandler := admin.New(enrollStore, policyStore, s, catalogFromEngine(det), logger)
-	sessionHandler := session.New(userStore, sessionStore, session.Options{
-		RatePerMinute: cfg.LoginRatePerMin,
-		CookieSecure:  cfg.TLSEnabled(),
-		Logger:        logger,
-	})
 
 	mux := buildMux(muxDeps{
-		ingestHandler:  ingestHandler,
-		enrollHandler:  enrollHandler,
-		sessionHandler: sessionHandler,
-		apiHandler:     apiHandler,
-		adminHandler:   adminHandler,
-		enrollStore:    enrollStore,
-		sessionStore:   sessionStore,
-		logger:         logger,
+		ingestHandler: ingestHandler,
+		enrollHandler: enrollHandler,
+		identityCtx:   identityCtx,
+		apiHandler:    apiHandler,
+		adminHandler:  adminHandler,
+		enrollStore:   enrollStore,
+		logger:        logger,
 	})
 	registerUIRoutes(mux, logger)
 
@@ -188,7 +205,11 @@ func run() error {
 		Metrics:  metricsRec,
 	})
 	go processTTLRunner.Loop(ctx)
-	go runSessionCleanup(ctx, sessionStore, logger)
+	go func() {
+		if err := identityCtx.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.ErrorContext(ctx, "identity run", "err", err)
+		}
+	}()
 	go runProcessor(ctx, proc, logger)
 
 	srv := newHTTPServer(cfg, mux, logger)
@@ -203,30 +224,6 @@ func run() error {
 		}
 	}
 	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
-}
-
-// runSessionCleanup sweeps expired session rows on a 5-minute cadence. The
-// exact interval is not load-bearing: Session middleware already rejects
-// expired rows via the `expires_at > NOW()` filter, so rows that linger for a
-// few extra minutes are harmless — this loop is about reclaiming disk, not
-// enforcing security.
-func runSessionCleanup(ctx context.Context, sessionStore *sessions.Store, logger *slog.Logger) {
-	t := time.NewTicker(5 * time.Minute)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			n, err := sessionStore.CleanupExpired(ctx)
-			switch {
-			case err != nil:
-				logger.WarnContext(ctx, "session cleanup", "err", err)
-			case n > 0:
-				logger.InfoContext(ctx, "session cleanup removed rows", "count", n)
-			}
-		}
-	}
 }
 
 // runProcessor owns the background event-processor goroutine and logs any
@@ -259,14 +256,13 @@ func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger) 
 // muxDeps bundles the handlers + stores the HTTP mux assembly needs, so buildMux takes
 // a single argument and new middleware layers don't keep widening the signature.
 type muxDeps struct {
-	ingestHandler  *ingest.Handler
-	enrollHandler  *enrollment.Handler
-	sessionHandler *session.Handler
-	apiHandler     *api.Handler
-	adminHandler   *admin.Handler
-	enrollStore    *enrollment.Store
-	sessionStore   *sessions.Store
-	logger         *slog.Logger
+	ingestHandler *ingest.Handler
+	enrollHandler *enrollment.Handler
+	identityCtx   *identitybootstrap.Identity
+	apiHandler    *api.Handler
+	adminHandler  *admin.Handler
+	enrollStore   *enrollment.Store
+	logger        *slog.Logger
 }
 
 // buildMux composes the HTTP surface out of three authorization domains:
@@ -287,9 +283,10 @@ func buildMux(d muxDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	d.ingestHandler.RegisterHealthRoutes(mux)
 	d.enrollHandler.RegisterRoutes(mux)
-	// POST /api/session is public — there is no session yet. The session handler
-	// does its own rate-limit + audit log so it does not need a wrapper.
-	d.sessionHandler.RegisterPublicRoutes(mux)
+	// POST + DELETE /api/session are public -- login mints a session, logout
+	// is permissive (a stale cookie still needs a clearing Set-Cookie). The
+	// identity context owns rate-limiting + audit log on these.
+	d.identityCtx.RegisterPublicRoutes(mux)
 	// Self-hosted Redoc at /api/docs (the matching spec at /api/openapi.yaml).
 	// Public on purpose: same content is on the GitHub release page and
 	// procurement teams browse it pre-eval.
@@ -326,12 +323,12 @@ func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 // session off ctx, validates X-CSRF-Token on unsafe methods). GET + DELETE
 // /api/session live under the same stack; login POST is public.
 func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
-	sessionMW := authn.Session(d.sessionStore, d.logger)
-	csrfMW := authn.CSRF(d.logger)
+	sessionMW := d.identityCtx.SessionMiddleware()
+	csrfMW := d.identityCtx.CSRFMiddleware()
 	apiMux := http.NewServeMux()
 	d.apiHandler.RegisterRoutes(apiMux)
 	d.adminHandler.RegisterRoutes(apiMux)
-	d.sessionHandler.RegisterAuthedRoutes(apiMux)
+	d.identityCtx.RegisterAuthedRoutes(apiMux)
 	sessionProtected := sessionMW(csrfMW(apiMux))
 	for _, p := range []string{
 		"GET /api/hosts", "GET /api/hosts/{host_id}/tree", "GET /api/hosts/{host_id}/processes/{pid}",

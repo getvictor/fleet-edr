@@ -1,0 +1,22 @@
+version: 1
+
+# Architecture rules for the modular-monolith bounded-context migration.
+# See docs/adr/0004-modular-monolith-bounded-contexts.md for the rationale.
+#
+# Rules are added one bounded context at a time as each phase lands. Phase 7
+# tightens the rule set with cross-cutting `bootstrap/` access restrictions
+# and api/ -> internal/ blocking.
+
+dependenciesRules:
+  # Phase 1: identity context internals may import only their own context,
+  # platform packages, and standard library / approved third-party. Other
+  # contexts that need identity functionality go through identity/api.
+  #
+  # arch-go pattern syntax: dots are wildcards for path segments. The
+  # match below covers packages whose path contains /identity/internal/...
+  - package: "**.identity.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.attrkeys"
+        - "**.store"  # for testhelper only; phase 5 removes the cross-context FK that forces this

@@ -14,6 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/enrollment"
 	"github.com/fleetdm/edr/server/httpserver"
+	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -52,12 +53,32 @@ func run() error {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
 	}
 
-	s, err := store.New(ctx, cfg.DSN)
+	db, err := store.OpenDB(ctx, cfg.DSN)
+	if err != nil {
+		logger.ErrorContext(ctx, "open db", "err", err)
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	// Identity ApplySchema must run before store.New on a fresh DB because
+	// store.applySchema includes ALTER TABLE alerts ADD CONSTRAINT
+	// fk_alerts_updated_by REFERENCES users(id), and the users table is
+	// owned by identity. Phase 5 drops the FK and this preamble goes away.
+	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{DB: db, Logger: logger})
+	if err != nil {
+		logger.ErrorContext(ctx, "open identity", "err", err)
+		return err
+	}
+	if err := identityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "identity schema", "err", err)
+		return err
+	}
+
+	s, err := store.New(ctx, db)
 	if err != nil {
 		logger.ErrorContext(ctx, "open store", "err", err)
 		return err
 	}
-	defer func() { _ = s.Close() }()
 
 	enrollStore := enrollment.NewStore(s.DB())
 	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{

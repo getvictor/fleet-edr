@@ -100,7 +100,10 @@ tasks:
       Agent + shared coverage flavor of test:go:agent. Emits coverage-agent.out
       which CI uploads as an artifact for the Sonar scan job.
     cmds:
-      - go test -race -count=1 -timeout=10m -coverprofile=coverage-agent.out -covermode=atomic ./agent/... ./internal/...
+      # See comment on test:go:server:coverage. Same -coverpkg fix so agent
+      # tests that exercise shared internal/ packages (observability, envparse)
+      # contribute to those packages' coverage on Sonar.
+      - go test -race -count=1 -timeout=10m -coverpkg=./agent/...,./internal/... -coverprofile=coverage-agent.out -covermode=atomic ./agent/... ./internal/...
       - go tool cover -func=coverage-agent.out | tail -1
 
   test:go:server:
@@ -119,7 +122,15 @@ tasks:
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
     cmds:
-      - go test -race -count=1 -timeout=10m -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/...
+      # -coverpkg=./server/...,./internal/... attributes coverage from one
+      # package's tests back to symbols in any other package they exercise.
+      # Without it, default Go coverage is per-test-package only, so e.g. the
+      # bootstrap.go and service.go files (constructed by integration tests
+      # in identity/internal/tests/) showed 0% coverage even though the
+      # tests fully exercise them. Per the modular-monolith pattern,
+      # cross-package exercise via the public api/ + bootstrap/ surface is
+      # the intended coverage path; coverpkg makes Sonar see it.
+      - go test -race -count=1 -timeout=10m -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/...
       - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:

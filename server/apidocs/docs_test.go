@@ -1,4 +1,4 @@
-package docs
+package apidocs
 
 import (
 	"io"

@@ -138,33 +138,11 @@ var schemaStatements = []string{
 	// row. The initial blocklist is empty — operators opt in to blocking via PUT.
 	`INSERT IGNORE INTO policies (name, version, blocklist, updated_by)
 	 VALUES ('default', 1, JSON_OBJECT('paths', JSON_ARRAY(), 'hashes', JSON_ARRAY()), 'system')`,
-	// Phase 3: users table for UI auth. password_hash is argon2id output (32 bytes);
-	// password_salt is 16 random bytes (same argon params as enrollment host tokens).
-	// email is UNIQUE so duplicate invites fail cleanly at the DB boundary.
-	`CREATE TABLE IF NOT EXISTS users (
-		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
-		email          VARCHAR(255)   NOT NULL,
-		password_hash  VARBINARY(255) NOT NULL,
-		password_salt  VARBINARY(32)  NOT NULL,
-		created_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		updated_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-		                              ON UPDATE CURRENT_TIMESTAMP(6),
-		UNIQUE KEY uk_users_email (email)
-	)`,
-	// Phase 3: sessions table for UI cookie auth. id is 32 random bytes (~256 bits of
-	// entropy) — acts as its own unguessable lookup key, no separate index needed.
-	// csrf_token is 32 random bytes; compared constant-time against X-CSRF-Token header
-	// on unsafe methods.
-	`CREATE TABLE IF NOT EXISTS sessions (
-		id            VARBINARY(32)  PRIMARY KEY,
-		user_id       BIGINT         NOT NULL,
-		csrf_token    VARBINARY(32)  NOT NULL,
-		created_at    TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		last_seen_at  TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-		                             ON UPDATE CURRENT_TIMESTAMP(6),
-		expires_at    TIMESTAMP(6)   NOT NULL,
-		INDEX idx_sessions_expires (expires_at)
-	)`,
+	// users + sessions DDL is owned by the identity bounded context (see
+	// server/identity/bootstrap/schema.go). cmd/main calls
+	// identityCtx.ApplySchema before this list runs so the cross-context
+	// FK fk_alerts_updated_by below can resolve. Phase 5 will drop that FK
+	// and the call ordering will no longer matter.
 }
 
 // Event represents the canonical event envelope.
@@ -189,20 +167,38 @@ type Store struct {
 	db *sqlx.DB
 }
 
-// New opens a connection to MySQL and ensures the schema exists.
-// The dsn should be in go-sql-driver/mysql format, e.g. "user:pass@tcp(127.0.0.1:3316)/edr?parseTime=true".
-func New(ctx context.Context, dsn string) (*Store, error) {
+// OpenDB opens a connection pool to MySQL and pings it. cmd/main calls this
+// once and injects the returned handle into each bounded context's bootstrap
+// + into store.New, so all contexts share one connection budget. The dsn
+// should be in go-sql-driver/mysql format, e.g.
+// "user:pass@tcp(127.0.0.1:3316)/edr?parseTime=true". parseTime=true is
+// appended automatically when missing.
+func OpenDB(ctx context.Context, dsn string) (*sqlx.DB, error) {
 	sqldb, err := openInstrumentedDB(ensureParseTime(dsn))
 	if err != nil {
 		return nil, err
 	}
 	db := sqlx.NewDb(sqldb, "mysql")
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
+	return db, nil
+}
+
+// New ensures the schema this store owns exists, then returns the Store
+// wrapping the provided db handle. cmd/main is responsible for opening the
+// db (via OpenDB) and for calling each bounded context's ApplySchema in the
+// right order before this function runs (so cross-table FKs resolve).
+//
+// Note: the db handle is shared across the process; closing it is the
+// caller's responsibility, not Store.Close (which is intentionally a no-op
+// to avoid yanking other contexts' connection pool out from under them).
+func New(ctx context.Context, db *sqlx.DB) (*Store, error) {
+	if db == nil {
+		return nil, errors.New("store.New: db handle must not be nil")
+	}
 	if err := applySchema(ctx, db); err != nil {
-		db.Close()
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -285,13 +281,12 @@ var migrations = []string{
 	// to render. The migration loop above swallows "duplicate column name" errors, so
 	// re-running on an already-migrated DB is a no-op.
 	`ALTER TABLE alerts ADD COLUMN updated_by BIGINT NULL`,
-	// Phase 3 FK constraints: enforce that sessions point at live users (CASCADE on
-	// user delete so stale sessions die with their owner) and alert audit references
-	// are either a real user or NULL (SET NULL on delete so a removed admin doesn't
-	// erase their historical acknowledgements). Indexes on the FK columns are
-	// required for InnoDB to accept the constraint and make JOIN-based queries cheap.
-	`ALTER TABLE sessions ADD INDEX idx_sessions_user_id (user_id)`,
-	`ALTER TABLE sessions ADD CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+	// alerts.updated_by FK references users.id from another bounded context
+	// (identity). The ALTER ADD COLUMN above stays here because the column
+	// belongs to the alerts table that this store owns; the FK is created
+	// here for now and dropped in phase 5, after which the alert-update
+	// handler validates user existence in code (identity.api.Service.UserExists)
+	// instead of through the database constraint. Index required for InnoDB.
 	`ALTER TABLE alerts ADD INDEX idx_alerts_updated_by (updated_by)`,
 	`ALTER TABLE alerts ADD CONSTRAINT fk_alerts_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL`,
 	// Phase 7 / issue #7: server-stamped ingest time. ES and NE clocks drift,
@@ -340,9 +335,14 @@ var postSchemaMigrations = []string{
 	`UPDATE processes SET fork_ingested_at_ns = fork_time_ns WHERE fork_ingested_at_ns IS NULL`,
 }
 
-// Close closes the database connection.
+// Close is a no-op. The db handle is shared across bounded contexts and owned
+// by cmd/main; closing it here would yank the pool out from under sibling
+// contexts. cmd/main is responsible for db.Close on shutdown.
+//
+// Kept as a method (rather than removed) so callers that defer s.Close() out
+// of habit do no harm; the existing test helpers also call this.
 func (s *Store) Close() error {
-	return s.db.Close()
+	return nil
 }
 
 // PingContext verifies connectivity to the underlying database. Used by the readiness probe.
