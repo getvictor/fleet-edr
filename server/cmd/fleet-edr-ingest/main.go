@@ -52,12 +52,18 @@ func run() error {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
 	}
 
-	s, err := store.New(ctx, cfg.DSN)
+	db, err := store.OpenDB(ctx, cfg.DSN)
+	if err != nil {
+		logger.ErrorContext(ctx, "open db", "err", err)
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	s, err := store.New(ctx, db)
 	if err != nil {
 		logger.ErrorContext(ctx, "open store", "err", err)
 		return err
 	}
-	defer func() { _ = s.Close() }()
 
 	enrollStore := enrollment.NewStore(s.DB())
 	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{

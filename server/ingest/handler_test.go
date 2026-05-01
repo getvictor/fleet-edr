@@ -67,7 +67,9 @@ func TestReadyz_DBUp(t *testing.T) {
 
 func TestReadyz_DBDown(t *testing.T) {
 	s := store.OpenTestStore(t)
-	require.NoError(t, s.Close())
+	// Close the underlying db handle directly. Store.Close is a no-op now
+	// that the pool is owned by cmd/main and shared across contexts.
+	require.NoError(t, s.DB().Close())
 
 	h := New(s, slog.Default(), BuildInfo{})
 	mux := http.NewServeMux()

@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/graph"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/store"
 )
 
@@ -180,7 +180,7 @@ func TestUpdateAlertStatus_CapturesUserID(t *testing.T) {
 	body := `{"status":"resolved"}`
 	req := httptest.NewRequestWithContext(t.Context(), "PUT",
 		fmt.Sprintf("/api/alerts/%d", alertID), strings.NewReader(body))
-	req = req.WithContext(authn.WithUserIDForTest(req.Context(), 42))
+	req = req.WithContext(identityapi.WithUserIDForTest(req.Context(), 42))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	require.Equal(t, http.StatusNoContent, w.Code)

@@ -49,14 +49,67 @@ func OpenTestStore(t *testing.T) *Store {
 		_, _ = cleanupDB.ExecContext(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
 	})
 
-	// Build a DSN pointing to the new database.
+	// Build a DSN pointing to the new database, open the shared pool, then
+	// hand it to New so the test exercises the same OpenDB + New(ctx, db)
+	// path cmd/main uses.
 	testDSN := replaceDBName(dsn, dbName)
-	s, err := New(ctx, testDSN)
+	db, err := OpenDB(ctx, testDSN)
 	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+
+	// store.applySchema includes the cross-context FK fk_alerts_updated_by
+	// (alerts.updated_by -> users.id) which requires the users table to
+	// exist first. In production cmd/main calls identityCtx.ApplySchema
+	// before store.New; tests inline the same DDL here. Phase 5 drops the
+	// FK and this preamble goes away.
+	for _, stmt := range identitySchemaForTests {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			_ = db.Close()
+			t.Fatalf("apply identity schema for test: %v", err)
+		}
+	}
+
+	s, err := New(ctx, db)
+	if err != nil {
+		_ = db.Close()
 		t.Fatalf("open test store: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return s
+}
+
+// identitySchemaForTests duplicates the identity bounded context's CREATE
+// TABLE statements so the store package's test helper can apply them
+// before store.applySchema runs (which references users via the
+// fk_alerts_updated_by constraint). Authoritative copy lives at
+// server/identity/bootstrap/schema.go; phase 5 drops the FK and this
+// duplication goes away.
+//
+// This is the one place the store package "knows about" another context
+// schema -- and only in test code. A real cross-package import would
+// create a cycle (identity tests use store.OpenTestStore).
+var identitySchemaForTests = []string{
+	`CREATE TABLE IF NOT EXISTS users (
+		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+		email          VARCHAR(255)   NOT NULL,
+		password_hash  VARBINARY(255) NOT NULL,
+		password_salt  VARBINARY(32)  NOT NULL,
+		created_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		updated_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+		                              ON UPDATE CURRENT_TIMESTAMP(6),
+		UNIQUE KEY uk_users_email (email)
+	)`,
+	`CREATE TABLE IF NOT EXISTS sessions (
+		id            VARBINARY(32)  PRIMARY KEY,
+		user_id       BIGINT         NOT NULL,
+		csrf_token    VARBINARY(32)  NOT NULL,
+		created_at    TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		last_seen_at  TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+		                             ON UPDATE CURRENT_TIMESTAMP(6),
+		expires_at    TIMESTAMP(6)   NOT NULL,
+		INDEX idx_sessions_expires (expires_at)
+	)`,
 }
 
 func testDSN(t *testing.T) string {

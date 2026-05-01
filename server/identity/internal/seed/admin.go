@@ -18,7 +18,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/fleetdm/edr/server/users"
+	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
 // DefaultAdminEmail is the well-known first-admin email. Operators can create further

@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/identity/internal/users"
 	"github.com/fleetdm/edr/server/store"
-	"github.com/fleetdm/edr/server/users"
 )
 
 func newUsersStore(t *testing.T) *users.Store {
