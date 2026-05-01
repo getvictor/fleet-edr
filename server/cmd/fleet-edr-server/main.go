@@ -18,7 +18,7 @@ import (
 
 	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
-	apidocs "github.com/fleetdm/edr/server/api/docs"
+	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"

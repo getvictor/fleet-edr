@@ -1,4 +1,4 @@
-// Package docs serves the self-hosted OpenAPI documentation: an embedded
+// Package apidocs serves the self-hosted OpenAPI documentation: an embedded
 // Redoc renderer at GET /api/docs and the underlying spec at GET
 // /api/openapi.yaml. Both routes are unauthenticated on purpose — the spec
 // content is already public on the GitHub release page and procurement
@@ -29,7 +29,7 @@
 //     tradeoff: one extra round-trip per page load vs. URL chaining
 //     through the bundle (which would require regenerating bundleHash
 //     whenever the logo/spec change).
-package docs
+package apidocs
 
 import (
 	"bytes"
