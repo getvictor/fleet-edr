@@ -9,6 +9,7 @@ package tests
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -218,4 +219,94 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	// path. Defensive coverage that we haven't broken the wrap chain.
 	require.True(t, errors.Is(api.ErrUserNotFound, api.ErrInvalidCredentials))
 	require.True(t, errors.Is(api.ErrBadPassword, api.ErrInvalidCredentials))
+}
+
+// TestRegisterRoutes_Public asserts RegisterPublicRoutes wires both
+// POST and DELETE /api/session on the supplied mux, and that the routes
+// are reachable end-to-end (login + logout) through the registered mux.
+func TestRegisterRoutes_Public(t *testing.T) {
+	id := newIdentity(t)
+	ctx := t.Context()
+
+	// Seed an admin so we have a credential to test login with.
+	var stderr bytes.Buffer
+	admin, pw, err := id.Service().SeedAdmin(ctx, &stderr)
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	id.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// POST /api/session: route registered; login succeeds.
+	body := bytes.NewBufferString(`{"email":"` + admin.Email + `","password":"` + pw + `"}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/session", body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "POST /api/session via RegisterPublicRoutes")
+
+	// DELETE /api/session: route registered; logout 204 even without cookie (idempotent).
+	req2, err := http.NewRequestWithContext(ctx, http.MethodDelete, srv.URL+"/api/session", nil)
+	require.NoError(t, err)
+	resp2, err := srv.Client().Do(req2)
+	require.NoError(t, err)
+	resp2.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp2.StatusCode, "DELETE /api/session via RegisterPublicRoutes")
+}
+
+// TestRegisterRoutes_Authed asserts RegisterAuthedRoutes wires GET
+// /api/session. Calling without a session middleware in front returns 500
+// (the handler logs misconfigured), confirming the route is wired.
+func TestRegisterRoutes_Authed(t *testing.T) {
+	id := newIdentity(t)
+	ctx := t.Context()
+
+	mux := http.NewServeMux()
+	id.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// GET /api/session without session middleware: handler returns 500
+	// because Session was never pinned to ctx. The 500 itself proves the
+	// route is registered (else 404).
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/session", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"GET /api/session via RegisterAuthedRoutes (without Session middleware -> 500 misconfigured)")
+}
+
+// TestRun_StopsOnContextCancel verifies the cleanup goroutine returns when
+// ctx is cancelled, and uses a tiny CleanupInterval so the ticker fires
+// at least once during the test (covering the cleanup-call branch).
+func TestRun_StopsOnContextCancel(t *testing.T) {
+	s := store.OpenTestStore(t)
+	id, err := bootstrap.New(bootstrap.Deps{
+		DB:              s.DB(),
+		Logger:          slog.Default(),
+		CleanupInterval: 25 * time.Millisecond, // short so the loop exercises CleanupExpired
+	})
+	require.NoError(t, err)
+	require.NoError(t, id.ApplySchema(t.Context()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- id.Run(ctx) }()
+
+	// Let at least one tick happen.
+	time.Sleep(75 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr, "Run should return nil on context cancellation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of ctx cancel")
+	}
 }
