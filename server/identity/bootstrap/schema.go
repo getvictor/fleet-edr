@@ -23,10 +23,12 @@ var schemaStatements = []string{
 		                              ON UPDATE CURRENT_TIMESTAMP(6),
 		UNIQUE KEY uk_users_email (email)
 	)`,
-	// sessions table for UI cookie auth. id is 32 random bytes (~256 bits of
-	// entropy) -- acts as its own unguessable lookup key, no separate index
-	// needed. csrf_token is 32 random bytes; compared constant-time against
-	// X-Csrf-Token header on unsafe methods.
+	// sessions table for UI cookie auth. id stores SHA-256(token), where
+	// token is 32 random bytes (~256 bits of entropy). The plaintext token
+	// lives only in the cookie; preimage resistance means a DB dump does
+	// not yield replayable credentials. VARBINARY(32) holds the 32-byte
+	// digest exactly. csrf_token is 32 random bytes; compared constant-time
+	// against X-Csrf-Token header on unsafe methods.
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id            VARBINARY(32)  PRIMARY KEY,
 		user_id       BIGINT         NOT NULL,

@@ -1,10 +1,9 @@
-// Package arch holds the architecture-lint test that runs as part of every
-// `go test ./...` invocation. The test loads arch-go.yml at the repo root,
-// walks the module's package graph, and fails on any rule violation.
+// Package arch_test holds the architecture-lint test that runs as part of
+// every `go test ./...` invocation. The test loads arch-go.yml at the repo
+// root, walks the module's package graph, and fails on any rule violation.
 //
-// See docs/adr/0004-modular-monolith-bounded-contexts.md and
-// claude/modular-monolith/phase1.md for the rationale + per-phase rule
-// roll-out plan.
+// See docs/adr/0004-modular-monolith-bounded-contexts.md for the rationale
+// and per-phase rule roll-out plan.
 package arch_test
 
 import (
@@ -44,37 +43,55 @@ func TestArchitecture(t *testing.T) {
 	}
 }
 
-// summarize formats the failing rules into a readable error message. arch-go's
-// Result type carries per-rule details on .DependenciesRuleResult,
+// summarize formats the failing rules into a readable error message.
+// arch-go's Result type carries per-rule details on .DependenciesRuleResult,
 // .ContentsRuleResult, etc.; we surface only the dependency failures since
 // that's the only rule family in use for now.
 func summarize(r *archapi.Result) string {
 	var b strings.Builder
-	if r.DependenciesRuleResult != nil && !r.DependenciesRuleResult.Passes {
-		for _, dr := range r.DependenciesRuleResult.Results {
-			if dr.Passes {
-				continue
-			}
-			b.WriteString("dependency rule: ")
-			b.WriteString(dr.Description)
-			b.WriteString("\n")
-			for _, vr := range dr.Verifications {
-				if vr.Passes {
-					continue
-				}
-				b.WriteString("  package ")
-				b.WriteString(vr.Package)
-				b.WriteString("\n")
-				for _, d := range vr.Details {
-					b.WriteString("    ")
-					b.WriteString(d)
-					b.WriteString("\n")
-				}
-			}
-		}
-	}
+	summarizeDependencies(&b, r)
 	if b.Len() == 0 {
 		b.WriteString("(no detail; check arch-go output)")
 	}
 	return b.String()
+}
+
+// summarizeDependencies walks the dependency-rule sub-results and renders
+// each failing verification as one line per offending package + one line
+// per offending import detail. Split out of summarize so each function
+// stays under the cognitive-complexity gate.
+//
+// arch-go's Verification type lives in an internal package, so the
+// nested writeRuleFailure / writeVerificationFailure helpers below take
+// primitives (description, package name, details slice) instead of the
+// typed value -- crossing the typed boundary into primitives once at
+// the loop site, then the helpers don't pull arch-go internals in.
+func summarizeDependencies(b *strings.Builder, r *archapi.Result) {
+	if r.DependenciesRuleResult == nil || r.DependenciesRuleResult.Passes {
+		return
+	}
+	for _, dr := range r.DependenciesRuleResult.Results {
+		if dr.Passes {
+			continue
+		}
+		b.WriteString("dependency rule: ")
+		b.WriteString(dr.Description)
+		b.WriteString("\n")
+		for _, vr := range dr.Verifications {
+			if !vr.Passes {
+				writeVerificationFailure(b, vr.Package, vr.Details)
+			}
+		}
+	}
+}
+
+func writeVerificationFailure(b *strings.Builder, pkg string, details []string) {
+	b.WriteString("  package ")
+	b.WriteString(pkg)
+	b.WriteString("\n")
+	for _, d := range details {
+		b.WriteString("    ")
+		b.WriteString(d)
+		b.WriteString("\n")
+	}
 }

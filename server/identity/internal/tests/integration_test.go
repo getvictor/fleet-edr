@@ -1,10 +1,9 @@
-//go:build integration
-
 // Per-context integration tests for the identity bounded context. Exercise
 // the full bootstrap.New -> ApplySchema -> Service stack against a real
-// MySQL. Per docs/best-practices.md three-layer split + ADR-0004.
+// MySQL. Skips when EDR_TEST_DSN isn't set, matching the project's other
+// DB-using test files (no separate build tag).
 //
-// Run via: MYSQL_TEST=1 go test -tags=integration ./server/identity/...
+// Per docs/adr/0004-modular-monolith-bounded-contexts.md.
 
 package tests
 

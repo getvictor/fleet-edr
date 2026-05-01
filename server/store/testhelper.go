@@ -110,6 +110,13 @@ var identitySchemaForTests = []string{
 		expires_at    TIMESTAMP(6)   NOT NULL,
 		INDEX idx_sessions_expires (expires_at)
 	)`,
+	// Mirror the FK identity/bootstrap.ApplySchema adds in production so
+	// tests reject the same orphan-session inserts production rejects.
+	// Idempotent on rerun (CREATE TABLE IF NOT EXISTS above means tests
+	// that already ran won't see this fire again, so we don't need the
+	// duplicate-key error swallow that store.applySchema does).
+	`ALTER TABLE sessions ADD INDEX idx_sessions_user_id (user_id)`,
+	`ALTER TABLE sessions ADD CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
 }
 
 func testDSN(t *testing.T) string {

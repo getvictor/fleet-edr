@@ -7,6 +7,7 @@ package login
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -247,16 +248,7 @@ func idPrefix(id []byte) string {
 	if len(id) < n {
 		return ""
 	}
-	return toHex(id[:n])
-}
-
-func toHex(b []byte) string {
-	const hex = "0123456789abcdef"
-	out := make([]byte, 0, len(b)*2)
-	for _, v := range b {
-		out = append(out, hex[v>>4], hex[v&0x0f])
-	}
-	return string(out)
+	return hex.EncodeToString(id[:n])
 }
 
 // failInfo carries the identity + audit fields for a failed login attempt.

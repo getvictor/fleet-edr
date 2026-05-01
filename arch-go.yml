@@ -1,4 +1,4 @@
-version: 2
+version: 1
 
 # Architecture rules for the modular-monolith bounded-context migration.
 # See docs/adr/0004-modular-monolith-bounded-contexts.md for the rationale.

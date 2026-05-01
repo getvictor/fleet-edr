@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
@@ -57,8 +58,8 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 				return
 			}
 			trace.SpanFromContext(ctx).SetAttributes(
-				attribute.Int64("edr.user.id", sess.UserID),
-				attribute.String("edr.auth.result", "ok"),
+				attribute.Int64(attrkeys.UserID, sess.UserID),
+				attribute.String(attrkeys.AuthResult, "ok"),
 			)
 			ctx = api.WithUserID(ctx, sess.UserID)
 			ctx = api.WithSession(ctx, sess)
@@ -126,10 +127,10 @@ type errBody struct {
 func fail(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, status int, reason string) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
-		attribute.String("edr.auth.result", "fail"),
-		attribute.String("edr.auth.reason", reason),
+		attribute.String(attrkeys.AuthResult, "fail"),
+		attribute.String(attrkeys.AuthReason, reason),
 	)
-	logger.WarnContext(ctx, "authn failed", "edr.auth.reason", reason, "status", status)
+	logger.WarnContext(ctx, "authn failed", attrkeys.AuthReason, reason, "status", status)
 
 	if status == http.StatusUnauthorized {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)

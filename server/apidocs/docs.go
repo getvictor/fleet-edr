@@ -16,7 +16,7 @@
 // The canonical spec lives at docs/api/openapi.yaml in the repo root; the
 // copy in embed/openapi.yaml is refreshed via go generate (see the
 // directive below) and a `task sync:openapi-embed` helper is a follow-up.
-// If you edit the canonical copy, run `go generate ./server/api/docs/...`
+// If you edit the canonical copy, run `go generate ./server/apidocs/...`
 // before building.
 //
 // Cache invalidation strategy across the three assets:
@@ -41,7 +41,7 @@ import (
 	"time"
 )
 
-//go:generate sh -c "cp ../../../docs/api/openapi.yaml embed/openapi.yaml"
+//go:generate sh -c "cp ../../docs/api/openapi.yaml embed/openapi.yaml"
 
 //go:embed embed/openapi.yaml embed/redoc.standalone.js embed/logo-mini.svg
 var assets embed.FS
