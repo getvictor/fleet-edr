@@ -38,6 +38,7 @@ time, not a single mutable "current view".
 | [0001](0001-single-go-module-with-internal.md) | Single Go module with `internal/` for shared code | Accepted |
 | [0002](0002-macos-apple-silicon-mvp-only.md) | MVP ships macOS on Apple Silicon only | Accepted |
 | [0003](0003-standalone-product-not-fleet-integrated.md) | EDR is a standalone product, Fleet is a deployment channel | Accepted |
+| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Accepted |
 
 ## Tooling
 
