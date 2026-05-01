@@ -10,7 +10,6 @@ package tests
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -217,8 +216,8 @@ func TestCleanupExpiredSessions(t *testing.T) {
 
 	// Errors-aren't-thrown sanity: ErrAlreadySeeded check from a different
 	// path. Defensive coverage that we haven't broken the wrap chain.
-	require.True(t, errors.Is(api.ErrUserNotFound, api.ErrInvalidCredentials))
-	require.True(t, errors.Is(api.ErrBadPassword, api.ErrInvalidCredentials))
+	require.ErrorIs(t, api.ErrUserNotFound, api.ErrInvalidCredentials)
+	require.ErrorIs(t, api.ErrBadPassword, api.ErrInvalidCredentials)
 }
 
 // TestRegisterRoutes_Public asserts RegisterPublicRoutes wires both
@@ -281,6 +280,36 @@ func TestRegisterRoutes_Authed(t *testing.T) {
 		"GET /api/session via RegisterAuthedRoutes (without Session middleware -> 500 misconfigured)")
 }
 
+// TestService_LogoutEmptyToken covers the early-return branch in Logout
+// (sessionToken length zero) so a stale or missing cookie cannot turn into
+// a Delete query against the DB.
+func TestService_LogoutEmptyToken(t *testing.T) {
+	id := newIdentity(t)
+	require.NoError(t, id.Service().Logout(t.Context(), nil))
+	require.NoError(t, id.Service().Logout(t.Context(), []byte{}))
+}
+
+// TestService_UserExistsZeroOrNegative covers the userID <= 0 short-circuit
+// so a buggy caller can't accidentally probe the users table with junk ids.
+func TestService_UserExistsZeroOrNegative(t *testing.T) {
+	id := newIdentity(t)
+	for _, uid := range []int64{0, -1, -1000000} {
+		exists, err := id.Service().UserExists(t.Context(), uid)
+		require.NoError(t, err)
+		assert.False(t, exists)
+	}
+}
+
+// TestService_GetUserNotFound exercises the ErrUserNotFound branch in
+// GetUser. UserExists doesn't reach this branch because it short-circuits
+// on userID <= 0; GetUser is the only API path that surfaces the lookup
+// miss.
+func TestService_GetUserNotFound(t *testing.T) {
+	id := newIdentity(t)
+	_, err := id.Service().GetUser(t.Context(), 999_999_999)
+	require.ErrorIs(t, err, api.ErrUserNotFound)
+}
+
 // TestRun_StopsOnContextCancel verifies the cleanup goroutine returns when
 // ctx is cancelled, and uses a tiny CleanupInterval so the ticker fires
 // at least once during the test (covering the cleanup-call branch).
@@ -305,7 +334,7 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 
 	select {
 	case runErr := <-done:
-		assert.NoError(t, runErr, "Run should return nil on context cancellation")
+		require.NoError(t, runErr, "Run should return nil on context cancellation")
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return within 2s of ctx cancel")
 	}

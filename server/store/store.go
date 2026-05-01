@@ -196,7 +196,7 @@ func OpenDB(ctx context.Context, dsn string) (*sqlx.DB, error) {
 // to avoid yanking other contexts' connection pool out from under them).
 func New(ctx context.Context, db *sqlx.DB) (*Store, error) {
 	if db == nil {
-		return nil, fmt.Errorf("store.New: db handle must not be nil")
+		return nil, errors.New("store.New: db handle must not be nil")
 	}
 	if err := applySchema(ctx, db); err != nil {
 		return nil, err

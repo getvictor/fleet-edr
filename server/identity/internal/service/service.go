@@ -25,10 +25,11 @@ type service struct {
 // for the identity bounded context; the login HTTP handler and the
 // session/CSRF middleware also call into it for business logic so the
 // orchestration is in one place.
+//
+// All inputs are required to be non-nil; bootstrap.New is the only caller
+// and provides them via Deps. A nil-defensive branch here would be dead
+// code, so we trust the caller.
 func New(u *users.Store, s *sessions.Store, logger *slog.Logger) api.Service {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	return &service{users: u, sessions: s, logger: logger}
 }
 
@@ -117,11 +118,9 @@ func (s *service) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 
 // toAPIUser converts the internal users.User row into the operator-visible
 // api.User. Skipping the password hash is the whole point: the api type
-// has no slot for it.
+// has no slot for it. Caller guarantees u is non-nil (every callsite
+// already early-returns on error before reaching this).
 func toAPIUser(u *users.User) api.User {
-	if u == nil {
-		return api.User{}
-	}
 	return api.User{
 		ID:        u.ID,
 		Email:     u.Email,
@@ -133,10 +132,8 @@ func toAPIUser(u *users.User) api.User {
 // toAPISession converts the internal sessions.Session row to the api.Session
 // shape. The plaintext ID stays internal; the api type carries only what
 // callers (middleware + cross-context tests) legitimately need to read.
+// Caller guarantees s is non-nil.
 func toAPISession(s *sessions.Session) *api.Session {
-	if s == nil {
-		return nil
-	}
 	return &api.Session{
 		UserID:     s.UserID,
 		CreatedAt:  s.CreatedAt,
