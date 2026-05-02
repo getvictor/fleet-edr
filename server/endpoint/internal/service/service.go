@@ -26,15 +26,22 @@ const commandTypeSetBlocklist = "set_blocklist"
 // + regex update.
 var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
-// service implements api.Service by composing the mysql.Store with the
-// optional PolicyProvider + CommandInserter that cmd/main supplies as
-// adapters around the still-existing policy and store packages until
-// phases 3 and 4 land.
+// CommandInserter is the closure shape endpoint's enroll fan-out
+// uses to queue the initial set_blocklist command. cmd/main passes
+// response.Service.Insert as a method value satisfying this type;
+// the interface form (api.CommandInserter) was deleted in phase 4
+// for symmetry with rules's existing closure pattern.
+type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
+
+// service implements api.Service by composing the mysql.Store with
+// the optional PolicyProvider (today: rules.api.PolicyService;
+// phase 3) and CommandInserter closure (today:
+// response.api.Service.Insert; phase 4) that cmd/main supplies.
 type service struct {
 	store    *mysql.Store
 	secret   string
 	policy   api.PolicyProvider // nil-safe: handler skips fan-out
-	commands api.CommandInserter
+	commands CommandInserter
 	logger   *slog.Logger
 }
 
@@ -45,7 +52,7 @@ type service struct {
 // PolicyProvider and CommandInserter are an all-or-nothing pair: if one
 // is set the other must be too (panic otherwise). This matches the
 // existing enrollment.NewHandler precondition.
-func New(s *mysql.Store, secret string, policy api.PolicyProvider, cmds api.CommandInserter, logger *slog.Logger) api.Service {
+func New(s *mysql.Store, secret string, policy api.PolicyProvider, cmds CommandInserter, logger *slog.Logger) api.Service {
 	if (policy != nil) != (cmds != nil) {
 		panic("endpoint service: PolicyProvider and CommandInserter must be set together or both nil")
 	}
@@ -123,7 +130,7 @@ func (s *service) enqueueInitialPolicy(ctx context.Context, hostID string) {
 			attrkeys.HostID, hostID, "edr.policy.version", version)
 		return
 	}
-	if _, err := s.commands.InsertCommand(ctx, hostID, commandTypeSetBlocklist, payload); err != nil {
+	if _, err := s.commands(ctx, hostID, commandTypeSetBlocklist, payload); err != nil {
 		s.logger.WarnContext(ctx, "initial policy enqueue failed", attrkeys.HostID, hostID, "err", err)
 		return
 	}

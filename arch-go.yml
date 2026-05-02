@@ -60,3 +60,23 @@ dependenciesRules:
         - "**.endpoint.api"  # ActiveHostsLister uses endpoint.Service for hostID lookup at runtime
         - "**.detection"     # transitional: rule files reference detection.Severity* and the Finding alias; phase 5 moves to detection/api
         - "**.store"         # transitional: *store.Store satisfies api.GraphReader; phase 5 moves to detection/api
+
+  # Phase 4: response context internals may import only their own
+  # context, platform packages, the standard library / approved
+  # third-party, identity/api (UserIDFromContext for audit on POST
+  # /api/commands), endpoint/api (HostIDFromContext on agent
+  # routes), and the transitional server/store import for testhelper.
+  #
+  # The response context owns the commands table + the four
+  # /api/commands HTTP routes. endpoint and rules consume
+  # response.Service.Insert as a method value satisfying their
+  # CommandInserter closure types; neither imports response/api.
+  - package: "**.response.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.response.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.endpoint.api"  # for HostIDFromContext on agent routes
+        - "**.identity.api"  # reserved: future audit on POST /api/commands; harmless if unused today
+        - "**.store"         # for testhelper only
