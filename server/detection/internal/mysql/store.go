@@ -1,0 +1,214 @@
+package mysql
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/detection/api"
+)
+
+// Store is the persistence handle for the detection bounded context.
+// Holds the shared *sqlx.DB pool that cmd/main opens once via
+// server/bootstrap.OpenDB and shares across every context.
+type Store struct {
+	db *sqlx.DB
+}
+
+// New returns a Store wrapping the provided db handle. Schema is
+// applied separately via detection/bootstrap.ApplySchema; New just
+// hands back the read/write surface.
+//
+// Closing the db handle is cmd/main's responsibility, not Store's.
+func New(db *sqlx.DB) (*Store, error) {
+	if db == nil {
+		return nil, errors.New("detection mysql.New: db handle must not be nil")
+	}
+	return &Store{db: db}, nil
+}
+
+// DB returns the underlying *sqlx.DB. Used by integration tests that
+// need raw access (e.g. assertion queries that bypass the typed API).
+func (s *Store) DB() *sqlx.DB { return s.db }
+
+// PingContext verifies connectivity to the underlying database.
+// Used by the readiness probe.
+func (s *Store) PingContext(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
+// Close is a no-op. The db handle is shared across bounded contexts
+// and owned by cmd/main; closing it here would yank the pool out
+// from under sibling contexts.
+func (s *Store) Close() error { return nil }
+
+// InsertEvents upserts a batch of events. Duplicates (by event_id)
+// are ignored. Each row is stamped with a server-controlled
+// ingested_at_ns; the caller's Event.IngestedAtNs is ignored so
+// agents can't set it.
+func (s *Store) InsertEvents(ctx context.Context, events []api.Event) error {
+	return s.insertEventsAt(ctx, events, time.Now().UnixNano())
+}
+
+// InsertEventsAt is a test-only variant that takes a deterministic
+// ingest timestamp. Production callers go through InsertEvents.
+// This path exists so cross-source correlation tests can simulate
+// the ES/NE clock-drift scenario (issue #7) without relying on
+// wall-clock timing.
+func (s *Store) InsertEventsAt(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
+	return s.insertEventsAt(ctx, events, ingestedAtNs)
+}
+
+func (s *Store) insertEventsAt(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	// Stamp the caller's slice with the server-chosen ingest time so callers
+	// that hand the same slice straight to the graph builder see the
+	// persisted value.
+	//
+	// Only stamp rows that were actually INSERTed. INSERT IGNORE silently
+	// drops duplicates, and in that case the DB already holds a different
+	// ingested_at_ns from the original insert; mutating the caller's slice
+	// to a value that doesn't match the persisted row would silently break
+	// any correlation the caller tries to do in-memory.
+	for i := range events {
+		payloadBytes, err := json.Marshal(events[i].Payload)
+		if err != nil {
+			return fmt.Errorf("marshal payload for %s: %w", events[i].EventID, err)
+		}
+		res, err := stmt.ExecContext(ctx, events[i].EventID, events[i].HostID, events[i].TimestampNs,
+			ingestedAtNs, events[i].EventType, payloadBytes)
+		if err != nil {
+			return fmt.Errorf("insert %s: %w", events[i].EventID, err)
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected for %s: %w", events[i].EventID, err)
+		}
+		if rowsAffected > 0 {
+			events[i].IngestedAtNs = ingestedAtNs
+		}
+	}
+
+	return tx.Commit()
+}
+
+// CountEvents returns the total number of events.
+func (s *Store) CountEvents(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events")
+	return count, err
+}
+
+// CountUnprocessed returns the number of events that have not been
+// fully processed (state 0 or 2). Used by the OTel
+// unprocessed-events gauge.
+func (s *Store) CountUnprocessed(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events WHERE processed != 1")
+	return count, err
+}
+
+// FetchUnprocessed atomically claims up to limit unprocessed events
+// for the graph builder. Uses SELECT ... FOR UPDATE SKIP LOCKED to
+// prevent concurrent processors from claiming the same rows, and
+// transitions events from state 0 (unprocessed) to 2 (processing)
+// within the same transaction. Events are ordered by host_id and
+// timestamp to ensure correct per-host ordering.
+func (s *Store) FetchUnprocessed(ctx context.Context, limit int) ([]api.Event, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx for fetch unprocessed: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+
+	var events []api.Event
+	err = tx.SelectContext(ctx, &events, `
+		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
+		FROM events
+		WHERE processed = 0
+		ORDER BY host_id, timestamp_ns
+		LIMIT ?
+		FOR UPDATE SKIP LOCKED`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetch unprocessed select: %w", err)
+	}
+
+	if len(events) == 0 {
+		return events, tx.Commit()
+	}
+
+	eventIDs := make([]string, len(events))
+	for i, e := range events {
+		eventIDs[i] = e.EventID
+	}
+
+	claimQuery, args, err := sqlx.In("UPDATE events SET processed = 2 WHERE event_id IN (?)", eventIDs)
+	if err != nil {
+		return nil, fmt.Errorf("fetch unprocessed build claim query: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, claimQuery, args...); err != nil {
+		return nil, fmt.Errorf("fetch unprocessed claim: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit fetch unprocessed tx: %w", err)
+	}
+	return events, nil
+}
+
+// MarkProcessed marks the given events as fully processed (state 2 -> 1).
+func (s *Store) MarkProcessed(ctx context.Context, eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In("UPDATE events SET processed = 1 WHERE event_id IN (?)", eventIDs)
+	if err != nil {
+		return fmt.Errorf("mark processed build query: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("mark processed: %w", err)
+	}
+	return nil
+}
+
+// UnclaimEvents transitions events from processing (state 2) back
+// to unprocessed (state 0) so they can be retried.
+func (s *Store) UnclaimEvents(ctx context.Context, eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In("UPDATE events SET processed = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
+	if err != nil {
+		return fmt.Errorf("unclaim events build query: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("unclaim events: %w", err)
+	}
+	return nil
+}
