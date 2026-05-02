@@ -129,21 +129,55 @@ type Host struct {
 	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
 
+// JSONStringSlice is a []string persisted as a JSON array in a MySQL
+// JSON column. NULL + SQL empty-string round-trip to a nil slice;
+// the JSON marshal path keeps the field omitted when empty. Used by
+// Alert.Techniques (the MITRE ATT&CK technique IDs).
+type JSONStringSlice []string
+
+func (s *JSONStringSlice) Scan(value any) error {
+	if value == nil {
+		*s = nil
+		return nil
+	}
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		return fmt.Errorf("JSONStringSlice.Scan: unsupported type %T", value)
+	}
+	if len(b) == 0 {
+		*s = nil
+		return nil
+	}
+	return json.Unmarshal(b, s)
+}
+
+func (s JSONStringSlice) Value() (driver.Value, error) {
+	if len(s) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(s)
+}
+
 // Alert is a persisted detection finding.
 type Alert struct {
-	ID          int64       `db:"id" json:"id"`
-	HostID      string      `db:"host_id" json:"host_id"`
-	RuleID      string      `db:"rule_id" json:"rule_id"`
-	Severity    string      `db:"severity" json:"severity"`
-	Title       string      `db:"title" json:"title"`
-	Description string      `db:"description" json:"description"`
-	ProcessID   int64       `db:"process_id" json:"process_id"`
-	Techniques  NullRawJSON `db:"techniques" json:"techniques,omitempty"`
-	Status      AlertStatus `db:"status" json:"status"`
-	CreatedAt   time.Time   `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time   `db:"updated_at" json:"updated_at"`
-	ResolvedAt  *time.Time  `db:"resolved_at" json:"resolved_at,omitempty"`
-	UpdatedBy   *int64      `db:"updated_by" json:"updated_by,omitempty"`
+	ID          int64           `db:"id" json:"id"`
+	HostID      string          `db:"host_id" json:"host_id"`
+	RuleID      string          `db:"rule_id" json:"rule_id"`
+	Severity    string          `db:"severity" json:"severity"`
+	Title       string          `db:"title" json:"title"`
+	Description string          `db:"description" json:"description"`
+	ProcessID   int64           `db:"process_id" json:"process_id"`
+	Techniques  JSONStringSlice `db:"techniques" json:"techniques,omitempty"`
+	Status      AlertStatus     `db:"status" json:"status"`
+	CreatedAt   time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time       `db:"updated_at" json:"updated_at"`
+	ResolvedAt  *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
+	UpdatedBy   *int64          `db:"updated_by" json:"updated_by,omitempty"`
 }
 
 // AlertStatus enumerates the operator-driven alert lifecycle.
