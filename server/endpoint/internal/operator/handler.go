@@ -15,13 +15,21 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/endpoint/api"
+	"github.com/fleetdm/edr/server/httpserver"
 )
+
+// revokeBodyCap caps the JSON body size for POST /revoke. The handler
+// only reads two short string fields; matches the 64KiB cap admin uses
+// for /api/policy and protects the operator surface from clients that
+// stream a large body before any auth check fails.
+const revokeBodyCap = 64 << 10
 
 // Handler serves the operator-facing enrollment routes.
 type Handler struct {
@@ -74,10 +82,12 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body revokeRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, revokeBodyCap)).Decode(&body); err != nil {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
 		return
 	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	body.Actor = strings.TrimSpace(body.Actor)
 	if body.Reason == "" || body.Actor == "" {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "reason and actor are required")
 		return
@@ -110,14 +120,9 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		logger.ErrorContext(ctx, "operator encode response", "err", err)
-	}
+	httpserver.NoStoreJSON(ctx, logger, w, status, body)
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
-	writeJSON(ctx, logger, w, status, map[string]string{"error": code})
+	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
 }

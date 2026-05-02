@@ -59,6 +59,13 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.EnrollSecret == "" {
 		return nil, errors.New("endpoint bootstrap: EnrollSecret is required")
 	}
+	// PolicyProvider + CommandInserter are paired. Letting the mismatch
+	// fall through to service.New's panic would crash startup with no
+	// recoverable error; surface it as a config error instead so the
+	// caller's err-handling sees it.
+	if (deps.PolicyProvider == nil) != (deps.CommandInserter == nil) {
+		return nil, errors.New("endpoint bootstrap: PolicyProvider and CommandInserter must be set together (or both nil)")
+	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()

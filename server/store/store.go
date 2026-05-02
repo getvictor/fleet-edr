@@ -101,10 +101,11 @@ var schemaStatements = []string{
 		updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	)`,
 	// enrollments DDL is owned by the endpoint bounded context (see
-	// server/endpoint/bootstrap/schema.go). cmd/main calls
-	// endpointCtx.ApplySchema before this list runs. No FK referencing
-	// or referenced; ordering between identity / endpoint / store is
-	// not load-bearing for the enrollments table itself.
+	// server/endpoint/bootstrap/schema.go) and applied via
+	// endpointCtx.ApplySchema during startup. No FK referencing or
+	// referenced; the call order between store.New (which runs the list
+	// below) and endpointCtx.ApplySchema is not load-bearing for the
+	// enrollments table itself.
 	// policies holds the Phase 2 server-driven blocklist. For MVP we keep a single "default"
 	// row — `name` is a UNIQUE key now so v1.1 can add per-team targeting without a schema
 	// migration. `version` is a monotonically-increasing integer bumped on every admin PUT;

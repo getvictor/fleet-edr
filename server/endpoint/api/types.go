@@ -65,6 +65,14 @@ var (
 	// unparseable hardware UUID. Mapped to 400.
 	ErrInvalidHardwareUUID = errors.New("endpoint: invalid hardware uuid")
 
+	// ErrInvalidEnrollRequest is returned when one or more required fields
+	// of the EnrollRequest are blank (enroll_secret, hardware_uuid,
+	// hostname, os_version, agent_version). Mapped to 400 by the HTTP
+	// handler. A separate sentinel from ErrInvalidSecret so non-HTTP
+	// callers (tests, future contexts) can distinguish "shape" from
+	// "credential" without parsing free-form error strings.
+	ErrInvalidEnrollRequest = errors.New("endpoint: invalid enroll request")
+
 	// ErrNotFound is returned by Get / Revoke when the host_id has no
 	// enrollment row.
 	ErrNotFound = errors.New("endpoint: enrollment not found")

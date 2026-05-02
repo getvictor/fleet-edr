@@ -64,7 +64,7 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 		// The handler maps this to 400/bad_body via the missing-field check
 		// it already does. Service returns ErrInvalidSecret only if secret
 		// is non-empty but wrong; an empty secret is a body-shape error.
-		return api.EnrollResponse{}, errors.New("endpoint enroll: missing fields")
+		return api.EnrollResponse{}, api.ErrInvalidEnrollRequest
 	}
 	if !hardwareUUIDPattern.MatchString(req.HardwareUUID) {
 		return api.EnrollResponse{}, api.ErrInvalidHardwareUUID

@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/endpoint/api"
+	"github.com/fleetdm/edr/server/httpserver"
 )
 
 const (
@@ -33,7 +33,7 @@ const (
 type Handler struct {
 	svc      api.Service
 	logger   *slog.Logger
-	limiter  *ipLimiter
+	limiter  *httpserver.IPLimiter
 	trimHost bool // net.SplitHostPort applied in remoteIP; toggleable for tests
 }
 
@@ -62,7 +62,7 @@ func New(svc api.Service, opts Options) *Handler {
 	return &Handler{
 		svc:      svc,
 		logger:   logger,
-		limiter:  newIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
+		limiter:  httpserver.NewIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
 		trimHost: true,
 	}
 }
@@ -115,7 +115,7 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	ip := remoteIP(r, h.trimHost)
 	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 
-	if !h.limiter.allow(ip) {
+	if !h.limiter.Allow(ip) {
 		w.Header().Set("Retry-After", "60")
 		h.failf(ctx, w, http.StatusTooManyRequests, "rate_limited", failInfo{IP: ip},
 			attrEnrollReason, "rate_limited")
@@ -234,50 +234,4 @@ func remoteIP(r *http.Request, trimHost bool) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-// --- ipLimiter mirrors the identity package's. Duplicated to avoid a
-// cross-package private export; same eviction semantics. Refactor
-// candidate post-phase-7 (alongside identity's copy and any future
-// per-IP-rate-limit caller).
-
-const (
-	bucketIdleTTL = 2 * time.Hour
-	maxBuckets    = 1024
-)
-
-type ipBucket struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
-}
-
-type ipLimiter struct {
-	mu      sync.Mutex
-	limit   rate.Limit
-	burst   int
-	buckets map[string]*ipBucket
-}
-
-func newIPLimiter(limit rate.Limit, burst int) *ipLimiter {
-	return &ipLimiter{limit: limit, burst: burst, buckets: make(map[string]*ipBucket)}
-}
-
-func (l *ipLimiter) allow(ip string) bool {
-	now := time.Now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.buckets) > maxBuckets {
-		for k, b := range l.buckets {
-			if now.Sub(b.lastSeen) > bucketIdleTTL {
-				delete(l.buckets, k)
-			}
-		}
-	}
-	b, ok := l.buckets[ip]
-	if !ok {
-		b = &ipBucket{limiter: rate.NewLimiter(l.limit, l.burst)}
-		l.buckets[ip] = b
-	}
-	b.lastSeen = now
-	return b.limiter.Allow()
 }

@@ -18,6 +18,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
 	"github.com/fleetdm/edr/server/apidocs"
@@ -191,24 +193,8 @@ func run() error {
 
 	policyStore := policy.New(s.DB())
 
-	// Endpoint context (host enrollment + host-token verification).
-	// PolicyProvider + CommandInserter are thin shims over the still-
-	// existing policy and store packages; phase 3 + 4 replace them
-	// with rules.api.PolicyService and response.api.Service.Insert.
-	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
-		DB:                  db,
-		Logger:              logger,
-		EnrollSecret:        cfg.EnrollSecret,
-		EnrollRatePerMinute: cfg.EnrollRatePerMin,
-		PolicyProvider:      policyProviderShim{store: policyStore},
-		CommandInserter:     commandInserterShim{store: s},
-	})
+	endpointCtx, err := openEndpoint(ctx, logger, db, cfg, policyStore, s)
 	if err != nil {
-		logger.ErrorContext(ctx, "open endpoint", "err", err)
-		return err
-	}
-	if err := endpointCtx.ApplySchema(ctx); err != nil {
-		logger.ErrorContext(ctx, "endpoint schema", "err", err)
 		return err
 	}
 
@@ -280,6 +266,32 @@ func run() error {
 		}
 	}
 	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
+}
+
+// openEndpoint wires the endpoint bounded context (host enrollment +
+// host-token verification) and applies its schema. PolicyProvider +
+// CommandInserter are thin shims over the still-existing policy and
+// store packages; phase 3 + 4 replace them with rules.api.PolicyService
+// and response.api.Service.Insert. Extracted from run() to keep that
+// function under the cognitive-complexity gate.
+func openEndpoint(ctx context.Context, logger *slog.Logger, db *sqlx.DB, cfg *config.Config, policyStore *policy.Store, s *store.Store) (*endpointbootstrap.Endpoint, error) {
+	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
+		DB:                  db,
+		Logger:              logger,
+		EnrollSecret:        cfg.EnrollSecret,
+		EnrollRatePerMinute: cfg.EnrollRatePerMin,
+		PolicyProvider:      policyProviderShim{store: policyStore},
+		CommandInserter:     commandInserterShim{store: s},
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open endpoint", "err", err)
+		return nil, err
+	}
+	if err := endpointCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "endpoint schema", "err", err)
+		return nil, err
+	}
+	return endpointCtx, nil
 }
 
 // runProcessor owns the background event-processor goroutine and logs any

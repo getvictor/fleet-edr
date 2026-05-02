@@ -19,6 +19,7 @@ dependenciesRules:
       internal:
         - "**.identity.**"
         - "**.attrkeys"
+        - "**.httpserver"
         - "**.store"  # for testhelper only; phase 5 removes the cross-context FK that forces this
 
   # Phase 2: endpoint context internals may import only their own context,
