@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -11,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/enrollment"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -22,9 +23,29 @@ type stubCatalog struct {
 
 func (c *stubCatalog) Catalog() []RuleMetadata { return c.rules }
 
+// stubEndpointSvc satisfies endpointapi.Service for tests that only exercise
+// the catalog/rules endpoints. The catalog endpoints don't call into the
+// endpoint service at all -- the stub exists solely to satisfy admin.New's
+// nil-check.
+type stubEndpointSvc struct{}
+
+func (stubEndpointSvc) Enroll(context.Context, endpointapi.EnrollRequest, string) (endpointapi.EnrollResponse, error) {
+	return endpointapi.EnrollResponse{}, nil
+}
+func (stubEndpointSvc) VerifyToken(context.Context, string) (string, error) { return "", nil }
+func (stubEndpointSvc) List(context.Context) ([]endpointapi.Enrollment, error) {
+	return nil, nil
+}
+
+func (stubEndpointSvc) Get(context.Context, string) (*endpointapi.Enrollment, error) {
+	return nil, nil
+}
+func (stubEndpointSvc) Revoke(context.Context, string, string, string) error { return nil }
+func (stubEndpointSvc) CountActive(context.Context) (int, error)             { return 0, nil }
+func (stubEndpointSvc) ActiveHostIDs(context.Context) ([]string, error)      { return nil, nil }
+
 func TestHandleATTACKCoverage_EmitsNavigatorLayer(t *testing.T) {
 	s := store.OpenTestStore(t)
-	es := enrollment.NewStore(s.DB())
 	ps := policy.New(s.DB())
 
 	catalog := &stubCatalog{rules: []RuleMetadata{
@@ -33,7 +54,7 @@ func TestHandleATTACKCoverage_EmitsNavigatorLayer(t *testing.T) {
 		{ID: "gamma", Techniques: []string{"T1574.006"}}, // sub-technique
 		{ID: "delta", Techniques: nil},                   // rule without a mapping — must not crash
 	}}
-	h := New(es, ps, s, catalog, slog.Default())
+	h := New(stubEndpointSvc{}, ps, s, catalog, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -79,14 +100,13 @@ func TestHandleATTACKCoverage_IsDeterministic(t *testing.T) {
 	// Same catalog, many calls — the body must be byte-identical across
 	// requests so the endpoint is ETag-friendly and snapshot-testable.
 	s := store.OpenTestStore(t)
-	es := enrollment.NewStore(s.DB())
 	ps := policy.New(s.DB())
 	catalog := &stubCatalog{rules: []RuleMetadata{
 		{ID: "z_rule", Techniques: []string{"T1105", "T1059"}},
 		{ID: "a_rule", Techniques: []string{"T1059"}},
 		{ID: "m_rule", Techniques: []string{"T1574.006"}},
 	}}
-	h := New(es, ps, s, catalog, slog.Default())
+	h := New(stubEndpointSvc{}, ps, s, catalog, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -112,10 +132,9 @@ func TestHandleATTACKCoverage_IsDeterministic(t *testing.T) {
 
 func TestHandleATTACKCoverage_EmptyCatalogStillReturnsLayer(t *testing.T) {
 	s := store.OpenTestStore(t)
-	es := enrollment.NewStore(s.DB())
 	ps := policy.New(s.DB())
 
-	h := New(es, ps, s, nil, slog.Default())
+	h := New(stubEndpointSvc{}, ps, s, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)

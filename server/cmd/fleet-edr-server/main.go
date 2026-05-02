@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -17,15 +18,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
 	"github.com/fleetdm/edr/server/apidocs"
-	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/detection/rules"
-	"github.com/fleetdm/edr/server/enrollment"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
+	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
@@ -40,20 +43,63 @@ import (
 	"github.com/fleetdm/edr/server/ui"
 )
 
-// serverGaugeSource adapts our enrollment + store handles to the metrics.GaugeSource
-// interface. Lives here (not in the metrics package) so the metrics package stays
-// free of MySQL dependencies and testable without a real DB.
+// serverGaugeSource adapts our endpoint Service + store handle to the
+// metrics.GaugeSource interface. Lives here (not in the metrics package)
+// so the metrics package stays free of MySQL + endpoint dependencies and
+// testable without a real DB.
 type serverGaugeSource struct {
-	enroll *enrollment.Store
-	store  *store.Store
+	endpointSvc endpointapi.Service
+	store       *store.Store
 }
 
 func (g serverGaugeSource) EnrolledHosts(ctx context.Context) (int, error) {
-	return g.enroll.CountActive(ctx)
+	return g.endpointSvc.CountActive(ctx)
 }
 
 func (g serverGaugeSource) OfflineHosts(ctx context.Context, threshold time.Duration) (int, error) {
 	return g.store.CountOfflineHosts(ctx, threshold)
+}
+
+// policyProviderShim adapts the still-existing *policy.Store to the
+// endpoint.api.PolicyProvider interface. Phase 3 replaces with
+// rules.api.PolicyService when policy moves into the rules context.
+type policyProviderShim struct{ store *policy.Store }
+
+func (p policyProviderShim) GetActiveCommandPayload(ctx context.Context) (json.RawMessage, int64, bool, error) {
+	pol, err := p.store.Get(ctx, policy.DefaultName)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	hasContent := len(pol.Blocklist.Paths) > 0 || len(pol.Blocklist.Hashes) > 0
+	if !hasContent {
+		return nil, pol.Version, false, nil
+	}
+	payload, err := json.Marshal(struct {
+		Name    string   `json:"name"`
+		Version int64    `json:"version"`
+		Paths   []string `json:"paths"`
+		Hashes  []string `json:"hashes"`
+	}{
+		Name:    pol.Name,
+		Version: pol.Version,
+		Paths:   pol.Blocklist.Paths,
+		Hashes:  pol.Blocklist.Hashes,
+	})
+	return payload, pol.Version, true, err
+}
+
+// commandInserterShim adapts the still-existing *store.Store to the
+// endpoint.api.CommandInserter interface. Phase 4 replaces with
+// response.api.Service.Insert when commands move into the response
+// context.
+type commandInserterShim struct{ store *store.Store }
+
+func (c commandInserterShim) InsertCommand(ctx context.Context, hostID, cmdType string, payload json.RawMessage) (int64, error) {
+	return c.store.InsertCommand(ctx, store.Command{
+		HostID:      hostID,
+		CommandType: cmdType,
+		Payload:     payload,
+	})
 }
 
 // Build info injected via -ldflags at build time.
@@ -145,16 +191,20 @@ func run() error {
 	q := graph.NewQuery(s)
 	apiHandler := api.New(q, s, logger)
 
-	enrollStore := enrollment.NewStore(s.DB())
 	policyStore := policy.New(s.DB())
+
+	endpointCtx, err := openEndpoint(ctx, logger, db, cfg, policyStore, s)
+	if err != nil {
+		return err
+	}
 
 	// Phase 4: OTel metrics recorder. Instruments register against the global meter
 	// provider wired by observability.Init; counters, histograms, and observable
 	// gauges flow through the same OTLP pipeline as traces + logs, so SigNoz (or any
 	// OTLP backend) sees them without a separate scrape endpoint. Gauge source
-	// queries live state on each collection via the enrollStore + s adapter.
+	// queries live state on each collection via the endpointCtx + s adapter.
 	metricsRec := metrics.New(
-		serverGaugeSource{enroll: enrollStore, store: s},
+		serverGaugeSource{endpointSvc: endpointCtx.Service(), store: s},
 		metrics.Options{OfflineThreshold: 5 * time.Minute},
 	)
 	ingestHandler.SetMetrics(metricsRec)
@@ -168,22 +218,14 @@ func run() error {
 		logger.ErrorContext(ctx, "admin seed failed", "err", err)
 	}
 
-	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{
-		EnrollSecret:  cfg.EnrollSecret,
-		RatePerMinute: cfg.EnrollRatePerMin,
-		Logger:        logger,
-		PolicyStore:   policyStore,
-		CommandStore:  s,
-	})
-	adminHandler := admin.New(enrollStore, policyStore, s, catalogFromEngine(det), logger)
+	adminHandler := admin.New(endpointCtx.Service(), policyStore, s, catalogFromEngine(det), logger)
 
 	mux := buildMux(muxDeps{
 		ingestHandler: ingestHandler,
-		enrollHandler: enrollHandler,
+		endpointCtx:   endpointCtx,
 		identityCtx:   identityCtx,
 		apiHandler:    apiHandler,
 		adminHandler:  adminHandler,
-		enrollStore:   enrollStore,
 		logger:        logger,
 	})
 	registerUIRoutes(mux, logger)
@@ -226,6 +268,32 @@ func run() error {
 	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
 }
 
+// openEndpoint wires the endpoint bounded context (host enrollment +
+// host-token verification) and applies its schema. PolicyProvider +
+// CommandInserter are thin shims over the still-existing policy and
+// store packages; phase 3 + 4 replace them with rules.api.PolicyService
+// and response.api.Service.Insert. Extracted from run() to keep that
+// function under the cognitive-complexity gate.
+func openEndpoint(ctx context.Context, logger *slog.Logger, db *sqlx.DB, cfg *config.Config, policyStore *policy.Store, s *store.Store) (*endpointbootstrap.Endpoint, error) {
+	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
+		DB:                  db,
+		Logger:              logger,
+		EnrollSecret:        cfg.EnrollSecret,
+		EnrollRatePerMinute: cfg.EnrollRatePerMin,
+		PolicyProvider:      policyProviderShim{store: policyStore},
+		CommandInserter:     commandInserterShim{store: s},
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open endpoint", "err", err)
+		return nil, err
+	}
+	if err := endpointCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "endpoint schema", "err", err)
+		return nil, err
+	}
+	return endpointCtx, nil
+}
+
 // runProcessor owns the background event-processor goroutine and logs any
 // non-shutdown-induced exit as an error so SigNoz alerts fire if the processor
 // dies while the server is otherwise healthy.
@@ -253,15 +321,15 @@ func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger) 
 	}
 }
 
-// muxDeps bundles the handlers + stores the HTTP mux assembly needs, so buildMux takes
-// a single argument and new middleware layers don't keep widening the signature.
+// muxDeps bundles the handlers + bounded-context handles the HTTP mux assembly
+// needs, so buildMux takes a single argument and new middleware layers don't
+// keep widening the signature.
 type muxDeps struct {
 	ingestHandler *ingest.Handler
-	enrollHandler *enrollment.Handler
+	endpointCtx   *endpointbootstrap.Endpoint
 	identityCtx   *identitybootstrap.Identity
 	apiHandler    *api.Handler
 	adminHandler  *admin.Handler
-	enrollStore   *enrollment.Store
 	logger        *slog.Logger
 }
 
@@ -271,18 +339,18 @@ type muxDeps struct {
 //     tolerating an unknown session avoids forcing a session probe
 //     before a logout request)
 //   - host:    POST /api/events, GET /api/commands, PUT /api/commands/{id}
-//     (wrapped in authn.HostToken — the agent polls for + reports on its own commands)
+//     (wrapped in endpoint HostToken middleware -- the agent polls for + reports on its own commands)
 //   - session: /api/hosts/**, /api/alerts/**, /api/enrollments/**, /api/policy,
 //     /api/attack-coverage, /api/rules, POST /api/commands, GET /api/commands/{id},
-//     GET /api/session (wrapped in authn.Session; unsafe methods additionally
-//     gated by authn.CSRF)
+//     GET /api/session (wrapped in identity Session; unsafe methods additionally
+//     gated by identity CSRF)
 //
 // Middleware is applied per-handler at registration time so one mux serves the whole
 // surface instead of chaining multiple servers.
 func buildMux(d muxDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	d.ingestHandler.RegisterHealthRoutes(mux)
-	d.enrollHandler.RegisterRoutes(mux)
+	d.endpointCtx.RegisterPublicRoutes(mux)
 	// POST + DELETE /api/session are public -- login mints a session, logout
 	// is permissive (a stale cookie still needs a clearing Set-Cookie). The
 	// identity context owns rate-limiting + audit log on these.
@@ -301,7 +369,7 @@ func buildMux(d muxDeps) *http.ServeMux {
 // dedicated sub-mux keeps api.Handler routes (GET/PUT commands) scoped together with
 // the ingest handler under a single HostToken middleware.
 func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
-	hostTokenMW := authn.HostToken(d.enrollStore, d.logger)
+	hostTokenMW := d.endpointCtx.HostTokenMiddleware()
 	hostMux := http.NewServeMux()
 	hostMux.Handle("POST /api/events", d.ingestHandler.IngestHandler())
 	hostMux.HandleFunc("GET /api/commands", d.apiHandler.ListCommands)
@@ -328,6 +396,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	apiMux := http.NewServeMux()
 	d.apiHandler.RegisterRoutes(apiMux)
 	d.adminHandler.RegisterRoutes(apiMux)
+	d.endpointCtx.RegisterAuthedRoutes(apiMux)
 	d.identityCtx.RegisterAuthedRoutes(apiMux)
 	sessionProtected := sessionMW(csrfMW(apiMux))
 	for _, p := range []string{

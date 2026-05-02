@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/enrollment"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -21,7 +20,6 @@ import (
 // load-bearing: the UI uses the catalog order to render the rules index.
 func TestHandleListRules_RoundTrips(t *testing.T) {
 	s := store.OpenTestStore(t)
-	es := enrollment.NewStore(s.DB())
 	ps := policy.New(s.DB())
 
 	catalog := &stubCatalog{rules: []RuleMetadata{
@@ -52,7 +50,7 @@ func TestHandleListRules_RoundTrips(t *testing.T) {
 			},
 		},
 	}}
-	h := New(es, ps, s, catalog, slog.Default())
+	h := New(stubEndpointSvc{}, ps, s, catalog, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -108,10 +106,9 @@ func TestHandleListRules_RoundTrips(t *testing.T) {
 // not 500.
 func TestHandleListRules_NilCatalog(t *testing.T) {
 	s := store.OpenTestStore(t)
-	es := enrollment.NewStore(s.DB())
 	ps := policy.New(s.DB())
 
-	h := New(es, ps, s, nil, slog.Default())
+	h := New(stubEndpointSvc{}, ps, s, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)

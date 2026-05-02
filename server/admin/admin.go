@@ -13,9 +13,7 @@ package admin
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -25,7 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/attrkeys"
-	"github.com/fleetdm/edr/server/enrollment"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -78,30 +76,40 @@ type RuleConfig struct {
 	Description string `json:"description"`
 }
 
-// Handler serves the admin endpoints. Construct it with the enrollment + policy stores,
-// the command inserter used to fan out policy pushes, and a slog logger.
+// Handler serves the admin endpoints. Construct it with the endpoint
+// service (used by the policy fan-out path to enumerate active hosts),
+// the policy store, the command inserter used to fan out policy pushes,
+// and a slog logger.
 type Handler struct {
-	enrollments *enrollment.Store
+	endpointSvc endpointapi.Service
 	policy      *policy.Store
 	commands    CommandInserter
 	catalog     Cataloger
 	logger      *slog.Logger
 }
 
-// New creates an admin handler. The handler does not perform its own auth — wrap it with
-// the operator-session middleware (authn.Session, then authn.CSRF on unsafe methods) at
-// registration time.
+// New creates an admin handler. The handler does not perform its own
+// auth -- wrap it with the operator-session middleware (Session +
+// CSRF on unsafe methods) at registration time.
 //
-// Panics if any required dependency is nil: enrollment Store for /enrollments routes,
-// policy Store + CommandInserter for /policy. Fail-fast at construction mirrors the
-// enrollment.NewHandler pattern — a misconfigured handler otherwise blows up only on the
+// Panics if any required dependency is nil: endpoint Service (for the
+// policy fan-out's ActiveHostIDs walk), policy Store, CommandInserter
+// for /policy. Fail-fast at construction mirrors the enrollment-handler
+// pattern -- a misconfigured handler otherwise blows up only on the
 // first request, after the server is already accepting connections.
 //
-// catalog may be nil; the ATT&CK coverage endpoint then returns an empty layer rather
-// than 500, which makes unit tests of the legacy admin surface easier to write.
-func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog Cataloger, logger *slog.Logger) *Handler {
+// catalog may be nil; the ATT&CK coverage endpoint then returns an
+// empty layer rather than 500, which makes unit tests of the legacy
+// admin surface easier to write.
+//
+// Phase 2 of the modular-monolith migration removed the operator
+// enrollment routes from this handler -- they now live in
+// server/endpoint/internal/operator/. Phase 3 will remove the policy
+// routes (moving them into the rules context) and phase 4 will remove
+// command issuance.
+func New(es endpointapi.Service, ps *policy.Store, ci CommandInserter, catalog Cataloger, logger *slog.Logger) *Handler {
 	if es == nil {
-		panic("admin.New: enrollment store must not be nil")
+		panic("admin.New: endpoint service must not be nil")
 	}
 	if ps == nil {
 		panic("admin.New: policy store must not be nil")
@@ -112,15 +120,17 @@ func New(es *enrollment.Store, ps *policy.Store, ci CommandInserter, catalog Cat
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{enrollments: es, policy: ps, commands: ci, catalog: catalog, logger: logger}
+	return &Handler{endpointSvc: es, policy: ps, commands: ci, catalog: catalog, logger: logger}
 }
 
-// RegisterRoutes wires the endpoints onto the mux. Callers wrap the returned handler in the
-// session + CSRF middleware (authn.Session, then authn.CSRF) before mounting; see buildMux
-// in cmd/fleet-edr-server/main.go.
+// RegisterRoutes wires the endpoints onto the mux. Callers wrap the
+// returned handler in the session + CSRF middleware before mounting;
+// see buildMux in cmd/fleet-edr-server/main.go.
+//
+// Phase 2 removed GET /api/enrollments and POST
+// /api/enrollments/{host_id}/revoke from this handler; those live in
+// server/endpoint/internal/operator/ now.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/enrollments", h.handleList)
-	mux.HandleFunc("POST /api/enrollments/{host_id}/revoke", h.handleRevoke)
 	mux.HandleFunc("GET /api/policy", h.handleGetPolicy)
 	mux.HandleFunc("PUT /api/policy", h.handlePutPolicy)
 	mux.HandleFunc("GET /api/attack-coverage", h.handleATTACKCoverage)
@@ -155,67 +165,6 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		out = append(out, ruleResponse(rm))
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})
-}
-
-func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.enrollments.List(r.Context())
-	if err != nil {
-		h.logger.ErrorContext(r.Context(), "admin list enrollments", "err", err)
-		writeErr(r.Context(), h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
-	writeJSON(r.Context(), h.logger, w, http.StatusOK, rows)
-}
-
-type revokeRequest struct {
-	Reason string `json:"reason"`
-	Actor  string `json:"actor"`
-}
-
-func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hostID := r.PathValue("host_id")
-	if hostID == "" {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
-		return
-	}
-
-	var body revokeRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
-		return
-	}
-	if body.Reason == "" || body.Actor == "" {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "reason and actor are required")
-		return
-	}
-
-	err := h.enrollments.Revoke(ctx, hostID, body.Reason, body.Actor)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
-		return
-	case err != nil:
-		h.logger.ErrorContext(ctx, "admin revoke", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
-
-	// Audit the revoke at WARN so it's visible in SigNoz alert queries. Span attributes give
-	// SOC teams the query dimensions they expect (`edr.admin.action`, `edr.admin.actor`).
-	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String(attrkeys.AdminAction, "revoke"),
-		attribute.String(attrkeys.AdminActor, body.Actor),
-		attribute.String(attrkeys.HostID, hostID),
-	)
-	h.logger.WarnContext(ctx, "admin action",
-		attrkeys.AdminAction, "revoke",
-		attrkeys.AdminActor, body.Actor,
-		attrkeys.AdminReason, body.Reason,
-		attrkeys.HostID, hostID,
-	)
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
@@ -284,7 +233,7 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	// no way to know whether the policy landed, and retrying would bump the version again.
 	// Moving the read ahead keeps the failure mode honest: a listing error aborts cleanly
 	// and the DB is untouched.
-	hostIDs, err := h.enrollments.ActiveHostIDs(ctx)
+	hostIDs, err := h.endpointSvc.ActiveHostIDs(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin put policy list hosts", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")

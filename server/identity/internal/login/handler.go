@@ -11,10 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -22,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/fleetdm/edr/server/attrkeys"
+	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
@@ -29,7 +27,7 @@ import (
 type Handler struct {
 	svc       api.Service
 	logger    *slog.Logger
-	limiter   *ipLimiter
+	limiter   *httpserver.IPLimiter
 	cookieSec bool
 }
 
@@ -58,7 +56,7 @@ func New(svc api.Service, opts Options) *Handler {
 	return &Handler{
 		svc:       svc,
 		logger:    logger,
-		limiter:   newIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
+		limiter:   httpserver.NewIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
 		cookieSec: opts.CookieSecure,
 	}
 }
@@ -106,10 +104,10 @@ const loginBodyCap = 4 << 10 // 4 KiB
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
-	ip := remoteIP(r)
+	ip := httpserver.RemoteIP(r)
 	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 
-	if !h.limiter.allow(ip) {
+	if !h.limiter.Allow(ip) {
 		w.Header().Set("Retry-After", "60")
 		h.fail(ctx, w, http.StatusTooManyRequests, "rate_limited", failInfo{IP: ip},
 			attrkeys.AuthReason, "rate_limited")
@@ -283,57 +281,4 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		logger.ErrorContext(ctx, "session encode response", "err", err)
 	}
-}
-
-// --- ipLimiter mirrors enrollment.ipLimiter. Duplicated to avoid a
-// cross-package private export; both packages are short enough that the
-// duplication is a smaller cost than the coupling.
-
-const (
-	bucketIdleTTL = 2 * time.Hour
-	maxBuckets    = 1024
-)
-
-type ipBucket struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
-}
-
-type ipLimiter struct {
-	mu      sync.Mutex
-	limit   rate.Limit
-	burst   int
-	buckets map[string]*ipBucket
-}
-
-func newIPLimiter(limit rate.Limit, burst int) *ipLimiter {
-	return &ipLimiter{limit: limit, burst: burst, buckets: make(map[string]*ipBucket)}
-}
-
-func (l *ipLimiter) allow(ip string) bool {
-	now := time.Now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.buckets) > maxBuckets {
-		for k, b := range l.buckets {
-			if now.Sub(b.lastSeen) > bucketIdleTTL {
-				delete(l.buckets, k)
-			}
-		}
-	}
-	b, ok := l.buckets[ip]
-	if !ok {
-		b = &ipBucket{limiter: rate.NewLimiter(l.limit, l.burst)}
-		l.buckets[ip] = b
-	}
-	b.lastSeen = now
-	return b.limiter.Allow()
-}
-
-func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
-	}
-	return host
 }

@@ -10,9 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/fleetdm/edr/server/authn"
 	"github.com/fleetdm/edr/server/bootstrap"
-	"github.com/fleetdm/edr/server/enrollment"
+	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/httpserver"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/ingest"
@@ -74,25 +73,37 @@ func run() error {
 		return err
 	}
 
+	// Endpoint context. Ingest doesn't run the operator surface or the
+	// post-enroll policy/command fan-out, so PolicyProvider +
+	// CommandInserter stay nil; the enroll handler tolerates that and
+	// skips the fan-out goroutine.
+	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
+		DB:                  db,
+		Logger:              logger,
+		EnrollSecret:        cfg.EnrollSecret,
+		EnrollRatePerMinute: cfg.EnrollRatePerMin,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open endpoint", "err", err)
+		return err
+	}
+	if err := endpointCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "endpoint schema", "err", err)
+		return err
+	}
+
 	s, err := store.New(ctx, db)
 	if err != nil {
 		logger.ErrorContext(ctx, "open store", "err", err)
 		return err
 	}
 
-	enrollStore := enrollment.NewStore(s.DB())
-	enrollHandler := enrollment.NewHandler(enrollStore, enrollment.Options{
-		EnrollSecret:  cfg.EnrollSecret,
-		RatePerMinute: cfg.EnrollRatePerMin,
-		Logger:        logger,
-	})
-
 	h := ingest.New(s, logger, ingest.BuildInfo{Version: version, Commit: commit, BuildTime: buildTime})
-	hostTokenMW := authn.HostToken(enrollStore, logger)
+	hostTokenMW := endpointCtx.HostTokenMiddleware()
 
 	mux := http.NewServeMux()
 	h.RegisterHealthRoutes(mux)
-	enrollHandler.RegisterRoutes(mux)
+	endpointCtx.RegisterPublicRoutes(mux)
 	mux.Handle("POST /api/events", hostTokenMW(h.IngestHandler()))
 
 	handler := httpserver.Build(mux, httpserver.Options{

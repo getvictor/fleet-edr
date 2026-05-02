@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/authn"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/store"
 )
 
@@ -20,7 +20,7 @@ import (
 // middleware would set. Use this in tests that exercise handleIngest directly (i.e. bypass
 // the mux + middleware chain that the main binary wires up).
 func withHostID(req *http.Request, hostID string) *http.Request {
-	ctx := authn.WithHostIDForTest(req.Context(), hostID)
+	ctx := endpointapi.WithHostIDForTest(req.Context(), hostID)
 	return req.WithContext(ctx)
 }
 
