@@ -23,9 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/endpoint/bootstrap"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // fanoutWaitFor and fanoutWaitTick cap the post-enroll goroutine wait.
@@ -91,9 +91,9 @@ func (r *recordingCommandInserter) snapshot() []recordedCommand {
 // register routes onto a test mux.
 func newEndpoint(t *testing.T, opts ...func(*bootstrap.Deps)) *bootstrap.Endpoint {
 	t.Helper()
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	deps := bootstrap.Deps{
-		DB:                  s.DB(),
+		DB:                  s,
 		Logger:              slog.Default(),
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
@@ -384,9 +384,9 @@ func TestEnroll_PolicyFanoutOnFirstEnroll(t *testing.T) {
 	}
 	commands := &recordingCommandInserter{}
 
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	ep, err := bootstrap.New(bootstrap.Deps{
-		DB:                  s.DB(),
+		DB:                  s,
 		Logger:              slog.Default(),
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
@@ -429,9 +429,9 @@ func TestEnroll_NoFanoutWhenPolicyEmpty(t *testing.T) {
 	policy := &fakePolicyProvider{hasContent: false}
 	commands := &recordingCommandInserter{}
 
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	ep, err := bootstrap.New(bootstrap.Deps{
-		DB:                  s.DB(),
+		DB:                  s,
 		Logger:              slog.Default(),
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
@@ -464,8 +464,8 @@ func TestBootstrap_MissingDeps(t *testing.T) {
 		assert.Contains(t, err.Error(), "DB")
 	})
 	t.Run("missing secret", func(t *testing.T) {
-		s := store.OpenTestStore(t)
-		_, err := bootstrap.New(bootstrap.Deps{DB: s.DB()})
+		s := srvbootstrap.OpenTestDB(t)
+		_, err := bootstrap.New(bootstrap.Deps{DB: s})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "EnrollSecret")
 	})

@@ -6,12 +6,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/store"
+	"github.com/fleetdm/edr/server/bootstrap"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	return New(store.OpenTestStore(t).DB())
+	return New(bootstrap.OpenTestDB(t))
 }
 
 func TestCreate_HappyPath(t *testing.T) {

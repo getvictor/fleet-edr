@@ -9,7 +9,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // PrivilegeLaunchdPlistWrite fires on a write-mode `open(2)` against any
@@ -129,7 +128,7 @@ type codeSigningJSON struct {
 }
 
 func (r *PrivilegeLaunchdPlistWrite) Evaluate(
-	ctx context.Context, events []store.Event, s api.GraphReader,
+	ctx context.Context, events []api.Event, s api.GraphReader,
 ) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
@@ -145,7 +144,7 @@ func (r *PrivilegeLaunchdPlistWrite) Evaluate(
 }
 
 func (r *PrivilegeLaunchdPlistWrite) evalEvent(
-	ctx context.Context, evt store.Event, s api.GraphReader,
+	ctx context.Context, evt api.Event, s api.GraphReader,
 ) (*detection.Finding, error) {
 	if evt.EventType != "open" {
 		return nil, nil
@@ -203,11 +202,11 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 // allowed returns true when the writing process's code-signing identity
 // is on the operator's allowlist or is a platform binary. Both branches
 // short-circuit the finding. NullRawJSON is a json.RawMessage alias;
-// both an empty slice (DB NULL → store.NullRawJSON.Scan zeros it) and
+// both an empty slice (DB NULL → api.NullRawJSON.Scan zeros it) and
 // the literal JSON value `null` (4 bytes) mean "no code_signing on the
 // process row" — typically an unsigned binary, which we treat as
 // in-scope so the finding fires.
-func (r *PrivilegeLaunchdPlistWrite) allowed(raw store.NullRawJSON) bool {
+func (r *PrivilegeLaunchdPlistWrite) allowed(raw api.NullRawJSON) bool {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return false
 	}

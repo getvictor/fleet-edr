@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // newService returns a ready-to-use api.Service backed by a fresh test DB.
@@ -24,17 +24,17 @@ import (
 // inserts that the tests below mint via the sessions store directly.
 func newService(t *testing.T) (api.Service, *sessions.Store) {
 	t.Helper()
-	s := store.OpenTestStore(t)
+	s := bootstrap.OpenTestDB(t)
 	for _, uid := range []int64{1, 7, 42} {
-		_, err := s.DB().ExecContext(t.Context(),
+		_, err := s.ExecContext(t.Context(),
 			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
 			uid, "stub-"+fmtInt(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
 		if err != nil {
 			t.Fatalf("seed stub user %d: %v", uid, err)
 		}
 	}
-	us := users.New(s.DB())
-	ss := sessions.New(s.DB(), sessions.Options{})
+	us := users.New(s)
+	ss := sessions.New(s, sessions.Options{})
 	return service.New(us, ss, slog.Default()), ss
 }
 

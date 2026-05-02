@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/store"
+	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 )
 
 const (
@@ -40,16 +40,16 @@ const enrollmentsDDLForTests = `CREATE TABLE IF NOT EXISTS enrollments (
 	UNIQUE KEY uk_enrollments_token_id (host_token_id)
 )`
 
-// newTestStore wraps store.OpenTestStore and exposes the raw sqlx.DB the
+// newTestStore wraps srvbootstrap.OpenTestDB and exposes the raw sqlx.DB the
 // enrollment Store needs. Applies the endpoint enrollments schema inline
 // since these tests run below the bootstrap layer that would normally do it.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	s := store.OpenTestStore(t)
-	if _, err := s.DB().ExecContext(t.Context(), enrollmentsDDLForTests); err != nil {
+	s := srvbootstrap.OpenTestDB(t)
+	if _, err := s.ExecContext(t.Context(), enrollmentsDDLForTests); err != nil {
 		t.Fatalf("apply enrollments schema: %v", err)
 	}
-	return NewStore(s.DB())
+	return NewStore(s)
 }
 
 func TestHashRoundTrip(t *testing.T) {

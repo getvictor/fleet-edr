@@ -8,13 +8,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/identity/internal/users"
-	"github.com/fleetdm/edr/server/store"
 )
 
 func newUsersStore(t *testing.T) *users.Store {
 	t.Helper()
-	return users.New(store.OpenTestStore(t).DB())
+	return users.New(bootstrap.OpenTestDB(t))
 }
 
 func TestAdmin_SeedsOnEmptyTable(t *testing.T) {

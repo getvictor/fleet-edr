@@ -8,7 +8,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // Known shell paths.
@@ -151,7 +150,7 @@ type networkConnectPayload struct {
 	RemotePort    int    `json:"remote_port"`
 }
 
-func (r *SuspiciousExec) Evaluate(ctx context.Context, events []store.Event, s api.GraphReader) ([]api.Finding, error) {
+func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	// Two-pass evaluation. Pass 1 handles temp-exec triggers (preferred); Pass 2
 	// handles outbound network_connect triggers as a fallback. Splitting the
 	// passes preserves the original rule's "prefer the path-based finding when
@@ -197,7 +196,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []store.Event, s a
 // when the shell exec is in an earlier batch it isn't findable here and
 // EventIDs simply omits it. The trigger's own event ID is excluded to avoid
 // duplicates in the arm-2 (re-exec) case where shell and temp share a PID.
-func findShellExecEventID(events []store.Event, hostID string, shellPID int, excludeEventID string) string {
+func findShellExecEventID(events []api.Event, hostID string, shellPID int, excludeEventID string) string {
 	for _, e := range events {
 		if e.EventType != "exec" || e.HostID != hostID || e.EventID == excludeEventID {
 			continue
@@ -222,7 +221,7 @@ func findShellExecEventID(events []store.Event, hostID string, shellPID int, exc
 // uses it for batch-level dedupe so multiple temp-exec children of one shell
 // produce one finding rather than one per child.
 func (r *SuspiciousExec) evalExec(
-	ctx context.Context, evt store.Event, s api.GraphReader, batch []store.Event, seenShell map[int]struct{},
+	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*detection.Finding, int, error) {
 	var p execPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
@@ -259,11 +258,11 @@ func (r *SuspiciousExec) evalExec(
 // cleaner anyway — every field below is "inputs about this single exec event"
 // and they always travel together.
 type execMatchInputs struct {
-	evt       store.Event
-	batch     []store.Event
+	evt       api.Event
+	batch     []api.Event
 	seenShell map[int]struct{}
 	p         execPayload
-	tempProc  *store.Process
+	tempProc  *api.Process
 	tempPath  string
 }
 
@@ -331,7 +330,7 @@ func (r *SuspiciousExec) evalExecArm2(
 // allowlist. Returning false means "skip this candidate, continue / give up";
 // the callers handle the `nil, 0, nil` reply.
 func (r *SuspiciousExec) shouldFire(
-	seenShell map[int]struct{}, shell, parent *store.Process, triggerTS int64,
+	seenShell map[int]struct{}, shell, parent *api.Process, triggerTS int64,
 ) bool {
 	if _, dupe := seenShell[shell.PID]; dupe {
 		return false
@@ -350,7 +349,7 @@ func (r *SuspiciousExec) shouldFire(
 // The connecting process itself can be the shell (curl|sh case) or any
 // descendant of it (shell spawned curl); the inclusive walk handles both.
 func (r *SuspiciousExec) evalNetwork(
-	ctx context.Context, evt store.Event, s api.GraphReader, batch []store.Event, seenShell map[int]struct{},
+	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*detection.Finding, int, error) {
 	var c networkConnectPayload
 	if err := json.Unmarshal(evt.Payload, &c); err != nil {
@@ -414,7 +413,7 @@ func (r *SuspiciousExec) evalNetwork(
 // candidate parent on the next step.
 func (r *SuspiciousExec) findShellWithNonShellAncestor(
 	ctx context.Context, s api.GraphReader, hostID string, startPID int, asOfNs int64,
-) (*store.Process, *store.Process, error) {
+) (*api.Process, *api.Process, error) {
 	current, err := s.GetProcessByPID(ctx, hostID, startPID, asOfNs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get pid %d: %w", startPID, err)
@@ -450,8 +449,8 @@ func (r *SuspiciousExec) findShellWithNonShellAncestor(
 // Splitting this out keeps findShellWithNonShellAncestor's loop body small
 // enough that gocognit / Sonar's cognitive-complexity gates stay green.
 func (r *SuspiciousExec) examineCandidate(
-	ctx context.Context, s api.GraphReader, hostID string, current *store.Process, asOfNs int64,
-) (shell, parent, advance *store.Process, err error) {
+	ctx context.Context, s api.GraphReader, hostID string, current *api.Process, asOfNs int64,
+) (shell, parent, advance *api.Process, err error) {
 	if !shellPaths[current.Path] {
 		// Not a shell. Walk up if there's an ancestor to walk to.
 		if current.PPID <= 1 {
@@ -487,7 +486,7 @@ func (r *SuspiciousExec) examineCandidate(
 // passes through to GetProcessByPID otherwise.
 func (r *SuspiciousExec) lookupAncestor(
 	ctx context.Context, s api.GraphReader, hostID string, pid int, asOfNs int64,
-) (*store.Process, error) {
+) (*api.Process, error) {
 	if pid <= 1 {
 		return nil, nil
 	}
@@ -503,7 +502,7 @@ func (r *SuspiciousExec) lookupAncestor(
 // exec_time_ns when set (preferred — that's the kernel's actual exec moment)
 // and falls back to fork_time_ns otherwise (defensive — should always be set
 // for a fully-materialised process).
-func shellWithinWindow(shell *store.Process, triggerTS int64) bool {
+func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	anchor := shell.ForkTimeNs
 	if shell.ExecTimeNs != nil {
 		anchor = *shell.ExecTimeNs
@@ -516,7 +515,7 @@ func shellWithinWindow(shell *store.Process, triggerTS int64) bool {
 // still links to tempProc so the analyst lands on the temp-stage record
 // (the re-exec'd row), not the earlier shell-stage row.
 func (r *SuspiciousExec) makeExecFinding(
-	evt store.Event, parent, shell, tempProc *store.Process, tempPath string, batch []store.Event,
+	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, batch []api.Event,
 ) *detection.Finding {
 	parentPath := "(unknown)"
 	if parent != nil {
@@ -541,7 +540,7 @@ func (r *SuspiciousExec) makeExecFinding(
 // operator's allowlist. A nil parent (shell parented at launchd, or parent
 // not yet materialised) never matches — those are the cases the rule must
 // continue to flag because there's no human-attested entry point.
-func (r *SuspiciousExec) parentAllowed(parent *store.Process) bool {
+func (r *SuspiciousExec) parentAllowed(parent *api.Process) bool {
 	if r.AllowedNonShellParents == nil || parent == nil {
 		return false
 	}

@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // setupServer wires a full session handler + middleware stack backed by real
@@ -24,9 +24,9 @@ import (
 // + the sessions store so tests can seed an initial user / verify deletion.
 func setupServer(t *testing.T, ratePerMinute int) (*httptest.Server, *users.Store, *sessions.Store) {
 	t.Helper()
-	s := store.OpenTestStore(t)
-	us := users.New(s.DB())
-	ss := sessions.New(s.DB(), sessions.Options{})
+	s := bootstrap.OpenTestDB(t)
+	us := users.New(s)
+	ss := sessions.New(s, sessions.Options{})
 	svc := service.New(us, ss, slog.Default())
 
 	h := New(svc, Options{

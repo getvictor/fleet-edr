@@ -2,12 +2,11 @@ package catalog
 
 import (
 	"encoding/json"
+	"github.com/fleetdm/edr/server/rules/api"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/fleetdm/edr/server/store"
 )
 
 func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
@@ -99,7 +98,7 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := store.OpenTestStore(t)
+			s := openCatalogStore(t)
 			ctx := t.Context()
 
 			parentPayload, _ := json.Marshal(map[string]any{
@@ -110,7 +109,7 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 				"pid": 100, "ppid": 50, "path": tc.path, "args": tc.args,
 				"uid": 501, "gid": 20,
 			})
-			events := []store.Event{
+			events := []api.Event{
 				{EventID: "fork-parent", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 					Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 				{EventID: "exec-parent", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -124,7 +123,7 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			materialize(t, s, events)
 
 			rule := &PersistenceLaunchAgent{AllowedPlists: tc.allowedPlists}
-			findings, err := rule.Evaluate(ctx, events, s)
+			findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 			require.NoError(t, err)
 
 			if !tc.wantFinding {

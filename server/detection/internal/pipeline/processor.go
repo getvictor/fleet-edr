@@ -1,31 +1,38 @@
-// Package processor polls for unprocessed events and feeds them through the
-// graph builder. It decouples event ingestion from graph materialization so
-// that the write path (ingest) can run independently of the processing path.
-package processor
+package pipeline
 
 import (
 	"context"
 	"log/slog"
 	"time"
 
-	"github.com/fleetdm/edr/server/detection"
-	"github.com/fleetdm/edr/server/graph"
-	"github.com/fleetdm/edr/server/store"
+	"github.com/fleetdm/edr/server/detection/internal/engine"
+	"github.com/fleetdm/edr/server/detection/internal/graph"
+	"github.com/fleetdm/edr/server/detection/internal/mysql"
 )
 
-// Processor polls for unprocessed events and runs them through the graph builder.
+// Processor polls for unprocessed events and runs them through the
+// graph builder, then evaluates detection rules over the same batch.
+// Decouples event ingestion from graph materialization so the write
+// path (intake) runs independently of the processing path.
 type Processor struct {
-	store     *store.Store
+	store     *mysql.Store
 	builder   *graph.Builder
-	detection *detection.Engine
+	detection *engine.Engine
 	logger    *slog.Logger
 	interval  time.Duration
 	batch     int
 }
 
-// New creates a Processor with the given poll interval and batch size.
-func New(s *store.Store, builder *graph.Builder, det *detection.Engine, logger *slog.Logger,
-	interval time.Duration, batchSize int) *Processor {
+// NewProcessor creates a Processor with the given poll interval and
+// batch size.
+func NewProcessor(
+	s *mysql.Store,
+	builder *graph.Builder,
+	det *engine.Engine,
+	logger *slog.Logger,
+	interval time.Duration,
+	batchSize int,
+) *Processor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -76,7 +83,6 @@ func (p *Processor) processOnce(ctx context.Context) {
 
 	if err := p.builder.ProcessBatch(ctx, events); err != nil {
 		p.logger.WarnContext(ctx, "graph builder failure, will retry batch", "err", err)
-		// Unclaim events so they can be retried in a future cycle.
 		if unclaimErr := p.store.UnclaimEvents(ctx, eventIDs); unclaimErr != nil {
 			p.logger.ErrorContext(ctx, "unclaim events after builder failure", "err", unclaimErr)
 		}

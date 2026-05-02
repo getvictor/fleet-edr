@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/response/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // commandsDDLForTests duplicates the CREATE TABLE statement from
@@ -31,11 +31,11 @@ const commandsDDLForTests = `CREATE TABLE IF NOT EXISTS commands (
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	s := store.OpenTestStore(t)
-	if _, err := s.DB().ExecContext(t.Context(), commandsDDLForTests); err != nil {
+	s := srvbootstrap.OpenTestDB(t)
+	if _, err := s.ExecContext(t.Context(), commandsDDLForTests); err != nil {
 		t.Fatalf("apply commands schema: %v", err)
 	}
-	return NewStore(s.DB())
+	return NewStore(s)
 }
 
 func TestInsertAndGet(t *testing.T) {

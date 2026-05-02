@@ -2,15 +2,14 @@ package catalog
 
 import (
 	"encoding/json"
-	"log/slog"
+	"github.com/fleetdm/edr/server/rules/api"
+
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/detection/testharness"
-	"github.com/fleetdm/edr/server/graph"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // TestSudoersTamper_Fixtures runs every fixture case under
@@ -54,18 +53,18 @@ func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
 // substring is present), then unmarshal trips and the rule drops the
 // event silently.
 func TestSudoersTamper_MalformedPayload(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 	r := &SudoersTamper{}
 
-	evt := store.Event{
+	evt := api.Event{
 		EventID:     "sud-malformed",
 		HostID:      "fixture-host",
 		TimestampNs: 1,
 		EventType:   "open",
 		Payload:     json.RawMessage(`{"path":"/etc/sudoers", "flags":`),
 	}
-	findings, err := r.Evaluate(ctx, []store.Event{evt}, s)
+	findings, err := r.Evaluate(ctx, []api.Event{evt}, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings, "malformed payload must be dropped silently")
 }
@@ -73,21 +72,21 @@ func TestSudoersTamper_MalformedPayload(t *testing.T) {
 // TestSudoersTamper_OpenRaceWithoutProcess covers the proc==nil race
 // guard. Mirrors the same shape as the other open-keyed rules.
 func TestSudoersTamper_OpenRaceWithoutProcess(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 	r := &SudoersTamper{}
 
-	evt := store.Event{
+	evt := api.Event{
 		EventID:     "sud-race",
 		HostID:      "fixture-host",
 		TimestampNs: 1,
 		EventType:   "open",
 		Payload:     json.RawMessage(`{"pid":99999,"path":"/etc/sudoers","flags":1}`),
 	}
-	require.NoError(t, s.InsertEvents(ctx, []store.Event{evt}))
-	require.NoError(t, graph.NewBuilder(s, slog.Default()).ProcessBatch(ctx, []store.Event{evt}))
+	require.NoError(t, s.InsertEvents(ctx, []api.Event{evt}))
+	require.NoError(t, s.ProcessBatch(ctx, []api.Event{evt}))
 
-	findings, err := r.Evaluate(ctx, []store.Event{evt}, s)
+	findings, err := r.Evaluate(ctx, []api.Event{evt}, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings, "race against process materialisation must skip silently")
 }

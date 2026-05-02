@@ -8,7 +8,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // CredentialKeychainDump fires when a process invokes `/usr/bin/security
@@ -87,7 +86,7 @@ type keychainDumpPayload struct {
 	Args []string `json:"args"`
 }
 
-func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []store.Event, s api.GraphReader) ([]api.Finding, error) {
+func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
 		if evt.EventType != "exec" {
