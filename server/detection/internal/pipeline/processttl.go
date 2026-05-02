@@ -8,6 +8,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/fleetdm/edr/server/detection/api"
 )
 
 // processTTLReconciler is the narrow store-surface needed by the
@@ -16,10 +18,11 @@ type processTTLReconciler interface {
 	ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs int64) (int64, error)
 }
 
-// processTTLMetrics is the optional OTel hook. Nil disables metrics.
-type processTTLMetrics interface {
-	ProcessesTTLReconciled(ctx context.Context, n int64)
-}
+// SetMetrics installs the metrics recorder after construction. Used
+// by Detection.SetMetrics to break the cmd/main circular-dependency
+// (metrics recorder needs detectionCtx for the OfflineHosts gauge,
+// detectionCtx's TTL runner needs the recorder).
+func (r *ProcessTTLRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 
 // ProcessTTLOptions tune the runner. Zero values fall back to defaults.
 type ProcessTTLOptions struct {
@@ -31,7 +34,7 @@ type ProcessTTLOptions struct {
 	// Logger for audit lines. Nil uses slog.Default().
 	Logger *slog.Logger
 	// Metrics, optional.
-	Metrics processTTLMetrics
+	Metrics api.MetricsRecorder
 	// Now is the clock source. Nil uses time.Now.
 	Now func() time.Time
 }
@@ -52,7 +55,7 @@ type ProcessTTLRunner struct {
 	maxAge   time.Duration
 	interval time.Duration
 	logger   *slog.Logger
-	metrics  processTTLMetrics
+	metrics  api.MetricsRecorder
 	now      func() time.Time
 }
 

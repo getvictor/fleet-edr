@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/detection/api"
 )
 
 // Runner composes the three background goroutines that the detection
@@ -35,6 +37,19 @@ func NewRunner(opts RunnerOptions) *Runner {
 		processor:  opts.Processor,
 		processTTL: opts.ProcessTTL,
 		retention:  opts.Retention,
+	}
+}
+
+// SetMetrics propagates the metrics recorder to processTTL +
+// retention (the processor itself doesn't take a recorder directly;
+// alert metrics flow through engine.SetMetrics). Called by
+// Detection.SetMetrics.
+func (r *Runner) SetMetrics(m api.MetricsRecorder) {
+	if r.processTTL != nil {
+		r.processTTL.SetMetrics(m)
+	}
+	if r.retention != nil {
+		r.retention.SetMetrics(m)
 	}
 }
 

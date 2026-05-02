@@ -122,10 +122,17 @@ func run() error {
 		return err
 	}
 
-	_ = metrics.New(
+	// Build the metrics recorder AFTER detectionCtx + endpointCtx exist
+	// so the gauge source can read live state from both. Wire it back
+	// into detectionCtx via SetMetrics so the engine + intake +
+	// pipeline (processttl + retention) all instrument: the
+	// recorder + recorder consumer dependency cycle resolves through
+	// this two-phase setup.
+	metricsRec := metrics.New(
 		serverGaugeSource{endpointSvc: endpointCtx.Service(), detectionSvc: detectionCtx.Service()},
 		metrics.Options{OfflineThreshold: 5 * time.Minute},
 	)
+	detectionCtx.SetMetrics(metricsRec)
 
 	seedAdmin(ctx, logger, identityCtx)
 

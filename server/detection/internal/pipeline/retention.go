@@ -9,17 +9,14 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/fleetdm/edr/server/detection/api"
 )
 
 // retentionDeleter is the minimal DB surface the retention runner
 // needs. Matches *sql.DB / *sqlx.DB so a caller can pass either.
 type retentionDeleter interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
-// retentionMetrics is the optional OTel hook. Nil disables metrics.
-type retentionMetrics interface {
-	RetentionRowsDeleted(ctx context.Context, n int64)
 }
 
 // RetentionOptions tune the retention runner.
@@ -33,7 +30,7 @@ type RetentionOptions struct {
 	// Logger for audit lines. Nil uses slog.Default().
 	Logger *slog.Logger
 	// Metrics, optional.
-	Metrics retentionMetrics
+	Metrics api.MetricsRecorder
 	// Now is the clock source. Nil uses time.Now.UTC.
 	Now func() time.Time
 }
@@ -50,7 +47,7 @@ type RetentionRunner struct {
 	interval      time.Duration
 	batchSize     int
 	logger        *slog.Logger
-	metrics       retentionMetrics
+	metrics       api.MetricsRecorder
 	now           func() time.Time
 }
 
@@ -84,6 +81,11 @@ func NewRetention(db retentionDeleter, opts RetentionOptions) *RetentionRunner {
 		now:           opts.Now,
 	}
 }
+
+// SetMetrics installs the metrics recorder after construction. See
+// ProcessTTLRunner.SetMetrics for the cmd/main two-phase setup
+// rationale.
+func (r *RetentionRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 
 // Loop runs retention passes until ctx is done.
 func (r *RetentionRunner) Loop(ctx context.Context) {

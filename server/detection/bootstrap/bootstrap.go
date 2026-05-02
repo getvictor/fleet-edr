@@ -191,6 +191,24 @@ func (d *Detection) MigrateSchema(ctx context.Context) error {
 // the hot path response consumes via its Heartbeat closure.
 func (d *Detection) Service() api.Service { return d.svc }
 
+// SetMetrics wires the metrics recorder into the engine + intake +
+// pipeline (processttl + retention) AFTER construction. Used by
+// cmd/main to break the circular dependency between detectionCtx and
+// metrics.New (the OfflineHosts gauge source needs detectionCtx;
+// detectionCtx's engine + intake + pipeline need the recorder).
+func (d *Detection) SetMetrics(m api.MetricsRecorder) {
+	d.metrics = m
+	if d.engine != nil {
+		d.engine.SetMetrics(m)
+	}
+	if d.intakeH != nil {
+		d.intakeH.SetMetrics(m)
+	}
+	if d.pipe != nil {
+		d.pipe.SetMetrics(m)
+	}
+}
+
 // Store exposes the persistence handle. Used by cmd/main for the
 // retention DB-handle wiring (retention takes a *sqlx.DB directly).
 func (d *Detection) Store() *mysql.Store { return d.store }
