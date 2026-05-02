@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -35,6 +34,7 @@ import (
 	"github.com/fleetdm/edr/server/metrics"
 	"github.com/fleetdm/edr/server/processor"
 	"github.com/fleetdm/edr/server/processttl"
+	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
 	"github.com/fleetdm/edr/server/retention"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
@@ -57,19 +57,6 @@ func (g serverGaugeSource) EnrolledHosts(ctx context.Context) (int, error) {
 
 func (g serverGaugeSource) OfflineHosts(ctx context.Context, threshold time.Duration) (int, error) {
 	return g.store.CountOfflineHosts(ctx, threshold)
-}
-
-// endpointCommandInserterShim adapts the still-existing *store.Store
-// to the endpoint.api.CommandInserter interface used by the post-enroll
-// fan-out. Phase 4 replaces with response.api.Service.Insert.
-type endpointCommandInserterShim struct{ store *store.Store }
-
-func (c endpointCommandInserterShim) InsertCommand(ctx context.Context, hostID, cmdType string, payload json.RawMessage) (int64, error) {
-	return c.store.InsertCommand(ctx, store.Command{
-		HostID:      hostID,
-		CommandType: cmdType,
-		Payload:     payload,
-	})
 }
 
 // Build info injected via -ldflags at build time.
@@ -153,6 +140,28 @@ func run() error {
 	q := graph.NewQuery(s)
 	apiHandler := api.New(q, s, logger)
 
+	// Response context: agent command queue. Built first because both
+	// rules and endpoint consume responseCtx.Service().Insert eagerly
+	// (as method values) for their fan-out paths. The Heartbeat closure
+	// wraps store.UpdateHostLastSeen so the /api/commands poll's
+	// last-seen-ns side effect survives the move; phase 5 swaps the
+	// closure to detectionCtx.RecordHostSeen.
+	responseCtx, err := responsebootstrap.New(responsebootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		Heartbeat: func(ctx context.Context, hostID string, at time.Time) error {
+			return s.UpdateHostLastSeen(ctx, hostID, at)
+		},
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open response", "err", err)
+		return err
+	}
+	if err := responseCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "response schema", "err", err)
+		return err
+	}
+
 	// Late-binding closure: rules's fan-out needs the endpoint
 	// service to enumerate active hosts, but endpoint hasn't been
 	// constructed yet (it needs rules's PolicyService). The closure
@@ -181,13 +190,7 @@ func run() error {
 			}
 			return endpointCtx.Service().ActiveHostIDs(ctx)
 		},
-		CommandInserter: func(ctx context.Context, hostID, cmdType string, payload []byte) (int64, error) {
-			return s.InsertCommand(ctx, store.Command{
-				HostID:      hostID,
-				CommandType: cmdType,
-				Payload:     payload,
-			})
-		},
+		CommandInserter: responseCtx.Service().Insert,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
@@ -199,7 +202,7 @@ func run() error {
 	}
 	det.LoadActive(rulesCtx.ContentService())
 
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, rulesCtx.PolicyService(), s)
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, rulesCtx.PolicyService(), responseCtx.Service().Insert)
 	if err != nil {
 		return err
 	}
@@ -229,6 +232,7 @@ func run() error {
 		endpointCtx:   endpointCtx,
 		identityCtx:   identityCtx,
 		rulesCtx:      rulesCtx,
+		responseCtx:   responseCtx,
 		apiHandler:    apiHandler,
 		logger:        logger,
 	})
@@ -274,18 +278,25 @@ func run() error {
 
 // openEndpoint wires the endpoint bounded context (host enrollment +
 // host-token verification) and applies its schema. PolicyProvider is
-// satisfied by rules/api.PolicyService; CommandInserter is the
-// store-backed shim until phase 4 replaces it with
-// response/api.Service.Insert. Extracted from run() to keep that
-// function under the cognitive-complexity gate.
-func openEndpoint(ctx context.Context, logger *slog.Logger, db *sqlx.DB, cfg *config.Config, policySvc endpointapi.PolicyProvider, s *store.Store) (*endpointbootstrap.Endpoint, error) {
+// satisfied by rules/api.PolicyService (phase 3); cmdInserter is
+// satisfied by response.Service.Insert as a method value (phase 4).
+// Extracted from run() to keep that function under the
+// cognitive-complexity gate.
+func openEndpoint(
+	ctx context.Context,
+	logger *slog.Logger,
+	db *sqlx.DB,
+	cfg *config.Config,
+	policySvc endpointapi.PolicyProvider,
+	cmdInserter endpointbootstrap.CommandInserter,
+) (*endpointbootstrap.Endpoint, error) {
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
 		Logger:              logger,
 		EnrollSecret:        cfg.EnrollSecret,
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
 		PolicyProvider:      policySvc,
-		CommandInserter:     endpointCommandInserterShim{store: s},
+		CommandInserter:     cmdInserter,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
@@ -333,6 +344,7 @@ type muxDeps struct {
 	endpointCtx   *endpointbootstrap.Endpoint
 	identityCtx   *identitybootstrap.Identity
 	rulesCtx      *rulesbootstrap.Rules
+	responseCtx   *responsebootstrap.Response
 	apiHandler    *api.Handler
 	logger        *slog.Logger
 }
@@ -370,14 +382,13 @@ func buildMux(d muxDeps) *http.ServeMux {
 }
 
 // registerHostRoutes wires the host-token protected agent endpoints onto mux. A
-// dedicated sub-mux keeps api.Handler routes (GET/PUT commands) scoped together with
-// the ingest handler under a single HostToken middleware.
+// dedicated sub-mux keeps the agent routes (ingest + response agent surface)
+// scoped together under a single HostToken middleware.
 func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 	hostTokenMW := d.endpointCtx.HostTokenMiddleware()
 	hostMux := http.NewServeMux()
 	hostMux.Handle("POST /api/events", d.ingestHandler.IngestHandler())
-	hostMux.HandleFunc("GET /api/commands", d.apiHandler.ListCommands)
-	hostMux.HandleFunc("PUT /api/commands/{id}", d.apiHandler.UpdateCommandStatus)
+	d.responseCtx.RegisterAgentRoutes(hostMux)
 	hostProtected := hostTokenMW(hostMux)
 	for _, p := range []string{
 		"POST /api/events",
@@ -401,6 +412,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	d.apiHandler.RegisterRoutes(apiMux)
 	d.rulesCtx.RegisterAuthedRoutes(apiMux)
 	d.endpointCtx.RegisterAuthedRoutes(apiMux)
+	d.responseCtx.RegisterAuthedRoutes(apiMux)
 	d.identityCtx.RegisterAuthedRoutes(apiMux)
 	sessionProtected := sessionMW(csrfMW(apiMux))
 	for _, p := range []string{

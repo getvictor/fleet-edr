@@ -81,19 +81,9 @@ var schemaStatements = []string{
 		CONSTRAINT fk_ae_alert FOREIGN KEY (alert_id) REFERENCES alerts(id),
 		CONSTRAINT fk_ae_event FOREIGN KEY (event_id) REFERENCES events(event_id)
 	)`,
-	`CREATE TABLE IF NOT EXISTS commands (
-		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
-		host_id      VARCHAR(255)  NOT NULL,
-		command_type VARCHAR(64)   NOT NULL,
-		payload      JSON          NOT NULL,
-		status       ENUM('pending', 'acked', 'completed', 'failed') NOT NULL DEFAULT 'pending',
-		created_at   TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		acked_at     TIMESTAMP(6)  NULL,
-		completed_at TIMESTAMP(6)  NULL,
-		result       JSON,
-		INDEX idx_commands_host_status (host_id, status),
-		INDEX idx_commands_created (created_at)
-	)`,
+	// commands DDL is owned by the response bounded context (see
+	// server/response/bootstrap/schema.go) and applied via
+	// responseCtx.ApplySchema. Phase 4 moved it out of this list.
 	`CREATE TABLE IF NOT EXISTS hosts (
 		host_id      VARCHAR(255) PRIMARY KEY,
 		event_count  BIGINT       NOT NULL DEFAULT 0,

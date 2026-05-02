@@ -103,15 +103,11 @@ type PolicyProvider interface {
 	ActiveCommandPayload(ctx context.Context) (payload json.RawMessage, version int64, hasContent bool, err error)
 }
 
-// CommandInserter is the narrow write interface endpoint's enroll handler
-// needs to seed the initial set_blocklist command at first enroll. Phase
-// 2 keeps the existing *store.Store as the implementation (via a thin
-// shim in cmd/main); phase 4 replaces with response.api.Service.Insert
-// when commands move into the response bounded context.
-//
-// commandType is exposed as a parameter (rather than a typed enum)
-// because the agent contract uses a string field; introducing a typed
-// enum here would just shift the string boundary one layer up.
-type CommandInserter interface {
-	InsertCommand(ctx context.Context, hostID, commandType string, payload json.RawMessage) (int64, error)
-}
+// CommandInserter shape moved to bootstrap as a closure type in
+// phase 4 (consumed by endpoint/internal/service via the call site
+// `s.commands(ctx, hostID, ct, payload)`). Kept the documentation
+// here so future readers see the rationale: cmd/main passes
+// responseCtx.Service().Insert as a method value, which matches the
+// closure shape; previously a one-method interface, now a func type
+// with the same signature so endpoint and rules can share the
+// pattern without endpoint importing response/api.

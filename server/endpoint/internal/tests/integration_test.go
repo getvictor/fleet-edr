@@ -53,8 +53,11 @@ func (f *fakePolicyProvider) ActiveCommandPayload(context.Context) (json.RawMess
 	return f.payload, f.version, f.hasContent, f.err
 }
 
-// recordingCommandInserter captures every fan-out InsertCommand call so
-// the test can assert on the host_id targeting.
+// recordingCommandInserter captures every fan-out call so the test
+// can assert on the host_id targeting. Phase 4 dropped the
+// api.CommandInserter interface in favour of a closure type
+// (endpoint/bootstrap.CommandInserter); the recorder exposes an
+// `Insert` method whose method-value satisfies that closure shape.
 type recordingCommandInserter struct {
 	mu     sync.Mutex
 	calls  []recordedCommand
@@ -67,11 +70,11 @@ type recordedCommand struct {
 	Payload     json.RawMessage
 }
 
-func (r *recordingCommandInserter) InsertCommand(_ context.Context, hostID, commandType string, payload json.RawMessage) (int64, error) {
+func (r *recordingCommandInserter) Insert(_ context.Context, hostID, commandType string, payload []byte) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nextID++
-	r.calls = append(r.calls, recordedCommand{HostID: hostID, CommandType: commandType, Payload: payload})
+	r.calls = append(r.calls, recordedCommand{HostID: hostID, CommandType: commandType, Payload: append(json.RawMessage(nil), payload...)})
 	return r.nextID, nil
 }
 
@@ -388,7 +391,7 @@ func TestEnroll_PolicyFanoutOnFirstEnroll(t *testing.T) {
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
 		PolicyProvider:      policy,
-		CommandInserter:     commands,
+		CommandInserter:     commands.Insert,
 	})
 	require.NoError(t, err)
 	require.NoError(t, ep.ApplySchema(t.Context()))
@@ -433,7 +436,7 @@ func TestEnroll_NoFanoutWhenPolicyEmpty(t *testing.T) {
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
 		PolicyProvider:      policy,
-		CommandInserter:     commands,
+		CommandInserter:     commands.Insert,
 	})
 	require.NoError(t, err)
 	require.NoError(t, ep.ApplySchema(t.Context()))

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/attrkeys"
-	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/graph"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/store"
@@ -49,7 +48,11 @@ func New(q *graph.Query, s *store.Store, logger *slog.Logger) *Handler {
 	return &Handler{query: q, store: s, logger: logger}
 }
 
-// RegisterRoutes registers the API routes on the given mux.
+// RegisterRoutes registers the API routes on the given mux. Phase 4
+// of the modular-monolith migration moved /api/commands and
+// /api/commands/{id} into the response bounded context (see
+// server/response/bootstrap); cmd/main now mounts those routes via
+// responseCtx.RegisterAgentRoutes / RegisterAuthedRoutes.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hosts", h.handleListHosts)
 	mux.HandleFunc("GET /api/hosts/{host_id}/tree", h.handleProcessTree)
@@ -58,11 +61,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/alerts", h.handleListAlerts)
 	mux.HandleFunc("GET /api/alerts/{id}", h.handleGetAlert)
 	mux.HandleFunc("PUT /api/alerts/{id}", h.handleUpdateAlertStatus)
-
-	mux.HandleFunc("GET /api/commands", h.ListCommands)
-	mux.HandleFunc("GET /api/commands/{id}", h.handleGetCommand)
-	mux.HandleFunc("POST /api/commands", h.handleCreateCommand)
-	mux.HandleFunc("PUT /api/commands/{id}", h.UpdateCommandStatus)
 }
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
@@ -236,152 +234,6 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 			"edr.alert.status", body.Status,
 			attrkeys.UserID, userID,
 		)
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) handleGetCommand(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid command id", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	cmd, err := h.store.GetCommand(ctx, id)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "get command", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
-		return
-	}
-	if cmd == nil {
-		http.Error(w, msgNotFound, http.StatusNotFound)
-		return
-	}
-
-	h.writeJSON(w, r, cmd)
-}
-
-func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	// This handler is only wired under the host-token middleware (agents polling their own
-	// queue). The host_id is always the authenticated host's id — any query parameter is
-	// ignored so a valid token for host A cannot read commands queued for host B. Admin UI
-	// command listing (Phase 3) will live under a separate /api/hosts/{host_id}/commands
-	// path so the two auth domains cannot collide on a single mux pattern.
-	hostID, ok := endpointapi.HostIDFromContext(ctx)
-	if !ok {
-		http.Error(w, "host context missing", http.StatusUnauthorized)
-		return
-	}
-
-	// Phase 4 host liveness: the agent polls this endpoint every 5 s, so it doubles as
-	// the heartbeat. A failure here is non-fatal — the list still returns, the next
-	// poll re-tries the upsert. The UI treats hosts with last_seen_ns older than 5 min
-	// as "offline".
-	if err := h.store.UpdateHostLastSeen(ctx, hostID, time.Now()); err != nil {
-		h.logger.WarnContext(ctx, "update host last_seen", "err", err, attrkeys.HostID, hostID)
-	}
-
-	status := r.URL.Query().Get("status")
-
-	commands, err := h.store.ListCommands(ctx, hostID, status)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "list commands", "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
-		return
-	}
-	if commands == nil {
-		commands = []store.Command{}
-	}
-
-	h.writeJSON(w, r, commands)
-}
-
-func (h *Handler) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		HostID      string          `json:"host_id"`
-		CommandType string          `json:"command_type"`
-		Payload     json.RawMessage `json:"payload"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
-		return
-	}
-	if body.HostID == "" || body.CommandType == "" {
-		http.Error(w, "host_id and command_type required", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	id, err := h.store.InsertCommand(ctx, store.Command{
-		HostID:      body.HostID,
-		CommandType: body.CommandType,
-		Payload:     body.Payload,
-	})
-	if err != nil {
-		h.logger.ErrorContext(ctx, "create command", "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(map[string]int64{"id": id}); err != nil {
-		h.logger.ErrorContext(ctx, "writeJSON encode failed", "err", err)
-	}
-}
-
-func (h *Handler) UpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid command id", http.StatusBadRequest)
-		return
-	}
-
-	var body struct {
-		Status string          `json:"status"`
-		Result json.RawMessage `json:"result,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
-		return
-	}
-
-	switch body.Status {
-	case "acked", "completed", "failed":
-	default:
-		http.Error(w, "invalid status: must be acked, completed, or failed", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	// Like ListCommands, this handler is host-token-only. Enforce that the command belongs
-	// to the authenticated host so agent A cannot ack/complete/fail agent B's commands.
-	ctxHostID, ok := endpointapi.HostIDFromContext(ctx)
-	if !ok {
-		http.Error(w, "host context missing", http.StatusUnauthorized)
-		return
-	}
-	existing, getErr := h.store.GetCommand(ctx, id)
-	if getErr != nil {
-		h.logger.ErrorContext(ctx, "update command lookup", "id", id, "err", getErr)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
-		return
-	}
-	if existing == nil || existing.HostID != ctxHostID {
-		http.Error(w, msgNotFound, http.StatusNotFound)
-		return
-	}
-	if err := h.store.UpdateCommandStatus(ctx, id, body.Status, body.Result); err != nil {
-		if errors.Is(err, errNotFound) {
-			http.Error(w, msgNotFound, http.StatusNotFound)
-			return
-		}
-		h.logger.ErrorContext(ctx, "update command status", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
-		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
