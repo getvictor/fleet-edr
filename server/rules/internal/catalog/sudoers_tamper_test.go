@@ -2,14 +2,13 @@ package catalog
 
 import (
 	"encoding/json"
-	"github.com/fleetdm/edr/server/rules/api"
-
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/detection/testharness"
+	"github.com/fleetdm/edr/server/rules/api"
 )
 
 // TestSudoersTamper_Fixtures runs every fixture case under

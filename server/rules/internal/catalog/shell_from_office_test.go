@@ -2,11 +2,12 @@ package catalog
 
 import (
 	"encoding/json"
-	"github.com/fleetdm/edr/server/rules/api"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/rules/api"
 )
 
 func TestShellFromOffice_TableDriven(t *testing.T) {
