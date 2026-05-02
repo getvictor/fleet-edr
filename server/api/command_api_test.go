@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/authn"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/graph"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -75,7 +75,7 @@ func TestListCommandsAPI(t *testing.T) {
 	require.NoError(t, err)
 
 	withHostA := func(req *http.Request) *http.Request {
-		return req.WithContext(authn.WithHostIDForTest(req.Context(), "host-a"))
+		return req.WithContext(endpointapi.WithHostIDForTest(req.Context(), "host-a"))
 	}
 
 	t.Run("host-scoped listing", func(t *testing.T) {
@@ -116,7 +116,7 @@ func TestUpdateCommandStatusAPI(t *testing.T) {
 	require.NoError(t, err)
 
 	withHostA := func(req *http.Request) *http.Request {
-		return req.WithContext(authn.WithHostIDForTest(req.Context(), "host-a"))
+		return req.WithContext(endpointapi.WithHostIDForTest(req.Context(), "host-a"))
 	}
 
 	t.Run("ack", func(t *testing.T) {
@@ -186,7 +186,7 @@ func TestHostScopedCommandAccess(t *testing.T) {
 	require.NoError(t, err)
 
 	withHostA := func(req *http.Request) *http.Request {
-		return req.WithContext(authn.WithHostIDForTest(req.Context(), hostA))
+		return req.WithContext(endpointapi.WithHostIDForTest(req.Context(), hostA))
 	}
 
 	t.Run("GET scoped to authenticated host", func(t *testing.T) {

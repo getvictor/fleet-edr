@@ -20,3 +20,19 @@ dependenciesRules:
         - "**.identity.**"
         - "**.attrkeys"
         - "**.store"  # for testhelper only; phase 5 removes the cross-context FK that forces this
+
+  # Phase 2: endpoint context internals may import only their own context,
+  # platform packages, and standard library / approved third-party. Other
+  # contexts that need enrollment / host-token verification go through
+  # endpoint/api.
+  #
+  # The endpoint context owns the enrollments table and the host-token
+  # verifier; admin's policy fan-out reaches it through endpointapi.Service,
+  # not by importing internal/mysql or internal/service directly.
+  - package: "**.endpoint.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.endpoint.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.store"  # for store.Event/Command/Host shared types and testhelper

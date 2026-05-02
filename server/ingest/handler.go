@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fleetdm/edr/server/authn"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/store"
 )
@@ -81,7 +81,7 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	// authn.HostToken must have run ahead of us. If the pinned host_id is missing the
 	// middleware wiring is broken — refuse rather than silently accept.
-	pinnedHostID, ok := authn.HostIDFromContext(ctx)
+	pinnedHostID, ok := endpointapi.HostIDFromContext(ctx)
 	if !ok {
 		h.logger.ErrorContext(ctx, "ingest handler reached without host_id on context; middleware misconfigured")
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")

@@ -1,7 +1,8 @@
-package admin
+package admin_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,105 +12,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/enrollment"
+	"github.com/fleetdm/edr/server/admin"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
+	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/store"
 )
 
-const testUUID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
+const (
+	testUUID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
+	// #nosec G101 -- test fixture: not a real credential.
+	testSecret = "admin-test-secret"
+)
 
-func newAdminServer(t *testing.T) (*httptest.Server, *enrollment.Store, *store.Store) {
+// newAdminServer wires the admin handler against a real test DB.
+// Phase 2 of the modular-monolith migration removed the enrollment
+// routes from admin (they live in server/endpoint/internal/operator/),
+// so this helper only exercises the policy + rules + attack-coverage
+// surfaces.
+func newAdminServer(t *testing.T) (*httptest.Server, *endpointbootstrap.Endpoint, *store.Store) {
 	t.Helper()
 	s := store.OpenTestStore(t)
-	es := enrollment.NewStore(s.DB())
+	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
+		DB:           s.DB(),
+		Logger:       slog.Default(),
+		EnrollSecret: testSecret,
+	})
+	require.NoError(t, err)
+	require.NoError(t, endpointCtx.ApplySchema(t.Context()))
+
 	ps := policy.New(s.DB())
+	h := admin.New(endpointCtx.Service(), ps, s, nil /* catalog */, slog.Default())
 
 	mux := http.NewServeMux()
-	h := New(es, ps, s, nil /* catalog not needed for existing tests */, slog.Default())
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, es, s
+	return srv, endpointCtx, s
 }
 
-func TestList_ReturnsEnrollmentRows(t *testing.T) {
-	srv, es, _ := newAdminServer(t)
-	_, err := es.Register(t.Context(), enrollment.RegisterRequest{
-		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
-	})
+// enrollHost issues a real enrollment row through the endpoint Service
+// so the policy fan-out tests have something to fan out to.
+func enrollHost(t *testing.T, ctx context.Context, ep *endpointbootstrap.Endpoint, hostID string) {
+	t.Helper()
+	_, err := ep.Service().Enroll(ctx, endpointapi.EnrollRequest{
+		EnrollSecret: testSecret,
+		HardwareUUID: hostID,
+		Hostname:     "h",
+		OSVersion:    "o",
+		AgentVersion: "v",
+	}, "127.0.0.1")
 	require.NoError(t, err)
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/enrollments", nil)
-	require.NoError(t, err)
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	var got []map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
-	require.Len(t, got, 1)
-	assert.Equal(t, testUUID, got[0]["host_id"])
-	assert.NotContains(t, got[0], "host_token")
-	assert.NotContains(t, got[0], "host_token_hash")
-}
-
-func TestRevoke_HappyPath(t *testing.T) {
-	srv, es, _ := newAdminServer(t)
-	reg, err := es.Register(t.Context(), enrollment.RegisterRequest{
-		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
-	})
-	require.NoError(t, err)
-
-	body, _ := json.Marshal(map[string]string{
-		"reason": "compromised",
-		"actor":  "jane@customer.com",
-	})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		srv.URL+"/api/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
-
-	// The previously-issued token no longer verifies.
-	_, err = es.Verify(t.Context(), reg.HostToken)
-	assert.ErrorIs(t, err, enrollment.ErrTokenMismatch)
-}
-
-func TestRevoke_NotFound(t *testing.T) {
-	srv, _, _ := newAdminServer(t)
-	body, _ := json.Marshal(map[string]string{"reason": "x", "actor": "y"})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		srv.URL+"/api/enrollments/AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA/revoke",
-		bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-}
-
-func TestRevoke_MissingBody(t *testing.T) {
-	srv, es, _ := newAdminServer(t)
-	_, err := es.Register(t.Context(), enrollment.RegisterRequest{
-		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
-	})
-	require.NoError(t, err)
-
-	body, _ := json.Marshal(map[string]string{"reason": ""})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		srv.URL+"/api/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestGetPolicy_SeedRow(t *testing.T) {
@@ -128,25 +81,23 @@ func TestGetPolicy_SeedRow(t *testing.T) {
 }
 
 func TestPutPolicy_HappyPath(t *testing.T) {
-	srv, es, s := newAdminServer(t)
+	srv, ep, s := newAdminServer(t)
+	ctx := t.Context()
 
 	// Enroll two hosts so there's something to fan out to.
 	for _, hostID := range []string{testUUID, "12345678-1234-1234-1234-123456789012"} {
-		_, err := es.Register(t.Context(), enrollment.RegisterRequest{
-			HostID: hostID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
-		})
-		require.NoError(t, err)
+		enrollHost(t, ctx, ep, hostID)
 	}
 
 	// Phase 2 requires hashes to be 64-char lowercase hex (SHA-256). Use a fake digest of
-	// the right shape — the server just persists + fans out, no SHA validation runs.
+	// the right shape -- the server just persists + fans out, no SHA validation runs.
 	body, _ := json.Marshal(map[string]any{
 		"paths":  []string{"/tmp/qa-block", "/opt/evil"},
 		"hashes": []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		"actor":  "qa-tester",
 		"reason": "phase-2 smoke",
 	})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -158,12 +109,13 @@ func TestPutPolicy_HappyPath(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	assert.EqualValues(t, 2, got["version"])
 
-	// Every active host now has exactly one pending set_blocklist command — the one this
-	// PUT fanned out. (Register was called directly, bypassing the enrollment Handler that
-	// would have queued its own initial command; the first-enroll path is covered in
-	// TestHandler_EnrollQueuesInitialPolicy in server/enrollment.)
+	// Every active host now has at least one set_blocklist command pending.
+	// Two paths queued the command: the post-enroll fan-out (when PolicyProvider
+	// is wired up here -- it isn't, so that goroutine is a no-op for this test)
+	// and the explicit PUT fan-out we just exercised. Without the PolicyProvider
+	// in this admin test, only the PUT fan-out runs, so we expect exactly 1.
 	for _, hostID := range []string{testUUID, "12345678-1234-1234-1234-123456789012"} {
-		cmds, err := s.ListCommands(t.Context(), hostID, "pending")
+		cmds, err := s.ListCommands(ctx, hostID, "pending")
 		require.NoError(t, err)
 		var setBlocklist int
 		for _, c := range cmds {
@@ -188,7 +140,7 @@ func TestPutPolicy_MissingActor(t *testing.T) {
 }
 
 func TestPutPolicy_EmptyBlocklistAccepted(t *testing.T) {
-	// "Clear everything" must be a first-class operation — no paths + no hashes is a valid
+	// "Clear everything" must be a first-class operation -- no paths + no hashes is a valid
 	// edit so operators have a fast panic-button.
 	srv, _, _ := newAdminServer(t)
 	body, _ := json.Marshal(map[string]any{"actor": "qa-tester", "reason": "clear"})
@@ -202,8 +154,7 @@ func TestPutPolicy_EmptyBlocklistAccepted(t *testing.T) {
 }
 
 // TestPutPolicy_InvalidBlocklistReturns400 locks in the Phase 2 validation surface: a
-// non-absolute path or a malformed hash gets a 400 with a stable error code, not the old
-// 500 that made it look like a server bug.
+// non-absolute path or a malformed hash gets a 400 with a stable error code.
 func TestPutPolicy_InvalidBlocklistReturns400(t *testing.T) {
 	srv, _, _ := newAdminServer(t)
 	body, _ := json.Marshal(map[string]any{
@@ -222,32 +173,4 @@ func TestPutPolicy_InvalidBlocklistReturns400(t *testing.T) {
 	var got map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	assert.Equal(t, "invalid_blocklist", got["error"])
-}
-
-func TestRevoke_IdempotentPreservesFirstActor(t *testing.T) {
-	srv, es, _ := newAdminServer(t)
-	_, err := es.Register(t.Context(), enrollment.RegisterRequest{
-		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
-	})
-	require.NoError(t, err)
-
-	revoke := func(actor, reason string) int {
-		body, _ := json.Marshal(map[string]string{"reason": reason, "actor": actor})
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-			srv.URL+"/api/enrollments/"+testUUID+"/revoke", bytes.NewReader(body))
-		require.NoError(t, err)
-		resp, err := srv.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		return resp.StatusCode
-	}
-	assert.Equal(t, http.StatusNoContent, revoke("first", "compromised"))
-	assert.Equal(t, http.StatusNoContent, revoke("second", "different"))
-
-	got, err := es.Get(t.Context(), testUUID)
-	require.NoError(t, err)
-	require.NotNil(t, got.RevokedBy)
-	assert.Equal(t, "first", *got.RevokedBy)
-	require.NotNil(t, got.RevokeReason)
-	assert.Equal(t, "compromised", *got.RevokeReason)
 }

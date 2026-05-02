@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/attrkeys"
-	"github.com/fleetdm/edr/server/authn"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/graph"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/store"
@@ -270,7 +270,7 @@ func (h *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	// ignored so a valid token for host A cannot read commands queued for host B. Admin UI
 	// command listing (Phase 3) will live under a separate /api/hosts/{host_id}/commands
 	// path so the two auth domains cannot collide on a single mux pattern.
-	hostID, ok := authn.HostIDFromContext(ctx)
+	hostID, ok := endpointapi.HostIDFromContext(ctx)
 	if !ok {
 		http.Error(w, "host context missing", http.StatusUnauthorized)
 		return
@@ -359,7 +359,7 @@ func (h *Handler) UpdateCommandStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Like ListCommands, this handler is host-token-only. Enforce that the command belongs
 	// to the authenticated host so agent A cannot ack/complete/fail agent B's commands.
-	ctxHostID, ok := authn.HostIDFromContext(ctx)
+	ctxHostID, ok := endpointapi.HostIDFromContext(ctx)
 	if !ok {
 		http.Error(w, "host context missing", http.StatusUnauthorized)
 		return

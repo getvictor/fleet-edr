@@ -1,7 +1,9 @@
-// Package enrollment owns per-host enrollment: token generation, argon2id hashing, and the
-// CRUD that backs the `enrollments` table. The wire handler lives in handler.go; this file
-// focuses on the cryptographic and storage primitives.
-package enrollment
+// This file holds the cryptographic primitives that back agent
+// host-token authentication: token generation, argon2id hashing,
+// constant-time verification, and the SHA-256 token-id lookup key.
+// See doc.go for the package contract.
+
+package mysql
 
 import (
 	"crypto/rand"
