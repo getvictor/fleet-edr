@@ -57,29 +57,39 @@ func (l *IPLimiter) Allow(ip string) bool {
 		return b.limiter.Allow()
 	}
 	if len(l.buckets) >= IPLimiterMaxBuckets {
-		// Sweep idle buckets first (cheap, common case).
-		for k, b := range l.buckets {
-			if now.Sub(b.lastSeen) > IPLimiterIdleTTL {
-				delete(l.buckets, k)
-			}
-		}
-		// If still at capacity, evict the least-recently-seen bucket so
-		// the map size cap is honoured even when every entry is "live".
+		l.evictIdleLocked(now)
 		if len(l.buckets) >= IPLimiterMaxBuckets {
-			var oldestIP string
-			var oldestSeen time.Time
-			for k, b := range l.buckets {
-				if oldestIP == "" || b.lastSeen.Before(oldestSeen) {
-					oldestIP = k
-					oldestSeen = b.lastSeen
-				}
-			}
-			delete(l.buckets, oldestIP)
+			l.evictOldestLocked()
 		}
 	}
 	b := &ipBucket{limiter: rate.NewLimiter(l.limit, l.burst), lastSeen: now}
 	l.buckets[ip] = b
 	return b.limiter.Allow()
+}
+
+// evictIdleLocked drops buckets that haven't been seen in IPLimiterIdleTTL.
+// Caller must hold l.mu.
+func (l *IPLimiter) evictIdleLocked(now time.Time) {
+	for k, b := range l.buckets {
+		if now.Sub(b.lastSeen) > IPLimiterIdleTTL {
+			delete(l.buckets, k)
+		}
+	}
+}
+
+// evictOldestLocked removes the least-recently-seen bucket so the map
+// size cap is honoured even when every entry is "live". Caller must
+// hold l.mu.
+func (l *IPLimiter) evictOldestLocked() {
+	var oldestIP string
+	var oldestSeen time.Time
+	for k, b := range l.buckets {
+		if oldestIP == "" || b.lastSeen.Before(oldestSeen) {
+			oldestIP = k
+			oldestSeen = b.lastSeen
+		}
+	}
+	delete(l.buckets, oldestIP)
 }
 
 // RemoteIP returns the client IP from r.RemoteAddr, stripping the port.

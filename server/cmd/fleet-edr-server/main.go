@@ -110,18 +110,8 @@ func run() error {
 	// before store.New because store.applySchema includes the
 	// fk_alerts_updated_by FK that references users(id). Phase 5 drops that
 	// FK and the call ordering will no longer matter.
-	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{
-		DB:              db,
-		Logger:          logger,
-		LoginRatePerMin: cfg.LoginRatePerMin,
-		CookieSecure:    cfg.TLSEnabled(),
-	})
+	identityCtx, err := openIdentity(ctx, logger, db, cfg)
 	if err != nil {
-		logger.ErrorContext(ctx, "open identity", "err", err)
-		return err
-	}
-	if err := identityCtx.ApplySchema(ctx); err != nil {
-		logger.ErrorContext(ctx, "identity schema", "err", err)
 		return err
 	}
 
@@ -146,19 +136,8 @@ func run() error {
 	// wraps store.UpdateHostLastSeen so the /api/commands poll's
 	// last-seen-ns side effect survives the move; phase 5 swaps the
 	// closure to detectionCtx.RecordHostSeen.
-	responseCtx, err := responsebootstrap.New(responsebootstrap.Deps{
-		DB:     db,
-		Logger: logger,
-		Heartbeat: func(ctx context.Context, hostID string, at time.Time) error {
-			return s.UpdateHostLastSeen(ctx, hostID, at)
-		},
-	})
+	responseCtx, err := openResponse(ctx, logger, db, s)
 	if err != nil {
-		logger.ErrorContext(ctx, "open response", "err", err)
-		return err
-	}
-	if err := responseCtx.ApplySchema(ctx); err != nil {
-		logger.ErrorContext(ctx, "response schema", "err", err)
 		return err
 	}
 
@@ -169,35 +148,20 @@ func run() error {
 	// before serving requests, so a fan-out call before that point
 	// is impossible.
 	var endpointCtx *endpointbootstrap.Endpoint
-	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:     db,
-		Logger: logger,
-		RegistryOptions: rulesapi.RegistryOptions{
-			SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
-			LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
-			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
-			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
-		},
-		ActiveHostsLister: func(ctx context.Context) ([]string, error) {
-			// Defensive nil check: cmd/main always assigns endpointCtx
-			// before serving requests, so this branch is unreachable in
-			// production. A future refactor could break the ordering;
-			// returning an error keeps the server up and surfaces a
-			// recognisable signal in the operator's audit log instead
-			// of crashing the process.
-			if endpointCtx == nil {
-				return nil, errors.New("rules fanout: endpoint context not yet initialised")
-			}
-			return endpointCtx.Service().ActiveHostIDs(ctx)
-		},
-		CommandInserter: responseCtx.Service().Insert,
-	})
-	if err != nil {
-		logger.ErrorContext(ctx, "open rules", "err", err)
-		return err
+	activeHostsLister := func(ctx context.Context) ([]string, error) {
+		// Defensive nil check: cmd/main always assigns endpointCtx
+		// before serving requests, so this branch is unreachable in
+		// production. A future refactor could break the ordering;
+		// returning an error keeps the server up and surfaces a
+		// recognisable signal in the operator's audit log instead
+		// of crashing the process.
+		if endpointCtx == nil {
+			return nil, errors.New("rules fanout: endpoint context not yet initialised")
+		}
+		return endpointCtx.Service().ActiveHostIDs(ctx)
 	}
-	if err := rulesCtx.ApplySchema(ctx); err != nil {
-		logger.ErrorContext(ctx, "rules schema", "err", err)
+	rulesCtx, err := openRules(ctx, logger, db, cfg, activeHostsLister, responseCtx.Service().Insert)
+	if err != nil {
 		return err
 	}
 	det.LoadActive(rulesCtx.ContentService())
@@ -219,13 +183,7 @@ func run() error {
 	ingestHandler.SetMetrics(metricsRec)
 	det.SetMetrics(metricsRec)
 
-	// Seed the first admin before we bind the HTTP listener. ErrAlreadySeeded
-	// is the success-but-noop case (table already populated). Any other error
-	// is logged but non-fatal -- the operator can still run migrations by hand.
-	if _, _, err := identityCtx.Service().SeedAdmin(ctx, os.Stderr); err != nil &&
-		!errors.Is(err, identityapi.ErrAlreadySeeded) {
-		logger.ErrorContext(ctx, "admin seed failed", "err", err)
-	}
+	seedAdmin(ctx, logger, identityCtx)
 
 	mux := buildMux(muxDeps{
 		ingestHandler: ingestHandler,
@@ -255,25 +213,132 @@ func run() error {
 		Metrics:  metricsRec,
 	})
 	go processTTLRunner.Loop(ctx)
-	go func() {
-		if err := identityCtx.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.ErrorContext(ctx, "identity run", "err", err)
-		}
-	}()
+	go runIdentity(ctx, identityCtx, logger)
 	go runProcessor(ctx, proc, logger)
 
 	srv := newHTTPServer(cfg, mux, logger)
-	if cfg.TLSEnabled() {
-		if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
-			CertFile:   cfg.TLSCertFile,
-			KeyFile:    cfg.TLSKeyFile,
-			AllowTLS12: cfg.AllowTLS12,
-			Logger:     logger,
-		}); err != nil {
-			return err
-		}
+	if err := configureTLSIfEnabled(ctx, logger, srv, cfg); err != nil {
+		return err
 	}
 	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
+}
+
+// seedAdmin runs the first-admin seed before the HTTP listener binds.
+// ErrAlreadySeeded is the success-but-noop case (table already
+// populated). Any other error is logged but non-fatal -- the operator
+// can still run migrations by hand. Extracted from run() to keep that
+// function under the cognitive-complexity gate.
+func seedAdmin(ctx context.Context, logger *slog.Logger, identityCtx *identitybootstrap.Identity) {
+	if _, _, err := identityCtx.Service().SeedAdmin(ctx, os.Stderr); err != nil &&
+		!errors.Is(err, identityapi.ErrAlreadySeeded) {
+		logger.ErrorContext(ctx, "admin seed failed", "err", err)
+	}
+}
+
+// configureTLSIfEnabled wires the TLS material onto srv when TLS is on,
+// otherwise it is a no-op. Extracted from run() to keep that function
+// under the cognitive-complexity gate.
+func configureTLSIfEnabled(ctx context.Context, logger *slog.Logger, srv *http.Server, cfg *config.Config) error {
+	if !cfg.TLSEnabled() {
+		return nil
+	}
+	return httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
+		CertFile:   cfg.TLSCertFile,
+		KeyFile:    cfg.TLSKeyFile,
+		AllowTLS12: cfg.AllowTLS12,
+		Logger:     logger,
+	})
+}
+
+// openIdentity wires the identity bounded context and applies its
+// schema. Extracted from run() to keep that function under the
+// cognitive-complexity gate.
+func openIdentity(
+	ctx context.Context,
+	logger *slog.Logger,
+	db *sqlx.DB,
+	cfg *config.Config,
+) (*identitybootstrap.Identity, error) {
+	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{
+		DB:              db,
+		Logger:          logger,
+		LoginRatePerMin: cfg.LoginRatePerMin,
+		CookieSecure:    cfg.TLSEnabled(),
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open identity", "err", err)
+		return nil, err
+	}
+	if err := identityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "identity schema", "err", err)
+		return nil, err
+	}
+	return identityCtx, nil
+}
+
+// openResponse wires the response bounded context (agent command queue)
+// and applies its schema. The Heartbeat closure wraps
+// store.UpdateHostLastSeen so the /api/commands poll's last-seen-ns
+// side effect survives the move; phase 5 swaps the closure to
+// detectionCtx.RecordHostSeen.
+func openResponse(
+	ctx context.Context,
+	logger *slog.Logger,
+	db *sqlx.DB,
+	s *store.Store,
+) (*responsebootstrap.Response, error) {
+	responseCtx, err := responsebootstrap.New(responsebootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		Heartbeat: func(ctx context.Context, hostID string, at time.Time) error {
+			return s.UpdateHostLastSeen(ctx, hostID, at)
+		},
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open response", "err", err)
+		return nil, err
+	}
+	if err := responseCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "response schema", "err", err)
+		return nil, err
+	}
+	return responseCtx, nil
+}
+
+// openRules wires the rules bounded context (blocklist policy + rule
+// catalog) and applies its schema. activeHostsLister and cmdInserter
+// are passed in as closures so cmd/main owns the cross-context late
+// binding (endpoint not yet constructed) without leaking it into the
+// helper.
+func openRules(
+	ctx context.Context,
+	logger *slog.Logger,
+	db *sqlx.DB,
+	cfg *config.Config,
+	activeHostsLister rulesbootstrap.ActiveHostsLister,
+	cmdInserter rulesbootstrap.CommandInserter,
+) (*rulesbootstrap.Rules, error) {
+	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		RegistryOptions: rulesapi.RegistryOptions{
+			SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
+			LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
+			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
+			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
+		},
+		ActiveHostsLister: activeHostsLister,
+		CommandInserter:   cmdInserter,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open rules", "err", err)
+		return nil, err
+	}
+	if err := rulesCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "rules schema", "err", err)
+		return nil, err
+	}
+	return rulesCtx, nil
 }
 
 // openEndpoint wires the endpoint bounded context (host enrollment +
@@ -315,6 +380,16 @@ func openEndpoint(
 func runProcessor(ctx context.Context, proc *processor.Processor, logger *slog.Logger) {
 	if err := proc.Run(ctx); err != nil && ctx.Err() == nil {
 		logger.ErrorContext(ctx, "processor", "err", err)
+	}
+}
+
+// runIdentity owns the background identity-context Run goroutine
+// (session sweeps, etc.) and logs any non-shutdown-induced exit as an
+// error so SigNoz alerts fire if the goroutine dies while the server
+// is otherwise healthy.
+func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, logger *slog.Logger) {
+	if err := identityCtx.Run(ctx); err != nil && ctx.Err() == nil {
+		logger.ErrorContext(ctx, "identity run", "err", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 // Package bootstrap wires the rules bounded context. cmd/* binaries call
 // rulesbootstrap.New(deps) once at startup, then ApplySchema, then
 // RegisterAuthedRoutes. The returned *Rules handle exposes
-// PolicyService, ContentService, and Catalog for cross-context callers.
+// PolicyService, RuleProvider, and Lister for cross-context callers.
 //
 // ActiveHostsLister and CommandInserter are closure types so cmd/main
 // can supply late-bound implementations without rules taking a hard
