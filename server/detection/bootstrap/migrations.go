@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -117,10 +118,5 @@ func (m migrationStep) shouldIgnore(err error) bool {
 	if !errors.As(err, &mysqlErr) {
 		return false
 	}
-	for _, code := range m.IgnoreErrors {
-		if mysqlErr.Number == code {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.IgnoreErrors, mysqlErr.Number)
 }

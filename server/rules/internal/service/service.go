@@ -27,7 +27,7 @@ type ActiveHostsLister func(ctx context.Context) ([]string, error)
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
 // Service is the rules orchestrator. A single struct satisfies all
-// three public api interfaces (PolicyService, Catalog, ContentService).
+// three public api interfaces (PolicyService, Lister, RuleProvider).
 type Service struct {
 	policy *policy.Store
 	rules  []api.Rule
@@ -111,7 +111,7 @@ func (s *Service) ActiveCommandPayload(ctx context.Context) (json.RawMessage, in
 	return payload, p.Version, true, nil
 }
 
-// --- api.Catalog + api.ContentService -----------------------------------------
+// --- api.Lister + api.RuleProvider --------------------------------------------
 
 // List returns RuleMetadata in registration order. Used by the
 // operator endpoints (/api/rules, /api/attack-coverage) and the docs

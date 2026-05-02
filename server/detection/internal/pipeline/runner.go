@@ -44,25 +44,19 @@ func NewRunner(opts RunnerOptions) *Runner {
 func (r *Runner) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	if r.processor != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = r.processor.Run(ctx)
-		}()
+		})
 	}
 	if r.processTTL != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			r.processTTL.Loop(ctx)
-		}()
+		})
 	}
 	if r.retention != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			r.retention.Loop(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 	return nil

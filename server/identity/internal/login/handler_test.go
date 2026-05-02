@@ -239,5 +239,5 @@ func TestLogin_RedactsPasswordInErrorLogs(t *testing.T) {
 	req := loginRequest{Email: "a@b.com", Password: "hunter2"}
 	s := req.String()
 	assert.NotContains(t, s, "hunter2")
-	assert.Contains(t, s, "REDACTED")
+	assert.Contains(t, s, "[redacted]")
 }

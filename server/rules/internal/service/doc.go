@@ -1,7 +1,7 @@
 // Package service is the rules orchestrator: a single struct that
 // composes the policy store + the rule catalog + the cross-context
 // closures for ActiveHostsLister and CommandInserter into the three
-// public interfaces (PolicyService, Catalog, ContentService).
+// public interfaces (PolicyService, Lister, RuleProvider).
 //
 // Policy fan-out (the per-host set_blocklist queue write that follows
 // every PUT /api/policy) lives in service.go alongside the
