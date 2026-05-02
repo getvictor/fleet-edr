@@ -20,8 +20,8 @@ import (
 type Service interface {
 	// Operator reads.
 	ListHosts(ctx context.Context) ([]HostSummary, error)
-	BuildTree(ctx context.Context, hostID string, tr TimeRange, depth, limit int) (ProcessNode, error)
-	GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error)
+	BuildTree(ctx context.Context, hostID string, tr TimeRange, limit int) ([]ProcessNode, error)
+	GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*ProcessDetail, error)
 	ListAlerts(ctx context.Context, filter AlertFilter) ([]Alert, error)
 	GetAlert(ctx context.Context, id int64) (Alert, []string, error) // alert + correlated event IDs
 	UpdateAlertStatus(ctx context.Context, id int64, status AlertStatus, userID int64) (Alert, error)

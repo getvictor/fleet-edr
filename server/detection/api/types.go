@@ -236,10 +236,26 @@ type AlertFilter struct {
 }
 
 // ProcessNode is the tree shape the UI's process-tree view renders.
-// Children are populated breadth-first up to the configured depth.
+// Wire shape preserved from server/graph.ProcessNode.
 type ProcessNode struct {
 	Process
-	Children []ProcessNode `json:"children,omitempty"`
+	Children           []ProcessNode `json:"children,omitempty"`
+	NetworkConnections []Event       `json:"network_connections,omitempty"`
+	DNSQueries         []Event       `json:"dns_queries,omitempty"`
+}
+
+// ProcessDetail is the wire shape of GET /api/hosts/{id}/processes/{pid}.
+// Mirrors server/graph.ProcessDetail.
+type ProcessDetail struct {
+	Process            Process `json:"process"`
+	NetworkConnections []Event `json:"network_connections"`
+	DNSQueries         []Event `json:"dns_queries"`
+	// ReExecChain is the list of prior exec generations on the same
+	// PID (issue #10), oldest-first. Empty for processes that only
+	// exec'd once after fork. The UI renders this as a visual chain
+	// (python -> sh -> bash -> current) so analysts see the full
+	// exec sequence instead of just the final path.
+	ReExecChain []Process `json:"re_exec_chain,omitempty"`
 }
 
 // Errors returned across the api boundary. Callers compare with
