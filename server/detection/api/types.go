@@ -224,14 +224,15 @@ type TimeRange struct {
 }
 
 // AlertFilter is the optional scope an operator passes to ListAlerts.
+// Mirrors the existing GET /api/alerts query params so the wire
+// shape is preserved; Since / Until / Offset are deferred follow-ups
+// (filed alongside the time-range and pagination work).
 type AlertFilter struct {
-	HostID   string
-	Status   AlertStatus
-	Severity string
-	Since    time.Time
-	Until    time.Time
-	Limit    int
-	Offset   int
+	HostID    string
+	Status    AlertStatus
+	Severity  string
+	ProcessID int64
+	Limit     int
 }
 
 // ProcessNode is the tree shape the UI's process-tree view renders.

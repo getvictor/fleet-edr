@@ -113,6 +113,10 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 		query += " AND severity = ?"
 		args = append(args, f.Severity)
 	}
+	if f.ProcessID != 0 {
+		query += " AND process_id = ?"
+		args = append(args, f.ProcessID)
+	}
 
 	query += " ORDER BY created_at DESC LIMIT ?"
 	args = append(args, limit)
@@ -156,9 +160,15 @@ func (s *Store) GetAlertEventIDs(ctx context.Context, alertID int64) ([]string, 
 // userID is written to alerts.updated_by; pass 0 to leave it
 // untouched (e.g. an internal backfill).
 //
-// Returns api.ErrAlertNotFound when the row doesn't exist. The
-// updated_by user is NOT validated here; the operator service
-// validates via the UserExists closure before calling.
+// Returns api.ErrAlertNotFound when the row doesn't exist.
+//
+// This persistence-level method does NOT enforce the
+// AlertStatusOpen -> AlertStatusAcknowledged -> AlertStatusResolved
+// lifecycle: any non-zero status string is written. The operator
+// service (commit 10) layers transition validation on top and is
+// where api.ErrInvalidAlertTransition is produced. The updated_by
+// user is also NOT validated here; the service uses the UserExists
+// closure to enforce that before calling.
 func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, userID int64) error {
 	var exists int64
 	if err := s.db.GetContext(ctx, &exists, "SELECT id FROM alerts WHERE id = ?", id); err != nil {
@@ -193,7 +203,8 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 }
 
 // CountAlerts returns the total number of alerts matching the
-// filter (ignoring limit / offset).
+// filter (ignoring limit). Filter set MUST stay in lockstep with
+// ListAlerts so pagination metadata describes the same result set.
 func (s *Store) CountAlerts(ctx context.Context, f api.AlertFilter) (int64, error) {
 	query := "SELECT COUNT(*) FROM alerts WHERE 1=1"
 	var args []any
@@ -209,6 +220,10 @@ func (s *Store) CountAlerts(ctx context.Context, f api.AlertFilter) (int64, erro
 	if f.Severity != "" {
 		query += " AND severity = ?"
 		args = append(args, f.Severity)
+	}
+	if f.ProcessID != 0 {
+		query += " AND process_id = ?"
+		args = append(args, f.ProcessID)
 	}
 
 	var count int64
