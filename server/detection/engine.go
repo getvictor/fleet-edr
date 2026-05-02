@@ -39,18 +39,25 @@ func (e *Engine) Register(r Rule) {
 	e.rules = append(e.rules, r)
 }
 
-// RuleMetadata describes a registered rule for callers outside the engine
-// (e.g. the Navigator-export handler in server/admin). Carries the structured
-// Documentation so the admin /rules endpoint and the markdown generator both
-// see the same data without each having to reach back into the rule slice.
-type RuleMetadata struct {
-	ID         string
-	Techniques []string
-	Doc        Documentation
+// LoadActive registers every rule the rules ContentService reports as
+// active. Phase 3 introduces this as the canonical production-side
+// registration call (replaces the rules.All loop in cmd/main); the
+// underlying Register stays so existing detection tests that build
+// engines with hand-rolled rules keep working without constructing a
+// ContentService.
+func (e *Engine) LoadActive(cs interface{ ActiveRules() []Rule }) {
+	for _, r := range cs.ActiveRules() {
+		e.Register(r)
+	}
 }
 
 // Catalog returns the metadata for every registered rule. Order matches
 // registration order so callers can render deterministic output.
+//
+// Phase 3 of the modular-monolith migration moved the catalog/rule-list
+// endpoint out of admin into rules. Production main.go now goes through
+// rules.api.Catalog instead of this method, but the method stays so
+// existing engine tests keep compiling.
 func (e *Engine) Catalog() []RuleMetadata {
 	out := make([]RuleMetadata, 0, len(e.rules))
 	for _, r := range e.rules {

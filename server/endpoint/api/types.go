@@ -88,7 +88,7 @@ var (
 // keeps endpoint from ever importing the policy / rules packages: the
 // shim does the empty-check and the marshalling.
 type PolicyProvider interface {
-	// GetActiveCommandPayload returns:
+	// ActiveCommandPayload returns:
 	//   - payload: pre-marshaled set_blocklist command body for the
 	//     current default policy, OR nil if the blocklist is empty.
 	//   - version: policy version for audit logs.
@@ -96,7 +96,11 @@ type PolicyProvider interface {
 	//     hashes; the enroll handler skips the fan-out in that case
 	//     because pushing an empty blocklist accomplishes nothing.
 	//   - err: provider failures (DB unavailable, marshal error, etc.)
-	GetActiveCommandPayload(ctx context.Context) (payload json.RawMessage, version int64, hasContent bool, err error)
+	//
+	// Renamed from GetActiveCommandPayload in phase 3 so
+	// rules/api.PolicyService satisfies this interface structurally
+	// without rules taking a hard dependency on endpoint/api.
+	ActiveCommandPayload(ctx context.Context) (payload json.RawMessage, version int64, hasContent bool, err error)
 }
 
 // CommandInserter is the narrow write interface endpoint's enroll handler

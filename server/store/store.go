@@ -102,27 +102,11 @@ var schemaStatements = []string{
 	)`,
 	// enrollments DDL is owned by the endpoint bounded context (see
 	// server/endpoint/bootstrap/schema.go) and applied via
-	// endpointCtx.ApplySchema during startup. No FK referencing or
-	// referenced; the call order between store.New (which runs the list
-	// below) and endpointCtx.ApplySchema is not load-bearing for the
-	// enrollments table itself.
-	// policies holds the Phase 2 server-driven blocklist. For MVP we keep a single "default"
-	// row — `name` is a UNIQUE key now so v1.1 can add per-team targeting without a schema
-	// migration. `version` is a monotonically-increasing integer bumped on every admin PUT;
-	// agents cache the last-applied version and skip no-op updates.
-	`CREATE TABLE IF NOT EXISTS policies (
-		id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-		name        VARCHAR(64)  NOT NULL,
-		version     BIGINT       NOT NULL DEFAULT 1,
-		blocklist   JSON         NOT NULL,
-		updated_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		updated_by  VARCHAR(255) NOT NULL DEFAULT 'system',
-		UNIQUE KEY uk_policies_name (name)
-	)`,
-	// Seed the default policy row. Using INSERT IGNORE so restarts don't clobber an edited
-	// row. The initial blocklist is empty — operators opt in to blocking via PUT.
-	`INSERT IGNORE INTO policies (name, version, blocklist, updated_by)
-	 VALUES ('default', 1, JSON_OBJECT('paths', JSON_ARRAY(), 'hashes', JSON_ARRAY()), 'system')`,
+	// endpointCtx.ApplySchema during startup. policies DDL is owned by
+	// the rules bounded context (see server/rules/bootstrap/schema.go)
+	// and applied via rulesCtx.ApplySchema. No FKs referencing or
+	// referenced; ordering between store.New and the bounded-context
+	// ApplySchema calls is not load-bearing for either table.
 	// users + sessions DDL is owned by the identity bounded context (see
 	// server/identity/bootstrap/schema.go). cmd/main calls
 	// identityCtx.ApplySchema before this list runs so the cross-context

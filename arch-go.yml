@@ -36,4 +36,27 @@ dependenciesRules:
         - "**.endpoint.**"
         - "**.attrkeys"
         - "**.httpserver"
+        - "**.rules.api"  # phase 3: rules.api.PolicyService satisfies endpoint's PolicyProvider
         - "**.store"  # for store.Event/Command/Host shared types and testhelper
+
+  # Phase 3: rules context internals may import only their own context,
+  # platform packages, the standard library / approved third-party,
+  # endpoint/api (for the ActiveHostsLister adapter usage), and the
+  # transitional server/store + server/detection imports that go away
+  # in phase 5. Other contexts that need rule content / policy go
+  # through rules/api.
+  #
+  # The rules context owns the policies table + the eight detection
+  # rules + the ATT&CK + rule-list operator surface. Phase 5 will
+  # move detection to a context too; at that point rules/api's Event
+  # / GraphReader / Finding aliases redirect from server/store to
+  # detection/api, and **.store + **.detection drop off this list.
+  - package: "**.rules.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.rules.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.endpoint.api"  # ActiveHostsLister uses endpoint.Service for hostID lookup at runtime
+        - "**.detection"     # transitional: rule files reference detection.Severity* and the Finding alias; phase 5 moves to detection/api
+        - "**.store"         # transitional: *store.Store satisfies api.GraphReader; phase 5 moves to detection/api

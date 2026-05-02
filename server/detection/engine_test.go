@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/store"
 )
 
@@ -24,7 +25,7 @@ func (r *stubRule) Techniques() []string { return nil }
 func (r *stubRule) Doc() Documentation {
 	return Documentation{Title: r.id, Severity: SeverityHigh}
 }
-func (r *stubRule) Evaluate(_ context.Context, _ []store.Event, _ *store.Store) ([]Finding, error) {
+func (r *stubRule) Evaluate(_ context.Context, _ []store.Event, _ api.GraphReader) ([]Finding, error) {
 	return r.findings, r.err
 }
 
@@ -43,7 +44,7 @@ func (r *recordingRule) Techniques() []string { return []string{} }
 func (r *recordingRule) Doc() Documentation {
 	return Documentation{Title: r.id, Severity: SeverityHigh}
 }
-func (r *recordingRule) Evaluate(_ context.Context, events []store.Event, _ *store.Store) ([]Finding, error) {
+func (r *recordingRule) Evaluate(_ context.Context, events []store.Event, _ api.GraphReader) ([]Finding, error) {
 	r.seen = append(r.seen, events...)
 	return nil, nil
 }
