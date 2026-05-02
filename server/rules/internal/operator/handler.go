@@ -177,9 +177,9 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		Techniques []string          `json:"techniques"`
 		Doc        api.Documentation `json:"doc"`
 	}
-	catalog := h.svc.List()
-	out := make([]ruleResponse, 0, len(catalog))
-	for _, rm := range catalog {
+	rules := h.svc.List()
+	out := make([]ruleResponse, 0, len(rules))
+	for _, rm := range rules {
 		out = append(out, ruleResponse{
 			ID:         rm.ID,
 			Techniques: rm.Techniques,
@@ -197,11 +197,11 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 // list of covering rule IDs is in the technique's `comment`.
 func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	catalog := h.svc.List()
+	rules := h.svc.List()
 
 	// technique -> rule IDs that cover it.
 	coverage := make(map[string][]string)
-	for _, rule := range catalog {
+	for _, rule := range rules {
 		for _, t := range rule.Techniques {
 			coverage[t] = append(coverage[t], rule.ID)
 		}

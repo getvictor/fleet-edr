@@ -140,7 +140,8 @@ func TestHandleCreate(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, resp.StatusCode)
 			if tc.wantBody != "" {
-				body, _ := io.ReadAll(resp.Body)
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
 				assert.Contains(t, string(body), tc.wantBody)
 			}
 			if tc.wantStatus == http.StatusCreated {
@@ -228,7 +229,8 @@ func TestHandleGet(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, resp.StatusCode)
 			if tc.wantBody != "" {
-				body, _ := io.ReadAll(resp.Body)
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
 				assert.Contains(t, string(body), tc.wantBody)
 			}
 			if tc.wantStatus == http.StatusOK {

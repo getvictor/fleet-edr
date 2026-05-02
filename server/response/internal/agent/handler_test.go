@@ -109,28 +109,54 @@ func TestHandleList_MissingHostContext(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 	assert.Contains(t, string(body), "host_context_missing")
 }
 
-func TestHandleList_ExplicitStatusFilter(t *testing.T) {
-	var capturedStatus api.Status
-	svc := fakeService{
-		listForHost: func(_ context.Context, _ string, status api.Status) ([]api.Command, error) {
-			capturedStatus = status
-			return []api.Command{}, nil
+func TestHandleList_StatusFilter(t *testing.T) {
+	cases := []struct {
+		name       string
+		query      string
+		wantStatus api.Status
+	}{
+		{
+			// Bare GET /api/commands must default to pending so the agent
+			// poller never receives terminal rows (completed / failed).
+			// Re-delivering an already-handled command would either
+			// double-execute or produce a confused log line in the
+			// agent's commander.
+			name:       "no query defaults to pending",
+			query:      "",
+			wantStatus: api.StatusPending,
+		},
+		{
+			name:       "explicit status is honored",
+			query:      "?status=acked",
+			wantStatus: api.StatusAcked,
 		},
 	}
-	srv := newAgentServer(t, svc, "host-a")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var capturedStatus api.Status
+			svc := fakeService{
+				listForHost: func(_ context.Context, _ string, status api.Status) ([]api.Command, error) {
+					capturedStatus = status
+					return []api.Command{}, nil
+				},
+			}
+			srv := newAgentServer(t, svc, "host-a")
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/commands?status=acked", nil)
-	require.NoError(t, err)
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/commands"+tc.query, nil)
+			require.NoError(t, err)
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, api.StatusAcked, capturedStatus)
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tc.wantStatus, capturedStatus)
+		})
+	}
 }
 
 func TestHandleList_ServiceError(t *testing.T) {
@@ -238,7 +264,8 @@ func TestHandleUpdate(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, resp.StatusCode)
 			if tc.wantBody != "" {
-				body, _ := io.ReadAll(resp.Body)
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
 				assert.Contains(t, string(body), tc.wantBody)
 			}
 		})
