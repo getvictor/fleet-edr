@@ -27,9 +27,12 @@ func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, 
 	return buildForest(procs), nil
 }
 
-// GetDetail returns a process with its network connections, DNS
-// queries, and re-exec chain.
-func (q *Query) GetDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.ProcessDetail, error) {
+// GetProcessDetail returns a process with its network connections,
+// DNS queries, and re-exec chain. Method name matches the
+// detection/api.Service.GetProcessDetail entry point so the eventual
+// service layer (detection/internal/service) can delegate without an
+// adapter or rename.
+func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.ProcessDetail, error) {
 	proc, err := q.store.GetProcessByPID(ctx, hostID, pid, atTimeNs)
 	if err != nil {
 		return nil, err
