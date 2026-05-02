@@ -40,13 +40,13 @@ func (e *Engine) Register(r Rule) {
 }
 
 // LoadActive replaces the engine's active rule set with what the
-// ContentService reports as active. Phase 3 introduces this as the
-// canonical production-side registration call (replaces the rules.All
-// loop in cmd/main). Replace-semantics (rather than append) so a future
-// hot-reload caller can invoke this repeatedly without Catalog() and
-// Evaluate() seeing duplicates. The underlying Register stays so
-// existing detection tests that build engines with hand-rolled rules
-// keep working without constructing a ContentService.
+// rules.api.RuleProvider reports as active. Phase 3 introduces this as
+// the canonical production-side registration call (replaces the
+// rules.All loop in cmd/main). Replace-semantics (rather than append)
+// so a future hot-reload caller can invoke this repeatedly without
+// Catalog() and Evaluate() seeing duplicates. The underlying Register
+// stays so existing detection tests that build engines with hand-rolled
+// rules keep working without constructing a RuleProvider.
 func (e *Engine) LoadActive(cs interface{ ActiveRules() []Rule }) {
 	e.rules = append(e.rules[:0], cs.ActiveRules()...)
 }
@@ -56,7 +56,7 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []Rule }) {
 //
 // Phase 3 of the modular-monolith migration moved the catalog/rule-list
 // endpoint out of admin into rules. Production main.go now goes through
-// rules.api.Catalog instead of this method, but the method stays so
+// rules.api.Lister instead of this method, but the method stays so
 // existing engine tests keep compiling.
 func (e *Engine) Catalog() []RuleMetadata {
 	out := make([]RuleMetadata, 0, len(e.rules))

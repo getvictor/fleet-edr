@@ -36,18 +36,21 @@ type PolicyService interface {
 	ActiveCommandPayload(ctx context.Context) (payload json.RawMessage, version int64, hasContent bool, err error)
 }
 
-// Catalog enumerates the registered detection rules' metadata.
+// Lister enumerates the registered detection rules' metadata.
 // Consumed by rules/internal/operator for GET /api/rules and
-// GET /api/attack-coverage. Single-method interface, follows Go's
-// verb-suffix convention.
-type Catalog interface {
+// GET /api/attack-coverage. Single-method interface; follows Go's
+// "MethodName + er" naming convention (List -> Lister) per Effective
+// Go.
+type Lister interface {
 	List() []RuleMetadata
 }
 
-// ContentService loads the active set of executable rules. Consumed
+// RuleProvider exposes the active set of executable rules. Consumed
 // by detection.Engine at start (and at every hot-reload tick once
 // post-migration "Long-term direction" #2 lands). Phase 3 ships a
 // single-load implementation; hot reload is post-migration scope.
-type ContentService interface {
+// "Provider" is the agent-noun form requested by Sonar S8196 for a
+// single-method interface whose method is a plural-noun accessor.
+type RuleProvider interface {
 	ActiveRules() []Rule
 }

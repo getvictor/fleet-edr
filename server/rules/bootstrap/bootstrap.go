@@ -98,16 +98,16 @@ func (r *Rules) ApplySchema(ctx context.Context) error {
 // post-enroll fan-out goroutine can call ActiveCommandPayload.
 func (r *Rules) PolicyService() api.PolicyService { return r.svc }
 
-// ContentService exposes the public api.ContentService. detection.Engine
+// ContentService exposes the public api.RuleProvider. detection.Engine
 // (still living at server/detection/) consumes this to load its rule
 // set at start.
-func (r *Rules) ContentService() api.ContentService { return r.svc }
+func (r *Rules) ContentService() api.RuleProvider { return r.svc }
 
-// Catalog exposes the public api.Catalog. The operator handler inside
+// Catalog exposes the public api.Lister. The operator handler inside
 // rules consumes this internally; nothing outside rules calls it
 // today (admin used to via a Cataloger interface; admin is gone in
 // phase 3).
-func (r *Rules) Catalog() api.Catalog { return r.svc }
+func (r *Rules) Catalog() api.Lister { return r.svc }
 
 // RegisterAuthedRoutes wires the operator-facing routes:
 //
@@ -127,15 +127,15 @@ func (r *Rules) RegisterAuthedRoutes(mux *http.ServeMux) {
 // store or operator routes. Exposed for tooling that doesn't have a
 // DB handle (notably tools/gen-rule-docs which builds the markdown
 // page from rule documentation at compile time).
-func CatalogOnly(opts api.RegistryOptions) api.Catalog {
+func CatalogOnly(opts api.RegistryOptions) api.Lister {
 	rules := catalog.New(opts)
 	// service.New panics without a policy store; catalog-only callers
-	// don't go through service.New. Return a thin api.Catalog whose
+	// don't go through service.New. Return a thin api.Lister whose
 	// List walks the rule slice directly.
 	return catalogList(rules)
 }
 
-// catalogList satisfies api.Catalog by reading from a captured rule
+// catalogList satisfies api.Lister by reading from a captured rule
 // slice. Avoids dragging the policy store into the gen-rule-docs path.
 type catalogList []api.Rule
 
