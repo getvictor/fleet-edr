@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/detection"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // TestEveryRuleHasDocs is the gate that prevents shipping a new detection
@@ -19,21 +19,21 @@ import (
 // that disagrees with the rest of the codebase.
 func TestEveryRuleHasDocs(t *testing.T) {
 	allowedSeverities := map[string]struct{}{
-		detection.SeverityLow:      {},
-		detection.SeverityMedium:   {},
-		detection.SeverityHigh:     {},
-		detection.SeverityCritical: {},
+		rulesapi.SeverityLow:      {},
+		rulesapi.SeverityMedium:   {},
+		rulesapi.SeverityHigh:     {},
+		rulesapi.SeverityCritical: {},
 	}
 	for _, r := range allRegisteredRules() {
-		t.Run(r.ID(), func(t *testing.T) {
-			d := r.Doc()
-			assert.NotEmpty(t, d.Title, "Doc().Title must be set")
-			assert.NotEmpty(t, d.Summary, "Doc().Summary must be set (one-line tooltip)")
-			assert.NotEmpty(t, d.Description, "Doc().Description must be set (long-form spec)")
-			assert.NotEmpty(t, d.Severity, "Doc().Severity must be set")
+		t.Run(r.ID, func(t *testing.T) {
+			d := r.Doc
+			assert.NotEmpty(t, d.Title, "Doc.Title must be set")
+			assert.NotEmpty(t, d.Summary, "Doc.Summary must be set (one-line tooltip)")
+			assert.NotEmpty(t, d.Description, "Doc.Description must be set (long-form spec)")
+			assert.NotEmpty(t, d.Severity, "Doc.Severity must be set")
 			assert.Contains(t, allowedSeverities, d.Severity,
-				"Doc().Severity must be one of detection.SeverityLow|Medium|High|Critical")
-			assert.NotEmpty(t, d.EventTypes, "Doc().EventTypes must list at least one event type")
+				"Doc.Severity must be one of rulesapi.SeverityLow|Medium|High|Critical")
+			assert.NotEmpty(t, d.EventTypes, "Doc.EventTypes must list at least one event type")
 		})
 	}
 }
@@ -50,9 +50,9 @@ func TestRenderProducesIndexEntryPerRule(t *testing.T) {
 
 	for _, r := range rs {
 		// Index entry: the row link uses a backtick-wrapped code span.
-		assert.Contains(t, out, "[`"+r.ID()+"`]", "rule %q missing from index table", r.ID())
+		assert.Contains(t, out, "[`"+r.ID+"`]", "rule %q missing from index table", r.ID)
 		// Section heading: "## <id>".
-		assert.Contains(t, out, "## "+r.ID()+"\n", "rule %q missing as a section heading", r.ID())
+		assert.Contains(t, out, "## "+r.ID+"\n", "rule %q missing as a section heading", r.ID)
 	}
 }
 

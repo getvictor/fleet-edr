@@ -113,7 +113,7 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 // is wasted work; the next admin policy PUT will fan out via
 // ActiveHostIDs.
 func (s *service) enqueueInitialPolicy(ctx context.Context, hostID string) {
-	payload, version, hasContent, err := s.policy.GetActiveCommandPayload(ctx)
+	payload, version, hasContent, err := s.policy.ActiveCommandPayload(ctx)
 	if err != nil {
 		s.logger.WarnContext(ctx, "initial policy fetch failed", attrkeys.HostID, hostID, "err", err)
 		return

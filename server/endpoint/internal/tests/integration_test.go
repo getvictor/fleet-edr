@@ -49,7 +49,7 @@ type fakePolicyProvider struct {
 	err        error
 }
 
-func (f *fakePolicyProvider) GetActiveCommandPayload(context.Context) (json.RawMessage, int64, bool, error) {
+func (f *fakePolicyProvider) ActiveCommandPayload(context.Context) (json.RawMessage, int64, bool, error) {
 	return f.payload, f.version, f.hasContent, f.err
 }
 

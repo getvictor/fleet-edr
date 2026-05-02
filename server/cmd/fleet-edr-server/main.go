@@ -20,13 +20,11 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/fleetdm/edr/server/admin"
 	"github.com/fleetdm/edr/server/api"
 	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/server/detection"
-	"github.com/fleetdm/edr/server/detection/rules"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/graph"
@@ -35,10 +33,11 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/ingest"
 	"github.com/fleetdm/edr/server/metrics"
-	"github.com/fleetdm/edr/server/policy"
 	"github.com/fleetdm/edr/server/processor"
 	"github.com/fleetdm/edr/server/processttl"
 	"github.com/fleetdm/edr/server/retention"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/store"
 	"github.com/fleetdm/edr/server/ui"
 )
@@ -60,41 +59,12 @@ func (g serverGaugeSource) OfflineHosts(ctx context.Context, threshold time.Dura
 	return g.store.CountOfflineHosts(ctx, threshold)
 }
 
-// policyProviderShim adapts the still-existing *policy.Store to the
-// endpoint.api.PolicyProvider interface. Phase 3 replaces with
-// rules.api.PolicyService when policy moves into the rules context.
-type policyProviderShim struct{ store *policy.Store }
+// endpointCommandInserterShim adapts the still-existing *store.Store
+// to the endpoint.api.CommandInserter interface used by the post-enroll
+// fan-out. Phase 4 replaces with response.api.Service.Insert.
+type endpointCommandInserterShim struct{ store *store.Store }
 
-func (p policyProviderShim) GetActiveCommandPayload(ctx context.Context) (json.RawMessage, int64, bool, error) {
-	pol, err := p.store.Get(ctx, policy.DefaultName)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	hasContent := len(pol.Blocklist.Paths) > 0 || len(pol.Blocklist.Hashes) > 0
-	if !hasContent {
-		return nil, pol.Version, false, nil
-	}
-	payload, err := json.Marshal(struct {
-		Name    string   `json:"name"`
-		Version int64    `json:"version"`
-		Paths   []string `json:"paths"`
-		Hashes  []string `json:"hashes"`
-	}{
-		Name:    pol.Name,
-		Version: pol.Version,
-		Paths:   pol.Blocklist.Paths,
-		Hashes:  pol.Blocklist.Hashes,
-	})
-	return payload, pol.Version, true, err
-}
-
-// commandInserterShim adapts the still-existing *store.Store to the
-// endpoint.api.CommandInserter interface. Phase 4 replaces with
-// response.api.Service.Insert when commands move into the response
-// context.
-type commandInserterShim struct{ store *store.Store }
-
-func (c commandInserterShim) InsertCommand(ctx context.Context, hostID, cmdType string, payload json.RawMessage) (int64, error) {
+func (c endpointCommandInserterShim) InsertCommand(ctx context.Context, hostID, cmdType string, payload json.RawMessage) (int64, error) {
 	return c.store.InsertCommand(ctx, store.Command{
 		HostID:      hostID,
 		CommandType: cmdType,
@@ -178,22 +148,58 @@ func run() error {
 	ingestHandler := ingest.New(s, logger, build)
 	builder := graph.NewBuilder(s, logger)
 	det := detection.NewEngine(s, logger)
-	for _, r := range rules.All(rules.RegistryOptions{
-		SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
-		LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
-		LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
-		SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
-	}) {
-		det.Register(r)
-	}
 	proc := processor.New(s, builder, det, logger, cfg.ProcessInterval, cfg.ProcessBatch)
 
 	q := graph.NewQuery(s)
 	apiHandler := api.New(q, s, logger)
 
-	policyStore := policy.New(s.DB())
+	// Late-binding closure: rules's fan-out needs the endpoint
+	// service to enumerate active hosts, but endpoint hasn't been
+	// constructed yet (it needs rules's PolicyService). The closure
+	// captures endpointCtx by name; cmd/main always assigns it
+	// before serving requests, so a fan-out call before that point
+	// is impossible.
+	var endpointCtx *endpointbootstrap.Endpoint
+	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		RegistryOptions: rulesapi.RegistryOptions{
+			SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
+			LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
+			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
+			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
+		},
+		ActiveHostsLister: func(ctx context.Context) ([]string, error) {
+			// Defensive nil check: cmd/main always assigns endpointCtx
+			// before serving requests, so this branch is unreachable in
+			// production. A future refactor could break the ordering;
+			// returning an error keeps the server up and surfaces a
+			// recognisable signal in the operator's audit log instead
+			// of crashing the process.
+			if endpointCtx == nil {
+				return nil, errors.New("rules fanout: endpoint context not yet initialised")
+			}
+			return endpointCtx.Service().ActiveHostIDs(ctx)
+		},
+		CommandInserter: func(ctx context.Context, hostID, cmdType string, payload []byte) (int64, error) {
+			return s.InsertCommand(ctx, store.Command{
+				HostID:      hostID,
+				CommandType: cmdType,
+				Payload:     payload,
+			})
+		},
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open rules", "err", err)
+		return err
+	}
+	if err := rulesCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "rules schema", "err", err)
+		return err
+	}
+	det.LoadActive(rulesCtx.ContentService())
 
-	endpointCtx, err := openEndpoint(ctx, logger, db, cfg, policyStore, s)
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, rulesCtx.PolicyService(), s)
 	if err != nil {
 		return err
 	}
@@ -218,14 +224,12 @@ func run() error {
 		logger.ErrorContext(ctx, "admin seed failed", "err", err)
 	}
 
-	adminHandler := admin.New(endpointCtx.Service(), policyStore, s, catalogFromEngine(det), logger)
-
 	mux := buildMux(muxDeps{
 		ingestHandler: ingestHandler,
 		endpointCtx:   endpointCtx,
 		identityCtx:   identityCtx,
+		rulesCtx:      rulesCtx,
 		apiHandler:    apiHandler,
-		adminHandler:  adminHandler,
 		logger:        logger,
 	})
 	registerUIRoutes(mux, logger)
@@ -269,19 +273,19 @@ func run() error {
 }
 
 // openEndpoint wires the endpoint bounded context (host enrollment +
-// host-token verification) and applies its schema. PolicyProvider +
-// CommandInserter are thin shims over the still-existing policy and
-// store packages; phase 3 + 4 replace them with rules.api.PolicyService
-// and response.api.Service.Insert. Extracted from run() to keep that
+// host-token verification) and applies its schema. PolicyProvider is
+// satisfied by rules/api.PolicyService; CommandInserter is the
+// store-backed shim until phase 4 replaces it with
+// response/api.Service.Insert. Extracted from run() to keep that
 // function under the cognitive-complexity gate.
-func openEndpoint(ctx context.Context, logger *slog.Logger, db *sqlx.DB, cfg *config.Config, policyStore *policy.Store, s *store.Store) (*endpointbootstrap.Endpoint, error) {
+func openEndpoint(ctx context.Context, logger *slog.Logger, db *sqlx.DB, cfg *config.Config, policySvc endpointapi.PolicyProvider, s *store.Store) (*endpointbootstrap.Endpoint, error) {
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
 		Logger:              logger,
 		EnrollSecret:        cfg.EnrollSecret,
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
-		PolicyProvider:      policyProviderShim{store: policyStore},
-		CommandInserter:     commandInserterShim{store: s},
+		PolicyProvider:      policySvc,
+		CommandInserter:     endpointCommandInserterShim{store: s},
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
@@ -328,8 +332,8 @@ type muxDeps struct {
 	ingestHandler *ingest.Handler
 	endpointCtx   *endpointbootstrap.Endpoint
 	identityCtx   *identitybootstrap.Identity
+	rulesCtx      *rulesbootstrap.Rules
 	apiHandler    *api.Handler
-	adminHandler  *admin.Handler
 	logger        *slog.Logger
 }
 
@@ -395,7 +399,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	csrfMW := d.identityCtx.CSRFMiddleware()
 	apiMux := http.NewServeMux()
 	d.apiHandler.RegisterRoutes(apiMux)
-	d.adminHandler.RegisterRoutes(apiMux)
+	d.rulesCtx.RegisterAuthedRoutes(apiMux)
 	d.endpointCtx.RegisterAuthedRoutes(apiMux)
 	d.identityCtx.RegisterAuthedRoutes(apiMux)
 	sessionProtected := sessionMW(csrfMW(apiMux))
@@ -449,46 +453,4 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
-}
-
-// engineCatalogAdapter bridges *detection.Engine.Catalog (returning
-// detection.RuleMetadata) to admin.Cataloger (which expects
-// []admin.RuleMetadata). The two types are deliberately duplicated — see
-// admin.RuleMetadata for the rationale — so this copy is the conversion
-// boundary.
-type engineCatalogAdapter struct{ engine *detection.Engine }
-
-func (a engineCatalogAdapter) Catalog() []admin.RuleMetadata {
-	src := a.engine.Catalog()
-	out := make([]admin.RuleMetadata, len(src))
-	for i, r := range src {
-		cfg := make([]admin.RuleConfig, len(r.Doc.Config))
-		for j, c := range r.Doc.Config {
-			cfg[j] = admin.RuleConfig{
-				EnvVar:      c.EnvVar,
-				Type:        c.Type,
-				Default:     c.Default,
-				Description: c.Description,
-			}
-		}
-		out[i] = admin.RuleMetadata{
-			ID:         r.ID,
-			Techniques: r.Techniques,
-			Doc: admin.RuleDoc{
-				Title:          r.Doc.Title,
-				Summary:        r.Doc.Summary,
-				Description:    r.Doc.Description,
-				Severity:       r.Doc.Severity,
-				EventTypes:     r.Doc.EventTypes,
-				FalsePositives: r.Doc.FalsePositives,
-				Limitations:    r.Doc.Limitations,
-				Config:         cfg,
-			},
-		}
-	}
-	return out
-}
-
-func catalogFromEngine(e *detection.Engine) admin.Cataloger {
-	return engineCatalogAdapter{engine: e}
 }

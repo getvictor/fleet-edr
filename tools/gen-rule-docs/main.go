@@ -1,5 +1,5 @@
 // gen-rule-docs renders docs/detection-rules.md from the structured Documentation
-// each rule exposes via detection.Rule.Doc(). Run via:
+// each rule exposes via rules.api.Rule.Doc(). Run via:
 //
 //	go run ./tools/gen-rule-docs
 //
@@ -16,18 +16,18 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fleetdm/edr/server/detection"
-	"github.com/fleetdm/edr/server/detection/rules"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 )
 
-// allRegisteredRules delegates to rules.All so the docs generator and the
-// production server's main.go are guaranteed to walk the same set of rules
-// in the same order. Documentation is not a function of a particular
-// deployment's tuning, so we pass the zero value of RegistryOptions —
-// allowlists default to empty, which is what the rule structs treat as
-// "no operator tuning yet."
-func allRegisteredRules() []detection.Rule {
-	return rules.All(rules.RegistryOptions{})
+// allRegisteredRules delegates to rules.bootstrap.CatalogOnly so the
+// docs generator and the production server's main.go are guaranteed
+// to walk the same set of rules in the same order. Documentation is
+// not a function of a particular deployment's tuning, so we pass the
+// zero value of RegistryOptions -- allowlists default to empty, which
+// is what the rule structs treat as "no operator tuning yet."
+func allRegisteredRules() []rulesapi.RuleMetadata {
+	return rulesbootstrap.CatalogOnly(rulesapi.RegistryOptions{}).List()
 }
 
 func main() {
@@ -57,11 +57,11 @@ func generate(out string) error {
 
 // render writes the full document body to w. Split out from main so a test can
 // drive it against a buffer and snapshot-compare against the committed file.
-func render(w io.Writer, rs []detection.Rule) error {
+func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	var b strings.Builder
 	b.WriteString("# Detection rules\n\n")
-	b.WriteString("This page is generated from `tools/gen-rule-docs` by walking the\n")
-	b.WriteString("`detection.Rule.Doc()` method on every rule registered in\n")
+	b.WriteString("This page is generated from `tools/gen-rule-docs` by reading the\n")
+	b.WriteString("`rulesapi.RuleMetadata.Doc` field on every rule registered in\n")
 	b.WriteString("`server/cmd/fleet-edr-server/main.go`. To refresh after changing a\n")
 	b.WriteString("rule's documentation, run:\n\n")
 	b.WriteString("```sh\n")
@@ -75,11 +75,10 @@ func render(w io.Writer, rs []detection.Rule) error {
 	b.WriteString("| Rule ID | Title | Severity | ATT&CK |\n")
 	b.WriteString("| --- | --- | --- | --- |\n")
 	for _, r := range rs {
-		d := r.Doc()
 		fmt.Fprintf(&b, "| [`%s`](#%s) | %s | %s | %s |\n",
-			r.ID(), anchor(r.ID()),
-			mdCell(d.Title), mdCell(d.Severity),
-			mdCell(strings.Join(r.Techniques(), ", ")))
+			r.ID, anchor(r.ID),
+			mdCell(r.Doc.Title), mdCell(r.Doc.Severity),
+			mdCell(strings.Join(r.Techniques, ", ")))
 	}
 	b.WriteString("\n")
 
@@ -95,18 +94,16 @@ func render(w io.Writer, rs []detection.Rule) error {
 // each helper stays trivially testable and the whole function stays under
 // the project cognitive-complexity cap (Sonar go:S3776). Adding a new
 // section means adding a new helper + a single Fprintf-style call here.
-func writeRule(b *strings.Builder, r detection.Rule) {
-	d := r.Doc()
-	id := r.ID()
-	writeRuleHeading(b, id, d)
-	writeRuleMeta(b, id, d, r.Techniques())
-	writeRuleDescription(b, d)
-	writeRuleConfig(b, d.Config)
-	writeRuleBulletSection(b, "Known false-positive sources", d.FalsePositives)
-	writeRuleBulletSection(b, "Limitations", d.Limitations)
+func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
+	writeRuleHeading(b, r.ID, r.Doc)
+	writeRuleMeta(b, r.ID, r.Doc, r.Techniques)
+	writeRuleDescription(b, r.Doc)
+	writeRuleConfig(b, r.Doc.Config)
+	writeRuleBulletSection(b, "Known false-positive sources", r.Doc.FalsePositives)
+	writeRuleBulletSection(b, "Limitations", r.Doc.Limitations)
 }
 
-func writeRuleHeading(b *strings.Builder, id string, d detection.Documentation) {
+func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
 	fmt.Fprintf(b, "## %s\n\n", id)
 	fmt.Fprintf(b, "**%s**  \n", d.Title)
 	if d.Summary != "" {
@@ -114,7 +111,7 @@ func writeRuleHeading(b *strings.Builder, id string, d detection.Documentation) 
 	}
 }
 
-func writeRuleMeta(b *strings.Builder, id string, d detection.Documentation, techs []string) {
+func writeRuleMeta(b *strings.Builder, id string, d rulesapi.Documentation, techs []string) {
 	b.WriteString("| | |\n| --- | --- |\n")
 	fmt.Fprintf(b, "| Rule ID | `%s` |\n", id)
 	fmt.Fprintf(b, "| Severity | `%s` |\n", d.Severity)
@@ -127,7 +124,7 @@ func writeRuleMeta(b *strings.Builder, id string, d detection.Documentation, tec
 	b.WriteString("\n")
 }
 
-func writeRuleDescription(b *strings.Builder, d detection.Documentation) {
+func writeRuleDescription(b *strings.Builder, d rulesapi.Documentation) {
 	if d.Description == "" {
 		return
 	}
@@ -136,7 +133,7 @@ func writeRuleDescription(b *strings.Builder, d detection.Documentation) {
 	b.WriteString("\n\n")
 }
 
-func writeRuleConfig(b *strings.Builder, knobs []detection.ConfigKnob) {
+func writeRuleConfig(b *strings.Builder, knobs []rulesapi.ConfigKnob) {
 	if len(knobs) == 0 {
 		return
 	}
