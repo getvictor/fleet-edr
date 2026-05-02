@@ -137,29 +137,40 @@ func (s *Service) ActiveRules() []api.Rule {
 // --- Fan-out -------------------------------------------------------------------
 
 // Fanout pushes a freshly-updated policy to every active host as a
-// set_blocklist command. Returns the number of failed inserts so
-// callers can record an audit metric. Best-effort: a partial failure
-// does NOT undo the policy update -- the policy row is authoritative
-// and the next poll/admin push catches up.
+// set_blocklist command. Returns:
+//   - totalHosts: count of active hosts targeted (0 when fan-out
+//     skipped because the operator surface is disabled or the
+//     blocklist is empty; also 0 when host-listing fails before
+//     any insert is attempted).
+//   - failedHosts: count of hosts whose command insert failed.
+//   - err: a fatal pre-loop error (marshal failure, host-list
+//     failure). A nil err with failedHosts > 0 means partial
+//     fan-out -- the policy row is authoritative and operators
+//     surface the count via the audit log + span attribute.
 //
-// Returns (0, nil) when the operator surface is disabled (hosts/cmds
-// closures nil) or when the blocklist has no content (skip per
-// PolicyService.ActiveCommandPayload semantics).
-func (s *Service) Fanout(ctx context.Context, p api.BlocklistPolicy) (failedHosts int, err error) {
+// Best-effort: a partial failure does NOT undo the policy update --
+// the policy row is authoritative and the next poll/admin push
+// catches up.
+//
+// Returns (0, 0, nil) when the operator surface is disabled
+// (hosts/cmds closures nil) or when the blocklist has no content
+// (skip per PolicyService.ActiveCommandPayload semantics).
+func (s *Service) Fanout(ctx context.Context, p api.BlocklistPolicy) (totalHosts, failedHosts int, err error) {
 	if s.hosts == nil || s.cmds == nil {
-		return 0, nil
+		return 0, 0, nil
 	}
 	if len(p.Blocklist.Paths) == 0 && len(p.Blocklist.Hashes) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	payload, err := api.MarshalSetBlocklistPayload(p)
 	if err != nil {
-		return 0, fmt.Errorf("rules fanout: marshal payload: %w", err)
+		return 0, 0, fmt.Errorf("rules fanout: marshal payload: %w", err)
 	}
 	hostIDs, err := s.hosts(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("rules fanout: list active hosts: %w", err)
+		return 0, 0, fmt.Errorf("rules fanout: list active hosts: %w", err)
 	}
+	totalHosts = len(hostIDs)
 	for _, hostID := range hostIDs {
 		if _, insErr := s.cmds(ctx, hostID, api.CommandTypeSetBlocklist, payload); insErr != nil {
 			failedHosts++
@@ -170,9 +181,9 @@ func (s *Service) Fanout(ctx context.Context, p api.BlocklistPolicy) (failedHost
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
 			attribute.Int64("edr.policy.version", p.Version),
-			attribute.Int("edr.policy.fanout_hosts", len(hostIDs)),
+			attribute.Int("edr.policy.fanout_hosts", totalHosts),
 			attribute.Int("edr.policy.fanout_failed", failedHosts),
 		)
 	}
-	return failedHosts, nil
+	return totalHosts, failedHosts, nil
 }

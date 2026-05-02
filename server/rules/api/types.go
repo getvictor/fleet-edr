@@ -88,10 +88,14 @@ type Rule interface {
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 }
 
-// RuleMetadata is the per-rule descriptor the operator endpoints render.
-// Field tags MUST match what the UI consumes from GET /api/rules; the
-// UI's RuleDetail.tsx and tools/gen-rule-docs both depend on the wire
-// shape staying byte-identical.
+// RuleMetadata is the per-rule descriptor the operator endpoints
+// render. Used in two surfaces: GET /api/rules (the operator handler
+// maps the fields into a JSON-tagged ruleResponse struct, so the
+// wire shape lives in rules/internal/operator and isn't on this
+// struct) and GET /api/attack-coverage (the handler uses ID +
+// Techniques fields directly to build the Navigator layer). The UI's
+// RuleDetail.tsx and tools/gen-rule-docs both depend on the wire
+// shape, so renaming a field here ripples through both.
 type RuleMetadata struct {
 	ID         string
 	Techniques []string

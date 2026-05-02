@@ -23,7 +23,7 @@ import (
 type Service interface {
 	api.PolicyService
 	api.Catalog
-	Fanout(ctx context.Context, p api.BlocklistPolicy) (failedHosts int, err error)
+	Fanout(ctx context.Context, p api.BlocklistPolicy) (totalHosts, failedHosts int, err error)
 }
 
 // Handler serves the rules-context operator routes. Construct it with
@@ -115,11 +115,16 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fanoutFailed, fanoutErr := h.svc.Fanout(ctx, p)
+	fanoutHosts, fanoutFailed, fanoutErr := h.svc.Fanout(ctx, p)
+	fanoutErrText := ""
 	if fanoutErr != nil {
 		// Listing hosts failed AFTER the policy update committed. The row
 		// is authoritative; the fan-out is best-effort. Log loud + carry
 		// on so the operator's PUT still returns 200 with the new row.
+		// Capture the error string so the audit log distinguishes "0
+		// failures because we never got to fan out" from "0 failures
+		// because the host list was empty".
+		fanoutErrText = fanoutErr.Error()
 		h.logger.ErrorContext(ctx, "rules put policy fan-out", "err", fanoutErr)
 	}
 
@@ -129,21 +134,29 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		attribute.Int64("edr.policy.version", p.Version),
 		attribute.Int("edr.policy.path_count", len(p.Blocklist.Paths)),
 		attribute.Int("edr.policy.hash_count", len(p.Blocklist.Hashes)),
+		attribute.Int("edr.policy.fanout_hosts", fanoutHosts),
 		attribute.Int("edr.policy.fanout_failed", fanoutFailed),
 	)
+	// WARN on partial fan-out OR a fatal pre-loop error so SOC dashboards
+	// can tell a healthy push apart from one that didn't reach all hosts.
 	logFn := h.logger.InfoContext
-	if fanoutFailed > 0 {
+	if fanoutFailed > 0 || fanoutErr != nil {
 		logFn = h.logger.WarnContext
 	}
-	logFn(ctx, "rules policy updated",
+	logArgs := []any{
 		attrkeys.AdminAction, "policy_update",
 		attrkeys.AdminActor, body.Actor,
 		attrkeys.AdminReason, body.Reason,
 		"edr.policy.version", p.Version,
 		"edr.policy.path_count", len(p.Blocklist.Paths),
 		"edr.policy.hash_count", len(p.Blocklist.Hashes),
+		"edr.policy.fanout_hosts", fanoutHosts,
 		"edr.policy.fanout_failed", fanoutFailed,
-	)
+	}
+	if fanoutErrText != "" {
+		logArgs = append(logArgs, "edr.policy.fanout_error", fanoutErrText)
+	}
+	logFn(ctx, "rules policy updated", logArgs...)
 
 	writeJSON(ctx, h.logger, w, http.StatusOK, p)
 }

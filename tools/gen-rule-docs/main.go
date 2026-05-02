@@ -60,8 +60,8 @@ func generate(out string) error {
 func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	var b strings.Builder
 	b.WriteString("# Detection rules\n\n")
-	b.WriteString("This page is generated from `tools/gen-rule-docs` by walking the\n")
-	b.WriteString("`rulesapi.RuleMetadata.Doc()` method on every rule registered in\n")
+	b.WriteString("This page is generated from `tools/gen-rule-docs` by reading the\n")
+	b.WriteString("`rulesapi.RuleMetadata.Doc` field on every rule registered in\n")
 	b.WriteString("`server/cmd/fleet-edr-server/main.go`. To refresh after changing a\n")
 	b.WriteString("rule's documentation, run:\n\n")
 	b.WriteString("```sh\n")

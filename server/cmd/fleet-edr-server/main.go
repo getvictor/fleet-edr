@@ -170,6 +170,15 @@ func run() error {
 			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
 		},
 		ActiveHostsLister: func(ctx context.Context) ([]string, error) {
+			// Defensive nil check: cmd/main always assigns endpointCtx
+			// before serving requests, so this branch is unreachable in
+			// production. A future refactor could break the ordering;
+			// returning an error keeps the server up and surfaces a
+			// recognisable signal in the operator's audit log instead
+			// of crashing the process.
+			if endpointCtx == nil {
+				return nil, errors.New("rules fanout: endpoint context not yet initialised")
+			}
 			return endpointCtx.Service().ActiveHostIDs(ctx)
 		},
 		CommandInserter: func(ctx context.Context, hostID, cmdType string, payload []byte) (int64, error) {

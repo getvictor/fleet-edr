@@ -39,16 +39,16 @@ func (e *Engine) Register(r Rule) {
 	e.rules = append(e.rules, r)
 }
 
-// LoadActive registers every rule the rules ContentService reports as
-// active. Phase 3 introduces this as the canonical production-side
-// registration call (replaces the rules.All loop in cmd/main); the
-// underlying Register stays so existing detection tests that build
-// engines with hand-rolled rules keep working without constructing a
-// ContentService.
+// LoadActive replaces the engine's active rule set with what the
+// ContentService reports as active. Phase 3 introduces this as the
+// canonical production-side registration call (replaces the rules.All
+// loop in cmd/main). Replace-semantics (rather than append) so a future
+// hot-reload caller can invoke this repeatedly without Catalog() and
+// Evaluate() seeing duplicates. The underlying Register stays so
+// existing detection tests that build engines with hand-rolled rules
+// keep working without constructing a ContentService.
 func (e *Engine) LoadActive(cs interface{ ActiveRules() []Rule }) {
-	for _, r := range cs.ActiveRules() {
-		e.Register(r)
-	}
+	e.rules = append(e.rules[:0], cs.ActiveRules()...)
 }
 
 // Catalog returns the metadata for every registered rule. Order matches
