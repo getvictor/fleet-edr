@@ -409,13 +409,16 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 		})
 		return
 	}
-	fileServer := http.FileServer(http.FS(uiDist))
+	fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(uiDist)))
 	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path[len("/ui/"):]
-		if path == "" {
-			path = "index.html"
+		// Serve the requested file when it exists; otherwise rewrite to
+		// index.html so React Router takes over for client-side deep
+		// links.
+		stripped := r.URL.Path[len("/ui/"):]
+		if stripped == "" {
+			stripped = "index.html"
 		}
-		if _, err := fs.Stat(uiDist, path); err != nil {
+		if _, err := fs.Stat(uiDist, stripped); err != nil {
 			r2 := r.Clone(r.Context())
 			r2.URL.Path = "/ui/index.html"
 			fileServer.ServeHTTP(w, r2)
