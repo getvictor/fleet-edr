@@ -99,7 +99,7 @@ func TestUpdateStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("ack sets acked_at", func(t *testing.T) {
-		err := s.UpdateStatus(ctx, id, "host-a", api.StatusAcked, nil)
+		err := s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil)
 		require.NoError(t, err)
 
 		got, err := s.Get(ctx, id)
@@ -111,7 +111,7 @@ func TestUpdateStatus(t *testing.T) {
 
 	t.Run("complete sets completed_at and result", func(t *testing.T) {
 		result := json.RawMessage(`{"killed":true}`)
-		err := s.UpdateStatus(ctx, id, "host-a", api.StatusCompleted, result)
+		err := s.UpdateStatus(ctx, id, "host-a", api.StatusAcked, api.StatusCompleted, result)
 		require.NoError(t, err)
 
 		got, err := s.Get(ctx, id)
@@ -133,7 +133,7 @@ func TestUpdateStatusForeignHostRejected(t *testing.T) {
 	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
 	require.NoError(t, err)
 
-	err = s.UpdateStatus(ctx, id, "host-b", api.StatusAcked, nil)
+	err = s.UpdateStatus(ctx, id, "host-b", api.StatusPending, api.StatusAcked, nil)
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
 
 	// Original row untouched.
@@ -145,7 +145,7 @@ func TestUpdateStatusForeignHostRejected(t *testing.T) {
 
 func TestUpdateStatusNotFound(t *testing.T) {
 	s := newTestStore(t)
-	err := s.UpdateStatus(t.Context(), 99999, "host-a", api.StatusAcked, nil)
+	err := s.UpdateStatus(t.Context(), 99999, "host-a", api.StatusPending, api.StatusAcked, nil)
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
 }
 
@@ -159,7 +159,7 @@ func TestUpdateStatusInvalidTarget(t *testing.T) {
 	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
 	require.NoError(t, err)
 
-	err = s.UpdateStatus(ctx, id, "host-a", api.StatusPending, nil)
+	err = s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusPending, nil)
 	require.ErrorIs(t, err, api.ErrInvalidStatusTransition)
 }
 
@@ -167,6 +167,30 @@ func TestGetNotFound(t *testing.T) {
 	s := newTestStore(t)
 	_, err := s.Get(t.Context(), 99999)
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
+}
+
+// TestUpdateStatusRaceLost simulates the TOCTOU window: caller A's
+// expected-from is stale because caller B already advanced the row.
+// The store must reject A's UPDATE with ErrInvalidStatusTransition
+// (not silently overwrite the newer state).
+func TestUpdateStatusRaceLost(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	// Caller B wins: pending -> acked.
+	require.NoError(t, s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil))
+
+	// Caller A's stale read still says pending. Their UPDATE must
+	// fail with ErrInvalidStatusTransition; the row must keep the
+	// acked state from caller B.
+	err = s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil)
+	require.ErrorIs(t, err, api.ErrInvalidStatusTransition)
+
+	got, err := s.Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusAcked, got.Status)
 }
 
 func TestCountPending(t *testing.T) {
@@ -188,7 +212,7 @@ func TestCountPending(t *testing.T) {
 	// Acked / completed don't count.
 	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
 	require.NoError(t, err)
-	require.NoError(t, s.UpdateStatus(ctx, id, "host-a", api.StatusAcked, nil))
+	require.NoError(t, s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil))
 	count, err = s.CountPending(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)

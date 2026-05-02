@@ -46,10 +46,13 @@ const (
 // future hardening can tighten this to a typed enum.
 const CommandTypeKillProcess = "kill_process"
 
-// InsertRequest is the payload Service.Insert accepts. Exported so
-// non-HTTP callers (admin command issuance via automation, future
-// job runners) construct it without going through the JSON wire
-// shape.
+// InsertRequest groups the fields the operator + agent handlers
+// decode off the wire when issuing a command. Service.Insert takes
+// the fields directly (hostID, commandType, payload) rather than
+// this struct -- the struct is exported as a convenience for
+// non-HTTP callers (admin issuance via automation, future job
+// runners) that prefer to construct one value and forward its
+// fields.
 type InsertRequest struct {
 	HostID      string
 	CommandType string
@@ -57,8 +60,15 @@ type InsertRequest struct {
 }
 
 // UpdateStatusRequest is the payload Service.UpdateStatus accepts.
-// Result is only meaningful on terminal transitions (acked or
-// pending -> completed | failed).
+// The lifecycle matrix is:
+//
+//	pending -> acked              (agent picked it up; Result ignored)
+//	pending -> failed             (agent immediately rejected; Result optional)
+//	acked   -> completed          (agent applied successfully; Result optional)
+//	acked   -> failed             (agent applied with errors; Result optional)
+//
+// Other transitions are rejected with ErrInvalidStatusTransition.
+// Terminal states (completed, failed) are immutable.
 type UpdateStatusRequest struct {
 	// HostID is the pinned host_id from the agent's host-token. The
 	// service rejects updates whose stored row belongs to a

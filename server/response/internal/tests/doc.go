@@ -4,9 +4,16 @@
 // They exercise the full stack via response/bootstrap.New against a
 // real MySQL.
 //
-// Imports are restricted to the response context's public surface
-// (response/api, response/bootstrap) plus platform packages and
-// other contexts' bootstrap (for cross-context end-to-end coverage,
-// e.g. wiring rules.bootstrap with response.Service().Insert as
-// CommandInserter).
+// Allowed imports for tests in this package:
+//   - response/api and response/bootstrap (the context's public surface);
+//   - server/store (for the OpenTestStore fixture);
+//   - endpoint/api (for WithHostIDForTest, used to fake the
+//     host-token middleware on agent-route tests);
+//   - other contexts' bootstrap packages (for cross-context end-to-end
+//     coverage, e.g. wiring rules.bootstrap with
+//     response.Service().Insert as the CommandInserter closure);
+//   - platform + standard library + approved third-party.
+//
+// Other contexts' internal packages are off-limits; the Go compiler
+// already enforces this via the internal/ rule.
 package tests

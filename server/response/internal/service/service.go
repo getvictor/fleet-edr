@@ -41,11 +41,18 @@ func New(store *mysql.Store, heartbeat Heartbeat, logger *slog.Logger) *Service 
 // Insert validates the request shape, then delegates to the store.
 // Empty hostID / commandType / payload all wrap
 // ErrInvalidInsertRequest so callers can errors.Is + map to 400.
+//
+// hostID and commandType are trimmed once at the boundary; the
+// trimmed values land in the row so a stray operator-typed space
+// can't produce a host_id with trailing whitespace that then fails
+// every ListForHost lookup.
 func (s *Service) Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error) {
-	if strings.TrimSpace(hostID) == "" {
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
 		return 0, fmt.Errorf("%w: host_id is required", api.ErrInvalidInsertRequest)
 	}
-	if strings.TrimSpace(commandType) == "" {
+	commandType = strings.TrimSpace(commandType)
+	if commandType == "" {
 		return 0, fmt.Errorf("%w: command_type is required", api.ErrInvalidInsertRequest)
 	}
 	if len(payload) == 0 {
@@ -106,7 +113,12 @@ func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest)
 			api.ErrInvalidStatusTransition, current.Status, req.Status)
 	}
 
-	return s.store.UpdateStatus(ctx, req.ID, req.HostID, req.Status, req.Result)
+	// Pass current.Status as the expected-from value so the store
+	// applies the WHERE clause atomically. If a concurrent caller
+	// advanced the row between our read and this write, the store
+	// returns ErrInvalidStatusTransition (not silently overwriting
+	// the newer state).
+	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current.Status, req.Status, req.Result)
 }
 
 // CountPending delegates straight to the store.

@@ -124,13 +124,21 @@ func (s *Store) Get(ctx context.Context, id int64) (api.Command, error) {
 	return r.toAPI(), nil
 }
 
-// UpdateStatus transitions a command's status. hostID is included
-// in the WHERE clause so the update is rejected at the DB layer if
-// the row belongs to a different host -- defence-in-depth on top of
-// the service-layer ownership check. Returns api.ErrCommandNotFound
-// when no row matches the (id, hostID) pair so a malicious agent
-// can't probe other hosts' command_ids.
-func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, status api.Status, result json.RawMessage) error {
+// UpdateStatus transitions a command's status atomically. Both the
+// host_id AND the expected current status are part of the WHERE
+// clause, so a concurrent request that already advanced the row
+// produces zero rows affected here -- the lifecycle matrix is
+// enforced at the DB level, not just at the service layer.
+//
+// Returns:
+//   - nil on a successful transition.
+//   - api.ErrCommandNotFound when (id, hostID) doesn't match a row
+//     (unknown id or wrong host -- collapsed so a malicious agent
+//     can't probe other hosts' command_ids).
+//   - api.ErrInvalidStatusTransition when (id, hostID) match but the
+//     current status no longer equals expectedFrom (race: a
+//     concurrent agent already advanced the row).
+func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expectedFrom, status api.Status, result json.RawMessage) error {
 	var (
 		res sql.Result
 		err error
@@ -138,12 +146,12 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, statu
 	switch status { //nolint:exhaustive // pending is intentionally rejected as a target -- caller can only move FORWARD.
 	case api.StatusAcked:
 		res, err = s.db.ExecContext(ctx,
-			"UPDATE commands SET status = ?, acked_at = NOW(6) WHERE id = ? AND host_id = ?",
-			string(status), id, hostID)
+			"UPDATE commands SET status = ?, acked_at = NOW(6) WHERE id = ? AND host_id = ? AND status = ?",
+			string(status), id, hostID, string(expectedFrom))
 	case api.StatusCompleted, api.StatusFailed:
 		res, err = s.db.ExecContext(ctx,
-			"UPDATE commands SET status = ?, completed_at = NOW(6), result = ? WHERE id = ? AND host_id = ?",
-			string(status), result, id, hostID)
+			"UPDATE commands SET status = ?, completed_at = NOW(6), result = ? WHERE id = ? AND host_id = ? AND status = ?",
+			string(status), result, id, hostID, string(expectedFrom))
 	default:
 		return fmt.Errorf("%w: status %q is not a valid update target", api.ErrInvalidStatusTransition, status)
 	}
@@ -152,7 +160,22 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, statu
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return api.ErrCommandNotFound
+		// Disambiguate "wrong (id, host)" from "lost the race": one
+		// SELECT settles it. The cost is paid only on the failure
+		// path; the happy path stays a single UPDATE.
+		var owner string
+		err := s.db.GetContext(ctx, &owner,
+			"SELECT host_id FROM commands WHERE id = ?", id)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && owner != hostID) {
+			return api.ErrCommandNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("disambiguate update miss for command %d: %w", id, err)
+		}
+		// Same (id, host_id) but UPDATE matched 0 rows: status
+		// changed under us. Caller's pre-read saw expectedFrom; a
+		// concurrent caller advanced the row.
+		return api.ErrInvalidStatusTransition
 	}
 	return nil
 }
@@ -189,7 +212,13 @@ func (n *nullRawJSON) Scan(value any) error {
 }
 
 func (n nullRawJSON) Value() (driver.Value, error) {
-	if len(n) == 0 {
+	// Treat both an empty payload AND the JSON literal "null" as SQL
+	// NULL -- mirrors store.NullRawJSON's intent. If we let "null"
+	// land in the column, toAPI's len-check would still emit
+	// `result: null` on the wire instead of omitting the field, and
+	// callers that round-trip via JSON would see drift between
+	// requests. Keep the column NULL so the wire shape stays clean.
+	if len(n) == 0 || string(n) == "null" {
 		return nil, nil
 	}
 	return []byte(n), nil
