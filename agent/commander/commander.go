@@ -35,6 +35,12 @@ type Config struct {
 	// command handler; nil means "commander cannot apply policy updates" and the
 	// handler will report the command failed with a clear reason.
 	PolicySender PolicySender
+	// RotateTokenFn applies a rotate_token command's new bearer to the
+	// agent's persisted state (issue #86). Nil means rotate_token is
+	// reported as failed; this is the right behaviour for tests / dry-runs
+	// that don't carry a real enrollment provider. Production wires
+	// enrollment.TokenProvider.Rotate.
+	RotateTokenFn func(ctx context.Context, newToken string) error
 }
 
 // Commander polls the server for pending commands and dispatches them.
@@ -83,6 +89,15 @@ type setBlocklistPayload struct {
 	Version int64    `json:"version"`
 	Paths   []string `json:"paths"`
 	Hashes  []string `json:"hashes"`
+}
+
+// rotateTokenPayload mirrors the JSON the server emits when issuing a
+// rotate_token command (issue #86). The new bearer is in cleartext;
+// transport security is provided by TLS on the host-token-protected
+// command-poll endpoint, so receiving the new token here is no worse
+// than the original enrollment response.
+type rotateTokenPayload struct {
+	NewToken string `json:"new_token"`
 }
 
 type statusUpdate struct {
@@ -158,10 +173,44 @@ func (c *Commander) dispatch(ctx context.Context, cmd command) {
 		c.executeKill(ctx, cmd)
 	case "set_blocklist":
 		c.executeSetBlocklist(ctx, cmd)
+	case "rotate_token":
+		c.executeRotateToken(ctx, cmd)
 	default:
 		if err := c.updateStatus(ctx, cmd.ID, "failed", marshalResult("unknown command type: "+cmd.CommandType)); err != nil {
 			c.logger.ErrorContext(ctx, "commander fail", "cmd_id", cmd.ID, "err", err)
 		}
+	}
+}
+
+// executeRotateToken applies the server-issued new bearer to the agent's
+// persisted state, then acks the command. Ordering is load-bearing: the
+// ack PUT must happen AFTER the rotate succeeds, because the ack itself
+// is bearer-authenticated and the server has already pre-flipped its
+// active token to the new value (the old token only verifies during
+// the grace window). Acking with the old token still works for ~5
+// minutes; acking with the new token works indefinitely. So the
+// natural order -- rotate first, ack second -- is correct.
+func (c *Commander) executeRotateToken(ctx context.Context, cmd command) {
+	var payload rotateTokenPayload
+	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid payload: "+err.Error()))
+		return
+	}
+	if payload.NewToken == "" {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("payload missing new_token"))
+		return
+	}
+	if c.cfg.RotateTokenFn == nil {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("rotate not configured"))
+		return
+	}
+	if err := c.cfg.RotateTokenFn(ctx, payload.NewToken); err != nil {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("apply rotate: "+err.Error()))
+		return
+	}
+	c.logger.InfoContext(ctx, "commander rotate_token applied", "cmd_id", cmd.ID)
+	if err := c.updateStatus(ctx, cmd.ID, "completed", nil); err != nil {
+		c.logger.ErrorContext(ctx, "commander report rotate_token success", "cmd_id", cmd.ID, "err", err)
 	}
 }
 

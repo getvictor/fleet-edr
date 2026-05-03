@@ -262,12 +262,13 @@ func startCommander(
 		return
 	}
 	cmdr := commander.New(commander.Config{
-		ServerURL:    serverURL,
-		TokenFn:      tokenProvider.Token,
-		OnAuthFail:   tokenProvider.OnUnauthorized,
-		HostID:       hostID,
-		Interval:     5 * time.Second,
-		PolicySender: policySender,
+		ServerURL:     serverURL,
+		TokenFn:       tokenProvider.Token,
+		OnAuthFail:    tokenProvider.OnUnauthorized,
+		RotateTokenFn: tokenProvider.Rotate,
+		HostID:        hostID,
+		Interval:      5 * time.Second,
+		PolicySender:  policySender,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
