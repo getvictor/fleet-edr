@@ -1,5 +1,22 @@
 name: Tests
 
+# Gate-then-analyze pattern: a single `changes` job inspects the PR's file
+# list and emits one boolean per language plus an `any` summary. Each test
+# job is skipped via `if:` when its files weren't touched, so a doc-only PR
+# pays nothing here, and a Go-only PR doesn't wait on UI tests (or vice
+# versa). Sonar + Codecov still run for any-source PRs and tolerate missing
+# coverage artifacts when their producing job was skipped. A skipped
+# required check is treated as success by branch protection, so the gate
+# names (`Agent tests`, `Server tests`, `UI tests`, `SonarCloud scan`,
+# `Codecov upload`) can stay in `required_status_checks` unchanged. Pushes
+# to main and workflow_dispatch always run everything.
+#
+# Failsafe: every dependent job's `if:` evaluates `needs.changes.result !=
+# 'success' || <relevant flag>`. If the `changes` job itself flakes (e.g.
+# transient gh API failure), test jobs run unconditionally rather than
+# skipping — without the failsafe, a flaky gate would let a PR merge with
+# no test execution because skipped required checks are treated as success.
+
 on:
   push:
     branches: [main]
@@ -11,12 +28,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect language changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # baseline; the detect step doesn't actually checkout
+      pull-requests: read  # gate job reads the PR's file list via gh api pulls/<n>/files
+    outputs:
+      go: ${{ steps.detect.outputs.go }}
+      ui: ${{ steps.detect.outputs.ui }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            {
+              echo "go=true"
+              echo "ui=true"
+              echo "any=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "Triggered by $EVENT_NAME; running all test jobs."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          # Taskfile.yml + this workflow file fan out to both language gates
+          # because either could change how any test job runs. The "any extra"
+          # pattern catches changes that should still trigger Sonar/Codecov
+          # even when no language gate fires (e.g. sonar-project.properties).
+          GO_PATTERN='\.go$|(^|/)go\.(mod|sum)$|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
+          UI_PATTERN='^ui/|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
+          ANY_EXTRA_PATTERN='^sonar-project\.properties$|^\.github/workflows/test\.yml$'
+          go=false; ui=false; any=false
+          if echo "$files" | grep -qE "$GO_PATTERN"; then
+            go=true; any=true
+            echo "go relevant; will run Go test jobs."
+          else
+            echo "go not touched; skipping Go test jobs."
+          fi
+          if echo "$files" | grep -qE "$UI_PATTERN"; then
+            ui=true; any=true
+            echo "ui relevant; will run UI test job."
+          else
+            echo "ui not touched; skipping UI test job."
+          fi
+          if echo "$files" | grep -qE "$ANY_EXTRA_PATTERN"; then
+            any=true
+            echo "Sonar/Codecov-relevant non-language file changed."
+          fi
+          {
+            echo "go=$go"
+            echo "ui=$ui"
+            echo "any=$any"
+          } >> "$GITHUB_OUTPUT"
+
   # agent-test + server-test both run on macos-latest because the agent's
   # CGo receiver links -framework Foundation with no darwin build tag, so
   # it won't build on ubuntu. Coverage is collected here (not re-run in
   # the Sonar job) to avoid duplicate Go test runs.
   agent-test:
     name: Agent tests
+    needs: changes
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
     runs-on: macos-latest
     permissions:
       contents: read
@@ -46,6 +126,10 @@ jobs:
 
   server-test:
     name: Server tests
+    needs: changes
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
     runs-on: macos-latest
     permissions:
       contents: read
@@ -114,6 +198,10 @@ jobs:
   # ts-lint.yml owns lint + type-check; this job owns vitest.
   ui-test:
     name: UI tests
+    needs: changes
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -159,13 +247,25 @@ jobs:
 
   sonarcloud:
     name: SonarCloud scan
-    needs: [agent-test, server-test, ui-test]
+    needs: [changes, agent-test, server-test, ui-test]
+    # `!cancelled()` overrides the default `success()` precondition so this
+    # job still runs when one of the upstream test jobs was *skipped* (e.g.
+    # a Go-only PR that skipped ui-test). The explicit `!= 'failure'` checks
+    # preserve the prior behavior of "don't run Sonar on top of a failing
+    # test" — the test failure already blocks merge on its own.
+    #
     # Dependabot-triggered PR runs cannot access Actions secrets (deliberate
     # GitHub policy: prevents a compromised upstream action from stealing
     # SONAR_TOKEN via a dep bump). Without the token the scanner can't reach a
     # private project, so it's guaranteed to fail. The bumps also don't touch
     # any source Sonar analyses, so skipping it loses zero signal.
-    if: github.actor != 'dependabot[bot]'
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.any == 'true')
+      && needs.agent-test.result != 'failure'
+      && needs.server-test.result != 'failure'
+      && needs.ui-test.result != 'failure'
+      && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     environment: sonarcloud
     timeout-minutes: 10
@@ -178,12 +278,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Each coverage download is gated on its producing job actually
+      # running. Skipped producers (UI-only PR skips Go tests, etc.) don't
+      # publish artifacts, so an unconditional download would 404. Sonar
+      # tolerates missing inputs and reports 0% for whichever language
+      # didn't run — but since the gate evaluates new-code coverage only,
+      # a PR that didn't touch that language has no new lines to cover.
       - name: Download agent coverage
+        if: needs.agent-test.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-agent
 
       - name: Download server coverage
+        if: needs.server-test.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-server
@@ -192,6 +300,7 @@ jobs:
       # sonar.javascript.lcov.reportPaths in sonar-project.properties expects
       # the file at that exact path, so re-create the directory layout.
       - name: Download UI coverage
+        if: needs.ui-test.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-ui
@@ -204,12 +313,22 @@ jobs:
 
   codecov:
     name: Codecov upload
-    needs: [agent-test, server-test, ui-test]
-    # Same exclusion logic as sonarcloud: Dependabot PRs cannot read repo
-    # secrets, so a CODECOV_TOKEN-gated upload would always fail. Coverage
-    # files for dep bumps don't change project numbers in any meaningful way,
-    # so skipping the upload loses no signal.
-    if: github.actor != 'dependabot[bot]'
+    needs: [changes, agent-test, server-test]
+    # Codecov only consumes the agent + server flags (codecov.yml ignores
+    # ui/src/** globally — see comment further down), so this job is
+    # Go-relevant only: a UI-only PR skips it. Same `!cancelled()` +
+    # explicit failure check pattern as sonarcloud above.
+    #
+    # Same Dependabot exclusion as sonarcloud: Dependabot PRs cannot read
+    # repo secrets, so a CODECOV_TOKEN-gated upload would always fail.
+    # Coverage files for dep bumps don't change project numbers in any
+    # meaningful way, so skipping the upload loses no signal.
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
+      && needs.agent-test.result != 'failure'
+      && needs.server-test.result != 'failure'
+      && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # CODECOV_TOKEN lives in the `codecov` environment so branch-protection
     # policies can constrain which refs can read it (same pattern as the
