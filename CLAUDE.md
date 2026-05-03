@@ -1,4 +1,4 @@
-# Project Claude guide — Fleet EDR
+# Project Claude guide: Fleet EDR
 
 Project-specific conventions Claude must follow when developing in this repo.
 Layered on top of the global guide at `~/.claude/CLAUDE.md`; project-specific

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -213,28 +214,28 @@ func sanitizeDBName(testName string) string {
 	return name
 }
 
+// stripDBName clears the DBName field on a parsed DSN so the caller
+// can connect to the MySQL server without selecting a specific
+// database. Falls back to the original string on a parse error so
+// the test doesn't lose the original DSN's diagnostic value.
 func stripDBName(dsn string) string {
-	slashIdx := strings.LastIndex(dsn, ")/")
-	if slashIdx == -1 {
+	cfg, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
 		return dsn
 	}
-	afterSlash := dsn[slashIdx+2:]
-	qIdx := strings.Index(afterSlash, "?")
-	if qIdx == -1 {
-		return dsn[:slashIdx+2]
-	}
-	return dsn[:slashIdx+2] + afterSlash[qIdx:]
+	cfg.DBName = ""
+	return cfg.FormatDSN()
 }
 
+// replaceDBName swaps the DBName field on a parsed DSN. Uses
+// go-sql-driver/mysql's ParseDSN+FormatDSN round-trip so passwords
+// containing `)/` and other DSN-flavoured punctuation don't fool
+// naive substring manipulation.
 func replaceDBName(dsn, newDB string) string {
-	slashIdx := strings.LastIndex(dsn, ")/")
-	if slashIdx == -1 {
+	cfg, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
 		return dsn
 	}
-	afterSlash := dsn[slashIdx+2:]
-	qIdx := strings.Index(afterSlash, "?")
-	if qIdx == -1 {
-		return dsn[:slashIdx+2] + newDB
-	}
-	return dsn[:slashIdx+2] + newDB + afterSlash[qIdx:]
+	cfg.DBName = newDB
+	return cfg.FormatDSN()
 }

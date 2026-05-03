@@ -14,6 +14,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -782,7 +783,7 @@ func TestOperatorHTTP_UpdateAlertStatus_HappyPath(t *testing.T) {
 
 	body := strings.NewReader(`{"status":"acknowledged"}`)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut,
-		srv.URL+"/api/alerts/"+intItoa(int(alertID)), body)
+		srv.URL+"/api/alerts/"+strconv.FormatInt(alertID, 10), body)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -976,7 +977,7 @@ func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection
 			HostID:      hostID,
 			TimestampNs: 1,
 			EventType:   "fork",
-			Payload:     json.RawMessage(`{"child_pid":` + intToStr(pid) + `,"parent_pid":1}`),
+			Payload:     json.RawMessage(`{"child_pid":` + strconv.Itoa(pid) + `,"parent_pid":1}`),
 		},
 	})
 	// Wait for the processor to materialise the row.
@@ -1029,10 +1030,6 @@ func insertAlertDirect(t *testing.T, ctx context.Context, d *bootstrap.Detection
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func intToStr(n int) string {
-	return strings.TrimPrefix(strings.Repeat("0", 0)+intItoa(n), "")
-}
-
 // countNodes recursively counts process nodes across the forest.
 func countNodes(forest []api.ProcessNode) int {
 	n := 0
@@ -1051,26 +1048,4 @@ func flattenPaths(forest []api.ProcessNode) []string {
 		out = append(out, flattenPaths(root.Children)...)
 	}
 	return out
-}
-
-func intItoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
