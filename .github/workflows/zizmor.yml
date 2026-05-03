@@ -1,5 +1,24 @@
 name: GitHub Actions security
 
+# zizmor audits .github/workflows/* for CI-supply-chain weaknesses
+# (excessive permissions, template injection, dangerous triggers, unpinned
+# actions, etc.). The job below is configured to FAIL CI on findings at
+# medium severity AND medium confidence or higher, so the gate catches the
+# meaningful issues without breaking on the auditor persona's speculative
+# low-confidence flags.
+#
+# Suppressing a false positive: add a trailing comment to the offending
+# line in the workflow file:
+#     # zizmor: ignore[<rule-id>] reason: <one-line>
+# (e.g. `# zizmor: ignore[excessive-permissions] reason: ...`)
+# The reason text is required by repo convention so the next reviewer can
+# tell why the suppression is correct.
+#
+# Bumping `zizmor-action`: every minor / major bump can introduce new
+# rules that fire on unchanged workflows. Budget 15-30 min of triage for
+# any pin update; resolve each new finding by either fixing the workflow
+# or adding a documented per-line ignore.
+
 on:
   push:
     branches: [main]
@@ -31,4 +50,13 @@ jobs:
 
       - uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
         with:
+          # auditor surfaces the broadest set of issues; min-confidence:
+          # medium filters out the auditor-extra speculative flags so they
+          # don't fail CI (they're still visible if you run zizmor locally
+          # without these knobs).
           persona: auditor
+          # Fail CI on findings at medium severity (zizmor's mapped warning
+          # level) or higher. Lower-severity advisory findings are not
+          # gated; surface them locally with `zizmor --persona=pedantic .`.
+          min-severity: medium
+          min-confidence: medium
