@@ -22,10 +22,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/bootstrap"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // recordingHeartbeat captures every Heartbeat invocation so tests
@@ -60,7 +60,7 @@ func (r *recordingHeartbeat) snapshot() []heartbeatCall {
 // Heartbeat is the recording closure (or nil if the test passes nil).
 func newResponse(t *testing.T, hb *recordingHeartbeat) *bootstrap.Response {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	deps := bootstrap.Deps{
 		DB: s,
 	}
@@ -177,7 +177,7 @@ func TestListForHost_HeartbeatErrorIsNonFatal(t *testing.T) {
 
 func newResponseWithHeartbeat(t *testing.T, hb bootstrap.Heartbeat) *bootstrap.Response {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	r, err := bootstrap.New(bootstrap.Deps{
 		DB:        s,
 		Heartbeat: hb,

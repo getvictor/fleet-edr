@@ -96,13 +96,22 @@ func New(deps Deps) (*Identity, error) {
 // store.applySchema can resolve. After phase 5 drops fk_alerts_updated_by,
 // the call order won't matter; for now it does.
 func (i *Identity) ApplySchema(ctx context.Context) error {
+	return ApplySchema(ctx, i.db)
+}
+
+// ApplySchema is the package-level form: applies identity's DDL +
+// idempotent ALTERs against the given DB without requiring a fully
+// constructed *Identity. Used by server/testdb so tests can apply
+// every context's schema without faking out each bootstrap's service
+// dependencies.
+func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("identity schema create: %w", err)
 		}
 	}
 	for _, stmt := range schemaMigrations {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
 			return fmt.Errorf("identity schema migration: %w", err)
 		}
 	}

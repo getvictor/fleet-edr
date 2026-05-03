@@ -1,4 +1,4 @@
-package mysql
+package mysql_test
 
 import (
 	"encoding/json"
@@ -7,35 +7,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/response/api"
+	"github.com/fleetdm/edr/server/response/bootstrap"
+	"github.com/fleetdm/edr/server/response/internal/mysql"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
-// commandsDDLForTests duplicates the CREATE TABLE statement from
-// server/response/bootstrap/schema.go. Authoritative copy lives there;
-// these unit tests run below the bootstrap layer that would normally
-// apply it. Keep in lockstep with bootstrap/schema.go.
-const commandsDDLForTests = `CREATE TABLE IF NOT EXISTS commands (
-	id           BIGINT AUTO_INCREMENT PRIMARY KEY,
-	host_id      VARCHAR(255)  NOT NULL,
-	command_type VARCHAR(64)   NOT NULL,
-	payload      JSON          NOT NULL,
-	status       ENUM('pending', 'acked', 'completed', 'failed') NOT NULL DEFAULT 'pending',
-	created_at   TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-	acked_at     TIMESTAMP(6)  NULL,
-	completed_at TIMESTAMP(6)  NULL,
-	result       JSON,
-	INDEX idx_commands_host_status (host_id, status),
-	INDEX idx_commands_created (created_at)
-)`
-
-func newTestStore(t *testing.T) *Store {
+// newTestStore opens an isolated DB and applies response's schema via
+// the canonical bootstrap.ApplySchema. Lives in the external test
+// package so the testdb -> response/bootstrap -> response/internal/mysql
+// cycle doesn't bite when this file is in `package mysql`.
+func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
-	if _, err := s.ExecContext(t.Context(), commandsDDLForTests); err != nil {
-		t.Fatalf("apply commands schema: %v", err)
-	}
-	return NewStore(s)
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	return mysql.NewStore(db)
 }
 
 func TestInsertAndGet(t *testing.T) {

@@ -23,9 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/endpoint/bootstrap"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // fanoutWaitFor and fanoutWaitTick cap the post-enroll goroutine wait.
@@ -91,7 +91,7 @@ func (r *recordingCommandInserter) snapshot() []recordedCommand {
 // register routes onto a test mux.
 func newEndpoint(t *testing.T, opts ...func(*bootstrap.Deps)) *bootstrap.Endpoint {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	deps := bootstrap.Deps{
 		DB:                  s,
 		Logger:              slog.Default(),
@@ -384,7 +384,7 @@ func TestEnroll_PolicyFanoutOnFirstEnroll(t *testing.T) {
 	}
 	commands := &recordingCommandInserter{}
 
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	ep, err := bootstrap.New(bootstrap.Deps{
 		DB:                  s,
 		Logger:              slog.Default(),
@@ -429,7 +429,7 @@ func TestEnroll_NoFanoutWhenPolicyEmpty(t *testing.T) {
 	policy := &fakePolicyProvider{hasContent: false}
 	commands := &recordingCommandInserter{}
 
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	ep, err := bootstrap.New(bootstrap.Deps{
 		DB:                  s,
 		Logger:              slog.Default(),
@@ -464,7 +464,7 @@ func TestBootstrap_MissingDeps(t *testing.T) {
 		assert.Contains(t, err.Error(), "DB")
 	})
 	t.Run("missing secret", func(t *testing.T) {
-		s := srvbootstrap.OpenTestDB(t)
+		s := full.Open(t)
 		_, err := bootstrap.New(bootstrap.Deps{DB: s})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "EnrollSecret")

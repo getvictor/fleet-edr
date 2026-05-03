@@ -1,4 +1,4 @@
-package mysql
+package mysql_test
 
 import (
 	"database/sql"
@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
+	"github.com/fleetdm/edr/server/endpoint/bootstrap"
+	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
 const (
@@ -18,61 +20,22 @@ const (
 	testUUID   = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 )
 
-// enrollmentsDDLForTests duplicates the CREATE TABLE statement from
-// server/endpoint/bootstrap/schema.go. Authoritative copy lives there;
-// these mysql-package unit tests run before bootstrap.ApplySchema and
-// would fail with "table doesn't exist" otherwise. Keep the schema here
-// in lockstep with bootstrap/schema.go.
-const enrollmentsDDLForTests = `CREATE TABLE IF NOT EXISTS enrollments (
-	host_id          VARCHAR(255) PRIMARY KEY,
-	host_token_id    VARBINARY(32)  NOT NULL,
-	host_token_hash  VARBINARY(255) NOT NULL,
-	host_token_salt  VARBINARY(32)  NOT NULL,
-	hostname         VARCHAR(255)   NOT NULL,
-	agent_version    VARCHAR(64)    NOT NULL,
-	os_version       VARCHAR(128)   NOT NULL,
-	source_ip        VARCHAR(45)    NOT NULL,
-	enrolled_at      TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-	expires_at       TIMESTAMP(6)   NULL,
-	revoked_at       TIMESTAMP(6)   NULL,
-	revoke_reason    VARCHAR(128)   NULL,
-	revoked_by       VARCHAR(255)   NULL,
-	UNIQUE KEY uk_enrollments_token_id (host_token_id)
-)`
-
-// newTestStore wraps srvbootstrap.OpenTestDB and exposes the raw sqlx.DB the
-// enrollment Store needs. Applies the endpoint enrollments schema inline
-// since these tests run below the bootstrap layer that would normally do it.
-func newTestStore(t *testing.T) *Store {
+// newTestStore opens an isolated DB and applies endpoint's schema via
+// the canonical bootstrap.ApplySchema. Lives in the external test
+// package so the testdb -> endpoint/bootstrap -> endpoint/internal/mysql
+// cycle doesn't bite when this file is in `package mysql`.
+func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
-	if _, err := s.ExecContext(t.Context(), enrollmentsDDLForTests); err != nil {
-		t.Fatalf("apply enrollments schema: %v", err)
-	}
-	return NewStore(s)
-}
-
-func TestHashRoundTrip(t *testing.T) {
-	tok, err := generateToken()
-	require.NoError(t, err)
-	require.Len(t, tok, 43)
-
-	hash, salt, err := hashToken(tok)
-	require.NoError(t, err)
-	require.NotEmpty(t, hash)
-	require.Len(t, salt, argonSaltLen)
-
-	assert.True(t, verifyToken(tok, hash, salt))
-	assert.False(t, verifyToken("not-the-right-token-not-the-right-token-xxx", hash, salt))
-	assert.False(t, verifyToken(tok, nil, salt))
-	assert.False(t, verifyToken(tok, hash, nil))
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	return mysql.NewStore(db)
 }
 
 func TestRegister_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	res, err := s.Register(ctx, RegisterRequest{
+	res, err := s.Register(ctx, mysql.RegisterRequest{
 		HostID:       testUUID,
 		Hostname:     "qa-host",
 		AgentVersion: "0.0.1-dev",
@@ -91,7 +54,7 @@ func TestRegister_HappyPath(t *testing.T) {
 
 	// An obviously-wrong token is rejected fast (length check short-circuits argon2).
 	_, err = s.Verify(ctx, "nope")
-	assert.ErrorIs(t, err, ErrTokenMismatch)
+	assert.ErrorIs(t, err, mysql.ErrTokenMismatch)
 }
 
 // TestVerify_LookupByTokenID exercises the SHA-256-keyed Verify path with a non-trivial
@@ -107,7 +70,7 @@ func TestVerify_LookupByTokenID(t *testing.T) {
 	want := make(map[string]string, 10)
 	for i := range 10 {
 		uuid := fmt.Sprintf("11111111-2222-3333-4444-%012d", i)
-		res, err := s.Register(ctx, RegisterRequest{
+		res, err := s.Register(ctx, mysql.RegisterRequest{
 			HostID: uuid, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
 		})
 		require.NoError(t, err)
@@ -124,19 +87,19 @@ func TestVerify_LookupByTokenID(t *testing.T) {
 	// An unknown token with the correct length is ErrTokenMismatch — Verify must not
 	// silently tolerate mis-shaped tokens by iterating the table.
 	_, err := s.Verify(ctx, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-	assert.ErrorIs(t, err, ErrTokenMismatch)
+	assert.ErrorIs(t, err, mysql.ErrTokenMismatch)
 }
 
 func TestRegister_ReenrollRevokesPrevious(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	first, err := s.Register(ctx, RegisterRequest{
+	first, err := s.Register(ctx, mysql.RegisterRequest{
 		HostID: testUUID, Hostname: "h1", AgentVersion: "v1", OSVersion: "o", SourceIP: "127.0.0.1",
 	})
 	require.NoError(t, err)
 
-	second, err := s.Register(ctx, RegisterRequest{
+	second, err := s.Register(ctx, mysql.RegisterRequest{
 		HostID: testUUID, Hostname: "h1-reimaged", AgentVersion: "v1", OSVersion: "o", SourceIP: "127.0.0.2",
 	})
 	require.NoError(t, err)
@@ -144,7 +107,7 @@ func TestRegister_ReenrollRevokesPrevious(t *testing.T) {
 
 	// The previous token no longer validates.
 	_, err = s.Verify(ctx, first.HostToken)
-	require.ErrorIs(t, err, ErrTokenMismatch)
+	require.ErrorIs(t, err, mysql.ErrTokenMismatch)
 
 	// The current one does.
 	hostID, err := s.Verify(ctx, second.HostToken)
@@ -155,7 +118,7 @@ func TestRegister_ReenrollRevokesPrevious(t *testing.T) {
 func TestList_RedactsTokenColumns(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
-	_, err := s.Register(ctx, RegisterRequest{
+	_, err := s.Register(ctx, mysql.RegisterRequest{
 		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
 	})
 	require.NoError(t, err)
@@ -175,7 +138,7 @@ func TestList_RedactsTokenColumns(t *testing.T) {
 func TestRevoke_IdempotentAndAfterwardsRejected(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
-	reg, err := s.Register(ctx, RegisterRequest{
+	reg, err := s.Register(ctx, mysql.RegisterRequest{
 		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
 	})
 	require.NoError(t, err)
@@ -184,7 +147,7 @@ func TestRevoke_IdempotentAndAfterwardsRejected(t *testing.T) {
 
 	// Token no longer verifies after revoke.
 	_, err = s.Verify(ctx, reg.HostToken)
-	require.ErrorIs(t, err, ErrTokenMismatch)
+	require.ErrorIs(t, err, mysql.ErrTokenMismatch)
 
 	// Second revoke is idempotent and preserves the first actor/reason.
 	before, err := s.Get(ctx, testUUID)

@@ -7,24 +7,12 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 )
 
 func TestNew_RejectsMissingDB(t *testing.T) {
 	_, err := New(Deps{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DB")
-}
-
-func TestStoreAccessor(t *testing.T) {
-	db := srvbootstrap.OpenTestDB(t)
-	d, err := New(Deps{DB: db, Mode: ModeFull})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	assert.NotNil(t, d.Store(), "Store accessor returns the persistence handle")
-	assert.NotNil(t, d.Service(), "Service accessor returns the operator-facing api.Service")
 }
 
 func TestMigrationStep_ShouldIgnore(t *testing.T) {

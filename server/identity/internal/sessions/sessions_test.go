@@ -1,4 +1,4 @@
-package sessions
+package sessions_test
 
 import (
 	"bytes"
@@ -8,24 +8,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/bootstrap"
+	"github.com/fleetdm/edr/server/identity/bootstrap"
+	"github.com/fleetdm/edr/server/identity/internal/sessions"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
 // newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the
 // userID tests reference (1, 2, 7, 42 — whatever the test passes to Create). Without
-// this the Phase 3 FK constraint sessions.user_id → users(id) rejects inserts.
-func newTestStore(t *testing.T, opts Options) *Store {
+// this the FK constraint sessions.user_id → users(id) rejects inserts.
+func newTestStore(t *testing.T, opts sessions.Options) *sessions.Store {
 	t.Helper()
-	s := bootstrap.OpenTestDB(t)
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
 	for _, uid := range []int64{1, 2, 7, 42} {
-		_, err := s.ExecContext(t.Context(),
+		_, err := db.ExecContext(t.Context(),
 			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
 			uid, "u"+intToStr(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
 		if err != nil {
 			t.Fatalf("seed test user %d: %v", uid, err)
 		}
 	}
-	return New(s, opts)
+	return sessions.New(db, opts)
 }
 
 func intToStr(i int64) string {
@@ -50,20 +53,20 @@ func frozenClock(start time.Time) (now func() time.Time, advance func(time.Durat
 }
 
 func TestCreate_ReturnsNewRow(t *testing.T) {
-	s := newTestStore(t, Options{})
+	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
 	sess, err := s.Create(ctx, 42)
 	require.NoError(t, err)
-	assert.Len(t, sess.ID, IDLen)
-	assert.Len(t, sess.CSRFToken, IDLen)
+	assert.Len(t, sess.ID, sessions.IDLen)
+	assert.Len(t, sess.CSRFToken, sessions.IDLen)
 	assert.Equal(t, int64(42), sess.UserID)
 	assert.False(t, sess.CreatedAt.IsZero())
 	assert.True(t, sess.ExpiresAt.After(sess.CreatedAt))
 }
 
 func TestCreate_IDsAreUnique(t *testing.T) {
-	s := newTestStore(t, Options{})
+	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
 	a, err := s.Create(ctx, 1)
@@ -75,7 +78,7 @@ func TestCreate_IDsAreUnique(t *testing.T) {
 }
 
 func TestGet_ActiveRoundTrip(t *testing.T) {
-	s := newTestStore(t, Options{})
+	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
 	created, err := s.Create(ctx, 7)
@@ -89,15 +92,15 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 }
 
 func TestGet_WrongLengthReturnsNotFound(t *testing.T) {
-	s := newTestStore(t, Options{})
+	s := newTestStore(t, sessions.Options{})
 	_, err := s.Get(t.Context(), []byte("short"))
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
 func TestGet_UnknownIDReturnsNotFound(t *testing.T) {
-	s := newTestStore(t, Options{})
-	_, err := s.Get(t.Context(), make([]byte, IDLen))
-	require.ErrorIs(t, err, ErrNotFound)
+	s := newTestStore(t, sessions.Options{})
+	_, err := s.Get(t.Context(), make([]byte, sessions.IDLen))
+	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
 func TestGet_ExpiredReturnsNotFound(t *testing.T) {
@@ -106,7 +109,7 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	// doesn't tie the test to wall-clock duration.
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
-	s := newTestStore(t, Options{TTL: time.Hour, Now: nowFn})
+	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
 	ctx := t.Context()
 
 	created, err := s.Create(ctx, 1)
@@ -114,24 +117,24 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 
 	advance(2 * time.Hour) // past the 1 hour TTL
 	_, err = s.Get(ctx, created.ID)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
 func TestDelete_IsIdempotent(t *testing.T) {
-	s := newTestStore(t, Options{})
+	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
 	sess, err := s.Create(ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, s.Delete(ctx, sess.ID))
 	require.NoError(t, s.Delete(ctx, sess.ID), "second delete of same id must not error")
-	require.NoError(t, s.Delete(ctx, make([]byte, IDLen)), "delete of unknown id must not error")
+	require.NoError(t, s.Delete(ctx, make([]byte, sessions.IDLen)), "delete of unknown id must not error")
 }
 
 func TestCleanupExpired_RemovesOnlyExpired(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
-	s := newTestStore(t, Options{TTL: time.Hour, Now: nowFn})
+	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
 	ctx := t.Context()
 
 	active, err := s.Create(ctx, 1)
@@ -148,7 +151,7 @@ func TestCleanupExpired_RemovesOnlyExpired(t *testing.T) {
 
 	// The expired row is gone.
 	_, err = s.Get(ctx, active.ID)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, sessions.ErrNotFound)
 
 	// The fresh row is still there.
 	got, err := s.Get(ctx, stillActive.ID)

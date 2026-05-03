@@ -20,7 +20,8 @@ dependenciesRules:
         - "**.identity.**"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.store"  # for testhelper only; phase 5 removes the cross-context FK that forces this
+        - "**.store"   # for testhelper only; phase 5 removes the cross-context FK that forces this
+        - "**.testdb"  # phase 6: external _test packages use testdb.Open
 
   # Phase 2: endpoint context internals may import only their own context,
   # platform packages, and standard library / approved third-party. Other
@@ -37,7 +38,8 @@ dependenciesRules:
         - "**.attrkeys"
         - "**.httpserver"
         - "**.rules.api"  # phase 3: rules.api.PolicyService satisfies endpoint's PolicyProvider
-        - "**.store"  # for store.Event/Command/Host shared types and testhelper
+        - "**.store"      # for store.Event/Command/Host shared types and testhelper
+        - "**.testdb"     # phase 6: external _test packages use testdb.Open
 
   # Phase 3: rules context internals may import only their own context,
   # platform packages, the standard library / approved third-party,
@@ -57,9 +59,13 @@ dependenciesRules:
         - "**.rules.**"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.endpoint.api"  # ActiveHostsLister uses endpoint.Service for hostID lookup at runtime
+        - "**.endpoint.api"     # ActiveHostsLister uses endpoint.Service for hostID lookup at runtime
+        - "**.detection.api"    # phase 5: detection became a context; rules.api re-exports its types
+        - "**.detection.bootstrap"  # phase 6: rules/internal/catalog tests apply detection schema via package-level ApplySchema
+        - "**.detection.testharness"  # phase 5: catalog tests use testharness.Scenario (cross-context fixture)
         - "**.detection"     # transitional: rule files reference detection.Severity* and the Finding alias; phase 5 moves to detection/api
         - "**.store"         # transitional: *store.Store satisfies api.GraphReader; phase 5 moves to detection/api
+        - "**.testdb"        # phase 6: external _test packages use testdb.Open
 
   # Phase 4: response context internals may import only their own
   # context, platform packages, the standard library / approved
@@ -79,4 +85,6 @@ dependenciesRules:
         - "**.httpserver"
         - "**.endpoint.api"  # for HostIDFromContext on agent routes
         - "**.identity.api"  # reserved: future audit on POST /api/commands; harmless if unused today
+        - "**.sqlhelpers"    # phase 6: NullRawJSON moved out of detection/api into a shared platform package
         - "**.store"         # for testhelper only
+        - "**.testdb"        # phase 6: external _test packages use testdb.Open

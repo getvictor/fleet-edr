@@ -85,8 +85,16 @@ func New(deps Deps) (*Rules, error) {
 // cross-context FKs; ordering with other contexts' ApplySchema is
 // not load-bearing.
 func (r *Rules) ApplySchema(ctx context.Context) error {
+	return ApplySchema(ctx, r.db)
+}
+
+// ApplySchema is the package-level form: applies rules' DDL against
+// the given DB without requiring a fully constructed *Rules. Used by
+// server/testdb so tests can apply every context's schema without
+// faking out each bootstrap's service dependencies.
+func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
-		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("rules schema apply: %w", err)
 		}
 	}

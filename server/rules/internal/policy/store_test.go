@@ -1,4 +1,4 @@
-package policy
+package policy_test
 
 import (
 	"strings"
@@ -7,37 +7,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/bootstrap"
+	"github.com/fleetdm/edr/server/rules/internal/policy"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
-// policiesDDLForTests duplicates the CREATE TABLE + seed INSERT from
-// server/rules/bootstrap/schema.go. Authoritative copy lives there;
-// these unit tests run below the bootstrap layer that would normally
-// apply it. Keep in lockstep with bootstrap/schema.go.
-const (
-	policiesCreateTableForTests = `CREATE TABLE IF NOT EXISTS policies (
-		id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-		name        VARCHAR(64)  NOT NULL,
-		version     BIGINT       NOT NULL DEFAULT 1,
-		blocklist   JSON         NOT NULL,
-		updated_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		updated_by  VARCHAR(255) NOT NULL DEFAULT 'system',
-		UNIQUE KEY uk_policies_name (name)
-	)`
-	policiesSeedRowForTests = `INSERT IGNORE INTO policies (name, version, blocklist, updated_by)
-		VALUES ('default', 1, JSON_OBJECT('paths', JSON_ARRAY(), 'hashes', JSON_ARRAY()), 'system')`
-)
-
-func newTestStore(t *testing.T) *Store {
+// newTestStore opens an isolated DB and applies rules' schema (which
+// includes the policies table + the seed default-policy row). Lives in
+// the external test package so the testdb -> rules/bootstrap ->
+// rules/internal/policy cycle doesn't bite when this file is in
+// `package policy`.
+func newTestStore(t *testing.T) *policy.Store {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
-	for _, stmt := range []string{policiesCreateTableForTests, policiesSeedRowForTests} {
-		if _, err := s.ExecContext(t.Context(), stmt); err != nil {
-			t.Fatalf("apply policies schema: %v", err)
-		}
-	}
-	return NewStore(s)
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	return policy.NewStore(db)
 }
 
 func TestGet_SeedRowPresent(t *testing.T) {

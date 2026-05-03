@@ -1,4 +1,4 @@
-package mysql
+package mysql_test
 
 import (
 	"context"
@@ -8,23 +8,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/bootstrap"
+	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTestStore wraps srvbootstrap.OpenTestDB with a mysql.Store. The
-// fixture (re)applies the detection schema as part of OpenTestDB so
-// every method below sees a fresh, fully-migrated database.
-func newTestStore(t *testing.T) *Store {
+// newTestStore wraps testdb.Open with detection's ApplySchema +
+// MigrateSchema and returns a fresh mysql.Store. Lives in
+// package mysql_test so the testdb import (which transitively pulls
+// in detection/bootstrap) doesn't create a cycle with the production
+// detection/internal/mysql package.
+func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
-	db := srvbootstrap.OpenTestDB(t)
-	s, err := New(db)
+	db := testdb.Open(t)
+	ctx := t.Context()
+	require.NoError(t, bootstrap.ApplySchema(ctx, db))
+	require.NoError(t, bootstrap.MigrateSchema(ctx, db))
+	s, err := mysql.New(db)
 	require.NoError(t, err)
 	return s
 }
 
 func TestNew_RejectsNilDB(t *testing.T) {
-	_, err := New(nil)
+	_, err := mysql.New(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db handle")
 }
@@ -152,31 +159,6 @@ func TestStore_CountAlerts(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-func TestDeduplicateStrings(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []string
-		want []string
-	}{
-		{"nil", nil, nil},
-		{"empty", []string{}, []string{}},
-		{"single element passthrough", []string{"a"}, []string{"a"}},
-		{"all unique", []string{"a", "b", "c"}, []string{"a", "b", "c"}},
-		{"with duplicates", []string{"a", "b", "a", "c", "b"}, []string{"a", "b", "c"}},
-		{"all duplicates", []string{"x", "x", "x"}, []string{"x"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			out := deduplicateStrings(tc.in)
-			if tc.want == nil {
-				assert.Nil(t, out)
-				return
-			}
-			assert.Equal(t, tc.want, out)
-		})
-	}
-}
-
 func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
@@ -198,9 +180,5 @@ func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
 	assert.ElementsMatch(t, []int{10, 11}, pids)
 }
 
-// ---- helpers also exercised --------------------------------------------------
-
-// Reach into the Store's DB() to confirm it returns a usable handle.
-// Compile-time check that the type satisfies the Store contract used
-// by tests that take a *sqlx.DB.
+// Compile-time check that the package is wired correctly.
 var _ context.Context = (context.Context)(nil)

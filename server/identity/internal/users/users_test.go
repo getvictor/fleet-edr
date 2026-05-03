@@ -1,4 +1,4 @@
-package users
+package users_test
 
 import (
 	"testing"
@@ -6,19 +6,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/bootstrap"
+	"github.com/fleetdm/edr/server/identity/bootstrap"
+	"github.com/fleetdm/edr/server/identity/internal/users"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
-func newTestStore(t *testing.T) *Store {
+// newTestStore opens an isolated DB and applies identity's schema so
+// the users.Store has a `users` table to operate against. Lives in
+// the external test package so importing identity/bootstrap doesn't
+// create a cycle with the production users package.
+func newTestStore(t *testing.T) *users.Store {
 	t.Helper()
-	return New(bootstrap.OpenTestDB(t))
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	return users.New(db)
 }
 
 func TestCreate_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	u, err := s.Create(ctx, CreateRequest{Email: "Admin@Example.com", Password: "Corr3ct!H0rseBattery"})
+	u, err := s.Create(ctx, users.CreateRequest{Email: "Admin@Example.com", Password: "Corr3ct!H0rseBattery"})
 	require.NoError(t, err)
 	assert.Positive(t, u.ID)
 	assert.Equal(t, "admin@example.com", u.Email, "email must be lowercased before storage")
@@ -33,7 +41,7 @@ func TestCreate_RejectsEmptyInputs(t *testing.T) {
 		{"a@b", "", "password is required"},
 	}
 	for _, tc := range cases {
-		_, err := s.Create(t.Context(), CreateRequest{Email: tc.email, Password: tc.password})
+		_, err := s.Create(t.Context(), users.CreateRequest{Email: tc.email, Password: tc.password})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), tc.wantSub)
 	}
@@ -43,10 +51,10 @@ func TestCreate_DuplicateEmailFails(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := s.Create(ctx, CreateRequest{Email: "admin@example.com", Password: "pw1"})
+	_, err := s.Create(ctx, users.CreateRequest{Email: "admin@example.com", Password: "pw1"})
 	require.NoError(t, err)
 
-	_, err = s.Create(ctx, CreateRequest{Email: "ADMIN@example.com", Password: "pw2"})
+	_, err = s.Create(ctx, users.CreateRequest{Email: "ADMIN@example.com", Password: "pw2"})
 	require.Error(t, err, "case-insensitive duplicate must fail")
 }
 
@@ -54,7 +62,7 @@ func TestVerifyPassword_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	created, err := s.Create(ctx, CreateRequest{Email: "admin@example.com", Password: "rightpassword"})
+	created, err := s.Create(ctx, users.CreateRequest{Email: "admin@example.com", Password: "rightpassword"})
 	require.NoError(t, err)
 
 	u, err := s.VerifyPassword(ctx, "ADMIN@example.com", "rightpassword")
@@ -67,17 +75,17 @@ func TestVerifyPassword_WrongPassword(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := s.Create(ctx, CreateRequest{Email: "admin@example.com", Password: "rightpassword"})
+	_, err := s.Create(ctx, users.CreateRequest{Email: "admin@example.com", Password: "rightpassword"})
 	require.NoError(t, err)
 
 	_, err = s.VerifyPassword(ctx, "admin@example.com", "wrongpassword")
-	require.ErrorIs(t, err, ErrBadPassword)
+	require.ErrorIs(t, err, users.ErrBadPassword)
 }
 
 func TestVerifyPassword_UnknownEmail(t *testing.T) {
 	s := newTestStore(t)
 	_, err := s.VerifyPassword(t.Context(), "nobody@example.com", "anything")
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, users.ErrNotFound)
 }
 
 // TestVerifyPassword_TimingInsensitiveToEmail locks in the constant-time property: an
@@ -91,7 +99,7 @@ func TestVerifyPassword_UnknownEmailStillHashes(t *testing.T) {
 	// with a DB error. Coverage-wise this ensures the dummy-salt branch is exercised.
 	for range 2 {
 		_, err := s.VerifyPassword(t.Context(), "nobody@example.com", "whatever")
-		require.ErrorIs(t, err, ErrNotFound)
+		require.ErrorIs(t, err, users.ErrNotFound)
 	}
 }
 
@@ -102,7 +110,7 @@ func TestCount(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
 
-	_, err = s.Create(ctx, CreateRequest{Email: "a@b.com", Password: "p"})
+	_, err = s.Create(ctx, users.CreateRequest{Email: "a@b.com", Password: "p"})
 	require.NoError(t, err)
 
 	n, err = s.Count(ctx)

@@ -23,11 +23,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // stubUserExists is a closure-typed UserExists fixture. Tests pin the
@@ -147,7 +147,7 @@ type detectionOpts struct {
 // processttl + retention loops are live. Cleanup cancels and waits.
 func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 	t.Helper()
-	db := srvbootstrap.OpenTestDB(t)
+	db := full.Open(t)
 	deps := bootstrap.Deps{
 		DB:                   db,
 		Mode:                 opts.mode,
