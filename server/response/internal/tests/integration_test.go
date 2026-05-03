@@ -1,3 +1,5 @@
+//go:build integration
+
 // Per-context integration tests for the response bounded context.
 // Exercise the full bootstrap.New -> ApplySchema -> Service stack
 // against a real MySQL. Skips when EDR_TEST_DSN isn't set, matching

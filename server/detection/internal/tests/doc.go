@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package tests holds per-context integration tests for the detection
 // bounded context. Tests skip when EDR_TEST_DSN isn't set, matching
 // the project's other DB-using test files. They exercise the full
