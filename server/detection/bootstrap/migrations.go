@@ -106,34 +106,6 @@ var migrations = []migrationStep{
 		SQL:          `ALTER TABLE processes ADD INDEX idx_processes_previous_exec (previous_exec_id)`,
 		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
 	},
-	// Stored generated column + composite index so GetNetworkEventsForProcess
-	// can drop its JSON_EXTRACT predicate (issue #92). STORED (not VIRTUAL)
-	// because VIRTUAL would force a per-row JSON_EXTRACT re-evaluation on
-	// every index lookup, defeating the whole point. CAST AS UNSIGNED matches
-	// pid's non-negative domain; the column is BIGINT so a JSON pid value
-	// outside INT range still round-trips losslessly. NULL when payload has
-	// no $.pid (e.g. login / logout events) — InnoDB indexes NULLs.
-	//
-	// Operational note (Copilot review on PR #110): adding a STORED
-	// generated column rebuilds the table — InnoDB does not support
-	// ALGORITHM=INPLACE for stored generated columns, so MySQL falls
-	// back to ALGORITHM=COPY. On a multi-million-row events table this
-	// holds a metadata lock on `events` for the duration of the rebuild
-	// and blocks concurrent writes. Run during a maintenance window for
-	// large existing deployments. Fresh installs hit the inline column
-	// definition in schemaStatements and skip this ALTER entirely (the
-	// IgnoreErrors path swallows the duplicate-column code).
-	{
-		Name: "events.payload_pid",
-		SQL: `ALTER TABLE events ADD COLUMN payload_pid BIGINT
-		      GENERATED ALWAYS AS (CAST(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.pid')) AS UNSIGNED)) STORED`,
-		IgnoreErrors: []uint16{mysqlDuplicateColumn},
-	},
-	{
-		Name:         "events.idx_host_type_pid_ingested",
-		SQL:          `ALTER TABLE events ADD INDEX idx_events_host_type_pid_ingested (host_id, event_type, payload_pid, ingested_at_ns)`,
-		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
-	},
 }
 
 // shouldIgnore reports whether err matches any of the codes in the
