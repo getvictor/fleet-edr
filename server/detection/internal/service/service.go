@@ -15,8 +15,8 @@ import (
 
 // UserExists is the closure cmd/main wires from
 // identity.api.Service.UserExists. PUT /api/alerts/{id} calls it
-// before persisting `updated_by` so the FK that phase 5 dropped
-// doesn't silently let orphan user_ids land on the row.
+// before persisting `updated_by` so that orphan user_ids cannot
+// silently land on the row in the absence of a cross-context FK.
 type UserExists func(ctx context.Context, userID int64) (bool, error)
 
 // Service is the operator-facing detection orchestrator. Composes
@@ -109,7 +109,7 @@ func (s *Service) UpdateAlertStatus(ctx context.Context, id int64, status api.Al
 	}
 
 	// Validate updated_by user exists in the identity context.
-	// Replaces the cross-context FK fk_alerts_updated_by that phase 5 drops.
+	// Replaces the dropped cross-context FK fk_alerts_updated_by.
 	// userID == 0 means "internal backfill, leave updated_by alone" so the
 	// existence check is skipped.
 	if userID > 0 && s.userExists != nil {

@@ -19,9 +19,9 @@ import (
 // "user:pass@tcp(127.0.0.1:3316)/edr?parseTime=true". parseTime=true
 // is appended automatically when missing.
 //
-// Phase 5 moved this from server/store to the platform bootstrap
-// package: the connection pool is process-wide infrastructure, not
-// owned by any single bounded context.
+// The connection pool lives in the platform bootstrap package because
+// it is process-wide infrastructure, not owned by any single bounded
+// context.
 func OpenDB(ctx context.Context, dsn string) (*sqlx.DB, error) {
 	sqldb, err := openInstrumentedDB(ensureParseTime(dsn))
 	if err != nil {

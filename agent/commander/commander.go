@@ -207,9 +207,9 @@ func (c *Commander) executeSetBlocklist(ctx context.Context, cmd command) {
 	}
 
 	// The send is async — completing the command here does NOT mean the extension has
-	// successfully applied the policy. Phase 2 intentionally stops short of an
+	// successfully applied the policy. The MVP intentionally stops short of an
 	// extension-side ack; the audit trail of "command completed on agent" is sufficient
-	// for MVP. v1.1 adds a round-trip ack with the actually-applied version.
+	// for now. A future revision can add a round-trip ack with the actually-applied version.
 	result, _ := json.Marshal(map[string]any{
 		"version":       payload.Version,
 		"applied_paths": len(payload.Paths),

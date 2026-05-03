@@ -4,8 +4,7 @@
 // *Response handle exposes Service for cross-context callers
 // (endpoint enroll fan-out, rules policy fan-out, metrics adapter).
 //
-// Heartbeat is a closure type so cmd/main can supply
-// store.UpdateHostLastSeen today and switch to
-// detection.api.RecordHostSeen in phase 5 without changing the
-// response surface.
+// Heartbeat is a closure type so cmd/main supplies a heartbeat
+// implementation (today: detection.api.RecordHostSeen) without
+// response taking a hard dependency on detection.
 package bootstrap

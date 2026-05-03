@@ -1,7 +1,7 @@
 name: Arch lint
 
 # arch-go enforces the modular-monolith bounded-context rules from
-# arch-go.yml. Phase 6 strict mode: this is a hard-fail required check.
+# arch-go.yml in strict mode: this is a hard-fail required check.
 
 on:
   push:

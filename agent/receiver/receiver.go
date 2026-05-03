@@ -133,7 +133,7 @@ func (r *Receiver) Connect() error {
 // SendPolicy delivers a policy.update XPC message to the peer. Returns an error if the
 // connection is not established or the send call rejected the payload. The send is
 // asynchronous; a nil error means the message was handed off to XPC, not that the peer
-// has acknowledged it — an ack is not part of the wire protocol at Phase 2.
+// has acknowledged it — an ack is not part of the current wire protocol.
 //
 // We hold r.mu across the C bridge call so a concurrent Disconnect() cannot tear the
 // slot down while C is still using the handle. Without the extended lock, the small

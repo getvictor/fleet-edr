@@ -4,9 +4,9 @@ package bootstrap
 // Idempotent (IF NOT EXISTS); safe to re-run on a populated DB. No
 // FKs.
 //
-// Authoritative copy of the commands table DDL. Was previously
-// inlined in server/store/store.go's applySchema; phase 4 moved it
-// here.
+// Authoritative copy of the commands table DDL. Earlier server
+// versions inlined this in server/store/store.go's applySchema; the
+// bounded-context split moved it here.
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS commands (
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,

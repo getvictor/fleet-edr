@@ -31,7 +31,7 @@ export interface Process {
   exec_time_ns?: number;
   exit_time_ns?: number;
   exit_code?: number;
-  // Phase 7 additions. exit_reason distinguishes observed exits ("event")
+  // exit_reason distinguishes observed exits ("event")
   // from synthesized ones: "ttl_reconciliation" (server-side TTL force-grey),
   // "pid_reuse" (closed by an incoming fork on the same PID), "reexec"
   // (superseded by a re-exec on the same PID — see ReExecChain), or

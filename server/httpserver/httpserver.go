@@ -195,8 +195,8 @@ func (s *statusCapture) Flush() {
 // remoteAddr returns the peer address for access logging. We intentionally do NOT consult
 // `X-Forwarded-For`: that header is client-settable and trusting it without a trusted-proxy
 // allowlist lets any caller spoof their logged source IP. When the server moves behind a
-// real reverse proxy (Phase 5 packaging), revisit this with an explicit trusted-proxies
-// config knob; until then, r.RemoteAddr is the only trustworthy source.
+// real reverse proxy in production packaging, revisit this with an explicit
+// trusted-proxies config knob; until then, r.RemoteAddr is the only trustworthy source.
 func remoteAddr(r *http.Request) string {
 	return r.RemoteAddr
 }

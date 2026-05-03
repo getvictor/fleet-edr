@@ -93,8 +93,8 @@ func New(deps Deps) (*Identity, error) {
 //
 // Idempotent: the cross-context FK fk_alerts_updated_by that used to
 // require this be called before detection's ApplySchema was dropped
-// in phase 5 in favour of code-level UserExists validation, so call
-// order across contexts is no longer load-bearing.
+// in favour of code-level UserExists validation, so call order across
+// contexts is no longer load-bearing.
 func (i *Identity) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, i.db)
 }
@@ -122,8 +122,8 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 }
 
 // Service returns the public Service interface. Used by cross-context
-// callers (today: cmd/main calls Service.SeedAdmin at startup; phase 5
-// detection alert-update handler will call Service.UserExists).
+// callers: cmd/main calls Service.SeedAdmin at startup; detection's
+// alert-update handler calls Service.UserExists.
 func (i *Identity) Service() api.Service { return i.svc }
 
 // SessionMiddleware returns the operator-session middleware. Chain on every

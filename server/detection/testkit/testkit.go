@@ -18,11 +18,11 @@
 //     of <case>.json files, each becomes a sub-test asserting the
 //     rule's findings match expected_findings.
 //
-// Replaces the previous server/detection/testharness/ package; the
+// Replaces an earlier server/detection/testharness/ package; the
 // rename also means cross-context tests import a single
 // **.detection.testkit allow-list entry instead of the two
-// **.detection.bootstrap + **.detection.testharness entries that
-// phase 6 carried as transitional exceptions.
+// **.detection.bootstrap + **.detection.testharness entries that an
+// interim revision carried as transitional exceptions.
 //
 // Constraint: testkit may import detection's own internals (it lives
 // inside detection/) but must NOT import any other bounded context.

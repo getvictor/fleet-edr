@@ -10,11 +10,11 @@
 // X → testdb/full → ctx/bootstrap → X.
 //
 // Schemas are applied in dependency order: identity first (owns
-// users + sessions), then endpoint, rules, response, detection. After
-// phase 5 dropped the cross-context fk_alerts_updated_by FK the
-// remaining four are independent; the order is preserved for
-// readability and so future cross-context FKs (e.g. an audit log
-// keyed by user_id) Just Work without re-shuffling the call sites.
+// users + sessions), then endpoint, rules, response, detection. With
+// no cross-context FKs in the current schema the remaining four are
+// independent; the order is preserved for readability and so future
+// cross-context FKs (e.g. an audit log keyed by user_id) Just Work
+// without re-shuffling the call sites.
 //
 // full imports each context's testkit rather than its bootstrap so
 // the rule "production wiring (bootstrap) and test fixtures (testkit)

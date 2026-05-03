@@ -1,4 +1,4 @@
-// Package sessions owns the `sessions` table that backs Phase 3 UI cookie auth. A
+// Package sessions owns the `sessions` table that backs UI cookie auth. A
 // session is a server-side row keyed by the SHA-256 digest of a 32-byte random token.
 // The cookie carries the raw token (base64url-encoded); the DB stores only the digest,
 // mirroring the pattern enrollment tokens use so a database compromise does not

@@ -33,9 +33,9 @@ var (
 // Event mirrors a row in the events table. The agent posts these to
 // /api/events; the engine evaluates rules over batches of these.
 //
-// Wire shape MUST stay byte-identical with what server/store.Event
-// produced before phase 5: agents in the field decode server-emitted
-// Events for /api/commands result payloads.
+// Wire shape MUST stay byte-identical with what earlier server
+// versions produced: agents in the field decode server-emitted Events
+// for /api/commands result payloads.
 type Event struct {
 	EventID      string          `db:"event_id" json:"event_id"`
 	HostID       string          `db:"host_id" json:"host_id"`
@@ -163,9 +163,7 @@ const (
 	AlertStatusResolved     AlertStatus = "resolved"
 )
 
-// Severity levels aligned with industry standards (CrowdStrike,
-// MITRE). Same constant set previously exported from server/detection
-// and re-exported via rules.api in phase 3.
+// Severity levels aligned with industry standards (CrowdStrike, MITRE).
 const (
 	SeverityLow      = "low"
 	SeverityMedium   = "medium"
@@ -174,9 +172,8 @@ const (
 )
 
 // Finding is a per-rule positive output, persisted by the engine
-// into the alerts table. Was rules.api.Finding (a store-aliased
-// type) in phases 3-4; phase 5 moves the canonical definition here
-// and rules drops the alias.
+// into the alerts table. Canonical definition; rules consume it
+// directly via detection.api.
 type Finding struct {
 	HostID      string
 	RuleID      string
@@ -247,7 +244,7 @@ var (
 	// ErrInvalidUserUpdater is returned when UpdateAlertStatus is
 	// called with a user_id that the identity context does not
 	// recognise. Replaces the FK-level rejection that fk_alerts_updated_by
-	// enforced before phase 5.
+	// enforced in the pre-bounded-context schema.
 	ErrInvalidUserUpdater = errors.New("detection: updated_by user does not exist")
 
 	// ErrHostNotFound is returned by host-keyed reads when the host

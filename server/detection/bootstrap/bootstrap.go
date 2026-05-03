@@ -43,8 +43,8 @@ const (
 
 // UserExists is the closure cmd/main wires from
 // identity.api.Service.UserExists. PUT /api/alerts/{id} calls it
-// before persisting `updated_by` so the FK that phase 5 dropped
-// doesn't silently let orphan user_ids land on the row.
+// before persisting `updated_by` so that orphan user_ids cannot
+// silently land on the row in the absence of a cross-context FK.
 type UserExists = service.UserExists
 
 // Deps bundles what New needs to wire the detection context.

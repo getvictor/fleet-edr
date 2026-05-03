@@ -21,17 +21,17 @@ import (
 )
 
 // TestFullPath_EnrollIngestCommandAck is the canonical layer-3 smoke
-// test, per claude/modular-monolith/plan.md §Phase 5: an agent enrolls,
-// uploads events, an alert fires, an admin issues a kill command, the
-// agent polls and acks. Five steps, four contexts hit via HTTP plus
-// detection.api.Service called directly to assert post-conditions.
+// test: an agent enrolls, uploads events, an alert fires, an admin
+// issues a kill command, the agent polls and acks. Five steps, four
+// contexts hit via HTTP plus detection.api.Service called directly to
+// assert post-conditions.
 //
 // The test exists to keep the cross-context wiring honest. Per-context
 // layer-2 tests cover each context's behaviour in isolation; this one
 // catches regressions like "rules' ContentService.ActiveRules() didn't
 // flow into detection's engine after the bootstrap-order refactor."
 //
-// Each phase is its own helper so the orchestration here stays
+// Each step is its own helper so the orchestration here stays
 // procedural and readable; the helpers carry the per-step
 // boilerplate.
 func TestFullPath_EnrollIngestCommandAck(t *testing.T) {
@@ -52,7 +52,7 @@ func stepEnroll(t *testing.T, stack *Stack, hostID string) string {
 		"enroll_secret": EnrollSecret,
 		"hardware_uuid": hostID,
 		"hostname":      "qa-integration.local",
-		"agent_version": "phase8-integration-test",
+		"agent_version": "layer3-integration-test",
 		"os_version":    "macOS 26.0",
 	})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -74,8 +74,8 @@ func stepEnroll(t *testing.T, stack *Stack, hostID string) string {
 func stepIngestEvents(t *testing.T, stack *Stack, hostID, hostToken string) {
 	t.Helper()
 	// Fork + exec from /private/tmp/xxx. We don't rely on this
-	// triggering a rule (catalog is content; phase 8 doesn't change
-	// rule content); the events themselves landing proves
+	// triggering a rule (catalog is content; this smoke does not
+	// exercise rule content); the events themselves landing proves
 	// endpoint→detection wiring through the host-token middleware.
 	now := time.Now().UnixNano()
 	events := []detectionapi.Event{
@@ -125,7 +125,7 @@ func stepIssueKillCommand(t *testing.T, stack *Stack, hostID string) int64 {
 	// response/internal/mysql.
 	id, err := stack.ResponseService().Insert(
 		t.Context(), hostID, "kill_process",
-		json.RawMessage(`{"pid":4242,"reason":"phase 8 integration smoke"}`),
+		json.RawMessage(`{"pid":4242,"reason":"integration smoke"}`),
 	)
 	require.NoError(t, err)
 	require.Positive(t, id, "Insert should return a positive command id")

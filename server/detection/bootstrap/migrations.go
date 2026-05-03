@@ -29,11 +29,11 @@ const (
 
 // migrations are idempotent ALTER TABLE statements applied after
 // initial schema creation. Each statement preserves the migration
-// history that lived in server/store before phase 5 (so existing-DB
-// upgrades are wire-compatible) plus the phase-5-specific FK drop on
-// alerts.updated_by.
+// history from earlier server versions (so existing-DB upgrades are
+// wire-compatible) plus the FK drop on alerts.updated_by that the
+// bounded-context migration introduced.
 var migrations = []migrationStep{
-	// Phase 1 -> Phase 4 ALTERs preserved verbatim. Each is idempotent
+	// Pre-bounded-context ALTERs preserved verbatim. Each is idempotent
 	// via the duplicate-column / duplicate-key codes; the bootstrap
 	// loop's IgnoreErrors swallows them on already-migrated DBs.
 	{
@@ -57,10 +57,10 @@ var migrations = []migrationStep{
 		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
 	},
 	// Drop the cross-context FK alerts.updated_by -> users.id that
-	// phase 1 added; detection enforces the integrity check at the
-	// service layer instead (UserExists closure called from
-	// UpdateAlertStatus). Ignores 1091/3940 so a fresh DB (no FK to
-	// drop) and a re-run (FK already dropped) both succeed.
+	// earlier server versions carried; detection enforces the integrity
+	// check at the service layer instead (UserExists closure called
+	// from UpdateAlertStatus). Ignores 1091/3940 so a fresh DB (no FK
+	// to drop) and a re-run (FK already dropped) both succeed.
 	{
 		Name:         "drop fk_alerts_updated_by",
 		SQL:          `ALTER TABLE alerts DROP FOREIGN KEY fk_alerts_updated_by`,
