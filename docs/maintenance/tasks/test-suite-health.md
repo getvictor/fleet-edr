@@ -8,7 +8,8 @@
 
 A failing test suite gets attention. A *slowly degrading* test suite (flakes, skips, slow cases, semantically thin tests) does
 not, until one day a real regression slips through because nobody trusts a red CI any more. The repo invests heavily in test
-quality (PBT with rapid, fuzz, three-tier integration, `bootstrap.OpenTestDB`); the schedule keeps that investment from rotting.
+quality (PBT with rapid, fuzz, three-tier integration, `server/testdb/full.Open` as the standard MySQL fixture); the schedule
+keeps that investment from rotting.
 
 CI already enforces:
 
@@ -41,7 +42,7 @@ For each skip:
 ### 2. Slow tests
 
 ```bash
-go test -json ./... | jq 'select(.Action=="pass") | {test:.Test, pkg:.Package, elapsed:.Elapsed}' \
+go test -json ./... | jq 'select(.Action=="pass" or .Action=="fail") | {test:.Test, pkg:.Package, elapsed:.Elapsed}' \
   | jq -s 'sort_by(-.elapsed) | .[0:20]'
 ```
 
@@ -71,7 +72,7 @@ Spot-check 10 tests at random across the contexts. For each, ask:
   framework bugs)?
 - For PBT: does `rapid.Check` actually shrink to a counter-example when a property is broken? (Test it by mutating the property
   and confirming a shrunken failure.)
-- For integration tests: are they hitting the real DB (per CLAUDE.md) and not a mock?
+- For integration tests: are they hitting the real DB via `server/testdb/full.Open` (per CLAUDE.md) and not a mock?
 
 Don't try to fix all thin tests - file findings as issues with a representative example each.
 

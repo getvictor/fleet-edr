@@ -19,6 +19,6 @@
 //
 // Allowed imports for tests in this package:
 //   - detection/api;
-//   - server/bootstrap (for OpenTestDB);
+//   - server/testdb (for Open) and server/detection/testkit;
 //   - platform + standard library + approved third-party.
 package mysql

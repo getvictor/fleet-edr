@@ -19,9 +19,10 @@ Three rules to keep this from becoming maintenance theatre:
 
 These tasks were chosen with the following deltas in mind, not just generic "review your docs" advice:
 
-- **AI assistant configuration is now part of the codebase.** `CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `MEMORY.md`, slash commands,
-  and skills now drift the same way prose docs always have. They need a dedicated audit cadence because the rules they encode are
-  invisible to compilers and linters but actively shape every change.
+- **AI assistant configuration is now part of the codebase.** `CLAUDE.md` (committed) and the per-maintainer `MEMORY.md`, slash
+  commands, and skills under `~/.claude/` and `.claude/` now drift the same way prose docs always have. (Other tools in the
+  ecosystem use `AGENTS.md`, `.cursor/rules`, etc.; this repo standardises on Claude Code so only `CLAUDE.md` is committed.)
+  These rules need a dedicated audit cadence because they are invisible to compilers and linters but actively shape every change.
 - **Living best-practices audits over one-shot style guides.** Modern codebases (Kubernetes, Sigstore, Falco) treat their
   best-practices docs as periodically re-evaluated checklists, not write-once prose. The repo already does this in
   `docs/best-practices.md`; the schedule formalises the refresh cadence so unchecked items don't silently rot.

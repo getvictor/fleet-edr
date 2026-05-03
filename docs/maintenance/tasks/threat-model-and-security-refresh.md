@@ -17,7 +17,7 @@ CodeQL, OSV-scanner, and Scorecard catch implementation-level CVEs and known pat
 - Trust boundaries removed but still asserted in the doc
 - Threats that the previous model deliberately scoped out and that have since become in-scope (e.g. multi-tenant if the deploy
   channel changes)
-- Authn / authz design assumptions that no longer hold (sessions vs API tokens, CSRF on `POST /api/v1/...`, etc.)
+- Authn / authz design assumptions that no longer hold (sessions vs API tokens, CSRF on `POST /api/...`, etc.)
 
 ## Scope
 
@@ -34,7 +34,7 @@ List every trust boundary the system actually has, today, by inspection of the c
 | Boundary | Source of truth |
 |---|---|
 | Agent ↔ extension (XPC) | `extension/edr/` Mach service registration + `agent/` XPC client |
-| Agent ↔ server (HTTP/mTLS) | `agent/uploader` + `server/endpoint/internal/transport` |
+| Agent ↔ server (HTTP/mTLS) | `agent/uploader` + `server/endpoint/internal/enroll` + `server/endpoint/internal/middleware` |
 | Server ↔ MySQL | `server/*/internal/mysql` |
 | Server ↔ UI (browser session) | `server/identity/middleware` + `ui/src/` |
 | Server ↔ admin API | `server/admin/` |
@@ -44,7 +44,7 @@ List every trust boundary the system actually has, today, by inspection of the c
 For each boundary:
 
 - Authentication mechanism in use today
-- Authorisation model
+- Authorization model
 - Confidentiality (TLS, file perms)
 - Integrity (signatures, hashes, mTLS, audit token verification)
 - What the threat model currently says about it

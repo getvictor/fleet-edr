@@ -11,18 +11,19 @@ sees because there's no metric for them, an alert keeps firing once a week with 
 background noise. The compounding cost is real: when an incident hits, the signal you needed is missing because nobody noticed
 the metric was never wired.
 
-Signoz is the source of truth for live behaviour (dashboards, alerts, traces, metrics). Browser screenshots are forbidden per
+SigNoz is the source of truth for live behaviour (dashboards, alerts, traces, metrics). Browser screenshots are forbidden per
 MEMORY - every metric / trace claim must be verified through the SigNoz MCP tools.
 
-Per `feedback_metrics_otel_only.md`: do NOT add a Prometheus `/metrics` endpoint. All metrics flow through OTel + the existing
-OTLP pipeline.
+Project policy: do NOT add a Prometheus `/metrics` endpoint. All metrics flow through OTel + the existing OTLP pipeline. This
+policy is currently captured in per-user MEMORY only; the `adr-audit` task gap list flags this as a candidate for a committed
+ADR so the policy outlives any single contributor's memory.
 
 ## Scope
 
 - OTel instrumentation in `server/`, `agent/`, `internal/`
 - SigNoz dashboards (production + load-test instances)
 - SigNoz alert rules
-- The `feedback_metrics_otel_only.md` policy
+- The OTel-only metrics policy stated above
 
 ## Steps
 

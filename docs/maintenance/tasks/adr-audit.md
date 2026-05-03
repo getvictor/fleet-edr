@@ -46,7 +46,7 @@ Go through these candidate decision domains and ask: is there an ADR for it? If 
 | Test layering (unit / per-context / cross-context) | maybe | check |
 | OTel-only metrics (no Prometheus /metrics) | not yet | likely yes |
 | Embedded UI (`server/ui/dist/` via embed.go) | not yet | check |
-| `bootstrap.OpenTestDB` as the integration-test seam | not yet | likely yes |
+| `server/testdb/full.Open` as the integration-test seam | not yet | likely yes |
 | Co-Authored-By trailers policy | not yet | possibly (it's in MEMORY/CLAUDE.md only) |
 | AI-tooling-as-code (CLAUDE.md, skills, commands committed) | not yet | possibly |
 

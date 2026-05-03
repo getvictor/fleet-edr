@@ -1,9 +1,3 @@
-# Project Claude guide: Fleet EDR
-
-Project-specific conventions Claude must follow when developing in this repo.
-Layered on top of the global guide at `~/.claude/CLAUDE.md`; project-specific
-rules below override generic guidance only when the two conflict.
-
 ## Testing
 
 The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR.
@@ -11,7 +5,7 @@ Codecov mirrors that threshold. Tests live in three layers:
 
 1. **Per-package unit tests** — co-located with the code, default tag.
 2. **Per-context integration tests** — `server/<context>/internal/tests/`,
-   `package tests`, real MySQL via `bootstrap.OpenTestDB(t)`.
+   `package tests`, real MySQL via `testdb/full.Open(t)`.
 3. **Cross-context integration tests** — `test/integration/`,
    `package integration`, multi-context scenarios.
 
@@ -24,7 +18,7 @@ When adding tests, pick the style that matches the property under test:
 | Example-based + table-driven | Wire-format pinning, security regressions, named bug repros, HTTP handler error paths | `testify/assert` + `testify/require`, `t.Run` subtests |
 | **Property-based (PBT)** | Algebraic invariants over an input space larger than a table can reasonably cover | `pgregory.net/rapid` |
 | Fuzz | Untrusted input parsing (event JSON, policy diff, agent HTTP bodies) | `go test -fuzz` |
-| Integration | DB-backed behaviour, multi-step workflows | `bootstrap.OpenTestDB` + a real MySQL via docker-compose |
+| Integration | DB-backed behaviour, multi-step workflows | `testdb/full.Open` + a real MySQL via docker-compose |
 
 ### When to reach for PBT
 
@@ -89,7 +83,5 @@ Layered on the global guide. Project-specific:
 
 - Line wrap at 140 characters.
 - Sentence case for headings.
-- No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-`
-  with surrounding spaces).
-- Co-Authored-By trailers in commit messages: NEVER (per global).
+- No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-` with surrounding spaces).
 - Don't run `make db-reset` without explicit user permission.

@@ -30,12 +30,12 @@ import (
 // needed.
 func newIdentity(t *testing.T) *bootstrap.Identity {
 	t.Helper()
-	// srvbootstrap.OpenTestDB is the project's standard MySQL fixture. It
-	// inlines the identity DDL itself (see server/store/testhelper.go) so
-	// the tables exist before store.New runs the alerts FK -- which means
-	// we don't strictly need to re-run identityCtx.ApplySchema here. We
-	// do it anyway to exercise the production code path and assert it is
-	// idempotent.
+	// testdb/full.Open is the project's standard MySQL fixture for
+	// per-context integration tests. It applies every context's schema
+	// (including identity's), so the tables exist before store.New runs
+	// the alerts FK - which means we don't strictly need to re-run
+	// identityCtx.ApplySchema here. We do it anyway to exercise the
+	// production code path and assert it is idempotent.
 	s := full.Open(t)
 
 	id, err := bootstrap.New(bootstrap.Deps{

@@ -15,15 +15,20 @@ This is a 2025-2026-era maintenance domain that didn't exist when most "best pra
 
 ## Scope
 
-Project-level only:
+`.claude/` is gitignored in this repo (see `.gitignore`), so this audit operates on each maintainer's local checkout, not on a
+PR. The same reviewer running this task quarter after quarter is the right pattern; the audit log entry records the date and
+"no findings" or a summary of changes.
 
-- `.claude/settings.local.json` (project-only overrides, can be local-only)
-- `.claude/commands/` (slash commands committed with the repo)
+Files in scope (all per-maintainer, none committed):
+
+- `.claude/settings.local.json` (project-scoped overrides)
+- `.claude/commands/` (project-scoped slash commands)
 - `.claude/skills/` (project-scoped skills)
 - `.claude/scheduled_tasks.lock` (informational)
 - Any hook entries in those settings files
 
-User-level (`~/.claude/`) is out of scope unless the user explicitly asks: it's per-user, not per-repo.
+User-level `~/.claude/` (settings, MEMORY index, user-level skills) is out of scope unless explicitly requested - that's
+cross-project.
 
 ## Steps
 

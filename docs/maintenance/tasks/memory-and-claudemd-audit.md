@@ -6,9 +6,10 @@
 
 ## Why this matters
 
-`CLAUDE.md` (project-level) and `~/.claude/projects/-Users-victor-work-edr/memory/MEMORY.md` (per-user, per-project) shape every
-agent action invisibly. Unlike code or docs, nothing fails when these go stale: the agent simply follows outdated guidance and
-produces subtly wrong work. A monthly pass is the cheapest insurance against silent regressions in agent behaviour.
+`CLAUDE.md` (project-level, committed) and the per-user, per-project `MEMORY.md` (under
+`~/.claude/projects/<project-id>/memory/MEMORY.md`, where `<project-id>` is your absolute checkout path with `/` replaced by `-`)
+shape every agent action invisibly. Unlike code or docs, nothing fails when these go stale: the agent simply follows outdated
+guidance and produces subtly wrong work. A monthly pass is the cheapest insurance against silent regressions in agent behaviour.
 
 This is doubly important here because MEMORY.md contains project facts dated to specific decisions ("decided 2026-04-18", "VM IP
 192.168.64.5") that change without notice.
@@ -17,7 +18,7 @@ This is doubly important here because MEMORY.md contains project facts dated to 
 
 - `CLAUDE.md` at the repo root
 - Per-package `CLAUDE.md` files if any exist (currently none - `git ls-files '**/CLAUDE.md'` to confirm)
-- `~/.claude/projects/-Users-victor-work-edr/memory/MEMORY.md` and the per-topic files it indexes
+- `~/.claude/projects/<project-id>/memory/MEMORY.md` and the per-topic files it indexes
 
 User-level `~/.claude/CLAUDE.md` is out of scope unless explicitly requested - that's per-user.
 
@@ -67,12 +68,13 @@ the index. Detail belongs in the per-topic files it points to.
 ```
 Run the MEMORY/CLAUDE audit defined in docs/maintenance/tasks/memory-and-claudemd-audit.md.
 
-Step 1 - read /Users/victor/work/edr/CLAUDE.md. For each rule, verify it's still true (cross-check
+Step 1 - read CLAUDE.md at the repo root. For each rule, verify it's still true (cross-check
 with code), still useful (not redundant with lefthook / CI), and properly scoped (project, not user).
 
-Step 2 - read /Users/victor/.claude/projects/-Users-victor-work-edr/memory/MEMORY.md and every file
-it indexes. Verify dates, IPs, branch names, and references. Delete entries that are now stale,
-duplicate CLAUDE.md, or violate the "do not save derivable info" rule.
+Step 2 - read your per-user MEMORY.md at ~/.claude/projects/<project-id>/memory/MEMORY.md (where
+<project-id> is your absolute repo path with / replaced by -) and every file it indexes. Verify
+dates, IPs, branch names, and references. Delete entries that are now stale, duplicate CLAUDE.md,
+or violate the "do not save derivable info" rule.
 
 Step 3 - reconcile any conflict between MEMORY.md and CLAUDE.md. CLAUDE.md wins (public source of
 truth). MEMORY.md keeps only context that benefits future sessions and isn't derivable from code.

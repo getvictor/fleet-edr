@@ -20,9 +20,20 @@ Excludes: `claude/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g
 
 ## Steps
 
-1. Find all comments matching `TODO|FIXME|XXX|HACK|DEPRECATED` (case-sensitive in code; comments only - don't sweep arbitrary
-   strings). For Go: `grep -rnE '//[^"]*\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' server agent internal test`. For TS: same with
-   `ui/src`. For Swift: same with `extension/edr`.
+1. Find all comments matching `TODO|FIXME|XXX|HACK|DEPRECATED` across the full scope (case-sensitive in code; the patterns below
+   match both line comments `//` and block comments `/* ... */`, accepting some noise from string literals that contain the
+   marker words):
+   ```bash
+   # Go
+   grep -rnE '(\/\/|\/\*).*\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' server agent internal test tools scripts schema
+   # TS
+   grep -rnE '(\/\/|\/\*).*\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' ui/src
+   # Swift
+   grep -rnE '(\/\/|\/\*).*\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' extension/edr
+   # YAML / Taskfile / docker-compose / committed Markdown (line comments + plain-text)
+   grep -rnE '\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' Taskfile.yml lefthook.yml docker-compose*.yml
+   git ls-files '*.md' | xargs grep -nE '\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b'
+   ```
 2. For each hit, decide:
 
    | Verdict | Action |
