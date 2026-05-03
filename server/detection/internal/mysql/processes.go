@@ -202,10 +202,14 @@ func (s *Store) ReExec(
 //
 // Issue #94: prior shape was N sequential round-trips (one per chain
 // link, capped at 64). The recursive CTE collapses that into one
-// query. The depth column inside the CTE serves as a belt-and-
-// suspenders cycle guard; the schema invariant is that
-// previous_exec_id is strictly decreasing, but a corrupt FK shouldn't
-// be able to lock up the query either.
+// query. The depth column inside the CTE serves two purposes: a
+// belt-and-suspenders cycle guard (in case of a corrupt FK), and the
+// ordering key for the result. The anchor row sits at depth=0 and
+// each recursion step adds one, so depth tracks structural distance
+// back from `current.PreviousExecID`. ORDER BY depth DESC therefore
+// yields oldest-first — independent of fork_time_ns, which can tie or
+// drift across agents (per Gemini Code Assist + Copilot review on
+// PR #110).
 //
 // The SELECT is scoped by host_id as well as id so a corrupted
 // previous_exec_id value can never surface a row from a different
@@ -238,10 +242,10 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
 		FROM chain
-		ORDER BY fork_time_ns`,
+		ORDER BY depth DESC`,
 		*current.PreviousExecID, current.HostID, maxChainLen-1,
 	)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return nil, fmt.Errorf("walk exec chain at id=%d: %w", *current.PreviousExecID, err)
 	}
 	return chain, nil

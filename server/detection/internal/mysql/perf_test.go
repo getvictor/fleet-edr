@@ -26,7 +26,7 @@ func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
 
 	const n = 32
 	events := make([]api.Event, 0, n*3)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		host := "host-" + strconv.Itoa(i)
 		events = append(events,
 			api.Event{EventID: host + "-1", HostID: host, TimestampNs: int64(100 + i), EventType: "fork", Payload: json.RawMessage(`{}`)},
@@ -44,7 +44,7 @@ func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
 	for _, h := range hosts {
 		byHost[h.HostID] = h
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		host := "host-" + strconv.Itoa(i)
 		got, ok := byHost[host]
 		require.True(t, ok, "missing row for %s", host)
@@ -88,7 +88,7 @@ func BenchmarkUpsertHosts(b *testing.B) {
 				}
 			}
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				if err := s.UpsertHosts(ctx, events); err != nil {
 					b.Fatalf("upsert hosts: %v", err)
 				}
@@ -140,7 +140,7 @@ func TestGetNetworkEventsForProcess_UsesPIDIndex(t *testing.T) {
 
 	// Seed enough rows that the optimiser would prefer a scan over an
 	// index lookup if the predicate weren't index-backed.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		require.NoError(t, s.InsertEvents(ctx, []api.Event{{
 			EventID:     "seed-" + strconv.Itoa(i),
 			HostID:      "h",
@@ -205,7 +205,7 @@ func BenchmarkGetNetworkEventsForProcess(b *testing.B) {
 			}
 			require.NoError(b, s.InsertEvents(ctx, batch))
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_, err := s.GetNetworkEventsForProcess(ctx, "h", 7, api.TimeRange{FromNs: 0, ToNs: 1 << 62})
 				if err != nil {
 					b.Fatalf("query: %v", err)
@@ -298,7 +298,7 @@ func BenchmarkInsertAlert_BulkLinkEvents(b *testing.B) {
 			}
 			require.NoError(b, s.InsertEvents(ctx, batch))
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				// Vary rule_id so each iteration creates a fresh alert
 				// (the dedup branch is covered by its own bench below).
 				_, _, err := s.InsertAlert(ctx, api.Alert{
@@ -393,22 +393,25 @@ func BenchmarkGetExecChain(b *testing.B) {
 			s := newTestStore(b)
 			ctx := b.Context()
 
-			var prev *int64
-			var lastID int64
-			for i := 0; i < depth; i++ {
-				p := api.Process{HostID: "h", PID: 1, ForkTimeNs: int64(100 + i)}
-				if prev != nil {
-					p.PreviousExecID = prev
-				}
+			// Build `depth` ancestor rows linked tail-to-head, then form
+			// a logical `current` whose PreviousExecID points at the most
+			// recent ancestor. Each iteration must capture the inserted
+			// id into a *fresh* int64 (snapshot) and take its address;
+			// reusing one variable's address yields a self-cycle because
+			// the pointer always reads the latest assignment (per
+			// Copilot review on PR #110).
+			var prevPtr *int64
+			for i := range depth {
+				p := api.Process{HostID: "h", PID: 1, ForkTimeNs: int64(100 + i), PreviousExecID: prevPtr}
 				id, err := s.InsertProcess(ctx, p)
 				require.NoError(b, err)
-				lastID = id
-				prev = &lastID
+				snapshot := id
+				prevPtr = &snapshot
 			}
-			current := api.Process{ID: lastID, HostID: "h", PID: 1, ForkTimeNs: int64(100 + depth - 1), PreviousExecID: prev}
+			current := api.Process{HostID: "h", PID: 1, ForkTimeNs: int64(100 + depth), PreviousExecID: prevPtr}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_, err := s.GetExecChain(ctx, current)
 				if err != nil {
 					b.Fatalf("get exec chain: %v", err)

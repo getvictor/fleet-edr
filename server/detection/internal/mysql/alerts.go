@@ -73,10 +73,7 @@ func bulkInsertAlertEvents(ctx context.Context, tx *sqlx.Tx, alertID int64, even
 		verb = "INSERT IGNORE INTO"
 	}
 	for start := 0; start < len(eventIDs); start += alertEventsBatchSize {
-		end := start + alertEventsBatchSize
-		if end > len(eventIDs) {
-			end = len(eventIDs)
-		}
+		end := min(start+alertEventsBatchSize, len(eventIDs))
 		chunk := eventIDs[start:end]
 		placeholders := make([]string, len(chunk))
 		args := make([]any, 0, len(chunk)*2)

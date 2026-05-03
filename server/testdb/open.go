@@ -32,10 +32,10 @@ import (
 // bootstrap, which lets per-package unit tests inside a context's
 // internal/ tree use Open without an import cycle (the cycle would
 // otherwise go: pkg → testdb → ctx/bootstrap → pkg).
-func Open(t testing.TB) *sqlx.DB {
-	t.Helper()
+func Open(tb testing.TB) *sqlx.DB {
+	tb.Helper()
 
-	dsn := testDSN(t)
+	dsn := testDSN(tb)
 
 	// Parse the DSN once and fail fast if it's malformed. Returning
 	// the original DSN on parse error would silently strip our
@@ -44,24 +44,24 @@ func Open(t testing.TB) *sqlx.DB {
 	// shared dev DB.
 	baseDSN, err := stripDBName(dsn)
 	if err != nil {
-		t.Fatalf("parse EDR_TEST_DSN: %v", err)
+		tb.Fatalf("parse EDR_TEST_DSN: %v", err)
 	}
 	adminDB, err := sqlx.Open("mysql", baseDSN)
 	if err != nil {
-		t.Fatalf("open admin connection: %v", err)
+		tb.Fatalf("open admin connection: %v", err)
 	}
 	defer adminDB.Close()
 
-	dbName := sanitizeDBName(t.Name())
-	ctx := t.Context()
+	dbName := sanitizeDBName(tb.Name())
+	ctx := tb.Context()
 
 	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName)); err != nil {
-		t.Fatalf("drop test db: %v", err)
+		tb.Fatalf("drop test db: %v", err)
 	}
 	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE `%s`", dbName)); err != nil {
-		t.Fatalf("create test db: %v", err)
+		tb.Fatalf("create test db: %v", err)
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		cleanupDB, err := sqlx.Open("mysql", baseDSN)
 		if err != nil {
 			return
@@ -72,22 +72,22 @@ func Open(t testing.TB) *sqlx.DB {
 
 	perTestDSN, err := replaceDBName(dsn, dbName)
 	if err != nil {
-		t.Fatalf("replace DSN db name: %v", err)
+		tb.Fatalf("replace DSN db name: %v", err)
 	}
 	db, err := bootstrap.OpenDB(ctx, perTestDSN)
 	if err != nil {
-		t.Fatalf("open test db: %v", err)
+		tb.Fatalf("open test db: %v", err)
 	}
 
-	t.Cleanup(func() { _ = db.Close() })
+	tb.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
-func testDSN(t testing.TB) string {
-	t.Helper()
+func testDSN(tb testing.TB) string {
+	tb.Helper()
 	dsn := os.Getenv("EDR_TEST_DSN")
 	if dsn == "" {
-		t.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
+		tb.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
 	return dsn
 }

@@ -113,6 +113,16 @@ var migrations = []migrationStep{
 	// pid's non-negative domain; the column is BIGINT so a JSON pid value
 	// outside INT range still round-trips losslessly. NULL when payload has
 	// no $.pid (e.g. login / logout events) — InnoDB indexes NULLs.
+	//
+	// Operational note (Copilot review on PR #110): adding a STORED
+	// generated column rebuilds the table — InnoDB does not support
+	// ALGORITHM=INPLACE for stored generated columns, so MySQL falls
+	// back to ALGORITHM=COPY. On a multi-million-row events table this
+	// holds a metadata lock on `events` for the duration of the rebuild
+	// and blocks concurrent writes. Run during a maintenance window for
+	// large existing deployments. Fresh installs hit the inline column
+	// definition in schemaStatements and skip this ALTER entirely (the
+	// IgnoreErrors path swallows the duplicate-column code).
 	{
 		Name: "events.payload_pid",
 		SQL: `ALTER TABLE events ADD COLUMN payload_pid BIGINT

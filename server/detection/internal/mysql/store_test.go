@@ -23,14 +23,14 @@ import (
 // Accepts testing.TB so the same fixture works for benchmarks (see
 // perf_test.go); *testing.T and *testing.B both satisfy the
 // interface.
-func newTestStore(t testing.TB) *mysql.Store {
-	t.Helper()
-	db := testdb.Open(t)
-	ctx := t.Context()
-	require.NoError(t, testkit.ApplySchema(ctx, db))
-	require.NoError(t, testkit.MigrateSchema(ctx, db))
+func newTestStore(tb testing.TB) *mysql.Store {
+	tb.Helper()
+	db := testdb.Open(tb)
+	ctx := tb.Context()
+	require.NoError(tb, testkit.ApplySchema(ctx, db))
+	require.NoError(tb, testkit.MigrateSchema(ctx, db))
 	s, err := mysql.New(db)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return s
 }
 
