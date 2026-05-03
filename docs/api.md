@@ -114,8 +114,7 @@ Over-limit requests return `429 Too Many Requests` with a
 
 Ingestion (`POST /api/events`), command polling, and UI read
 endpoints are not rate limited. If you proxy thousands of agents
-through a single IP (NAT), monitor `edr.enroll.attempts` in OTel
-metrics to confirm you're not hitting the enroll cap.
+through a single IP (NAT), you may hit the enrollment rate limit.
 
 ## Errors
 
