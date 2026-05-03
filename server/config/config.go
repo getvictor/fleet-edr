@@ -84,6 +84,18 @@ type Config struct {
 	// servers where interactive SSH is unusual — the rule's "non-shell
 	// -> shell -> /tmp/" shape is then a clean attacker indicator.
 	SuspiciousExecParentAllowlist map[string]struct{}
+
+	// HostTokenLifetime is the maximum age of an agent's bearer token
+	// before the verify path triggers an automatic rotation (issue #86).
+	// Populated from EDR_HOST_TOKEN_LIFETIME. Default 24h: short enough
+	// that an exfiltrated token has bounded value, long enough that the
+	// per-host rotation traffic is negligible.
+	HostTokenLifetime time.Duration
+	// HostTokenGrace is the window during which a just-rotated previous
+	// token still verifies. Populated from EDR_HOST_TOKEN_GRACE.
+	// Default 5m: comfortably wider than an agent's poll interval so an
+	// in-flight request doesn't 401 mid-cycle.
+	HostTokenGrace time.Duration
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -105,6 +117,8 @@ func defaults() Config {
 		RetentionInterval:    time.Hour,
 		StaleProcessTTL:      6 * time.Hour,
 		StaleProcessInterval: 10 * time.Minute,
+		HostTokenLifetime:    24 * time.Hour,
+		HostTokenGrace:       5 * time.Minute,
 	}
 }
 
@@ -156,6 +170,11 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	// Phase 7 / issue #6: stale-process TTL. 0 disables the reconciler.
 	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, &errs)
 	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, &errs)
+	// #86 host-token rotation. Both must be positive; "disable rotation"
+	// is not a supported deployment mode (a never-rotating bearer token
+	// is the very thing this feature exists to fix).
+	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_LIFETIME", &c.HostTokenLifetime, &errs)
+	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_GRACE", &c.HostTokenGrace, &errs)
 
 	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
 		c.LaunchAgentAllowlist = allowlist

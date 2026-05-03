@@ -283,12 +283,19 @@ tasks:
       service (MYSQL_ALLOW_EMPTY_PASSWORD=yes); a `root:toor@...` DSN will fail with
       access-denied. OTel exporter targets the local signoz-otel-collector on 4317; if
       no collector is running, exporter init logs warnings and request handling continues.
+
+      Host-token rotation defaults (issue #86): EDR_HOST_TOKEN_LIFETIME 24h,
+      EDR_HOST_TOKEN_GRACE 5m. Override either to a short value (e.g.
+      EDR_HOST_TOKEN_LIFETIME=30s) when QA-ing the rotation flow against a real VM agent
+      so you can observe a rotation cycle inside one minute rather than next-day.
     env:
       EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
       EDR_ENROLL_SECRET: dev-enroll-secret
       EDR_ALLOW_INSECURE_HTTP: "1"
       EDR_LISTEN_ADDR: "0.0.0.0:8088"
       EDR_LOG_FORMAT: text
+      EDR_HOST_TOKEN_LIFETIME: 24h
+      EDR_HOST_TOKEN_GRACE: 5m
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_EXPORTER_OTLP_INSECURE: "true"
