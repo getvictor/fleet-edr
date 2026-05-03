@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/rules/internal/policy"
+	"github.com/fleetdm/edr/server/rules/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
@@ -21,7 +21,7 @@ import (
 func newTestStore(t *testing.T) *policy.Store {
 	t.Helper()
 	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	return policy.NewStore(db)
 }
 

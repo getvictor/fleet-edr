@@ -3,81 +3,160 @@ version: 1
 # Architecture rules for the modular-monolith bounded-context migration.
 # See docs/adr/0004-modular-monolith-bounded-contexts.md for the rationale.
 #
-# Phase 6 strict mode: every transitional allow-list entry from earlier
-# phases (`**.store`, the `**.detection` catch-all) is gone. The five
-# bounded contexts are stable; new violations should fail the build.
+# Phase 7 strict mode: bootstrap is for production wiring only.
+# Per-context internal code may NOT import its own context's bootstrap;
+# tests reach for the per-context testkit instead. Cross-context tests
+# import only **.<Y>.api or **.<Y>.testkit — never **.<Y>.bootstrap and
+# never **.<Y>.internal.**. testkit packages are pinned to their own
+# context so cross-context test allowances cannot be exploited as
+# transitive paths to other bounded contexts.
 
 dependenciesRules:
-  # identity context internals may import only their own context,
-  # platform packages, and standard library / approved third-party.
-  # Other contexts that need identity functionality go through
-  # identity/api.
+  # identity context internals may import only identity's own api +
+  # internals + test-fixture surface, plus platform packages. Other
+  # contexts that need identity functionality go through identity/api.
   - package: "**.identity.internal.**"
     shouldOnlyDependsOn:
       internal:
-        - "**.identity.**"
+        - "**.identity.api"
+        - "**.identity.api.**"
+        - "**.identity.internal.**"
+        - "**.identity.testkit"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.testdb"  # test fixtures (external _test packages call testdb.Open)
+        - "**.testdb"
 
-  # endpoint context internals may import only their own context,
-  # platform packages, and standard library / approved third-party.
-  # Other contexts that need enrollment / host-token verification go
-  # through endpoint/api.
+  # endpoint context internals.
   - package: "**.endpoint.internal.**"
     shouldOnlyDependsOn:
       internal:
-        - "**.endpoint.**"
+        - "**.endpoint.api"
+        - "**.endpoint.api.**"
+        - "**.endpoint.internal.**"
+        - "**.endpoint.testkit"
         - "**.attrkeys"
         - "**.httpserver"
         - "**.rules.api"   # rules.api.PolicyService satisfies endpoint's PolicyProvider
-        - "**.testdb"      # test fixtures
+        - "**.testdb"
 
-  # rules context internals may import only their own context,
-  # platform packages, the standard library / approved third-party,
-  # endpoint/api (for the ActiveHostsLister adapter), and a narrow
-  # window into detection (api types + the testharness for catalog
-  # tests + bootstrap.ApplySchema for fixture setup).
+  # rules context internals. Cross-context test allowance is
+  # **.detection.testkit (and only testkit) — replaces the
+  # **.detection.bootstrap + **.detection.testharness pair phase 6
+  # carried as transitional exceptions.
   - package: "**.rules.internal.**"
     shouldOnlyDependsOn:
       internal:
-        - "**.rules.**"
+        - "**.rules.api"
+        - "**.rules.api.**"
+        - "**.rules.internal.**"
+        - "**.rules.testkit"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.endpoint.api"           # ActiveHostsLister uses endpoint.Service for hostID lookup
-        - "**.detection.api"          # detection's domain types (Event, Process, Finding, etc.)
-        - "**.detection.bootstrap"    # catalog tests apply detection schema via bootstrap.ApplySchema
-        - "**.detection.testharness"  # catalog tests use testharness.Scenario
-        - "**.testdb"                 # test fixtures
+        - "**.endpoint.api"
+        - "**.detection.api"
+        - "**.detection.api.**"
+        - "**.detection.testkit"
+        - "**.testdb"
 
-  # response context internals may import only their own context,
-  # platform packages, the standard library / approved third-party,
-  # identity/api (UserIDFromContext on POST /api/commands), and
-  # endpoint/api (HostIDFromContext on agent routes).
+  # response context internals.
   - package: "**.response.internal.**"
     shouldOnlyDependsOn:
       internal:
-        - "**.response.**"
+        - "**.response.api"
+        - "**.response.api.**"
+        - "**.response.internal.**"
+        - "**.response.testkit"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.endpoint.api"  # HostIDFromContext on agent routes
-        - "**.identity.api"  # reserved for future audit on POST /api/commands
-        - "**.sqlhelpers"    # NullRawJSON
-        - "**.testdb"        # test fixtures
+        - "**.endpoint.api"
+        - "**.identity.api"
+        - "**.sqlhelpers"
+        - "**.testdb"
 
-  # detection context internals may import only their own context,
-  # platform packages, the standard library / approved third-party,
-  # endpoint/api (HostIDFromContext on the ingest route), identity/api
-  # (UserIDFromContext on operator alert updates), and rules/api
-  # (Rule + RuleProvider interfaces the engine consumes).
+  # detection context internals.
   - package: "**.detection.internal.**"
     shouldOnlyDependsOn:
       internal:
-        - "**.detection.**"
+        - "**.detection.api"
+        - "**.detection.api.**"
+        - "**.detection.internal.**"
+        - "**.detection.testkit"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.endpoint.api"  # HostIDFromContext on POST /api/events
-        - "**.identity.api"  # UserIDFromContext on operator alert lifecycle
-        - "**.rules.api"     # Rule + RuleProvider interfaces
-        - "**.sqlhelpers"    # NullRawJSON
-        - "**.testdb"        # test fixtures
+        - "**.endpoint.api"
+        - "**.identity.api"
+        - "**.rules.api"
+        - "**.sqlhelpers"
+        - "**.testdb"
+
+  # ----- testkit packages -----------------------------------------------------
+  #
+  # testkit is a curated test-fixture surface for each bounded context.
+  # Pinning its dependencies to its own context (plus platform) prevents
+  # cross-context tests from using testkit as a transitive sneak-in
+  # path to a third context: even though rules.internal is allowed to
+  # import detection.testkit, detection.testkit cannot pull in
+  # identity/endpoint/response. arch-go inspects direct imports only,
+  # so this defence-in-depth rule is what makes the layered allow-list
+  # actually airtight.
+
+  - package: "**.identity.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.identity.api"
+        - "**.identity.api.**"
+        - "**.identity.bootstrap"     # testkit.ApplySchema wraps bootstrap.ApplySchema
+        - "**.identity.internal.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+        - "**.testdb"
+
+  - package: "**.endpoint.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.endpoint.api"
+        - "**.endpoint.api.**"
+        - "**.endpoint.bootstrap"
+        - "**.endpoint.internal.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+        - "**.testdb"
+
+  - package: "**.rules.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.rules.api"
+        - "**.rules.api.**"
+        - "**.rules.bootstrap"
+        - "**.rules.internal.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+        - "**.testdb"
+
+  - package: "**.response.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.response.api"
+        - "**.response.api.**"
+        - "**.response.bootstrap"
+        - "**.response.internal.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+        - "**.testdb"
+
+  - package: "**.detection.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.detection.api"
+        - "**.detection.api.**"
+        - "**.detection.bootstrap"
+        - "**.detection.internal.**"
+        - "**.rules.api"              # Replay runs rulesapi.Rule against fixtures
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+        - "**.testdb"

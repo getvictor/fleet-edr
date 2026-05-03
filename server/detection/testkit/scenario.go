@@ -1,4 +1,4 @@
-package testharness
+package testkit
 
 import (
 	"context"
@@ -15,17 +15,17 @@ import (
 
 // Scenario is a per-test detection-stack fixture: a *mysql.Store
 // wrapping the test DB, and a *graph.Builder that materialises events
-// into the processes table. Catalog tests that need to seed events +
-// reach api.GraphReader without going through the fixture-based
-// Replay path use this helper because they cannot import
-// detection/internal/* directly (Go's internal-package rule).
+// into the processes table. Tests outside detection (e.g. catalog rule
+// tests in server/rules/internal/catalog/) use this to seed events +
+// reach api.GraphReader without going through Go's internal-package
+// rule.
 type Scenario struct {
 	Store   *mysql.Store
 	Builder *graph.Builder
 }
 
 // NewScenario builds a detection fixture wrapping the given test DB
-// (typically returned by server/bootstrap.OpenTestDB).
+// (typically returned by server/testdb.Open).
 func NewScenario(t *testing.T, db *sqlx.DB) *Scenario {
 	t.Helper()
 	s, err := mysql.New(db)

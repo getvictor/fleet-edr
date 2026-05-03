@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/detection/testharness"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -19,7 +19,7 @@ func TestSudoersTamper_Fixtures(t *testing.T) {
 			"/usr/local/bin/fixture-allowed-writer": {},
 		},
 	}
-	testharness.Replay(t, r, "fixtures/sudoers_tamper")
+	detectiontestkit.Replay(t, r, "fixtures/sudoers_tamper")
 }
 
 // TestSudoersTamper_TechniquesMapping pins the MITRE ATT&CK mapping.

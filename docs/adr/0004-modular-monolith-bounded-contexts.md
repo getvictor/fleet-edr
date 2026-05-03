@@ -100,9 +100,23 @@ the `internal/` rule. Architecture lint (`arch-go`, programmatic API
 invoked from `go test ./test/arch/...`) covers the rules Go's compiler
 cannot express, namely: which contexts may import which other contexts'
 `api/` packages, that platform packages may not import contexts, and
-that `bootstrap/` packages are imported only by `server/cmd/*`,
-`server/testdb/full` (the test fixture that composes every context's
-`ApplySchema`), and `test/integration/`.
+that `bootstrap/` packages are imported only by `server/cmd/*`, each
+context's own `testkit/`, and integration tests.
+
+Each context also exposes a peer of `api/` / `bootstrap/` / `internal/`
+called `testkit/`: a coordinated test-fixture surface. testkit owns
+the schema-applier wrappers (`ApplySchema`, `MigrateSchema`),
+context-specific fakes/seeders, and (in detection's case) the
+rule-replay harness used by cross-context catalog tests. The split
+rule is:
+
+- Production wiring: `cmd/main` calls `bootstrap`; `bootstrap` is for
+  standing up real service instances.
+- Tests: per-context unit tests, cross-context integration tests
+  (including `server/testdb/full`'s composer), and rule fixture
+  replays all reach for `testkit`. arch-go pins each testkit to its
+  own context so cross-context test allowances cannot be exploited as
+  transitive sneak-in paths to a third context.
 
 The migration runs as seven phases, smallest blast radius first
 (`identity` -> `endpoint` -> `rules` -> `response` -> `detection` ->

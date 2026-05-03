@@ -8,16 +8,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/users"
+	"github.com/fleetdm/edr/server/identity/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
 func newUsersStore(t *testing.T) *users.Store {
 	t.Helper()
 	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	return users.New(db)
 }
 
