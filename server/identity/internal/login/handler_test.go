@@ -12,12 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/identity/api"
-	"github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
+	"github.com/fleetdm/edr/server/identity/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
@@ -42,7 +42,7 @@ type errBody struct {
 func setupServer(t *testing.T, ratePerMinute int) (*httptest.Server, *users.Store, *sessions.Store) {
 	t.Helper()
 	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	us := users.New(db)
 	ss := sessions.New(db, sessions.Options{})
 	svc := service.New(us, ss, slog.Default())

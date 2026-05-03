@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/identity/api"
-	"github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
+	"github.com/fleetdm/edr/server/identity/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
@@ -26,7 +26,7 @@ import (
 func newService(t *testing.T) (api.Service, *sessions.Store) {
 	t.Helper()
 	s := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), s))
+	require.NoError(t, testkit.ApplySchema(t.Context(), s))
 	for _, uid := range []int64{1, 7, 42} {
 		_, err := s.ExecContext(t.Context(),
 			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,

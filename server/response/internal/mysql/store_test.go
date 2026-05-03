@@ -8,19 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/response/api"
-	"github.com/fleetdm/edr/server/response/bootstrap"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
+	"github.com/fleetdm/edr/server/response/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
 // newTestStore opens an isolated DB and applies response's schema via
-// the canonical bootstrap.ApplySchema. Lives in the external test
+// the canonical testkit.ApplySchema. Lives in the external test
 // package so the testdb -> response/bootstrap -> response/internal/mysql
 // cycle doesn't bite when this file is in `package mysql`.
 func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
 	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	return mysql.NewStore(db)
 }
 

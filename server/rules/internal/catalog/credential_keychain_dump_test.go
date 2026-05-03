@@ -5,15 +5,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/fleetdm/edr/server/detection/testharness"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 )
 
 // TestCredentialKeychainDump_Fixtures runs every fixture case under
 // fixtures/credential_keychain_dump/ as its own sub-test. Add a new
 // case by dropping a *.json file in that directory — no Go edits
-// needed. See server/detection/testharness for the fixture schema.
+// needed. See server/detection/testkit for the fixture schema.
 func TestCredentialKeychainDump_Fixtures(t *testing.T) {
-	testharness.Replay(t, &CredentialKeychainDump{}, "fixtures/credential_keychain_dump")
+	detectiontestkit.Replay(t, &CredentialKeychainDump{}, "fixtures/credential_keychain_dump")
 }
 
 // TestCredentialKeychainDump_TechniquesMapping pins the MITRE ATT&CK

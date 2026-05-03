@@ -1,31 +1,32 @@
-// Package testharness runs detection rules against JSON fixtures so new
-// rule PRs can be reviewed as "here are the events, here are the expected
-// findings" — no boilerplate per test. Existing rules keep their bespoke
-// tests (see server/detection/rules/*_test.go); new rules should prefer
-// this harness.
+package testkit
+
+// Replay runs detection rules against JSON fixtures so new rule PRs
+// can be reviewed as "here are the events, here are the expected
+// findings" — no per-rule boilerplate.
 //
 // Fixture layout:
 //
-//	server/detection/rules/fixtures/<rule_id>/<case>.json
+//	<fixtureDir>/<case>.json
 //
-// Each JSON file is one Go sub-test. Its name (minus .json) becomes the
-// sub-test name, so `positive_dump_keychain.json` prints as
+// Each JSON file is one Go sub-test. Its name (minus .json) becomes
+// the sub-test name, so `positive_dump_keychain.json` prints as
 // `positive_dump_keychain` in test output. Expected-no-findings cases
 // just set "expected_findings": [] (or omit the key).
 //
-// What the harness does per case:
-//  1. Spin up an isolated MySQL test store.
-//  2. s.InsertEvents(events) — server stamps ingested_at_ns here.
-//  3. graph.Builder.ProcessBatch(events) — materialises the process
+// What Replay does per case:
+//
+//  1. Spin up an isolated MySQL test DB via testdb.Open.
+//  2. Apply detection's schema + migrations via testkit's own helpers
+//     (no bootstrap import needed at the call site).
+//  3. s.InsertEvents(events) — server stamps ingested_at_ns here.
+//  4. graph.Builder.ProcessBatch(events) — materialises the process
 //     rows the rule depends on (fork/exec/exit).
-//  4. rule.Evaluate(events, store) and check the findings shape against
+//  5. rule.Evaluate(events, store) and check the findings shape against
 //     the fixture's expected_findings.
 //
-// What the harness does NOT do:
-//   - Persist findings as alerts (the engine does that in production).
-//     Rules are tested in isolation; Engine.Evaluate behaviour is
-//     covered separately by engine_test.go.
-package testharness
+// What Replay does NOT do: persist findings as alerts (the engine
+// does that in production). Rules are tested in isolation;
+// Engine.Evaluate behaviour is covered by engine_test.go.
 
 import (
 	"encoding/json"
@@ -40,7 +41,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
-	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -51,8 +51,8 @@ import (
 type FixtureCase struct {
 	// Events are the event envelopes the rule will see. Fork + exec
 	// pairs are expected for any process the rule's Evaluate dereferences
-	// via GetProcessByPID; the harness calls ProcessBatch to materialise
-	// them before Evaluate.
+	// via GetProcessByPID; Replay calls ProcessBatch to materialise them
+	// before Evaluate.
 	Events []detectionapi.Event `json:"events"`
 	// ExpectedFindings is the assertion target. An empty slice (or
 	// omitted key) means "rule must not fire for these events" — a
@@ -76,8 +76,8 @@ type ExpectedFinding struct {
 // match. Fails t if fixtureDir is missing or has no cases — a silent
 // pass when all cases accidentally get moved is worse than a loud fail.
 //
-// Sub-tests are named by the fixture's path relative to fixtureDir with
-// the `.json` suffix stripped, so a file at
+// Sub-tests are named by the fixture's path relative to fixtureDir
+// with the `.json` suffix stripped, so a file at
 // `<dir>/sudoers/positive_overwrite.json` renders as sub-test name
 // `sudoers/positive_overwrite` and scoping via `-run` works naturally.
 func Replay(t *testing.T, rule rulesapi.Rule, fixtureDir string) {
@@ -110,8 +110,8 @@ func Replay(t *testing.T, rule rulesapi.Rule, fixtureDir string) {
 func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	t.Helper()
 	// Path is constructed from a fixed fixtureDir + a filename we
-	// already discovered via os.ReadDir on that same directory, so
-	// there's no user-input taint. gosec's G304 is a false positive
+	// already discovered via filepath.WalkDir on that same directory,
+	// so there's no user-input taint. gosec's G304 is a false positive
 	// in the test-harness context.
 	raw, err := os.ReadFile(path) //nolint:gosec // fixture path, not user input
 	require.NoError(t, err)
@@ -121,8 +121,8 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 
 	db := testdb.Open(t)
 	ctx := t.Context()
-	require.NoError(t, detectionbootstrap.ApplySchema(ctx, db), "apply detection schema")
-	require.NoError(t, detectionbootstrap.MigrateSchema(ctx, db), "apply detection migrations")
+	require.NoError(t, ApplySchema(ctx, db), "apply detection schema")
+	require.NoError(t, MigrateSchema(ctx, db), "apply detection migrations")
 	mysqlStore, err := mysql.New(db)
 	require.NoError(t, err, "wrap test store")
 	require.NoError(t, mysqlStore.InsertEvents(ctx, c.Events), "insert events")
@@ -138,15 +138,15 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 		len(c.ExpectedFindings), len(findings))
 
 	// Positional match. Rules in this codebase emit findings in
-	// deterministic order (iteration over sorted event batches); if a
-	// rule ever goes non-deterministic we should address it in the rule
-	// itself, not here.
+	// deterministic order (iteration over sorted event batches); if
+	// a rule ever goes non-deterministic we should address it in the
+	// rule itself, not here.
 	//
 	// Range over findings rather than ExpectedFindings so nilaway can
-	// see that we never index a nil slice — rule.Evaluate returns a nil
-	// []Finding for no-match cases, which is Go-idiomatic but trips
-	// nilaway's can-be-nil flow without this rewrite. The require.Len
-	// above guarantees ExpectedFindings[i] is in range.
+	// see that we never index a nil slice — rule.Evaluate returns a
+	// nil []Finding for no-match cases, which is Go-idiomatic but
+	// trips nilaway's can-be-nil flow without this rewrite. The
+	// require.Len above guarantees ExpectedFindings[i] is in range.
 	for i, got := range findings {
 		want := c.ExpectedFindings[i]
 		assert.Equal(t, want.RuleID, got.RuleID, "finding[%d].rule_id", i)

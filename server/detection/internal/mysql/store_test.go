@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/detection/api"
-	"github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	"github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
@@ -23,8 +23,8 @@ func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
 	db := testdb.Open(t)
 	ctx := t.Context()
-	require.NoError(t, bootstrap.ApplySchema(ctx, db))
-	require.NoError(t, bootstrap.MigrateSchema(ctx, db))
+	require.NoError(t, testkit.ApplySchema(ctx, db))
+	require.NoError(t, testkit.MigrateSchema(ctx, db))
 	s, err := mysql.New(db)
 	require.NoError(t, err)
 	return s

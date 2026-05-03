@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/detection/testharness"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -37,7 +37,7 @@ func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
 			"FIXTURE-ALLOW": {},
 		},
 	}
-	testharness.Replay(t, r, "fixtures/privilege_launchd_plist_write")
+	detectiontestkit.Replay(t, r, "fixtures/privilege_launchd_plist_write")
 }
 
 // TestPrivilegeLaunchdPlistWrite_TechniquesMapping pins the MITRE ATT&CK
@@ -142,8 +142,8 @@ func TestPrivilegeLaunchdPlistWrite_OpenRaceWithoutProcess(t *testing.T) {
 	assert.Empty(t, findings, "race against process materialisation must skip silently")
 }
 
-// Compile-time check that testharness is referenced (other tests in
+// Compile-time check that detection/testkit is referenced (other tests in
 // this package use Replay; the import sits at file scope alongside
 // the api import so this declaration keeps the unused-import linter
 // happy without forcing a per-test refactor).
-var _ = testharness.Replay
+var _ = detectiontestkit.Replay
