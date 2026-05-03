@@ -160,3 +160,183 @@ dependenciesRules:
         - "**.httpserver"
         - "**.sqlhelpers"
         - "**.testdb"
+
+  # ----- api/ packages: pure-types, no cross-context internals ----------------
+  #
+  # Each <X>/api/ contains domain value types + interface declarations; any
+  # executable cross-context wiring belongs in bootstrap/ or internal/. The
+  # rule catches accidents like "rules.api gained a helper that imports
+  # detection/internal/mysql for convenience" before they ship.
+  #
+  # rules/api carries an explicit cross-context exception: it re-exports
+  # detection/api types (Event, Process, Finding, NullRawJSON, GraphReader,
+  # TimeRange) as type aliases so the catalog rule files can implement
+  # rulesapi.Rule.Evaluate without importing detection/api directly. The
+  # alias is a deliberate design choice; this rule names it.
+
+  - package: "**.identity.api"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.identity.api.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+
+  - package: "**.endpoint.api"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.endpoint.api.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+
+  - package: "**.rules.api"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.rules.api.**"
+        - "**.detection.api"          # alias re-export of detection/api types
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+
+  - package: "**.response.api"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.response.api.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+
+  - package: "**.detection.api"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.detection.api.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+
+  # ----- platform packages: must not import any bounded context ---------------
+  #
+  # Plan §"Platform packages": "Platform packages MUST NOT import any context."
+  # The rule encodes that. Patterns use full module paths because
+  # `**.bootstrap` would otherwise also match each context's bootstrap, and
+  # `**.testdb` would also match testdb/full (the cross-context fixture
+  # composer that legitimately imports each testkit).
+
+  - package: "github.com/fleetdm/edr/server/config"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/bootstrap"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/httpserver"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/logging"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/metrics"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/attrkeys"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/apidocs"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  - package: "github.com/fleetdm/edr/server/sqlhelpers"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  # NOTE: server/testdb itself is a Go-leaf and imports no context, but its
+  # sub-package server/testdb/full is the cross-context fixture composer and
+  # imports each context's testkit. arch-go's package patterns are prefix-
+  # matched (github.com/fleetdm/edr/server/testdb matches both leaf + full),
+  # so a single rule can't distinguish them. The leaf invariant is verified
+  # by inspection (server/testdb/open.go imports nothing in server/<X>/) and
+  # by the per-testkit rules below preventing transitive sneak-ins.
+
+  - package: "github.com/fleetdm/edr/server/ui"
+    shouldNotDependsOn:
+      internal:
+        - "**.identity.**"
+        - "**.endpoint.**"
+        - "**.rules.**"
+        - "**.response.**"
+        - "**.detection.**"
+
+  # ----- bootstrap/ access: enforced indirectly --------------------------------
+  #
+  # Plan §"Architecture lint" prescribes "Allow only `cmd/**` and
+  # `test/integration/**` to import any `bootstrap/` package."
+  # arch-go v1.7.0 exposes only "depends-on" rule families
+  # (shouldOnlyDependsOn / shouldNotDependsOn) — not the inverse
+  # "shouldOnlyBeAccessedBy" the plan sketched against v2. The
+  # invariant is enforced indirectly by the importer-perspective
+  # rules already in this file:
+  #
+  #   - Platform packages cannot import any context (incl. bootstraps).
+  #   - <X>/api packages cannot import any other context's bootstrap
+  #     (the api-purity allow-list excludes it).
+  #   - <X>/internal/* packages cannot import another context's
+  #     bootstrap (each context's allow-list lists only that context's
+  #     own packages + cross-context **.<Y>.api / **.<Y>.testkit).
+  #   - <X>/testkit may import its OWN context's bootstrap (per-testkit
+  #     rule); other contexts' testkits are not in any internal
+  #     allow-list, so cross-context testkit imports go through testkit
+  #     too, not bootstrap.
+  #
+  # The remaining production-reachable bootstrap importers are
+  # cmd/fleet-edr-{server,ingest} and each <X>/testkit. New packages
+  # outside those slots would have to be added explicitly; code review
+  # is the gate. If arch-go ever ships a "shouldOnlyBeAccessedBy" rule
+  # family in v2, this section becomes the single declarative
+  # source of truth instead of a property derived from many other
+  # rules.
