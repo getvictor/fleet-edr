@@ -219,7 +219,7 @@ floor for any project that wants enterprise adoption.
   enforced). Five contexts: `detection`, `rules`, `response`, `endpoint`, `identity`.
   Cross-context calls go via the imported `api/` package only; no cross-context
   transactions; no cross-context foreign keys (the one such FK,
-  `fk_alerts_updated_by`, was dropped in phase 5 in favour of code-level validation)
+  `fk_alerts_updated_by`, was dropped in favour of code-level validation)
 - [x] **Architecture lint** via `arch-go`
   ([github.com/arch-go/arch-go](https://github.com/arch-go/arch-go)). Declarative
   YAML rules at `arch-go.yml`; programmatic API runs from `go test ./test/arch/...`
@@ -272,7 +272,7 @@ floor for any project that wants enterprise adoption.
   internals); use `server/testdb/full.Open(t)` for the full multi-schema
   fixture. Layer 3: cross-context integration tests at `test/integration/`
   exercise scenarios spanning multiple contexts
-- [x] Subtest + table-driven test convention (per `~/.claude/CLAUDE.md`)
+- [x] Subtest + table-driven test convention (per `CLAUDE.md`)
 - [x] Load-test harness (`test/loadtest.go`)
 - [ ] **End-to-end tests** (Playwright / Cypress) covering login -> alert -> ack -> close
 - [ ] **API contract tests** -- generated from OpenAPI, run against the live server
@@ -593,10 +593,10 @@ attack surfaces.
 
 ### Repo conventions for AI assistants
 
-- [~] **Project-level AI assistant config** -- the user has a global `~/.claude/CLAUDE.md`
-  and per-topic plans in `claude/<topic>/` (gitignored). A committed project-level
-  `CLAUDE.md` (or `AGENTS.md`) would let any contributor or agent start cold without
-  needing the global config
+- [x] **Project-level AI assistant config** -- committed `CLAUDE.md` at the repo
+  root captures testing conventions, bounded-context layout, dev-environment quirks,
+  and code-style rules, so any contributor or AI agent can start cold. Maintainers
+  may layer per-user global config on top, but nothing here depends on it
 - [ ] **`.cursorrules`** and/or **`.github/copilot-instructions.md`** mirrors of the
   same conventions for non-Claude users
 - [ ] **MCP servers committed to the repo** -- shared tooling configs (SigNoz, SonarQube,

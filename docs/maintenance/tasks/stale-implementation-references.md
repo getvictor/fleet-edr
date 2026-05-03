@@ -11,8 +11,8 @@ branch", "the new alerts table will be added in step 3", "see `claude/mvp/plan.m
 references become misleading: a future reader treats them as part of the permanent architecture and goes hunting for files or
 phases that no longer exist or never did.
 
-The current best-practices doc still has at least one such reference (`docs/best-practices.md:222` mentions "phase 5 in favour of
-code-level validation"). That's the canonical example.
+A canonical past example: `docs/best-practices.md` once read "the FK was dropped in phase 5 in favour of code-level validation".
+The 2026-05-03 sweep rewrote it to "the FK was dropped in favour of code-level validation" - same outcome, no journey.
 
 ## Scope
 
