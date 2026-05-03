@@ -150,12 +150,19 @@ func run() error {
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
 
-	clientIPResolver, err := httpserver.NewClientIPResolver(cfg.TrustedProxies)
-	if err != nil {
-		logger.ErrorContext(ctx, "EDR_TRUSTED_PROXIES invalid", "err", err)
-		return err
-	}
+	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty.
+	// httpserver.Build skips installing the middleware on a nil resolver,
+	// and httpserver.ClientIP's fallback returns the same peer IP the
+	// resolver's empty-list path would return — so this saves one
+	// per-request middleware hop in the default deployment (per Copilot
+	// review on PR #113).
+	var clientIPResolver *httpserver.ClientIPResolver
 	if len(cfg.TrustedProxies) > 0 {
+		clientIPResolver, err = httpserver.NewClientIPResolver(cfg.TrustedProxies)
+		if err != nil {
+			logger.ErrorContext(ctx, "EDR_TRUSTED_PROXIES invalid", "err", err)
+			return err
+		}
 		logger.InfoContext(ctx, "trusting X-Forwarded-For from proxies", "trusted", cfg.TrustedProxies)
 	}
 

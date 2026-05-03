@@ -99,10 +99,22 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	if !ok || !c.isTrusted(peerAddr) {
 		return peer
 	}
-	// Peer is trusted: walk the XFF chain right-to-left, skipping
-	// trusted hops. r.Header.Values returns one entry per header (some
-	// proxies emit multiple); each entry may itself contain a
-	// comma-separated chain.
+	if client := c.firstUntrustedXFFEntry(r); client != "" {
+		return client
+	}
+	// Every XFF entry was trusted (or the chain was empty / malformed).
+	// The peer is the most reliable thing left.
+	return peer
+}
+
+// firstUntrustedXFFEntry walks the X-Forwarded-For header(s) on r
+// from right to left and returns the first entry that is NOT in any
+// trusted CIDR. Returns "" when the chain is empty, every entry is
+// trusted, or every entry is malformed. r.Header.Values returns one
+// element per header; each element may itself contain a
+// comma-separated chain. Extracted from ClientIP to keep the
+// caller's cognitive complexity below the project lint cap.
+func (c *ClientIPResolver) firstUntrustedXFFEntry(r *http.Request) string {
 	values := r.Header.Values("X-Forwarded-For")
 	for i := len(values) - 1; i >= 0; i-- {
 		parts := strings.Split(values[i], ",")
@@ -112,18 +124,13 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 				continue
 			}
 			addr, ok := parseAddr(entry)
-			if !ok {
-				continue
-			}
-			if c.isTrusted(addr) {
+			if !ok || c.isTrusted(addr) {
 				continue
 			}
 			return addr.String()
 		}
 	}
-	// Every XFF entry was trusted (or the chain was empty / malformed).
-	// The peer is the most reliable thing left.
-	return peer
+	return ""
 }
 
 func (c *ClientIPResolver) isTrusted(addr netip.Addr) bool {
@@ -147,8 +154,12 @@ func remoteHost(remoteAddr string) string {
 	return host
 }
 
+// parseAddr parses a single XFF entry. Strips a trailing :port via
+// remoteHost first — non-standard but seen in some proxy / NLB setups
+// (per Gemini Code Assist review on PR #113). Unmaps IPv4-mapped IPv6
+// so a "::ffff:10.0.0.1" entry compares against an IPv4 trusted CIDR.
 func parseAddr(s string) (netip.Addr, bool) {
-	addr, err := netip.ParseAddr(s)
+	addr, err := netip.ParseAddr(remoteHost(s))
 	if err != nil {
 		return netip.Addr{}, false
 	}
@@ -175,9 +186,11 @@ type clientIPCtxKey struct{}
 // resolver is wired (returns peer IP).
 //
 // Production code should always call this rather than
-// httpserver.RemoteIP or r.RemoteAddr directly: the test harness sets
-// it via middleware, prod sets it via middleware, and the fallback
-// keeps tests that don't go through the middleware chain working.
+// httpserver.RemoteIP or r.RemoteAddr directly: prod sets the value
+// via middleware, and the fallback keeps tests that don't go through
+// the middleware chain working. The fallback NEVER honours XFF — a
+// forgotten middleware wire-up degrades to the secure default rather
+// than letting spoofed XFF through.
 func ClientIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -187,5 +200,5 @@ func ClientIP(r *http.Request) string {
 			return s
 		}
 	}
-	return RemoteIP(r)
+	return remoteHost(r.RemoteAddr)
 }

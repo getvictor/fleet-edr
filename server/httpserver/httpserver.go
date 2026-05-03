@@ -68,9 +68,13 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		h = hstsHeader()(h)
 	}
 	h = xRequestIDEcho()(h)
-	// Client-IP resolution sits outside the access log so the resolved
-	// IP is on ctx by the time accessLog logs (and downstream handlers
-	// run). Wrap before xRequestIDEcho so trace correlation is unchanged.
+	// Client-IP resolution wraps xRequestIDEcho so the resolver runs
+	// outermost in the application layer (still inside otelhttp's
+	// span). The resolved IP is therefore on ctx by the time accessLog
+	// + downstream handlers read it via ClientIP(r). Skipped entirely
+	// when no proxies are configured: the empty trusted list yields
+	// the same value httpserver.ClientIP's fallback does, with one
+	// fewer per-request allocation.
 	if opts.ClientIPResolver != nil {
 		h = opts.ClientIPResolver.Middleware(h)
 	}
@@ -156,7 +160,7 @@ func accessLog(logger *slog.Logger, slowThreshold time.Duration) func(http.Handl
 				"status", rw.status,
 				"bytes", rw.bytes,
 				"duration_ms", dur.Milliseconds(),
-				"remote_addr", remoteAddr(r),
+				"remote_addr", ClientIP(r),
 			}
 
 			ctx := r.Context()
@@ -202,15 +206,6 @@ func (s *statusCapture) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-// remoteAddr returns the peer address for access logging. We intentionally do NOT consult
-// `X-Forwarded-For`: that header is client-settable and trusting it without a trusted-proxy
-// allowlist lets any caller spoof their logged source IP. When the server moves behind a
-// real reverse proxy (Phase 5 packaging), revisit this with an explicit trusted-proxies
-// config knob; until then, r.RemoteAddr is the only trustworthy source.
-func remoteAddr(r *http.Request) string {
-	return r.RemoteAddr
 }
 
 // NoStoreJSON is a small helper for health handlers: writes JSON with no-store cache headers.
