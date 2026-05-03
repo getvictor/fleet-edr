@@ -113,7 +113,8 @@ Over-limit requests return `429 Too Many Requests` with a
 `Retry-After` header.
 
 Ingestion (`POST /api/events`), command polling, and UI read
-endpoints are not rate limited.
+endpoints are not rate limited. If you proxy thousands of agents
+through a single IP (NAT), you may hit the enrollment rate limit.
 
 ## Errors
 
