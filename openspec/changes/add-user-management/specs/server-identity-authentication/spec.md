@@ -147,8 +147,12 @@ non-allowlisted IPs (as determined by the configured forwarded-IP header) SHALL 
 
 The system MUST rate-limit break-glass attempts with tighter caps than SSO login: at
 most 5 attempts per 15 minutes per source IP and at most 10 attempts per hour per
-email. The bootstrap-setup endpoint MUST have its own rate bucket of at most 3 attempts
-per 5 minutes per IP. Every successful break-glass login MUST emit an audit row at WARN
+*presented email*. The per-email limiter MUST key on the email exactly as presented in
+the request, regardless of whether an account exists for that email, so the response
+shape and timing for an unknown email are indistinguishable from those for a known
+email at the rate-limit layer (preventing account enumeration through differential
+limiter behavior). The bootstrap-setup endpoint MUST have its own rate bucket of at
+most 3 attempts per 5 minutes per IP. Every successful break-glass login MUST emit an audit row at WARN
 so a SigNoz alert can fire on any occurrence. Every failed break-glass authentication
 MUST emit an audit row recording the failure mode (unknown email, wrong password,
 WebAuthn failure) without leaking which fact caused the failure to the client.
@@ -174,8 +178,9 @@ WebAuthn failure) without leaking which fact caused the failure to the client.
 The system SHALL require a fresh authentication event within the configured reauth
 window (default 30 minutes for normal sessions; the same window applies to break-glass
 sessions) before authorizing a destructive action. The set of destructive actions in
-wave 1 MUST include host isolation, host process kill, host script run, and dismissing
-an alert whose severity is `critical`. A request whose session has not been
+wave 1 MUST include host isolation, host process kill, host script run, host enrollment
+revocation, and dismissing an alert whose severity is `critical`. A request whose session
+has not been
 re-authenticated within the window MUST be rejected with a typed error so the UI can
 prompt for re-authentication, and the rejection MUST be recorded in the audit log.
 
@@ -214,7 +219,7 @@ account cannot bind to two users in the same deployment.
   configured provider and the IdP's subject claim
 - **AND** the user's `password_hash` and `password_salt` are NULL
 
-#### Scenario: Two SSO subjects cannot both bind to the same user
+#### Scenario: A single SSO subject cannot be bound to multiple users
 
 - **GIVEN** a SSO callback for a subject that already has an identity bound to a
   different user

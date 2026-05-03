@@ -6,15 +6,20 @@ The server MUST gate every endpoint defined by this capability behind both the
 operator-session middleware AND the authorization chokepoint defined by the
 server-identity-authorization capability, so a caller that is not authenticated as an
 operator SHALL receive `401 Unauthorized` and a caller whose role does not grant the
-endpoint's required action SHALL receive `403 Forbidden`. The endpoints in this
-capability — `/api/enrollments`, `/api/enrollments/{host_id}/revoke`, `/api/policy`,
-`/api/attack-coverage`, `/api/rules`, `/api/users`, `/api/users/{id}`,
-`/api/users/{id}/role-bindings`, `/api/roles` — each MUST declare the action the
-chokepoint will be asked to authorize (for example, `host.read` for the enrollments
-listing, `host.revoke_enrollment` for revoke, `policy.read` for policy GET,
-`policy.write` for policy PUT, `user.read` for user listing, `user.invite` for user
-creation, `role.bind` for role bindings). The implicit "any authenticated operator is
-admin" model is no longer in effect; the chokepoint is the source of truth.
+endpoint's required action SHALL receive `403 Forbidden`. Every endpoint introduced
+by this capability — including (non-exhaustively) `/api/enrollments`,
+`/api/enrollments/{host_id}/revoke`, `/api/policy`, `/api/attack-coverage`,
+`/api/rules`, `/api/users`, `/api/users/{id}`, `/api/users/{id}/disable`,
+`/api/users/{id}/role-bindings`, `/api/users/{id}/role-bindings/{binding_id}`, and
+`/api/roles` — MUST declare the action the chokepoint will be asked to authorize (for
+example, `host.read` for the enrollments listing, `host.revoke_enrollment` for revoke,
+`policy.read` for policy GET, `policy.write` for policy PUT, `user.read` for user
+listing, `user.disable` for disabling a user, `role.bind` for binding or unbinding a
+role, `role.read` for reading the role catalog). Any future endpoint added under this
+capability MUST follow the same pattern; the boundary applies to "every endpoint
+defined by this capability," not to a closed enumeration. The implicit "any
+authenticated operator is admin" model is no longer in effect; the chokepoint is the
+source of truth.
 
 #### Scenario: Unauthenticated request is rejected
 

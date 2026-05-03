@@ -16,6 +16,11 @@ Rego authorization with five seeded roles, dual-emit audit log, and tenant scaff
 2 (API tokens, host-group scopes, MFA for non-break-glass, SSO group mapping) and wave 3
 (SAML, SCIM, customer-authored Rego) are explicitly deferred to follow-on plans.
 
+This OpenSpec change is the **spec-only** artifact: it adds the proposal, design, tasks,
+and delta specs that describe the eventual behavior. The implementation lands in the
+follow-up PRs enumerated in `tasks.md` (one phase per PR, each independently reviewable
+against the requirements pinned by this change).
+
 ## What Changes
 
 - Add Okta OIDC login at `/api/auth/login` and `/api/auth/callback` with PKCE S256, JIT

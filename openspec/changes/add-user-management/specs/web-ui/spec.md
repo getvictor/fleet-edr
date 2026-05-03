@@ -54,8 +54,11 @@ The UI SHALL render the current operator's role and authentication method in the
 account menu so an operator can tell at a glance whether they are signed in via Okta
 or via the break-glass account, and what permissions their session carries. The role
 label MUST be one of the seeded role names (or a custom role name if non-built-in
-roles ship in a later wave). The authentication method MUST be one of `oidc` or
-`local_password`. The role and authentication method MUST be visible without
+roles ship in a later wave). The authentication-method indicator is derived from the
+session's `auth_method` value (`oidc` or `local_password`) but the UI MUST present a
+human-friendly label rather than the raw enum: `oidc` SHALL render as `Okta` and
+`local_password` (when the session was minted at the break-glass surface) SHALL
+render as `break-glass`. The role and authentication method MUST be visible without
 navigating to a settings page; they are first-class affordances of the menu.
 
 #### Scenario: Account menu shows Okta + analyst

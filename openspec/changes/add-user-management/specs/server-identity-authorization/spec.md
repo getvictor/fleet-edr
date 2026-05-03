@@ -42,7 +42,7 @@ The system SHALL seed five roles at startup and SHALL keep their `is_builtin` fl
 so they cannot be deleted via the admin API: `super_admin` (tenant + SSO config + every
 permission below), `admin` (day-to-day administration: user.read, user.invite, policy.*,
 host.*, alert.*), `senior_analyst` (investigate + take destructive action: host.read,
-host.isolate, host.kill_process, alert.*), `analyst` (investigate + comment + escalate:
+host.isolate, host.kill_process, host.run_script, alert.*), `analyst` (investigate + comment + escalate:
 host.read, process.read, alert.read, alert.comment), and `auditor` (read-only including
 audit.read). The break-glass user MUST be bound to `super_admin` at tenant scope.
 SSO-provisioned users MUST default to `analyst` at tenant scope; the system MUST NOT

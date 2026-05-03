@@ -1,7 +1,8 @@
 ## Context
 
-The user-management plan at `~/work/edr/ai/user-mgmt/plan.md` was authored before
-ADR-0004 carved `server/` into five bounded contexts (`identity`, `endpoint`, `rules`,
+The user-management plan tracked at
+`https://github.com/getvictor/fleet-edr/issues/66` was authored before ADR-0004 carved
+`server/` into five bounded contexts (`identity`, `endpoint`, `rules`,
 `response`, `detection`). The original plan referenced flat-tree packages
 (`server/users`, `server/sessions`, `server/authn`, `server/authz`, `server/audit`,
 `server/auth/oidc`, `server/auth/breakglass`, `server/seed/admin.go`) that no longer

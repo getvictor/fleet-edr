@@ -3,13 +3,17 @@
 ### Requirement: Authentication outcomes write an audit row
 
 The system SHALL record an audit row for every authentication outcome, success or
-failure, regardless of authentication method. The row MUST include the request
-timestamp, the source IP, the user agent, the request id, the action name (e.g.
-`auth.oidc.success`, `auth.breakglass.success`, `auth.local_password.failure`,
-`auth.oidc.callback.error`), the decision (`allow`, `deny`, or `error`), the reason,
-and (when known) the actor user id and identity id. Audit row writes MUST NOT block on
-the user response: a write failure SHALL be logged at ERROR and counted as a metric
-but the user request continues.
+failure, regardless of authentication method. Action names MUST follow the pattern
+`auth.<flow>.<outcome>` where `<flow>` is one of `oidc` or `breakglass` (named after
+the *flow* that produced the outcome, not the credential type — the break-glass flow
+combines a local password and a WebAuthn assertion under a single `breakglass` flow
+so dashboards stay cohesive). The action name MUST be one of `auth.oidc.success`,
+`auth.oidc.failure`, `auth.oidc.callback.error`, `auth.breakglass.success`, or
+`auth.breakglass.failure`. The row MUST include the request timestamp, the source IP,
+the user agent, the request id, the action name, the decision (`allow`, `deny`, or
+`error`), the reason, and (when known) the actor user id and identity id. Audit row
+writes MUST NOT block on the user response: a write failure SHALL be logged at ERROR
+and counted as a metric but the user request continues.
 
 #### Scenario: Successful SSO login is audited
 
@@ -18,13 +22,14 @@ but the user request continues.
 - **THEN** an audit row exists with `action='auth.oidc.success'`, `decision='allow'`,
   the actor's user id and identity id, and the request id
 
-#### Scenario: Failed local password is audited without leaking the failure mode to the client
+#### Scenario: Failed break-glass login is audited without leaking the failure mode to the client
 
 - **GIVEN** a break-glass login attempt with a wrong password
 - **WHEN** the server validates the submission
 - **THEN** the client receives a generic invalid-credentials response
-- **AND** the audit row records the precise failure reason
-  (`auth.local_password.password_mismatch`)
+- **AND** the audit row records `action='auth.breakglass.failure'` and the precise
+  failure reason in the row's `reason` field (e.g. `password_mismatch`,
+  `webauthn_assertion_invalid`)
 
 #### Scenario: Audit write failure does not fail the user request
 
