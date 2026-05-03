@@ -100,7 +100,7 @@ func run() error {
 		return err
 	}
 
-	responseCtx, err := openResponse(ctx, logger, db, detectionCtx)
+	responseCtx, err := openResponse(ctx, logger, db, detectionCtx, identityCtx)
 	if err != nil {
 		return err
 	}
@@ -112,13 +112,13 @@ func run() error {
 		}
 		return endpointCtx.Service().ActiveHostIDs(ctx)
 	}
-	rulesCtx, err := openRules(ctx, logger, db, cfg, activeHostsLister, responseCtx.Service().Insert)
+	rulesCtx, err := openRules(ctx, logger, db, cfg, activeHostsLister, responseCtx.Service().Insert, identityCtx)
 	if err != nil {
 		return err
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
 
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, rulesCtx.PolicyService(), responseCtx.Service().Insert)
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, rulesCtx.PolicyService(), responseCtx.Service().Insert, identityCtx)
 	if err != nil {
 		return err
 	}
@@ -203,6 +203,7 @@ func openDetection(
 		RetentionDays:        cfg.RetentionDays,
 		RetentionInterval:    cfg.RetentionInterval,
 		UserExists:           identityCtx.Service().UserExists,
+		Audit:                identityCtx.AuditRecorder(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)
@@ -224,11 +225,13 @@ func openResponse(
 	logger *slog.Logger,
 	db *sqlx.DB,
 	detectionCtx *detectionbootstrap.Detection,
+	identityCtx *identitybootstrap.Identity,
 ) (*responsebootstrap.Response, error) {
 	responseCtx, err := responsebootstrap.New(responsebootstrap.Deps{
 		DB:        db,
 		Logger:    logger,
 		Heartbeat: detectionCtx.Service().RecordHostSeen,
+		Audit:     identityCtx.AuditRecorder(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open response", "err", err)
@@ -248,6 +251,7 @@ func openRules(
 	cfg *config.Config,
 	activeHostsLister rulesbootstrap.ActiveHostsLister,
 	cmdInserter rulesbootstrap.CommandInserter,
+	identityCtx *identitybootstrap.Identity,
 ) (*rulesbootstrap.Rules, error) {
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
 		DB:     db,
@@ -260,6 +264,7 @@ func openRules(
 		},
 		ActiveHostsLister: activeHostsLister,
 		CommandInserter:   cmdInserter,
+		Audit:             identityCtx.AuditRecorder(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
@@ -279,6 +284,7 @@ func openEndpoint(
 	cfg *config.Config,
 	policySvc endpointapi.PolicyProvider,
 	cmdInserter endpointbootstrap.CommandInserter,
+	identityCtx *identitybootstrap.Identity,
 ) (*endpointbootstrap.Endpoint, error) {
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
@@ -287,6 +293,7 @@ func openEndpoint(
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
 		PolicyProvider:      policySvc,
 		CommandInserter:     cmdInserter,
+		Audit:               identityCtx.AuditRecorder(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
@@ -399,6 +406,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/policy", "PUT /api/policy",
 		"GET /api/attack-coverage",
 		"GET /api/rules",
+		"GET /api/audit",
 		"GET /api/session",
 	} {
 		mux.Handle(p, sessionProtected)

@@ -39,6 +39,35 @@ var schemaStatements = []string{
 		expires_at    TIMESTAMP(6)   NOT NULL,
 		INDEX idx_sessions_expires (expires_at)
 	)`,
+	// audit_events is the append-only operator audit trail. Append-only is
+	// enforced primarily by the application code (no UPDATE/DELETE paths
+	// in the audit package, no Update/Delete methods on AuditRecorder)
+	// and can be tightened to GRANT-level enforcement in deployments
+	// that have a DBA without changing this schema. actor_user_id is
+	// nullable so login_failed rows (where the email may map to no user)
+	// still record the attempt; actor_email is denormalised so audit
+	// remains readable after a user row is deleted. payload is JSON to
+	// let individual actions record per-action context (alert prior
+	// state, policy diff) without a schema migration. Indexes cover the
+	// retrieval queries the admin UI will run: by occurred_at (timeline),
+	// by actor (per-user history), by action (filter all logins), and by
+	// target (alert history).
+	`CREATE TABLE IF NOT EXISTS audit_events (
+		id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		occurred_at     TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		actor_user_id   BIGINT          NULL,
+		actor_email     VARCHAR(255)    NULL,
+		action          VARCHAR(64)     NOT NULL,
+		target_type     VARCHAR(64)     NULL,
+		target_id       VARCHAR(255)    NULL,
+		trace_id        VARCHAR(32)     NULL,
+		remote_addr     VARCHAR(64)     NULL,
+		payload         JSON            NULL,
+		INDEX idx_audit_events_occurred (occurred_at),
+		INDEX idx_audit_events_actor (actor_user_id, occurred_at),
+		INDEX idx_audit_events_action (action, occurred_at),
+		INDEX idx_audit_events_target (target_type, target_id, occurred_at)
+	)`,
 }
 
 // schemaMigrations are idempotent ALTERs applied after the CREATE TABLEs.

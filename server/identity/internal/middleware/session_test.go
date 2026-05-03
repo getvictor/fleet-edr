@@ -69,6 +69,12 @@ func TestSession_MissingCookieReturns401(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	// Regression for #80: a cookie-auth 401 must not advertise a Bearer challenge.
+	// The Session middleware's failure mode is "open the login page", not
+	// "retry with a Bearer token", so clients that surface WWW-Authenticate
+	// to the user (browsers' HTTP-Basic dialog, curl --anyauth) shouldn't
+	// see one.
+	assert.Empty(t, resp.Header.Get("WWW-Authenticate"))
 }
 
 func TestSession_UnknownCookieReturns401(t *testing.T) {

@@ -30,6 +30,7 @@ type alertDetailResponse struct {
 // Handler serves the operator-facing detection routes.
 type Handler struct {
 	svc    api.Service
+	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
@@ -43,6 +44,12 @@ func New(svc api.Service, logger *slog.Logger) *Handler {
 	}
 	return &Handler{svc: svc, logger: logger}
 }
+
+// SetAudit installs the operator audit recorder. Optional: when not
+// set, alert-status changes still apply but no audit row is written.
+// Bootstrap calls this after New so existing tests that pass nil for
+// audit do not need to change.
+func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes registers the operator routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -221,7 +228,50 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		)
 	}
 
+	h.recordAlertStatusAudit(r, id, body.Status, userID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordAlertStatusAudit emits one audit row for the just-committed
+// alert-status change. Action is per-status so SIEM filters can scope
+// to "all acks" vs "all resolves" without parsing payload. Audit
+// failures are soft: the action committed; a missing audit row is a
+// follow-up incident, not a reason to fail an HTTP response that
+// already returned 204.
+func (h *Handler) recordAlertStatusAudit(r *http.Request, alertID int64, newStatus string, userID int64) {
+	if h.audit == nil {
+		return
+	}
+	var action identityapi.AuditAction
+	switch newStatus {
+	case string(api.AlertStatusAcknowledged):
+		action = identityapi.AuditAlertAcknowledge
+	case string(api.AlertStatusResolved):
+		action = identityapi.AuditAlertResolve
+	case string(api.AlertStatusOpen):
+		action = identityapi.AuditAlertReopen
+	default:
+		return // status validated above; an unknown one would be a programming error.
+	}
+	var uid *int64
+	if userID > 0 {
+		u := userID
+		uid = &u
+	}
+	if err := h.audit.Record(r.Context(), identityapi.AuditEvent{
+		UserID:     uid,
+		Action:     action,
+		TargetType: "alert",
+		TargetID:   strconv.FormatInt(alertID, 10),
+		RemoteAddr: r.RemoteAddr,
+		Payload:    map[string]any{"new_status": newStatus},
+	}); err != nil {
+		h.logger.WarnContext(r.Context(), "audit record",
+			"err", err,
+			"action", string(action),
+			"edr.alert.id", alertID,
+		)
+	}
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, v any) {

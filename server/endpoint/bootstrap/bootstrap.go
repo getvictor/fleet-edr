@@ -15,6 +15,7 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
 	"github.com/fleetdm/edr/server/endpoint/internal/operator"
 	"github.com/fleetdm/edr/server/endpoint/internal/service"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
 // CommandInserter is the closure cmd/main supplies so the post-enroll
@@ -45,6 +46,11 @@ type Deps struct {
 	// 2+3; the closure pattern matches what rules has used since
 	// phase 3 and removes one layer of interface boilerplate.
 	CommandInserter CommandInserter
+
+	// Audit is the operator-action recorder. Optional: nil disables
+	// audit emission for enrollment.revoke. cmd/main wires
+	// identityCtx.AuditRecorder().
+	Audit identityapi.AuditRecorder
 }
 
 // Endpoint is the handle cmd/main holds for the endpoint bounded
@@ -85,13 +91,15 @@ func New(deps Deps) (*Endpoint, error) {
 	store := mysql.NewStore(deps.DB)
 	svc := service.New(store, deps.EnrollSecret, deps.PolicyProvider, deps.CommandInserter, logger)
 
+	opH := operator.New(svc, logger)
+	opH.SetAudit(deps.Audit)
 	return &Endpoint{
 		svc: svc,
 		enrollH: enroll.New(svc, enroll.Options{
 			RatePerMinute: deps.EnrollRatePerMinute,
 			Logger:        logger,
 		}),
-		operatorH:   operator.New(svc, logger),
+		operatorH:   opH,
 		hostTokenMW: middleware.HostToken(svc, logger),
 		db:          deps.DB,
 		logger:      logger,
