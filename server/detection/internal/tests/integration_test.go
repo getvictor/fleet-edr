@@ -11,7 +11,6 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -204,7 +203,10 @@ func TestIngest_PersistsEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body := `[{"event_id":"e1","host_id":"host-a","timestamp_ns":1000,"event_type":"fork","payload":{"child_pid":42,"parent_pid":1}}]`
-	resp, err := srv.Client().Post(srv.URL, "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -224,7 +226,10 @@ func TestIngest_HostIDMismatchRejected(t *testing.T) {
 
 	// Body claims host-b but the host-token middleware pinned host-a.
 	body := `[{"event_id":"x","host_id":"host-b","timestamp_ns":1,"event_type":"fork","payload":{}}]`
-	resp, err := srv.Client().Post(srv.URL, "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -237,7 +242,10 @@ func TestIngest_RequiresHostContext(t *testing.T) {
 	srv := httptest.NewServer(d.Service().IngestHandler())
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Post(srv.URL, "application/json", strings.NewReader("[]"))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader("[]"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -258,7 +266,7 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
 		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	}
-	insertEventsViaIngest(t, d, "host-a", events)
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
 
 	// One processor tick is enough; ProcessOnce is exposed on the
 	// processor for deterministic test signalling. Use a brief
@@ -289,7 +297,7 @@ func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 		{EventID: "trigger-a", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 		{EventID: "trigger-b", HostID: "host-a", TimestampNs: 3000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	}
-	insertEventsViaIngest(t, d, "host-a", events)
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
 
 	require.Eventually(t, func() bool {
 		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
@@ -315,7 +323,7 @@ func TestOperator_UpdateAlertStatus_HappyPath(t *testing.T) {
 
 	mustInsertProcess(t, ctx, d, "host-a", 100)
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "lifecycle"}}})
-	insertEventsViaIngest(t, d, "host-a", []api.Event{
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
 		{EventID: "trigger", HostID: "host-a", TimestampNs: 1, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	})
 
@@ -354,8 +362,7 @@ func TestOperator_UpdateAlertStatus_RejectsUnknownUser(t *testing.T) {
 	// userID 99 is not in the UserExists set. The cross-context FK
 	// guard (ErrInvalidUserUpdater) MUST fire before the row update.
 	_, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, 99)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrInvalidUserUpdater),
+	require.ErrorIs(t, err, api.ErrInvalidUserUpdater,
 		"expected ErrInvalidUserUpdater, got %v", err)
 
 	// Row must NOT have moved.
@@ -381,7 +388,7 @@ func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, 42)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrInvalidAlertTransition),
+	assert.ErrorIs(t, err, api.ErrInvalidAlertTransition,
 		"expected ErrInvalidAlertTransition, got %v", err)
 }
 
@@ -403,7 +410,7 @@ func TestOperator_GetAlert_NotFound(t *testing.T) {
 
 	_, _, err := d.Service().GetAlert(ctx, 999_999)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrAlertNotFound))
+	assert.ErrorIs(t, err, api.ErrAlertNotFound)
 }
 
 func TestOperator_ListAlerts_FiltersByHostAndStatus(t *testing.T) {
@@ -451,6 +458,7 @@ func TestRecordHostSeen_AdvancesLastSeen(t *testing.T) {
 
 	hosts, err = d.Service().ListHosts(ctx)
 	require.NoError(t, err)
+	require.NotEmpty(t, hosts)
 	assert.Equal(t, later.UnixNano(), hosts[0].LastSeenNs, "earlier RecordHostSeen must not regress")
 }
 
@@ -471,7 +479,7 @@ func TestService_CountUnprocessed(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
-	insertEventsViaIngest(t, d, "host-a", []api.Event{
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
 		{EventID: "u1", HostID: "host-a", TimestampNs: 1, EventType: "x", Payload: json.RawMessage(`{}`)},
 		{EventID: "u2", HostID: "host-a", TimestampNs: 2, EventType: "x", Payload: json.RawMessage(`{}`)},
 	})
@@ -518,7 +526,9 @@ func TestBootstrap_IntakeModeIsNoOp(t *testing.T) {
 	d.RegisterAuthedRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	resp, err := srv.Client().Get(srv.URL + "/api/hosts")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/hosts", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
@@ -558,7 +568,7 @@ func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "metrics"}}})
 
 	mustInsertProcess(t, ctx, d, "host-a", 100)
-	insertEventsViaIngest(t, d, "host-a", []api.Event{
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
 		{EventID: "trigger-mx", HostID: "host-a", TimestampNs: 1, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	})
 
@@ -569,9 +579,9 @@ func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 
 	events, queries, alerts, _, _ := rec.snapshot()
-	assert.Greater(t, events, 0, "EventsIngested hook fired by intake")
-	assert.Greater(t, queries, 0, "ObserveDBQuery fired during ingest")
-	assert.Greater(t, alerts, 0, "AlertCreated fired by engine")
+	assert.Positive(t, events, "EventsIngested hook fired by intake")
+	assert.Positive(t, queries, "ObserveDBQuery fired during ingest")
+	assert.Positive(t, alerts, "AlertCreated fired by engine")
 }
 
 // ---- Graph builder exec/exit paths -----------------------------------------
@@ -599,7 +609,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 		{EventID: "exec-pl", HostID: "h", TimestampNs: now + 5, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/tmp/payload","uid":501,"gid":20}`)},
 	}
-	insertEventsViaIngest(t, d, "h", events)
+	insertEventsViaIngest(ctx, t, d, "h", events)
 
 	require.Eventually(t, func() bool {
 		tree, err := d.Service().BuildTree(ctx, "h",
@@ -636,7 +646,7 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 		{EventID: "exit-x", HostID: "h", TimestampNs: now + 2, EventType: "exit",
 			Payload: json.RawMessage(`{"pid":777,"exit_code":0}`)},
 	}
-	insertEventsViaIngest(t, d, "h", events)
+	insertEventsViaIngest(ctx, t, d, "h", events)
 
 	// Query at the exit time exactly: GetProcessByPID's predicate is
 	// (exit_time_ns IS NULL OR exit_time_ns >= ?), so the row is
@@ -658,7 +668,7 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 	ctx := t.Context()
 
 	now := time.Now().UnixNano()
-	insertEventsViaIngest(t, d, "h-orphan", []api.Event{
+	insertEventsViaIngest(ctx, t, d, "h-orphan", []api.Event{
 		{EventID: "exec-orphan", HostID: "h-orphan", TimestampNs: now, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":555,"ppid":1,"path":"/usr/bin/synth","args":["synth"]}`)},
 	})
@@ -681,7 +691,7 @@ func TestGraph_SamePIDReExec(t *testing.T) {
 	ctx := t.Context()
 
 	now := time.Now().UnixNano()
-	insertEventsViaIngest(t, d, "h-reexec", []api.Event{
+	insertEventsViaIngest(ctx, t, d, "h-reexec", []api.Event{
 		{EventID: "fork-py", HostID: "h-reexec", TimestampNs: now, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "h-reexec", TimestampNs: now + 1, EventType: "exec",
@@ -718,7 +728,9 @@ func TestOperatorHTTP_ListHosts(t *testing.T) {
 
 	require.NoError(t, d.Service().RecordHostSeen(t.Context(), "host-1", time.Now()))
 
-	resp, err := srv.Client().Get(srv.URL + "/api/hosts")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/hosts", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -734,7 +746,10 @@ func TestOperatorHTTP_ListAlerts_Empty(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/alerts?status=open&host_id=h&severity=high&limit=10&process_id=1")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		srv.URL+"/api/alerts?status=open&host_id=h&severity=high&limit=10&process_id=1", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -750,7 +765,9 @@ func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/alerts/99999")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/alerts/99999", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -763,7 +780,9 @@ func TestOperatorHTTP_GetAlert_BadID(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/alerts/notanumber")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/alerts/notanumber", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -833,7 +852,9 @@ func TestOperatorHTTP_ProcessTree_RequiresHostID(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/hosts//tree")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/hosts//tree", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	// Empty path segment yields a 404 from the mux (the path matcher
@@ -849,7 +870,9 @@ func TestOperatorHTTP_ProcessDetail_BadPID(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/hosts/host-a/processes/notanumber")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/hosts/host-a/processes/notanumber", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -862,7 +885,9 @@ func TestOperatorHTTP_ProcessDetail_NotFound(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/hosts/no-such/processes/12345")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/hosts/no-such/processes/12345", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -877,7 +902,9 @@ func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
 
 	mustInsertProcess(t, t.Context(), d, "tree-host", 100)
 
-	resp, err := srv.Client().Get(srv.URL + "/api/hosts/tree-host/tree?limit=50")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/hosts/tree-host/tree?limit=50", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -898,7 +925,9 @@ func TestHealthRoutes_LivezReadyz(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	for _, path := range []string{"/livez", "/readyz", "/health"} {
-		resp, err := srv.Client().Get(srv.URL + path)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "path=%s", path)
 		resp.Body.Close()
@@ -915,7 +944,11 @@ func TestRegisterIngestRoutes_MountsPostEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body := `[{"event_id":"e","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{}}]`
-	resp, err := srv.Client().Post(srv.URL+"/api/events", "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/events",
+		strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -936,7 +969,12 @@ func TestRecordHostSeen_SatisfiesResponseHeartbeatShape(t *testing.T) {
 	// build via the type alias check below rather than at runtime.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 
-	var responseHeartbeat func(ctx context.Context, hostID string, at time.Time) error = d.Service().RecordHostSeen
+	// Wrapping in a function literal with the exact heartbeat signature pins the shape:
+	// if RecordHostSeen drifts away from what the response context's Heartbeat closure
+	// expects, this fails to compile rather than at runtime.
+	responseHeartbeat := func(ctx context.Context, hostID string, at time.Time) error {
+		return d.Service().RecordHostSeen(ctx, hostID, at)
+	}
 	require.NotNil(t, responseHeartbeat)
 
 	calls := atomic.Int64{}
@@ -953,13 +991,16 @@ func TestRecordHostSeen_SatisfiesResponseHeartbeatShape(t *testing.T) {
 // insertEventsViaIngest sends the batch through the agent-facing
 // IngestHandler so the test exercises the same path production uses
 // (validation + host_id pin enforcement + UpsertHosts side effect).
-func insertEventsViaIngest(t *testing.T, d *bootstrap.Detection, hostID string, events []api.Event) {
+func insertEventsViaIngest(ctx context.Context, t *testing.T, d *bootstrap.Detection, hostID string, events []api.Event) {
 	t.Helper()
 	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), hostID))
 	t.Cleanup(srv.Close)
 	body, err := json.Marshal(events)
 	require.NoError(t, err)
-	resp, err := srv.Client().Post(srv.URL, "application/json", strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(string(body)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -971,7 +1012,7 @@ func insertEventsViaIngest(t *testing.T, d *bootstrap.Detection, hostID string, 
 // from outside detection/.
 func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID string, pid int) int64 {
 	t.Helper()
-	insertEventsViaIngest(t, d, hostID, []api.Event{
+	insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
 		{
 			EventID:     "fork-seed-" + hostID,
 			HostID:      hostID,
@@ -999,7 +1040,7 @@ func seedSingleAlert(t *testing.T, ctx context.Context, d *bootstrap.Detection) 
 	t.Helper()
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "seed"}}})
 	mustInsertProcess(t, ctx, d, "host-a", 100)
-	insertEventsViaIngest(t, d, "host-a", []api.Event{
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
 		{EventID: "seed-trigger", HostID: "host-a", TimestampNs: 1, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	})
 	var alertID int64
@@ -1021,7 +1062,7 @@ func seedSingleAlert(t *testing.T, ctx context.Context, d *bootstrap.Detection) 
 func insertAlertDirect(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID, ruleID string, _ int64, _ []string) {
 	t.Helper()
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: ruleID}}})
-	insertEventsViaIngest(t, d, hostID, []api.Event{
+	insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
 		{EventID: hostID + "-trig", HostID: hostID, TimestampNs: 1, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	})
 	require.Eventually(t, func() bool {
@@ -1044,7 +1085,7 @@ func countNodes(forest []api.ProcessNode) int {
 func flattenPaths(forest []api.ProcessNode) []string {
 	var out []string
 	for _, root := range forest {
-		out = append(out, root.Process.Path)
+		out = append(out, root.Path)
 		out = append(out, flattenPaths(root.Children)...)
 	}
 	return out

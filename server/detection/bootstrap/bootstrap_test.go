@@ -6,13 +6,14 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 )
 
 func TestNew_RejectsMissingDB(t *testing.T) {
 	_, err := New(Deps{})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DB")
 }
 

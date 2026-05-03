@@ -12,7 +12,7 @@ import (
 )
 
 func TestNullRawJSON_Scan(t *testing.T) {
-	var n NullRawJSON
+	n := NullRawJSON(nil)
 
 	require.NoError(t, n.Scan(nil), "nil scans to empty")
 	assert.Nil(t, []byte(n))
@@ -37,8 +37,8 @@ func TestNullRawJSON_Value(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, v, "JSON null literal yields SQL NULL")
 
-	real := NullRawJSON(`{"a":1}`)
-	v, err = real.Value()
+	concrete := NullRawJSON(`{"a":1}`)
+	v, err = concrete.Value()
 	require.NoError(t, err)
 	assert.Equal(t, []byte(`{"a":1}`), v)
 }
@@ -49,14 +49,14 @@ func TestNullRawJSON_MarshalJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `null`, string(out))
 
-	real := NullRawJSON(`{"x":true}`)
-	out, err = real.MarshalJSON()
+	concrete := NullRawJSON(`{"x":true}`)
+	out, err = concrete.MarshalJSON()
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"x":true}`, string(out))
 }
 
 func TestNullRawJSON_UnmarshalJSON(t *testing.T) {
-	var n NullRawJSON
+	n := NullRawJSON(nil)
 	require.NoError(t, n.UnmarshalJSON([]byte(`null`)))
 	assert.Nil(t, []byte(n))
 
@@ -70,7 +70,7 @@ func TestJSONStringSlice_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, v)
 
-	var got JSONStringSlice
+	got := JSONStringSlice(nil)
 	require.NoError(t, got.Scan(v.([]byte)))
 	assert.Equal(t, s, got)
 
@@ -80,22 +80,22 @@ func TestJSONStringSlice_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, v)
 
-	var nilGot JSONStringSlice
+	nilGot := JSONStringSlice(nil)
 	require.NoError(t, nilGot.Scan(nil))
 	assert.Nil(t, nilGot)
 
 	// String input also works (some drivers hand back string for JSON).
-	var fromStr JSONStringSlice
+	fromStr := JSONStringSlice(nil)
 	require.NoError(t, fromStr.Scan(`["T1083"]`))
 	assert.Equal(t, JSONStringSlice{"T1083"}, fromStr)
 
 	// Empty bytes scan to nil (NULL-equivalent).
-	var fromEmpty JSONStringSlice
+	fromEmpty := JSONStringSlice(nil)
 	require.NoError(t, fromEmpty.Scan([]byte{}))
 	assert.Nil(t, fromEmpty)
 
 	// Unsupported types return an error.
-	var bad JSONStringSlice
+	bad := JSONStringSlice(nil)
 	err = bad.Scan(42)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported type")
@@ -195,7 +195,7 @@ func jsonValueGen() *rapid.Generator[json.RawMessage] {
 func TestNullRawJSON_RoundTripProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		v := jsonValueGen().Draw(rt, "v")
-		var n NullRawJSON = NullRawJSON(v)
+		n := NullRawJSON(v)
 
 		// Marshal -> Unmarshal must preserve content (or both be nil
 		// for the null literal).
@@ -283,7 +283,7 @@ func TestIsValidationError_Property(t *testing.T) {
 		} else {
 			err = notValidationErrs[rapid.IntRange(0, len(notValidationErrs)-1).Draw(rt, "n_idx")]
 		}
-		for i := 0; i < wrapDepth; i++ {
+		for i := range wrapDepth {
 			err = fmt.Errorf("wrap-%d: %w", i, err)
 		}
 
