@@ -61,6 +61,12 @@ Touching auth, crypto, the network extension, or the ingestion pipeline triggers
 - No new untrusted-input -> SQL / shell / log-injection sinks.
 - Add a test that exercises the failure path, not just the happy path.
 
+## Recurring maintenance
+
+Maintainers run periodic codebase-hygiene sweeps (doc accuracy, stale implementation references, ADR audit, dead-code, etc.).
+Cadence, scope, and runnable prompts live in [`docs/maintenance/`](docs/maintenance/). External contributors do not need to run
+these, but PRs that surface issues those sweeps would catch are welcome.
+
 ## Reporting bugs
 
 For non-security bugs, open a [GitHub issue](https://github.com/getvictor/fleet-edr/issues/new) with:

@@ -7,7 +7,7 @@
 //
 // Allowed imports for tests in this package:
 //   - detection/api and detection/bootstrap (the context's public surface);
-//   - server/bootstrap (for OpenTestDB + the identity-schema preamble);
+//   - server/testdb/full (for Open, which applies every context's schema);
 //   - endpoint/api (for WithHostIDForTest, used to fake the
 //     host-token middleware on agent-route tests);
 //   - identity/api (for UserExists test fakes);
