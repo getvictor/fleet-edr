@@ -16,11 +16,11 @@ without reading the handler source.
 
 ### Requirement: Authenticated admin boundary
 
-Every endpoint defined by this capability (`/api/enrollments`, `/api/enrollments/{host_id}/revoke`,
-`/api/policy`, `/api/attack-coverage`, and `/api/rules`) SHALL require a caller authenticated as an operator.
-The server MUST gate these routes behind the operator-session middleware so that an unauthenticated caller receives
-`401 Unauthorized`. The endpoints share an authentication boundary with the rest of the operator API; there is no
-separate "admin" auth mode in the current implementation.
+The server MUST gate every endpoint defined by this capability (`/api/enrollments`,
+`/api/enrollments/{host_id}/revoke`, `/api/policy`, `/api/attack-coverage`, and `/api/rules`) behind the
+operator-session middleware, so a caller that is not authenticated as an operator SHALL receive `401 Unauthorized`.
+These endpoints share an authentication boundary with the rest of the operator API; there is no separate "admin" auth
+mode in the current implementation.
 
 #### Scenario: Unauthenticated request is rejected
 
