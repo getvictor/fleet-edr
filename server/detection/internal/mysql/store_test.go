@@ -19,7 +19,11 @@ import (
 // package mysql_test so the testdb import (which transitively pulls
 // in detection/bootstrap) doesn't create a cycle with the production
 // detection/internal/mysql package.
-func newTestStore(t *testing.T) *mysql.Store {
+//
+// Accepts testing.TB so the same fixture works for benchmarks (see
+// perf_test.go); *testing.T and *testing.B both satisfy the
+// interface.
+func newTestStore(t testing.TB) *mysql.Store {
 	t.Helper()
 	db := testdb.Open(t)
 	ctx := t.Context()

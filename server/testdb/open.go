@@ -32,7 +32,7 @@ import (
 // bootstrap, which lets per-package unit tests inside a context's
 // internal/ tree use Open without an import cycle (the cycle would
 // otherwise go: pkg → testdb → ctx/bootstrap → pkg).
-func Open(t *testing.T) *sqlx.DB {
+func Open(t testing.TB) *sqlx.DB {
 	t.Helper()
 
 	dsn := testDSN(t)
@@ -83,7 +83,7 @@ func Open(t *testing.T) *sqlx.DB {
 	return db
 }
 
-func testDSN(t *testing.T) string {
+func testDSN(t testing.TB) string {
 	t.Helper()
 	dsn := os.Getenv("EDR_TEST_DSN")
 	if dsn == "" {
