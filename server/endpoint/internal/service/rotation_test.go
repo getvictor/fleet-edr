@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,16 +25,32 @@ const (
 	testSecret = "test-enroll-secret"
 )
 
-// fakeRecorder captures audit events for assertion. Must be safe to
-// invoke from any goroutine; the verify-time auto-rotate path is
-// synchronous today but a future scheduler may run it concurrently.
+// fakeRecorder captures audit events for assertion. Goroutine-safe so
+// future moves of the verify-time auto-rotate trigger to a background
+// scheduler do not silently introduce data races; today the path is
+// synchronous, but the contract is the safer side of the change.
+// Tests read events via Snapshot so the slice copy is taken under the
+// same mutex.
 type fakeRecorder struct {
+	mu     sync.Mutex
 	events []identityapi.AuditEvent
 }
 
 func (f *fakeRecorder) Record(_ context.Context, e identityapi.AuditEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.events = append(f.events, e)
 	return nil
+}
+
+// Snapshot returns a copy of the captured events so tests assert on a
+// stable view independent of concurrent Record calls.
+func (f *fakeRecorder) Snapshot() []identityapi.AuditEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]identityapi.AuditEvent, len(f.events))
+	copy(out, f.events)
+	return out
 }
 
 // commandCapture records (host_id, command_type, payload) tuples so
@@ -119,7 +136,7 @@ func TestVerifyToken_FreshTokenDoesNotRotate(t *testing.T) {
 	hostID, err := svc.VerifyToken(t.Context(), tok)
 	require.NoError(t, err)
 	assert.Equal(t, testHostID, hostID)
-	assert.Empty(t, audit.events, "fresh token must not emit any audit row")
+	assert.Empty(t, audit.Snapshot(), "fresh token must not emit any audit row")
 	assert.Zero(t, cmds.calls.Load(), "fresh token must not queue any rotate_token command")
 }
 
@@ -135,9 +152,9 @@ func TestVerifyToken_StaleTokenAutoRotates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testHostID, hostID)
 
-	require.Len(t, audit.events, 1, "stale-token verify must emit exactly one audit row")
-	got := audit.events[0]
-	assert.Equal(t, identityapi.AuditEnrollmentTokenRotated, got.Action)
+	require.Len(t, audit.Snapshot(), 1, "stale-token verify must emit exactly one audit row")
+	got := audit.Snapshot()[0]
+	assert.Equal(t, identityapi.AuditEnrollmentRotateToken, got.Action)
 	assert.Equal(t, "host", got.TargetType)
 	assert.Equal(t, testHostID, got.TargetID)
 	assert.Equal(t, "auto", got.Payload["trigger"])
@@ -161,14 +178,14 @@ func TestVerifyToken_GraceTokenDoesNotReRotate(t *testing.T) {
 	ageToken(t, db, testHostID, 2*time.Hour)
 	_, err := svc.VerifyToken(t.Context(), oldTok)
 	require.NoError(t, err)
-	require.Len(t, audit.events, 1)
+	require.Len(t, audit.Snapshot(), 1)
 	require.Equal(t, int64(1), cmds.calls.Load())
 
 	// Second verify with the OLD token: matches the previous-token grace
 	// path. Service must NOT trigger another rotation.
 	_, err = svc.VerifyToken(t.Context(), oldTok)
 	require.NoError(t, err)
-	assert.Len(t, audit.events, 1, "grace-path verify must not emit another audit row")
+	assert.Len(t, audit.Snapshot(), 1, "grace-path verify must not emit another audit row")
 	assert.Equal(t, int64(1), cmds.calls.Load(), "grace-path verify must not queue another rotate_token command")
 }
 
@@ -183,10 +200,11 @@ func TestRotateToken_OperatorPath(t *testing.T) {
 		"victor@example", "incident-2026-Q2")
 	require.NoError(t, err)
 	assert.NotEmpty(t, res.PreviousTokenIDPrefix)
-	assert.Positive(t, res.CommandID, "operator path must report the queued command_id")
+	require.NotNil(t, res.CommandID, "operator path must surface the queued command_id")
+	assert.Positive(t, *res.CommandID)
 
-	require.Len(t, audit.events, 1)
-	got := audit.events[0]
+	require.Len(t, audit.Snapshot(), 1)
+	got := audit.Snapshot()[0]
 	assert.Equal(t, "operator", got.Payload["trigger"])
 	assert.Equal(t, "victor@example", got.Payload["actor"])
 	assert.Equal(t, "incident-2026-Q2", got.Payload["reason"])
@@ -200,7 +218,7 @@ func TestRotateToken_MissingHost(t *testing.T) {
 	_, err := svc.RotateToken(t.Context(), "AAAA1111-2222-3333-4444-555566667777",
 		api.RotationTriggerOperator, "operator", "test")
 	require.ErrorIs(t, err, api.ErrNotFound)
-	assert.Empty(t, audit.events)
+	assert.Empty(t, audit.Snapshot())
 	assert.Zero(t, cmds.calls.Load())
 }
 
@@ -215,7 +233,7 @@ func TestRotateToken_RevokedHost(t *testing.T) {
 
 	_, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "test")
 	require.ErrorIs(t, err, api.ErrNotFound)
-	assert.Empty(t, audit.events)
+	assert.Empty(t, audit.Snapshot())
 	assert.Zero(t, cmds.calls.Load())
 }
 
@@ -240,6 +258,6 @@ func TestRotateToken_NilDepsOK(t *testing.T) {
 
 	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "", "")
 	require.NoError(t, err)
-	assert.Zero(t, res.CommandID, "nil CommandInserter -> command_id 0")
+	assert.Nil(t, res.CommandID, "nil CommandInserter -> CommandID nil so the wire shape omits command_id")
 	assert.NotEmpty(t, res.PreviousTokenIDPrefix)
 }

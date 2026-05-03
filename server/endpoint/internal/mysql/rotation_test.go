@@ -1,6 +1,7 @@
 package mysql_test
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -152,7 +153,7 @@ func TestRotateHostToken_ConcurrentVerifiesProduceOneRotation(t *testing.T) {
 			switch {
 			case err == nil:
 				successes++
-			case mysql.ErrRotateRaced.Error() == err.Error():
+			case errors.Is(err, mysql.ErrRotateRaced):
 				races++
 			default:
 				t.Errorf("unexpected error: %v", err)

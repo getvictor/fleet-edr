@@ -120,7 +120,8 @@ func TestHandler_Rotate_HappyPath(t *testing.T) {
 		captured.trigger = trigger
 		captured.actor = actor
 		captured.reason = reason
-		return api.RotateResult{PreviousTokenIDPrefix: "deadbeef", CommandID: 7}, nil
+		id := int64(7)
+		return api.RotateResult{PreviousTokenIDPrefix: "deadbeef", CommandID: &id}, nil
 	}}
 	h := New(svc, nil)
 
@@ -141,7 +142,8 @@ func TestHandler_Rotate_HappyPath(t *testing.T) {
 	var got api.RotateResult
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	assert.Equal(t, "deadbeef", got.PreviousTokenIDPrefix)
-	assert.Equal(t, int64(7), got.CommandID)
+	require.NotNil(t, got.CommandID)
+	assert.Equal(t, int64(7), *got.CommandID)
 	// The handler tags the trigger as Operator so the service emits the
 	// right audit row payload (verified at the service layer).
 	assert.Equal(t, "H-1", captured.hostID)

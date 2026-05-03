@@ -172,9 +172,22 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, &errs)
 	// #86 host-token rotation. Both must be positive; "disable rotation"
 	// is not a supported deployment mode (a never-rotating bearer token
-	// is the very thing this feature exists to fix).
+	// is the very thing this feature exists to fix). Grace must be
+	// strictly shorter than lifetime: with grace >= lifetime, two
+	// consecutive rotations would leave THREE valid tokens at once
+	// (current + previous still in grace + previous-previous's grace
+	// window stretching past the next rotation), which the
+	// previous_token_* schema columns can't represent. Verify-time
+	// rotation would happily overwrite the in-flight grace, leaving an
+	// agent with a token the server has discarded but whose grace had
+	// not yet expired. Reject the misconfiguration at boot.
 	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_LIFETIME", &c.HostTokenLifetime, &errs)
 	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_GRACE", &c.HostTokenGrace, &errs)
+	if c.HostTokenLifetime > 0 && c.HostTokenGrace > 0 && c.HostTokenGrace >= c.HostTokenLifetime {
+		errs = append(errs, fmt.Errorf(
+			"EDR_HOST_TOKEN_GRACE (%s) must be strictly shorter than EDR_HOST_TOKEN_LIFETIME (%s)",
+			c.HostTokenGrace, c.HostTokenLifetime))
+	}
 
 	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
 		c.LaunchAgentAllowlist = allowlist

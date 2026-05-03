@@ -98,7 +98,7 @@ func TestRotation_AutoTriggerOnStaleToken(t *testing.T) {
 	// Exactly one audit row + one rotate_token command emitted.
 	events := audit.snapshot()
 	require.Len(t, events, 1)
-	assert.Equal(t, identityapi.AuditEnrollmentTokenRotated, events[0].Action)
+	assert.Equal(t, identityapi.AuditEnrollmentRotateToken, events[0].Action)
 	assert.Equal(t, "auto", events[0].Payload["trigger"])
 	assert.NotEmpty(t, events[0].Payload["previous_token_id_prefix"])
 
@@ -160,7 +160,8 @@ func TestRotation_OperatorPath(t *testing.T) {
 	rot, err := ep.Service().RotateToken(ctx, testHardwareUUID,
 		api.RotationTriggerOperator, "victor@example", "incident-2026-Q2")
 	require.NoError(t, err)
-	assert.Positive(t, rot.CommandID)
+	require.NotNil(t, rot.CommandID, "operator path must surface the queued command_id")
+	assert.Positive(t, *rot.CommandID)
 	assert.NotEmpty(t, rot.PreviousTokenIDPrefix)
 
 	events := audit.snapshot()

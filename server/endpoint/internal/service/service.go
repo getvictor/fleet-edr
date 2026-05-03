@@ -252,10 +252,9 @@ func (s *service) RotateToken(ctx context.Context, hostID string, trigger api.Ro
 	if err != nil {
 		return api.RotateResult{}, fmt.Errorf("rotate token: %w", err)
 	}
-	cmdID := s.deliverRotation(ctx, hostID, trigger, actor, reason, rot)
 	return api.RotateResult{
 		PreviousTokenIDPrefix: rot.PreviousTokenIDPrefix,
-		CommandID:             cmdID,
+		CommandID:             s.deliverRotation(ctx, hostID, trigger, actor, reason, rot),
 	}, nil
 }
 
@@ -263,9 +262,12 @@ func (s *service) RotateToken(ctx context.Context, hostID string, trigger api.Ro
 // emits the audit row. Shared between the verify-time auto path and
 // the operator-driven RotateToken path so both audit row shapes are
 // byte-identical except for the trigger / actor / reason payload
-// fields. Returns the command_id (or 0 if the queue insert failed) so
-// the operator endpoint can include it in its 200 body for clients
-// that want to wait until the agent has acked.
+// fields. Returns *int64: a non-nil pointer carries the freshly-queued
+// command id, nil signals "rotation committed in the DB but the agent
+// command queue did not receive the new bearer." The operator UI uses
+// the nil case to surface "agent will recover via re-enroll once the
+// previous-token grace expires" rather than waiting indefinitely for
+// an ack.
 //
 // Best-effort on the command insert: rotation already committed in
 // the DB. If we can't queue the rotate_token command, the agent's
@@ -275,20 +277,22 @@ func (s *service) RotateToken(ctx context.Context, hostID string, trigger api.Ro
 // Best-effort on the audit emit too: a missed audit row is a follow-up
 // incident, not a reason to fail an HTTP response that already
 // returned 200/204.
-func (s *service) deliverRotation(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string, rot mysql.RotateResult) int64 {
-	cmdID := int64(0)
+func (s *service) deliverRotation(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string, rot mysql.RotateResult) *int64 {
+	var cmdID *int64
 	if s.commands != nil {
 		payload, err := json.Marshal(map[string]string{"new_token": rot.NewToken})
-		if err == nil {
-			cmdID, err = s.commands(ctx, hostID, commandTypeRotateToken, payload)
+		switch {
+		case err != nil:
+			s.logger.WarnContext(ctx, "rotate_token marshal failed",
+				attrkeys.HostID, hostID, "err", err)
+		default:
+			id, err := s.commands(ctx, hostID, commandTypeRotateToken, payload)
 			if err != nil {
 				s.logger.WarnContext(ctx, "rotate_token enqueue failed",
 					attrkeys.HostID, hostID, "err", err)
-				cmdID = 0
+			} else {
+				cmdID = &id
 			}
-		} else {
-			s.logger.WarnContext(ctx, "rotate_token marshal failed",
-				attrkeys.HostID, hostID, "err", err)
 		}
 	}
 
@@ -303,18 +307,18 @@ func (s *service) deliverRotation(ctx context.Context, hostID string, trigger ap
 		if reason != "" {
 			payload["reason"] = reason
 		}
-		if cmdID > 0 {
-			payload["command_id"] = cmdID
+		if cmdID != nil {
+			payload["command_id"] = *cmdID
 		}
 		if err := s.audit.Record(ctx, identityapi.AuditEvent{
-			Action:     identityapi.AuditEnrollmentTokenRotated,
+			Action:     identityapi.AuditEnrollmentRotateToken,
 			TargetType: "host",
 			TargetID:   hostID,
 			Payload:    payload,
 		}); err != nil {
 			s.logger.WarnContext(ctx, "audit record failed",
 				attrkeys.HostID, hostID,
-				"action", string(identityapi.AuditEnrollmentTokenRotated),
+				"action", string(identityapi.AuditEnrollmentRotateToken),
 				"err", err)
 		}
 	}

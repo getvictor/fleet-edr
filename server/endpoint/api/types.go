@@ -75,11 +75,19 @@ const (
 // operator's UI confirmation + the audit row so a reviewer can pivot
 // from a rotation event to the verify request that triggered it
 // (audit + access-log share the X-Request-ID / trace_id correlation).
-// CommandID is the rotate_token command queued for the agent; useful
-// for an operator who wants to wait until the agent has acked.
+//
+// CommandID is the rotate_token command queued for the agent. *int64
+// (not int64) so a rotation that committed in the DB but failed to
+// queue the agent command is observably distinct on the wire: nil ->
+// JSON omits command_id, telling the operator UI "rotation succeeded
+// but the agent will only pick up the new token via re-enroll after
+// the previous-token grace expires." A bare int64 zero would be
+// indistinguishable from a successful queue at id 0 (auto-increment
+// never returns 0, but a JSON consumer can't know that without
+// reading server source).
 type RotateResult struct {
 	PreviousTokenIDPrefix string `json:"previous_token_id_prefix"`
-	CommandID             int64  `json:"command_id"`
+	CommandID             *int64 `json:"command_id,omitempty"`
 }
 
 // Errors returned across the api boundary. Callers compare with errors.Is.

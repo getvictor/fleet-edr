@@ -47,7 +47,7 @@ type Deps struct {
 	CommandInserter CommandInserter
 
 	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for enrollment.revoke + enrollment.token_rotated.
+	// audit emission for enrollment.revoke + enrollment.rotate_token.
 	// cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 
