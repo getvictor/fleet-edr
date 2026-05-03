@@ -113,13 +113,11 @@ var (
 
 // PolicyProvider is the narrow read interface endpoint's enroll handler
 // needs to bootstrap each new agent with the current blocklist policy.
-// Phase 2 keeps the existing policy.Store as the implementation (via a
-// thin shim in cmd/main); phase 3 replaces with the rules context's
-// PolicyService when policy moves into the rules bounded context.
+// Today's implementation is rules.api.PolicyService.
 //
 // Returning a pre-marshaled command payload + version + hasContent flag
 // keeps endpoint from ever importing the policy / rules packages: the
-// shim does the empty-check and the marshalling.
+// implementation does the empty-check and the marshalling.
 type PolicyProvider interface {
 	// ActiveCommandPayload returns:
 	//   - payload: pre-marshaled set_blocklist command body for the
@@ -130,17 +128,16 @@ type PolicyProvider interface {
 	//     because pushing an empty blocklist accomplishes nothing.
 	//   - err: provider failures (DB unavailable, marshal error, etc.)
 	//
-	// Renamed from GetActiveCommandPayload in phase 3 so
-	// rules/api.PolicyService satisfies this interface structurally
-	// without rules taking a hard dependency on endpoint/api.
+	// The shape lets rules/api.PolicyService satisfy this interface
+	// structurally without rules taking a hard dependency on
+	// endpoint/api.
 	ActiveCommandPayload(ctx context.Context) (payload json.RawMessage, version int64, hasContent bool, err error)
 }
 
-// CommandInserter shape moved to bootstrap as a closure type in
-// phase 4 (consumed by endpoint/internal/service via the call site
-// `s.commands(ctx, hostID, ct, payload)`). Kept the documentation
-// here so future readers see the rationale: cmd/main passes
+// CommandInserter is a closure type defined in endpoint/bootstrap
+// (consumed by endpoint/internal/service via the call site
+// `s.commands(ctx, hostID, ct, payload)`). cmd/main passes
 // responseCtx.Service().Insert as a method value, which matches the
-// closure shape; previously a one-method interface, now a func type
-// with the same signature so endpoint and rules can share the
-// pattern without endpoint importing response/api.
+// closure shape; using a func type instead of a one-method interface
+// lets endpoint and rules share the pattern without endpoint
+// importing response/api.

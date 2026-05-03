@@ -25,8 +25,8 @@ import (
 type ActiveHostsLister = service.ActiveHostsLister
 
 // CommandInserter inserts a single command row keyed on host_id.
-// Phase 4 replaces the cmd/main shim with response/api.Service.Insert.
-// Signature is bound now so the swap is one line.
+// Today cmd/main passes response/api.Service.Insert as a method
+// value satisfying this closure shape.
 type CommandInserter = service.CommandInserter
 
 // Deps bundles what New needs to wire the rules context. cmd/main
@@ -124,8 +124,7 @@ func (r *Rules) ContentService() api.RuleProvider { return r.svc }
 
 // Catalog exposes the public api.Lister. The operator handler inside
 // rules consumes this internally; nothing outside rules calls it
-// today (admin used to via a Cataloger interface; admin is gone in
-// phase 3).
+// today.
 func (r *Rules) Catalog() api.Lister { return r.svc }
 
 // RegisterAuthedRoutes wires the operator-facing routes:

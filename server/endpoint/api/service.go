@@ -43,8 +43,7 @@ type Service interface {
 	CountActive(ctx context.Context) (int, error)
 
 	// ActiveHostIDs returns the non-revoked host_ids in stable order.
-	// Used by admin's policy fan-out today; phase 3 may relocate the
-	// caller into the rules context.
+	// Used by the policy fan-out path.
 	ActiveHostIDs(ctx context.Context) ([]string, error)
 
 	// RotateToken atomically issues a fresh bearer token for hostID, moves

@@ -22,7 +22,5 @@
 // types Event, Process, Host, Alert, AlertStatus, AlertFilter,
 // ProcessNode, HostSummary, Finding, TimeRange, plus the SeverityLow /
 // Medium / High / Critical constants. rules/internal/catalog imports
-// these directly via `import detectionapi "...detection/api"` (the
-// rules.api alias indirection that phases 3-4 carried is dropped in
-// phase 5).
+// these directly via `import detectionapi "...detection/api"`.
 package api

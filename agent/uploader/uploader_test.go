@@ -130,8 +130,8 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	}
 }
 
-// TestUpload401_CallsOnAuthFail locks in the 401 → re-auth signal. The Phase 1 QA bug was
-// that OnAuthFail never fired because the agent's TLS config was broken; this test prevents
+// TestUpload401_CallsOnAuthFail locks in the 401 → re-auth signal. An early QA bug had
+// OnAuthFail never firing because the agent's TLS config was broken; this test prevents
 // any future regression where the auth path stops surfacing 401s to enrollment.
 func TestUpload401_CallsOnAuthFail(t *testing.T) {
 	q := openTestQueue(t)

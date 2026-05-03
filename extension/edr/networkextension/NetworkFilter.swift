@@ -10,7 +10,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 ///
 /// DNS query capture is not implemented here because macOS routes DNS
 /// through mDNSResponder, so this filter never sees application DNS flows.
-/// DNS monitoring is planned for Phase 3 via NEDNSProxyProvider.
+/// A future NEDNSProxyProvider can intercept queries when DNS monitoring is added.
 final class NetworkFilter: NEFilterDataProvider {
     private let serializer = NetworkEventSerializer()
 

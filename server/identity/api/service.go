@@ -43,9 +43,9 @@ type Service interface {
 	SeedAdmin(ctx context.Context, w io.Writer) (User, string, error)
 
 	// UserExists reports whether the user id refers to a live user.
-	// Replaces the cross-context FK fk_alerts_updated_by that phase 5
-	// dropped: detection's alert-update handler calls UserExists before
-	// writing alerts.updated_by.
+	// Replaces the cross-context FK fk_alerts_updated_by that the
+	// bounded-context split dropped: detection's alert-update handler
+	// calls UserExists before writing alerts.updated_by.
 	UserExists(ctx context.Context, userID int64) (bool, error)
 
 	// CleanupExpiredSessions deletes session rows whose expires_at is in

@@ -61,8 +61,8 @@ type RegisterResult struct {
 // enrollments table holds the *current* enrollment state only; an older design called for an
 // archive UPDATE before REPLACE, but REPLACE on the primary key deletes and re-inserts the
 // row, so "re-enrolled" audit metadata cannot survive in the same row. Enrollment history
-// (revocation reasons, who revoked, etc.) will live in a dedicated history table in Phase 4;
-// for the MVP, the audit trail lives in structured logs emitted by handler.go (enroll) and
+// (revocation reasons, who revoked, etc.) is deferred to a dedicated history table; for
+// the MVP, the audit trail lives in structured logs emitted by handler.go (enroll) and
 // admin.go (revoke).
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
 	token, err := generateToken()
@@ -398,7 +398,7 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 }
 
 // CountActive returns how many non-revoked enrollments exist. Cheaper than
-// ActiveHostIDs when the caller only needs the count — Phase 4's OTel gauge
+// ActiveHostIDs when the caller only needs the count — the OTel gauge
 // `edr.enrolled.hosts` is the primary caller.
 func (s *Store) CountActive(ctx context.Context) (int, error) {
 	var n int
@@ -409,9 +409,9 @@ func (s *Store) CountActive(ctx context.Context) (int, error) {
 }
 
 // ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment.
-// Phase 2 uses this to fan out policy updates to the set of hosts that still have a
-// valid token; returning just the id column keeps the payload small when the caller is
-// already going to look up the full row by id.
+// Used to fan out policy updates to the set of hosts that still have a valid token;
+// returning just the id column keeps the payload small when the caller is already
+// going to look up the full row by id.
 func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	var ids []string
 	if err := s.db.SelectContext(ctx, &ids, `

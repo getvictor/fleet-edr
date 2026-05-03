@@ -182,12 +182,11 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 // Compile-time guards: *Recorder must satisfy every hook interface its callers
 // expect. Renaming or changing the signature of any of these hook methods will
 // break compilation here before the consumer packages — catches signature drift
-// during phase-4-style refactors.
-// Phase 5 collapses ingest.MetricsHook + detection.MetricsRecorder +
-// retention.MetricsRecorder into a single detection/api.MetricsRecorder
-// interface. The retention runner gets its rows-deleted hook through
-// the same interface (RetentionRowsDeleted method); the guard asserts
-// the consolidated surface.
+// during refactors.
+//
+// detection/api.MetricsRecorder is the consolidated hook surface; the retention
+// runner gets its rows-deleted hook through the same interface
+// (RetentionRowsDeleted method). The guard asserts the consolidated surface.
 var (
 	_ detectionapi.MetricsRecorder = (*Recorder)(nil)
 )

@@ -14,5 +14,6 @@
 // ActiveHostsLister and CommandInserter are unrelated to detection;
 // detection's only outbound closure is UserExists, which cmd/main
 // supplies from identity.api.Service.UserExists. UserExists replaces
-// the cross-context FK fk_alerts_updated_by that phase 5 drops.
+// the cross-context FK fk_alerts_updated_by that the bounded-context
+// migration dropped.
 package bootstrap

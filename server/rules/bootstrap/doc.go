@@ -9,5 +9,5 @@
 //
 // ActiveHostsLister and CommandInserter are closure types so cmd/main
 // can supply late-bound implementations without rules taking a hard
-// dependency on endpoint or response. See phase3.md for the rationale.
+// dependency on endpoint or response.
 package bootstrap

@@ -57,10 +57,9 @@ func (f *fakePolicyProvider) ActiveCommandPayload(context.Context) (json.RawMess
 }
 
 // recordingCommandInserter captures every fan-out call so the test
-// can assert on the host_id targeting. Phase 4 dropped the
-// api.CommandInserter interface in favour of a closure type
-// (endpoint/bootstrap.CommandInserter); the recorder exposes an
-// `Insert` method whose method-value satisfies that closure shape.
+// can assert on the host_id targeting. CommandInserter is a closure
+// type (endpoint/bootstrap.CommandInserter); the recorder exposes
+// an `Insert` method whose method-value satisfies that closure shape.
 type recordingCommandInserter struct {
 	mu     sync.Mutex
 	calls  []recordedCommand

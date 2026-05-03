@@ -32,7 +32,8 @@ import (
 // Known limitations, documented for the operator runbook:
 //   - Atomic writes via temp-file + rename: ESF NOTIFY_OPEN sees the
 //     temp file, not the destination, so the rule misses these. We
-//     don't subscribe to NOTIFY_RENAME today; tracked for Phase 8.
+//     don't subscribe to NOTIFY_RENAME today; tracked as a future
+//     extension change.
 //   - Drops via Apple platform binaries (e.g. attacker uses `sudo cp`
 //     where `cp` is a platform binary): skipped here, but the parent
 //     shell's exec is captured by suspicious_exec / process tree.

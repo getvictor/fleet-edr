@@ -6,7 +6,7 @@
 // misses the print (container stdout rotated, terminal cleared, etc.) the recovery
 // path is to `DELETE FROM users WHERE email='admin@fleet-edr.local'` and restart —
 // the seeder sees the empty table and generates a new password. That's not elegant,
-// but a password-reset flow is explicitly out of scope for Phase 3.
+// but a password-reset flow is explicitly out of scope for the MVP.
 package seed
 
 import (

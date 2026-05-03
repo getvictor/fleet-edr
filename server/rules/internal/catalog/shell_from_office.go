@@ -100,8 +100,8 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	}
 	// Parent not yet materialised, or not an Office binary. The processor marks the
 	// whole batch processed after Evaluate returns, so a re-feed does not happen
-	// automatically — missing-parent cases are accepted for Phase 2; a deferred retry
-	// queue is Phase 4 scope.
+	// automatically — missing-parent cases are accepted today; a deferred retry
+	// queue is a future improvement.
 	if parent == nil || !officeBinaries[parent.Path] {
 		return nil, nil
 	}

@@ -4,6 +4,5 @@
 // future protobuf cutover only swaps this package rather than
 // churning every caller.
 //
-// Phase 5 ships JSON-only; protobuf is a future swap (out of scope
-// per phase5.md).
+// JSON-only today; protobuf would be a future swap.
 package wire

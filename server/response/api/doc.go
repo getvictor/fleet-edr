@@ -10,8 +10,7 @@
 //   - Get / ListForHost / UpdateStatus (consumed internally by the
 //     response/internal/{agent,operator} HTTP handlers).
 //
-// Per ADR-0004 and claude/modular-monolith/phase4.md, response/api
-// imports nothing from the project: Command + Status + the request
-// shapes are defined here from scratch (no aliases of store types,
-// unlike rules/api).
+// Per ADR-0004, response/api imports nothing from the project:
+// Command + Status + the request shapes are defined here from scratch
+// (no aliases of store types, unlike rules/api).
 package api

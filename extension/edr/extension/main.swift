@@ -1,7 +1,7 @@
 import Foundation
 import EndpointSecurity
 
-// Phase 2: load any persisted blocklist BEFORE ESF starts subscribing. Startup order
+// Load any persisted blocklist BEFORE ESF starts subscribing. Startup order
 // matters here — if we subscribed first, a racing exec of a blocked path between
 // subscribe and loadFromDisk would be incorrectly allowed.
 PolicyStore.shared.loadFromDisk()
