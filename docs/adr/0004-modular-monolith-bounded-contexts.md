@@ -104,18 +104,19 @@ that `bootstrap/` packages are imported only by `server/cmd/*`, each
 context's own `testkit/`, and integration tests.
 
 Each context also exposes a peer of `api/` / `bootstrap/` / `internal/`
-called `testkit/` — a coordinated test-fixture surface. testkit owns
-the schema-applier wrappers (`Apply`, `Migrate`), context-specific
-fakes/seeders, and (in detection's case) the rule-replay harness used
-by cross-context catalog tests. The split rule is:
+called `testkit/`: a coordinated test-fixture surface. testkit owns
+the schema-applier wrappers (`ApplySchema`, `MigrateSchema`),
+context-specific fakes/seeders, and (in detection's case) the
+rule-replay harness used by cross-context catalog tests. The split
+rule is:
 
-- Production wiring: `cmd/main` (and `server/testdb/full`'s test-only
-  composer) calls `bootstrap`. `bootstrap` is for standing up real
-  service instances.
-- Tests: per-context unit tests, cross-context integration tests, and
-  rule fixture replays all reach for `testkit`. arch-go pins each
-  testkit to its own context so cross-context test allowances cannot
-  be exploited as transitive sneak-in paths to a third context.
+- Production wiring: `cmd/main` calls `bootstrap`; `bootstrap` is for
+  standing up real service instances.
+- Tests: per-context unit tests, cross-context integration tests
+  (including `server/testdb/full`'s composer), and rule fixture
+  replays all reach for `testkit`. arch-go pins each testkit to its
+  own context so cross-context test allowances cannot be exploited as
+  transitive sneak-in paths to a third context.
 
 The migration runs as seven phases, smallest blast radius first
 (`identity` -> `endpoint` -> `rules` -> `response` -> `detection` ->
