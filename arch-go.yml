@@ -36,6 +36,7 @@ dependenciesRules:
         - "**.endpoint.testkit"
         - "**.attrkeys"
         - "**.httpserver"
+        - "**.identity.api"  # identity.api.AuditRecorder for enrollment.revoke audit
         - "**.rules.api"   # rules.api.PolicyService satisfies endpoint's PolicyProvider
         - "**.testdb"
 
@@ -53,6 +54,7 @@ dependenciesRules:
         - "**.attrkeys"
         - "**.httpserver"
         - "**.endpoint.api"
+        - "**.identity.api"  # identity.api.AuditRecorder for policy.{create,update,delete} audit
         - "**.detection.api"
         - "**.detection.api.**"
         - "**.detection.testkit"

@@ -11,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/audit"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/service"
@@ -43,6 +44,8 @@ const defaultCleanupInterval = 5 * time.Minute
 type Identity struct {
 	svc          api.Service
 	loginHandler *login.Handler
+	auditStore   *audit.Store
+	auditHandler *audit.Handler
 	sessionMW    func(http.Handler) http.Handler
 	csrfMW       func(http.Handler) http.Handler
 	db           *sqlx.DB
@@ -69,6 +72,7 @@ func New(deps Deps) (*Identity, error) {
 	usersStore := users.New(deps.DB)
 	sessionsStore := sessions.New(deps.DB, sessions.Options{TTL: deps.SessionTTL})
 	svc := service.New(usersStore, sessionsStore, logger)
+	auditStore := audit.New(deps.DB)
 
 	return &Identity{
 		svc: svc,
@@ -76,7 +80,10 @@ func New(deps Deps) (*Identity, error) {
 			RatePerMinute: deps.LoginRatePerMin,
 			CookieSecure:  deps.CookieSecure,
 			Logger:        logger,
+			Audit:         auditStore,
 		}),
+		auditStore:   auditStore,
+		auditHandler: audit.NewHandler(auditStore, logger),
 		sessionMW:    middleware.Session(svc, logger),
 		csrfMW:       middleware.CSRF(logger),
 		db:           deps.DB,
@@ -140,11 +147,19 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterPublicRoutes(mux)
 }
 
-// RegisterAuthedRoutes wires GET /api/session (who-am-i). Caller wraps in
+// RegisterAuthedRoutes wires GET /api/session (who-am-i) and
+// GET /api/audit (operator-action history). Caller wraps in
 // SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
+	i.auditHandler.RegisterAuthedRoutes(mux)
 }
+
+// AuditRecorder returns the cross-context-callable AuditRecorder.
+// Other contexts (response, rules, endpoint) take this as a constructor
+// dependency and call Record() at the point an operator action commits;
+// see api.AuditRecorder for the interface contract.
+func (i *Identity) AuditRecorder() api.AuditRecorder { return i.auditStore }
 
 // Run owns the identity context's background goroutines. Today: a ticker
 // that sweeps expired session rows. Returns when ctx is cancelled. cmd/main
