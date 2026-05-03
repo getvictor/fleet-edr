@@ -30,8 +30,8 @@ jobs:
     name: Detect Go changes
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
+      contents: read       # baseline; the detect step doesn't actually checkout
+      pull-requests: read  # gate job reads the PR's file list via gh api pulls/<n>/files
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
     steps:
