@@ -12,10 +12,14 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
 )
 
-// rotationGrace is the grace window the tests use; long enough to cover
-// the test's own setup latency, short enough that the
-// "after-grace-rejection" branch is exercised in milliseconds.
-const rotationGrace = 500 * time.Millisecond
+// rotationGrace is the grace window the tests use for "verify-during-grace"
+// assertions. Sized to comfortably outlast the slowest plausible CI argon2id
+// sequence (5+ verify/rotate cycles at ~1.5s each on a slow GitHub runner)
+// so a test failure here means a real grace-window bug, not an elapsed clock.
+// The "after-grace-rejection" branch uses its own short tinyGrace + sleep
+// in TestRotateHostToken_OldTokenRejectedAfterGrace; that path is still
+// exercised in milliseconds.
+const rotationGrace = 30 * time.Second
 
 // TestRotateHostToken_HappyPath asserts the contract: a successful
 // rotation returns a fresh raw token + a non-empty previous-token-id
