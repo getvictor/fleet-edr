@@ -1,5 +1,6 @@
 /ai
 tmp
+.claude/scheduled_tasks.lock
 
 # Xcode
 xcuserdata/
