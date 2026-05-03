@@ -9,6 +9,6 @@
 // surface on a mux. Run starts the background goroutines (today: the
 // expired-session cleanup loop).
 //
-// By convention only server/cmd/* and test/integration/* import this
-// package; arch lint enforces it from phase 7.
+// Only server/cmd/*, server/testdb/full, and test/integration/* import
+// this package; arch-go enforces the rule (see arch-go.yml).
 package bootstrap

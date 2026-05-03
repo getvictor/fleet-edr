@@ -11,6 +11,6 @@
 // HostTokenMiddleware returns the per-request middleware that gates
 // agent endpoints (POST /api/events, GET /api/commands, etc.).
 //
-// By convention only server/cmd/* and test/integration/* import this
-// package; arch lint enforces it from phase 7.
+// Only server/cmd/*, server/testdb/full, and test/integration/* import
+// this package; arch-go enforces the rule (see arch-go.yml).
 package bootstrap

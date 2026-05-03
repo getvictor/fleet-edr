@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -52,8 +51,8 @@ func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
-	return detection.Documentation{
+func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
+	return api.Documentation{
 		Title:   "LaunchDaemon plist drop (/Library/LaunchDaemons write)",
 		Summary: "Flags a non-platform-binary write to any *.plist directly under /Library/LaunchDaemons.",
 		Description: "Detects the canonical system-domain persistence drop: writing a plist into " +
@@ -65,7 +64,7 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
 			"To stay high-precision, writes by Apple-signed platform binaries (installd, system_installd, " +
 			"sysadminctl, package post-flight scripts) are skipped — they're the legitimate path. Non-Apple MDM " +
 			"agents (Munki, JumpCloud, Kandji's daemon) need their team ID allowlisted.",
-		Severity:   detection.SeverityHigh,
+		Severity:   api.SeverityHigh,
 		EventTypes: []string{"open"},
 		FalsePositives: []string{
 			"Non-Apple MDM agent installations dropping their own LaunchDaemon. Allowlist the agent's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
@@ -75,7 +74,7 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() detection.Documentation {
 			"Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
 			"Drops via Apple platform binaries (e.g. `sudo cp` where cp is Apple-signed) are skipped here — pair with suspicious_exec for parent-shell visibility.",
 		},
-		Config: []detection.ConfigKnob{
+		Config: []api.ConfigKnob{
 			{
 				EnvVar:      "EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST",
 				Type:        "csv-team-ids",
@@ -145,7 +144,7 @@ func (r *PrivilegeLaunchdPlistWrite) Evaluate(
 
 func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	ctx context.Context, evt api.Event, s api.GraphReader,
-) (*detection.Finding, error) {
+) (*api.Finding, error) {
 	if evt.EventType != "open" {
 		return nil, nil
 	}
@@ -185,10 +184,10 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 		return nil, nil
 	}
 
-	return &detection.Finding{
+	return &api.Finding{
 		HostID:   evt.HostID,
 		RuleID:   r.ID(),
-		Severity: detection.SeverityHigh,
+		Severity: api.SeverityHigh,
 		Title:    "LaunchDaemon plist drop",
 		Description: fmt.Sprintf(
 			"%s wrote %s — non-Apple persistence drop in system LaunchDaemons (MITRE T1543.004)",

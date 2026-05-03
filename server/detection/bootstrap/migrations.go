@@ -56,10 +56,10 @@ var migrations = []migrationStep{
 		SQL:          `ALTER TABLE alerts ADD INDEX idx_alerts_updated_by (updated_by)`,
 		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
 	},
-	// Phase 5 NEW migration: drop the cross-context FK that phase 1
-	// added (alerts.updated_by -> users.id). The integrity check
-	// moves to detection/internal/service.UpdateAlertStatus via the
-	// UserExists closure. Ignores 1091/3940 so a fresh DB (no FK to
+	// Drop the cross-context FK alerts.updated_by -> users.id that
+	// phase 1 added; detection enforces the integrity check at the
+	// service layer instead (UserExists closure called from
+	// UpdateAlertStatus). Ignores 1091/3940 so a fresh DB (no FK to
 	// drop) and a re-run (FK already dropped) both succeed.
 	{
 		Name:         "drop fk_alerts_updated_by",

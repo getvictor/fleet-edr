@@ -11,58 +11,10 @@ import (
 	"pgregory.net/rapid"
 )
 
-func TestNullRawJSON_Scan(t *testing.T) {
-	n := NullRawJSON(nil)
-
-	require.NoError(t, n.Scan(nil), "nil scans to empty")
-	assert.Nil(t, []byte(n))
-
-	require.NoError(t, n.Scan([]byte(`{"key":"value"}`)))
-	assert.JSONEq(t, `{"key":"value"}`, string(n))
-
-	// Unsupported type produces a typed error.
-	err := n.Scan(42)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported type")
-}
-
-func TestNullRawJSON_Value(t *testing.T) {
-	var nilN NullRawJSON
-	v, err := nilN.Value()
-	require.NoError(t, err)
-	assert.Nil(t, v, "nil RawJSON yields SQL NULL")
-
-	literalNull := NullRawJSON("null")
-	v, err = literalNull.Value()
-	require.NoError(t, err)
-	assert.Nil(t, v, "JSON null literal yields SQL NULL")
-
-	concrete := NullRawJSON(`{"a":1}`)
-	v, err = concrete.Value()
-	require.NoError(t, err)
-	assert.Equal(t, []byte(`{"a":1}`), v)
-}
-
-func TestNullRawJSON_MarshalJSON(t *testing.T) {
-	var nilN NullRawJSON
-	out, err := nilN.MarshalJSON()
-	require.NoError(t, err)
-	assert.Equal(t, `null`, string(out))
-
-	concrete := NullRawJSON(`{"x":true}`)
-	out, err = concrete.MarshalJSON()
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"x":true}`, string(out))
-}
-
-func TestNullRawJSON_UnmarshalJSON(t *testing.T) {
-	n := NullRawJSON(nil)
-	require.NoError(t, n.UnmarshalJSON([]byte(`null`)))
-	assert.Nil(t, []byte(n))
-
-	require.NoError(t, n.UnmarshalJSON([]byte(`{"a":1}`)))
-	assert.JSONEq(t, `{"a":1}`, string(n))
-}
+// NullRawJSON's Scan/Value/Marshal/Unmarshal contracts are tested in
+// server/sqlhelpers (the canonical home post-phase-6). detection/api
+// re-exports the type via alias and only tests the detection-specific
+// shapes here (JSONStringSlice, Event wire format, validation errors).
 
 func TestJSONStringSlice_RoundTrip(t *testing.T) {
 	s := JSONStringSlice{"T1059", "T1105"}
@@ -111,9 +63,8 @@ func TestIsValidationError(t *testing.T) {
 }
 
 func TestEvent_RoundTripJSON(t *testing.T) {
-	// The agent depends on byte-identical wire shape across the
-	// modular monolith migration. Round-trip an Event through json
-	// to pin the field set.
+	// The agent depends on byte-identical wire shape for Event. Round-
+	// trip an Event through json to pin the field set.
 	in := Event{
 		EventID:      "abc",
 		HostID:       "h",
@@ -158,83 +109,6 @@ func TestExitReason_Constants(t *testing.T) {
 }
 
 // ---- Property-based tests --------------------------------------------------
-//
-// PBT (pgregory.net/rapid) for serialization round-trips: the input
-// space is "any valid JSON value", which is too large to enumerate
-// in a table. The properties below assert algebraic identities that
-// must hold for every input rapid generates. Failures shrink to a
-// minimal counter-example, named in the failure message.
-
-// jsonValueGen produces a valid JSON value (object, array, string,
-// number, bool, or null) suitable for NullRawJSON / JSONStringSlice
-// round-trip checks.
-func jsonValueGen() *rapid.Generator[json.RawMessage] {
-	return rapid.OneOf(
-		rapid.Just(json.RawMessage(`null`)),
-		rapid.Just(json.RawMessage(`true`)),
-		rapid.Just(json.RawMessage(`false`)),
-		rapid.Just(json.RawMessage(`0`)),
-		rapid.Just(json.RawMessage(`42`)),
-		rapid.Just(json.RawMessage(`-7`)),
-		rapid.Just(json.RawMessage(`"x"`)),
-		rapid.Just(json.RawMessage(`"hello world"`)),
-		rapid.Just(json.RawMessage(`""`)),
-		rapid.Just(json.RawMessage(`[]`)),
-		rapid.Just(json.RawMessage(`[1,2,3]`)),
-		rapid.Just(json.RawMessage(`{}`)),
-		rapid.Just(json.RawMessage(`{"a":1}`)),
-		rapid.Just(json.RawMessage(`{"nested":{"k":"v"}}`)),
-		rapid.Just(json.RawMessage(`{"arr":[1,"two",null,true]}`)),
-	)
-}
-
-// TestNullRawJSON_RoundTripProperty asserts that for any valid JSON
-// value v: Unmarshal(Marshal(v)) reproduces v's logical content. The
-// "null" literal collapses to nil per NullRawJSON's documented shape;
-// every other value round-trips byte-for-byte (modulo whitespace).
-func TestNullRawJSON_RoundTripProperty(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		v := jsonValueGen().Draw(rt, "v")
-		n := NullRawJSON(v)
-
-		// Marshal -> Unmarshal must preserve content (or both be nil
-		// for the null literal).
-		out, err := n.MarshalJSON()
-		require.NoError(rt, err)
-
-		var back NullRawJSON
-		require.NoError(rt, back.UnmarshalJSON(out))
-
-		if string(v) == "null" {
-			assert.Nil(rt, []byte(back), "JSON null collapses to nil")
-			return
-		}
-		assert.JSONEq(rt, string(v), string(back),
-			"round-trip must preserve JSON value (input=%s)", string(v))
-	})
-}
-
-// TestNullRawJSON_ScanValueProperty pairs Scan + Value: for any
-// valid raw JSON, Scan(Value(x)) reproduces x (with the "null" /
-// nil collapse), and the Value of a nil/null is SQL NULL.
-func TestNullRawJSON_ScanValueProperty(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		v := jsonValueGen().Draw(rt, "v")
-		original := NullRawJSON(v)
-
-		val, err := original.Value()
-		require.NoError(rt, err)
-
-		var rebuilt NullRawJSON
-		if val == nil {
-			require.NoError(rt, rebuilt.Scan(nil))
-			assert.Nil(rt, []byte(rebuilt))
-			return
-		}
-		require.NoError(rt, rebuilt.Scan(val))
-		assert.JSONEq(rt, string(v), string(rebuilt))
-	})
-}
 
 // TestJSONStringSlice_RoundTripProperty: for any []string s,
 // Scan(Value(s)) == s (with the empty-slice collapse to nil).

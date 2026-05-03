@@ -91,18 +91,30 @@ func New(deps Deps) (*Identity, error) {
 // pattern, swallowing "Duplicate column" / "Duplicate key" / "Duplicate
 // foreign key" errors).
 //
-// Call this BEFORE store.New so the cross-context FK
-// fk_alerts_updated_by (alerts.updated_by -> users.id) created by
-// store.applySchema can resolve. After phase 5 drops fk_alerts_updated_by,
-// the call order won't matter; for now it does.
+// Idempotent: the cross-context FK fk_alerts_updated_by that used to
+// require this be called before detection's ApplySchema was dropped
+// in phase 5 in favour of code-level UserExists validation, so call
+// order across contexts is no longer load-bearing.
 func (i *Identity) ApplySchema(ctx context.Context) error {
+	return ApplySchema(ctx, i.db)
+}
+
+// ApplySchema is the package-level form: applies identity's DDL +
+// idempotent ALTERs against the given DB without requiring a fully
+// constructed *Identity. Used by server/testdb so tests can apply
+// every context's schema without faking out each bootstrap's service
+// dependencies.
+func ApplySchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("identity ApplySchema: db must not be nil")
+	}
 	for _, stmt := range schemaStatements {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("identity schema create: %w", err)
 		}
 	}
 	for _, stmt := range schemaMigrations {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
 			return fmt.Errorf("identity schema migration: %w", err)
 		}
 	}

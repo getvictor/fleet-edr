@@ -3,80 +3,81 @@ version: 1
 # Architecture rules for the modular-monolith bounded-context migration.
 # See docs/adr/0004-modular-monolith-bounded-contexts.md for the rationale.
 #
-# Rules are added one bounded context at a time as each phase lands. Phase 7
-# tightens the rule set with cross-cutting `bootstrap/` access restrictions
-# and api/ -> internal/ blocking.
+# Phase 6 strict mode: every transitional allow-list entry from earlier
+# phases (`**.store`, the `**.detection` catch-all) is gone. The five
+# bounded contexts are stable; new violations should fail the build.
 
 dependenciesRules:
-  # Phase 1: identity context internals may import only their own context,
-  # platform packages, and standard library / approved third-party. Other
-  # contexts that need identity functionality go through identity/api.
-  #
-  # arch-go pattern syntax: dots are wildcards for path segments. The
-  # match below covers packages whose path contains /identity/internal/...
+  # identity context internals may import only their own context,
+  # platform packages, and standard library / approved third-party.
+  # Other contexts that need identity functionality go through
+  # identity/api.
   - package: "**.identity.internal.**"
     shouldOnlyDependsOn:
       internal:
         - "**.identity.**"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.store"  # for testhelper only; phase 5 removes the cross-context FK that forces this
+        - "**.testdb"  # test fixtures (external _test packages call testdb.Open)
 
-  # Phase 2: endpoint context internals may import only their own context,
-  # platform packages, and standard library / approved third-party. Other
-  # contexts that need enrollment / host-token verification go through
-  # endpoint/api.
-  #
-  # The endpoint context owns the enrollments table and the host-token
-  # verifier; admin's policy fan-out reaches it through endpointapi.Service,
-  # not by importing internal/mysql or internal/service directly.
+  # endpoint context internals may import only their own context,
+  # platform packages, and standard library / approved third-party.
+  # Other contexts that need enrollment / host-token verification go
+  # through endpoint/api.
   - package: "**.endpoint.internal.**"
     shouldOnlyDependsOn:
       internal:
         - "**.endpoint.**"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.rules.api"  # phase 3: rules.api.PolicyService satisfies endpoint's PolicyProvider
-        - "**.store"  # for store.Event/Command/Host shared types and testhelper
+        - "**.rules.api"   # rules.api.PolicyService satisfies endpoint's PolicyProvider
+        - "**.testdb"      # test fixtures
 
-  # Phase 3: rules context internals may import only their own context,
+  # rules context internals may import only their own context,
   # platform packages, the standard library / approved third-party,
-  # endpoint/api (for the ActiveHostsLister adapter usage), and the
-  # transitional server/store + server/detection imports that go away
-  # in phase 5. Other contexts that need rule content / policy go
-  # through rules/api.
-  #
-  # The rules context owns the policies table + the eight detection
-  # rules + the ATT&CK + rule-list operator surface. Phase 5 will
-  # move detection to a context too; at that point rules/api's Event
-  # / GraphReader / Finding aliases redirect from server/store to
-  # detection/api, and **.store + **.detection drop off this list.
+  # endpoint/api (for the ActiveHostsLister adapter), and a narrow
+  # window into detection (api types + the testharness for catalog
+  # tests + bootstrap.ApplySchema for fixture setup).
   - package: "**.rules.internal.**"
     shouldOnlyDependsOn:
       internal:
         - "**.rules.**"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.endpoint.api"  # ActiveHostsLister uses endpoint.Service for hostID lookup at runtime
-        - "**.detection"     # transitional: rule files reference detection.Severity* and the Finding alias; phase 5 moves to detection/api
-        - "**.store"         # transitional: *store.Store satisfies api.GraphReader; phase 5 moves to detection/api
+        - "**.endpoint.api"           # ActiveHostsLister uses endpoint.Service for hostID lookup
+        - "**.detection.api"          # detection's domain types (Event, Process, Finding, etc.)
+        - "**.detection.bootstrap"    # catalog tests apply detection schema via bootstrap.ApplySchema
+        - "**.detection.testharness"  # catalog tests use testharness.Scenario
+        - "**.testdb"                 # test fixtures
 
-  # Phase 4: response context internals may import only their own
-  # context, platform packages, the standard library / approved
-  # third-party, identity/api (UserIDFromContext for audit on POST
-  # /api/commands), endpoint/api (HostIDFromContext on agent
-  # routes), and the transitional server/store import for testhelper.
-  #
-  # The response context owns the commands table + the four
-  # /api/commands HTTP routes. endpoint and rules consume
-  # response.Service.Insert as a method value satisfying their
-  # CommandInserter closure types; neither imports response/api.
+  # response context internals may import only their own context,
+  # platform packages, the standard library / approved third-party,
+  # identity/api (UserIDFromContext on POST /api/commands), and
+  # endpoint/api (HostIDFromContext on agent routes).
   - package: "**.response.internal.**"
     shouldOnlyDependsOn:
       internal:
         - "**.response.**"
         - "**.attrkeys"
         - "**.httpserver"
-        - "**.endpoint.api"  # for HostIDFromContext on agent routes
-        - "**.identity.api"  # reserved: future audit on POST /api/commands; harmless if unused today
-        - "**.store"         # for testhelper only
+        - "**.endpoint.api"  # HostIDFromContext on agent routes
+        - "**.identity.api"  # reserved for future audit on POST /api/commands
+        - "**.sqlhelpers"    # NullRawJSON
+        - "**.testdb"        # test fixtures
+
+  # detection context internals may import only their own context,
+  # platform packages, the standard library / approved third-party,
+  # endpoint/api (HostIDFromContext on the ingest route), identity/api
+  # (UserIDFromContext on operator alert updates), and rules/api
+  # (Rule + RuleProvider interfaces the engine consumes).
+  - package: "**.detection.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.detection.**"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.endpoint.api"  # HostIDFromContext on POST /api/events
+        - "**.identity.api"  # UserIDFromContext on operator alert lifecycle
+        - "**.rules.api"     # Rule + RuleProvider interfaces
+        - "**.sqlhelpers"    # NullRawJSON
+        - "**.testdb"        # test fixtures

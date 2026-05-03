@@ -39,11 +39,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/bootstrap"
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
+	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
 // FixtureCase is one named scenario loaded from a fixture JSON file.
@@ -118,10 +119,12 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	var c FixtureCase
 	require.NoError(t, json.Unmarshal(raw, &c), "decode %s", path)
 
-	db := bootstrap.OpenTestDB(t)
+	db := testdb.Open(t)
+	ctx := t.Context()
+	require.NoError(t, detectionbootstrap.ApplySchema(ctx, db), "apply detection schema")
+	require.NoError(t, detectionbootstrap.MigrateSchema(ctx, db), "apply detection migrations")
 	mysqlStore, err := mysql.New(db)
 	require.NoError(t, err, "wrap test store")
-	ctx := t.Context()
 	require.NoError(t, mysqlStore.InsertEvents(ctx, c.Events), "insert events")
 
 	builder := graph.NewBuilder(mysqlStore, slog.Default())

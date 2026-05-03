@@ -10,6 +10,7 @@ import (
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
@@ -75,8 +76,8 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tr := parseTimeRange(r)
-	limit := parseIntParam(r, "limit", 2000)
+	tr := httpserver.ParseTimeRange(r)
+	limit := httpserver.ParseIntParam(r, "limit", 2000)
 	if limit <= 0 {
 		limit = 2000
 	}
@@ -106,7 +107,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	atTime := parseInt64Param(r, "at", time.Now().UnixNano())
+	atTime := httpserver.ParseInt64Param(r, "at", time.Now().UnixNano())
 
 	ctx := r.Context()
 	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime)
@@ -127,8 +128,8 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		HostID:    r.URL.Query().Get("host_id"),
 		Status:    api.AlertStatus(r.URL.Query().Get("status")),
 		Severity:  r.URL.Query().Get("severity"),
-		ProcessID: parseInt64Param(r, "process_id", 0),
-		Limit:     parseIntParam(r, "limit", 100),
+		ProcessID: httpserver.ParseInt64Param(r, "process_id", 0),
+		Limit:     httpserver.ParseIntParam(r, "limit", 100),
 	}
 
 	ctx := r.Context()
@@ -221,40 +222,6 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func parseTimeRange(r *http.Request) api.TimeRange {
-	now := time.Now().UnixNano()
-	defaultFrom := now - int64(time.Hour)
-
-	fromNs := parseInt64Param(r, "from", defaultFrom)
-	toNs := parseInt64Param(r, "to", now)
-
-	return api.TimeRange{FromNs: fromNs, ToNs: toNs}
-}
-
-func parseIntParam(r *http.Request, name string, defaultVal int) int {
-	s := r.URL.Query().Get(name)
-	if s == "" {
-		return defaultVal
-	}
-	v, err := strconv.Atoi(s)
-	if err != nil {
-		return defaultVal
-	}
-	return v
-}
-
-func parseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
-	s := r.URL.Query().Get(name)
-	if s == "" {
-		return defaultVal
-	}
-	v, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return defaultVal
-	}
-	return v
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, v any) {

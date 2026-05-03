@@ -33,7 +33,7 @@ type Deps struct {
 
 	// Heartbeat is optional; nil disables the per-poll last-seen
 	// bump. Production wires cmd/main's `s.UpdateHostLastSeen`
-	// closure today; phase 5 swaps to detectionCtx.RecordHostSeen.
+	// closure; cmd/main wires it to detectionCtx.RecordHostSeen.
 	Heartbeat Heartbeat
 }
 
@@ -72,8 +72,19 @@ func New(deps Deps) (*Response, error) {
 // (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
 // other contexts' ApplySchema is not load-bearing.
 func (r *Response) ApplySchema(ctx context.Context) error {
+	return ApplySchema(ctx, r.db)
+}
+
+// ApplySchema is the package-level form: applies response's DDL
+// against the given DB without requiring a fully constructed
+// *Response. Used by server/testdb so tests can apply every context's
+// schema without faking out each bootstrap's service dependencies.
+func ApplySchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("response ApplySchema: db must not be nil")
+	}
 	for _, stmt := range schemaStatements {
-		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("response schema apply: %w", err)
 		}
 	}

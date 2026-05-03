@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // newIdentity wires identity.bootstrap.New against a fresh test DB,
@@ -36,7 +36,7 @@ func newIdentity(t *testing.T) *bootstrap.Identity {
 	// we don't strictly need to re-run identityCtx.ApplySchema here. We
 	// do it anyway to exercise the production code path and assert it is
 	// idempotent.
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 
 	id, err := bootstrap.New(bootstrap.Deps{
 		DB:              s,
@@ -314,7 +314,7 @@ func TestService_GetUserNotFound(t *testing.T) {
 // ctx is cancelled, and uses a tiny CleanupInterval so the ticker fires
 // at least once during the test (covering the cleanup-call branch).
 func TestRun_StopsOnContextCancel(t *testing.T) {
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	id, err := bootstrap.New(bootstrap.Deps{
 		DB:              s,
 		Logger:          slog.Default(),

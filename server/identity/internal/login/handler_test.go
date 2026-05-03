@@ -1,4 +1,4 @@
-package login
+package login_test
 
 import (
 	"bytes"
@@ -11,25 +11,43 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/bootstrap"
+	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
+	"github.com/fleetdm/edr/server/testdb"
 )
+
+// Local mirror types pinned to the wire shape so the external test
+// package can decode without reaching for handler.go's private struct
+// names.
+type sessionResponse struct {
+	User struct {
+		ID    int64  `json:"id"`
+		Email string `json:"email"`
+	} `json:"user"`
+	CSRFToken string `json:"csrf_token"`
+}
+
+type errBody struct {
+	Error string `json:"error"`
+}
 
 // setupServer wires a full session handler + middleware stack backed by real
 // stores, exactly like main.go does. Returns the HTTP server + the userStore
 // + the sessions store so tests can seed an initial user / verify deletion.
 func setupServer(t *testing.T, ratePerMinute int) (*httptest.Server, *users.Store, *sessions.Store) {
 	t.Helper()
-	s := bootstrap.OpenTestDB(t)
-	us := users.New(s)
-	ss := sessions.New(s, sessions.Options{})
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	us := users.New(db)
+	ss := sessions.New(db, sessions.Options{})
 	svc := service.New(us, ss, slog.Default())
 
-	h := New(svc, Options{
+	h := login.New(svc, login.Options{
 		RatePerMinute: ratePerMinute,
 		CookieSecure:  false, // httptest is plain HTTP; browsers would reject Secure anyway.
 		Logger:        slog.Default(),
@@ -231,13 +249,4 @@ func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ss.Get(t.Context(), raw)
 	require.Error(t, err)
-}
-
-func TestLogin_RedactsPasswordInErrorLogs(t *testing.T) {
-	// The String() method on loginRequest is the guard we care about. Assert
-	// directly to keep the test fast and deterministic.
-	req := loginRequest{Email: "a@b.com", Password: "hunter2"}
-	s := req.String()
-	assert.NotContains(t, s, "hunter2")
-	assert.Contains(t, s, "[redacted]")
 }

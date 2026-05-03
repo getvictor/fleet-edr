@@ -21,11 +21,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 const testEnrollSecret = "rules-integration-secret"
@@ -66,7 +66,7 @@ func (r *recordingCommandInserter) snapshot() []recordedCommand {
 // is wired to call ep.Service().ActiveHostIDs at request time.
 func newRules(t *testing.T, ep **endpointbootstrap.Endpoint, cmds *recordingCommandInserter) *rulesbootstrap.Rules {
 	t.Helper()
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	deps := rulesbootstrap.Deps{
 		DB:     s,
 		Logger: slog.Default(),
@@ -207,7 +207,7 @@ func TestOperator_PutPolicyFanout(t *testing.T) {
 
 	// Single shared DB across rulesCtx + endpointCtx so the bidirectional
 	// dependency in cmd/main is exercised end-to-end.
-	s := srvbootstrap.OpenTestDB(t)
+	s := full.Open(t)
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
 		DB:     s,
 		Logger: slog.Default(),
@@ -345,7 +345,7 @@ func TestBootstrap_MissingDeps(t *testing.T) {
 	})
 
 	t.Run("asymmetric ActiveHostsLister and CommandInserter", func(t *testing.T) {
-		s := srvbootstrap.OpenTestDB(t)
+		s := full.Open(t)
 		_, err := rulesbootstrap.New(rulesbootstrap.Deps{
 			DB: s,
 			ActiveHostsLister: func(context.Context) ([]string, error) {

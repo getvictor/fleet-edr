@@ -4,9 +4,12 @@ import (
 	"context"
 	"testing"
 
-	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
+	"github.com/stretchr/testify/require"
+
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
+	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/testharness"
+	"github.com/fleetdm/edr/server/testdb"
 )
 
 // catalogStore is a thin wrapper that exposes the limited
@@ -20,7 +23,10 @@ type catalogStore struct {
 
 func openCatalogStore(t *testing.T) *catalogStore {
 	t.Helper()
-	db := srvbootstrap.OpenTestDB(t)
+	db := testdb.Open(t)
+	ctx := t.Context()
+	require.NoError(t, detectionbootstrap.ApplySchema(ctx, db))
+	require.NoError(t, detectionbootstrap.MigrateSchema(ctx, db))
 	return &catalogStore{scenario: testharness.NewScenario(t, db)}
 }
 

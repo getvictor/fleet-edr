@@ -128,8 +128,8 @@ func (s *Service) List() []api.RuleMetadata {
 	return out
 }
 
-// ActiveRules returns the in-memory rule set. Today identical to the
-// constructor input; phase 7+ may add hot-reload semantics here.
+// ActiveRules returns the in-memory rule set, identical to the
+// constructor input. Hot-reload is a future extension point.
 func (s *Service) ActiveRules() []api.Rule {
 	return s.rules
 }

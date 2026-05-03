@@ -6,8 +6,8 @@ import (
 )
 
 // Service is the identity bounded context's full business surface.
-// Cross-context callers (today: phase 5 detection alert-update handler
-// will call UserExists) and the identity HTTP handlers consume Service
+// Cross-context callers (today: detection's alert-update handler
+// calls UserExists) and the identity HTTP handlers consume Service
 // through this api package, never through the internal implementation.
 //
 // Implementation lives in server/identity/internal/service.
@@ -42,10 +42,10 @@ type Service interface {
 	// non-empty so the caller can errors.Is to the success-but-noop case.
 	SeedAdmin(ctx context.Context, w io.Writer) (User, string, error)
 
-	// UserExists reports whether the user id refers to a live user. The
-	// cross-context FK-replacement path: phase 5 drops fk_alerts_updated_by
-	// and the alert-update handler calls UserExists before writing
-	// alerts.updated_by.
+	// UserExists reports whether the user id refers to a live user.
+	// Replaces the cross-context FK fk_alerts_updated_by that phase 5
+	// dropped: detection's alert-update handler calls UserExists before
+	// writing alerts.updated_by.
 	UserExists(ctx context.Context, userID int64) (bool, error)
 
 	// CleanupExpiredSessions deletes session rows whose expires_at is in

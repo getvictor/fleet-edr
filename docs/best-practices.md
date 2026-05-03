@@ -213,20 +213,19 @@ floor for any project that wants enterprise adoption.
 - [x] SonarCloud for cross-language quality + security hot spots
   (`sonar-project.properties`, dedicated `SonarCloud` workflow)
 - [x] Multi-module Go workspace with clear boundaries (`agent/`, `server/`)
-- [ ] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/`
+- [x] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/`
   layout: `api/` (public types and interfaces), `bootstrap/` (DI entry point for
   `server/cmd/*` and `test/integration/`), `internal/<module>/` (private, Go-compiler
   enforced). Five contexts: `detection`, `rules`, `response`, `endpoint`, `identity`.
   Cross-context calls go via the imported `api/` package only; no cross-context
-  transactions; no cross-context foreign keys (one such FK exists in the current
-  schema, `fk_alerts_updated_by`, and is dropped during phase 5 in favour of
-  code-level validation)
-- [ ] **Architecture lint** via `arch-go`
+  transactions; no cross-context foreign keys (the one such FK,
+  `fk_alerts_updated_by`, was dropped in phase 5 in favour of code-level validation)
+- [x] **Architecture lint** via `arch-go`
   ([github.com/arch-go/arch-go](https://github.com/arch-go/arch-go)). Declarative
   YAML rules at `arch-go.yml`; programmatic API runs from `go test ./test/arch/...`
   so violations break the test job, not just lint. Complements `depguard` (which
-  stays for block-list deps like `pkg/errors`). Will be wired to lefthook pre-commit
-  and CI when the migration lands
+  stays for block-list deps like `pkg/errors`). Wired as `task lint:arch` locally
+  and as a hard-fail gating CI job (`.github/workflows/arch-go.yml`)
 - [x] **Test-coverage thresholds** uploaded to SonarCloud. Both Go and TS coverage
   reports flow through (`sonar.go.coverage.reportPaths`,
   `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to
@@ -265,13 +264,15 @@ floor for any project that wants enterprise adoption.
 - [x] React component tests with Vitest + Testing Library
 - [x] Test helpers and shared fixtures (`server/store/testhelper.go`,
   `server/api/testhelpers_test.go`)
-- [ ] **Three-layer test split** aligned with bounded contexts (per ADR-0004).
-  Layer 1: per-package unit tests, default tag, co-located with the code.
-  Layer 2: per-context integration tests at `server/<context>/internal/tests/`,
-  `package tests`, `//go:build integration`, scoped to one context's public
-  surface (compiler refuses cross-context internals). Layer 3: cross-context
-  integration tests at `test/integration/`, `package integration`,
-  `//go:build integration`, exercising scenarios that span multiple contexts
+- [x] **Three-layer test split** aligned with bounded contexts (per ADR-0004).
+  Layer 1: per-package unit tests, default tag, co-located with the code; use
+  `server/testdb.Open(t)` + the relevant context's `bootstrap.ApplySchema` (or
+  external `_test` packages where the cycle bites). Layer 2: per-context
+  integration tests at `server/<context>/internal/tests/`, `package tests`,
+  scoped to one context's public surface (compiler refuses cross-context
+  internals); use `server/testdb/full.Open(t)` for the full multi-schema
+  fixture. Layer 3: cross-context integration tests at `test/integration/`
+  exercise scenarios spanning multiple contexts
 - [x] Subtest + table-driven test convention (per `~/.claude/CLAUDE.md`)
 - [x] Load-test harness (`test/loadtest.go`)
 - [ ] **End-to-end tests** (Playwright / Cypress) covering login -> alert -> ack -> close

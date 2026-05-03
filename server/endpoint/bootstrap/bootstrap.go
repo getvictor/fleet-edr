@@ -102,8 +102,19 @@ func New(deps Deps) (*Endpoint, error) {
 // (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
 // other contexts' ApplySchema is not load-bearing.
 func (e *Endpoint) ApplySchema(ctx context.Context) error {
+	return ApplySchema(ctx, e.db)
+}
+
+// ApplySchema is the package-level form: applies endpoint's DDL
+// against the given DB without requiring a fully constructed
+// *Endpoint. Used by server/testdb so tests can apply every context's
+// schema without faking out each bootstrap's service dependencies.
+func ApplySchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("endpoint ApplySchema: db must not be nil")
+	}
 	for _, stmt := range schemaStatements {
-		if _, err := e.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("endpoint schema create: %w", err)
 		}
 	}

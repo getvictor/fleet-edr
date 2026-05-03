@@ -1,8 +1,14 @@
 # 0004. Modular monolith with bounded contexts
 
-- Status: Accepted
+- Status: Implemented
 - Date: 2026-05-01
 - Deciders: getvictor
+
+> Migration completed 2026-05-03 across phases 1-6. See
+> `claude/modular-monolith/phase[1-6].md` for the per-phase plans
+> and outcomes. arch-go (`arch-go.yml` + `test/arch/arch_test.go`)
+> enforces the bounded-context import rules in CI as a hard-fail
+> gating check.
 
 ## Context
 
@@ -94,8 +100,9 @@ the `internal/` rule. Architecture lint (`arch-go`, programmatic API
 invoked from `go test ./test/arch/...`) covers the rules Go's compiler
 cannot express, namely: which contexts may import which other contexts'
 `api/` packages, that platform packages may not import contexts, and
-that `bootstrap/` packages are imported only by `server/cmd/*` and
-`test/integration/`.
+that `bootstrap/` packages are imported only by `server/cmd/*`,
+`server/testdb/full` (the test fixture that composes every context's
+`ApplySchema`), and `test/integration/`.
 
 The migration runs as seven phases, smallest blast radius first
 (`identity` -> `endpoint` -> `rules` -> `response` -> `detection` ->

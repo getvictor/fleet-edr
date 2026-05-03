@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -420,15 +421,20 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
 		// Serve the requested file when it exists; otherwise rewrite to
 		// index.html so React Router takes over for client-side deep
-		// links.
+		// links (e.g. /ui/hosts/{id}, /ui/alerts/{id}).
+		//
+		// We can't reuse fileServer for the SPA fallback because Go's
+		// http.FileServer redirects requests for `index.html` to `./`
+		// (it tries to canonicalise URLs that name an index file). That
+		// turns /ui/hosts/{id} into a 301 → /ui/hosts/, which then hits
+		// the same redirect chain again. Open the bytes directly here.
 		stripped := r.URL.Path[len("/ui/"):]
 		if stripped == "" {
-			stripped = "index.html"
+			serveIndex(w, r, uiDist, logger)
+			return
 		}
 		if _, err := fs.Stat(uiDist, stripped); err != nil {
-			r2 := r.Clone(r.Context())
-			r2.URL.Path = "/ui/index.html"
-			fileServer.ServeHTTP(w, r2)
+			serveIndex(w, r, uiDist, logger)
 			return
 		}
 		fileServer.ServeHTTP(w, r)
@@ -436,4 +442,23 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
+}
+
+// serveIndex writes the embedded SPA index.html bytes directly. Used
+// as the SPA fallback so React Router handles deep links like
+// /ui/hosts/{id} client-side without bouncing through http.FileServer's
+// canonicalisation redirect for index files.
+func serveIndex(w http.ResponseWriter, r *http.Request, uiDist fs.FS, logger *slog.Logger) {
+	f, err := uiDist.Open("index.html")
+	if err != nil {
+		logger.ErrorContext(r.Context(), "open ui index.html", "err", err)
+		http.Error(w, "ui index missing", http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if _, err := io.Copy(w, f); err != nil {
+		logger.WarnContext(r.Context(), "copy ui index.html", "err", err)
+	}
 }
