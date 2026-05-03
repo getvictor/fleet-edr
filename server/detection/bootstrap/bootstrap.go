@@ -167,6 +167,9 @@ func (d *Detection) ApplySchema(ctx context.Context) error {
 // *Detection. Used by server/testdb so tests can apply every context's
 // schema without faking out each bootstrap's service dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("detection ApplySchema: db must not be nil")
+	}
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("detection schema apply: %w", err)
@@ -185,6 +188,9 @@ func (d *Detection) MigrateSchema(ctx context.Context) error {
 // MigrateSchema is the package-level form: applies detection's
 // idempotent ALTERs against the given DB.
 func MigrateSchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("detection MigrateSchema: db must not be nil")
+	}
 	for _, m := range migrations {
 		if _, err := db.ExecContext(ctx, m.SQL); err != nil {
 			if m.shouldIgnore(err) {

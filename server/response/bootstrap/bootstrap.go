@@ -80,6 +80,9 @@ func (r *Response) ApplySchema(ctx context.Context) error {
 // *Response. Used by server/testdb so tests can apply every context's
 // schema without faking out each bootstrap's service dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("response ApplySchema: db must not be nil")
+	}
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("response schema apply: %w", err)

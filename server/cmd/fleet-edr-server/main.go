@@ -455,7 +455,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request, uiDist fs.FS, logger *sl
 		http.Error(w, "ui index missing", http.StatusInternalServerError)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	if _, err := io.Copy(w, f); err != nil {

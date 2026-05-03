@@ -37,7 +37,15 @@ func Open(t *testing.T) *sqlx.DB {
 
 	dsn := testDSN(t)
 
-	baseDSN := stripDBName(dsn)
+	// Parse the DSN once and fail fast if it's malformed. Returning
+	// the original DSN on parse error would silently strip our
+	// "isolated test database" guarantee — the admin connection would
+	// keep the original DBName and any DDL we run would land on the
+	// shared dev DB.
+	baseDSN, err := stripDBName(dsn)
+	if err != nil {
+		t.Fatalf("parse EDR_TEST_DSN: %v", err)
+	}
 	adminDB, err := sqlx.Open("mysql", baseDSN)
 	if err != nil {
 		t.Fatalf("open admin connection: %v", err)
@@ -62,8 +70,11 @@ func Open(t *testing.T) *sqlx.DB {
 		_, _ = cleanupDB.ExecContext(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
 	})
 
-	testDSN := replaceDBName(dsn, dbName)
-	db, err := bootstrap.OpenDB(ctx, testDSN)
+	perTestDSN, err := replaceDBName(dsn, dbName)
+	if err != nil {
+		t.Fatalf("replace DSN db name: %v", err)
+	}
+	db, err := bootstrap.OpenDB(ctx, perTestDSN)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
@@ -93,26 +104,28 @@ func sanitizeDBName(testName string) string {
 
 // stripDBName clears the DBName field on a parsed DSN so the caller
 // can connect to the MySQL server without selecting a specific
-// database. Falls back to the original string on a parse error so
-// the test doesn't lose the original DSN's diagnostic value.
-func stripDBName(dsn string) string {
+// database. Returns the parse error so callers fail fast instead of
+// silently running tests against the shared DSN's database.
+func stripDBName(dsn string) (string, error) {
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
-		return dsn
+		return "", fmt.Errorf("parse DSN: %w", err)
 	}
 	cfg.DBName = ""
-	return cfg.FormatDSN()
+	return cfg.FormatDSN(), nil
 }
 
 // replaceDBName swaps the DBName field on a parsed DSN. Uses
 // go-sql-driver/mysql's ParseDSN+FormatDSN round-trip so passwords
 // containing `)/` and other DSN-flavoured punctuation don't fool
-// naive substring manipulation.
-func replaceDBName(dsn, newDB string) string {
+// naive substring manipulation. Returns the parse error so callers
+// fail fast (silently falling back to the original DSN would route
+// the test to the shared database, breaking isolation).
+func replaceDBName(dsn, newDB string) (string, error) {
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
-		return dsn
+		return "", fmt.Errorf("parse DSN: %w", err)
 	}
 	cfg.DBName = newDB
-	return cfg.FormatDSN()
+	return cfg.FormatDSN(), nil
 }

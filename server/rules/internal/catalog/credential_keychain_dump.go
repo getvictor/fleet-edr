@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/fleetdm/edr/server/rules/api"
-	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // CredentialKeychainDump fires when a process invokes `/usr/bin/security
@@ -39,8 +38,8 @@ func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *CredentialKeychainDump) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{
+func (r *CredentialKeychainDump) Doc() api.Documentation {
+	return api.Documentation{
 		Title:   "Keychain dump (security dump-keychain)",
 		Summary: "Flags exec of /usr/bin/security dump-keychain — the canonical macOS Keychain export command.",
 		Description: "Fires when a process invokes `/usr/bin/security` with the `dump-keychain` subcommand. " +
@@ -49,7 +48,7 @@ func (r *CredentialKeychainDump) Doc() rulesapi.Documentation {
 			"Match shape is exact-path + exact-subcommand to keep the rule high-precision. A shell wrapper " +
 			"(`sh -c \"security dump-keychain\"`) still surfaces because ESF emits a NOTIFY_EXEC for each execve(), " +
 			"so the security binary always shows up as its own exec event regardless of parent.",
-		Severity:   rulesapi.SeverityHigh,
+		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
 			"An IT admin running a one-off keychain audit. Rare in managed fleets; confirm with the user before treating as benign.",
@@ -120,10 +119,10 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			continue
 		}
 
-		findings = append(findings, rulesapi.Finding{
+		findings = append(findings, api.Finding{
 			HostID:      evt.HostID,
 			RuleID:      r.ID(),
-			Severity:    rulesapi.SeverityHigh,
+			Severity:    api.SeverityHigh,
 			Title:       "Keychain credential dump attempted",
 			Description: fmt.Sprintf("%s invoked with %q — reads all Keychain entries (Keychain credential access, MITRE T1555.001)", p.Path, sub),
 			ProcessID:   proc.ID,

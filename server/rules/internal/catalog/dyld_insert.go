@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/fleetdm/edr/server/rules/api"
-	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // DyldInsert fires when a process is launched with DYLD_INSERT_LIBRARIES or
@@ -33,8 +32,8 @@ func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *DyldInsert) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{
+func (r *DyldInsert) Doc() api.Documentation {
+	return api.Documentation{
 		Title:   "DYLD injection on exec",
 		Summary: "Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).",
 		Description: "Detects the classic macOS code-injection primitive: launching a process with " +
@@ -44,7 +43,7 @@ func (r *DyldInsert) Doc() rulesapi.Documentation {
 			"not false-positive.\n\n" +
 			"The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw " +
 			"event payload for responders.",
-		Severity:   rulesapi.SeverityHigh,
+		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
 			"Local development of code that itself uses DYLD_INSERT_LIBRARIES (rare; usually scoped to non-managed dev hosts).",
@@ -94,10 +93,10 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 			continue
 		}
 
-		findings = append(findings, rulesapi.Finding{
+		findings = append(findings, api.Finding{
 			HostID:      evt.HostID,
 			RuleID:      r.ID(),
-			Severity:    rulesapi.SeverityHigh,
+			Severity:    api.SeverityHigh,
 			Title:       "DYLD injection env var set on exec",
 			Description: fmt.Sprintf("%s launched with %s", p.Path, matched),
 			ProcessID:   proc.ID,

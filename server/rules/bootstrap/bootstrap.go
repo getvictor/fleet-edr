@@ -93,6 +93,9 @@ func (r *Rules) ApplySchema(ctx context.Context) error {
 // server/testdb so tests can apply every context's schema without
 // faking out each bootstrap's service dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
+	if db == nil {
+		return errors.New("rules ApplySchema: db must not be nil")
+	}
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("rules schema apply: %w", err)
