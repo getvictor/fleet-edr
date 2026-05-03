@@ -17,6 +17,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Top-level token has no permissions; each job grants the exact scopes it
+# needs (satisfies Scorecard Token-Permissions, Sonar githubactions:S8264,
+# zizmor excessive-permissions).
+permissions: {}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

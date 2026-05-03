@@ -22,13 +22,16 @@ on:
   # release-signing environment secrets.
   workflow_dispatch: {}
 
+# Top-level `permissions: {}` grants nothing (does not trigger Sonar
+# githubactions:S8264, which forbids granting read scopes at workflow level)
+# while still satisfying Scorecard Token-Permissions. Each job below
+# escalates for its specific needs; there is deliberately no read-only
+# default to fall back to.
+permissions: {}
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
-# Permissions are declared per-job below (Sonar githubactions:S8264). The
-# macos-pkg and docker-server jobs each escalate for their specific needs;
-# there's no read-only default to fall back to.
 
 jobs:
   macos-pkg:

@@ -11,8 +11,11 @@ on:
 
 # SARIF upload requires security-events:write; granted only to the reusable
 # workflow invocation below so the default token (for checkouts etc.) stays
-# minimal. Permissions are declared per-job, not at workflow level (Sonar
-# githubactions:S8264).
+# minimal. The top-level `permissions: {}` grants nothing (does not trigger
+# Sonar githubactions:S8264, which forbids granting read scopes at workflow
+# level) while still satisfying Scorecard Token-Permissions, which wants
+# top-level permissions explicitly declared.
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
