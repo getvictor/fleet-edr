@@ -11,11 +11,10 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/bootstrap"
+	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/httpserver"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
-	"github.com/fleetdm/edr/server/ingest"
-	"github.com/fleetdm/edr/server/store"
 )
 
 var (
@@ -52,17 +51,13 @@ func run() error {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
 	}
 
-	db, err := store.OpenDB(ctx, cfg.DSN)
+	db, err := bootstrap.OpenDB(ctx, cfg.DSN)
 	if err != nil {
 		logger.ErrorContext(ctx, "open db", "err", err)
 		return err
 	}
 	defer func() { _ = db.Close() }()
 
-	// Identity ApplySchema must run before store.New on a fresh DB because
-	// store.applySchema includes ALTER TABLE alerts ADD CONSTRAINT
-	// fk_alerts_updated_by REFERENCES users(id), and the users table is
-	// owned by identity. Phase 5 drops the FK and this preamble goes away.
 	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{DB: db, Logger: logger})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)
@@ -73,10 +68,29 @@ func run() error {
 		return err
 	}
 
-	// Endpoint context. Ingest doesn't run the operator surface or the
-	// post-enroll policy/command fan-out, so PolicyProvider +
-	// CommandInserter stay nil; the enroll handler tolerates that and
-	// skips the fan-out goroutine.
+	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		Mode:   detectionbootstrap.ModeIntake,
+		Build: detectionbootstrap.BuildInfo{
+			Version:   version,
+			Commit:    commit,
+			BuildTime: buildTime,
+		},
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open detection", "err", err)
+		return err
+	}
+	if err := detectionCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "detection schema", "err", err)
+		return err
+	}
+	if err := detectionCtx.MigrateSchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "detection migrate", "err", err)
+		return err
+	}
+
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
 		Logger:              logger,
@@ -92,19 +106,12 @@ func run() error {
 		return err
 	}
 
-	s, err := store.New(ctx, db)
-	if err != nil {
-		logger.ErrorContext(ctx, "open store", "err", err)
-		return err
-	}
-
-	h := ingest.New(s, logger, ingest.BuildInfo{Version: version, Commit: commit, BuildTime: buildTime})
 	hostTokenMW := endpointCtx.HostTokenMiddleware()
 
 	mux := http.NewServeMux()
-	h.RegisterHealthRoutes(mux)
+	detectionCtx.RegisterHealthRoutes(mux)
 	endpointCtx.RegisterPublicRoutes(mux)
-	mux.Handle("POST /api/events", hostTokenMW(h.IngestHandler()))
+	mux.Handle("POST /api/events", hostTokenMW(detectionCtx.Service().IngestHandler()))
 
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:      logger,

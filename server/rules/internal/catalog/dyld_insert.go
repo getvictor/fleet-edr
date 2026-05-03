@@ -8,7 +8,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // DyldInsert fires when a process is launched with DYLD_INSERT_LIBRARIES or
@@ -72,7 +71,7 @@ type dyldPayload struct {
 	Args []string `json:"args"`
 }
 
-func (r *DyldInsert) Evaluate(ctx context.Context, events []store.Event, s api.GraphReader) ([]api.Finding, error) {
+func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
 		if evt.EventType != "exec" {

@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // newIdentity wires identity.bootstrap.New against a fresh test DB,
@@ -30,16 +30,16 @@ import (
 // needed.
 func newIdentity(t *testing.T) *bootstrap.Identity {
 	t.Helper()
-	// store.OpenTestStore is the project's standard MySQL fixture. It
+	// srvbootstrap.OpenTestDB is the project's standard MySQL fixture. It
 	// inlines the identity DDL itself (see server/store/testhelper.go) so
 	// the tables exist before store.New runs the alerts FK -- which means
 	// we don't strictly need to re-run identityCtx.ApplySchema here. We
 	// do it anyway to exercise the production code path and assert it is
 	// idempotent.
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 
 	id, err := bootstrap.New(bootstrap.Deps{
-		DB:              s.DB(),
+		DB:              s,
 		Logger:          slog.Default(),
 		LoginRatePerMin: 60,
 		CookieSecure:    false,
@@ -314,9 +314,9 @@ func TestService_GetUserNotFound(t *testing.T) {
 // ctx is cancelled, and uses a tiny CleanupInterval so the ticker fires
 // at least once during the test (covering the cleanup-call branch).
 func TestRun_StopsOnContextCancel(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	id, err := bootstrap.New(bootstrap.Deps{
-		DB:              s.DB(),
+		DB:              s,
 		Logger:          slog.Default(),
 		CleanupInterval: 25 * time.Millisecond, // short so the loop exercises CleanupExpired
 	})

@@ -78,4 +78,10 @@ type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
 	ObserveDBQuery(ctx context.Context, op string, d time.Duration)
 	AlertCreated(ctx context.Context, ruleID, severity string)
+	// ProcessesTTLReconciled is called by the pipeline's
+	// stale-process janitor on every reconciliation pass.
+	ProcessesTTLReconciled(ctx context.Context, n int64)
+	// RetentionRowsDeleted is called by the pipeline's retention
+	// runner on every retention pass.
+	RetentionRowsDeleted(ctx context.Context, n int64)
 }

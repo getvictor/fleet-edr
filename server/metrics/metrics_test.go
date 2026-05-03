@@ -11,9 +11,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/fleetdm/edr/server/detection"
-	"github.com/fleetdm/edr/server/ingest"
-	"github.com/fleetdm/edr/server/retention"
+	detectionapi "github.com/fleetdm/edr/server/detection/api"
 )
 
 // newTestRecorder builds a Recorder backed by a ManualReader so tests can collect
@@ -185,8 +183,11 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 // expect. Renaming or changing the signature of any of these hook methods will
 // break compilation here before the consumer packages — catches signature drift
 // during phase-4-style refactors.
+// Phase 5 collapses ingest.MetricsHook + detection.MetricsRecorder +
+// retention.MetricsRecorder into a single detection/api.MetricsRecorder
+// interface. The retention runner gets its rows-deleted hook through
+// the same interface (RetentionRowsDeleted method); the guard asserts
+// the consolidated surface.
 var (
-	_ ingest.MetricsHook        = (*Recorder)(nil)
-	_ detection.MetricsRecorder = (*Recorder)(nil)
-	_ retention.MetricsRecorder = (*Recorder)(nil)
+	_ detectionapi.MetricsRecorder = (*Recorder)(nil)
 )

@@ -7,24 +7,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/graph"
-	"github.com/fleetdm/edr/server/store"
+	"github.com/fleetdm/edr/server/rules/api"
 )
 
 // materialize processes events through the graph builder so processes are
 // available for detection rule lookups.
-func materialize(t *testing.T, s *store.Store, events []store.Event) {
+func materialize(t *testing.T, s *catalogStore, events []api.Event) {
 	t.Helper()
-	builder := graph.NewBuilder(s, nil)
-	require.NoError(t, builder.ProcessBatch(t.Context(), events))
+	_ = s
+	require.NoError(t, s.ProcessBatch(t.Context(), events))
 }
 
 func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// Simulate: python3 (PID 50) → /bin/sh (PID 100) → /tmp/payload (PID 200)
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-python", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-python", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -44,7 +43,7 @@ func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 
@@ -64,13 +63,13 @@ func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
 // same pid (first /bin/sh, then the payload), and the processes table ends up
 // with the pid's path as the payload. The rule must still fire.
 func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// Simulate: python3 (PID 50) forks child 100, which execs /bin/sh then
 	// immediately re-execs /private/tmp/payload at the same pid. No separate
 	// child process for the payload.
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-python", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-python", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -88,7 +87,7 @@ func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 
@@ -103,11 +102,11 @@ func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
 }
 
 func TestSuspiciousExecSkipsShellToShell(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// bash → sh is normal and should not trigger.
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-bash", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-bash", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -122,17 +121,17 @@ func TestSuspiciousExecSkipsShellToShell(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings)
 }
 
 func TestSuspiciousExecSkipsNonSuspiciousPath(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 → sh → /usr/bin/ls is not suspicious.
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -151,17 +150,17 @@ func TestSuspiciousExecSkipsNonSuspiciousPath(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings)
 }
 
 func TestSuspiciousExecDetectsVarTmp(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 → zsh → /var/tmp/malware
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -180,21 +179,21 @@ func TestSuspiciousExecDetectsVarTmp(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0].Description, "/var/tmp/malware")
 }
 
 func TestSuspiciousExecSkipsChildOutsideWindow(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 → sh, but child exec from /tmp/ happens 31 seconds later (outside window).
 	shellTime := int64(1_000_000_000)
 	childTime := shellTime + 31_000_000_000 // 31 seconds later
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 500_000_000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 600_000_000, EventType: "exec",
@@ -213,17 +212,17 @@ func TestSuspiciousExecSkipsChildOutsideWindow(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings)
 }
 
 func TestSuspiciousExecPathTraversal(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 → sh → /usr/local/../../../tmp/evil
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -242,19 +241,19 @@ func TestSuspiciousExecPathTraversal(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0].Description, "..")
 }
 
 func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 (PID 50) → /bin/sh (PID 100) → curl (PID 200) which makes an outbound connection.
 	// curl's path is /usr/bin/curl (not suspicious), but the outbound network connection triggers detection.
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -275,7 +274,7 @@ func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 
@@ -289,12 +288,12 @@ func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
 }
 
 func TestSuspiciousExecPrefersSuspiciousPathOverNetwork(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 → sh → /tmp/payload (suspicious path) AND outbound connection.
 	// Should fire the path-based alert, not the network one (avoid double-alerting).
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -315,7 +314,7 @@ func TestSuspiciousExecPrefersSuspiciousPathOverNetwork(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 
@@ -354,13 +353,13 @@ func TestIsSuspiciousPath(t *testing.T) {
 // silently misses the attack. This test pins the shebang detection
 // AND its negative twin (`sh -c <command>` argv[1] = "-c", not a path).
 func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// python3 (50) -> /bin/sh as shebang interpreter for /tmp/payload.sh (200).
 	// payload.path = /bin/sh, argv[1] = /tmp/payload.sh — the kernel-resolved
 	// shebang shape.
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -374,7 +373,7 @@ func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "shebang script in argv[1] must match the temp-exec arm")
 	assert.Equal(t, "Suspicious exec from temp path", findings[0].Title)
@@ -388,10 +387,10 @@ func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 // IPv4 octet sequence in a curl URL). The shebang detector must bail
 // the moment it sees `-c`.
 func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -407,7 +406,7 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &SuspiciousExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings, "sh -c <command> argv must NOT be treated as a script path")
 }
@@ -422,7 +421,7 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	// sshd-session -> /bin/sh -> /tmp/payload — the "admin SSH and run
 	// a script from /tmp/" shape, observed live during edr-qa.
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-sshd", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-sshd", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -438,7 +437,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	}
 
 	t.Run("with sshd-session in allowlist — suppressed", func(t *testing.T) {
-		s := store.OpenTestStore(t)
+		s := openCatalogStore(t)
 		ctx := t.Context()
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
@@ -448,19 +447,19 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 				"/usr/libexec/sshd-session": {},
 			},
 		}
-		findings, err := rule.Evaluate(ctx, events, s)
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
 		assert.Empty(t, findings, "allowlisted parent must suppress the finding")
 	})
 
 	t.Run("without allowlist — fires", func(t *testing.T) {
-		s := store.OpenTestStore(t)
+		s := openCatalogStore(t)
 		ctx := t.Context()
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
 
 		rule := &SuspiciousExec{}
-		findings, err := rule.Evaluate(ctx, events, s)
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
 		require.Len(t, findings, 1, "with no allowlist the chain still matches")
 		assert.Contains(t, findings[0].Description, "/usr/libexec/sshd-session")
@@ -477,11 +476,11 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 // is already in the store from batch N's ProcessBatch. This test exercises
 // that path explicitly.
 func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// Batch 1: python3 + /bin/sh — no temp-binary yet, so no firing.
-	batch1 := []store.Event{
+	batch1 := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -494,14 +493,14 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	require.NoError(t, s.InsertEvents(ctx, batch1))
 	materialize(t, s, batch1)
 	rule := &SuspiciousExec{}
-	findings1, err := rule.Evaluate(ctx, batch1, s)
+	findings1, err := rule.Evaluate(ctx, batch1, s.GraphReader())
 	require.NoError(t, err)
 	require.Empty(t, findings1, "no temp-binary in batch 1 — rule must not fire")
 
 	// Batch 2: only the temp-binary exec arrives. The python3 + sh ancestors
 	// are already in the store (materialised by batch 1) so the reverse-walk
 	// from temp-exec finds them.
-	batch2 := []store.Event{
+	batch2 := []api.Event{
 		{EventID: "fork-payload", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
 		{EventID: "exec-payload", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
@@ -509,7 +508,7 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	}
 	require.NoError(t, s.InsertEvents(ctx, batch2))
 	materialize(t, s, batch2)
-	findings2, err := rule.Evaluate(ctx, batch2, s)
+	findings2, err := rule.Evaluate(ctx, batch2, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings2, 1, "temp-binary exec in batch 2 must walk up to python3 → sh from batch 1")
 	assert.Equal(t, "Suspicious exec from temp path", findings2[0].Title)

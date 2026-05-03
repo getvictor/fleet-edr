@@ -1,14 +1,131 @@
 package engine
 
-// Engine is the rule-evaluation engine. The implementation is
-// deliberately deferred: it must land together with the rules.api
-// alias collapse (which retargets rules.api.Event / Process /
-// TimeRange / Finding / GraphReader to detection.api) and the
-// cmd/main wiring switch from detection.NewEngine(*store.Store) to
-// detection/internal/engine.New(*detection/internal/mysql.Store).
-// Until those land, calling rule.Evaluate on a detection.api event
-// batch produces a type mismatch against the existing rules.api
-// shape that aliases to server/store.
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
+)
+
+// Engine manages a set of rules and evaluates them against event
+// batches. The store handle is concrete (*mysql.Store) so rules
+// reach api.GraphReader through the same interface and dispatch
+// stays non-allocating.
+type Engine struct {
+	rules   []rulesapi.Rule
+	store   *mysql.Store
+	logger  *slog.Logger
+	metrics api.MetricsRecorder
+}
+
+// New creates a detection engine backed by the given store.
+func New(s *mysql.Store, logger *slog.Logger) *Engine {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Engine{store: s, logger: logger}
+}
+
+// SetMetrics installs the OTel counter hook. Safe to call after New.
+func (e *Engine) SetMetrics(m api.MetricsRecorder) { e.metrics = m }
+
+// Register adds a detection rule to the engine.
+func (e *Engine) Register(r rulesapi.Rule) {
+	e.rules = append(e.rules, r)
+}
+
+// LoadActive replaces the engine's active rule set with what the
+// rules.api.RuleProvider reports as active. Replace-semantics
+// (rather than append) so a future hot-reload caller can invoke this
+// repeatedly without Catalog() and Evaluate() seeing duplicates.
 //
-// The doc.go in this package describes the eventual surface
-// (Engine, Register, LoadActive, Evaluate, Catalog, SetMetrics).
+// Accepts an inline interface so detection/internal/engine doesn't
+// have to import rules/bootstrap; the rules.api.RuleProvider
+// interface is the canonical implementation.
+func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
+	e.rules = append(e.rules[:0], cs.ActiveRules()...)
+}
+
+// Catalog returns the metadata for every registered rule. Order
+// matches registration order so callers can render deterministic
+// output. Production main.go now goes through rules.api.Lister
+// instead of this method, but the method stays so existing engine
+// tests keep compiling.
+func (e *Engine) Catalog() []rulesapi.RuleMetadata {
+	out := make([]rulesapi.RuleMetadata, 0, len(e.rules))
+	for _, r := range e.rules {
+		out = append(out, rulesapi.RuleMetadata{
+			ID:         r.ID(),
+			Techniques: r.Techniques(),
+			Doc:        r.Doc(),
+		})
+	}
+	return out
+}
+
+// Evaluate runs all registered rules against the event batch.
+// Findings are persisted as alerts. Rule evaluation failures are
+// logged and skipped, but alert persistence failures are returned so
+// the caller can retry the batch.
+//
+// Snapshot exec events (issue #11: ESF baseline enumeration) are
+// filtered out before rule evaluation. Those events describe
+// processes that existed before the extension subscribed to ESF;
+// they're stitched into the process tree by graph.Builder so an
+// analyst can see Safari, Slack, Finder, etc., but they represent
+// historical state, not new attacker activity. Letting rules see
+// them would generate false positives every time the extension
+// restarts.
+func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
+	live := filterSnapshotEvents(events)
+	for _, rule := range e.rules {
+		findings, err := rule.Evaluate(ctx, live, e.store)
+		if err != nil {
+			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
+			continue
+		}
+		techniques := rule.Techniques()
+		for _, f := range findings {
+			if err := e.persistFinding(ctx, f, techniques); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// persistFinding inserts a single finding as an alert, stamping it
+// with the rule's ATT&CK techniques and emitting the new-alert log
+// line + metric only when the insert wasn't deduped away. Extracted
+// from Evaluate so that method stays under the project
+// cognitive-complexity cap.
+func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) error {
+	if f.Techniques == nil {
+		f.Techniques = techniques
+	}
+	_, created, err := e.store.InsertAlert(ctx, api.Alert{
+		HostID:      f.HostID,
+		RuleID:      f.RuleID,
+		Severity:    f.Severity,
+		Title:       f.Title,
+		Description: f.Description,
+		ProcessID:   f.ProcessID,
+		Techniques:  f.Techniques,
+	}, f.EventIDs)
+	if err != nil {
+		return fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
+	}
+	if !created {
+		// Dedup-skip path: same rule + process + host. Evaluator noise.
+		return nil
+	}
+	e.logger.InfoContext(ctx, "detection alert created",
+		"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+	if e.metrics != nil {
+		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
+	}
+	return nil
+}

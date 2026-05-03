@@ -6,64 +6,48 @@ import (
 	"errors"
 	"time"
 
-	"github.com/fleetdm/edr/server/store"
+	detectionapi "github.com/fleetdm/edr/server/detection/api"
 )
 
 // --- Engine input/output types -------------------------------------------------
 //
-// Aliased to store types for phase 3 so *store.Store directly satisfies
-// GraphReader without per-call conversion in the rule hot path. After
-// phase 5 these aliases redirect to detection/api so rules/api's only
-// project import becomes detection/api. The arch-go rule for
-// **.rules.api allows server/store explicitly to support these aliases.
+// Aliased to detection/api: detection now owns the canonical Event /
+// Process / TimeRange / Finding / GraphReader definitions, and
+// rules.api re-exports them as aliases so rules/internal/catalog rule
+// files can keep referring to rules.api.Event etc. without import
+// churn. The aliases (= keyword) make these the SAME named type at
+// the language level, so *detection/internal/mysql.Store satisfies
+// rules.api.GraphReader directly and the rule hot path stays
+// non-allocating.
 
 type (
 	// Event mirrors a row in the events table.
-	Event = store.Event
+	Event = detectionapi.Event
 	// Process mirrors a row in the processes table.
-	Process = store.Process
+	Process = detectionapi.Process
 	// TimeRange is the [start, end] window every graph query takes.
-	TimeRange = store.TimeRange
+	TimeRange = detectionapi.TimeRange
+	// Finding is a per-rule positive output. Detection persists these
+	// as alerts via mysql.Store.InsertAlert.
+	Finding = detectionapi.Finding
+	// GraphReader is the narrow read surface the engine exposes to
+	// rules. Audit of the eight production rules confirms these three
+	// methods are the entire surface they consume.
+	GraphReader = detectionapi.GraphReader
+	// NullRawJSON is the json.RawMessage alias that scans MySQL JSON
+	// NULL correctly. Used by some rule code-signing helpers
+	// (privilege_launchd_plist_write).
+	NullRawJSON = detectionapi.NullRawJSON
 )
 
 // Severity levels aligned with industry standards (CrowdStrike, MITRE).
-// Same constant set previously exported from server/detection.
+// Same constant set as detection/api.Severity*.
 const (
-	SeverityLow      = "low"
-	SeverityMedium   = "medium"
-	SeverityHigh     = "high"
-	SeverityCritical = "critical"
+	SeverityLow      = detectionapi.SeverityLow
+	SeverityMedium   = detectionapi.SeverityMedium
+	SeverityHigh     = detectionapi.SeverityHigh
+	SeverityCritical = detectionapi.SeverityCritical
 )
-
-// Finding is a per-rule positive output. Mirrors today's
-// detection.Finding exactly so the move is mechanical and the
-// detection.Engine path doesn't change.
-type Finding struct {
-	HostID      string
-	RuleID      string
-	Severity    string
-	Title       string
-	Description string
-	ProcessID   int64    // references processes.id
-	EventIDs    []string // triggering event_ids
-	// Techniques lists MITRE ATT&CK technique IDs (e.g. "T1059.002") the
-	// finding maps to. Populated by the engine from Rule.Techniques() at
-	// evaluate time so rule authors own the mapping and it survives even
-	// when the rule metadata is later refined -- the historical alert
-	// keeps the techniques it fired under. Empty is legal for rules that
-	// don't map to the matrix cleanly.
-	Techniques []string
-}
-
-// GraphReader is the narrow read surface the engine exposes to rules.
-// Audit of the eight production rules confirms these three methods are
-// the entire surface they consume; see plan.md "The rule signature
-// change" for the proof. *store.Store satisfies this interface today.
-type GraphReader interface {
-	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error)
-	GetChildProcesses(ctx context.Context, hostID string, ppid int, tr TimeRange) ([]Process, error)
-	GetExecChain(ctx context.Context, current Process) ([]Process, error)
-}
 
 // --- Catalog types -------------------------------------------------------------
 

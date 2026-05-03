@@ -9,7 +9,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
@@ -143,7 +142,7 @@ const sudoersWriteAccessMask = 0x3
 const sudoersWriteIntentMask = 0x400 | 0x8 | 0x200
 
 func (r *SudoersTamper) Evaluate(
-	ctx context.Context, events []store.Event, s api.GraphReader,
+	ctx context.Context, events []api.Event, s api.GraphReader,
 ) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
@@ -159,7 +158,7 @@ func (r *SudoersTamper) Evaluate(
 }
 
 func (r *SudoersTamper) evalEvent(
-	ctx context.Context, evt store.Event, s api.GraphReader,
+	ctx context.Context, evt api.Event, s api.GraphReader,
 ) (*detection.Finding, error) {
 	if evt.EventType != "open" {
 		return nil, nil

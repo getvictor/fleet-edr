@@ -1,22 +1,4 @@
-// Package processttl implements the Phase 7 / issue #6 freshness-TTL
-// reconciler. ESF is a best-effort event stream; `exit` events go missing
-// under kernel back-pressure, agent crashes, or SQLite-queue pruning. When
-// that happens the `processes` row stays green forever, and after 24h of
-// activity the UI tree becomes a wall of stale greens that analysts can no
-// longer trust.
-//
-// This runner periodically forces a synthesized exit on processes that
-// have been "running" past a configurable TTL. The synthesized exit is
-// tagged exit_reason = "ttl_reconciliation" so the UI can render a
-// distinct "forced gray" indicator rather than pretending it was a clean
-// observed exit.
-//
-// The pair to this (tracked as a Phase 8 item) is an agent-side
-// `kill(pid, 0)` reconciliation pass that asks the host "is this pid
-// actually alive?" — that's strictly better than a TTL guess but needs a
-// new agent command and protocol surface. This server-side TTL is the
-// cheap half that ships in Phase 7.
-package processttl
+package pipeline
 
 import (
 	"context"
@@ -26,21 +8,24 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// Reconciler is the narrow store-surface needed by the runner. Implemented
-// by *store.Store; extracted so tests can substitute a recorder.
-type Reconciler interface {
+// processTTLReconciler is the narrow store-surface needed by the
+// runner. Implemented by *mysql.Store.
+type processTTLReconciler interface {
 	ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs int64) (int64, error)
 }
 
-// MetricsRecorder is the optional OTel hook. Nil disables metrics.
-type MetricsRecorder interface {
-	ProcessesTTLReconciled(ctx context.Context, n int64)
-}
+// SetMetrics installs the metrics recorder after construction. Used
+// by Detection.SetMetrics to break the cmd/main circular-dependency
+// (metrics recorder needs detectionCtx for the OfflineHosts gauge,
+// detectionCtx's TTL runner needs the recorder).
+func (r *ProcessTTLRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 
-// Options tune the runner. Zero values fall back to documented defaults.
-type Options struct {
+// ProcessTTLOptions tune the runner. Zero values fall back to defaults.
+type ProcessTTLOptions struct {
 	// MaxAge is the fork-time age past which a still-running process is
 	// considered stale and force-exited. 0 disables the runner entirely.
 	MaxAge time.Duration
@@ -49,25 +34,35 @@ type Options struct {
 	// Logger for audit lines. Nil uses slog.Default().
 	Logger *slog.Logger
 	// Metrics, optional.
-	Metrics MetricsRecorder
+	Metrics api.MetricsRecorder
 	// Now is the clock source. Nil uses time.Now.
 	Now func() time.Time
 }
 
-// Runner executes reconciliation passes on a cadence.
-type Runner struct {
-	store    Reconciler
+// ProcessTTLRunner executes the issue #6 freshness-TTL reconciliation
+// passes on a cadence. ESF is a best-effort event stream; exit events
+// go missing under back-pressure / agent crashes / SQLite-queue
+// pruning. When that happens the processes row stays green forever
+// and the UI tree turns into a wall of stale greens.
+//
+// This runner periodically forces a synthesized exit on processes
+// running past a configurable TTL. The synthesized exit is tagged
+// exit_reason = "ttl_reconciliation" so the UI can render a
+// distinct "forced gray" indicator rather than pretending it was a
+// clean observed exit.
+type ProcessTTLRunner struct {
+	store    processTTLReconciler
 	maxAge   time.Duration
 	interval time.Duration
 	logger   *slog.Logger
-	metrics  MetricsRecorder
+	metrics  api.MetricsRecorder
 	now      func() time.Time
 }
 
-// New builds a Runner. Panics if store is nil.
-func New(s Reconciler, opts Options) *Runner {
+// NewProcessTTL builds a ProcessTTLRunner. Panics if store is nil.
+func NewProcessTTL(s processTTLReconciler, opts ProcessTTLOptions) *ProcessTTLRunner {
 	if s == nil {
-		panic("processttl.New: store must not be nil")
+		panic("pipeline.NewProcessTTL: store must not be nil")
 	}
 	if opts.MaxAge < 0 {
 		opts.MaxAge = 0
@@ -81,7 +76,7 @@ func New(s Reconciler, opts Options) *Runner {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Runner{
+	return &ProcessTTLRunner{
 		store:    s,
 		maxAge:   opts.MaxAge,
 		interval: opts.Interval,
@@ -91,10 +86,11 @@ func New(s Reconciler, opts Options) *Runner {
 	}
 }
 
-// Loop runs reconciliation passes until ctx is done. Blocks; intended for
-// a dedicated goroutine. First pass fires immediately so a just-started
-// server doesn't wait a full interval to clean a pre-existing DB.
-func (r *Runner) Loop(ctx context.Context) {
+// Loop runs reconciliation passes until ctx is done. Blocks; intended
+// for a dedicated goroutine. First pass fires immediately so a
+// just-started server doesn't wait a full interval to clean a
+// pre-existing DB.
+func (r *ProcessTTLRunner) Loop(ctx context.Context) {
 	if r.maxAge == 0 {
 		r.logger.InfoContext(ctx, "process-ttl reconciliation disabled", "edr.process.ttl_seconds", 0)
 		return
@@ -117,7 +113,7 @@ func (r *Runner) Loop(ctx context.Context) {
 }
 
 // Run executes one reconciliation pass and returns rows reconciled.
-func (r *Runner) Run(ctx context.Context) (int64, error) {
+func (r *ProcessTTLRunner) Run(ctx context.Context) (int64, error) {
 	if r.maxAge == 0 {
 		return 0, nil
 	}

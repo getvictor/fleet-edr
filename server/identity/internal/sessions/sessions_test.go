@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/store"
+	"github.com/fleetdm/edr/server/bootstrap"
 )
 
 // newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the
@@ -16,16 +16,16 @@ import (
 // this the Phase 3 FK constraint sessions.user_id → users(id) rejects inserts.
 func newTestStore(t *testing.T, opts Options) *Store {
 	t.Helper()
-	s := store.OpenTestStore(t)
+	s := bootstrap.OpenTestDB(t)
 	for _, uid := range []int64{1, 2, 7, 42} {
-		_, err := s.DB().ExecContext(t.Context(),
+		_, err := s.ExecContext(t.Context(),
 			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
 			uid, "u"+intToStr(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
 		if err != nil {
 			t.Fatalf("seed test user %d: %v", uid, err)
 		}
 	}
-	return New(s.DB(), opts)
+	return New(s, opts)
 }
 
 func intToStr(i int64) string {

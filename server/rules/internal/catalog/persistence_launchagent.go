@@ -9,7 +9,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // PersistenceLaunchAgent fires when a process calls `launchctl load` or
@@ -83,7 +82,7 @@ type persistenceLaunchCtlPayload struct {
 	Args []string `json:"args"`
 }
 
-func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []store.Event, s api.GraphReader) ([]api.Finding, error) {
+func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
 		f, err := r.evalEvent(ctx, evt, s)
@@ -98,7 +97,7 @@ func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []store.Ev
 }
 
 // evalEvent returns a finding for a single event, or nil when the event doesn't match.
-func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt store.Event, s api.GraphReader) (*detection.Finding, error) {
+func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*detection.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
 	}

@@ -39,9 +39,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/detection"
-	"github.com/fleetdm/edr/server/graph"
-	"github.com/fleetdm/edr/server/store"
+	"github.com/fleetdm/edr/server/bootstrap"
+	detectionapi "github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/internal/graph"
+	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // FixtureCase is one named scenario loaded from a fixture JSON file.
@@ -50,7 +52,7 @@ type FixtureCase struct {
 	// pairs are expected for any process the rule's Evaluate dereferences
 	// via GetProcessByPID; the harness calls ProcessBatch to materialise
 	// them before Evaluate.
-	Events []store.Event `json:"events"`
+	Events []detectionapi.Event `json:"events"`
 	// ExpectedFindings is the assertion target. An empty slice (or
 	// omitted key) means "rule must not fire for these events" — a
 	// negative test.
@@ -77,7 +79,7 @@ type ExpectedFinding struct {
 // the `.json` suffix stripped, so a file at
 // `<dir>/sudoers/positive_overwrite.json` renders as sub-test name
 // `sudoers/positive_overwrite` and scoping via `-run` works naturally.
-func Replay(t *testing.T, rule detection.Rule, fixtureDir string) {
+func Replay(t *testing.T, rule rulesapi.Rule, fixtureDir string) {
 	t.Helper()
 
 	var cases []string
@@ -104,7 +106,7 @@ func Replay(t *testing.T, rule detection.Rule, fixtureDir string) {
 	}
 }
 
-func runCase(t *testing.T, rule detection.Rule, path string) {
+func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	t.Helper()
 	// Path is constructed from a fixed fixtureDir + a filename we
 	// already discovered via os.ReadDir on that same directory, so
@@ -116,14 +118,16 @@ func runCase(t *testing.T, rule detection.Rule, path string) {
 	var c FixtureCase
 	require.NoError(t, json.Unmarshal(raw, &c), "decode %s", path)
 
-	s := store.OpenTestStore(t)
+	db := bootstrap.OpenTestDB(t)
+	mysqlStore, err := mysql.New(db)
+	require.NoError(t, err, "wrap test store")
 	ctx := t.Context()
-	require.NoError(t, s.InsertEvents(ctx, c.Events), "insert events")
+	require.NoError(t, mysqlStore.InsertEvents(ctx, c.Events), "insert events")
 
-	builder := graph.NewBuilder(s, slog.Default())
+	builder := graph.NewBuilder(mysqlStore, slog.Default())
 	require.NoError(t, builder.ProcessBatch(ctx, c.Events), "materialize")
 
-	findings, err := rule.Evaluate(ctx, c.Events, s)
+	findings, err := rule.Evaluate(ctx, c.Events, mysqlStore)
 	require.NoError(t, err, "rule.Evaluate")
 
 	require.Len(t, findings, len(c.ExpectedFindings),

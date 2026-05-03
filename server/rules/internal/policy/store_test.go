@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // policiesDDLForTests duplicates the CREATE TABLE + seed INSERT from
@@ -31,13 +31,13 @@ const (
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	for _, stmt := range []string{policiesCreateTableForTests, policiesSeedRowForTests} {
-		if _, err := s.DB().ExecContext(t.Context(), stmt); err != nil {
+		if _, err := s.ExecContext(t.Context(), stmt); err != nil {
 			t.Fatalf("apply policies schema: %v", err)
 		}
 	}
-	return NewStore(s.DB())
+	return NewStore(s)
 }
 
 func TestGet_SeedRowPresent(t *testing.T) {

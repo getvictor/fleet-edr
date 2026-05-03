@@ -278,7 +278,20 @@ floor for any project that wants enterprise adoption.
 - [ ] **API contract tests** -- generated from OpenAPI, run against the live server
 - [ ] **Fuzz tests** for the JSON event parser, the policy diff, and any HTTP body that
   comes from the agent (Go has built-in `go test -fuzz`)
-- [ ] **Property-based tests** for the process graph builder (`gopter` / `rapid`)
+- [~] **Property-based tests** via `pgregory.net/rapid` for components with clear
+  algebraic invariants. Use when the property holds across an input space larger
+  than what a table-driven test reasonably enumerates: serialization round-trips
+  (`Marshal ∘ Unmarshal == identity`, `Scan ∘ Value == identity`), state-machine
+  matrices (alert lifecycle, process lifecycle), graph algorithms (process tree
+  build / re-exec chain walk: every non-root has a real parent in the tree, no
+  cycles, every input PID appears exactly once), and order-preserving filters
+  (e.g. `filterSnapshotEvents` removes only snapshot exec events and preserves
+  the order of the rest). Rapid's built-in shrinking + state-machine API are
+  the modern Go choice — `gopter` works but is heavier, and `testing/quick`
+  lacks shrinking. PBT does NOT replace example-based tests for wire-format
+  pinning, security-critical regressions, or named bug repros — those still
+  want explicit values. See the detection bounded context's `internal/tests/`
+  + `api/api_test.go` for the canonical patterns.
 - [ ] **Snapshot tests** for the React process-tree D3 layout
 - [ ] **Visual-regression tests** (Playwright screenshots or Chromatic) on UI components
 - [ ] **Accessibility (a11y) tests**: `@axe-core/react` in component tests + `pa11y` on

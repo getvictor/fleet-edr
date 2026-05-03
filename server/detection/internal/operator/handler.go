@@ -1,8 +1,6 @@
-// Package api provides JSON REST endpoints for the EDR web UI.
-package api
+package operator
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -11,12 +9,9 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/attrkeys"
-	"github.com/fleetdm/edr/server/graph"
+	"github.com/fleetdm/edr/server/detection/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
-	"github.com/fleetdm/edr/server/store"
 )
-
-var errNotFound = sql.ErrNoRows
 
 const (
 	msgInternalError   = "internal error"
@@ -24,35 +19,31 @@ const (
 	msgInvalidJSONBody = "invalid JSON body"
 )
 
-// alertDetailResponse extends Alert with linked event IDs for the detail endpoint.
+// alertDetailResponse extends Alert with linked event IDs for the
+// detail endpoint.
 type alertDetailResponse struct {
-	store.Alert
+	api.Alert
 	EventIDs []string `json:"event_ids"`
 }
 
-// Handler serves the UI-facing API endpoints.
+// Handler serves the operator-facing detection routes.
 type Handler struct {
-	query  *graph.Query
-	store  *store.Store
+	svc    api.Service
 	logger *slog.Logger
 }
 
-// New creates an API handler. Authorization is NOT enforced in this package anymore; callers
-// wrap the returned mux (or this handler's routes) in the operator-session middleware
-// (authn.Session, then authn.CSRF on unsafe methods) at registration time. See buildMux in
-// cmd/fleet-edr-server/main.go for the actual wiring.
-func New(q *graph.Query, s *store.Store, logger *slog.Logger) *Handler {
+// New creates a detection operator handler. Authorization is NOT
+// enforced in this package; callers wrap the routes in the
+// operator-session middleware (identity.Session, then identity.CSRF
+// on unsafe methods) at registration time.
+func New(svc api.Service, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{query: q, store: s, logger: logger}
+	return &Handler{svc: svc, logger: logger}
 }
 
-// RegisterRoutes registers the API routes on the given mux. Phase 4
-// of the modular-monolith migration moved /api/commands and
-// /api/commands/{id} into the response bounded context (see
-// server/response/bootstrap); cmd/main now mounts those routes via
-// responseCtx.RegisterAgentRoutes / RegisterAuthedRoutes.
+// RegisterRoutes registers the operator routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hosts", h.handleListHosts)
 	mux.HandleFunc("GET /api/hosts/{host_id}/tree", h.handleProcessTree)
@@ -65,16 +56,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	hosts, err := h.query.ListHosts(ctx)
+	hosts, err := h.svc.ListHosts(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list hosts", "err", err)
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if hosts == nil {
-		hosts = []store.HostSummary{}
+		hosts = []api.HostSummary{}
 	}
-
 	h.writeJSON(w, r, hosts)
 }
 
@@ -95,16 +85,15 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	roots, err := h.query.BuildTree(ctx, hostID, tr, limit)
+	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if roots == nil {
-		roots = []graph.ProcessNode{}
+		roots = []api.ProcessNode{}
 	}
-
 	h.writeJSON(w, r, map[string]any{"roots": roots})
 }
 
@@ -120,7 +109,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	atTime := parseInt64Param(r, "at", time.Now().UnixNano())
 
 	ctx := r.Context()
-	detail, err := h.query.GetDetail(ctx, hostID, pid, atTime)
+	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
@@ -130,30 +119,28 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msgNotFound, http.StatusNotFound)
 		return
 	}
-
 	h.writeJSON(w, r, detail)
 }
 
 func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
-	f := store.AlertFilter{
+	f := api.AlertFilter{
 		HostID:    r.URL.Query().Get("host_id"),
-		Status:    r.URL.Query().Get("status"),
+		Status:    api.AlertStatus(r.URL.Query().Get("status")),
 		Severity:  r.URL.Query().Get("severity"),
 		ProcessID: parseInt64Param(r, "process_id", 0),
 		Limit:     parseIntParam(r, "limit", 100),
 	}
 
 	ctx := r.Context()
-	alerts, err := h.store.ListAlerts(ctx, f)
+	alerts, err := h.svc.ListAlerts(ctx, f)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list alerts", "err", err)
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if alerts == nil {
-		alerts = []store.Alert{}
+		alerts = []api.Alert{}
 	}
-
 	h.writeJSON(w, r, alerts)
 }
 
@@ -165,28 +152,20 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	alert, err := h.store.GetAlert(ctx, id)
+	alert, eventIDs, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
+		if errors.Is(err, api.ErrAlertNotFound) {
+			http.Error(w, msgNotFound, http.StatusNotFound)
+			return
+		}
 		h.logger.ErrorContext(ctx, "get alert", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
-		return
-	}
-	if alert == nil {
-		http.Error(w, msgNotFound, http.StatusNotFound)
-		return
-	}
-
-	eventIDs, err := h.store.GetAlertEventIDs(ctx, id)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "get alert event ids", "id", id, "err", err)
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if eventIDs == nil {
 		eventIDs = []string{}
 	}
-
-	h.writeJSON(w, r, alertDetailResponse{Alert: *alert, EventIDs: eventIDs})
+	h.writeJSON(w, r, alertDetailResponse{Alert: alert, EventIDs: eventIDs})
 }
 
 func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request) {
@@ -205,21 +184,26 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	switch body.Status {
-	case "open", "acknowledged", "resolved":
+	case string(api.AlertStatusOpen),
+		string(api.AlertStatusAcknowledged),
+		string(api.AlertStatusResolved):
 	default:
 		http.Error(w, "invalid status: must be open, acknowledged, or resolved", http.StatusBadRequest)
 		return
 	}
 
 	ctx := r.Context()
-	// Phase 3: record the authenticated user id on the row so SOC forensics can tell
-	// who resolved what. When the handler is invoked outside the session middleware
-	// stack (e.g. direct test harness), UserIDFromContext returns false and we pass 0,
-	// which UpdateAlertStatus treats as "leave updated_by alone".
 	userID, _ := identityapi.UserIDFromContext(ctx)
-	if err := h.store.UpdateAlertStatus(ctx, id, body.Status, userID); err != nil {
-		if errors.Is(err, errNotFound) {
+	if _, err := h.svc.UpdateAlertStatus(ctx, id, api.AlertStatus(body.Status), userID); err != nil {
+		switch {
+		case errors.Is(err, api.ErrAlertNotFound):
 			http.Error(w, msgNotFound, http.StatusNotFound)
+			return
+		case errors.Is(err, api.ErrInvalidAlertTransition):
+			http.Error(w, "invalid status transition", http.StatusBadRequest)
+			return
+		case errors.Is(err, api.ErrInvalidUserUpdater):
+			http.Error(w, "invalid user", http.StatusBadRequest)
 			return
 		}
 		h.logger.ErrorContext(ctx, "update alert status", "id", id, "err", err)
@@ -239,14 +223,14 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func parseTimeRange(r *http.Request) store.TimeRange {
+func parseTimeRange(r *http.Request) api.TimeRange {
 	now := time.Now().UnixNano()
 	defaultFrom := now - int64(time.Hour)
 
 	fromNs := parseInt64Param(r, "from", defaultFrom)
 	toNs := parseInt64Param(r, "to", now)
 
-	return store.TimeRange{FromNs: fromNs, ToNs: toNs}
+	return api.TimeRange{FromNs: fromNs, ToNs: toNs}
 }
 
 func parseIntParam(r *http.Request, name string, defaultVal int) int {

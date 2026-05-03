@@ -21,11 +21,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	srvbootstrap "github.com/fleetdm/edr/server/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
-	"github.com/fleetdm/edr/server/store"
 )
 
 const testEnrollSecret = "rules-integration-secret"
@@ -66,9 +66,9 @@ func (r *recordingCommandInserter) snapshot() []recordedCommand {
 // is wired to call ep.Service().ActiveHostIDs at request time.
 func newRules(t *testing.T, ep **endpointbootstrap.Endpoint, cmds *recordingCommandInserter) *rulesbootstrap.Rules {
 	t.Helper()
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	deps := rulesbootstrap.Deps{
-		DB:     s.DB(),
+		DB:     s,
 		Logger: slog.Default(),
 	}
 	if ep != nil && cmds != nil {
@@ -207,9 +207,9 @@ func TestOperator_PutPolicyFanout(t *testing.T) {
 
 	// Single shared DB across rulesCtx + endpointCtx so the bidirectional
 	// dependency in cmd/main is exercised end-to-end.
-	s := store.OpenTestStore(t)
+	s := srvbootstrap.OpenTestDB(t)
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:     s.DB(),
+		DB:     s,
 		Logger: slog.Default(),
 		ActiveHostsLister: func(ctx context.Context) ([]string, error) {
 			return ep.Service().ActiveHostIDs(ctx)
@@ -220,7 +220,7 @@ func TestOperator_PutPolicyFanout(t *testing.T) {
 	require.NoError(t, rulesCtx.ApplySchema(t.Context()))
 
 	ep, err = endpointbootstrap.New(endpointbootstrap.Deps{
-		DB:                  s.DB(),
+		DB:                  s,
 		Logger:              slog.Default(),
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
@@ -345,9 +345,9 @@ func TestBootstrap_MissingDeps(t *testing.T) {
 	})
 
 	t.Run("asymmetric ActiveHostsLister and CommandInserter", func(t *testing.T) {
-		s := store.OpenTestStore(t)
+		s := srvbootstrap.OpenTestDB(t)
 		_, err := rulesbootstrap.New(rulesbootstrap.Deps{
-			DB: s.DB(),
+			DB: s,
 			ActiveHostsLister: func(context.Context) ([]string, error) {
 				return nil, errors.New("unused")
 			},

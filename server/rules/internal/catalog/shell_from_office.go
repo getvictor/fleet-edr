@@ -8,7 +8,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // ShellFromOffice fires when a shell (/bin/sh, /bin/bash, /bin/zsh, etc.) is spawned
@@ -67,7 +66,7 @@ type shellFromOfficePayload struct {
 	Path string `json:"path"`
 }
 
-func (r *ShellFromOffice) Evaluate(ctx context.Context, events []store.Event, s api.GraphReader) ([]api.Finding, error) {
+func (r *ShellFromOffice) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
 		f, err := r.evalEvent(ctx, evt, s)
@@ -84,7 +83,7 @@ func (r *ShellFromOffice) Evaluate(ctx context.Context, events []store.Event, s 
 // evalEvent returns a finding for a single event, or nil when the event doesn't match.
 // Splitting this out of Evaluate keeps the per-event short-circuits (non-exec, bad JSON,
 // non-shell path, non-Office parent) from stacking cognitive complexity on the caller.
-func (r *ShellFromOffice) evalEvent(ctx context.Context, evt store.Event, s api.GraphReader) (*detection.Finding, error) {
+func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*detection.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
 	}

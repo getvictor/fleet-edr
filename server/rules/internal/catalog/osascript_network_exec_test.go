@@ -7,18 +7,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/store"
+	"github.com/fleetdm/edr/server/rules/api"
 )
 
 // TestOsascriptNetworkExec exercises the download-and-exec chain detection. The rule
 // fires only when a single osascript process's 30s descendant tree contains BOTH a
 // curl/wget exec AND an exec out of a suspicious path — either alone is not enough.
 func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// Tree: launchd (1) → osascript (50) → curl (100) + /tmp/stage2 (200)
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -36,7 +36,7 @@ func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 	f := findings[0]
@@ -49,10 +49,10 @@ func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 // Negative: osascript alone with a curl child but no temp-path exec. Download without a
 // following exec is not a droppers pattern — could be a legitimate script fetch.
 func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -66,7 +66,7 @@ func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings)
 }
@@ -75,10 +75,10 @@ func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
 // droppers spawn an intermediate shell; the direct-children-only scan missed this until
 // the BFS fix.
 func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -100,7 +100,7 @@ func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "BFS traversal must see the grandchild curl + /tmp/stage2")
 	assert.Contains(t, findings[0].Description, "/usr/bin/curl")
@@ -113,10 +113,10 @@ func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
 // this case the rule missed the runbook's osascript step on edr-qa even though
 // the underlying chain (osascript -> sh -> curl + /tmp/stage2) was identical.
 func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -134,7 +134,7 @@ func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "shebang script in argv[1] should match the temp-exec arm")
 	assert.Equal(t, "osascript_network_exec", findings[0].RuleID)
@@ -150,10 +150,10 @@ func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
 // This ordering also tickles the iteration: the intermediate sh comes before
 // curl + the shebang sh in BFS order.
 func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		// osascript itself
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
@@ -179,7 +179,7 @@ func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "rule must fire on real-chain shape: intermediate sh -c does NOT shadow the grandchild shebang sh")
 	assert.Equal(t, "osascript_network_exec", findings[0].RuleID)
@@ -195,11 +195,11 @@ func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
 // ancestor has already been ingested and materialised by batch N. This test
 // exercises that path explicitly.
 func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
 	// Batch 1: only the osascript fork+exec arrive.
-	batch1 := []store.Event{
+	batch1 := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -209,13 +209,13 @@ func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 	materialize(t, s, batch1)
 
 	rule := &OsascriptNetworkExec{}
-	findings1, err := rule.Evaluate(ctx, batch1, s)
+	findings1, err := rule.Evaluate(ctx, batch1, s.GraphReader())
 	require.NoError(t, err)
 	require.Empty(t, findings1, "no temp-exec yet — rule must not fire on the osascript event alone")
 
 	// Batch 2: descendants land in a later flush. osascript already in store
 	// from batch 1's materialise; the temp-exec walks up to find it.
-	batch2 := []store.Event{
+	batch2 := []api.Event{
 		{EventID: "fork-curl", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
 		{EventID: "exec-curl", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
@@ -228,7 +228,7 @@ func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 	require.NoError(t, s.InsertEvents(ctx, batch2))
 	materialize(t, s, batch2)
 
-	findings2, err := rule.Evaluate(ctx, batch2, s)
+	findings2, err := rule.Evaluate(ctx, batch2, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings2, 1, "temp-exec in batch 2 must walk up to the osa from batch 1 and confirm the curl sibling")
 	assert.Equal(t, "osascript_network_exec", findings2[0].RuleID)
@@ -241,10 +241,10 @@ func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 // rule must still emit one finding per chain rather than once per descendant.
 // Two temp-exec children are present here; the rule should fire once.
 func TestOsascriptNetworkExec_SameBatchDedupe(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -266,7 +266,7 @@ func TestOsascriptNetworkExec_SameBatchDedupe(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "two temp-exec children of the same osascript -> one finding (deduped by ancestor PID)")
 }
@@ -274,10 +274,10 @@ func TestOsascriptNetworkExec_SameBatchDedupe(t *testing.T) {
 // Negative: temp-path exec without the download child. The parent suspicious_exec rule
 // covers this case; osascript_network_exec stays silent.
 func TestOsascriptNetworkExec_TempExecWithoutDownloadDoesNotFire(t *testing.T) {
-	s := store.OpenTestStore(t)
+	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	events := []store.Event{
+	events := []api.Event{
 		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
@@ -291,7 +291,7 @@ func TestOsascriptNetworkExec_TempExecWithoutDownloadDoesNotFire(t *testing.T) {
 	materialize(t, s, events)
 
 	rule := &OsascriptNetworkExec{}
-	findings, err := rule.Evaluate(ctx, events, s)
+	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings)
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/store"
 )
 
 // OsascriptNetworkExec fires when the rule sees a temp-path exec whose process
@@ -121,7 +120,7 @@ type osascriptPayload struct {
 	Args []string `json:"args"`
 }
 
-func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []store.Event, s api.GraphReader) ([]api.Finding, error) {
+func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	// One osascript chain commonly produces multiple temp-exec descendants
 	// — the kernel re-execs sh→bash, the chain runs more than one stage, etc.
 	// Track which osascript ancestor PIDs we've already fired on within this
@@ -145,7 +144,7 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []store.Even
 // match. osaPID is the PID of the osascript ancestor that triggered the
 // finding; the caller uses it for batch-level dedupe.
 func (r *OsascriptNetworkExec) evalEvent(
-	ctx context.Context, evt store.Event, s api.GraphReader, seenOsa map[int]struct{},
+	ctx context.Context, evt api.Event, s api.GraphReader, seenOsa map[int]struct{},
 ) (*detection.Finding, int, error) {
 	if evt.EventType != "exec" {
 		return nil, 0, nil
@@ -176,12 +175,12 @@ func (r *OsascriptNetworkExec) evalEvent(
 	if osa.ExecTimeNs != nil {
 		osaExecTS = *osa.ExecTimeNs
 	}
-	tr := store.TimeRange{FromNs: osaExecTS, ToNs: osaExecTS + osascriptWindowNs}
+	tr := api.TimeRange{FromNs: osaExecTS, ToNs: osaExecTS + osascriptWindowNs}
 	descendants, err := collectDescendants(ctx, s, evt.HostID, osa.PID, tr)
 	if err != nil {
 		return nil, 0, err
 	}
-	var downloader *store.Process
+	var downloader *api.Process
 	for i := range descendants {
 		if downloadBinaries[descendants[i].Path] {
 			downloader = &descendants[i]
@@ -218,7 +217,7 @@ func (r *OsascriptNetworkExec) evalEvent(
 // no osascript ancestor exists or the chain bottoms out at launchd (PPID 1).
 func (r *OsascriptNetworkExec) findOsascriptAncestor(
 	ctx context.Context, s api.GraphReader, hostID string, startPID int, asOfNs int64,
-) (*store.Process, error) {
+) (*api.Process, error) {
 	current, err := s.GetProcessByPID(ctx, hostID, startPID, asOfNs)
 	if err != nil {
 		return nil, fmt.Errorf("get pid %d: %w", startPID, err)
@@ -301,8 +300,8 @@ func displayTempExec(p osascriptPayload) string {
 // generous without being abusable.
 const maxDescendants = 500
 
-func collectDescendants(ctx context.Context, s api.GraphReader, hostID string, rootPID int, tr store.TimeRange) ([]store.Process, error) {
-	var all []store.Process
+func collectDescendants(ctx context.Context, s api.GraphReader, hostID string, rootPID int, tr api.TimeRange) ([]api.Process, error) {
+	var all []api.Process
 	queue := []int{rootPID}
 	seen := map[int]struct{}{rootPID: {}}
 
