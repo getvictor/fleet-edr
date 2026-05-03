@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package tests holds per-context integration tests for the identity
 // context. Tests live behind the //go:build integration tag and exercise
 // the full stack via identity/bootstrap.New against a real MySQL.

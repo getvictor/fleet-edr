@@ -110,15 +110,40 @@ tasks:
     desc: |
       Run Go tests with race detector for the server + shared code. Requires
       $EDR_TEST_DSN set or the docker-compose mysql_test on port 3317.
+
+      Runs WITHOUT the integration build tag so the layer-2 + layer-3 tests
+      (`server/<X>/internal/tests/`, `test/integration/`) are excluded; for
+      those use test:go:server:integration.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./internal/...
 
+  test:go:server:integration:
+    desc: |
+      Run the server's integration build-tag suite (layer-2 per-context tests
+      under server/<X>/internal/tests/ + layer-3 cross-context tests under
+      test/integration/). Requires a real MySQL via $EDR_TEST_DSN.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+    cmds:
+      - go test -race -count=1 -timeout=10m -tags=integration ./server/... ./internal/... ./test/integration/...
+
+  test:integration:
+    desc: |
+      Shorthand for the integration-tagged Go suite. Same as
+      test:go:server:integration; kept as a top-level alias because the test
+      pyramid (unit / per-context / cross-context) is the user-facing concept.
+    cmds:
+      - task: test:go:server:integration
+
   test:go:server:coverage:
     desc: |
       Server + shared coverage flavor of test:go:server. Emits coverage-server.out
-      which CI uploads as an artifact for the Sonar scan job.
+      which CI uploads as an artifact for the Sonar scan job. Runs with
+      -tags=integration so layer-2 + layer-3 tests contribute to the
+      cross-package coverage attribution; without that, the bootstrap.go and
+      service.go files (which the integration tests exercise) would report 0%.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
     cmds:
@@ -130,7 +155,7 @@ tasks:
       # tests fully exercise them. Per the modular-monolith pattern,
       # cross-package exercise via the public api/ + bootstrap/ surface is
       # the intended coverage path; coverpkg makes Sonar see it.
-      - go test -race -count=1 -timeout=10m -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/...
+      - go test -race -count=1 -timeout=10m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/...
       - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:

@@ -85,6 +85,16 @@ pre-push:
         mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
         golangci-lint run --fast-only ./server/... ./agent/... ./internal/... ./test/...
 
+    arch-go:
+      # Bounded-context architecture lint via arch-go. Local feedback in
+      # ~3s; CI also has its own arch-go workflow as the backstop. Only
+      # runs when Go files (or the rule config / Taskfile / arch-go.yml
+      # itself) change, mirroring the .github/workflows/arch-go.yml gate.
+      glob: "{**/*.go,arch-go.yml,Taskfile.yml,go.mod,go.sum}"
+      run: |
+        mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
+        task lint:arch
+
     tsc:
       root: "ui/"
       run: npx tsc --noEmit
