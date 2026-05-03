@@ -1,8 +1,14 @@
 # 0004. Modular monolith with bounded contexts
 
-- Status: Accepted
+- Status: Implemented
 - Date: 2026-05-01
 - Deciders: getvictor
+
+> Migration completed 2026-05-03 across phases 1-6. See
+> `claude/modular-monolith/phase[1-6].md` for the per-phase plans
+> and outcomes. arch-go (`arch-go.yml` + `test/arch/arch_test.go`)
+> enforces the bounded-context import rules in CI as a hard-fail
+> gating check.
 
 ## Context
 

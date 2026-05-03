@@ -54,8 +54,7 @@ var schemaMigrations = []string{
 
 // isAlreadyAppliedMigration returns true when err is one of the MySQL
 // "this ALTER is already applied" codes, so we can treat the re-run as a
-// no-op. Duplicated from server/store/store.go for now; phase 7 may
-// consolidate to a shared helper.
+// no-op.
 func isAlreadyAppliedMigration(err error) bool {
 	var mysqlErr *mysql.MySQLError
 	if !errors.As(err, &mysqlErr) {

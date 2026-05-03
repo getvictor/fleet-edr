@@ -91,10 +91,10 @@ func New(deps Deps) (*Identity, error) {
 // pattern, swallowing "Duplicate column" / "Duplicate key" / "Duplicate
 // foreign key" errors).
 //
-// Call this BEFORE store.New so the cross-context FK
-// fk_alerts_updated_by (alerts.updated_by -> users.id) created by
-// store.applySchema can resolve. After phase 5 drops fk_alerts_updated_by,
-// the call order won't matter; for now it does.
+// Idempotent: the cross-context FK fk_alerts_updated_by that used to
+// require this be called before detection's ApplySchema was dropped
+// in phase 5 in favour of code-level UserExists validation, so call
+// order across contexts is no longer load-bearing.
 func (i *Identity) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, i.db)
 }

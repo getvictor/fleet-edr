@@ -33,7 +33,7 @@ type Deps struct {
 
 	// Heartbeat is optional; nil disables the per-poll last-seen
 	// bump. Production wires cmd/main's `s.UpdateHostLastSeen`
-	// closure today; phase 5 swaps to detectionCtx.RecordHostSeen.
+	// closure; cmd/main wires it to detectionCtx.RecordHostSeen.
 	Heartbeat Heartbeat
 }
 
