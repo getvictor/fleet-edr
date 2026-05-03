@@ -46,6 +46,16 @@ func New(db *sqlx.DB) *Store {
 // is set by the DB DEFAULT, so a clock skew between app and DB host
 // shows up consistently across rows.
 //
+// When UserID is set but ActorEmail is empty (the common case for
+// cross-context handlers that only see user_id on ctx, e.g. alert
+// status changes), Record looks up the current email from users and
+// denormalises it onto the audit row. That lookup is what keeps an
+// audit row attributable after a user is later deleted: the LEFT JOIN
+// on read returns "" for a missing user, but the denormalised
+// actor_email column survives. A failed lookup leaves actor_email
+// empty rather than failing the audit; the row still records the
+// user_id, and reviewers can correlate via that.
+//
 // Synchronous: returns once the row is durably committed. The caller
 // is expected to record audit AFTER the underlying action commits, so
 // a successful audit row is evidence that the action persisted.
@@ -55,6 +65,7 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	}
 
 	traceID := traceIDFromContext(ctx)
+	actorEmail := s.resolveActorEmail(ctx, e)
 
 	var payloadBytes []byte
 	if len(e.Payload) > 0 {
@@ -72,7 +83,7 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.ExecContext(ctx, q,
 		nullInt64(e.UserID),
-		nullString(e.ActorEmail),
+		nullString(actorEmail),
 		string(e.Action),
 		nullString(e.TargetType),
 		nullString(e.TargetID),
@@ -86,6 +97,30 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	return nil
 }
 
+// resolveActorEmail returns the email to denormalise onto the audit row.
+// Caller-supplied ActorEmail wins (login paths know the email already);
+// otherwise look it up from users by UserID. A failed lookup is not a
+// hard error because the audit row's user_id column is still
+// authoritative; we simply leave actor_email empty and let the LEFT
+// JOIN on read surface the live email when the user still exists.
+func (s *Store) resolveActorEmail(ctx context.Context, e api.AuditEvent) string {
+	if e.ActorEmail != "" {
+		return e.ActorEmail
+	}
+	if e.UserID == nil {
+		return ""
+	}
+	var email sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT email FROM users WHERE id = ?`, *e.UserID).Scan(&email); err != nil {
+		return ""
+	}
+	if email.Valid {
+		return email.String
+	}
+	return ""
+}
+
 // List returns audit rows matching the filter, newest first. Caller
 // passes a non-zero Limit; the Store caps it at maxListLimit so a
 // runaway request cannot scan the whole table.
@@ -94,7 +129,45 @@ func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, er
 	if limit <= 0 || limit > maxListLimit {
 		limit = maxListLimit
 	}
+	where, args := buildListWhere(f)
+	args = append(args, limit)
 
+	q := `
+		SELECT a.id, a.occurred_at, a.actor_user_id, a.actor_email,
+		       a.action, a.target_type, a.target_id, a.trace_id,
+		       a.remote_addr, a.payload, COALESCE(u.email, '')
+		FROM audit_events a
+		LEFT JOIN users u ON u.id = a.actor_user_id ` + where + `
+		ORDER BY a.id DESC
+		LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("audit.List query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]api.AuditRow, 0, limit)
+	for rows.Next() {
+		r, err := scanListRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("audit.List iter: %w", err)
+	}
+	return out, nil
+}
+
+// buildListWhere builds the WHERE clause + bound args for List. Pulled
+// out of List so the parent function stays at a cognitive complexity
+// below Sonar's S3776 threshold; each branch is a single optional
+// filter and is independently testable. The leading `WHERE 1=1` is a
+// trivial harness so each clause appends as ` AND ...?` regardless of
+// which other filters are set.
+func buildListWhere(f api.AuditFilter) (string, []any) {
 	args := make([]any, 0, 8)
 	where := "WHERE 1=1"
 	if f.UserID != nil {
@@ -125,76 +198,63 @@ func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, er
 		where += " AND a.id < ?"
 		args = append(args, f.BeforeID)
 	}
-	args = append(args, limit)
+	return where, args
+}
 
-	q := `
-		SELECT a.id, a.occurred_at, a.actor_user_id, a.actor_email,
-		       a.action, a.target_type, a.target_id, a.trace_id,
-		       a.remote_addr, a.payload, COALESCE(u.email, '')
-		FROM audit_events a
-		LEFT JOIN users u ON u.id = a.actor_user_id ` + where + `
-		ORDER BY a.id DESC
-		LIMIT ?`
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("audit.List query: %w", err)
+// scanListRow unmarshals one row from List's SELECT into a public
+// AuditRow. Pulled out so List's per-row loop body stays trivial; the
+// scan + null-handling logic is the lion's share of the cognitive
+// complexity that S3776 was flagging on the previous in-line shape.
+// The caller's row iteration is therefore a one-liner per row, and the
+// scan logic is independently exercised by mysql_test's round-trip
+// assertions.
+func scanListRow(rows *sql.Rows) (api.AuditRow, error) {
+	var (
+		r            api.AuditRow
+		actorUserID  sql.NullInt64
+		actorEmail   sql.NullString
+		targetType   sql.NullString
+		targetID     sql.NullString
+		traceID      sql.NullString
+		remoteAddr   sql.NullString
+		payloadBytes []byte
+		joinedEmail  string
+		action       string
+	)
+	if err := rows.Scan(
+		&r.ID, &r.OccurredAt, &actorUserID, &actorEmail,
+		&action, &targetType, &targetID, &traceID,
+		&remoteAddr, &payloadBytes, &joinedEmail,
+	); err != nil {
+		return r, fmt.Errorf("audit.List scan: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]api.AuditRow, 0, limit)
-	for rows.Next() {
-		var (
-			r            api.AuditRow
-			actorUserID  sql.NullInt64
-			actorEmail   sql.NullString
-			targetType   sql.NullString
-			targetID     sql.NullString
-			traceID      sql.NullString
-			remoteAddr   sql.NullString
-			payloadBytes []byte
-			joinedEmail  string
-			action       string
-		)
-		if err := rows.Scan(
-			&r.ID, &r.OccurredAt, &actorUserID, &actorEmail,
-			&action, &targetType, &targetID, &traceID,
-			&remoteAddr, &payloadBytes, &joinedEmail,
-		); err != nil {
-			return nil, fmt.Errorf("audit.List scan: %w", err)
-		}
-		r.Action = api.AuditAction(action)
-		if actorUserID.Valid {
-			id := actorUserID.Int64
-			r.UserID = &id
-		}
-		// Prefer the live join so the retrieval endpoint reflects current
-		// emails (e.g. an admin who renamed their email post-action sees
-		// the new value). Fall back to the denormalised actor_email when
-		// the user row no longer exists.
-		switch {
-		case joinedEmail != "":
-			r.UserEmail = joinedEmail
-		case actorEmail.Valid:
-			r.UserEmail = actorEmail.String
-		}
-		r.TargetType = targetType.String
-		r.TargetID = targetID.String
-		r.TraceID = traceID.String
-		r.RemoteAddr = remoteAddr.String
-		if len(payloadBytes) > 0 {
-			payload := map[string]any{}
-			if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-				return nil, fmt.Errorf("audit.List unmarshal payload row=%d: %w", r.ID, err)
-			}
-			r.Payload = payload
-		}
-		out = append(out, r)
+	r.Action = api.AuditAction(action)
+	if actorUserID.Valid {
+		id := actorUserID.Int64
+		r.UserID = &id
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("audit.List iter: %w", err)
+	// Prefer the live join so the retrieval endpoint reflects current
+	// emails (e.g. an admin who renamed their email post-action sees
+	// the new value). Fall back to the denormalised actor_email when
+	// the user row no longer exists.
+	switch {
+	case joinedEmail != "":
+		r.UserEmail = joinedEmail
+	case actorEmail.Valid:
+		r.UserEmail = actorEmail.String
 	}
-	return out, nil
+	r.TargetType = targetType.String
+	r.TargetID = targetID.String
+	r.TraceID = traceID.String
+	r.RemoteAddr = remoteAddr.String
+	if len(payloadBytes) > 0 {
+		payload := map[string]any{}
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return r, fmt.Errorf("audit.List unmarshal payload row=%d: %w", r.ID, err)
+		}
+		r.Payload = payload
+	}
+	return r, nil
 }
 
 // maxListLimit caps the page size so a runaway retrieval request can't

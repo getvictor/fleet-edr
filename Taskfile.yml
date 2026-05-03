@@ -52,12 +52,18 @@ tasks:
 
   ui:setup:
     desc: |
-      Install UI npm dependencies. Idempotent: skips when ui/node_modules already exists,
-      so it is cheap to wire as a dep of build:ui and dev:ui. A fresh clone or a new git
-      worktree therefore builds without a separate manual `cd ui && npm ci` step.
+      Install UI npm dependencies. Wired as a dep of build:ui and dev:ui so a fresh clone
+      or new git worktree builds without a separate manual `cd ui && npm ci` step. Skips
+      when `node_modules/.package-lock.json` (the snapshot npm writes on a successful
+      `npm ci`) is at least as new as `package-lock.json`, so a lockfile bump triggers a
+      fresh install but a no-op build does not pay the cost. A bare `test -d node_modules`
+      guard would leave stale dependencies in place after a branch switch that touches
+      the lockfile.
     dir: ui
-    status:
-      - test -d node_modules
+    sources:
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
     cmds:
       - npm ci
 
@@ -289,10 +295,12 @@ tasks:
       DESTRUCTIVE: drop the dev database and recreate empty. Requires explicit
       confirmation (Taskfile's prompt:). Use only when the schema is out of
       sync with current migrations; routine dev never needs this.
-      Credentials match the dev:server DSN (root:toor on port 3316).
+      Credentials match the dev:server DSN (root, empty password, port 3316);
+      see the dev:server desc for why the password is empty (matches docker-compose
+      MYSQL_ALLOW_EMPTY_PASSWORD=yes; a `-ptoor` invocation produces access-denied).
     prompt: About to DROP DATABASE edr. Continue?
     cmds:
-      - mysql -uroot -ptoor -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+      - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
 
   # -------- install tools / hooks --------
 

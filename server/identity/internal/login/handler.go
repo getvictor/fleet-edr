@@ -213,45 +213,73 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := httpserver.RemoteIP(r)
 
-	if cookie, err := r.Cookie(api.SessionCookieName); err == nil && cookie.Value != "" {
-		if raw, err := api.DecodeToken(cookie.Value); err == nil {
-			// Resolve the session BEFORE deletion so we can record who logged
-			// out. Logout is idempotent on missing sessions, so a failed
-			// resolve falls through silently to the cookie clear without an
-			// audit row (there is nothing to audit).
-			var actorUserID *int64
-			var actorEmail string
-			if sess, err := h.svc.GetSession(ctx, raw); err == nil {
-				uid := sess.UserID
-				actorUserID = &uid
-				if u, err := h.svc.GetUser(ctx, sess.UserID); err == nil {
-					actorEmail = u.Email
-				}
-			}
-			if delErr := h.svc.Logout(ctx, raw); delErr == nil {
-				trace.SpanFromContext(ctx).SetAttributes(
-					attribute.String(attrkeys.AuthAction, "logout"),
-				)
-				h.logger.InfoContext(ctx, "logout ok",
-					attrkeys.AuthAction, "logout",
-					attrkeys.SessionIDPrefix, idPrefix(raw),
-				)
-				if actorUserID != nil {
-					h.recordAudit(ctx, api.AuditEvent{
-						UserID:     actorUserID,
-						ActorEmail: actorEmail,
-						Action:     api.AuditAuthLogout,
-						RemoteAddr: ip,
-					})
-				}
-			} else {
-				h.logger.ErrorContext(ctx, "session delete", "err", delErr)
-			}
+	raw := h.decodeLogoutToken(r)
+	if raw != nil {
+		// Resolve the session BEFORE deletion so we can record who logged
+		// out. Logout is idempotent on missing sessions, so a failed
+		// resolve falls through silently to the cookie clear without an
+		// audit row (there is nothing to audit).
+		actorUserID, actorEmail := h.resolveLogoutActor(ctx, raw)
+		switch err := h.svc.Logout(ctx, raw); {
+		case err != nil:
+			h.logger.ErrorContext(ctx, "session delete", "err", err)
+		case actorUserID != nil:
+			trace.SpanFromContext(ctx).SetAttributes(
+				attribute.String(attrkeys.AuthAction, "logout"),
+			)
+			h.logger.InfoContext(ctx, "logout ok",
+				attrkeys.AuthAction, "logout",
+				attrkeys.SessionIDPrefix, idPrefix(raw),
+			)
+			h.recordAudit(ctx, api.AuditEvent{
+				UserID:     actorUserID,
+				ActorEmail: actorEmail,
+				Action:     api.AuditAuthLogout,
+				RemoteAddr: ip,
+			})
 		}
 	}
 
 	http.SetCookie(w, h.expireCookie())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// decodeLogoutToken extracts the raw session token from the logout request,
+// returning nil when the cookie is absent, empty, or malformed. Pulled out
+// of handleLogout so its happy path is a single early-return instead of a
+// double-nested `if cookie { if raw, err := ...`. Returning nil on every
+// failure mode preserves logout's "always clear the cookie, never error"
+// contract.
+func (h *Handler) decodeLogoutToken(r *http.Request) []byte {
+	cookie, err := r.Cookie(api.SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return nil
+	}
+	raw, err := api.DecodeToken(cookie.Value)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// resolveLogoutActor looks up the user behind a session token so the audit
+// row records the right user_id + email. Returns (nil, "") when the
+// session is unknown / expired (logout is idempotent so a missing session
+// produces no audit row). When the session resolves but the users row
+// fetch fails (e.g. the user was deleted between session create and now),
+// returns the user_id with an empty email; the audit row still records
+// the user_id, and reviewers can correlate via that.
+func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, string) {
+	sess, err := h.svc.GetSession(ctx, raw)
+	if err != nil {
+		return nil, ""
+	}
+	uid := sess.UserID
+	u, err := h.svc.GetUser(ctx, sess.UserID)
+	if err != nil {
+		return &uid, ""
+	}
+	return &uid, u.Email
 }
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {

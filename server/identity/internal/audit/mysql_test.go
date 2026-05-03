@@ -64,6 +64,41 @@ func TestRecord_RoundTrip(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), r.OccurredAt, 30*time.Second)
 }
 
+// When the caller does not supply ActorEmail, the Recorder must look it
+// up from the users table by UserID and denormalise it onto the row so
+// the audit row stays attributable after the user is later deleted.
+// This is the key durability promise behind the cross-context recordX
+// helpers, which only have user_id from ctx (no email).
+func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
+	store, db := newStore(t)
+	const userID = int64(99)
+	seedUser(t, db, userID, "operator-99@test")
+
+	uid := userID
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
+		UserID: &uid,
+		Action: api.AuditAlertAcknowledge,
+		// ActorEmail intentionally empty; Recorder should fill it from the users row.
+	}))
+
+	rows, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "operator-99@test", rows[0].UserEmail)
+
+	// And after the user is deleted, the denormalised email survives so
+	// the audit row stays attributable. Pre-deletion the LEFT JOIN
+	// returns the live email; post-deletion the join is empty and the
+	// reader falls back to the actor_email column captured at record time.
+	_, err = db.ExecContext(t.Context(), `DELETE FROM users WHERE id = ?`, userID)
+	require.NoError(t, err)
+	rowsAfter, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, rowsAfter, 1)
+	assert.Equal(t, "operator-99@test", rowsAfter[0].UserEmail,
+		"denormalised actor_email must survive user deletion")
+}
+
 // login_failed rows have no user_id (the email may be unknown). The
 // retrieval endpoint must surface them with the attempted email so a
 // brute-force pattern is observable in retention.

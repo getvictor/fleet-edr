@@ -148,7 +148,7 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 }
 
 // RegisterAuthedRoutes wires GET /api/session (who-am-i) and
-// GET /api/v1/audit (operator-action history). Caller wraps in
+// GET /api/audit (operator-action history). Caller wraps in
 // SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
