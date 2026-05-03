@@ -7,7 +7,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 // The blocklist is a runtime set owned by PolicyStore.shared. The server pushes
 // updates over the agent's XPC connection; the extension persists them to
 // /var/db/com.fleetdm.edr/policy.json and swaps the in-memory set atomically.
-// Operators configure entries via `PUT /api/v1/admin/policy` on the server.
+// Operators configure entries via `PUT /api/policy` on the server.
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).

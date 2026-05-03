@@ -172,8 +172,10 @@ const (
 )
 
 // Finding is a per-rule positive output, persisted by the engine
-// into the alerts table. Canonical definition; rules consume it
-// directly via detection.api.
+// into the alerts table. Canonical definition; rules/api re-exports
+// it as a type alias so catalog rule files implement
+// rulesapi.Rule.Evaluate without importing detection/api directly
+// (see arch-go.yml §api-purity for the alias rationale).
 type Finding struct {
 	HostID      string
 	RuleID      string
