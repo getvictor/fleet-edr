@@ -74,3 +74,10 @@ func verifyToken(token string, wantHash, salt []byte) bool {
 
 // ErrTokenMismatch is returned when a presented token does not match any enrolled host.
 var ErrTokenMismatch = errors.New("enrollment: token mismatch")
+
+// ErrRotateRaced is returned when RotateHostToken's optimistic-lock
+// UPDATE matched zero rows: another rotation for the same host has
+// already swapped the token between the caller's verify and the
+// rotate. Callers map this to a no-op (the other path's rotation
+// already produced a fresh token; nothing for this caller to do).
+var ErrRotateRaced = errors.New("enrollment: rotate raced with another rotation")
