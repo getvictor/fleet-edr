@@ -31,7 +31,11 @@ Three buckets, all in scope:
    the same way prose does. The user-level `~/.claude/` and the gitignored project-level `.claude/scheduled_tasks.lock` are
    out of scope.
 
-Excludes the gitignored `claude/` (singular, no leading dot) topic-plan tree and `tmp/`.
+Excludes the gitignored `claude/` (singular, no leading dot) topic-plan tree and `tmp/`. Also excludes
+`openspec/changes/<change-name>/` trees: OpenSpec change proposals use phase numbering as a planning device for
+in-flight work, by design. They get archived under `openspec/archive/` when complete; do not rewrite their
+phase headings while a change is active. If an archived change has phase numbering that has rotted (e.g.
+documented work that landed and was renamed), that is in scope.
 
 ## Patterns to find and triage
 
@@ -51,12 +55,14 @@ Excludes the gitignored `claude/` (singular, no leading dot) topic-plan tree and
    second is markdown-scoped because "will be" is too noisy in Go/TS/Swift; the third catches any path-style `claude/` link
    that leaks into committed prose or code comments.
    ```bash
-   git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!claude/' ':!tmp/'
-   git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!claude/' ':!tmp/' '*.md'
-   git grep -nE 'claude/' -- ':!claude/' ':!tmp/' ':!.claude/'
+   git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!claude/' ':!tmp/' ':!openspec/changes/'
+   git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!claude/' ':!tmp/' ':!openspec/changes/' '*.md'
+   git grep -nE 'claude/' -- ':!claude/' ':!tmp/' ':!.claude/' ':!openspec/changes/'
    ```
-   The third grep deliberately excludes the committed `.claude/` tree because OpenSpec slash commands legitimately reference
-   `.claude/` paths in their own bodies; sweep that tree manually instead.
+   The third grep excludes the committed `.claude/` tree because OpenSpec slash commands legitimately reference
+   `.claude/` paths in their own bodies; sweep that tree manually instead. All three exclude `openspec/changes/`
+   because OpenSpec change proposals use phase numbering as in-flight planning structure; sweep `openspec/archive/`
+   instead when an archived change has rotted.
 2. For each hit, decide: **rewrite around outcome** / **delete** / **convert to issue**.
 3. Confirm by also reading the surrounding paragraph or function: "phase 5" might be a legitimate reference to the *fifth
    phase of an attack chain*, not a project phase. `Step 3 of 7` in `scripts/qa/attack-runbook.sh` is rendered to the
@@ -79,11 +85,11 @@ Scope: committed prose (docs/, README.md, ADRs, *.md), committed code comments
 plus committed .claude/ (commands and skills under .claude/).
 
 Run these greps and triage every hit (some may be legitimate references to attack-chain phases,
-numbered list items, or runtime per-step header rendering; use judgment):
+numbered list items, runtime per-step header rendering, or OpenSpec change planning; use judgment):
 
-  git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!claude/' ':!tmp/'
-  git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!claude/' ':!tmp/' '*.md'
-  git grep -nE 'claude/' -- ':!claude/' ':!tmp/' ':!.claude/'
+  git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!claude/' ':!tmp/' ':!openspec/changes/'
+  git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!claude/' ':!tmp/' ':!openspec/changes/' '*.md'
+  git grep -nE 'claude/' -- ':!claude/' ':!tmp/' ':!.claude/' ':!openspec/changes/'
 
 For each genuine finding: rewrite the sentence around the surviving outcome (no "phase X" wording),
 delete it, or convert to a GitHub issue if it's a real TODO. For test-fixture literals that bake in
