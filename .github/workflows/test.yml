@@ -10,6 +10,12 @@ name: Tests
 # names (`Agent tests`, `Server tests`, `UI tests`, `SonarCloud scan`,
 # `Codecov upload`) can stay in `required_status_checks` unchanged. Pushes
 # to main and workflow_dispatch always run everything.
+#
+# Failsafe: every dependent job's `if:` evaluates `needs.changes.result !=
+# 'success' || <relevant flag>`. If the `changes` job itself flakes (e.g.
+# transient gh API failure), test jobs run unconditionally rather than
+# skipping — without the failsafe, a flaky gate would let a PR merge with
+# no test execution because skipped required checks are treated as success.
 
 on:
   push:
@@ -31,7 +37,6 @@ jobs:
     outputs:
       go: ${{ steps.detect.outputs.go }}
       ui: ${{ steps.detect.outputs.ui }}
-      sonar_config: ${{ steps.detect.outputs.sonar_config }}
       any: ${{ steps.detect.outputs.any }}
     steps:
       - id: detect
@@ -46,33 +51,41 @@ jobs:
             {
               echo "go=true"
               echo "ui=true"
-              echo "sonar_config=true"
               echo "any=true"
             } >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running all test jobs."
             exit 0
           fi
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
-          # Taskfile.yml + this workflow file fan out to every language gate
-          # because either could change how any test job runs. sonar-project
-          # .properties only flips the Sonar gate (test execution is unaffected).
+          # Taskfile.yml + this workflow file fan out to both language gates
+          # because either could change how any test job runs. The "any extra"
+          # pattern catches changes that should still trigger Sonar/Codecov
+          # even when no language gate fires (e.g. sonar-project.properties).
           GO_PATTERN='\.go$|(^|/)go\.(mod|sum)$|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
           UI_PATTERN='^ui/|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
-          SONAR_PATTERN='^sonar-project\.properties$|^\.github/workflows/test\.yml$'
-          any=false
-          for entry in "go:$GO_PATTERN" "ui:$UI_PATTERN" "sonar_config:$SONAR_PATTERN"; do
-            key=${entry%%:*}
-            pat=${entry#*:}
-            if echo "$files" | grep -qE "$pat"; then
-              echo "$key=true" >> "$GITHUB_OUTPUT"
-              echo "$key relevant; will run dependent jobs."
-              any=true
-            else
-              echo "$key=false" >> "$GITHUB_OUTPUT"
-              echo "$key not touched; skipping."
-            fi
-          done
-          echo "any=$any" >> "$GITHUB_OUTPUT"
+          ANY_EXTRA_PATTERN='^sonar-project\.properties$|^\.github/workflows/test\.yml$'
+          go=false; ui=false; any=false
+          if echo "$files" | grep -qE "$GO_PATTERN"; then
+            go=true; any=true
+            echo "go relevant; will run Go test jobs."
+          else
+            echo "go not touched; skipping Go test jobs."
+          fi
+          if echo "$files" | grep -qE "$UI_PATTERN"; then
+            ui=true; any=true
+            echo "ui relevant; will run UI test job."
+          else
+            echo "ui not touched; skipping UI test job."
+          fi
+          if echo "$files" | grep -qE "$ANY_EXTRA_PATTERN"; then
+            any=true
+            echo "Sonar/Codecov-relevant non-language file changed."
+          fi
+          {
+            echo "go=$go"
+            echo "ui=$ui"
+            echo "any=$any"
+          } >> "$GITHUB_OUTPUT"
 
   # agent-test + server-test both run on macos-latest because the agent's
   # CGo receiver links -framework Foundation with no darwin build tag, so
@@ -81,7 +94,9 @@ jobs:
   agent-test:
     name: Agent tests
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
     runs-on: macos-latest
     permissions:
       contents: read
@@ -112,7 +127,9 @@ jobs:
   server-test:
     name: Server tests
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
     runs-on: macos-latest
     permissions:
       contents: read
@@ -182,7 +199,9 @@ jobs:
   ui-test:
     name: UI tests
     needs: changes
-    if: needs.changes.outputs.ui == 'true'
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -242,7 +261,7 @@ jobs:
     # any source Sonar analyses, so skipping it loses zero signal.
     if: >-
       !cancelled()
-      && needs.changes.outputs.any == 'true'
+      && (needs.changes.result != 'success' || needs.changes.outputs.any == 'true')
       && needs.agent-test.result != 'failure'
       && needs.server-test.result != 'failure'
       && needs.ui-test.result != 'failure'
@@ -306,7 +325,7 @@ jobs:
     # meaningful way, so skipping the upload loses no signal.
     if: >-
       !cancelled()
-      && needs.changes.outputs.go == 'true'
+      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
       && needs.agent-test.result != 'failure'
       && needs.server-test.result != 'failure'
       && github.actor != 'dependabot[bot]'
