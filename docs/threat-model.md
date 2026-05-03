@@ -156,7 +156,7 @@ Trust assumptions:
 
 | Threat | Mitigation |
 | --- | --- |
-| A bad detection rule causes false-positive storm. | Per-rule unit tests; integration test in `all_rules_integration_test.go` exercises every shipped rule end-to-end; `tools/gen-rule-docs` ensures every rule has documented severity + false-positive sources. |
+| A bad detection rule causes false-positive storm. | Per-rule unit tests; integration test in `server/rules/internal/tests/integration_test.go` exercises every shipped rule end-to-end; `tools/gen-rule-docs` ensures every rule has documented severity + false-positive sources. |
 | A missed detection allows attacker activity through. | Documented in `docs/detection-rules.md` as "Limitations" per rule; ATT&CK coverage page surfaces the gaps. Future work: Atomic Red Team / Caldera replays in CI. |
 | Inadvertent denial of service via inline blocking. | `set_blocklist` policy is operator-driven, version-bumped, audited; no automatic blocking based on rule output (alerts emit; blocks require explicit operator action). |
 

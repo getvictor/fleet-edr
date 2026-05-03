@@ -133,7 +133,7 @@ restarts once mysql is ready (Compose healthcheck gates it).
 ## Backup and restore
 
 The entire EDR state is in the MySQL `edr` schema. The named volume
-`mysql-data` is the source of truth; nothing else is stateful.
+`edr-mysql-data` is the source of truth; nothing else is stateful.
 
 ### Logical backup
 
@@ -422,7 +422,7 @@ retention run. If that isn't enough, the events table is larger than
 your disk; you need either more disk or a shorter window. There is no
 online rebalance — expand storage and restart.
 
-**`docker compose up -d` fails with `volume mysql-data is in use`.**
+**`docker compose up -d` fails with `volume edr-mysql-data is in use`.**
 A previous server process didn't shut down cleanly. `docker compose
 down && docker compose up -d` usually clears it. Do NOT
-`docker volume rm mysql-data`; that wipes the database.
+`docker volume rm edr-mysql-data`; that wipes the database.
