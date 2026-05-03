@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // ShellFromOffice fires when a shell (/bin/sh, /bin/bash, /bin/zsh, etc.) is spawned
@@ -28,8 +28,8 @@ func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *ShellFromOffice) Doc() detection.Documentation {
-	return detection.Documentation{
+func (r *ShellFromOffice) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{
 		Title:   "Shell spawned by Microsoft Office",
 		Summary: "Flags any /bin/sh, /bin/bash, /bin/zsh (etc.) whose parent is Word, Excel, PowerPoint, or Outlook.",
 		Description: "Detects the textbook post-phishing execution step: a macro-laden Office document opens, the macro " +
@@ -37,7 +37,7 @@ func (r *ShellFromOffice) Doc() detection.Documentation {
 			"the four standard macOS Office binaries (full path, not substring) and the child being a known shell.\n\n" +
 			"Office apps almost never need to shell out in normal use; when they do, it's an admin-side automation " +
 			"that's worth surfacing anyway.",
-		Severity:   detection.SeverityHigh,
+		Severity:   rulesapi.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
 			"Office's internal `Get Started` first-run flow has historically shelled out to fetch help content. Confirm by inspecting argv on the alert.",
@@ -83,7 +83,7 @@ func (r *ShellFromOffice) Evaluate(ctx context.Context, events []api.Event, s ap
 // evalEvent returns a finding for a single event, or nil when the event doesn't match.
 // Splitting this out of Evaluate keeps the per-event short-circuits (non-exec, bad JSON,
 // non-shell path, non-Office parent) from stacking cognitive complexity on the caller.
-func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*detection.Finding, error) {
+func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*rulesapi.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
 	}
@@ -114,10 +114,10 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	if proc == nil {
 		return nil, nil
 	}
-	return &detection.Finding{
+	return &rulesapi.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
-		Severity:    detection.SeverityHigh,
+		Severity:    rulesapi.SeverityHigh,
 		Title:       "Shell spawned from Office app",
 		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parent.Path), p.Path),
 		ProcessID:   proc.ID,

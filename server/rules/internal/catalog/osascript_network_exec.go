@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // OsascriptNetworkExec fires when the rule sees a temp-path exec whose process
@@ -47,8 +47,8 @@ func (r *OsascriptNetworkExec) Techniques() []string {
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *OsascriptNetworkExec) Doc() detection.Documentation {
-	return detection.Documentation{
+func (r *OsascriptNetworkExec) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{
 		Title:   "AppleScript dropper (osascript → curl/wget → temp exec)",
 		Summary: "Critical-severity catch on the canonical macOS commodity-dropper chain: osascript fetches a stage-2 over the network and runs it from /tmp.",
 		Description: "Fires on the LAST link of the chain — an exec from a temp directory whose process tree has " +
@@ -60,7 +60,7 @@ func (r *OsascriptNetworkExec) Doc() detection.Documentation {
 			"across an agent flush boundary.\n\n" +
 			"The rule requires both halves of the chain to be present, so download-only or temp-exec-only flows do " +
 			"not fire here — those overlap with suspicious_exec.",
-		Severity:   detection.SeverityCritical,
+		Severity:   rulesapi.SeverityCritical,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
 			"Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript — extremely rare in managed fleets.",
@@ -145,7 +145,7 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event,
 // finding; the caller uses it for batch-level dedupe.
 func (r *OsascriptNetworkExec) evalEvent(
 	ctx context.Context, evt api.Event, s api.GraphReader, seenOsa map[int]struct{},
-) (*detection.Finding, int, error) {
+) (*rulesapi.Finding, int, error) {
 	if evt.EventType != "exec" {
 		return nil, 0, nil
 	}
@@ -201,10 +201,10 @@ func (r *OsascriptNetworkExec) evalEvent(
 		return nil, 0, nil
 	}
 
-	return &detection.Finding{
+	return &rulesapi.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
-		Severity:    detection.SeverityCritical,
+		Severity:    rulesapi.SeverityCritical,
 		Title:       "osascript download-and-exec chain",
 		Description: fmt.Sprintf("osascript → %s → %s", downloader.Path, displayTempExec(p)),
 		ProcessID:   tempExecProc.ID,

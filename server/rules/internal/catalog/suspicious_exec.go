@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // Known shell paths.
@@ -81,8 +81,8 @@ func (r *SuspiciousExec) Techniques() []string {
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *SuspiciousExec) Doc() detection.Documentation {
-	return detection.Documentation{
+func (r *SuspiciousExec) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{
 		Title:   "Suspicious exec chain (non-shell → shell → temp/network)",
 		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.",
 		Description: "Detects two related chain shapes that share a single attribution chain:\n\n" +
@@ -93,7 +93,7 @@ func (r *SuspiciousExec) Doc() detection.Documentation {
 			"in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor " +
 			"chain has already been ingested by the time the trigger event lands.\n\n" +
 			"30 seconds is the temporal cap between the shell exec and the trigger event.",
-		Severity:   detection.SeverityHigh,
+		Severity:   rulesapi.SeverityHigh,
 		EventTypes: []string{"exec", "network_connect"},
 		FalsePositives: []string{
 			"Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Use EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST to silence sshd-session if that's a routine workflow on the host class.",
@@ -103,7 +103,7 @@ func (r *SuspiciousExec) Doc() detection.Documentation {
 			"30s window is hard-coded; long-tail post-shell activity is missed by design.",
 			"Allowlisting a parent silences BOTH arms of the rule for that parent — the trade-off is documented on AllowedNonShellParents.",
 		},
-		Config: []detection.ConfigKnob{
+		Config: []rulesapi.ConfigKnob{
 			{
 				EnvVar:      "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST",
 				Type:        "csv-paths",
@@ -222,7 +222,7 @@ func findShellExecEventID(events []api.Event, hostID string, shellPID int, exclu
 // produce one finding rather than one per child.
 func (r *SuspiciousExec) evalExec(
 	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
-) (*detection.Finding, int, error) {
+) (*rulesapi.Finding, int, error) {
 	var p execPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, 0, nil
@@ -274,7 +274,7 @@ type execMatchInputs struct {
 // step.
 func (r *SuspiciousExec) evalExecArm1(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
-) (*detection.Finding, int, error) {
+) (*rulesapi.Finding, int, error) {
 	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, in.evt.HostID, in.p.PID, in.evt.TimestampNs)
 	if err != nil {
 		return nil, 0, err
@@ -298,7 +298,7 @@ func (r *SuspiciousExec) evalExecArm1(
 // PID, not in the parent chain.
 func (r *SuspiciousExec) evalExecArm2(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
-) (*detection.Finding, int, error) {
+) (*rulesapi.Finding, int, error) {
 	chain, err := s.GetExecChain(ctx, *in.tempProc)
 	if err != nil {
 		return nil, 0, fmt.Errorf("walk exec chain pid %d: %w", in.p.PID, err)
@@ -350,7 +350,7 @@ func (r *SuspiciousExec) shouldFire(
 // descendant of it (shell spawned curl); the inclusive walk handles both.
 func (r *SuspiciousExec) evalNetwork(
 	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
-) (*detection.Finding, int, error) {
+) (*rulesapi.Finding, int, error) {
 	var c networkConnectPayload
 	if err := json.Unmarshal(evt.Payload, &c); err != nil {
 		return nil, 0, nil
@@ -386,10 +386,10 @@ func (r *SuspiciousExec) evalNetwork(
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)
 	}
-	return &detection.Finding{
+	return &rulesapi.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
-		Severity:    detection.SeverityHigh,
+		Severity:    rulesapi.SeverityHigh,
 		Title:       "Shell spawn with outbound network connection",
 		Description: fmt.Sprintf("%s → %s → outbound %s:%d", parentPath, shell.Path, c.RemoteAddress, c.RemotePort),
 		ProcessID:   conn.ID,
@@ -516,7 +516,7 @@ func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 // (the re-exec'd row), not the earlier shell-stage row.
 func (r *SuspiciousExec) makeExecFinding(
 	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, batch []api.Event,
-) *detection.Finding {
+) *rulesapi.Finding {
 	parentPath := "(unknown)"
 	if parent != nil {
 		parentPath = parent.Path
@@ -525,10 +525,10 @@ func (r *SuspiciousExec) makeExecFinding(
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)
 	}
-	return &detection.Finding{
+	return &rulesapi.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
-		Severity:    detection.SeverityHigh,
+		Severity:    rulesapi.SeverityHigh,
 		Title:       "Suspicious exec from temp path",
 		Description: fmt.Sprintf("%s → %s → %s", parentPath, shell.Path, tempPath),
 		ProcessID:   tempProc.ID,

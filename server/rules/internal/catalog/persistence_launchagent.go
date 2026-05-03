@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // PersistenceLaunchAgent fires when a process calls `launchctl load` or
@@ -33,8 +33,8 @@ func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *PersistenceLaunchAgent) Doc() detection.Documentation {
-	return detection.Documentation{
+func (r *PersistenceLaunchAgent) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{
 		Title:   "LaunchAgent persistence (launchctl load/bootstrap)",
 		Summary: "Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/LaunchAgents or /Library/LaunchAgents.",
 		Description: "Detects the canonical user-domain persistence step on macOS: an attacker drops a plist into a " +
@@ -43,7 +43,7 @@ func (r *PersistenceLaunchAgent) Doc() detection.Documentation {
 			"the persistence becomes effective.\n\n" +
 			"Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plist path and tolerates " +
 			"flag-like args between `load` and the plist (`-w`, `-F`, etc.).",
-		Severity:   detection.SeverityHigh,
+		Severity:   rulesapi.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
 			"MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Allowlist their plist paths via EDR_LAUNCHAGENT_ALLOWLIST.",
@@ -53,7 +53,7 @@ func (r *PersistenceLaunchAgent) Doc() detection.Documentation {
 			"Does not cover `launchctl bootout` or `launchctl unload` — those undo persistence rather than create it.",
 			"Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.",
 		},
-		Config: []detection.ConfigKnob{
+		Config: []rulesapi.ConfigKnob{
 			{
 				EnvVar:      "EDR_LAUNCHAGENT_ALLOWLIST",
 				Type:        "csv-paths",
@@ -97,7 +97,7 @@ func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []api.Even
 }
 
 // evalEvent returns a finding for a single event, or nil when the event doesn't match.
-func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*detection.Finding, error) {
+func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*rulesapi.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
 	}
@@ -125,10 +125,10 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if proc == nil {
 		return nil, nil
 	}
-	return &detection.Finding{
+	return &rulesapi.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
-		Severity:    detection.SeverityHigh,
+		Severity:    rulesapi.SeverityHigh,
 		Title:       "LaunchAgent persistence attempt",
 		Description: fmt.Sprintf("launchctl %s %s", subcommand, plistPath),
 		ProcessID:   proc.ID,

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/fleetdm/edr/server/detection"
 	"github.com/fleetdm/edr/server/rules/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
@@ -53,8 +53,8 @@ func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.
-func (r *SudoersTamper) Doc() detection.Documentation {
-	return detection.Documentation{
+func (r *SudoersTamper) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{
 		Title:   "Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*)",
 		Summary: "Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.",
 		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
@@ -66,7 +66,7 @@ func (r *SudoersTamper) Doc() detection.Documentation {
 			"admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.\n\n" +
 			"`visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the " +
 			"rule does not see them at all.",
-		Severity:   detection.SeverityHigh,
+		Severity:   rulesapi.SeverityHigh,
 		EventTypes: []string{"open"},
 		FalsePositives: []string{
 			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Allowlist their absolute writer paths.",
@@ -74,7 +74,7 @@ func (r *SudoersTamper) Doc() detection.Documentation {
 		Limitations: []string{
 			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
 		},
-		Config: []detection.ConfigKnob{
+		Config: []rulesapi.ConfigKnob{
 			{
 				EnvVar:      "EDR_SUDOERS_WRITER_ALLOWLIST",
 				Type:        "csv-paths",
@@ -159,7 +159,7 @@ func (r *SudoersTamper) Evaluate(
 
 func (r *SudoersTamper) evalEvent(
 	ctx context.Context, evt api.Event, s api.GraphReader,
-) (*detection.Finding, error) {
+) (*rulesapi.Finding, error) {
 	if evt.EventType != "open" {
 		return nil, nil
 	}
@@ -204,10 +204,10 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 
-	return &detection.Finding{
+	return &rulesapi.Finding{
 		HostID:   evt.HostID,
 		RuleID:   r.ID(),
-		Severity: detection.SeverityHigh,
+		Severity: rulesapi.SeverityHigh,
 		Title:    "Sudoers tamper",
 		Description: fmt.Sprintf(
 			"%s opened %s for writing — sudo escalation surface (MITRE T1548.003)",

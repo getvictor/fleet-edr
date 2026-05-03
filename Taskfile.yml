@@ -176,6 +176,14 @@ tasks:
     cmds:
       - golangci-lint run --fix ./server/... ./agent/... ./internal/... ./test/...
 
+  lint:arch:
+    desc: |
+      arch-go architecture rules over the modular monolith bounded contexts.
+      Hard-fails on any cross-context import that isn't in arch-go.yml's
+      allow-list. Phase 6 strict mode: no transitional exceptions.
+    cmds:
+      - go test ./test/arch/...
+
   lint:ui:
     desc: ESLint + tsc --noEmit across the React UI
     dir: ui
