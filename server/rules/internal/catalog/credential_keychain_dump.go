@@ -25,7 +25,7 @@ import (
 // without going through /usr/bin/security (raw SQLite reads of
 // login.keychain-db, SecItemCopyMatching API calls). Those are caught by
 // the file-integrity-monitoring work tracked in the best-practices
-// checklist (Phase 8+).
+// checklist as a future addition.
 type CredentialKeychainDump struct{}
 
 func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump" }

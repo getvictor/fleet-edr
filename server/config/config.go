@@ -31,7 +31,7 @@ type Config struct {
 	ProcessInterval   time.Duration
 	ProcessBatch      int
 
-	// Phase 4: data lifecycle + observability.
+	// Data lifecycle + observability.
 	//
 	// RetentionDays is the age cap for events in days. 0 disables the retention
 	// runner entirely (useful for operators who ship events to another store and
@@ -40,7 +40,7 @@ type Config struct {
 	// RetentionInterval is how often the retention runner wakes up. Default 1h.
 	RetentionInterval time.Duration
 
-	// Phase 7 / issue #6: process-tree freshness TTL.
+	// Process-tree freshness TTL (issue #6).
 	//
 	// StaleProcessTTL is the fork-time age past which a still-running
 	// process is force-exited by the reconciler. 0 disables the runner.
@@ -137,9 +137,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	requireStr(&c.DSN, "EDR_DSN", getenv, &errs, true)
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, &errs, true)
-	// Phase 3 removed EDR_ADMIN_TOKEN. UI + admin surfaces now authenticate via the
-	// session cookie minted by POST /api/session. The first-boot seeder prints the
-	// admin password once so the operator can log in.
+	// UI + admin surfaces authenticate via the session cookie minted by
+	// POST /api/session. The first-boot seeder prints the admin password
+	// once so the operator can log in.
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 
@@ -151,7 +151,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together (or both left unset)"))
 	}
 
-	// Phase 1 requires TLS in production. The opt-out is deliberately noisy so operators
+	// TLS is required in production. The opt-out is deliberately noisy so operators
 	// don't accidentally ship plaintext.
 	if !c.TLSEnabled() && !c.AllowInsecureHTTP {
 		errs = append(errs, errors.New(
@@ -160,10 +160,10 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, &errs)
 	envparse.PositiveInt(getenv, "EDR_LOGIN_RATE_PER_MIN", &c.LoginRatePerMin, &errs)
-	// Phase 4: retention window. Allow 0 to disable entirely. Negative = error.
+	// Retention window. Allow 0 to disable entirely. Negative = error.
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, &errs)
 	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, &errs)
-	// Phase 7 / issue #6: stale-process TTL. 0 disables the reconciler.
+	// Stale-process TTL (issue #6). 0 disables the reconciler.
 	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, &errs)
 	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, &errs)
 

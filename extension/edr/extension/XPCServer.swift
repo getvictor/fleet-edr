@@ -53,7 +53,7 @@ final class XPCServer {
     /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
     ///
     ///   - "hello"         : the handshake the agent uses to trigger the Mach port bind.
-    ///   - "policy.update" : Phase 2 blocklist push. The "data" key holds raw JSON bytes
+    ///   - "policy.update" : blocklist push. The "data" key holds raw JSON bytes
     ///                       that PolicyStore decodes + persists.
     ///
     /// Unknown types are logged and ignored — future protocol evolutions should be

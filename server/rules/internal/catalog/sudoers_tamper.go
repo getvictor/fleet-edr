@@ -34,7 +34,7 @@ import (
 // Known limitation: an attacker with root could create the temp file
 // and rename it onto /etc/sudoers without ever firing NOTIFY_OPEN on
 // /etc/sudoers. NOTIFY_RENAME would catch that, but the extension
-// doesn't subscribe to it today (tracked for Phase 8 alongside the
+// doesn't subscribe to it today (tracked alongside the
 // privilege_launchd_plist_write atomic-rename gap).
 type SudoersTamper struct {
 	// AllowedWriters is the set of absolute writer-process paths the
@@ -136,8 +136,8 @@ const sudoersWriteAccessMask = 0x3
 // neither the intent-mask gate (because the writer isn't sudo) nor
 // the existing rename gap closes on it. Correlating on
 // NOTIFY_WRITE / NOTIFY_CLOSE_MODIFIED instead of inferring intent
-// from open(2) flags is the real fix; tracked for Phase 8 alongside
-// the rename limitation noted above.
+// from open(2) flags is the real fix; tracked alongside the rename
+// limitation noted above.
 const sudoersWriteIntentMask = 0x400 | 0x8 | 0x200
 
 func (r *SudoersTamper) Evaluate(

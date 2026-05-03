@@ -12,12 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRegisterUIRoutes_SPAFallback locks in the post-phase-6 fix:
+// TestRegisterUIRoutes_SPAFallback locks in the SPA-fallback contract:
 // /ui/{deep-link} must return 200 with the index.html body so React
-// Router can take over client-side, NOT a 301 redirect to ./. Earlier
-// this code rewrote URL.Path to /ui/index.html and let http.FileServer
-// serve it, but FileServer canonicalises /index.html → ./ and broke
-// every SPA deep link (e.g. /ui/hosts/{host_id}).
+// Router can take over client-side, NOT a 301 redirect to ./. An
+// earlier implementation rewrote URL.Path to /ui/index.html and let
+// http.FileServer serve it, but FileServer canonicalises
+// /index.html → ./ and broke every SPA deep link (e.g.
+// /ui/hosts/{host_id}).
 func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
 	// Synthesise a minimal "dist" tree so the handler doesn't depend on
 	// a built UI bundle being present. The real embed.FS has the same
@@ -27,7 +28,7 @@ func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
 			Data: []byte("<!doctype html><html><body>SPA</body></html>"),
 		},
 		"dist/assets/main.js": &fstest.MapFile{
-			Data: []byte("console.log('phase6');"),
+			Data: []byte("console.log('asset-marker');"),
 		},
 	}
 
@@ -68,7 +69,7 @@ func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
 			name:     "real asset is served as-is, not the index fallback",
 			path:     "/ui/assets/main.js",
 			wantCode: http.StatusOK,
-			wantBody: "phase6",
+			wantBody: "asset-marker",
 		},
 	}
 	for _, tc := range cases {

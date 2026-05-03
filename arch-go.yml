@@ -1,15 +1,15 @@
 version: 1
 
-# Architecture rules for the modular-monolith bounded-context migration.
+# Architecture rules for the modular-monolith bounded contexts.
 # See docs/adr/0004-modular-monolith-bounded-contexts.md for the rationale.
 #
-# Phase 7 strict mode: bootstrap is for production wiring only.
-# Per-context internal code may NOT import its own context's bootstrap;
-# tests reach for the per-context testkit instead. Cross-context tests
-# import only **.<Y>.api or **.<Y>.testkit — never **.<Y>.bootstrap and
-# never **.<Y>.internal.**. testkit packages are pinned to their own
-# context so cross-context test allowances cannot be exploited as
-# transitive paths to other bounded contexts.
+# Strict mode: bootstrap is for production wiring only. Per-context
+# internal code may NOT import its own context's bootstrap; tests reach
+# for the per-context testkit instead. Cross-context tests import only
+# **.<Y>.api or **.<Y>.testkit — never **.<Y>.bootstrap and never
+# **.<Y>.internal.**. testkit packages are pinned to their own context
+# so cross-context test allowances cannot be exploited as transitive
+# paths to other bounded contexts.
 
 dependenciesRules:
   # identity context internals may import only identity's own api +
@@ -41,9 +41,9 @@ dependenciesRules:
         - "**.testdb"
 
   # rules context internals. Cross-context test allowance is
-  # **.detection.testkit (and only testkit) — replaces the
-  # **.detection.bootstrap + **.detection.testharness pair phase 6
-  # carried as transitional exceptions.
+  # **.detection.testkit (and only testkit); a transitional
+  # **.detection.bootstrap + **.detection.testharness pair existed in
+  # earlier revisions and is no longer permitted.
   - package: "**.rules.internal.**"
     shouldOnlyDependsOn:
       internal:
@@ -220,10 +220,10 @@ dependenciesRules:
   # ----- platform packages: allow-list of acceptable internal deps ------------
   #
   # Plan §"Platform packages": "Platform packages MUST NOT import any context."
-  # Phase 8 originally encoded this as a deny-list (shouldNotDependsOn each
+  # An earlier revision encoded this as a deny-list (shouldNotDependsOn each
   # bounded context); Gemini's review on PR #100 pointed out that the
   # deny-list is not future-proof — adding a sixth bounded context would
-  # require updating every platform rule by hand. Switching to an allow-list
+  # require updating every platform rule by hand. The allow-list form
   # (shouldOnlyDependsOn the explicit set of allowed internal-graph deps)
   # auto-excludes any new context: a future server/<new-context>/ package
   # is implicitly forbidden because it isn't named in the allow.

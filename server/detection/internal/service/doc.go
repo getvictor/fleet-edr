@@ -9,5 +9,5 @@
 //
 // PUT /api/alerts/{id} reaches Service.UpdateAlertStatus, which
 // validates updated_by via UserExists before persisting; that
-// check replaces the fk_alerts_updated_by FK dropped in phase 5.
+// check replaces the dropped fk_alerts_updated_by FK.
 package service

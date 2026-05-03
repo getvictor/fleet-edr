@@ -181,8 +181,8 @@ func openCappedQueue(t *testing.T, maxBytes int64) *Queue {
 	return q
 }
 
-// TestEnqueue_CapDropsUploadedFirst locks in the Phase 4 queue-cap contract: with a
-// tight cap plus a batch of uploaded-then-unuploaded rows, cap enforcement drops the
+// TestEnqueue_CapDropsUploadedFirst locks in the queue-cap contract: with a tight
+// cap plus a batch of uploaded-then-unuploaded rows, cap enforcement drops the
 // uploaded rows before it touches the unuploaded ones.
 func TestEnqueue_CapDropsUploadedFirst(t *testing.T) {
 	// ~1 KiB payload so the SQLite main file grows in predictable ~4 KiB page steps.

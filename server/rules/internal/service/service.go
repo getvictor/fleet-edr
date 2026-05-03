@@ -22,8 +22,8 @@ import (
 type ActiveHostsLister func(ctx context.Context) ([]string, error)
 
 // CommandInserter inserts a single command row keyed on host_id.
-// Closure-typed for the same reason as ActiveHostsLister; phase 4
-// replaces the cmd/main shim with response/api.Service.Insert.
+// Closure-typed for the same reason as ActiveHostsLister; today
+// cmd/main supplies response/api.Service.Insert as a method value.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
 // Service is the rules orchestrator. A single struct satisfies all

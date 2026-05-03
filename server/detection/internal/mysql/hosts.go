@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -64,8 +65,16 @@ func (s *Store) UpdateHostLastSeen(ctx context.Context, hostID string, now time.
 
 // UpsertHosts incrementally updates the hosts summary table for a
 // batch of ingested events. It aggregates event counts and max
-// timestamps per host, then upserts them in a single statement per
-// host.
+// timestamps per host, then upserts every host in a single batched
+// statement.
+//
+// Issue #91: the prior shape was one ExecContext per distinct host_id
+// in the batch — N round-trips inside the ingest hot path. The
+// multi-row VALUES clause folds that to one round-trip. The (host_id,
+// event_count, last_seen_ns) per-host triple is unique within a
+// single call (we aggregate into byHost first), so ON DUPLICATE KEY
+// UPDATE only ever fires against pre-existing rows, never against
+// rows from earlier in the same VALUES list.
 func (s *Store) UpsertHosts(ctx context.Context, events []api.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -88,17 +97,21 @@ func (s *Store) UpsertHosts(ctx context.Context, events []api.Event) error {
 		}
 	}
 
+	placeholders := make([]string, 0, len(byHost))
+	args := make([]any, 0, len(byHost)*3)
 	for hostID, st := range byHost {
-		_, err := s.db.ExecContext(ctx, `
-			INSERT INTO hosts (host_id, event_count, last_seen_ns)
-			VALUES (?, ?, ?)
-			ON DUPLICATE KEY UPDATE
-				event_count = event_count + VALUES(event_count),
-				last_seen_ns = GREATEST(last_seen_ns, VALUES(last_seen_ns))`,
-			hostID, st.count, st.maxTSNs)
-		if err != nil {
-			return fmt.Errorf("upsert host %s: %w", hostID, err)
-		}
+		placeholders = append(placeholders, "(?, ?, ?)")
+		args = append(args, hostID, st.count, st.maxTSNs)
+	}
+
+	stmt := `INSERT INTO hosts (host_id, event_count, last_seen_ns) VALUES ` +
+		strings.Join(placeholders, ", ") + `
+		ON DUPLICATE KEY UPDATE
+			event_count = event_count + VALUES(event_count),
+			last_seen_ns = GREATEST(last_seen_ns, VALUES(last_seen_ns))`
+
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
+		return fmt.Errorf("upsert hosts (n=%d): %w", len(byHost), err)
 	}
 	return nil
 }

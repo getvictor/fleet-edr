@@ -20,8 +20,7 @@ import (
 
 // updateBodyCap caps the JSON body for PUT /api/commands/{id}. The
 // agent only sends a tiny status + result blob (a few hundred bytes
-// at most). 64 KiB matches phase 2's enroll cap as a defensive
-// upper bound.
+// at most). 64 KiB matches the enroll cap as a defensive upper bound.
 const updateBodyCap = 64 << 10
 
 // Handler serves the agent-facing command routes.

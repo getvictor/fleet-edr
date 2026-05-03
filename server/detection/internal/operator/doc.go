@@ -11,5 +11,5 @@
 // by cmd/main. PUT /api/alerts/{id} additionally calls
 // identity.api.Service.UserExists via the UserExists closure to
 // validate the actor before persisting -- this replaces the
-// fk_alerts_updated_by FK that phase 5 dropped.
+// fk_alerts_updated_by FK that the bounded-context split dropped.
 package operator

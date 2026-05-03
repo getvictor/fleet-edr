@@ -1,8 +1,7 @@
-// Phase 3: the UI authenticates with the server via a HttpOnly session cookie
+// The UI authenticates with the server via a HttpOnly session cookie
 // (automatic on every fetch when credentials: 'include') + a per-session CSRF token
-// that the JS attaches as X-CSRF-Token on unsafe methods. The old sessionStorage
-// "edr_api_key" bearer is gone; see POST /api/session for the login round-trip
-// that issues both the cookie and the CSRF token.
+// that the JS attaches as X-CSRF-Token on unsafe methods. See POST /api/session
+// for the login round-trip that issues both the cookie and the CSRF token.
 import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail, Command } from "./types";
 
 const API_BASE = "/api";

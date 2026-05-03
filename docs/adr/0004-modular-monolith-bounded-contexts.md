@@ -4,17 +4,17 @@
 - Date: 2026-05-01
 - Deciders: getvictor
 
-> Migration completed 2026-05-03 across phases 1-6. See
-> `claude/modular-monolith/phase[1-6].md` for the per-phase plans
-> and outcomes. Phase 7 added per-context `testkit/` packages so
-> tests reach for a coordinated test surface separate from production
-> wiring; phase 8 tightened arch-go to its strict-mode form. arch-go
-> (`arch-go.yml` + `test/arch/arch_test.go`) enforces the
-> bounded-context import rules in CI as a hard-fail gating check.
-> See `docs/architecture-maturity.md` for the audit of what's
-> enforced where, plus the graduation-criteria checklist for when to
-> invest in heavier patterns (ACL packages, event-driven cross-context
-> calls, database-per-context, separate-process split).
+> Migration completed 2026-05-03. The five contexts (`identity`,
+> `endpoint`, `rules`, `response`, `detection`) each ship as
+> `api/` + `bootstrap/` + `internal/` + `testkit/`, with `testkit/`
+> providing a coordinated test-fixture surface separate from
+> production wiring. arch-go (`arch-go.yml` + `test/arch/arch_test.go`)
+> runs in strict mode and enforces the bounded-context import rules
+> in CI as a hard-fail gating check. See
+> `docs/architecture-maturity.md` for the audit of what's enforced
+> where, plus the graduation-criteria checklist for when to invest in
+> heavier patterns (ACL packages, event-driven cross-context calls,
+> database-per-context, separate-process split).
 
 ## Context
 
@@ -87,11 +87,11 @@ calls go through `<other>/api`. Cross-context HTTP composition happens
 at the binary entrypoints under `server/cmd/*` (today
 `server/cmd/fleet-edr-server/main.go` and
 `server/cmd/fleet-edr-ingest/main.go`), not inside any context. No
-cross-context transactions, and no cross-context foreign keys after
-the migration completes; one such FK exists in the current schema
+cross-context transactions, and no cross-context foreign keys; the
+one such FK that existed in the pre-migration schema
 (`fk_alerts_updated_by` linking `alerts.updated_by` to `users.id`)
-and is dropped during phase 5, replaced by code-level validation in
-the alert-update handler.
+was dropped and replaced by code-level validation in the
+alert-update handler.
 
 Three test layers, each with a clear scope and import boundary:
 
@@ -124,14 +124,13 @@ rule is:
   own context so cross-context test allowances cannot be exploited as
   transitive sneak-in paths to a third context.
 
-The migration runs as seven phases, smallest blast radius first
-(`identity` -> `endpoint` -> `rules` -> `response` -> `detection` ->
-deletions -> arch-lint tightening). Each phase is one PR, ships
-independently, and keeps the test suite green. Phase-by-phase
-implementation tasks are tracked in the per-phase PRs and their commit
-history rather than embedded in this ADR (an ADR captures the durable
-decision; the file-by-file move list is operational and changes shape
-as the migration proceeds).
+The migration ran smallest blast radius first
+(`identity` -> `endpoint` -> `rules` -> `response` -> `detection`,
+followed by `server/store` deletion and arch-lint tightening), one
+PR per context, with the test suite green at each step. The
+file-by-file move history lives in those PRs and the commit log
+rather than in this ADR (an ADR captures the durable decision; the
+move list was operational).
 
 ## Consequences
 
@@ -167,13 +166,13 @@ as the migration proceeds).
 
 **Bad:**
 
-- Phase 5 (the `detection` move) is large: 1500-2500 lines of file
-  moves in one PR. There is no smaller intermediate state that ships
+- The `detection` move was large: 1500-2500 lines of file moves in
+  one PR. There was no smaller intermediate state that ships
   meaningful value without exposing partially-migrated tables.
-- Rule signature changes from `Evaluate(ctx, events, *store.Store)` to
-  `Evaluate(ctx, events, detection.GraphReader)`. The interface is
-  narrower (three methods rules actually use today), so the change is
-  mechanical, but every rule file changes in the same PR (phase 3).
+- Rule signatures changed from `Evaluate(ctx, events, *store.Store)`
+  to `Evaluate(ctx, events, detection.GraphReader)`. The interface is
+  narrower (three methods rules actually use today), so the change
+  was mechanical, but every rule file changed in the same PR.
 - Rule definitions still live in the project as Go code. The boundary
   is set up for a later YAML migration, but contributors who expected
   rule changes to be content-only PRs will still need a Go build for
@@ -218,8 +217,8 @@ later.** This was the original plan revision. Switched to using
 `internal/` from day one because Go's `internal/` rule is free at any
 nesting depth, costs nothing to adopt, and forecloses an entire class of
 accidents the moment we adopt any modularity at all. Deferring it would
-have meant a phase 7 cleanup that is now subsumed into the per-phase
-moves.
+have meant a follow-up cleanup that was instead absorbed into the
+per-context moves.
 
 **Use Fleet's custom `archtest` rather than a third-party tool.** Fleet
 ships `server/archtest`, ~200-300 lines that walk `go list -deps` and
@@ -262,5 +261,3 @@ half-fictional.
 - arch-go: https://github.com/arch-go/arch-go (v2.1.2, Feb 2026).
 - go-arch-lint (alternative considered):
   https://github.com/fe3dback/go-arch-lint.
-- Migration plan with file-by-file moves and phase ordering:
-  `claude/modular-monolith/plan.md` (gitignored scratch).

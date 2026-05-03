@@ -5,8 +5,7 @@
 // Service stack against a real MySQL. Skips when EDR_TEST_DSN isn't
 // set, matching the project's other DB-using test files.
 //
-// Per docs/adr/0004-modular-monolith-bounded-contexts.md and
-// claude/modular-monolith/phase5.md.
+// Per docs/adr/0004-modular-monolith-bounded-contexts.md.
 
 package tests
 
@@ -34,8 +33,8 @@ import (
 
 // stubUserExists is a closure-typed UserExists fixture. Tests pin the
 // known-user set up front; UpdateAlertStatus consults it for the
-// FK-replacement check (the cross-context guard that replaced
-// fk_alerts_updated_by in phase 5).
+// FK-replacement check (the cross-context guard that replaces
+// fk_alerts_updated_by).
 func stubUserExists(known ...int64) bootstrap.UserExists {
 	set := make(map[int64]struct{}, len(known))
 	for _, id := range known {
