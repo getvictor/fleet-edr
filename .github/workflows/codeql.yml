@@ -28,6 +28,11 @@ on:
     - cron: "23 6 * * 1"  # Mon 06:23 UTC
   workflow_dispatch: {}
 
+# Top-level token has no permissions; each job grants the exact scopes it
+# needs (satisfies Scorecard Token-Permissions, Sonar githubactions:S8264,
+# zizmor excessive-permissions).
+permissions: {}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
