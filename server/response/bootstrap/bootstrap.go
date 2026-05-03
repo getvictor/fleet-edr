@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/agent"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
@@ -35,6 +36,11 @@ type Deps struct {
 	// bump. Production wires cmd/main's `s.UpdateHostLastSeen`
 	// closure; cmd/main wires it to detectionCtx.RecordHostSeen.
 	Heartbeat Heartbeat
+
+	// Audit is the operator-action recorder. Optional: nil disables
+	// audit emission for command issuance. cmd/main wires
+	// identityCtx.AuditRecorder().
+	Audit identityapi.AuditRecorder
 }
 
 // Response is the handle cmd/main holds for the response bounded
@@ -59,10 +65,12 @@ func New(deps Deps) (*Response, error) {
 	}
 	store := mysql.NewStore(deps.DB)
 	svc := service.New(store, deps.Heartbeat, logger)
+	opH := operator.New(svc, logger)
+	opH.SetAudit(deps.Audit)
 	return &Response{
 		svc:       svc,
 		agentH:    agent.New(svc, logger),
-		operatorH: operator.New(svc, logger),
+		operatorH: opH,
 		db:        deps.DB,
 		logger:    logger,
 	}, nil

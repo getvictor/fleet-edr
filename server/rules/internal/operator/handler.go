@@ -13,6 +13,7 @@ import (
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/httpserver"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -30,6 +31,7 @@ type Service interface {
 // the rules service handle; mount via RegisterRoutes.
 type Handler struct {
 	svc    Service
+	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
@@ -43,6 +45,10 @@ func New(svc Service, logger *slog.Logger) *Handler {
 	}
 	return &Handler{svc: svc, logger: logger}
 }
+
+// SetAudit installs the operator audit recorder. Optional: when not
+// set, policy updates still apply but no audit row is written.
+func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the four operator routes onto the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -158,7 +164,50 @@ func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	logFn(ctx, "rules policy updated", logArgs...)
 
+	h.recordPolicyAudit(r, body, p.Version, fanoutHosts, fanoutFailed, fanoutErrText)
 	writeJSON(ctx, h.logger, w, http.StatusOK, p)
+}
+
+// recordPolicyAudit emits one audit row for the just-committed policy
+// update. The body.Actor + body.Reason go in the payload because they
+// carry operator-supplied attribution that the session userID alone
+// does not (an operator may be running an automation script that
+// signs the change with a different label). Soft-fail on audit error.
+func (h *Handler) recordPolicyAudit(r *http.Request, body putPolicyRequest, version int64, fanoutHosts, fanoutFailed int, fanoutErrText string) {
+	if h.audit == nil {
+		return
+	}
+	ctx := r.Context()
+	uid, _ := identityapi.UserIDFromContext(ctx)
+	var userID *int64
+	if uid > 0 {
+		u := uid
+		userID = &u
+	}
+	payload := map[string]any{
+		"version":       version,
+		"path_count":    len(body.Paths),
+		"hash_count":    len(body.Hashes),
+		"actor":         body.Actor,
+		"reason":        body.Reason,
+		"fanout_hosts":  fanoutHosts,
+		"fanout_failed": fanoutFailed,
+	}
+	if fanoutErrText != "" {
+		payload["fanout_error"] = fanoutErrText
+	}
+	if err := h.audit.Record(ctx, identityapi.AuditEvent{
+		UserID:     userID,
+		Action:     identityapi.AuditPolicyUpdate,
+		TargetType: "policy",
+		TargetID:   api.DefaultPolicyName,
+		RemoteAddr: r.RemoteAddr,
+		Payload:    payload,
+	}); err != nil {
+		h.logger.WarnContext(ctx, "audit record",
+			"err", err, "action", string(identityapi.AuditPolicyUpdate),
+		)
+	}
 }
 
 // handleListRules returns the structured per-rule documentation for

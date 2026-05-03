@@ -26,6 +26,7 @@ import (
 // Handler serves the login + session-check + logout endpoints.
 type Handler struct {
 	svc       api.Service
+	audit     api.AuditRecorder
 	logger    *slog.Logger
 	limiter   *httpserver.IPLimiter
 	cookieSec bool
@@ -39,6 +40,12 @@ type Options struct {
 	CookieSecure bool
 	// Logger for audit lines.
 	Logger *slog.Logger
+	// Audit is the operator-action audit recorder. Optional: when nil the
+	// handler skips the Record calls (existing tests that don't care about
+	// the audit trail need not stand one up). When set, login_success,
+	// login_failed, and logout each emit one row through this recorder
+	// after the action commits.
+	Audit api.AuditRecorder
 }
 
 // New builds a session handler. Panics if svc is nil.
@@ -55,6 +62,7 @@ func New(svc api.Service, opts Options) *Handler {
 	}
 	return &Handler{
 		svc:       svc,
+		audit:     opts.Audit,
 		logger:    logger,
 		limiter:   httpserver.NewIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
 		cookieSec: opts.CookieSecure,
@@ -115,6 +123,10 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "60")
 		h.fail(ctx, w, http.StatusTooManyRequests, "rate_limited", failInfo{IP: ip},
 			attrkeys.AuthReason, "rate_limited")
+		// Audit-record the throttled attempt: a brute force shows up as a
+		// dense sequence of rate_limited rows, which is an observability
+		// signal even though the wire response is just "try again."
+		h.recordLoginFailed(ctx, "", ip, "rate_limited")
 		return
 	}
 
@@ -138,10 +150,12 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// emails. Audit log records the distinction.
 		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
 			attrkeys.AuthReason, "user_not_found")
+		h.recordLoginFailed(ctx, req.Email, ip, "user_not_found")
 		return
 	case errors.Is(err, api.ErrBadPassword):
 		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
 			attrkeys.AuthReason, "password_mismatch")
+		h.recordLoginFailed(ctx, req.Email, ip, "password_mismatch")
 		return
 	case err != nil:
 		h.logger.ErrorContext(ctx, "login", "err", err)
@@ -163,6 +177,13 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		attrkeys.SessionIDPrefix, idPrefix(result.SessionToken),
 		attrkeys.RemoteAddr, ip,
 	)
+
+	h.recordAudit(ctx, api.AuditEvent{
+		UserID:     &result.User.ID,
+		ActorEmail: result.User.Email,
+		Action:     api.AuditAuthLoginSuccess,
+		RemoteAddr: ip,
+	})
 
 	h.writeSessionJSON(ctx, w, result.User, result.CSRFToken)
 }
@@ -190,9 +211,23 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 // through to the cookie clear.
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	ip := httpserver.RemoteIP(r)
 
 	if cookie, err := r.Cookie(api.SessionCookieName); err == nil && cookie.Value != "" {
 		if raw, err := api.DecodeToken(cookie.Value); err == nil {
+			// Resolve the session BEFORE deletion so we can record who logged
+			// out. Logout is idempotent on missing sessions, so a failed
+			// resolve falls through silently to the cookie clear without an
+			// audit row (there is nothing to audit).
+			var actorUserID *int64
+			var actorEmail string
+			if sess, err := h.svc.GetSession(ctx, raw); err == nil {
+				uid := sess.UserID
+				actorUserID = &uid
+				if u, err := h.svc.GetUser(ctx, sess.UserID); err == nil {
+					actorEmail = u.Email
+				}
+			}
 			if delErr := h.svc.Logout(ctx, raw); delErr == nil {
 				trace.SpanFromContext(ctx).SetAttributes(
 					attribute.String(attrkeys.AuthAction, "logout"),
@@ -201,6 +236,14 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 					attrkeys.AuthAction, "logout",
 					attrkeys.SessionIDPrefix, idPrefix(raw),
 				)
+				if actorUserID != nil {
+					h.recordAudit(ctx, api.AuditEvent{
+						UserID:     actorUserID,
+						ActorEmail: actorEmail,
+						Action:     api.AuditAuthLogout,
+						RemoteAddr: ip,
+					})
+				}
 			} else {
 				h.logger.ErrorContext(ctx, "session delete", "err", delErr)
 			}
@@ -285,4 +328,38 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		logger.ErrorContext(ctx, "session encode response", "err", err)
 	}
+}
+
+// recordAudit writes one audit row, treating recorder errors as soft:
+// log-warn-and-continue. The action being audited (login/logout) has
+// already committed by the time we reach this helper, so failing the
+// HTTP response on an audit-table hiccup would be worse than a missed
+// audit row. The structured warn line preserves the full event for
+// log-based reconstruction if needed.
+func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
+	if h.audit == nil {
+		return
+	}
+	if err := h.audit.Record(ctx, e); err != nil {
+		h.logger.WarnContext(ctx, "audit record",
+			"err", err,
+			"action", string(e.Action),
+			attrkeys.UserEmail, e.ActorEmail,
+		)
+	}
+}
+
+// recordLoginFailed writes an auth.login.failed audit row with the
+// reason the login was rejected. UserID is always nil for failed
+// attempts: the email may map to no user (user_not_found), to the
+// wrong password (password_mismatch), or be untouched by the rate
+// limiter (rate_limited), and recording a UserID would imply the
+// attempt got past authentication.
+func (h *Handler) recordLoginFailed(ctx context.Context, email, ip, reason string) {
+	h.recordAudit(ctx, api.AuditEvent{
+		ActorEmail: email,
+		Action:     api.AuditAuthLoginFailed,
+		RemoteAddr: ip,
+		Payload:    map[string]any{"reason": reason},
+	})
 }
