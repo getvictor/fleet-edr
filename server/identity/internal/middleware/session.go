@@ -35,12 +35,12 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 			ctx := r.Context()
 			cookie, err := r.Cookie(api.SessionCookieName)
 			if err != nil || cookie.Value == "" {
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusUnauthorized, "missing_session")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "missing_session")
 				return
 			}
 			raw, err := api.DecodeToken(cookie.Value)
 			if err != nil {
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
 				return
 			}
 			sess, err := svc.GetSession(ctx, raw)
@@ -49,11 +49,11 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 				// Covers both "cookie points at deleted row" (logout happened
 				// elsewhere) and "cookie points at expired row". The UI maps
 				// both to "redirect to login".
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
 				return
 			case err != nil:
 				logger.ErrorContext(ctx, "session lookup", "err", err)
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
 				return
 			}
 			trace.SpanFromContext(ctx).SetAttributes(
@@ -88,17 +88,17 @@ func CSRF(logger *slog.Logger) func(http.Handler) http.Handler {
 				// with 500 because the problem is server-side, not the
 				// caller's credentials.
 				logger.ErrorContext(ctx, "CSRF middleware invoked without Session on ctx")
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusInternalServerError, "csrf_misconfigured")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusInternalServerError, "csrf_misconfigured")
 				return
 			}
 			presented := r.Header.Get(api.CSRFHeaderName)
 			if presented == "" {
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusForbidden, "csrf_missing")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusForbidden, "csrf_missing")
 				return
 			}
 			got, err := api.DecodeToken(presented)
 			if err != nil || subtle.ConstantTimeCompare(got, sess.CSRFToken) != 1 {
-				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusForbidden, "csrf_mismatch")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusForbidden, "csrf_mismatch")
 				return
 			}
 			next.ServeHTTP(w, r)

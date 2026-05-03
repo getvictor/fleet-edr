@@ -18,6 +18,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/operator"
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
 	"github.com/fleetdm/edr/server/detection/internal/service"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -69,6 +70,10 @@ type Deps struct {
 	// Cross-context inputs (Full mode only).
 	UserExists UserExists
 	Metrics    api.MetricsRecorder
+	// Audit is the operator-action recorder. Optional: nil disables
+	// audit emission for alert-status changes (existing tests pass nil
+	// without ceremony). cmd/main wires identityCtx.AuditRecorder().
+	Audit identityapi.AuditRecorder
 }
 
 // Detection is the handle cmd/main holds.
@@ -123,6 +128,7 @@ func New(deps Deps) (*Detection, error) {
 		query := graph.NewQuery(store)
 		det.svc = service.New(store, query, intakeH, deps.UserExists, logger)
 		det.operatorH = operator.New(det.svc, logger)
+		det.operatorH.SetAudit(deps.Audit)
 
 		processor := pipeline.NewProcessor(
 			store,

@@ -5,12 +5,20 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
 )
+
+// alertEventsBatchSize caps the number of (alert_id, event_id) rows
+// per INSERT. Today's rules cap their output at ~10 events per
+// finding, but a future noisy detection could link thousands. Keeping
+// the batch bounded stops a single INSERT from breaching MySQL's
+// max_allowed_packet on hosts where it's tuned low.
+const alertEventsBatchSize = 500
 
 // InsertAlert creates an alert and links it to the given event IDs.
 // If a duplicate alert exists (same host_id, rule_id, process_id),
@@ -42,16 +50,43 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 		return 0, false, fmt.Errorf("insert alert last id: %w", err)
 	}
 
-	for _, eid := range eventIDs {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO alert_events (alert_id, event_id) VALUES (?, ?)", alertID, eid); err != nil {
-			return 0, false, fmt.Errorf("insert alert_event (%d, %s): %w", alertID, eid, err)
-		}
+	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, false /* not dedup */); err != nil {
+		return 0, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, false, fmt.Errorf("commit insert alert: %w", err)
 	}
 	return alertID, true, nil
+}
+
+// bulkInsertAlertEvents links eventIDs to alertID with one (chunked)
+// multi-row INSERT instead of N round-trips. dedup=true switches to
+// INSERT IGNORE so re-linking an existing (alert_id, event_id) PK
+// doesn't blow up.
+func bulkInsertAlertEvents(ctx context.Context, tx *sqlx.Tx, alertID int64, eventIDs []string, dedup bool) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	verb := "INSERT INTO"
+	if dedup {
+		verb = "INSERT IGNORE INTO"
+	}
+	for start := 0; start < len(eventIDs); start += alertEventsBatchSize {
+		end := min(start+alertEventsBatchSize, len(eventIDs))
+		chunk := eventIDs[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk)*2)
+		for i, eid := range chunk {
+			placeholders[i] = "(?, ?)"
+			args = append(args, alertID, eid)
+		}
+		stmt := verb + " alert_events (alert_id, event_id) VALUES " + strings.Join(placeholders, ", ")
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return fmt.Errorf("link alert_events alert=%d count=%d: %w", alertID, len(chunk), err)
+		}
+	}
+	return nil
 }
 
 // isDuplicateKeyErr matches MySQL error 1062 (duplicate primary/unique key).
@@ -75,12 +110,8 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 	); err != nil {
 		return 0, false, fmt.Errorf("lookup duplicate alert: %w", err)
 	}
-	for _, eid := range eventIDs {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT IGNORE INTO alert_events (alert_id, event_id) VALUES (?, ?)", existingID, eid,
-		); err != nil {
-			return 0, false, fmt.Errorf("link event to existing alert (%d, %s): %w", existingID, eid, err)
-		}
+	if err := bulkInsertAlertEvents(ctx, tx, existingID, eventIDs, true /* dedup */); err != nil {
+		return 0, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, false, fmt.Errorf("commit duplicate alert lookup: %w", err)

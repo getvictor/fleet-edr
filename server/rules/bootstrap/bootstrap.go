@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
@@ -44,6 +45,11 @@ type Deps struct {
 	// both non-nil enables it. An asymmetric pair is a config error.
 	ActiveHostsLister ActiveHostsLister
 	CommandInserter   CommandInserter
+
+	// Audit is the operator-action recorder. Optional: nil disables
+	// audit emission for policy updates. cmd/main wires
+	// identityCtx.AuditRecorder().
+	Audit identityapi.AuditRecorder
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -72,9 +78,11 @@ func New(deps Deps) (*Rules, error) {
 	rules := catalog.New(deps.RegistryOptions)
 	svc := service.New(policyStore, rules, deps.ActiveHostsLister, deps.CommandInserter, logger)
 
+	opH := operator.New(svc, logger)
+	opH.SetAudit(deps.Audit)
 	return &Rules{
 		svc:       svc,
-		operatorH: operator.New(svc, logger),
+		operatorH: opH,
 		db:        deps.DB,
 		logger:    logger,
 	}, nil

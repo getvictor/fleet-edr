@@ -18,6 +18,7 @@ import (
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/httpserver"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 )
 
@@ -30,6 +31,7 @@ const createBodyCap = 64 << 10
 // Handler serves the operator-facing command routes.
 type Handler struct {
 	svc    api.Service
+	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
@@ -43,6 +45,10 @@ func New(svc api.Service, logger *slog.Logger) *Handler {
 	}
 	return &Handler{svc: svc, logger: logger}
 }
+
+// SetAudit installs the operator audit recorder. Optional: when not
+// set, command issuance still works but no audit row is written.
+func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the two operator routes on the given mux.
 // Caller wraps in identity.Session + identity.CSRF before mounting.
@@ -90,7 +96,42 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		"edr.command.id", id,
 	)
 
+	h.recordCommandAudit(r, body.HostID, body.CommandType, id)
 	writeJSON(ctx, h.logger, w, http.StatusCreated, map[string]int64{"id": id})
+}
+
+// recordCommandAudit emits one audit row for the just-committed
+// command issuance. target = the host receiving the command;
+// payload carries command_type + command_id so a reviewer can
+// reconstruct the exact action without joining commands. Soft-fail
+// on audit error: the command row is authoritative.
+func (h *Handler) recordCommandAudit(r *http.Request, hostID, commandType string, commandID int64) {
+	if h.audit == nil {
+		return
+	}
+	ctx := r.Context()
+	uid, _ := identityapi.UserIDFromContext(ctx)
+	var userID *int64
+	if uid > 0 {
+		u := uid
+		userID = &u
+	}
+	if err := h.audit.Record(ctx, identityapi.AuditEvent{
+		UserID:     userID,
+		Action:     identityapi.AuditCommandIssue,
+		TargetType: "host",
+		TargetID:   hostID,
+		RemoteAddr: r.RemoteAddr,
+		Payload: map[string]any{
+			"command_type": commandType,
+			"command_id":   commandID,
+		},
+	}); err != nil {
+		h.logger.WarnContext(ctx, "audit record",
+			"err", err, "action", string(identityapi.AuditCommandIssue),
+			attrkeys.HostID, hostID,
+		)
+	}
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {

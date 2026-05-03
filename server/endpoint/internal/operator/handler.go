@@ -23,6 +23,7 @@ import (
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
 // revokeBodyCap caps the JSON body size for POST /revoke. The handler
@@ -34,6 +35,7 @@ const revokeBodyCap = 64 << 10
 // Handler serves the operator-facing enrollment routes.
 type Handler struct {
 	svc    api.Service
+	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
@@ -47,6 +49,10 @@ func New(svc api.Service, logger *slog.Logger) *Handler {
 	}
 	return &Handler{svc: svc, logger: logger}
 }
+
+// SetAudit installs the operator audit recorder. Optional: when not
+// set, revoke still applies but no audit row is written.
+func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the two operator routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -116,7 +122,42 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		attrkeys.HostID, hostID,
 	)
 
+	h.recordRevokeAudit(r, hostID, body)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordRevokeAudit emits one audit row for the just-committed enrollment
+// revoke. body.Actor / body.Reason are operator-supplied attribution
+// strings carried in the payload; the session userID is the
+// authenticated identity that signed the request. Soft-fail on audit
+// error.
+func (h *Handler) recordRevokeAudit(r *http.Request, hostID string, body revokeRequest) {
+	if h.audit == nil {
+		return
+	}
+	ctx := r.Context()
+	uid, _ := identityapi.UserIDFromContext(ctx)
+	var userID *int64
+	if uid > 0 {
+		u := uid
+		userID = &u
+	}
+	if err := h.audit.Record(ctx, identityapi.AuditEvent{
+		UserID:     userID,
+		Action:     identityapi.AuditEnrollmentRevoke,
+		TargetType: "host",
+		TargetID:   hostID,
+		RemoteAddr: r.RemoteAddr,
+		Payload: map[string]any{
+			"actor":  body.Actor,
+			"reason": body.Reason,
+		},
+	}); err != nil {
+		h.logger.WarnContext(ctx, "audit record",
+			"err", err, "action", string(identityapi.AuditEnrollmentRevoke),
+			attrkeys.HostID, hostID,
+		)
+	}
 }
 
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {

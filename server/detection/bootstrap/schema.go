@@ -16,12 +16,14 @@ var schemaStatements = []string{
 		ingested_at_ns  BIGINT       NOT NULL DEFAULT 0,
 		event_type      VARCHAR(64)  NOT NULL,
 		payload         JSON         NOT NULL,
+		payload_pid     BIGINT       GENERATED ALWAYS AS (CAST(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.pid')) AS UNSIGNED)) STORED,
 		processed       TINYINT(1)   NOT NULL DEFAULT 0,
 		created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_events_host_id (host_id),
 		INDEX idx_events_type (event_type),
 		INDEX idx_events_timestamp (timestamp_ns),
 		INDEX idx_events_host_type_ingested (host_id, event_type, ingested_at_ns),
+		INDEX idx_events_host_type_pid_ingested (host_id, event_type, payload_pid, ingested_at_ns),
 		INDEX idx_events_processed (processed, host_id, timestamp_ns)
 	)`,
 	`CREATE TABLE IF NOT EXISTS processes (
