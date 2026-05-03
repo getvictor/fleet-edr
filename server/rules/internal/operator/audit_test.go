@@ -99,7 +99,7 @@ func TestHandler_PolicyUpdate_EmitsAudit(t *testing.T) {
 		"actor":  "victor@example",
 		"reason": "incident-2026-Q2",
 	})
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -136,7 +136,7 @@ func TestHandler_PolicyUpdate_NilAuditOK(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := stdjson.Marshal(map[string]any{"actor": "v", "reason": "r"})
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)

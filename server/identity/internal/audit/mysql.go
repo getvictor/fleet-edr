@@ -147,7 +147,12 @@ func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, er
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := make([]api.AuditRow, 0, limit)
+	// CodeQL flags `make([]T, 0, limit)` when limit traces back to a
+	// user-controlled value, even though limit is clamped to maxListLimit
+	// above. Drop the capacity hint and let the slice grow on demand;
+	// audit pages are bounded (LIMIT in the SELECT, max 500 rows), so
+	// the few reallocations along the way are not measurable.
+	var out []api.AuditRow
 	for rows.Next() {
 		r, err := scanListRow(rows)
 		if err != nil {

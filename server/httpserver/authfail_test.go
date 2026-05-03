@@ -65,7 +65,7 @@ func TestWriteAuthFailure_BodyShape(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			tc.write(rec, req)
 
 			assert.Equal(t, tc.status, rec.Code)
@@ -88,7 +88,7 @@ func TestWriteAuthFailure_BodyShape(t *testing.T) {
 // authentication failure distinct from a service outage.
 func TestWriteAuthFailure_Bearer401_SetsChallenge(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	httpserver.WriteAuthFailure(req.Context(), rec, slog.Default(),
 		http.StatusUnauthorized, "invalid_token")
 
@@ -104,7 +104,7 @@ func TestWriteAuthFailure_BearerNon401_OmitsChallenge(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusServiceUnavailable, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			httpserver.WriteAuthFailure(req.Context(), rec, slog.Default(),
 				status, "verifier_unavailable")
 
@@ -124,7 +124,7 @@ func TestWriteCookieAuthFailure_NoChallenge(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			httpserver.WriteCookieAuthFailure(req.Context(), rec, slog.Default(),
 				status, "missing_session")
 
@@ -141,7 +141,7 @@ func TestWriteCookieAuthFailure_NoChallenge(t *testing.T) {
 // natural way to express "no logger".
 func TestWriteAuthFailure_NilLoggerOK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	assert.NotPanics(t, func() {
 		httpserver.WriteAuthFailure(req.Context(), rec, nil, http.StatusUnauthorized, "boot_failure")
 	})

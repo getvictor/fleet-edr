@@ -172,7 +172,7 @@ func TestList_Paginates(t *testing.T) {
 	seedUser(t, db, 1, "u1@test")
 
 	uid := int64(1)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		require.NoError(t, store.Record(t.Context(), api.AuditEvent{
 			UserID: &uid, Action: api.AuditAuthLoginSuccess,
 		}))

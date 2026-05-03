@@ -62,7 +62,7 @@ func TestHandler_Revoke_EmitsAudit(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(map[string]any{"actor": "operator@test", "reason": "compromise"})
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/enrollments/H-9/revoke", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/enrollments/H-9/revoke", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -89,7 +89,7 @@ func TestHandler_Revoke_NilAuditOK(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(map[string]any{"actor": "operator@test", "reason": "compromise"})
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/enrollments/H-9/revoke", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/enrollments/H-9/revoke", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)

@@ -54,7 +54,7 @@ func TestHandler_CommandIssue_EmitsAudit(t *testing.T) {
 		"command_type": "kill_process",
 		"payload":      map[string]any{"pid": 1234},
 	})
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/commands", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/commands", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -85,7 +85,7 @@ func TestHandler_CommandIssue_NilAuditOK(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(map[string]any{"host_id": "H-1", "command_type": "isolate"})
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/commands", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/commands", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
@@ -112,7 +112,7 @@ func TestHandler_CommandIssue_InsertErrorSkipsAudit(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(map[string]any{"host_id": "H-1", "command_type": "isolate"})
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/commands", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/commands", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)

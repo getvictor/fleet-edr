@@ -50,7 +50,9 @@ func TestHandler_ListEmptySuccess(t *testing.T) {
 	reader := &stubReader{rows: nil}
 	srv := newHandlerTestServer(t, reader)
 
-	resp, err := http.Get(srv.URL + "/api/audit")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -86,7 +88,9 @@ func TestHandler_ListPopulated(t *testing.T) {
 	}}}
 	srv := newHandlerTestServer(t, reader)
 
-	resp, err := http.Get(srv.URL + "/api/audit?limit=1")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit?limit=1", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -128,7 +132,9 @@ func TestHandler_ListParseErrors(t *testing.T) {
 			reader := &stubReader{}
 			srv := newHandlerTestServer(t, reader)
 
-			resp, err := http.Get(srv.URL + "/api/audit?" + tc.query)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit?"+tc.query, nil)
+			require.NoError(t, err)
+			resp, err := srv.Client().Do(req)
 			require.NoError(t, err)
 			defer resp.Body.Close()
 
@@ -159,7 +165,9 @@ func TestHandler_ListFilterParsing(t *testing.T) {
 	q := "user_id=42&action=alert.acknowledge&target_type=alert&target_id=99" +
 		"&since=2026-05-01T00:00:00Z&until=2026-05-04T00:00:00Z" +
 		"&limit=25&before_id=1000"
-	resp, err := http.Get(srv.URL + "/api/audit?" + q)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit?"+q, nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -183,7 +191,9 @@ func TestHandler_ListReaderError(t *testing.T) {
 	reader := &stubReader{err: errors.New("clickhouse went away")}
 	srv := newHandlerTestServer(t, reader)
 
-	resp, err := http.Get(srv.URL + "/api/audit")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
