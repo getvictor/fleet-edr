@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/sqlhelpers"
 )
 
@@ -188,11 +189,12 @@ type Finding struct {
 }
 
 // TimeRange is the [from, to] nanosecond window every graph query
-// takes.
-type TimeRange struct {
-	FromNs int64
-	ToNs   int64
-}
+// takes. The canonical type lives in server/httpserver because the
+// concept is generic and shared across every operator endpoint that
+// parses ?from=&to= query parameters; detection/api keeps the public
+// name via alias so existing callers (and the rules.api re-export)
+// stay byte-identical.
+type TimeRange = httpserver.TimeRange
 
 // AlertFilter is the optional scope an operator passes to ListAlerts.
 // Mirrors the existing GET /api/alerts query params so the wire
