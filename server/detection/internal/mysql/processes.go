@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/fleetdm/edr/server/detection/api"
 )
@@ -201,30 +200,54 @@ func (s *Store) ReExec(
 // row). For a non-re-exec process the result is an empty slice.
 // Bounded to maxChainLen rows to stop a cycle.
 //
+// Issue #94: prior shape was N sequential round-trips (one per chain
+// link, capped at 64). The recursive CTE collapses that into one
+// query. The depth column inside the CTE serves two purposes: a
+// belt-and-suspenders cycle guard (in case of a corrupt FK), and the
+// ordering key for the result. The anchor row sits at depth=0 and
+// each recursion step adds one, so depth tracks structural distance
+// back from `current.PreviousExecID`. ORDER BY depth DESC therefore
+// yields oldest-first — independent of fork_time_ns, which can tie or
+// drift across agents (per Gemini Code Assist + Copilot review on
+// PR #110).
+//
 // The SELECT is scoped by host_id as well as id so a corrupted
 // previous_exec_id value can never surface a row from a different
-// host (defense-in-depth).
+// host (defense-in-depth, preserved from the prior implementation).
 func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Process, error) {
 	const maxChainLen = 64
+	if current.PreviousExecID == nil {
+		return nil, nil
+	}
 	var chain []api.Process
-	prevID := current.PreviousExecID
-	for depth := 0; prevID != nil && depth < maxChainLen; depth++ {
-		var p api.Process
-		err := s.db.GetContext(ctx, &p, `
+	err := s.db.SelectContext(ctx, &chain, `
+		WITH RECURSIVE chain AS (
 			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 			       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
-			FROM processes WHERE id = ? AND host_id = ?`, *prevID, current.HostID)
-		if errors.Is(err, sql.ErrNoRows) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("walk exec chain at id=%d: %w", *prevID, err)
-		}
-		chain = append(chain, p)
-		prevID = p.PreviousExecID
+			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+			       0 AS depth
+			FROM processes
+			WHERE id = ? AND host_id = ?
+			UNION ALL
+			SELECT p.id, p.host_id, p.pid, p.ppid, p.path, p.args, p.uid, p.gid,
+			       p.code_signing, p.sha256, p.fork_time_ns, p.fork_ingested_at_ns,
+			       p.exec_time_ns, p.exit_time_ns, p.exit_ingested_at_ns,
+			       p.exit_reason, p.exit_code, p.previous_exec_id,
+			       c.depth + 1
+			FROM processes p
+			JOIN chain c ON p.id = c.previous_exec_id AND p.host_id = c.host_id
+			WHERE c.depth < ?
+		)
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
+		FROM chain
+		ORDER BY depth DESC`,
+		*current.PreviousExecID, current.HostID, maxChainLen-1,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("walk exec chain at id=%d: %w", *current.PreviousExecID, err)
 	}
-	slices.Reverse(chain)
 	return chain, nil
 }
 
@@ -334,16 +357,23 @@ func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, 
 // events attributed to the given PID within a time range. Filtered
 // on ingested_at_ns (server-stamped) rather than timestamp_ns
 // because ES and NE clocks drift (issue #7).
+//
+// The payload_pid predicate is index-backed by
+// idx_events_host_type_pid_ingested (issue #92): the prior
+// JSON_EXTRACT predicate forced a full scan of the events table.
+// payload_pid is a STORED generated column; the index entry is
+// populated on insert so this query is a range scan, not a JSON
+// reparse, regardless of how many rows live in events.
 func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr api.TimeRange) ([]api.Event, error) {
 	var events []api.Event
 	err := s.db.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
 		FROM events
 		WHERE host_id = ? AND event_type IN ('network_connect', 'dns_query')
+		  AND payload_pid = ?
 		  AND ingested_at_ns >= ? AND ingested_at_ns <= ?
-		  AND JSON_EXTRACT(payload, '$.pid') = ?
 		ORDER BY timestamp_ns`,
-		hostID, tr.FromNs, tr.ToNs, pid,
+		hostID, pid, tr.FromNs, tr.ToNs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query network events: %w", err)
