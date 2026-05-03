@@ -48,7 +48,8 @@ const (
 	AuditCommandIssue AuditAction = "command.issue"
 
 	// Enrollment lifecycle (endpoint context).
-	AuditEnrollmentRevoke AuditAction = "enrollment.revoke"
+	AuditEnrollmentRevoke       AuditAction = "enrollment.revoke"
+	AuditEnrollmentTokenRotated AuditAction = "enrollment.token_rotated"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller fills

@@ -38,6 +38,9 @@ func (f fakeRevokeService) Revoke(ctx context.Context, hostID, reason, actor str
 }
 func (f fakeRevokeService) CountActive(context.Context) (int, error)        { panic("not used") }
 func (f fakeRevokeService) ActiveHostIDs(context.Context) ([]string, error) { panic("not used") }
+func (f fakeRevokeService) RotateToken(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
+	panic("not used")
+}
 
 type captureRecorder struct {
 	last   identityapi.AuditEvent

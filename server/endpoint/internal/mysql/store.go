@@ -310,6 +310,93 @@ func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentToken
 	}, nil
 }
 
+// RotateHostTokenForce is the operator-driven counterpart to
+// RotateHostToken: it commits a rotation regardless of recent
+// rotations, gated only on (host exists AND not revoked). Used by the
+// POST /api/enrollments/{host_id}/rotate handler where the operator's
+// intent is "issue a fresh token NOW," not "rotate only if no other
+// rotation slipped in." Returns ErrNotFound when the host has no
+// non-revoked enrollment.
+//
+// Internally a SELECT FOR UPDATE inside a tx serialises concurrent
+// operator-clicks for the same host so the previous_* slot reflects
+// the most recently superseded token (not whichever one a non-locked
+// UPDATE happened to read mid-flip). The same SET-clause ordering rule
+// applies as RotateHostToken: previous_* assignments must come before
+// the host_* assignments since MySQL evaluates left-to-right.
+func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace time.Duration) (RotateResult, error) {
+	if hostID == "" {
+		return RotateResult{}, errors.New("RotateHostTokenForce: hostID is required")
+	}
+	if grace <= 0 {
+		return RotateResult{}, errors.New("RotateHostTokenForce: grace must be > 0")
+	}
+
+	newToken, err := generateToken()
+	if err != nil {
+		return RotateResult{}, err
+	}
+	newHash, newSalt, err := hashToken(newToken)
+	if err != nil {
+		return RotateResult{}, err
+	}
+	newID := tokenID(newToken)
+	expiresAt := time.Now().UTC().Add(grace)
+
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var currentID []byte
+	err = tx.GetContext(ctx, &currentID, `
+		SELECT host_token_id FROM enrollments
+		WHERE host_id = ? AND revoked_at IS NULL
+		FOR UPDATE
+	`, hostID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RotateResult{}, ErrNotFound
+	}
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force lock: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE enrollments
+		SET previous_host_token_id    = host_token_id,
+		    previous_host_token_hash  = host_token_hash,
+		    previous_host_token_salt  = host_token_salt,
+		    previous_token_expires_at = ?,
+		    host_token_id             = ?,
+		    host_token_hash           = ?,
+		    host_token_salt           = ?,
+		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
+		WHERE host_id = ? AND revoked_at IS NULL
+	`, expiresAt, newID, newHash, newSalt, hostID); err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force update: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force commit: %w", err)
+	}
+	committed = true
+
+	prefix := ""
+	if len(currentID) >= 4 {
+		prefix = hex.EncodeToString(currentID[:4])
+	}
+	return RotateResult{
+		NewToken:              newToken,
+		PreviousTokenIDPrefix: prefix,
+	}, nil
+}
+
 // CountActive returns how many non-revoked enrollments exist. Cheaper than
 // ActiveHostIDs when the caller only needs the count — Phase 4's OTel gauge
 // `edr.enrolled.hosts` is the primary caller.

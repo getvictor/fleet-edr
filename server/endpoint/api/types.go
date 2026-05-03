@@ -49,6 +49,39 @@ type EnrollResponse struct {
 	EnrolledAt time.Time `json:"enrolled_at"`
 }
 
+// RotationTrigger describes who initiated a host-token rotation. Used by
+// the audit row payload so reviewers can distinguish a routine
+// scheduled rotation from a deliberate operator-driven one (incident
+// response, suspected token leak). Stored as a string so adding new
+// triggers (e.g. "scheduler" if a background sweep is added later) is a
+// constant-time addition rather than a wire-shape break.
+type RotationTrigger string
+
+const (
+	// RotationTriggerAuto is the verify-time trigger: an agent presented
+	// a token whose host_token_issued_at + lifetime is in the past.
+	RotationTriggerAuto RotationTrigger = "auto"
+	// RotationTriggerOperator is the explicit operator-driven trigger
+	// from POST /api/enrollments/{host_id}/rotate.
+	RotationTriggerOperator RotationTrigger = "operator"
+)
+
+// RotateResult is the operator-visible outcome of a host-token rotation.
+// The newly minted raw token is intentionally NOT in this struct: the
+// agent receives it via the rotate_token command on its next poll, and
+// surfacing it through the operator API would tempt copy-paste flows
+// that bypass the command queue. PreviousTokenIDPrefix is the hex of
+// the first 4 bytes of the rotated-out host_token_id, included on the
+// operator's UI confirmation + the audit row so a reviewer can pivot
+// from a rotation event to the verify request that triggered it
+// (audit + access-log share the X-Request-ID / trace_id correlation).
+// CommandID is the rotate_token command queued for the agent; useful
+// for an operator who wants to wait until the agent has acked.
+type RotateResult struct {
+	PreviousTokenIDPrefix string `json:"previous_token_id_prefix"`
+	CommandID             int64  `json:"command_id"`
+}
+
 // Errors returned across the api boundary. Callers compare with errors.Is.
 var (
 	// ErrInvalidSecret is returned when the agent's enroll_secret doesn't

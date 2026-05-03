@@ -47,6 +47,9 @@ func (f fakeService) CountActive(context.Context) (int, error) {
 func (f fakeService) ActiveHostIDs(context.Context) ([]string, error) {
 	panic("not implemented in fakeService")
 }
+func (f fakeService) RotateToken(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
+	panic("not implemented in fakeService")
+}
 
 func newServer(t *testing.T, svc api.Service, ratePerMinute int) *httptest.Server {
 	t.Helper()

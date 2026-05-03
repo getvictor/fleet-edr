@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -48,9 +49,19 @@ type Deps struct {
 	CommandInserter CommandInserter
 
 	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for enrollment.revoke. cmd/main wires
-	// identityCtx.AuditRecorder().
+	// audit emission for enrollment.revoke + enrollment.token_rotated.
+	// cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
+
+	// HostTokenLifetime is how long a host bearer token may live before
+	// the verify path triggers an auto-rotation. Zero -> service
+	// default (24h). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
+	HostTokenLifetime time.Duration
+	// HostTokenGrace is the window during which the just-superseded
+	// token still verifies after rotation, so an in-flight agent poll
+	// doesn't 401 mid-cycle. Zero -> service default (5m). cmd/main
+	// reads EDR_HOST_TOKEN_GRACE.
+	HostTokenGrace time.Duration
 }
 
 // Endpoint is the handle cmd/main holds for the endpoint bounded
@@ -76,12 +87,13 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.EnrollSecret == "" {
 		return nil, errors.New("endpoint bootstrap: EnrollSecret is required")
 	}
-	// PolicyProvider + CommandInserter are paired. Letting the mismatch
-	// fall through to service.New's panic would crash startup with no
-	// recoverable error; surface it as a config error instead so the
-	// caller's err-handling sees it.
-	if (deps.PolicyProvider == nil) != (deps.CommandInserter == nil) {
-		return nil, errors.New("endpoint bootstrap: PolicyProvider and CommandInserter must be set together (or both nil)")
+	// Policy without Commands is a config error (policy fan-out has nowhere
+	// to send commands); Commands without Policy is allowed since rotation
+	// uses Commands without consulting Policy. Surface this here as a
+	// recoverable error rather than letting it fall through to service.New's
+	// panic at boot.
+	if deps.PolicyProvider != nil && deps.CommandInserter == nil {
+		return nil, errors.New("endpoint bootstrap: PolicyProvider set but CommandInserter is nil; policy fan-out has nowhere to go")
 	}
 	logger := deps.Logger
 	if logger == nil {
@@ -89,7 +101,16 @@ func New(deps Deps) (*Endpoint, error) {
 	}
 
 	store := mysql.NewStore(deps.DB)
-	svc := service.New(store, deps.EnrollSecret, deps.PolicyProvider, deps.CommandInserter, logger)
+	svc := service.New(service.Options{
+		Store:    store,
+		Secret:   deps.EnrollSecret,
+		Policy:   deps.PolicyProvider,
+		Commands: deps.CommandInserter,
+		Audit:    deps.Audit,
+		Lifetime: deps.HostTokenLifetime,
+		Grace:    deps.HostTokenGrace,
+		Logger:   logger,
+	})
 
 	opH := operator.New(svc, logger)
 	opH.SetAudit(deps.Audit)
