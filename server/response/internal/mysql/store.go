@@ -3,7 +3,6 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/response/api"
+	"github.com/fleetdm/edr/server/sqlhelpers"
 )
 
 // Store owns the commands table. All public methods take the row's
@@ -31,18 +31,18 @@ func NewStore(db *sqlx.DB) *Store {
 
 // commandRow mirrors a row in the commands table; held internal to
 // the package so api.Command stays the public contract. Result uses
-// nullRawJSON because the column is JSON NULL until the agent
-// completes / fails the command.
+// sqlhelpers.NullRawJSON because the column is JSON NULL until the
+// agent completes / fails the command.
 type commandRow struct {
-	ID          int64           `db:"id"`
-	HostID      string          `db:"host_id"`
-	CommandType string          `db:"command_type"`
-	Payload     json.RawMessage `db:"payload"`
-	Status      string          `db:"status"`
-	CreatedAt   time.Time       `db:"created_at"`
-	AckedAt     *time.Time      `db:"acked_at"`
-	CompletedAt *time.Time      `db:"completed_at"`
-	Result      nullRawJSON     `db:"result"`
+	ID          int64                  `db:"id"`
+	HostID      string                 `db:"host_id"`
+	CommandType string                 `db:"command_type"`
+	Payload     json.RawMessage        `db:"payload"`
+	Status      string                 `db:"status"`
+	CreatedAt   time.Time              `db:"created_at"`
+	AckedAt     *time.Time             `db:"acked_at"`
+	CompletedAt *time.Time             `db:"completed_at"`
+	Result      sqlhelpers.NullRawJSON `db:"result"`
 }
 
 // toAPI converts the row into the public api.Command. Result is
@@ -188,38 +188,4 @@ func (s *Store) CountPending(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("count pending commands: %w", err)
 	}
 	return n, nil
-}
-
-// nullRawJSON is a json.RawMessage that correctly scans NULL from
-// MySQL JSON columns. Mirrors store.NullRawJSON; defined locally so
-// response/internal/mysql doesn't drag a cross-context import for
-// one type. Phase 5 may move both to a shared sqlx-helper package.
-type nullRawJSON json.RawMessage
-
-func (n *nullRawJSON) Scan(value any) error {
-	if value == nil {
-		*n = nil
-		return nil
-	}
-	b, ok := value.([]byte)
-	if !ok {
-		return fmt.Errorf("nullRawJSON.Scan: unsupported type %T", value)
-	}
-	cp := make([]byte, len(b))
-	copy(cp, b)
-	*n = nullRawJSON(cp)
-	return nil
-}
-
-func (n nullRawJSON) Value() (driver.Value, error) {
-	// Treat both an empty payload AND the JSON literal "null" as SQL
-	// NULL -- mirrors store.NullRawJSON's intent. If we let "null"
-	// land in the column, toAPI's len-check would still emit
-	// `result: null` on the wire instead of omitting the field, and
-	// callers that round-trip via JSON would see drift between
-	// requests. Keep the column NULL so the wire shape stays clean.
-	if len(n) == 0 || string(n) == "null" {
-		return nil, nil
-	}
-	return []byte(n), nil
 }

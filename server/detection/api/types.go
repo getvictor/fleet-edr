@@ -6,57 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/fleetdm/edr/server/sqlhelpers"
 )
 
-// NullRawJSON is a json.RawMessage that correctly scans NULL from
-// MySQL JSON columns. json.RawMessage alone fails because the MySQL
-// driver returns nil for NULL JSON, and database/sql doesn't know
-// how to assign nil to the named type json.RawMessage.
-//
-// Mirrors the helper that lived in server/store before phase 5;
-// exposed publicly here because detection/api types are scanned
-// directly by sqlx in detection/internal/mysql. Phase 6 may
-// consolidate this with response/internal/mysql.nullRawJSON in a
-// shared sqlhelpers package.
-type NullRawJSON json.RawMessage
+// NullRawJSON is the canonical nullable JSON column scanner. The
+// authoritative type lives in server/sqlhelpers; detection/api keeps
+// the public name so existing callers (and the rules.api re-export)
+// stay byte-identical with the pre-phase-6 import path.
+type NullRawJSON = sqlhelpers.NullRawJSON
 
-func (n *NullRawJSON) Scan(value any) error {
-	if value == nil {
-		*n = nil
-		return nil
-	}
-	b, ok := value.([]byte)
-	if !ok {
-		return fmt.Errorf("NullRawJSON.Scan: unsupported type %T", value)
-	}
-	cp := make([]byte, len(b))
-	copy(cp, b)
-	*n = NullRawJSON(cp)
-	return nil
-}
-
-func (n NullRawJSON) Value() (driver.Value, error) {
-	if len(n) == 0 || string(n) == "null" {
-		return nil, nil
-	}
-	return []byte(n), nil
-}
-
-func (n NullRawJSON) MarshalJSON() ([]byte, error) {
-	if n == nil {
-		return []byte("null"), nil
-	}
-	return json.RawMessage(n).MarshalJSON()
-}
-
-func (n *NullRawJSON) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
-		*n = nil
-		return nil
-	}
-	*n = NullRawJSON(data)
-	return nil
-}
+// Compile-time pin that the scanner / valuer / json contracts the rest
+// of detection relies on are still satisfied through the alias.
+var (
+	_ interface {
+		Scan(any) error
+	} = (*NullRawJSON)(nil)
+	_ driver.Valuer  = NullRawJSON(nil)
+	_ json.Marshaler = NullRawJSON(nil)
+	_ interface {
+		UnmarshalJSON([]byte) error
+	} = (*NullRawJSON)(nil)
+)
 
 // Event mirrors a row in the events table. The agent posts these to
 // /api/events; the engine evaluates rules over batches of these.
