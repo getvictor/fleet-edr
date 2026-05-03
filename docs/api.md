@@ -82,8 +82,8 @@ X-CSRF-Token: <csrf_token>
 GET requests only need the cookie. Logout is `DELETE /api/session`.
 
 Endpoints that require the session cookie:
-- `GET /api/hosts`, `/api/hosts/{id}/tree`,
-  `/api/hosts/{id}/processes/{pid}`
+- `GET /api/hosts`, `/api/hosts/{host_id}/tree`,
+  `/api/hosts/{host_id}/processes/{pid}`
 - `GET /api/alerts`, `/api/alerts/{id}`; `PUT /api/alerts/{id}`
 - `GET /api/commands/{id}`, `POST /api/commands`
 - `GET /api/enrollments`,

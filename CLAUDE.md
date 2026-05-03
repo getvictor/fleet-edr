@@ -84,4 +84,4 @@ Layered on the global guide. Project-specific:
 - Line wrap at 140 characters.
 - Sentence case for headings.
 - No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-` with surrounding spaces).
-- Don't run `make db-reset` without explicit user permission.
+- Don't run `task db:reset` without explicit user permission.

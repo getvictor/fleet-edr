@@ -262,8 +262,7 @@ floor for any project that wants enterprise adoption.
 - [x] Unit tests with race detector (`go test -race -count=1`) for agent and server
 - [x] Integration tests against real MySQL 8.4 in CI
 - [x] React component tests with Vitest + Testing Library
-- [x] Test helpers and shared fixtures (`server/store/testhelper.go`,
-  `server/api/testhelpers_test.go`)
+- [x] Test helpers and shared fixtures (per-context `server/<context>/testkit/testkit.go`)
 - [x] **Three-layer test split** aligned with bounded contexts (per ADR-0004).
   Layer 1: per-package unit tests, default tag, co-located with the code; use
   `server/testdb.Open(t)` + the relevant context's `bootstrap.ApplySchema` (or
@@ -355,7 +354,7 @@ genuine differentiator versus most competitors.
   time so the policy is reviewable in `main.go`
 - [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml`, prose overview at
   `docs/api.md`, AND hosted rendering at `/api/docs` via embedded Redoc (D1
-  deliverable: zero external network calls, served from `server/api/docs/embed`).
+  deliverable: zero external network calls, served from `server/apidocs/embed`).
   Still missing: handler/client codegen via `oapi-codegen` /
   `openapi-typescript`, so today the spec and the Go handlers can still drift
   without CI catching it

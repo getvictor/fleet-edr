@@ -15,3 +15,6 @@ or change the cadence - running tasks with no record is the same as not running 
 ---
 
 <!-- entries below, newest at the bottom -->
+
+2026-05-03  doc-accuracy-sweep  partial  scope: root-level READMEs + `docs/*.md` (subdirs deferred to next rotation)
+
