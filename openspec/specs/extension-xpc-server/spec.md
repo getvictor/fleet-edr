@@ -128,9 +128,9 @@ extensions.
 
 ### Requirement: Disconnect cleanup
 
-When an XPC peer disconnects — whether because the agent process exited, the connection was interrupted, or the agent
-called disconnect — the extension SHALL remove that peer from the broadcast set and SHALL stop sending events to it.
-A disconnect MUST NOT affect any other connected peer.
+The extension SHALL remove a peer from the broadcast set and stop sending events to it whenever its XPC connection
+ends, whether because the agent process exited, the connection was interrupted, or the agent called disconnect. A
+disconnect MUST NOT affect any other connected peer.
 
 #### Scenario: One of two agents goes away
 

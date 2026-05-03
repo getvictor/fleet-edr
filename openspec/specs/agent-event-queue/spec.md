@@ -167,9 +167,9 @@ silently losing data.
 
 ### Requirement: Synthetic reconciliation events use the same queue
 
-Reconciliation events (synthetic exit events emitted by the agent and snapshot exec events emitted by the extension)
-SHALL traverse the same queue as kernel-observed events. The queue MUST NOT distinguish them from organic events for
-the purposes of durability, ordering, or upload.
+The queue SHALL accept reconciliation events (synthetic exit events emitted by the agent and snapshot exec events
+emitted by the extension) on the same path as kernel-observed events, and MUST NOT distinguish them from organic events
+for the purposes of durability, ordering, or upload.
 
 #### Scenario: Reconciliation exit event is queued and uploaded
 
