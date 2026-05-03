@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -90,8 +91,20 @@ func (r *recordingCommandInserter) snapshot() []recordedCommand {
 
 // newEndpoint wires endpoint.bootstrap.New against a fresh test DB.
 // Returns the *Endpoint handle so tests can hit Service() directly or
-// register routes onto a test mux.
+// register routes onto a test mux. Tests that need direct DB access
+// (e.g. rotation_test.go's ageToken) reach for newEndpointWithDB.
 func newEndpoint(t *testing.T, opts ...func(*bootstrap.Deps)) *bootstrap.Endpoint {
+	t.Helper()
+	ep, _ := newEndpointWithDB(t, opts...)
+	return ep
+}
+
+// newEndpointWithDB exposes the underlying *sqlx.DB alongside the
+// Endpoint so tests that need to manipulate row state directly (e.g.
+// backdating host_token_issued_at to forge a stale token without
+// waiting an hour) can do so without leaking through the public
+// bootstrap.Endpoint surface.
+func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.Endpoint, *sqlx.DB) {
 	t.Helper()
 	s := full.Open(t)
 	deps := bootstrap.Deps{
@@ -106,7 +119,7 @@ func newEndpoint(t *testing.T, opts ...func(*bootstrap.Deps)) *bootstrap.Endpoin
 	ep, err := bootstrap.New(deps)
 	require.NoError(t, err)
 	require.NoError(t, ep.ApplySchema(t.Context()))
-	return ep
+	return ep, s
 }
 
 // TestEnrollVerifyListRevoke walks the full operator + agent flow:
