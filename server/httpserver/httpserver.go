@@ -41,6 +41,12 @@ type Options struct {
 	// speaks TLS; emitting HSTS over plain HTTP is a footgun that can make users unreachable if
 	// they accidentally deploy the next process without TLS.
 	TLSEnabled bool
+	// ClientIPResolver, when set, runs as middleware that resolves the
+	// trusted client IP once per request and stashes it on ctx so
+	// downstream rate-limit + audit code reads the same value (issue
+	// #81). nil disables the middleware: handlers fall back to the
+	// direct TCP peer via httpserver.ClientIP.
+	ClientIPResolver *ClientIPResolver
 }
 
 // Build wraps the provided handler with the full middleware chain.
@@ -62,6 +68,12 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		h = hstsHeader()(h)
 	}
 	h = xRequestIDEcho()(h)
+	// Client-IP resolution sits outside the access log so the resolved
+	// IP is on ctx by the time accessLog logs (and downstream handlers
+	// run). Wrap before xRequestIDEcho so trace correlation is unchanged.
+	if opts.ClientIPResolver != nil {
+		h = opts.ClientIPResolver.Middleware(h)
+	}
 	h = otelhttp.NewHandler(h, opts.ServiceName,
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			// otelhttp calls the formatter inside its own handler, so r.Pattern may be empty.

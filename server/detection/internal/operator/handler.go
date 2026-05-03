@@ -263,7 +263,7 @@ func (h *Handler) recordAlertStatusAudit(r *http.Request, alertID int64, newStat
 		Action:     action,
 		TargetType: "alert",
 		TargetID:   strconv.FormatInt(alertID, 10),
-		RemoteAddr: r.RemoteAddr,
+		RemoteAddr: httpserver.ClientIP(r),
 		Payload:    map[string]any{"new_status": newStatus},
 	}); err != nil {
 		h.logger.WarnContext(r.Context(), "audit record",

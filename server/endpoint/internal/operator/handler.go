@@ -147,7 +147,7 @@ func (h *Handler) recordRevokeAudit(r *http.Request, hostID string, body revokeR
 		Action:     identityapi.AuditEnrollmentRevoke,
 		TargetType: "host",
 		TargetID:   hostID,
-		RemoteAddr: r.RemoteAddr,
+		RemoteAddr: httpserver.ClientIP(r),
 		Payload: map[string]any{
 			"actor":  body.Actor,
 			"reason": body.Reason,

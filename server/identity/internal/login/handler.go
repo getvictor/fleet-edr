@@ -116,7 +116,7 @@ const loginBodyCap = 4 << 10 // 4 KiB
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
-	ip := httpserver.RemoteIP(r)
+	ip := httpserver.ClientIP(r)
 	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 
 	if !h.limiter.Allow(ip) {
@@ -211,7 +211,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 // through to the cookie clear.
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	ip := httpserver.RemoteIP(r)
+	ip := httpserver.ClientIP(r)
 
 	raw := h.decodeLogoutToken(r)
 	if raw != nil {

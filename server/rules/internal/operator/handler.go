@@ -201,7 +201,7 @@ func (h *Handler) recordPolicyAudit(r *http.Request, body putPolicyRequest, vers
 		Action:     identityapi.AuditPolicyUpdate,
 		TargetType: "policy",
 		TargetID:   api.DefaultPolicyName,
-		RemoteAddr: r.RemoteAddr,
+		RemoteAddr: httpserver.ClientIP(r),
 		Payload:    payload,
 	}); err != nil {
 		h.logger.WarnContext(ctx, "audit record",
