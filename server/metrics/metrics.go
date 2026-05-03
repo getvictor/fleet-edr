@@ -1,4 +1,4 @@
-// Package metrics owns the Phase 4 OTel metric surface. Every counter, histogram, and
+// Package metrics owns the OTel metric surface. Every counter, histogram, and
 // observable gauge is registered against the global OTel meter so values flow through
 // the same OTLP pipeline `observability.Init` already configured. There is no Prometheus
 // scrape endpoint and no secondary registry — SigNoz (or any OTLP receiver) sees these
@@ -57,7 +57,7 @@ type Options struct {
 	Meter metric.Meter
 }
 
-// New builds a Recorder and registers every Phase 4 metric against the OTel meter.
+// New builds a Recorder and registers every metric against the OTel meter.
 // When OTEL_EXPORTER_OTLP_ENDPOINT is unset `observability.Init` leaves the SDK in its
 // no-op state; in that case every `Add`/`Record`/`Observe` call is a no-op and this
 // constructor still succeeds, so unit tests and offline dev don't need a collector.

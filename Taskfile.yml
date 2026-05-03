@@ -223,7 +223,7 @@ tasks:
     desc: |
       arch-go architecture rules over the modular monolith bounded contexts.
       Hard-fails on any cross-context import that isn't in arch-go.yml's
-      allow-list. Phase 6 strict mode: no transitional exceptions.
+      allow-list. Strict mode: no transitional exceptions.
     cmds:
       - go test ./test/arch/...
 

@@ -52,9 +52,8 @@ type Service interface {
 // interface directly so rule.Evaluate gets non-allocating method
 // dispatch.
 //
-// Was rules.api.GraphReader (alias-targeted) in phases 3-4; phase 5
-// moves the canonical definition here. rules/internal/catalog
-// imports it directly via detection.api.
+// The canonical definition lives here; rules/internal/catalog imports
+// it directly via detection.api.
 type GraphReader interface {
 	// GetProcessByPID returns the row whose (host, pid) bracket
 	// atTimeNs (i.e. fork_time_ns <= atTimeNs <= exit_time_ns or

@@ -73,9 +73,9 @@ export function HostList() {
   );
 }
 
-// offlineThresholdMs: Phase 4 defines "offline" as last_seen > 5 min old. The agent
-// polls every 5 s, so 5 min is 60× the polling interval — well past any transient
-// network blip but fast enough that a crashed agent shows up quickly in the UI.
+// offlineThresholdMs: "offline" is last_seen > 5 min old. The agent polls every 5 s,
+// so 5 min is 60× the polling interval — well past any transient network blip but
+// fast enough that a crashed agent shows up quickly in the UI.
 const offlineThresholdMs = 5 * 60 * 1000;
 
 function isOnline(lastSeenNs: number): boolean {

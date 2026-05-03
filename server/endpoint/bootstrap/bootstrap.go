@@ -21,9 +21,8 @@ import (
 // CommandInserter is the closure cmd/main supplies so the post-enroll
 // fan-out can queue the initial set_blocklist command without
 // endpoint importing response/api directly. Method-value-shaped to
-// match response.Service.Insert exactly: phase-4 cmd/main passes
-// `responseCtx.Service().Insert` here as a one-liner. Phase 5 may
-// route through detection-context glue but the signature stays.
+// match response.Service.Insert exactly: cmd/main passes
+// `responseCtx.Service().Insert` here as a one-liner.
 type CommandInserter = service.CommandInserter
 
 // Deps bundles what New needs to wire the endpoint context. cmd/main
@@ -37,14 +36,13 @@ type Deps struct {
 	// PolicyProvider supplies the active blocklist for new agents at
 	// enroll time. Nil-safe: when nil (or paired with a nil
 	// CommandInserter), the enroll handler skips the post-enroll
-	// fan-out. Satisfied today by rules.api.PolicyService (phase 3).
+	// fan-out. Satisfied today by rules.api.PolicyService.
 	PolicyProvider api.PolicyProvider
 	// CommandInserter inserts the initial set_blocklist command for
 	// new agents. Must be nil-or-non-nil paired with PolicyProvider.
-	// Satisfied today by response.api.Service.Insert (phase 4) via a
-	// method value. Was an interface (api.CommandInserter) in phases
-	// 2+3; the closure pattern matches what rules has used since
-	// phase 3 and removes one layer of interface boilerplate.
+	// Satisfied today by response.api.Service.Insert via a method
+	// value; the closure pattern matches what rules uses and avoids
+	// endpoint importing response/api.
 	CommandInserter CommandInserter
 
 	// Audit is the operator-action recorder. Optional: nil disables

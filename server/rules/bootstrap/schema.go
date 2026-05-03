@@ -4,8 +4,9 @@ package bootstrap
 // Idempotent (IF NOT EXISTS / INSERT IGNORE); safe to re-run on a
 // populated DB. No cross-context FKs.
 //
-// Authoritative copy of the policies table DDL. Was previously inlined
-// in server/store/store.go's applySchema; phase 3 moved it here.
+// Authoritative copy of the policies table DDL. Earlier server
+// versions inlined this in server/store/store.go's applySchema; the
+// bounded-context split moved it here.
 var schemaStatements = []string{
 	// policies holds the server-driven blocklist. For MVP we keep a
 	// single "default" row -- `name` is a UNIQUE key so v1.1 can add

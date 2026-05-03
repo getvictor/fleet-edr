@@ -34,10 +34,8 @@ type Service interface {
 	// hot path -- called every 5s per host.
 	//
 	// Side effect: calls the Heartbeat closure (wired by cmd/main) so
-	// the host's last-seen-ns advances on every poll. Phase 5 swaps
-	// the heartbeat plumbing for detection.api.RecordHostSeen; the
-	// closure pattern keeps response free of an explicit detection
-	// dependency until then.
+	// the host's last-seen-ns advances on every poll. The closure
+	// pattern keeps response free of an explicit detection dependency.
 	ListForHost(ctx context.Context, hostID string, status Status) ([]Command, error)
 
 	// UpdateStatus transitions a command's status. Agent-driven (acks

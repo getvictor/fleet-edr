@@ -13,11 +13,11 @@ import (
 // DYLD_LIBRARY_PATH in its environment. Those env vars tell dyld to load arbitrary
 // dylibs, a classic macOS code-injection technique.
 //
-// Phase 2 MVP: the ESF extension does not (yet) capture the full env map, so this rule
-// only catches the "explicit prefix" cases — either the env vars appear in argv (shell
-// style `VAR=x /bin/true`) or the caller invoked `env VAR=x target`. Inherited env vars
-// are invisible to us until the extension learns to serialise them; that extension change
-// is tracked in Phase 4 (Data lifecycle + observability).
+// Known limitation: the ESF extension does not (yet) capture the full env map, so this
+// rule only catches the "explicit prefix" cases — either the env vars appear in argv
+// (shell style `VAR=x /bin/true`) or the caller invoked `env VAR=x target`. Inherited
+// env vars are invisible until the extension learns to serialise them; that extension
+// change is tracked alongside the data-lifecycle work in the best-practices checklist.
 //
 // MITRE ATT&CK: T1574.006 (Hijack Execution Flow: Dynamic Linker Hijacking)
 type DyldInsert struct{}

@@ -4,9 +4,9 @@ package bootstrap
 // processes, alerts, alert_events, hosts. CREATE TABLE IF NOT EXISTS
 // so re-running ApplySchema is idempotent.
 //
-// Note: alerts.updated_by has NO FK to users(id) here. Phase 1 added
-// that FK as a transitional cross-context guard; phase 5's
-// MigrateSchema drops it (existing-DB upgrades) and the alert-update
+// Note: alerts.updated_by has NO FK to users(id) here. An earlier
+// schema carried that FK as a transitional cross-context guard;
+// MigrateSchema drops it on existing-DB upgrades and the alert-update
 // service layer enforces user existence via UserExists instead.
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS events (
@@ -95,7 +95,7 @@ var postSchemaStatements = []string{
 	 ON DUPLICATE KEY UPDATE
 	   event_count = VALUES(event_count),
 	   last_seen_ns = GREATEST(hosts.last_seen_ns, VALUES(last_seen_ns))`,
-	// Phase 7 / issue #7: backfill ingested_at_ns for pre-migration rows.
+	// Backfill ingested_at_ns for pre-migration rows (issue #7).
 	`UPDATE events SET ingested_at_ns = timestamp_ns WHERE ingested_at_ns = 0`,
 	// Mirror backfill on processes.
 	`UPDATE processes SET fork_ingested_at_ns = fork_time_ns WHERE fork_ingested_at_ns IS NULL`,

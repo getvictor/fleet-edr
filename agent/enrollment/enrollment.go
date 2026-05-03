@@ -1,4 +1,4 @@
-// Package enrollment drives the agent side of the Phase 1 identity protocol.
+// Package enrollment drives the agent side of the host-identity protocol.
 //
 //   - Ensure: called once at startup. If a persisted token file exists, loads it. Otherwise,
 //     performs a fresh enrollment against the server using EDR_ENROLL_SECRET, persists the
@@ -11,7 +11,7 @@
 //
 // Persistence uses XML plist format so operators can inspect the file via `plutil -p`. The
 // file is written with mode 0600; loading a world-readable file is a fatal error. Writes
-// use write-to-.new + fsync(file) + rename. On APFS (the Phase 1 target) rename is a
+// use write-to-.new + fsync(file) + rename. On APFS (the macOS target) rename is a
 // durable metadata op, so this gives us crash safety; see writePersisted for details if you
 // port to a non-APFS filesystem.
 package enrollment

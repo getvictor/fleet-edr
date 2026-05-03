@@ -10,9 +10,9 @@
 //   - Lister: enumerate rule metadata for /api/rules and /api/attack-coverage.
 //   - RuleProvider: load executable rules into the detection engine.
 //
-// Per ADR-0004 and claude/modular-monolith/phase3.md, rules/api may
-// import server/store transitively for Event/Process/TimeRange type
-// aliases so *store.Store satisfies GraphReader without per-call
-// conversion in the rule hot path. Phase 5 redirects those aliases to
-// detection/api.
+// Per ADR-0004, rules/api re-exports detection/api types
+// (Event/Process/TimeRange/GraphReader/Finding/NullRawJSON) as type
+// aliases so the catalog rule files can implement Rule.Evaluate
+// without importing detection/api directly. The alias is a deliberate
+// design choice; arch-go.yml names it explicitly.
 package api

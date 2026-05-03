@@ -8,7 +8,7 @@
 	<!--
 	    All tunables come from /etc/fleet-edr.conf (loaded by the agent on
 	    startup) or from the operator's LaunchDaemon env overrides below.
-	    No CLI flags: the agent main.go dropped flag parsing in phase 5.
+	    No CLI flags: the agent main.go reads everything from env / config.
 	-->
 	<key>ProgramArguments</key>
 	<array>

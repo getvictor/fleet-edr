@@ -52,7 +52,7 @@ func TestFetchPendingWithAuth(t *testing.T) {
 }
 
 // TestFetchPending401_CallsOnAuthFail locks in the contract that a 401 from the server wakes
-// up the enrollment re-auth hook. Regression bar for the Phase 1 QA bug where a revoked token
+// up the enrollment re-auth hook. Regression bar for an early QA bug where a revoked token
 // left the commander silently stuck.
 func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -90,8 +90,8 @@ func (r *recordingPolicySender) SendPolicy(payload []byte) error {
 	return nil
 }
 
-// TestExecuteSetBlocklist_HappyPath covers the Phase 2 command path: server enqueues a
-// set_blocklist, commander forwards it to the extension, and reports `completed` with
+// TestExecuteSetBlocklist_HappyPath covers the set_blocklist command path: server enqueues
+// the command, commander forwards it to the extension, and reports `completed` with
 // version + applied_paths.
 func TestExecuteSetBlocklist_HappyPath(t *testing.T) {
 	var gotStatus string
@@ -160,8 +160,8 @@ func TestExecuteSetBlocklist_InvalidPayload(t *testing.T) {
 	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
 }
 
-// TestExecuteSetBlocklist_InvalidVersion covers the Phase 2 guard: a payload with
-// version <= 0 is malformed (real server versions start at 1) and must be rejected
+// TestExecuteSetBlocklist_InvalidVersion covers the version-validation guard: a payload
+// with version <= 0 is malformed (real server versions start at 1) and must be rejected
 // before XPC handoff so the extension never sees a payload it cannot order correctly.
 func TestExecuteSetBlocklist_InvalidVersion(t *testing.T) {
 	var gotStatus, gotErr string

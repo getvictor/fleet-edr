@@ -1,10 +1,9 @@
 # Architecture maturity: what's enforced, by whom, and what's not
 
-This doc is a companion to `docs/adr/0004-modular-monolith-bounded-contexts.md`
-and the per-phase plans under `claude/modular-monolith/`. It exists so a
-reader landing in this repo six months from now - or someone deciding
-whether to invest in a new architectural pattern - can answer two
-questions in one place:
+This doc is a companion to `docs/adr/0004-modular-monolith-bounded-contexts.md`.
+It exists so a reader landing in this repo six months from now - or
+someone deciding whether to invest in a new architectural pattern -
+can answer two questions in one place:
 
 1. Which architectural rules are enforced automatically, and which are
    on code-reviewer trust?
@@ -113,7 +112,7 @@ custom tooling or arch-go capabilities the project doesn't ship.
   sub-package `testdb/full` which legitimately imports each testkit.
   Review heuristic: any new import in `server/testdb/open.go` (the
   leaf) that targets a `server/<X>/` path is the violation.
-- **No cross-context FKs.** Phase 5 dropped the only one
+- **No cross-context FKs.** The migration dropped the only one
   (`fk_alerts_updated_by`) and replaced it with the
   `identity.api.UserExists` code-level check. Schema review on every
   DDL change is the gate; arch-go doesn't see DDL.
@@ -274,5 +273,3 @@ authentication between processes (mTLS or token-keyed API).
   - A graduation criterion fires (and the response is to invest).
   - Industry practice shifts the comparison points (e.g. Fleet
     refactors away from the layered datastore-service shape).
-- Each phase plan under `claude/modular-monolith/phase[N].md` cites
-  this doc when the phase changes the enforcement surface.

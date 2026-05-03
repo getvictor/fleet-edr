@@ -117,7 +117,7 @@ func TestUpdate_CanonicalizesMacOSSymlinkPaths(t *testing.T) {
 		"every /tmp/, /var/, and /etc/ prefix must be rewritten to its /private/... canonical form; lookalike paths (/tmpfoo, /varlog, /etcetera) pass through unchanged")
 }
 
-// TestUpdate_RejectsInvalidBlocklistEntries locks in the Phase 2 validation contract: a
+// TestUpdate_RejectsInvalidBlocklistEntries locks in the validation contract: a
 // malformed path (relative, empty after trim) or hash (not 64 lowercase hex chars) fails
 // the update before anything is persisted. Without this, bad operator input would be
 // versioned + audited + fanned out to agents that silently can't apply it.

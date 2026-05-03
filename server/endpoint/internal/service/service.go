@@ -28,15 +28,14 @@ var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-
 
 // CommandInserter is the closure shape endpoint's enroll fan-out
 // uses to queue the initial set_blocklist command. cmd/main passes
-// response.Service.Insert as a method value satisfying this type;
-// the interface form (api.CommandInserter) was deleted in phase 4
-// for symmetry with rules's existing closure pattern.
+// response.Service.Insert as a method value satisfying this type.
+// The closure pattern matches what rules uses elsewhere.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
 // service implements api.Service by composing the mysql.Store with
-// the optional PolicyProvider (today: rules.api.PolicyService;
-// phase 3) and CommandInserter closure (today:
-// response.api.Service.Insert; phase 4) that cmd/main supplies.
+// the optional PolicyProvider (today: rules.api.PolicyService) and
+// CommandInserter closure (today: response.api.Service.Insert) that
+// cmd/main supplies.
 type service struct {
 	store    *mysql.Store
 	secret   string
