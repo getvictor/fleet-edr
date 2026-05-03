@@ -2,8 +2,8 @@
 
 This doc is a companion to `docs/adr/0004-modular-monolith-bounded-contexts.md`
 and the per-phase plans under `claude/modular-monolith/`. It exists so a
-reader landing in this repo six months from now — or someone deciding
-whether to invest in a new architectural pattern — can answer two
+reader landing in this repo six months from now - or someone deciding
+whether to invest in a new architectural pattern - can answer two
 questions in one place:
 
 1. Which architectural rules are enforced automatically, and which are
@@ -16,7 +16,7 @@ questions in one place:
 ### By the Go compiler (`internal/` rule)
 
 Strongest tier. Bypassing this requires either editing Go itself or
-arranging the package tree differently — neither is plausible.
+arranging the package tree differently - neither is plausible.
 
 - Each bounded context's `<X>/internal/` is invisible to anything
   outside `<X>/`. Other contexts cannot import
@@ -24,7 +24,7 @@ arranging the package tree differently — neither is plausible.
   refuses at `go build` time.
 - The repo-level `internal/` (e.g. `internal/observability`) is
   visible to any package under `github.com/fleetdm/edr/`, which is
-  the entire repo, so it functions as "shared module-private" — not
+  the entire repo, so it functions as "shared module-private" - not
   a bounded-context restriction.
 
 ### By arch-go (`arch-go.yml`, gated on every PR)
@@ -32,7 +32,7 @@ arranging the package tree differently — neither is plausible.
 Encoded as declarative rules, run as a hard-fail CI check
 (`.github/workflows/arch-go.yml`) and via `task lint:arch` locally
 (also wired into the lefthook pre-push chain). arch-go inspects
-**direct** imports only — see "Honest gaps" for the implications.
+**direct** imports only - see "Honest gaps" for the implications.
 
 Today's rule families:
 
@@ -58,7 +58,7 @@ Today's rule families:
 4. **Platform isolation.** `server/{config, bootstrap, httpserver,
    logging, metrics, attrkeys, apidocs, sqlhelpers, ui}` may not
    import any bounded context. (`server/testdb` is the noted
-   exception — its sub-package `testdb/full` legitimately imports
+   exception - its sub-package `testdb/full` legitimately imports
    each context's testkit; arch-go's prefix-based pattern matching
    can't cleanly separate the two, so the leaf invariant lives in
    code review.)
@@ -67,15 +67,15 @@ Today's rule families:
 
 Test layers map onto explicit file locations and build tags:
 
-- **Layer 1 — unit.** Co-located with code at `<X>/internal/<module>/`.
+- **Layer 1 - unit.** Co-located with code at `<X>/internal/<module>/`.
   Default tag, runs on every `go test ./...`. May use `testdb.Open` +
   `<X>/testkit.ApplySchema` for DB-touching tests; skips cleanly when
   `EDR_TEST_DSN` is unset.
-- **Layer 2 — per-context integration.** Lives at
+- **Layer 2 - per-context integration.** Lives at
   `<X>/internal/tests/`, package `tests`, build-tag `integration`.
   Exercises one bounded context end-to-end through its public
   `bootstrap.New` + service surface.
-- **Layer 3 — cross-context integration.** Lives at
+- **Layer 3 - cross-context integration.** Lives at
   `test/integration/`, package `integration`, build-tag
   `integration`. The canonical fixture in `test/integration/setup.go`
   composes every context the way `cmd/main` does; the canonical
@@ -139,16 +139,16 @@ custom tooling or arch-go capabilities the project doesn't ship.
 Backstage Plugin Architecture, ThoughtWorks Tech Radar 2024 entry on
 Modular Monoliths):**
 
-- Bounded contexts at the package level — ✓.
+- Bounded contexts at the package level - ✓.
 - Public-API / private-internal split with compiler-level
-  enforcement — ✓ (Go's `internal/`).
-- Per-context schema ownership; no cross-context FKs — ✓.
-- Architecture lint encoded as code, run as a blocking CI check —
+  enforcement - ✓ (Go's `internal/`).
+- Per-context schema ownership; no cross-context FKs - ✓.
+- Architecture lint encoded as code, run as a blocking CI check -
   ✓ (`arch-go`).
 - Single-process, single-DB hot path; cross-context calls go through
-  narrow interfaces with no allocation in the inner loop — ✓
+  narrow interfaces with no allocation in the inner loop - ✓
   (`detection.api.GraphReader` is the canonical example).
-- Three-layer test pyramid — ✓ (unit + per-context + cross-context).
+- Three-layer test pyramid - ✓ (unit + per-context + cross-context).
 
 **Stronger than the Fleet (`fleetdm/fleet`) reference the strategic
 plan cites:**
@@ -173,8 +173,8 @@ plan cites:**
   contexts when they diverge; today rules.api re-exports detection.api
   types directly (and re-export is documented as an explicit alias).
   When a future change requires rules to model `Event` differently
-  than detection — e.g. adding a `RuleHints` field that detection
-  doesn't care about — the right move is an ACL package
+  than detection - e.g. adding a `RuleHints` field that detection
+  doesn't care about - the right move is an ACL package
   (`server/rules/internal/eventacl/`) that converts between shapes.
 - **No event-driven cross-context communication (Kafka / NATS /
   Watermill).** All cross-context calls today are direct interface
@@ -215,7 +215,7 @@ ACL-shaped type. Drop the alias entry in arch-go.yml.
 **Trigger:** a cross-context interface call becomes the bottleneck
 (detection's processor blocks on response.Insert; OR rules'
 fan-out blocks on endpoint.ActiveHostIDs), AND the workload would
-naturally fan out — multiple ingest workers, async fan-out at
+naturally fan out - multiple ingest workers, async fan-out at
 enroll time.
 
 **Today:** every cross-context call is a direct method invocation
@@ -250,7 +250,7 @@ payoff.
 ### When to split into separate processes / services
 
 **Trigger:** context lifecycles diverge enough that a single
-deployment unit is the bottleneck — e.g. detection rule reload
+deployment unit is the bottleneck - e.g. detection rule reload
 requires a server restart that drops in-flight ingest, OR ingest
 QPS demands horizontal scaling that the operator API can't usefully
 share.

@@ -215,85 +215,68 @@ dependenciesRules:
         - "**.httpserver"
         - "**.sqlhelpers"
 
-  # ----- platform packages: must not import any bounded context ---------------
+  # ----- platform packages: allow-list of acceptable internal deps ------------
   #
   # Plan §"Platform packages": "Platform packages MUST NOT import any context."
-  # The rule encodes that. Patterns use full module paths because
-  # `**.bootstrap` would otherwise also match each context's bootstrap, and
-  # `**.testdb` would also match testdb/full (the cross-context fixture
-  # composer that legitimately imports each testkit).
+  # Phase 8 originally encoded this as a deny-list (shouldNotDependsOn each
+  # bounded context); Gemini's review on PR #100 pointed out that the
+  # deny-list is not future-proof — adding a sixth bounded context would
+  # require updating every platform rule by hand. Switching to an allow-list
+  # (shouldOnlyDependsOn the explicit set of allowed internal-graph deps)
+  # auto-excludes any new context: a future server/<new-context>/ package
+  # is implicitly forbidden because it isn't named in the allow.
+  #
+  # The allow-list enumerates: every other platform package, the repo-level
+  # internal/ tree (envparse + observability today), and stdlib/third-party
+  # imports (which arch-go's "internal:" key doesn't restrict — third-party
+  # imports flow through automatically, no listing needed).
+  #
+  # Patterns use full module paths because `**.bootstrap` would otherwise
+  # also match each context's bootstrap, and `**.testdb` would also match
+  # testdb/full (the cross-context fixture composer that legitimately
+  # imports each testkit).
 
   - package: "github.com/fleetdm/edr/server/config"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: &platform_allow
+        - "github.com/fleetdm/edr/server/config"
+        - "github.com/fleetdm/edr/server/bootstrap"
+        - "github.com/fleetdm/edr/server/httpserver"
+        - "github.com/fleetdm/edr/server/logging"
+        - "github.com/fleetdm/edr/server/metrics"
+        - "github.com/fleetdm/edr/server/attrkeys"
+        - "github.com/fleetdm/edr/server/apidocs"
+        - "github.com/fleetdm/edr/server/sqlhelpers"
+        - "github.com/fleetdm/edr/server/ui"
+        - "**.internal.**"
 
   - package: "github.com/fleetdm/edr/server/bootstrap"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   - package: "github.com/fleetdm/edr/server/httpserver"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   - package: "github.com/fleetdm/edr/server/logging"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   - package: "github.com/fleetdm/edr/server/metrics"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   - package: "github.com/fleetdm/edr/server/attrkeys"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   - package: "github.com/fleetdm/edr/server/apidocs"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   - package: "github.com/fleetdm/edr/server/sqlhelpers"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   # NOTE: server/testdb itself is a Go-leaf and imports no context, but its
   # sub-package server/testdb/full is the cross-context fixture composer and
@@ -304,13 +287,8 @@ dependenciesRules:
   # by the per-testkit rules below preventing transitive sneak-ins.
 
   - package: "github.com/fleetdm/edr/server/ui"
-    shouldNotDependsOn:
-      internal:
-        - "**.identity.**"
-        - "**.endpoint.**"
-        - "**.rules.**"
-        - "**.response.**"
-        - "**.detection.**"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
 
   # ----- bootstrap/ access: enforced indirectly --------------------------------
   #

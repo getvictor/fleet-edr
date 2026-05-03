@@ -2,7 +2,7 @@
 
 // Package tests holds per-context integration tests for the response
 // bounded context. Tests skip when EDR_TEST_DSN isn't set, matching
-// the project's other DB-using test files (no separate build tag).
+// the project's other DB-using test files.
 // They exercise the full stack via response/bootstrap.New against a
 // real MySQL.
 //

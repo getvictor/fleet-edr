@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package integration holds cross-context integration tests that exercise
 // scenarios spanning multiple bounded contexts — enroll a host via
 // endpoint, ingest events via detection, see an alert, issue a command via
@@ -152,9 +154,20 @@ func Setup(t *testing.T) *Stack {
 	mux := buildMux(detectionCtx, endpointCtx, identityCtx, rulesCtx, responseCtx, logger)
 
 	// Background loops. Cancelling the context stops them; t.Cleanup
-	// drives that.
-	go func() { _ = detectionCtx.Run(ctx) }()
-	go func() { _ = identityCtx.Run(ctx) }()
+	// drives that. Errors from the run loop are surfaced via t.Errorf
+	// so a crash in the processor or the session-cleanup loop fails
+	// the test loudly instead of silently letting Eventually timeouts
+	// be the only diagnostic signal.
+	go func() {
+		if err := detectionCtx.Run(ctx); err != nil && ctx.Err() == nil {
+			t.Errorf("detection.Run failed: %v", err)
+		}
+	}()
+	go func() {
+		if err := identityCtx.Run(ctx); err != nil && ctx.Err() == nil {
+			t.Errorf("identity.Run failed: %v", err)
+		}
+	}()
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
