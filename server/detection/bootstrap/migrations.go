@@ -106,6 +106,20 @@ var migrations = []migrationStep{
 		SQL:          `ALTER TABLE processes ADD INDEX idx_processes_previous_exec (previous_exec_id)`,
 		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
 	},
+	// Tenant scaffolding (wave-1 user-management). The column exists for
+	// future MSSP-style multi-tenancy; wave-1 reads do not filter on it.
+	// VARCHAR(64) DEFAULT 'default' so an existing-DB ALTER backfills
+	// every row to the seeded tenant without a follow-up UPDATE.
+	{
+		Name:         "hosts.tenant_id",
+		SQL:          `ALTER TABLE hosts ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
+		IgnoreErrors: []uint16{mysqlDuplicateColumn},
+	},
+	{
+		Name:         "alerts.tenant_id",
+		SQL:          `ALTER TABLE alerts ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
+		IgnoreErrors: []uint16{mysqlDuplicateColumn},
+	},
 }
 
 // shouldIgnore reports whether err matches any of the codes in the

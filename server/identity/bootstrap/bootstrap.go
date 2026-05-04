@@ -14,6 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/audit"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
+	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
@@ -107,10 +108,15 @@ func (i *Identity) ApplySchema(ctx context.Context) error {
 }
 
 // ApplySchema is the package-level form: applies identity's DDL +
-// idempotent ALTERs against the given DB without requiring a fully
-// constructed *Identity. Used by server/testdb so tests can apply
+// idempotent ALTERs against the given DB, then seeds the default tenant
+// and the five built-in roles. Used by server/testdb so tests can apply
 // every context's schema without faking out each bootstrap's service
 // dependencies.
+//
+// Seed steps run after DDL because they require the tables they
+// populate. Both seeds are INSERT IGNORE so re-running on a populated
+// DB is a no-op; the same call site is used for fresh deployments and
+// for upgrades that pick up a new built-in role.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("identity ApplySchema: db must not be nil")
@@ -124,6 +130,12 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
 			return fmt.Errorf("identity schema migration: %w", err)
 		}
+	}
+	if err := seed.Tenants(ctx, db); err != nil {
+		return fmt.Errorf("identity seed tenants: %w", err)
+	}
+	if err := seed.Roles(ctx, db); err != nil {
+		return fmt.Errorf("identity seed roles: %w", err)
 	}
 	return nil
 }

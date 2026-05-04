@@ -1,0 +1,38 @@
+//go:build integration
+
+package tests
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/endpoint/bootstrap"
+	"github.com/fleetdm/edr/server/testdb"
+)
+
+// TestSchema_TenantIDOnEnrollments locks in the wave-1
+// tenant-scaffolding migration: endpoint's `enrollments` table gains a
+// tenant_id VARCHAR(64) NOT NULL DEFAULT 'default' column. Wave-1
+// reads do not query on it; the column exists for wave-2 MSSP scoping.
+func TestSchema_TenantIDOnEnrollments(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+
+	var nullable, dataType string
+	var defaultValue *string
+	err := db.QueryRowContext(t.Context(), `
+		SELECT IS_NULLABLE, DATA_TYPE, COLUMN_DEFAULT
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'enrollments' AND COLUMN_NAME = 'tenant_id'
+	`).Scan(&nullable, &dataType, &defaultValue)
+	require.NoError(t, err, "tenant_id missing from enrollments")
+	assert.Equal(t, "NO", nullable)
+	assert.Equal(t, "varchar", dataType)
+	require.NotNil(t, defaultValue)
+	assert.Equal(t, "default", *defaultValue)
+
+	require.NoError(t, bootstrap.ApplySchema(t.Context(), db),
+		"second ApplySchema must succeed -- migrations are not idempotent")
+}

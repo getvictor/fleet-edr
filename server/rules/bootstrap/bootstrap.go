@@ -96,10 +96,10 @@ func (r *Rules) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, r.db)
 }
 
-// ApplySchema is the package-level form: applies rules' DDL against
-// the given DB without requiring a fully constructed *Rules. Used by
-// server/testdb so tests can apply every context's schema without
-// faking out each bootstrap's service dependencies.
+// ApplySchema is the package-level form: applies rules' DDL + idempotent
+// ALTERs against the given DB without requiring a fully constructed
+// *Rules. Used by server/testdb so tests can apply every context's
+// schema without faking out each bootstrap's service dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("rules ApplySchema: db must not be nil")
@@ -107,6 +107,11 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("rules schema apply: %w", err)
+		}
+	}
+	for _, stmt := range schemaMigrations {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
+			return fmt.Errorf("rules schema migration: %w", err)
 		}
 	}
 	return nil

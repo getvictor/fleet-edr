@@ -75,6 +75,11 @@ var schemaMigrations = []string{
 	`ALTER TABLE enrollments ADD COLUMN previous_host_token_salt  VARBINARY(32)  NULL`,
 	`ALTER TABLE enrollments ADD COLUMN previous_token_expires_at TIMESTAMP(6)   NULL`,
 	`ALTER TABLE enrollments ADD INDEX idx_enrollments_prev_token (previous_host_token_id)`,
+	// Tenant scaffolding (wave-1 user-management). The column exists for
+	// future MSSP-style multi-tenancy; wave-1 reads do not filter on it.
+	// VARCHAR(64) DEFAULT 'default' so the ALTER backfills existing rows
+	// without a follow-up UPDATE.
+	`ALTER TABLE enrollments ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
 }
 
 // isAlreadyAppliedMigration returns true when err is one of the MySQL
