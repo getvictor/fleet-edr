@@ -150,7 +150,23 @@ func run() error {
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
 
-	srv := newHTTPServer(cfg, mux, logger)
+	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty.
+	// httpserver.Build skips installing the middleware on a nil resolver,
+	// and httpserver.ClientIP's fallback returns the same peer IP the
+	// resolver's empty-list path would return — so this saves one
+	// per-request middleware hop in the default deployment (per Copilot
+	// review on PR #113).
+	var clientIPResolver *httpserver.ClientIPResolver
+	if len(cfg.TrustedProxies) > 0 {
+		clientIPResolver, err = httpserver.NewClientIPResolver(cfg.TrustedProxies)
+		if err != nil {
+			logger.ErrorContext(ctx, "EDR_TRUSTED_PROXIES invalid", "err", err)
+			return err
+		}
+		logger.InfoContext(ctx, "trusting X-Forwarded-For from proxies", "trusted", cfg.TrustedProxies)
+	}
+
+	srv := newHTTPServer(cfg, mux, logger, clientIPResolver)
 	if err := configureTLSIfEnabled(ctx, logger, srv, cfg); err != nil {
 		return err
 	}
@@ -339,11 +355,12 @@ func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, l
 	}
 }
 
-func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger) *http.Server {
+func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, clientIPResolver *httpserver.ClientIPResolver) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{
-		Logger:      logger,
-		ServiceName: serviceName,
-		TLSEnabled:  cfg.TLSEnabled(),
+		Logger:           logger,
+		ServiceName:      serviceName,
+		TLSEnabled:       cfg.TLSEnabled(),
+		ClientIPResolver: clientIPResolver,
 	})
 	return &http.Server{
 		Addr:         cfg.ListenAddr,

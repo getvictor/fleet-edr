@@ -41,6 +41,12 @@ type Options struct {
 	// speaks TLS; emitting HSTS over plain HTTP is a footgun that can make users unreachable if
 	// they accidentally deploy the next process without TLS.
 	TLSEnabled bool
+	// ClientIPResolver, when set, runs as middleware that resolves the
+	// trusted client IP once per request and stashes it on ctx so
+	// downstream rate-limit + audit code reads the same value (issue
+	// #81). nil disables the middleware: handlers fall back to the
+	// direct TCP peer via httpserver.ClientIP.
+	ClientIPResolver *ClientIPResolver
 }
 
 // Build wraps the provided handler with the full middleware chain.
@@ -62,6 +68,16 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		h = hstsHeader()(h)
 	}
 	h = xRequestIDEcho()(h)
+	// Client-IP resolution wraps xRequestIDEcho so the resolver runs
+	// outermost in the application layer (still inside otelhttp's
+	// span). The resolved IP is therefore on ctx by the time accessLog
+	// + downstream handlers read it via ClientIP(r). Skipped entirely
+	// when no proxies are configured: the empty trusted list yields
+	// the same value httpserver.ClientIP's fallback does, with one
+	// fewer per-request allocation.
+	if opts.ClientIPResolver != nil {
+		h = opts.ClientIPResolver.Middleware(h)
+	}
 	h = otelhttp.NewHandler(h, opts.ServiceName,
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			// otelhttp calls the formatter inside its own handler, so r.Pattern may be empty.
@@ -144,7 +160,7 @@ func accessLog(logger *slog.Logger, slowThreshold time.Duration) func(http.Handl
 				"status", rw.status,
 				"bytes", rw.bytes,
 				"duration_ms", dur.Milliseconds(),
-				"remote_addr", remoteAddr(r),
+				"remote_addr", ClientIP(r),
 			}
 
 			ctx := r.Context()
@@ -190,15 +206,6 @@ func (s *statusCapture) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-// remoteAddr returns the peer address for access logging. We intentionally do NOT consult
-// `X-Forwarded-For`: that header is client-settable and trusting it without a trusted-proxy
-// allowlist lets any caller spoof their logged source IP. When the server moves behind a
-// real reverse proxy in production packaging, revisit this with an explicit
-// trusted-proxies config knob; until then, r.RemoteAddr is the only trustworthy source.
-func remoteAddr(r *http.Request) string {
-	return r.RemoteAddr
 }
 
 // NoStoreJSON is a small helper for health handlers: writes JSON with no-store cache headers.

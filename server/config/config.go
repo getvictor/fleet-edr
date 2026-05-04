@@ -96,6 +96,16 @@ type Config struct {
 	// Default 5m: comfortably wider than an agent's poll interval so an
 	// in-flight request doesn't 401 mid-cycle.
 	HostTokenGrace time.Duration
+
+	// TrustedProxies is the set of CIDRs (or bare IPs) the server will
+	// trust X-Forwarded-For from. Populated from EDR_TRUSTED_PROXIES
+	// (comma-separated). Empty by default — XFF is ignored and the
+	// per-IP rate limiter + audit log see the direct TCP peer (issue
+	// #81). Set this to your reverse proxy / load-balancer pool the
+	// moment you put an ALB / nginx / Cloudflare in front of
+	// fleet-edr-server, or one user hitting the rate limit will lock
+	// out everyone behind the proxy.
+	TrustedProxies []string
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -202,6 +212,10 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 		c.SuspiciousExecParentAllowlist = allowlist
 	}
 
+	if v := getenv("EDR_TRUSTED_PROXIES"); v != "" {
+		c.TrustedProxies = splitCSV(v)
+	}
+
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
 		// Normalize to the canonical lowercase form so downstream slog handlers see one of the
 		// documented values regardless of how the operator spelled it (e.g. "INFO", "Warn").
@@ -241,6 +255,23 @@ func optionalStr(dst *string, key string, getenv func(string) string) {
 	if v := getenv(key); v != "" {
 		*dst = v
 	}
+}
+
+// splitCSV trims and drops empty tokens from a comma-separated value.
+// CIDR validation is deferred to httpserver.NewClientIPResolver so a
+// bad token errors with a uniform message at startup.
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func validLogLevel(lvl string) bool {
