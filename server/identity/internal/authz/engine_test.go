@@ -39,7 +39,7 @@ func (r *recordingAudit) snapshot() []api.AuditEvent {
 func newEngine(t *testing.T, shadowMode bool) (*authz.Engine, *recordingAudit) {
 	t.Helper()
 	rec := &recordingAudit{}
-	e, err := authz.New(t.Context(), rec, nil, shadowMode)
+	e, err := authz.New(t.Context(), rec, nil, shadowMode, authz.Options{})
 	require.NoError(t, err, "construct engine")
 	return e, rec
 }
@@ -238,7 +238,7 @@ func TestSetShadowMode_Atomic(t *testing.T) {
 // caller passes nil for the AuditRecorder. Production callers must
 // supply one; tests sometimes don't.
 func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
-	e, err := authz.New(t.Context(), nil, nil, false)
+	e, err := authz.New(t.Context(), nil, nil, false, authz.Options{})
 	require.NoError(t, err)
 	actor := actorWithRoles(1, "default", tenantBinding("super_admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)

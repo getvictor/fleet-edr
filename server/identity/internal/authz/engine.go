@@ -15,6 +15,7 @@ import (
 	"github.com/open-policy-agent/opa/v1/storage/inmem"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/audit"
 )
 
 // policyFS bakes the Rego module + JSON data files into the binary.
@@ -43,10 +44,22 @@ const actionAttrKey = "edr.authz.action"
 // and a hot-swappable shadow-mode flag. SIGHUP reloads the flag
 // without rebuilding the query.
 type Engine struct {
-	query  rego.PreparedEvalQuery
-	audit  api.AuditRecorder
-	logger *slog.Logger
-	shadow atomic.Bool
+	query rego.PreparedEvalQuery
+	audit api.AuditRecorder
+	// asyncRead is the optional Phase 3 path for read-action allow
+	// events: the chokepoint Submits to it instead of calling
+	// audit.Record synchronously when (a) the action is a read action,
+	// (b) the decision is Allow, (c) the actor is non-break-glass, and
+	// (d) the action is not audit.read (which keeps the audit-of-audit
+	// row regardless of sampling). Nil-safe: a missing async writer
+	// degrades silently to the synchronous Record path.
+	asyncRead api.AsyncAuditWriter
+	// readSamplingRate is the inclusion probability (0.0-1.0) for
+	// non-carve-out read-allow events. 0.0 (default) emits zero such
+	// rows; 1.0 emits every row (the wave-1 historical behavior).
+	readSamplingRate float64
+	logger           *slog.Logger
+	shadow           atomic.Bool
 
 	// registered is the action allowlist the chokepoint validates
 	// against before invoking Rego. A request that names an
@@ -55,6 +68,15 @@ type Engine struct {
 	// api.RegisteredActions and policy/data/actions.json keeps the two
 	// in lockstep, this set is the runtime defense in depth.
 	registered map[api.Action]struct{}
+}
+
+// Options bundles the optional Phase 3 dependencies. Zero values are
+// valid: a nil AsyncRead degrades to fully-synchronous audit;
+// ReadSamplingRate=0 means "audit zero non-carve-out read-allow
+// events" (the wave-1 default).
+type Options struct {
+	AsyncRead        api.AsyncAuditWriter
+	ReadSamplingRate float64
 }
 
 // New compiles the embedded Rego policy + bundle data and returns a
@@ -66,7 +88,11 @@ type Engine struct {
 // later Allow calls take their own ctx. shadowMode is the initial
 // value of the hot-swap flag; SetShadowMode changes it later
 // (cmd/main's SIGHUP handler is the production caller).
-func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, shadowMode bool) (*Engine, error) {
+//
+// opts carries the Phase 3 async + sampling configuration. Zero
+// value is valid (no async writer, 0.0 read sampling); production
+// wires identityCtx's AsyncWriter and cfg.AuditReadSampling.
+func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, shadowMode bool, opts Options) (*Engine, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -99,10 +125,12 @@ func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, shad
 	}
 
 	e := &Engine{
-		query:      query,
-		audit:      audit,
-		logger:     logger,
-		registered: registered,
+		query:            query,
+		audit:            audit,
+		asyncRead:        opts.AsyncRead,
+		readSamplingRate: opts.ReadSamplingRate,
+		logger:           logger,
+		registered:       registered,
 	}
 	e.shadow.Store(shadowMode)
 	return e, nil
@@ -197,6 +225,14 @@ func (e *Engine) ShadowMode() bool { return e.shadow.Load() }
 // not turn into a permission deny (the spec's audit-of-audit pattern
 // is explicit on this — we want both signals when both fail, not a
 // false negative cascading from one).
+//
+// Phase 3 hybrid path: when the decision is an allow on a non-audit
+// read action by a non-break-glass actor, the chokepoint consults
+// the read-sampling rate; included events go to the async writer
+// (when configured) so the privileged-route hot path doesn't wait on
+// an INSERT. Everything else (denies, errors, writes, auth outcomes,
+// audit.read, break-glass) remains on the synchronous path so the
+// durability invariant on security-relevant signals is preserved.
 func (e *Engine) recordDecision(
 	ctx context.Context,
 	actor *api.Actor,
@@ -218,6 +254,18 @@ func (e *Engine) recordDecision(
 		uid := actor.UserID
 		event.UserID = &uid
 	}
+	if e.routeAsync(action, d, actor) {
+		if !audit.ShouldSampleRead(action, false, e.readSamplingRate) {
+			return
+		}
+		if e.asyncRead.Submit(ctx, event) {
+			return
+		}
+		// Submit returned false (queue full or writer stopped); fall
+		// through to the sync path so the row still lands. The async
+		// writer already logged the queue-full WARN; double-logging
+		// the same event is acceptable to keep the audit record.
+	}
 	if err := e.audit.Record(ctx, event); err != nil {
 		e.logger.WarnContext(ctx, "authz audit write",
 			"err", err,
@@ -225,6 +273,28 @@ func (e *Engine) recordDecision(
 			"edr.authz.allow", d.Allow,
 			"edr.authz.reason", d.Reason)
 	}
+}
+
+// routeAsync reports whether this (action, decision, actor) tuple is
+// a candidate for the async + sampling path. Returns true only when
+// every guard holds: an allow decision, a non-audit-read action that
+// IS a read action, a non-break-glass actor, and an asyncRead writer
+// configured. Any miss falls through to the sync path so security-
+// relevant signals are never sampled out.
+func (e *Engine) routeAsync(action api.Action, d api.Decision, actor *api.Actor) bool {
+	if e.asyncRead == nil {
+		return false
+	}
+	if !d.Allow {
+		return false
+	}
+	if actor == nil || actor.IsBreakglass {
+		return false
+	}
+	if action == api.ActionAuditRead {
+		return false
+	}
+	return api.IsReadAction(action)
 }
 
 func auditPayload(d api.Decision, shadow bool) map[string]any {

@@ -123,6 +123,27 @@ func NonNegativeDuration(getenv Getenv, key string, dst *time.Duration, errs *[]
 	}
 }
 
+// UnitFraction parses key as a float in [0.0, 1.0]. Used for inclusion
+// probabilities (audit read-sampling rate, tracing sample rate) where
+// any value outside that range is meaningless. Out-of-range inputs
+// produce a validation error; an unset key leaves dst untouched so
+// the caller's default survives.
+func UnitFraction(getenv Getenv, key string, dst *float64, errs *[]error) {
+	v := getenv(key)
+	if v == "" {
+		return
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	switch {
+	case err != nil:
+		*errs = append(*errs, fmt.Errorf(errFmt, key, v, err))
+	case f < 0.0 || f > 1.0:
+		*errs = append(*errs, fmt.Errorf("%s=%v must be in [0.0, 1.0]", key, f))
+	default:
+		*dst = f
+	}
+}
+
 // Allowlist turns a comma-separated string into a set, trimming whitespace and
 // dropping empty entries. Returns nil for empty input so the caller can detect
 // "operator didn't set it" and keep the package-local default.

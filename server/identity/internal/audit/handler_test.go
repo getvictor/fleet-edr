@@ -77,7 +77,7 @@ func TestHandler_ListEmptySuccess(t *testing.T) {
 	reader := &stubReader{rows: nil}
 	srv := newHandlerTestServer(t, reader)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -115,7 +115,7 @@ func TestHandler_ListPopulated(t *testing.T) {
 	}}}
 	srv := newHandlerTestServer(t, reader)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit?limit=1", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events?limit=1", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestHandler_ListParseErrors(t *testing.T) {
 			reader := &stubReader{}
 			srv := newHandlerTestServer(t, reader)
 
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit?"+tc.query, nil)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events?"+tc.query, nil)
 			require.NoError(t, err)
 			resp, err := srv.Client().Do(req)
 			require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestHandler_ListFilterParsing(t *testing.T) {
 	q := "user_id=42&action=alert.acknowledge&target_type=alert&target_id=99" +
 		"&since=2026-05-01T00:00:00Z&until=2026-05-04T00:00:00Z" +
 		"&limit=25&before_id=1000"
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit?"+q, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events?"+q, nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestHandler_ListReaderError(t *testing.T) {
 	reader := &stubReader{err: errors.New("clickhouse went away")}
 	srv := newHandlerTestServer(t, reader)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -259,7 +259,7 @@ func TestHandler_AuthZDeny(t *testing.T) {
 	srv := newHandlerTestServerWithAuthZ(t, reader,
 		stubAuthZ{decision: api.Decision{Allow: false, Reason: "no_matching_rule"}})
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
@@ -282,7 +282,7 @@ func TestHandler_AuthZEngineError(t *testing.T) {
 	srv := newHandlerTestServerWithAuthZ(t, reader,
 		stubAuthZ{err: errors.New("opa exploded")})
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events", nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)

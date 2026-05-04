@@ -101,8 +101,60 @@ type AuditEvent struct {
 // INSERT per operator action), and operator-action volume is several
 // orders of magnitude smaller than event ingest, so synchronous is
 // the right default.
+//
+// Phase 3 carves out an async path for chokepoint emissions on
+// read-action allow events; see AsyncAuditWriter and IsReadAction
+// below. Sync remains the default for everything else (denies, writes,
+// auth outcomes, break-glass) so the durability invariant stays
+// intact on the events reviewers actually need post-incident.
 type AuditRecorder interface {
 	Record(ctx context.Context, e AuditEvent) error
+}
+
+// AsyncAuditWriter is the optional non-blocking sibling of
+// AuditRecorder. The chokepoint routes high-volume read-allow audit
+// events through Submit so the hot path of every privileged read does
+// not wait on an INSERT. Submit is non-blocking: it returns true when
+// the event was queued, false when the bounded buffer was full and
+// the implementation logged a slog WARN as the dual-emit fallback.
+//
+// Submit must be safe to call concurrently from multiple goroutines.
+//
+// Lifecycle: implementations own a goroutine; cmd/main starts it via
+// the per-context Run loop and stops it on ctx cancel. Pending
+// events at shutdown flush with a per-row deadline before the loop
+// returns; the slog backend captures anything still queued past the
+// deadline.
+type AsyncAuditWriter interface {
+	Submit(ctx context.Context, e AuditEvent) bool
+}
+
+// IsReadAction reports whether action is one of the wave-1 read
+// actions. The chokepoint uses it to gate the sampling + async path:
+// only read-action allow events are eligible for sampling. Denies,
+// writes, and auth outcomes always audit synchronously.
+//
+// ActionAuditRead is included in the read set semantically (it is a
+// read of audit history) but the chokepoint exempts it from sampling
+// — auditors need a record of who read the audit log, regardless of
+// the operator's read_sampling configuration.
+//
+// The default branch returns false for every non-read action; adding
+// a new read action to the Action enum requires adding it here too.
+//
+//nolint:exhaustive
+func IsReadAction(a Action) bool {
+	switch a {
+	case ActionHostRead, ActionProcessRead,
+		ActionAlertRead,
+		ActionPolicyRead,
+		ActionEnrollmentRead,
+		ActionUserRead,
+		ActionAuditRead:
+		return true
+	default:
+		return false
+	}
 }
 
 // AuditFilter constrains AuditReader.List. All fields are optional;

@@ -12,7 +12,7 @@ import (
 // binding. Useful for tracking long-term trends; the CI gate above
 // is the per-PR safety net.
 func BenchmarkAllow_TenantScopeAllow(b *testing.B) {
-	e, err := authz.New(b.Context(), nil, nil, false)
+	e, err := authz.New(b.Context(), nil, nil, false, authz.Options{})
 	if err != nil {
 		b.Fatalf("construct engine: %v", err)
 	}
@@ -37,7 +37,7 @@ func BenchmarkAllow_TenantScopeAllow(b *testing.B) {
 // scanning the whole role set instead of short-circuiting) shows up
 // in benchstat output.
 func BenchmarkAllow_Deny(b *testing.B) {
-	e, err := authz.New(b.Context(), nil, nil, false)
+	e, err := authz.New(b.Context(), nil, nil, false, authz.Options{})
 	if err != nil {
 		b.Fatalf("construct engine: %v", err)
 	}

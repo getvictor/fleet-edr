@@ -43,6 +43,16 @@ type Deps struct {
 	// Identity.SetAuthzShadowMode atomically; the in-memory flag is
 	// already hot-swap-safe via atomic.Bool.
 	AuthzShadowMode bool
+
+	// AuditReadSampling is the inclusion probability (0.0-1.0) the
+	// chokepoint applies to read-action allow events before submitting
+	// them to the async writer. See server/config/config.go for the
+	// full semantics; identity passes it through to authz.New.
+	AuditReadSampling float64
+
+	// AuditAsyncQueueCap sizes the bounded async-writer buffer. Zero
+	// uses the audit package default (8192).
+	AuditAsyncQueueCap int
 }
 
 const defaultCleanupInterval = 5 * time.Minute
@@ -58,6 +68,7 @@ type Identity struct {
 	loginHandler *login.Handler
 	auditStore   *audit.Store
 	auditHandler *audit.Handler
+	auditAsync   *audit.AsyncWriter
 	sessionMW    func(http.Handler) http.Handler
 	csrfMW       func(http.Handler) http.Handler
 	db           *sqlx.DB
@@ -88,8 +99,15 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	rbacStore := rbac.New(deps.DB)
 	svc := service.New(usersStore, sessionsStore, rbacStore, logger)
 	auditStore := audit.New(deps.DB)
+	auditAsync := audit.NewAsyncWriter(auditStore, audit.AsyncOptions{
+		QueueCap: deps.AuditAsyncQueueCap,
+		Logger:   logger,
+	})
 
-	authzEngine, err := authz.New(ctx, auditStore, logger, deps.AuthzShadowMode)
+	authzEngine, err := authz.New(ctx, auditStore, logger, deps.AuthzShadowMode, authz.Options{
+		AsyncRead:        auditAsync,
+		ReadSamplingRate: deps.AuditReadSampling,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("identity bootstrap: construct authz engine: %w", err)
 	}
@@ -105,6 +123,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		}),
 		auditStore:   auditStore,
 		auditHandler: audit.NewHandler(auditStore, authzEngine, logger),
+		auditAsync:   auditAsync,
 		sessionMW:    middleware.Session(svc, logger),
 		csrfMW:       middleware.CSRF(logger),
 		db:           deps.DB,
@@ -175,7 +194,7 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 }
 
 // RegisterAuthedRoutes wires GET /api/session (who-am-i) and
-// GET /api/audit (operator-action history). Caller wraps in
+// GET /api/audit-events (operator-action history). Caller wraps in
 // SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
@@ -205,20 +224,32 @@ func (i *Identity) SetAuthzShadowMode(on bool) { i.authzEngine.SetShadowMode(on)
 // "shadow / enforcing" on the deny-decision panel.
 func (i *Identity) AuthzShadowMode() bool { return i.authzEngine.ShadowMode() }
 
-// Run owns the identity context's background goroutines. Today: a ticker
-// that sweeps expired session rows. Returns when ctx is cancelled. cmd/main
-// runs it as `go func() { _ = identityCtx.Run(ctx) }()`.
+// Run owns the identity context's background goroutines. Two loops:
+// (1) the session-cleanup ticker that sweeps expired session rows,
+// (2) the audit async writer that drains chokepoint read-allow events.
+// Returns when ctx is cancelled. cmd/main runs it as
+// `go func() { _ = identityCtx.Run(ctx) }()`.
 //
-// The exact interval is not load-bearing: Session middleware already
-// rejects expired rows via the expires_at > NOW() filter, so rows that
-// linger for a few extra minutes are harmless. This loop is about
-// reclaiming disk, not enforcing security.
+// The session-cleanup interval is not load-bearing: Session
+// middleware already rejects expired rows via the expires_at > NOW()
+// filter, so rows that linger for a few extra minutes are harmless.
+// That loop is about reclaiming disk, not enforcing security.
+//
+// The audit async writer is load-bearing on the chokepoint hot
+// path: every read-allow audit row routes through it; the loop's
+// graceful drain on ctx cancel is the durability bridge to slog when
+// the queue empties cleanly.
 func (i *Identity) Run(ctx context.Context) error {
+	asyncDone := make(chan error, 1)
+	go func() { asyncDone <- i.auditAsync.Run(ctx) }()
+
 	t := time.NewTicker(i.cleanupEvery)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			// Wait for the async writer's graceful drain.
+			<-asyncDone
 			return nil
 		case <-t.C:
 			n, err := i.svc.CleanupExpiredSessions(ctx)
