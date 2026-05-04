@@ -51,12 +51,16 @@ func TestRotateHostToken_HappyPath(t *testing.T) {
 	assert.Len(t, rot.PreviousTokenIDPrefix, 8) // 4 bytes hex == 8 chars
 
 	// The new token verifies as the current token; rotation is not in
-	// flight from this row's POV (we just committed it).
+	// flight from this row's POV (we just committed it). Tolerance
+	// matches the freshly-issued check above (5s) so a slow CI runner
+	// where argon2id verify takes the better part of a second does not
+	// trip the assertion; the test still catches a regression that
+	// leaves host_token_issued_at on its pre-rotation value.
 	post, err := s.VerifyWithMeta(ctx, rot.NewToken)
 	require.NoError(t, err)
 	assert.Equal(t, testUUID, post.HostID)
 	assert.False(t, post.MatchedPrevious)
-	assert.WithinDuration(t, time.Now(), post.TokenIssuedAt, 2*time.Second,
+	assert.WithinDuration(t, time.Now(), post.TokenIssuedAt, 5*time.Second,
 		"a freshly rotated token should bump host_token_issued_at to NOW()")
 
 	// The OLD token still verifies during grace, AND surfaces

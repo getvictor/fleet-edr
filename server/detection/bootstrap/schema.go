@@ -59,6 +59,7 @@ var schemaStatements = []string{
 		description  TEXT         NOT NULL,
 		process_id   BIGINT       NOT NULL,
 		techniques   JSON         NULL,
+		tenant_id    VARCHAR(64)  NOT NULL DEFAULT 'default',
 		status       ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
 		updated_by   BIGINT       NULL,
 		created_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -68,6 +69,7 @@ var schemaStatements = []string{
 		INDEX idx_alerts_host (host_id),
 		INDEX idx_alerts_status_created (status, created_at),
 		INDEX idx_alerts_updated_by (updated_by),
+		INDEX idx_alerts_tenant_id (tenant_id),
 		CONSTRAINT fk_alerts_process FOREIGN KEY (process_id) REFERENCES processes(id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS alert_events (
@@ -81,7 +83,9 @@ var schemaStatements = []string{
 		host_id      VARCHAR(255) PRIMARY KEY,
 		event_count  BIGINT       NOT NULL DEFAULT 0,
 		last_seen_ns BIGINT       NOT NULL DEFAULT 0,
-		updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		tenant_id    VARCHAR(64)  NOT NULL DEFAULT 'default',
+		updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		INDEX idx_hosts_tenant_id (tenant_id)
 	)`,
 }
 
