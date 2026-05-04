@@ -50,8 +50,14 @@ func TestListLiveBindings_EmptyTableReturnsEmptySlice(t *testing.T) {
 func TestListLiveBindings_RoundTrip(t *testing.T) {
 	db := openSchema(t)
 	uid := insertUser(t, db, "active-bindings@test")
-	insertBinding(t, db, uid, "admin", api.DefaultTenantID, "tenant", api.RoleBindingScopeWildcard, nil)
-	insertBinding(t, db, uid, "auditor", api.DefaultTenantID, "tenant", api.RoleBindingScopeWildcard, nil)
+	insertBinding(t, db, bindingFixture{
+		UserID: uid, RoleID: "admin", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: api.RoleBindingScopeWildcard,
+	})
+	insertBinding(t, db, bindingFixture{
+		UserID: uid, RoleID: "auditor", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: api.RoleBindingScopeWildcard,
+	})
 
 	s := rbac.New(db)
 	got, err := s.ListLiveBindings(t.Context(), uid)
@@ -79,9 +85,18 @@ func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
 	uid := insertUser(t, db, "expired-bindings@test")
 	pastExp := time.Now().Add(-1 * time.Hour)
 	futureExp := time.Now().Add(1 * time.Hour)
-	insertBinding(t, db, uid, "analyst", api.DefaultTenantID, "tenant", "*", &pastExp)
-	insertBinding(t, db, uid, "auditor", api.DefaultTenantID, "tenant", "*", &futureExp)
-	insertBinding(t, db, uid, "admin", api.DefaultTenantID, "tenant", "*", nil)
+	insertBinding(t, db, bindingFixture{
+		UserID: uid, RoleID: "analyst", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: "*", ExpiresAt: &pastExp,
+	})
+	insertBinding(t, db, bindingFixture{
+		UserID: uid, RoleID: "auditor", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: "*", ExpiresAt: &futureExp,
+	})
+	insertBinding(t, db, bindingFixture{
+		UserID: uid, RoleID: "admin", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: "*",
+	})
 
 	s := rbac.New(db)
 	got, err := s.ListLiveBindings(t.Context(), uid)
@@ -102,8 +117,14 @@ func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
 	db := openSchema(t)
 	uidA := insertUser(t, db, "user-a@test")
 	uidB := insertUser(t, db, "user-b@test")
-	insertBinding(t, db, uidA, "admin", api.DefaultTenantID, "tenant", "*", nil)
-	insertBinding(t, db, uidB, "auditor", api.DefaultTenantID, "tenant", "*", nil)
+	insertBinding(t, db, bindingFixture{
+		UserID: uidA, RoleID: "admin", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: "*",
+	})
+	insertBinding(t, db, bindingFixture{
+		UserID: uidB, RoleID: "auditor", TenantID: api.DefaultTenantID,
+		ScopeType: "tenant", ScopeID: "*",
+	})
 
 	s := rbac.New(db)
 	gotA, err := s.ListLiveBindings(t.Context(), uidA)
@@ -143,17 +164,25 @@ func insertUser(t *testing.T, db *sqlx.DB, email string) int64 {
 	return id
 }
 
-func insertBinding(
-	t *testing.T,
-	db *sqlx.DB,
-	userID int64,
-	roleID, tenantID, scopeType, scopeID string,
-	expiresAt *time.Time,
-) {
+// bindingFixture bundles the role_bindings columns each test row
+// pins. Collapsing the previous 8-parameter helper into a struct keeps
+// individual call sites legible (named fields beat positional args
+// when many strings have the same type) and quiets Sonar's S107
+// "function has too many parameters" rule.
+type bindingFixture struct {
+	UserID    int64
+	RoleID    string
+	TenantID  string
+	ScopeType string
+	ScopeID   string
+	ExpiresAt *time.Time
+}
+
+func insertBinding(t *testing.T, db *sqlx.DB, b bindingFixture) {
 	t.Helper()
 	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		userID, roleID, tenantID, scopeType, scopeID, expiresAt)
-	require.NoError(t, err, "insert binding role=%s for user=%d", roleID, userID)
+		b.UserID, b.RoleID, b.TenantID, b.ScopeType, b.ScopeID, b.ExpiresAt)
+	require.NoError(t, err, "insert binding role=%s for user=%d", b.RoleID, b.UserID)
 }

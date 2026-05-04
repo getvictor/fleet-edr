@@ -55,12 +55,19 @@ const (
 	AuditEnrollmentRotateToken AuditAction = "enrollment.rotate_token"
 )
 
-// AuditEvent is the value passed to AuditRecorder.Record. Caller fills
-// the application-layer fields; the Recorder pulls trace_id from ctx
-// (which equals the X-Request-ID echoed in response headers) so handler
-// code does not have to re-extract it. RemoteAddr is on the event
-// because it derives from *http.Request, which is not on ctx by
-// convention. occurred_at is set by the Recorder at INSERT time.
+// AuditEvent is the value passed to AuditRecorder.Record. Caller
+// fills the application-layer fields; the Recorder pulls trace_id
+// from ctx (which equals the X-Request-ID echoed in response headers)
+// so handler code does not have to re-extract it. RemoteAddr is on
+// the event because it derives from *http.Request, which is not on
+// ctx by convention. occurred_at is set by the Recorder at INSERT
+// time.
+//
+// TraceID is the explicit override path: when set, Recorder uses it
+// instead of probing ctx. The async chokepoint emission populates
+// TraceID at Submit time so the eventual INSERT (which runs under a
+// background ctx without the original span) still attributes the row
+// to the request that triggered it.
 type AuditEvent struct {
 	// UserID is the authenticated user, when one exists. Nil for
 	// pre-auth events (login_failed) so the audit row records "who
@@ -75,6 +82,13 @@ type AuditEvent struct {
 	// For unary actions (login, logout) leave both empty.
 	TargetType string
 	TargetID   string
+	// TraceID is the OTel- / X-Request-ID trace id to record. Optional:
+	// when empty, Recorder falls back to extracting it from the call's
+	// ctx (the wave-1 sync default). Set explicitly by the chokepoint
+	// before Submit so the async writer's background-ctx INSERT keeps
+	// trace correlation. Lower-case 32-char hex per the existing
+	// sync-path extractor.
+	TraceID string
 	// RemoteAddr is the peer address for retention/correlation. Today
 	// this is r.RemoteAddr verbatim (not X-Forwarded-For); see #81 for
 	// the trusted-proxy follow-up.
@@ -101,8 +115,69 @@ type AuditEvent struct {
 // INSERT per operator action), and operator-action volume is several
 // orders of magnitude smaller than event ingest, so synchronous is
 // the right default.
+//
+// Phase 3 carves out an async path for chokepoint emissions on
+// read-action allow events; see AsyncAuditWriter and IsReadAction
+// below. Sync remains the default for everything else (denies, writes,
+// auth outcomes, break-glass) so the durability invariant stays
+// intact on the events reviewers actually need post-incident.
 type AuditRecorder interface {
 	Record(ctx context.Context, e AuditEvent) error
+}
+
+// AsyncAuditWriter is the optional non-blocking sibling of
+// AuditRecorder. The chokepoint routes high-volume read-allow audit
+// events through Submit so the hot path of every privileged read does
+// not wait on an INSERT. Submit is non-blocking: it returns true when
+// the event was queued, false when the bounded buffer was full and
+// the implementation logged a slog WARN as the dual-emit fallback.
+//
+// Submit must be safe to call concurrently from multiple goroutines.
+//
+// ctx contract: ctx is valid only for the synchronous part of Submit
+// (the channel send + a slog.WarnContext on overflow). Implementations
+// MUST NOT retain it for the eventual asynchronous DB write — the
+// request-scoped ctx is cancelled the moment the handler returns,
+// and an INSERT under a cancelled ctx silently drops the row. Per the
+// AuditEvent doc: copy the trace_id (and any other ctx-derived fields)
+// onto AuditEvent.TraceID before Submit; the writer's Run loop owns
+// the lifecycle ctx for the actual INSERT.
+//
+// Lifecycle: implementations own a goroutine; cmd/main starts it via
+// the per-context Run loop and stops it on ctx cancel. Pending
+// events at shutdown flush with a per-row deadline before the loop
+// returns; the slog backend captures anything still queued past the
+// deadline.
+type AsyncAuditWriter interface {
+	Submit(ctx context.Context, e AuditEvent) bool
+}
+
+// IsReadAction reports whether action is one of the wave-1 read
+// actions. The chokepoint uses it to gate the sampling + async path:
+// only read-action allow events are eligible for sampling. Denies,
+// writes, and auth outcomes always audit synchronously.
+//
+// ActionAuditRead is included in the read set semantically (it is a
+// read of audit history) but the chokepoint exempts it from sampling
+// — auditors need a record of who read the audit log, regardless of
+// the operator's read_sampling configuration.
+//
+// The default branch returns false for every non-read action; adding
+// a new read action to the Action enum requires adding it here too.
+//
+//nolint:exhaustive
+func IsReadAction(a Action) bool {
+	switch a {
+	case ActionHostRead, ActionProcessRead,
+		ActionAlertRead,
+		ActionPolicyRead,
+		ActionEnrollmentRead,
+		ActionUserRead,
+		ActionAuditRead:
+		return true
+	default:
+		return false
+	}
 }
 
 // AuditFilter constrains AuditReader.List. All fields are optional;

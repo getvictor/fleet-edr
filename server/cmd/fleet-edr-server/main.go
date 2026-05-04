@@ -193,11 +193,13 @@ func openIdentity(
 	cfg *config.Config,
 ) (*identitybootstrap.Identity, error) {
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
-		DB:              db,
-		Logger:          logger,
-		LoginRatePerMin: cfg.LoginRatePerMin,
-		CookieSecure:    cfg.TLSEnabled(),
-		AuthzShadowMode: cfg.AuthzShadowMode,
+		DB:                 db,
+		Logger:             logger,
+		LoginRatePerMin:    cfg.LoginRatePerMin,
+		CookieSecure:       cfg.TLSEnabled(),
+		AuthzShadowMode:    cfg.AuthzShadowMode,
+		AuditReadSampling:  cfg.AuditReadSampling,
+		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)
@@ -452,7 +454,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/policy", "PUT /api/policy",
 		"GET /api/attack-coverage",
 		"GET /api/rules",
-		"GET /api/audit",
+		"GET /api/audit-events",
 		"GET /api/session",
 	} {
 		mux.Handle(p, sessionProtected)

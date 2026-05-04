@@ -148,6 +148,22 @@ type Config struct {
 	// Identity.SetAuthzShadowMode atomically; the in-memory engine
 	// flag is already hot-swap-safe via atomic.Bool).
 	AuthzShadowMode bool
+
+	// AuditReadSampling is the inclusion probability (0.0-1.0) the
+	// chokepoint applies to read-action allow events before submitting
+	// them to the async writer. Default 0.0 (audit zero non-carve-out
+	// read-allow events). Operators set EDR_AUDIT_READ_SAMPLING=1.0 to
+	// keep the wave-1 historical behavior of auditing every decision.
+	// Carve-outs ALWAYS audit regardless of rate: break-glass actor +
+	// ActionAuditRead (the audit-of-audit row).
+	AuditReadSampling float64
+
+	// AuditAsyncQueueCap sizes the bounded buffer in the async audit
+	// writer. Default 8192 (~minutes of read-burst headroom at wave-1
+	// volumes). Larger reduces drop probability under burst at the cost
+	// of more memory; smaller catches a queue-leak earlier. Populated
+	// from EDR_AUDIT_ASYNC_QUEUE_CAP. Zero -> use the package default.
+	AuditAsyncQueueCap int
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -186,13 +202,40 @@ func Load() (*Config, error) {
 }
 
 // loadFrom is the testable core of Load; it takes a lookup function so tests can provide a fake env.
+//
+// The function fan-outs to per-section helpers (loadCoreEnv,
+// loadTLSConfig, loadRateLimits, loadHostTokenConfig, loadAllowlists,
+// loadLogConfig, loadProcessConfig) so the parent stays at a
+// cognitive complexity Sonar's S3776 rule accepts. Order between
+// helpers is preserved: TLS validation depends on the certificate
+// paths the core helper read; the host-token cross-field check
+// depends on both durations being parsed first.
 func loadFrom(getenv func(string) string) (*Config, error) {
 	c := defaults()
 	var errs []error
 
-	requireStr(&c.DSN, "EDR_DSN", getenv, &errs, true)
+	loadCoreEnv(&c, getenv, &errs)
+	loadTLSConfig(&c, &errs)
+	loadRateLimits(&c, getenv, &errs)
+	loadHostTokenConfig(&c, getenv, &errs)
+	loadAllowlists(&c, getenv)
+	loadLogConfig(&c, getenv, &errs)
+	loadProcessConfig(&c, getenv, &errs)
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return &c, nil
+}
+
+// loadCoreEnv reads required strings + scalar feature flags. The TLS
+// certificate paths land here too because they're optionalStr; their
+// cross-field validation runs in loadTLSConfig once both sides are
+// known.
+func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
+	requireStr(&c.DSN, "EDR_DSN", getenv, errs, true)
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
-	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, &errs, true)
+	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, errs, true)
 	// UI + admin surfaces authenticate via the session cookie minted by
 	// POST /api/session. The first-boot seeder prints the admin password
 	// once so the operator can log in.
@@ -202,46 +245,64 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	c.AllowInsecureHTTP = getenv("EDR_ALLOW_INSECURE_HTTP") == "1"
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
 	c.AuthzShadowMode = getenv("EDR_AUTHZ_SHADOW_MODE") == "1"
+	envparse.UnitFraction(getenv, "EDR_AUDIT_READ_SAMPLING", &c.AuditReadSampling, errs)
+	envparse.NonNegativeInt(getenv, "EDR_AUDIT_ASYNC_QUEUE_CAP", &c.AuditAsyncQueueCap, errs)
 
+	if v := getenv("EDR_TRUSTED_PROXIES"); v != "" {
+		c.TrustedProxies = splitCSV(v)
+	}
+}
+
+// loadTLSConfig validates the TLS configuration's cross-field
+// invariants now that loadCoreEnv has populated the cert paths.
+func loadTLSConfig(c *Config, errs *[]error) {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
-		errs = append(errs, errors.New(
+		*errs = append(*errs, errors.New(
 			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together (or both left unset)"))
 	}
-
 	// TLS is required in production. The opt-out is deliberately noisy so operators
 	// don't accidentally ship plaintext.
 	if !c.TLSEnabled() && !c.AllowInsecureHTTP {
-		errs = append(errs, errors.New(
+		*errs = append(*errs, errors.New(
 			"EDR_TLS_CERT_FILE is required (set EDR_ALLOW_INSECURE_HTTP=1 for dev)"))
 	}
+}
 
-	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, &errs)
-	envparse.PositiveInt(getenv, "EDR_LOGIN_RATE_PER_MIN", &c.LoginRatePerMin, &errs)
-	// Retention window. Allow 0 to disable entirely. Negative = error.
-	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, &errs)
-	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, &errs)
-	// Stale-process TTL (issue #6). 0 disables the reconciler.
-	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, &errs)
-	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, &errs)
-	// #86 host-token rotation. Both must be positive; "disable rotation"
-	// is not a supported deployment mode (a never-rotating bearer token
-	// is the very thing this feature exists to fix). Grace must be
-	// strictly shorter than lifetime: with grace >= lifetime, two
-	// consecutive rotations would leave THREE valid tokens at once
-	// (current + previous still in grace + previous-previous's grace
-	// window stretching past the next rotation), which the
-	// previous_token_* schema columns can't represent. Verify-time
-	// rotation would happily overwrite the in-flight grace, leaving an
-	// agent with a token the server has discarded but whose grace had
-	// not yet expired. Reject the misconfiguration at boot.
-	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_LIFETIME", &c.HostTokenLifetime, &errs)
-	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_GRACE", &c.HostTokenGrace, &errs)
+// loadRateLimits parses the per-minute throttles for enroll + login
+// alongside the retention/process-reconciler windows. All but
+// retention require strictly-positive values; retention permits 0 as
+// the documented "disable" sentinel.
+func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
+	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
+	envparse.PositiveInt(getenv, "EDR_LOGIN_RATE_PER_MIN", &c.LoginRatePerMin, errs)
+	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
+	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, errs)
+	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, errs)
+	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, errs)
+}
+
+// loadHostTokenConfig parses the wave-1 host-token rotation knobs and
+// enforces the cross-field invariant: grace MUST be strictly shorter
+// than lifetime. Both must be positive; "disable rotation" is not a
+// supported deployment mode (a never-rotating bearer token is the
+// very thing this feature exists to fix). With grace >= lifetime,
+// two consecutive rotations would leave THREE valid tokens at once
+// (current + previous still in grace + previous-previous's grace
+// window stretching past the next rotation), which the
+// previous_token_* schema columns can't represent.
+func loadHostTokenConfig(c *Config, getenv func(string) string, errs *[]error) {
+	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_LIFETIME", &c.HostTokenLifetime, errs)
+	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_GRACE", &c.HostTokenGrace, errs)
 	if c.HostTokenLifetime > 0 && c.HostTokenGrace > 0 && c.HostTokenGrace >= c.HostTokenLifetime {
-		errs = append(errs, fmt.Errorf(
+		*errs = append(*errs, fmt.Errorf(
 			"EDR_HOST_TOKEN_GRACE (%s) must be strictly shorter than EDR_HOST_TOKEN_LIFETIME (%s)",
 			c.HostTokenGrace, c.HostTokenLifetime))
 	}
+}
 
+// loadAllowlists reads each detection-rule allowlist env var. Each is
+// optional; nil-or-empty leaves the catalog default in place.
+func loadAllowlists(c *Config, getenv func(string) string) {
 	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
 		c.LaunchAgentAllowlist = allowlist
 	}
@@ -254,35 +315,35 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	if allowlist := envparse.Allowlist(getenv("EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST")); allowlist != nil {
 		c.SuspiciousExecParentAllowlist = allowlist
 	}
+}
 
-	if v := getenv("EDR_TRUSTED_PROXIES"); v != "" {
-		c.TrustedProxies = splitCSV(v)
-	}
-
+// loadLogConfig reads + validates the slog handler's level + format
+// knobs. Lowercases for downstream consumers regardless of how the
+// operator spelled the env var.
+func loadLogConfig(c *Config, getenv func(string) string, errs *[]error) {
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
 		// Normalize to the canonical lowercase form so downstream slog handlers see one of the
 		// documented values regardless of how the operator spelled it (e.g. "INFO", "Warn").
 		c.LogLevel = strings.ToLower(v)
 	}
 	if !validLogLevel(c.LogLevel) {
-		errs = append(errs, fmt.Errorf("EDR_LOG_LEVEL=%q must be one of debug, info, warn, error", c.LogLevel))
+		*errs = append(*errs, fmt.Errorf("EDR_LOG_LEVEL=%q must be one of debug, info, warn, error", c.LogLevel))
 	}
-
 	if v := getenv("EDR_LOG_FORMAT"); v != "" {
 		c.LogFormat = strings.ToLower(v)
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
-		errs = append(errs, fmt.Errorf("EDR_LOG_FORMAT=%q must be 'json' or 'text'", c.LogFormat))
+		*errs = append(*errs, fmt.Errorf("EDR_LOG_FORMAT=%q must be 'json' or 'text'", c.LogFormat))
 	}
+}
 
-	// processor.Run feeds ProcessInterval into time.NewTicker, which panics on non-positive values.
-	envparse.PositiveDuration(getenv, "EDR_PROCESS_INTERVAL", &c.ProcessInterval, &errs)
-	envparse.PositiveInt(getenv, "EDR_PROCESS_BATCH", &c.ProcessBatch, &errs)
-
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	return &c, nil
+// loadProcessConfig parses the detection processor cadence knobs.
+// Interval must be strictly positive (processor.Run feeds it into
+// time.NewTicker which panics on non-positive values); batch must be
+// strictly positive (a zero-batch loop spins).
+func loadProcessConfig(c *Config, getenv func(string) string, errs *[]error) {
+	envparse.PositiveDuration(getenv, "EDR_PROCESS_INTERVAL", &c.ProcessInterval, errs)
+	envparse.PositiveInt(getenv, "EDR_PROCESS_BATCH", &c.ProcessBatch, errs)
 }
 
 func requireStr(dst *string, key string, getenv func(string) string, errs *[]error, nonEmpty bool) {

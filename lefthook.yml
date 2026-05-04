@@ -65,6 +65,30 @@ pre-commit:
         done
         exit $matched
 
+    # audit_events is append-only. Block any production Go file that
+    # stages an UPDATE or DELETE against the table — the audit trail's
+    # integrity is the whole point of the schema, and accidental
+    # tampering is the regression this hook exists to catch.
+    # The Go test at server/identity/internal/audit/append_only_lint_test.go
+    # is the CI backstop for developers who bypass with --no-verify.
+    # The audit package is NOT excluded (PR #120 review): the regex
+    # is UPDATE/DELETE-specific so the legitimate INSERT in mysql.go
+    # does not trip, and policing the package is the point.
+    audit-append-only:
+      glob: "**/*.go"
+      exclude:
+        - "**/*_test.go"
+      run: |
+        matched=0
+        for f in {staged_files}; do
+          content=$(git show ":$f" 2>/dev/null) || continue
+          if printf '%s' "$content" | grep -niE '\b(update[[:space:]]+audit_events|delete[[:space:]]+from[[:space:]]+audit_events)\b'; then
+            echo "audit_events is append-only; UPDATE/DELETE not permitted in $f"
+            matched=1
+          fi
+        done
+        exit $matched
+
 pre-push:
   parallel: true
   commands:

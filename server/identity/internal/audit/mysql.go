@@ -64,7 +64,14 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 		return errors.New("audit.Record: Action is required")
 	}
 
-	traceID := traceIDFromContext(ctx)
+	// e.TraceID wins when set so the async chokepoint path (which
+	// runs under a fresh background ctx) keeps trace correlation.
+	// Sync callers continue to leave it empty and the ctx fallback
+	// preserves the wave-1 behavior.
+	traceID := e.TraceID
+	if traceID == "" {
+		traceID = traceIDFromContext(ctx)
+	}
 	actorEmail := s.resolveActorEmail(ctx, e)
 
 	var payloadBytes []byte
