@@ -104,9 +104,13 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 		{"auditor alert.comment", "auditor", api.ActionAlertComment, false},
 		{"auditor host.isolate", "auditor", api.ActionHostIsolate, false},
 	}
+	// One engine for the whole matrix. The Rego compile is the
+	// expensive part (~30ms) and the engine is read-only here (no
+	// SetShadowMode calls), so 21 reuses of the same prepared query
+	// keep `go test` snappy without changing any assertion.
+	e, _ := newEngine(t, false)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e, _ := newEngine(t, false)
 			actor := actorWithRoles(1, "default", tenantBinding(tc.roleID, "default"))
 			ctx := api.WithActor(t.Context(), actor)
 			d, err := e.Allow(ctx, tc.action, api.Resource{TenantID: "default", Type: "host", ID: "abc"})

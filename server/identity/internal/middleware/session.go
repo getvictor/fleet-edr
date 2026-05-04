@@ -71,8 +71,14 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
 				return
 			case err != nil:
+				// LoadActor failure can come from the users store, the
+				// rbac store, or a future identity-context dependency.
+				// "session_store_unavailable" would be misleading here;
+				// "identity_store_unavailable" matches the failure
+				// surface so dashboards / runbooks point at the right
+				// thing.
 				logger.ErrorContext(ctx, "actor build", "err", err)
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "identity_store_unavailable")
 				return
 			}
 

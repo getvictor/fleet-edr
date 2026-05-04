@@ -80,7 +80,7 @@ role_grants_action(role_id, action) if {
 	grant == action
 }
 
-role_grants_action(role_id, _action) if {
+role_grants_action(role_id, _) if {
 	some grant in data.roles[role_id].grants
 	grant == "*"
 }

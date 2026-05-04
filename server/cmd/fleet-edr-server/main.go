@@ -11,8 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -164,7 +162,6 @@ func run() error {
 
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
-	go watchSIGHUPForAuthzShadowMode(ctx, identityCtx, logger)
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty.
 	// httpserver.Build skips installing the middleware on a nil resolver,
@@ -372,32 +369,14 @@ func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, l
 	}
 }
 
-// watchSIGHUPForAuthzShadowMode re-reads EDR_AUTHZ_SHADOW_MODE on every
-// SIGHUP and calls Identity.SetAuthzShadowMode. Multiple SIGHUP
-// listeners coexist via signal.Notify; the TLS reloader in
-// httpserver.ConfigureTLS uses the same signal for cert reload, so an
-// operator's `kill -HUP <pid>` flips both.
-//
-// The SIGHUP-driven reload exists so a pilot deployment can swap from
-// shadow to enforcement (or back, if the dashboard surfaces an
-// unexpected deny) without a server restart. The wave-1 production
-// rollout walks operators through this exact procedure.
-func watchSIGHUPForAuthzShadowMode(ctx context.Context, identityCtx *identitybootstrap.Identity, logger *slog.Logger) {
-	sighup := make(chan os.Signal, 1)
-	signal.Notify(sighup, syscall.SIGHUP)
-	defer signal.Stop(sighup)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-sighup:
-			on := os.Getenv("EDR_AUTHZ_SHADOW_MODE") == "1"
-			identityCtx.SetAuthzShadowMode(on)
-			logger.InfoContext(ctx, "authz shadow mode reloaded",
-				"edr.authz.shadow_mode", on)
-		}
-	}
-}
+// (Removed: watchSIGHUPForAuthzShadowMode reloaded the rollout flag
+// from EDR_AUTHZ_SHADOW_MODE on SIGHUP, but a running process's
+// environment cannot be modified externally in most deployment
+// shapes — the reload would be a no-op except in test harnesses
+// that call os.Setenv before signaling. The flag is set at boot;
+// flipping it in production is a restart in wave 1. A future admin
+// endpoint or file-watch can call Identity.SetAuthzShadowMode
+// atomically; the in-memory flag is already hot-swap-safe.)
 
 func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, clientIPResolver *httpserver.ClientIPResolver) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{

@@ -37,7 +37,11 @@ type Deps struct {
 	CleanupInterval time.Duration
 	// AuthzShadowMode is the wave-1 rollout flag for the authorization
 	// chokepoint. true = evaluate + audit but never deny; false =
-	// enforce. cmd/main flips it on SIGHUP via Identity.SetShadowMode.
+	// enforce. The flag is set at boot from EDR_AUTHZ_SHADOW_MODE;
+	// flipping it in a running deployment requires a restart in wave
+	// 1. A future admin endpoint (or a file-watch) can call
+	// Identity.SetAuthzShadowMode atomically; the in-memory flag is
+	// already hot-swap-safe via atomic.Bool.
 	AuthzShadowMode bool
 }
 

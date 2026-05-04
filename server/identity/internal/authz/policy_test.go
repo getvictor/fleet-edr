@@ -79,8 +79,15 @@ func TestPolicy_ActionsParity(t *testing.T) {
 // opa CLI on PATH and `go test` exercises both engine + policy
 // correctness in a single command.
 //
-// Coverage is asserted >= 90 %: the policy is small and critical;
-// tightening later is cheap, loosening hides bugs.
+// Asserts: every test in edr_test.rego passes AND the suite is not
+// empty (`require.Positive(count)`). A numeric coverage threshold
+// is intentionally NOT enforced here; the (role, action) matrix in
+// edr_test.rego plus the engine-side TestAllow_RoleActionMatrix in
+// engine_test.go is the wave-1 correctness floor. A future
+// enhancement may wire `tester.NewRunner().SetCoverageQueryTracer`
+// to a real tracer and gate at a percentage; today the runner is
+// initialised with `SetCoverageQueryTracer(nil)` (coverage off) and
+// the comment matches the code.
 func TestPolicy_RegoTestSuite(t *testing.T) {
 	ctx := context.Background()
 

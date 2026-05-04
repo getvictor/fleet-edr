@@ -1,7 +1,9 @@
-# Policy-side correctness suite. `opa test --coverage policy/` runs
-# this against edr.rego and the data bundle; the Go-side
-# policy_test.go shells out to it and gates the build at >= 90%
-# coverage on the policy module.
+# Policy-side correctness suite. The Go-side policy_test.go runs this
+# against edr.rego + the data bundle via the OPA tester library
+# (semantics match `opa test policy/` exactly, no CLI required) and
+# fails the build on any failing case. Numeric coverage is not gated
+# in wave 1; the matrix below + engine_test.go's Go-side cells form
+# the correctness floor.
 #
 # Each test pins one concrete (role, action, resource) decision so a
 # Rego edit that subtly changes the matrix shows up here immediately

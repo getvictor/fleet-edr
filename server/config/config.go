@@ -142,9 +142,11 @@ type Config struct {
 	// audits the would-be decision but ALWAYS returns Allow=true so
 	// pilot deployments observe the deny dashboard before enforcement
 	// flips on. Populated from EDR_AUTHZ_SHADOW_MODE; default false
-	// (enforcement on) for fresh deployments. cmd/main re-reads the
-	// env var on SIGHUP and calls Engine.SetShadowMode so an operator
-	// can flip the gate without a restart.
+	// (enforcement on) for fresh deployments. The flag is read at
+	// boot only — flipping it in production is a restart in wave 1
+	// (a future admin endpoint or file-watch can call
+	// Identity.SetAuthzShadowMode atomically; the in-memory engine
+	// flag is already hot-swap-safe via atomic.Bool).
 	AuthzShadowMode bool
 }
 

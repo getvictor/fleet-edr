@@ -94,16 +94,26 @@ func RegisteredActions() []Action {
 }
 
 // Resource pins what the action operates on. JSON-marshals into the
-// OPA `input.resource` map. Fields are populated only when meaningful
-// for the action; zero-value strings are valid (e.g. unary actions
-// like audit.read against the whole tenant pass an empty Type and ID).
+// OPA `input.resource` map. Type and ID are populated only when
+// meaningful for the action; zero-value strings are valid (e.g.
+// unary actions like audit.read against the whole tenant pass an
+// empty Type and ID).
+//
+// TenantID is intentionally NOT tagged `omitempty`: the Rego policy
+// equates `binding.tenant_id == input.resource.tenant_id`, and
+// `omitempty` would erase the field from the OPA input on a
+// zero-value caller, leaving `input.resource.tenant_id` undefined
+// and silently producing `no_matching_rule` deny. The chokepoint
+// also short-circuits empty TenantID with `resource_tenant_missing`
+// so the misconfiguration is visible in the audit log; the JSON tag
+// is the second line of defense.
 //
 // Wave 1: TenantID + Type + ID is enough for tenant-scope evaluation.
 // Wave 2 will grow ABAC-shaped fields (labels, source IP, severity)
 // here without breaking existing call sites because OPA's input map
 // is open.
 type Resource struct {
-	TenantID string `json:"tenant_id,omitempty"`
+	TenantID string `json:"tenant_id"`
 	Type     string `json:"type,omitempty"`
 	ID       string `json:"id,omitempty"`
 }

@@ -32,6 +32,11 @@ var policyFS embed.FS
 // constructor checks both ends agree.
 const regoQueryName = "data.edr.authz.decision"
 
+// actionAttrKey is the slog / OTel attribute key for the privileged
+// action being evaluated. Callers structure their log entries around
+// it so a SigNoz dashboard can pivot on `edr.authz.action` directly.
+const actionAttrKey = "edr.authz.action"
+
 // Engine is the AuthZ-interface implementation. Holds the prepared
 // Rego query (compiled at construction time so per-request evaluation
 // is the warm path), the audit recorder every decision flows through,
@@ -128,6 +133,18 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 		return d, nil
 	}
 
+	// Empty resource.TenantID would JSON-marshal to undefined under the
+	// `omitempty` removal below, but a caller that passes a zero-value
+	// Resource by accident still arrives here. Surface it explicitly:
+	// the deny is real (no tenant binding can match an undefined
+	// tenant) but `no_matching_rule` would hide the misconfiguration.
+	// Audit + a distinct reason makes the bug visible at the call site.
+	if resource.TenantID == "" {
+		d := api.Decision{Allow: false, Reason: "resource_tenant_missing"}
+		e.recordDecision(ctx, actor, action, resource, d, false)
+		return d, nil
+	}
+
 	input := map[string]any{
 		"actor":    actor,
 		"action":   string(action),
@@ -137,19 +154,21 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 	if err != nil {
 		e.logger.ErrorContext(ctx, "authz evaluate",
 			"err", err,
-			"edr.authz.action", string(action),
+			actionAttrKey, string(action),
 			"edr.authz.resource_type", resource.Type)
-		return api.Decision{Allow: false, Reason: "engine_error"},
-			fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
+		errDecision := api.Decision{Allow: false, Reason: "engine_error"}
+		e.recordDecision(ctx, actor, action, resource, errDecision, false)
+		return errDecision, fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
 	}
 
 	policyDecision, err := decisionFromResultSet(rs)
 	if err != nil {
 		e.logger.ErrorContext(ctx, "authz decode decision",
 			"err", err,
-			"edr.authz.action", string(action))
-		return api.Decision{Allow: false, Reason: "engine_error"},
-			fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
+			actionAttrKey, string(action))
+		errDecision := api.Decision{Allow: false, Reason: "engine_error"}
+		e.recordDecision(ctx, actor, action, resource, errDecision, false)
+		return errDecision, fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
 	}
 
 	shadow := e.shadow.Load()
@@ -202,7 +221,7 @@ func (e *Engine) recordDecision(
 	if err := e.audit.Record(ctx, event); err != nil {
 		e.logger.WarnContext(ctx, "authz audit write",
 			"err", err,
-			"edr.authz.action", string(action),
+			actionAttrKey, string(action),
 			"edr.authz.allow", d.Allow,
 			"edr.authz.reason", d.Reason)
 	}
@@ -318,6 +337,14 @@ func assertActionsParity(data map[string]any) error {
 // the default rule, which is a Rego authoring bug — treat it as
 // engine_error so the operator sees something is wrong rather than
 // a silent deny.
+//
+// Both `allow` and `reason` MUST be present and the right Go type.
+// A missing or mistyped field is a Rego authoring bug too: silently
+// returning `{Allow:false, Reason:""}` would record an empty audit
+// reason that's indistinguishable from a real policy result, masking
+// a regression that is most easily seen at PR-test time. Error here
+// so the engine_error path in Allow records a distinguishable audit
+// row and the upstream handler responds 503 instead of 403.
 func decisionFromResultSet(rs rego.ResultSet) (api.Decision, error) {
 	if len(rs) == 0 || len(rs[0].Expressions) == 0 {
 		return api.Decision{}, errors.New("authz: empty rego result set")
@@ -326,8 +353,14 @@ func decisionFromResultSet(rs rego.ResultSet) (api.Decision, error) {
 	if !ok {
 		return api.Decision{}, fmt.Errorf("authz: unexpected decision shape %T", rs[0].Expressions[0].Value)
 	}
-	allow, _ := val["allow"].(bool)
-	reason, _ := val["reason"].(string)
+	allow, ok := val["allow"].(bool)
+	if !ok {
+		return api.Decision{}, fmt.Errorf("authz: decision 'allow' field has unexpected type %T", val["allow"])
+	}
+	reason, ok := val["reason"].(string)
+	if !ok {
+		return api.Decision{}, fmt.Errorf("authz: decision 'reason' field has unexpected type %T", val["reason"])
+	}
 	return api.Decision{Allow: allow, Reason: reason}, nil
 }
 
