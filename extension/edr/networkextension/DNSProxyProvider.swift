@@ -5,6 +5,18 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "DNSProxy")
 
+/// Wire-format + flow-control constants for DNS proxying.
+private enum DNSProxy {
+    /// RFC 1035 §4.2.2: TCP DNS messages are prefixed with a two-byte big-endian length.
+    static let tcpLengthPrefixBytes = 2
+    /// 16-bit length means the upper bound on a TCP DNS payload is UInt16.max bytes.
+    static let tcpMaxMessageBytes = Int(UInt16.max)
+    /// Safety cancel for an idle TCP DNS connection after the flow has signalled FIN
+    /// upstream. 30s is past any sane resolver round-trip but bounded enough that a
+    /// misbehaving upstream cannot pin our flow + NWConnection pair forever.
+    static let tcpUpstreamLingerSeconds: Double = 30
+}
+
 /// Process attribution context for a single DNS flow. Bundled to keep function
 /// parameter counts manageable.
 private struct FlowContext {
@@ -215,15 +227,15 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                                     // if the upstream reader hasn't already torn down.
                                 })
                 flow.closeWriteWithError(nil)
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) {
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + DNSProxy.tcpUpstreamLingerSeconds) {
                     connection.cancel()
                 }
                 return
             }
 
             // TCP DNS has a 2-byte length prefix; emit telemetry on the query portion.
-            if let data, data.count > 2 {
-                let queryData = data.suffix(from: 2)
+            if let data, data.count > DNSProxy.tcpLengthPrefixBytes {
+                let queryData = data.suffix(from: DNSProxy.tcpLengthPrefixBytes)
                 self.emitDNSTelemetry(datagram: Data(queryData), ctx: ctx, proto: "tcp")
             }
 
@@ -240,11 +252,14 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     }
 
     private func readTCPFromConnection(flow: NEAppProxyTCPFlow, connection: Network.NWConnection, ctx: FlowContext) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65535) { [weak self] data, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1,
+                           maximumLength: DNSProxy.tcpMaxMessageBytes) { [weak self] data, _, isComplete, error in
             if let data, !data.isEmpty {
                 // Emit response telemetry (TCP DNS has a 2-byte length prefix).
-                if data.count > 2 {
-                    self?.emitDNSResponseTelemetry(response: Data(data.dropFirst(2)), ctx: ctx, proto: "tcp")
+                if data.count > DNSProxy.tcpLengthPrefixBytes {
+                    self?.emitDNSResponseTelemetry(
+                        response: Data(data.dropFirst(DNSProxy.tcpLengthPrefixBytes)),
+                        ctx: ctx, proto: "tcp")
                 }
                 flow.write(data) { writeError in
                     if let writeError {

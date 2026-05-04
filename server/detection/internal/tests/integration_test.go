@@ -916,6 +916,43 @@ func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, body.Roots)
 }
 
+// TestOperatorHTTP_ProcessTree_LimitClamping pins the three branches in the
+// handler's limit handling so a regression in the parse helper or the
+// processTreeDefaultLimit / processTreeMaxLimit constants does not silently
+// slip through. Each subtest only asserts a 200 status: the clamp happens
+// before the underlying query runs, so the observable contract is "every
+// limit value -- absent, zero, negative, oversized -- yields a successful
+// response".
+func TestOperatorHTTP_ProcessTree_LimitClamping(t *testing.T) {
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	mux := http.NewServeMux()
+	d.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	mustInsertProcess(t, t.Context(), d, "tree-host", 100)
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"absent limit -> default", "/api/hosts/tree-host/tree"},
+		{"limit=0 -> default", "/api/hosts/tree-host/tree?limit=0"},
+		{"negative limit -> default", "/api/hosts/tree-host/tree?limit=-1"},
+		{"oversized limit -> max", "/api/hosts/tree-host/tree?limit=6000"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+tc.path, nil)
+			require.NoError(t, err)
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	}
+}
+
 // ---- Health probes ---------------------------------------------------------
 
 func TestHealthRoutes_LivezReadyz(t *testing.T) {

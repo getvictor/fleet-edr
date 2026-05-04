@@ -79,6 +79,15 @@ var schemaMigrations = []string{
 	`ALTER TABLE enrollments ADD INDEX idx_enrollments_prev_token (previous_host_token_id)`,
 }
 
+// MySQL error numbers we treat as "already applied" for ALTER migrations.
+// See https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
+const (
+	mysqlErrDupFieldName = 1060 // duplicate column name
+	mysqlErrDupKeyName   = 1061 // duplicate key name
+	mysqlErrDupKey       = 1022 // duplicate key on add (older MySQL FK clash)
+	mysqlErrFKDupName    = 1826 // duplicate FK constraint name
+)
+
 // isAlreadyAppliedMigration returns true when err is one of the MySQL
 // "this ALTER is already applied" codes, so we can treat the re-run as a
 // no-op. Mirrors identity/bootstrap's helper.
@@ -87,10 +96,8 @@ func isAlreadyAppliedMigration(err error) bool {
 	if !errors.As(err, &mysqlErr) {
 		return false
 	}
-	// 1060 duplicate column, 1061 duplicate key name, 1826 duplicate FK name,
-	// 1022 duplicate key on add (older MySQL code for FK name clash).
 	switch mysqlErr.Number {
-	case 1060, 1061, 1826, 1022:
+	case mysqlErrDupFieldName, mysqlErrDupKeyName, mysqlErrFKDupName, mysqlErrDupKey:
 		return true
 	}
 	return false

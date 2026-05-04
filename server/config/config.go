@@ -15,6 +15,36 @@ import (
 	"github.com/fleetdm/edr/internal/envparse"
 )
 
+const (
+	// defaultProcessInterval is the cadence the server's process-graph
+	// builder ticks at. 500ms keeps tree freshness under a second on the
+	// hot path while letting the batch worker amortise DB queries.
+	defaultProcessInterval = 500 * time.Millisecond
+	// defaultProcessBatch is the maximum events processed per tick.
+	defaultProcessBatch = 500
+	// defaultEnrollRatePerMin is the per-IP enrollment rate cap.
+	defaultEnrollRatePerMin = 30
+	// defaultLoginRatePerMin is the per-IP login attempt cap. Tighter than
+	// enroll because a brute-force login is the higher-value target.
+	defaultLoginRatePerMin = 6
+	// defaultRetentionDays is the event-row retention window.
+	defaultRetentionDays = 30
+	// defaultStaleProcessTTL is the fork-time age past which a still-running
+	// process row is force-exited by the freshness reconciler. Long enough
+	// to cover an analyst's working window; short enough that overnight
+	// greens are gone by morning.
+	defaultStaleProcessTTL = 6 * time.Hour
+	// defaultStaleProcessInterval is how often the process-TTL reconciler runs.
+	defaultStaleProcessInterval = 10 * time.Minute
+	// defaultHostTokenLifetime is how long a host's bearer token is good for
+	// before the verify path triggers an automatic rotation (issue #86).
+	defaultHostTokenLifetime = 24 * time.Hour
+	// defaultHostTokenGrace is how long a just-rotated previous token still
+	// verifies after rotation. Wider than an agent's poll interval so an
+	// in-flight request does not 401 mid-cycle.
+	defaultHostTokenGrace = 5 * time.Minute
+)
+
 // Config is the resolved server configuration.
 type Config struct {
 	DSN               string
@@ -119,16 +149,16 @@ func defaults() Config {
 		ListenAddr:           ":8088",
 		LogLevel:             "info",
 		LogFormat:            "json",
-		ProcessInterval:      500 * time.Millisecond,
-		ProcessBatch:         500,
-		EnrollRatePerMin:     30,
-		LoginRatePerMin:      6,
-		RetentionDays:        30,
+		ProcessInterval:      defaultProcessInterval,
+		ProcessBatch:         defaultProcessBatch,
+		EnrollRatePerMin:     defaultEnrollRatePerMin,
+		LoginRatePerMin:      defaultLoginRatePerMin,
+		RetentionDays:        defaultRetentionDays,
 		RetentionInterval:    time.Hour,
-		StaleProcessTTL:      6 * time.Hour,
-		StaleProcessInterval: 10 * time.Minute,
-		HostTokenLifetime:    24 * time.Hour,
-		HostTokenGrace:       5 * time.Minute,
+		StaleProcessTTL:      defaultStaleProcessTTL,
+		StaleProcessInterval: defaultStaleProcessInterval,
+		HostTokenLifetime:    defaultHostTokenLifetime,
+		HostTokenGrace:       defaultHostTokenGrace,
 	}
 }
 

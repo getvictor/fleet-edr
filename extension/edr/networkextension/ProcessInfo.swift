@@ -1,10 +1,15 @@
 import Darwin
 import Foundation
 
+/// proc_pidpath wants room for the resolved path. macOS's PROC_PIDPATHINFO_MAXSIZE
+/// is 4 * MAXPATHLEN; size the buffer the same way so any kernel-side bump is
+/// covered without us editing both ends.
+private let processPathBufferMultiplier = 4
+
 /// Returns the executable path for a given PID using proc_pidpath, or "unknown" on failure.
 func processPath(for pid: pid_t) -> String {
     guard pid > 0 else { return "unknown" }
-    let bufferSize = 4 * Int(MAXPATHLEN)
+    let bufferSize = processPathBufferMultiplier * Int(MAXPATHLEN)
     let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: bufferSize)
     defer { buffer.deallocate() }
     let result = proc_pidpath(pid, buffer, UInt32(bufferSize))

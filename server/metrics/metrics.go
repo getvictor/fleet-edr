@@ -19,7 +19,21 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-const meterName = "github.com/fleetdm/edr/server/metrics"
+const (
+	meterName = "github.com/fleetdm/edr/server/metrics"
+
+	// defaultOfflineThreshold is the gauge cutoff used when
+	// Options.OfflineThreshold is zero. Mirrored as the UI offline cutoff
+	// so SigNoz numbers match what operators see on the host page.
+	defaultOfflineThreshold = 5 * time.Minute
+)
+
+// dbQueryHistogramBuckets is the explicit-bucket boundary set for the DB
+// query duration histogram, in seconds. Spaced to give p50/p95/p99 fidelity
+// over the SQL latencies this codebase actually sees: sub-millisecond on
+// single-row reads, low milliseconds on indexed batch reads, hundreds of
+// milliseconds on the worst-case unindexed retention scans.
+var dbQueryHistogramBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 // GaugeSource is the read-only contract used by the observable gauges. The OTel reader
 // invokes the callbacks on its collection cadence; the callback issues a live DB query
@@ -64,7 +78,7 @@ type Options struct {
 // Passing nil for `gauges` skips observable gauge registration (unit tests).
 func New(gauges GaugeSource, opts Options) *Recorder {
 	if opts.OfflineThreshold <= 0 {
-		opts.OfflineThreshold = 5 * time.Minute
+		opts.OfflineThreshold = defaultOfflineThreshold
 	}
 	meter := opts.Meter
 	if meter == nil {
@@ -90,7 +104,7 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.db.query.duration",
 		metric.WithDescription("Server-side DB write latency, by op. Read as histogram for p95."),
 		metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+		metric.WithExplicitBucketBoundaries(dbQueryHistogramBuckets...),
 	)
 	r.retentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.rows_deleted",

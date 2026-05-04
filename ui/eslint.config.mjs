@@ -47,6 +47,33 @@ export default defineConfig([
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "react-hooks/exhaustive-deps": "error",
+
+      // Magic numbers. The TS-aware variant understands enums, numeric
+      // literal types, and readonly class properties so the literal `200`
+      // in `enum HttpStatus { Ok = 200 }` doesn't fire. Array indexes,
+      // type indexes, and default parameter values are also exempted
+      // because they're load-bearing in idiomatic React code (`arr[0]`,
+      // `Tuple[1]`, `function f(x = 5)`).
+      "no-magic-numbers": "off",
+      "@typescript-eslint/no-magic-numbers": ["warn", {
+        ignore: [-1, 0, 1, 2, 100, 1000],
+        ignoreEnums: true,
+        ignoreNumericLiteralTypes: true,
+        ignoreReadonlyClassProperties: true,
+        ignoreTypeIndexes: true,
+        ignoreArrayIndexes: true,
+        ignoreDefaultValues: true,
+        ignoreClassFieldInitialValues: true,
+      }],
+    },
+  },
+  {
+    // Test files routinely use literal sizes, fake timestamps, and
+    // fixture IDs. Forcing every `expect(x).toBe(42)` to introduce a
+    // named constant adds noise without catching real bugs.
+    files: ["**/*.{test,spec}.{ts,tsx}", "src/test/**/*.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-magic-numbers": "off",
     },
   },
 ]);

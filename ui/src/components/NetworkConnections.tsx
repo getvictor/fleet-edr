@@ -4,6 +4,7 @@ import type {
   NetworkConnectPayload,
   DNSQueryPayload,
 } from "../types";
+import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 import "./NetworkConnections.scss";
 
 interface Props {
@@ -132,5 +133,5 @@ function groupConnections(events: EventRecord[]): GroupedConnection[] {
 }
 
 function formatTime(ns: number): string {
-  return new Date(ns / 1_000_000).toLocaleTimeString();
+  return new Date(ns / NANOSECONDS_PER_MILLISECOND).toLocaleTimeString();
 }

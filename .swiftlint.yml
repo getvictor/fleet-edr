@@ -14,6 +14,7 @@ opt_in_rules:
   - force_try
   - force_unwrapping
   - implicitly_unwrapped_optional
+  - no_magic_numbers # flags numeric literals not assigned to a named constant
   - overridden_super_call
   - private_action
   - private_outlet
@@ -22,6 +23,15 @@ opt_in_rules:
   - unavailable_function
   - unowned_variable_capture
   - vertical_whitespace_closing_braces
+
+# SwiftLint's no_magic_numbers defaults: 0 and 1 are allowed, plus any
+# literal at the top of an XCTestCase subclass file. We don't add an
+# explicit allow-list here because Swift's strong typing and named
+# parameters mean a literal usually only shows up when it really is a
+# tunable; expanding the allow-list eagerly defeats the rule.
+no_magic_numbers:
+  test_parent_classes:
+    - XCTestCase
 
 analyzer_rules:
   - unused_import

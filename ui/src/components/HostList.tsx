@@ -2,8 +2,20 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listHosts } from "../api";
 import type { HostSummary } from "../types";
+import {
+  MILLISECONDS_PER_DAY,
+  MILLISECONDS_PER_HOUR,
+  MILLISECONDS_PER_MINUTE,
+  NANOSECONDS_PER_MILLISECOND,
+} from "../constants";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
+
+// "offline" is last_seen > 5 min old. The agent polls every 5 s, so 5 min
+// is 60× the polling interval — well past any transient network blip but
+// fast enough that a crashed agent shows up quickly in the UI.
+const OFFLINE_THRESHOLD_MINUTES = 5;
+const offlineThresholdMs = OFFLINE_THRESHOLD_MINUTES * MILLISECONDS_PER_MINUTE;
 
 export function HostList() {
   const [hosts, setHosts] = useState<HostSummary[]>([]);
@@ -73,21 +85,16 @@ export function HostList() {
   );
 }
 
-// offlineThresholdMs: "offline" is last_seen > 5 min old. The agent polls every 5 s,
-// so 5 min is 60× the polling interval — well past any transient network blip but
-// fast enough that a crashed agent shows up quickly in the UI.
-const offlineThresholdMs = 5 * 60 * 1000;
-
 function isOnline(lastSeenNs: number): boolean {
   if (lastSeenNs === 0) return false;
-  return Date.now() - lastSeenNs / 1_000_000 < offlineThresholdMs;
+  return Date.now() - lastSeenNs / NANOSECONDS_PER_MILLISECOND < offlineThresholdMs;
 }
 
 function formatRelative(ns: number): string {
   if (ns === 0) return "never";
-  const diff = Date.now() - ns / 1_000_000;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${String(Math.floor(diff / 60_000))}m ago`;
-  if (diff < 86_400_000) return `${String(Math.floor(diff / 3_600_000))}h ago`;
-  return `${String(Math.floor(diff / 86_400_000))}d ago`;
+  const diff = Date.now() - ns / NANOSECONDS_PER_MILLISECOND;
+  if (diff < MILLISECONDS_PER_MINUTE) return "just now";
+  if (diff < MILLISECONDS_PER_HOUR) return `${String(Math.floor(diff / MILLISECONDS_PER_MINUTE))}m ago`;
+  if (diff < MILLISECONDS_PER_DAY) return `${String(Math.floor(diff / MILLISECONDS_PER_HOUR))}h ago`;
+  return `${String(Math.floor(diff / MILLISECONDS_PER_DAY))}d ago`;
 }

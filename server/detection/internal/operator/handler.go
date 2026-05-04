@@ -18,6 +18,15 @@ const (
 	msgInternalError   = "internal error"
 	msgNotFound        = "not found"
 	msgInvalidJSONBody = "invalid JSON body"
+
+	// processTreeDefaultLimit is the row cap when the caller does not
+	// supply ?limit=. Sized to fit a typical analyst's investigation
+	// without paging.
+	processTreeDefaultLimit = 2000
+	// processTreeMaxLimit is the upper bound the handler enforces; values
+	// above this are clamped down. Prevents an operator from accidentally
+	// asking for the whole host's history in one query.
+	processTreeMaxLimit = 5000
 )
 
 // alertDetailResponse extends Alert with linked event IDs for the
@@ -84,12 +93,12 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tr := httpserver.ParseTimeRange(r)
-	limit := httpserver.ParseIntParam(r, "limit", 2000)
+	limit := httpserver.ParseIntParam(r, "limit", processTreeDefaultLimit)
 	if limit <= 0 {
-		limit = 2000
+		limit = processTreeDefaultLimit
 	}
-	if limit > 5000 {
-		limit = 5000
+	if limit > processTreeMaxLimit {
+		limit = processTreeMaxLimit
 	}
 
 	ctx := r.Context()
