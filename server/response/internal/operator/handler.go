@@ -121,7 +121,7 @@ func (h *Handler) recordCommandAudit(r *http.Request, hostID, commandType string
 		Action:     identityapi.AuditCommandIssue,
 		TargetType: "host",
 		TargetID:   hostID,
-		RemoteAddr: r.RemoteAddr,
+		RemoteAddr: httpserver.ClientIP(r),
 		Payload: map[string]any{
 			"command_type": commandType,
 			"command_id":   commandID,

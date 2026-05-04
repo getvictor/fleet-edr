@@ -234,6 +234,42 @@ func TestLoad(t *testing.T) {
 			wantErr: "EDR_LOGIN_RATE_PER_MIN",
 		},
 		{
+			name: "EDR_TRUSTED_PROXIES populates and trims",
+			env: withExtra(minEnv, map[string]string{
+				// Mixed CIDR forms + whitespace + an empty entry. CIDR
+				// validation is deferred to httpserver.NewClientIPResolver,
+				// so config-level parsing only trims and drops empties.
+				"EDR_TRUSTED_PROXIES": " 10.0.0.0/8 , 192.168.1.5,, fd00::/8",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t,
+					[]string{"10.0.0.0/8", "192.168.1.5", "fd00::/8"},
+					c.TrustedProxies,
+					"split must trim entries and drop the empty token")
+			},
+		},
+		{
+			name: "EDR_TRUSTED_PROXIES unset leaves nil slice",
+			env:  minEnv,
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Nil(t, c.TrustedProxies,
+					"unset env keeps the secure default — XFF ignored, peer IP used")
+			},
+		},
+		{
+			name: "EDR_TRUSTED_PROXIES with only whitespace yields nil",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_TRUSTED_PROXIES": " , , ",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Nil(t, c.TrustedProxies,
+					"all-empty input must collapse to nil rather than an empty slice")
+			},
+		},
+		{
 			name: "zero login rate rejected",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_LOGIN_RATE_PER_MIN": "0",

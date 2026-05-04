@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"time"
 
@@ -31,10 +30,9 @@ const (
 // Handler serves POST /api/enroll. Unauthenticated; rate-limited per
 // source IP. Audit log + OTel span attributes on every attempt.
 type Handler struct {
-	svc      api.Service
-	logger   *slog.Logger
-	limiter  *httpserver.IPLimiter
-	trimHost bool // net.SplitHostPort applied in remoteIP; toggleable for tests
+	svc     api.Service
+	logger  *slog.Logger
+	limiter *httpserver.IPLimiter
 }
 
 // Options control handler behaviour.
@@ -60,10 +58,9 @@ func New(svc api.Service, opts Options) *Handler {
 		logger = slog.Default()
 	}
 	return &Handler{
-		svc:      svc,
-		logger:   logger,
-		limiter:  httpserver.NewIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
-		trimHost: true,
+		svc:     svc,
+		logger:  logger,
+		limiter: httpserver.NewIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
 	}
 }
 
@@ -112,7 +109,7 @@ const maxEnrollBodyBytes = 4 << 10
 func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
-	ip := remoteIP(r, h.trimHost)
+	ip := httpserver.ClientIP(r)
 	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
 
 	if !h.limiter.Allow(ip) {
@@ -220,18 +217,4 @@ func (h *Handler) failf(ctx context.Context, w http.ResponseWriter, status int, 
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errBody{Error: code})
-}
-
-// remoteIP extracts a stable IP string from r.RemoteAddr. trimHost is
-// always true in production; tests that pass "127.0.0.1" directly skip
-// the split.
-func remoteIP(r *http.Request, trimHost bool) string {
-	if !trimHost {
-		return r.RemoteAddr
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
