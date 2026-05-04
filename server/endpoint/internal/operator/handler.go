@@ -69,7 +69,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionEnrollmentRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "enrollment"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "enrollment"}) {
 		return
 	}
 	rows, err := h.svc.List(ctx)
@@ -96,7 +96,7 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
 		return
 	}
-	if !h.authzGate(ctx, w, identityapi.ActionEnrollmentRevoke, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "enrollment", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRevoke, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "enrollment", ID: hostID}) {
 		return
 	}
 
@@ -190,7 +190,7 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
 		return
 	}
-	if !h.authzGate(ctx, w, identityapi.ActionEnrollmentRotateToken, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "enrollment", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRotateToken, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "enrollment", ID: hostID}) {
 		return
 	}
 
@@ -241,42 +241,6 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
-}
-
-// authzGate is the standard chokepoint pattern: 503 on engine error,
-// 403 on deny (with the policy reason on a header so the operator UI
-// can distinguish "no role" from "session expired"), and true only
-// when the handler should proceed.
-func (h *Handler) authzGate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	action identityapi.Action,
-	res identityapi.Resource,
-) bool {
-	d, err := h.authz.Allow(ctx, action, res)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
-		writeErr(ctx, h.logger, w, http.StatusServiceUnavailable, "authz_unavailable")
-		return false
-	}
-	if !d.Allow {
-		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
-		writeErr(ctx, h.logger, w, http.StatusForbidden, "forbidden")
-		return false
-	}
-	return true
-}
-
-// actorTenantID returns the actor's tenant_id from ctx, or "" if no
-// actor is present. The chokepoint short-circuits empty TenantID with
-// reason resource_tenant_missing AND records the regression in the
-// audit log; callers therefore prefer this over an explicit
-// ActorFromContext check at the handler level.
-func actorTenantID(ctx context.Context) string {
-	if a, ok := identityapi.ActorFromContext(ctx); ok {
-		return a.TenantID
-	}
-	return ""
 }
 
 // commandIDForLog dereferences a *int64 for slog attribute output, returning

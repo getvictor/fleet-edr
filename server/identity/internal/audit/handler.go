@@ -56,7 +56,8 @@ type listResponse struct {
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !authzGate(ctx, h.authz, h.logger, w, api.ActionAuditRead, audithistoryResource(ctx)) {
+	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionAuditRead,
+		api.Resource{TenantID: api.ActorTenantID(ctx), Type: "audit"}) {
 		return
 	}
 	filter, errCode, ok := parseAuditFilter(r.URL.Query())
@@ -71,50 +72,6 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, listResponse{Items: items})
-}
-
-// audithistoryResource builds the Resource for an audit-history read.
-// TenantID is read from the actor on ctx; if absent, the chokepoint
-// short-circuits with reason resource_tenant_missing and audits the
-// regression. The handler does NOT 401 on missing actor because
-// session middleware should have already done so; reaching the
-// chokepoint anonymously is itself a signal worth recording.
-func audithistoryResource(ctx context.Context) api.Resource {
-	tenantID := ""
-	if a, ok := api.ActorFromContext(ctx); ok {
-		tenantID = a.TenantID
-	}
-	return api.Resource{TenantID: tenantID, Type: "audit"}
-}
-
-// authzGate is the standard chokepoint call pattern: evaluate the
-// action+resource, write 503 on engine error and 403 on deny (with the
-// reason on a header so the operator UI can surface it without parsing
-// the body), and return true only when the handler should proceed.
-//
-// The chokepoint records its own audit row; this helper does NOT.
-// Handlers record subsequent state-change audit rows via api.AuditRecorder
-// at commit time, which is the wave-1 contract.
-func authzGate(
-	ctx context.Context,
-	az api.AuthZ,
-	logger *slog.Logger,
-	w http.ResponseWriter,
-	action api.Action,
-	res api.Resource,
-) bool {
-	d, err := az.Allow(ctx, action, res)
-	if err != nil {
-		logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
-		writeListErr(ctx, logger, w, http.StatusServiceUnavailable, "authz_unavailable")
-		return false
-	}
-	if !d.Allow {
-		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
-		writeListErr(ctx, logger, w, http.StatusForbidden, "forbidden")
-		return false
-	}
-	return true
 }
 
 // parseAuditFilter centralises the per-query-param decode + validate so

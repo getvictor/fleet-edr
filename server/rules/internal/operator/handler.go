@@ -85,7 +85,7 @@ const putPolicyBodyCap = 64 << 10
 
 func (h *Handler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionPolicyRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "policy"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionPolicyRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "policy"}) {
 		return
 	}
 	p, err := h.svc.Get(ctx)
@@ -104,7 +104,7 @@ func (h *Handler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // and the next enroll/admin-push catches up.
 func (h *Handler) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionPolicyUpdate, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "policy"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionPolicyUpdate, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "policy"}) {
 		return
 	}
 
@@ -235,7 +235,7 @@ func (h *Handler) recordPolicyAudit(r *http.Request, body putPolicyRequest, vers
 // new fields, don't remove or rename existing ones.
 func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionPolicyRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "policy"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionPolicyRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "policy"}) {
 		return
 	}
 	type ruleResponse struct {
@@ -263,7 +263,7 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 // list of covering rule IDs is in the technique's `comment`.
 func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionAlertRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "alert"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert"}) {
 		return
 	}
 	rules := h.svc.List()
@@ -330,41 +330,4 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
-}
-
-// authzGate is the standard chokepoint pattern: 503 on engine error,
-// 403 on deny (with the policy reason on a header so the operator UI
-// can distinguish "no role" from "session expired" without parsing a
-// body shape that already varies by failure class), and true only
-// when the handler should proceed.
-func (h *Handler) authzGate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	action identityapi.Action,
-	res identityapi.Resource,
-) bool {
-	d, err := h.authz.Allow(ctx, action, res)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
-		writeErr(ctx, h.logger, w, http.StatusServiceUnavailable, "authz_unavailable")
-		return false
-	}
-	if !d.Allow {
-		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
-		writeErr(ctx, h.logger, w, http.StatusForbidden, "forbidden")
-		return false
-	}
-	return true
-}
-
-// actorTenantID returns the actor's tenant_id from ctx, or "" if no
-// actor is present. The chokepoint short-circuits empty TenantID with
-// reason resource_tenant_missing AND records the regression in the
-// audit log; callers therefore prefer this over an explicit
-// ActorFromContext check at the handler level.
-func actorTenantID(ctx context.Context) string {
-	if a, ok := identityapi.ActorFromContext(ctx); ok {
-		return a.TenantID
-	}
-	return ""
 }

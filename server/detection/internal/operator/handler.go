@@ -1,7 +1,6 @@
 package operator
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -49,9 +48,13 @@ type Handler struct {
 // chokepoint every privileged route gates on; callers also wrap the
 // routes in the operator-session middleware (identity.Session, then
 // identity.CSRF on unsafe methods) at registration time. Panics on
-// nil authz: a Handler without one would silently bypass the role
-// matrix once shadow mode flips off.
+// nil svc or authz: a Handler without one would silently bypass the
+// role matrix or nil-deref on the first request, neither of which is
+// an acceptable boot-time silent failure.
 func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
+	if svc == nil {
+		panic("detection operator.New: api.Service must not be nil")
+	}
 	if authz == nil {
 		panic("detection operator.New: authz must not be nil")
 	}
@@ -80,7 +83,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionHostRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "host"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host"}) {
 		return
 	}
 	hosts, err := h.svc.ListHosts(ctx)
@@ -103,7 +106,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionProcessRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "process", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "process", ID: hostID}) {
 		return
 	}
 
@@ -138,7 +141,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionProcessRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "process", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "process", ID: hostID}) {
 		return
 	}
 
@@ -159,7 +162,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionAlertRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "alert"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert"}) {
 		return
 	}
 	f := api.AlertFilter{
@@ -190,7 +193,7 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, identityapi.ActionAlertRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
 		return
 	}
 	alert, eventIDs, err := h.svc.GetAlert(ctx, id)
@@ -238,7 +241,7 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	ctx := r.Context()
-	if !h.authzGate(ctx, w, action, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
 		return
 	}
 	userID, _ := identityapi.UserIDFromContext(ctx)
@@ -319,43 +322,4 @@ func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		h.logger.ErrorContext(r.Context(), "writeJSON encode failed", "err", err)
 	}
-}
-
-// authzGate is the standard chokepoint pattern: 503 on engine error
-// (transient infra), 403 on deny (with the policy reason on a header
-// so the operator UI can distinguish "no role" from "session expired"
-// without parsing a body shape that already varies by failure class),
-// and true only when the handler should proceed. The chokepoint
-// records its own audit row; subsequent state-change audits are still
-// emitted by the handler at commit time.
-func (h *Handler) authzGate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	action identityapi.Action,
-	res identityapi.Resource,
-) bool {
-	d, err := h.authz.Allow(ctx, action, res)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
-		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
-		return false
-	}
-	if !d.Allow {
-		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return false
-	}
-	return true
-}
-
-// actorTenantID returns the actor's tenant_id from ctx, or "" if no
-// actor is present. The chokepoint short-circuits empty TenantID with
-// reason resource_tenant_missing AND records the regression in the
-// audit log; callers therefore prefer this over an explicit
-// ActorFromContext check at the handler level.
-func actorTenantID(ctx context.Context) string {
-	if a, ok := identityapi.ActorFromContext(ctx); ok {
-		return a.TenantID
-	}
-	return ""
 }

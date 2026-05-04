@@ -130,6 +130,125 @@ func TestHandler_PolicyUpdate_EmitsAudit(t *testing.T) {
 	assert.EqualValues(t, 0, rec.last.Payload["fanout_failed"])
 }
 
+// GET /api/policy succeeds with a 200 and returns the blocklist body.
+// Covers the chokepoint allow path AND handleGetPolicy at the
+// HTTP-handler layer; the existing TestPolicy_GetSeed exercises the
+// service but not the handler-layer authz gate that ships with this
+// PR.
+func TestHandler_GetPolicy(t *testing.T) {
+	svc := fakePolicyService{
+		get: func(context.Context) (api.BlocklistPolicy, error) {
+			return api.BlocklistPolicy{
+				Name:      api.DefaultPolicyName,
+				Version:   4,
+				Blocklist: api.Blocklist{Paths: []string{"/usr/local/bin/x"}},
+			}, nil
+		},
+	}
+	h := New(svc, allowAllAuthZ{}, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/policy", http.NoBody)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var got api.BlocklistPolicy
+	require.NoError(t, stdjson.NewDecoder(resp.Body).Decode(&got))
+	assert.Equal(t, int64(4), got.Version)
+}
+
+// GET /api/rules emits the registered rules' metadata. The handler
+// is otherwise covered only by integration tests against a real DB,
+// which leaves the chokepoint allow line at the top of the function
+// outside the unit-test envelope; this case closes that gap.
+func TestHandler_ListRules(t *testing.T) {
+	svc := fakePolicyService{
+		list: func() []api.RuleMetadata {
+			return []api.RuleMetadata{{ID: "r1", Techniques: []string{"T1059"}}}
+		},
+	}
+	h := New(svc, allowAllAuthZ{}, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules", http.NoBody)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// GET /api/attack-coverage returns the navigator-layer JSON. Same
+// rationale as TestHandler_ListRules: closes the unit-test gap on the
+// chokepoint allow line for an otherwise integration-only handler.
+func TestHandler_AttackCoverage(t *testing.T) {
+	svc := fakePolicyService{
+		list: func() []api.RuleMetadata {
+			return []api.RuleMetadata{{ID: "r1", Techniques: []string{"T1059"}}}
+		},
+	}
+	h := New(svc, allowAllAuthZ{}, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/attack-coverage", http.NoBody)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// AuthZ deny on PUT /api/policy short-circuits before svc.Update is
+// invoked. Locks the deny wire shape (403 + X-Edr-Authz-Reason
+// header) the operator UI relies on to distinguish "no role" from
+// "session expired".
+func TestHandler_PolicyUpdate_AuthZDeny(t *testing.T) {
+	updateCalled := false
+	svc := fakePolicyService{
+		update: func(context.Context, api.UpdateRequest) (api.BlocklistPolicy, error) {
+			updateCalled = true
+			return api.BlocklistPolicy{}, nil
+		},
+	}
+	denying := denyAuthZ{reason: "no_matching_rule"}
+	h := New(svc, denying, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body, _ := stdjson.Marshal(map[string]any{"actor": "v", "reason": "r"})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/policy", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Equal(t, "no_matching_rule", resp.Header.Get("X-Edr-Authz-Reason"))
+	assert.False(t, updateCalled, "service.Update must not run when authz denies")
+}
+
+// denyAuthZ is the deny-only AuthZ stub for the per-handler deny tests.
+type denyAuthZ struct{ reason string }
+
+func (d denyAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: false, Reason: d.reason}, nil
+}
+
 // Nil recorder is the documented "audit-disabled" mode; the policy
 // update must still apply and return 200 without panicking.
 func TestHandler_PolicyUpdate_NilAuditOK(t *testing.T) {

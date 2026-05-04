@@ -84,7 +84,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "unsupported_command_type")
 		return
 	}
-	if !h.authzGate(ctx, w, action, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "host", ID: body.HostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host", ID: body.HostID}) {
 		return
 	}
 
@@ -157,9 +157,12 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_command_id")
 		return
 	}
-	if !h.authzGate(ctx, w, identityapi.ActionHostRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "command", ID: strconv.FormatInt(id, 10)}) {
-		return
-	}
+	// Fetch first so the chokepoint can gate on the command's host_id.
+	// Reading by id alone leaks "command N exists" but no payload, and
+	// matches what GET /api/commands/{id} did before this PR — the
+	// chokepoint then enforces host.read against the resolved host so
+	// future host-scoped roles can deny without special-casing the
+	// commands → host relationship at the policy layer.
 	cmd, err := h.svc.Get(ctx, id)
 	switch {
 	case errors.Is(err, api.ErrCommandNotFound):
@@ -168,6 +171,10 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		h.logger.ErrorContext(ctx, "get command", "id", id, "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead,
+		identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host", ID: cmd.HostID}) {
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, cmd)
@@ -201,40 +208,4 @@ func commandTypeToAction(commandType string) (identityapi.Action, bool) {
 		return identityapi.ActionHostRunScript, true
 	}
 	return "", false
-}
-
-// authzGate is the standard chokepoint pattern: 503 on engine error,
-// 403 on deny (with the policy reason on a header so the operator UI
-// can distinguish "no role" from "session expired"), and true only
-// when the handler should proceed.
-func (h *Handler) authzGate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	action identityapi.Action,
-	res identityapi.Resource,
-) bool {
-	d, err := h.authz.Allow(ctx, action, res)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
-		writeErr(ctx, h.logger, w, http.StatusServiceUnavailable, "authz_unavailable")
-		return false
-	}
-	if !d.Allow {
-		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
-		writeErr(ctx, h.logger, w, http.StatusForbidden, "forbidden")
-		return false
-	}
-	return true
-}
-
-// actorTenantID returns the actor's tenant_id from ctx, or "" if no
-// actor is present. The chokepoint short-circuits empty TenantID with
-// reason resource_tenant_missing AND records the regression in the
-// audit log; callers therefore prefer this over an explicit
-// ActorFromContext check at the handler level.
-func actorTenantID(ctx context.Context) string {
-	if a, ok := identityapi.ActorFromContext(ctx); ok {
-		return a.TenantID
-	}
-	return ""
 }
