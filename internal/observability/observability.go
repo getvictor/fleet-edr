@@ -39,6 +39,12 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
 
+// defaultInitTimeout caps the OTLP dial during Init when Options.InitTimeout
+// is zero. 5s is well above a healthy collector's ack latency but bounded
+// enough that a misconfigured endpoint surfaces during boot rather than
+// stalling the agent / server's startup path.
+const defaultInitTimeout = 5 * time.Second
+
 // Options configure the OTel SDK. Only the fields we rely on at startup are
 // exposed; the SDK reads every other OTEL_* env var
 // (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_BSP_*, etc.) directly.
@@ -86,7 +92,7 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 
 	initDeadline := opts.InitTimeout
 	if initDeadline == 0 {
-		initDeadline = 5 * time.Second
+		initDeadline = defaultInitTimeout
 	}
 	initCtx, cancel := context.WithTimeout(ctx, initDeadline)
 	defer cancel()

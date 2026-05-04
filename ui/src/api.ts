@@ -3,6 +3,11 @@
 // that the JS attaches as X-CSRF-Token on unsafe methods. See POST /api/session
 // for the login round-trip that issues both the cookie and the CSRF token.
 import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail, Command } from "./types";
+import {
+  HTTP_STATUS_NO_CONTENT,
+  HTTP_STATUS_UNAUTHORIZED,
+  MAX_CSRF_TOKEN_LENGTH,
+} from "./constants";
 
 const API_BASE = "/api";
 
@@ -31,7 +36,7 @@ export function getCsrfToken(): string {
 // silently wedge the client.
 function sanitizeCsrfToken(raw: string): string {
   const trimmed = raw.trim();
-  if (trimmed.length === 0 || trimmed.length > 256) return "";
+  if (trimmed.length === 0 || trimmed.length > MAX_CSRF_TOKEN_LENGTH) return "";
   return /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "";
 }
 
@@ -98,7 +103,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     headers,
     credentials: "include",
   });
-  if (res.status === 401) {
+  if (res.status === HTTP_STATUS_UNAUTHORIZED) {
     // Session expired or never existed. Clear local CSRF so a stale token doesn't
     // linger and trip us up on the next login.
     clearCsrfToken();
@@ -108,7 +113,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
   // DELETE /api/session returns 204 with no body; handle the empty-body case.
-  if (res.status === 204) return undefined as T;
+  if (res.status === HTTP_STATUS_NO_CONTENT) return undefined as T;
   return res.json() as Promise<T>;
 }
 

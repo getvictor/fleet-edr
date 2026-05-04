@@ -53,7 +53,20 @@ var (
 	buildTime = ""
 )
 
-const serviceName = "fleet-edr-server"
+const (
+	serviceName = "fleet-edr-server"
+
+	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s
+	// and idle 60s bound how long a stuck client holds a connection. Same
+	// values as fleet-edr-ingest.
+	httpWriteTimeout = 30 * time.Second
+	httpIdleTimeout  = 60 * time.Second
+
+	// metricsOfflineThreshold is the "how old is too old" cutoff for the
+	// edr.offline.hosts gauge. Mirrored as the UI's offline threshold so
+	// what operators see in SigNoz matches what they see on the host page.
+	metricsOfflineThreshold = 5 * time.Minute
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -131,7 +144,7 @@ func run() error {
 	// this two-phase setup.
 	metricsRec := metrics.New(
 		serverGaugeSource{endpointSvc: endpointCtx.Service(), detectionSvc: detectionCtx.Service()},
-		metrics.Options{OfflineThreshold: 5 * time.Minute},
+		metrics.Options{OfflineThreshold: metricsOfflineThreshold},
 	)
 	detectionCtx.SetMetrics(metricsRec)
 
@@ -366,8 +379,8 @@ func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, 
 		Addr:         cfg.ListenAddr,
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout: httpWriteTimeout,
+		IdleTimeout:  httpIdleTimeout,
 	}
 }
 

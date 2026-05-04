@@ -89,13 +89,16 @@ func bulkInsertAlertEvents(ctx context.Context, tx *sqlx.Tx, alertID int64, even
 	return nil
 }
 
+// mysqlErrDuplicateKey is MySQL error 1062 (duplicate primary/unique key).
+const mysqlErrDuplicateKey = 1062
+
 // isDuplicateKeyErr matches MySQL error 1062 (duplicate primary/unique key).
 func isDuplicateKeyErr(err error) bool {
 	var mysqlErr *mysql.MySQLError
 	if !errors.As(err, &mysqlErr) {
 		return false
 	}
-	return mysqlErr.Number == 1062
+	return mysqlErr.Number == mysqlErrDuplicateKey
 }
 
 // attachEventsToExistingAlert handles the dedup branch when

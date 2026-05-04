@@ -17,6 +17,19 @@ import (
 	"github.com/fleetdm/edr/agent/queue"
 )
 
+const (
+	// defaultBatchSize is the per-tick upload cap.
+	defaultBatchSize = 100
+
+	// defaultMaxRetries is the per-batch retry cap before the uploader gives
+	// up and falls through to the next drain tick.
+	defaultMaxRetries = 5
+
+	// defaultClientTimeout is the per-request HTTP timeout when the caller
+	// does not pass an *http.Client.
+	defaultClientTimeout = 30 * time.Second
+)
+
 // Config holds uploader settings.
 type Config struct {
 	// ServerURL is the base URL of the ingestion server (e.g. "https://edr.example.com").
@@ -43,9 +56,9 @@ type Config struct {
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		BatchSize:  100,
+		BatchSize:  defaultBatchSize,
 		Interval:   time.Second,
-		MaxRetries: 5,
+		MaxRetries: defaultMaxRetries,
 	}
 }
 
@@ -62,7 +75,7 @@ type Uploader struct {
 // timeout and no instrumentation.
 func New(q *queue.Queue, cfg Config, client *http.Client, logger *slog.Logger) *Uploader {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: defaultClientTimeout}
 	}
 	if logger == nil {
 		logger = slog.Default()

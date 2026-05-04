@@ -23,7 +23,16 @@ var (
 	buildTime = ""
 )
 
-const serviceName = "fleet-edr-ingest"
+const (
+	serviceName = "fleet-edr-ingest"
+
+	// HTTP server timeouts. Read 10s covers the agent's worst-case slow upload
+	// of a full batch; write 30s and idle 60s keep long-poll-style commands
+	// from getting cut off, but bound how long a stuck client can hold a
+	// connection. Same defaults as fleet-edr-server.
+	httpWriteTimeout = 30 * time.Second
+	httpIdleTimeout  = 60 * time.Second
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -123,8 +132,8 @@ func run() error {
 		Addr:         cfg.ListenAddr,
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout: httpWriteTimeout,
+		IdleTimeout:  httpIdleTimeout,
 	}
 	if cfg.TLSEnabled() {
 		if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{

@@ -28,6 +28,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// defaultSlowThreshold is the access-log "this request is slow" cutoff used
+// when Options.SlowThreshold is zero. Lines past this latency upgrade from
+// info to warn so SigNoz can alert on regressions without sampling every
+// request.
+const defaultSlowThreshold = 500 * time.Millisecond
+
 // Options configures the middleware chain.
 type Options struct {
 	// Logger is required; all middleware logs through it.
@@ -55,7 +61,7 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		panic("httpserver.Build: Logger is required")
 	}
 	if opts.SlowThreshold == 0 {
-		opts.SlowThreshold = 500 * time.Millisecond
+		opts.SlowThreshold = defaultSlowThreshold
 	}
 	if opts.ServiceName == "" {
 		opts.ServiceName = "fleet-edr"

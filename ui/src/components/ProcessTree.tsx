@@ -3,6 +3,12 @@ import { useParams, useSearchParams, Link } from "react-router-dom";
 import * as d3 from "d3";
 import { getAlertDetail, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
+import {
+  HOURS_PER_DAY,
+  MILLISECONDS_PER_HOUR,
+  MILLISECONDS_PER_MINUTE,
+  NANOSECONDS_PER_MILLISECOND,
+} from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
@@ -16,12 +22,39 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
   low: "low",
 };
 
+// Time-range presets surfaced in the UI's segmented picker. The labels are
+// authoritative; the ms values derive from them so the lint catch the next
+// "wait, that's a 26-hour range" typo.
+const RANGE_15_MINUTES_IN_MINUTES = 15;
+const RANGE_6_HOURS_IN_HOURS = 6;
 const TIME_RANGES: { label: string; ms: number }[] = [
-  { label: "15 min", ms: 15 * 60 * 1000 },
-  { label: "1 hour", ms: 60 * 60 * 1000 },
-  { label: "6 hours", ms: 6 * 60 * 60 * 1000 },
-  { label: "24 hours", ms: 24 * 60 * 60 * 1000 },
+  { label: "15 min", ms: RANGE_15_MINUTES_IN_MINUTES * MILLISECONDS_PER_MINUTE },
+  { label: "1 hour", ms: MILLISECONDS_PER_HOUR },
+  { label: "6 hours", ms: RANGE_6_HOURS_IN_HOURS * MILLISECONDS_PER_HOUR },
+  { label: "24 hours", ms: HOURS_PER_DAY * MILLISECONDS_PER_HOUR },
 ];
+
+// Indexes into TIME_RANGES used by the default-window-on-mount logic.
+const DEFAULT_RANGE_IDX_LIVE = 1; // 1 hour
+const DEFAULT_RANGE_IDX_FROM_ALERT = 3; // 24 hours
+
+// d3 layout + render constants. Tuned by hand; collected here so a future
+// "make labels bigger" change touches one block instead of every selector.
+const TREE_NODE_HEIGHT_PX = 28;
+const TREE_NODE_WIDTH_PX = 220;
+const TREE_MARGIN_PX = 40;
+const TREE_ZOOM_MIN = 0.2;
+const TREE_ZOOM_MAX = 3;
+const NODE_DOT_RADIUS_DEFAULT = 5;
+const NODE_DOT_RADIUS_ALERTED = 8;
+const CHEVRON_DX = -14;
+const CHEVRON_DY = 4;
+const LABEL_DX = 16;
+const LABEL_DY = 4;
+const LABEL_BG_PAD_X = 3;
+const LABEL_BG_PAD_Y = 1;
+const LABEL_BG_EXTRA_WIDTH = LABEL_BG_PAD_X * 2;
+const LABEL_BG_EXTRA_HEIGHT = LABEL_BG_PAD_Y * 2;
 
 // Path segments we treat as "system noise" for the hide-system toggle. We match on substring
 // rather than prefix so that cryptex-mounted paths also match. On modern macOS a single framework
@@ -55,7 +88,9 @@ export function ProcessTreeView() {
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
   // Default to 24h window when navigating from an alert (alert times may be days old);
   // otherwise default to 1h for the live view.
-  const [rangeIdx, setRangeIdx] = useState(() => (searchParams.get("at") ? 3 : 1));
+  const [rangeIdx, setRangeIdx] = useState(
+    () => (searchParams.get("at") ? DEFAULT_RANGE_IDX_FROM_ALERT : DEFAULT_RANGE_IDX_LIVE),
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
@@ -197,13 +232,13 @@ export function ProcessTreeView() {
     // Anchor the window on the alert time when arriving from the alert list; fall back to now.
     const atParam = searchParams.get("at");
     const anchorMs = atParam ? Number(atParam) : Date.now();
-    const to = anchorMs * 1_000_000;
+    const to = anchorMs * NANOSECONDS_PER_MILLISECOND;
     // rangeIdx is the user's pick from the segmented control above; it's
     // bounded to [0, TIME_RANGES.length-1] by the click handlers, so this
     // bracket access is safe even though the static analyzer can't prove it.
     // eslint-disable-next-line security/detect-object-injection
     const range = TIME_RANGES[rangeIdx];
-    const from = to - range.ms * 1_000_000;
+    const from = to - range.ms * NANOSECONDS_PER_MILLISECOND;
 
     getProcessTree(hostId, from, to)
       .then((res) => { setRoots(res.roots); })
@@ -275,8 +310,8 @@ export function ProcessTreeView() {
     // Only adjust horizontal scroll when the match is outside the current viewport;
     // preserve the user's horizontal position otherwise so deep-tree panning feels stable.
     const curLeft = canvas.scrollLeft;
-    const inHorizontalView = nodeScreenX >= curLeft + 40
-      && nodeScreenX <= curLeft + canvas.clientWidth - 40;
+    const inHorizontalView = nodeScreenX >= curLeft + TREE_MARGIN_PX
+      && nodeScreenX <= curLeft + canvas.clientWidth - TREE_MARGIN_PX;
     const targetLeft = inHorizontalView ? curLeft : Math.max(0, nodeScreenX - canvas.clientWidth / 2);
     canvas.scrollTo({ top: targetTop, left: targetLeft, behavior: "smooth" });
   }, []);
@@ -636,12 +671,10 @@ function renderTree(
   collapsedIds: Set<number> = new Set(),
   onToggleCollapsed?: (nodeId: number) => void,
 ): RenderResult {
-  const nodeHeight = 28;
-
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
 
-  const treeLayout = d3.tree<D3Node>().nodeSize([nodeHeight, 220]);
+  const treeLayout = d3.tree<D3Node>().nodeSize([TREE_NODE_HEIGHT_PX, TREE_NODE_WIDTH_PX]);
   treeLayout(root);
 
   const nodes = root.descendants() as D3PointNode[];
@@ -657,7 +690,7 @@ function renderTree(
     if (n.y > maxY) maxY = n.y;
   }
 
-  const margin = 40;
+  const margin = TREE_MARGIN_PX;
   const svgHeight = maxX - minX + margin * 2;
 
   const sel = d3.select(svg);
@@ -669,7 +702,7 @@ function renderTree(
     .attr("transform", `translate(${String(margin - minY)},${String(margin - minX)})`);
 
   // Zoom behavior.
-  const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.2, 3]).on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
+  const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([TREE_ZOOM_MIN, TREE_ZOOM_MAX]).on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
     g.attr("transform", String(event.transform));
   });
   sel.call(zoom);
@@ -715,7 +748,7 @@ function renderTree(
     // Alerted nodes get a larger red dot. The label sits far enough away from the
     // dot (see dx on the label text below) that neither the bigger dot nor the
     // search-match ring get clipped by the label backdrop.
-    .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? 8 : 5))
+    .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? NODE_DOT_RADIUS_ALERTED : NODE_DOT_RADIUS_DEFAULT))
     .attr("fill", (d) => {
       if (alertProcessIds.has(d.data.data.id)) return "#ff5c83"; // core-vibrant-red
       if (d.data.data.exit_time_ns) return "#8b8fa2";
@@ -732,8 +765,8 @@ function renderTree(
   chevronNodes
     .append("text")
     .attr("class", "node__chevron")
-    .attr("dx", -14)
-    .attr("dy", 4)
+    .attr("dx", CHEVRON_DX)
+    .attr("dy", CHEVRON_DY)
     .attr("font-size", "10px")
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
     .attr("fill", "#515774")
@@ -753,8 +786,8 @@ function renderTree(
     // dx=16 leaves enough gap that the label backdrop starts clear of an r=8
     // alert dot (extends to x=8) and of the r=7 + 2px stroke search-match ring
     // (extends to x=9), so neither is clipped by the backdrop rect.
-    .attr("dx", 16)
-    .attr("dy", 4)
+    .attr("dx", LABEL_DX)
+    .attr("dy", LABEL_DY)
     .attr("font-size", "12px")
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
     .attr("fill", (d) => (alertProcessIds.has(d.data.data.id) ? "#ff5c83" : "#192147"))
@@ -776,10 +809,10 @@ function renderTree(
     const bbox = textEl.getBBox();
     g.insert("rect", "text.node__label")
       .attr("class", "node__label-bg")
-      .attr("x", bbox.x - 3)
-      .attr("y", bbox.y - 1)
-      .attr("width", bbox.width + 6)
-      .attr("height", bbox.height + 2)
+      .attr("x", bbox.x - LABEL_BG_PAD_X)
+      .attr("y", bbox.y - LABEL_BG_PAD_Y)
+      .attr("width", bbox.width + LABEL_BG_EXTRA_WIDTH)
+      .attr("height", bbox.height + LABEL_BG_EXTRA_HEIGHT)
       .attr("fill", "#fff")
       .attr("pointer-events", "none");
   });

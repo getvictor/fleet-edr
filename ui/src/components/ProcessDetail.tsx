@@ -16,7 +16,13 @@ import { NetworkConnections } from "./NetworkConnections";
 import { Card } from "./ui/Card";
 import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
+import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 import "./ProcessDetail.scss";
+
+// killCommandPollIntervalMs is the cadence we re-fetch the kill command's
+// status while it's still pending/acked. 2s mirrors the agent's command-poll
+// interval so the UI sees a state transition within one round-trip.
+const KILL_COMMAND_POLL_INTERVAL_MS = 2000;
 
 interface Props {
   readonly hostId: string;
@@ -82,7 +88,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
           }
         })
         .catch(() => { /* polling is best-effort */ });
-    }, 2000);
+    }, KILL_COMMAND_POLL_INTERVAL_MS);
     return () => { clearInterval(timer); };
   }, [killCommand]);
 
@@ -312,5 +318,5 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
 }
 
 function formatTimestamp(ns: number): string {
-  return new Date(ns / 1_000_000).toLocaleTimeString();
+  return new Date(ns / NANOSECONDS_PER_MILLISECOND).toLocaleTimeString();
 }

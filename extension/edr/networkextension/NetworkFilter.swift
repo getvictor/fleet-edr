@@ -5,6 +5,13 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "NetworkFilter")
 
+/// IANA L4 protocol numbers we attribute by name. Anything else falls through to
+/// "ip-N". Mirrors <netinet/in.h>'s IPPROTO_* values.
+private enum IANAProtocol {
+    static let tcp: Int32 = 6
+    static let udp: Int32 = 17
+}
+
 /// NetworkFilter captures outbound network connections, attributing them
 /// to the source process via audit token.
 ///
@@ -44,8 +51,8 @@ final class NetworkFilter: NEFilterDataProvider {
         // Determine protocol.
         let proto: String
         switch socketFlow.socketProtocol {
-        case 6: proto = "tcp"
-        case 17: proto = "udp"
+        case IANAProtocol.tcp: proto = "tcp"
+        case IANAProtocol.udp: proto = "udp"
         default: proto = "ip-\(socketFlow.socketProtocol)"
         }
 
