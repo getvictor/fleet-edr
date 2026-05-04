@@ -106,6 +106,16 @@ type Config struct {
 	// fleet-edr-server, or one user hitting the rate limit will lock
 	// out everyone behind the proxy.
 	TrustedProxies []string
+
+	// AuthzShadowMode is the wave-1 rollout knob for the authorization
+	// chokepoint. When true, every Allow call evaluates the policy and
+	// audits the would-be decision but ALWAYS returns Allow=true so
+	// pilot deployments observe the deny dashboard before enforcement
+	// flips on. Populated from EDR_AUTHZ_SHADOW_MODE; default false
+	// (enforcement on) for fresh deployments. cmd/main re-reads the
+	// env var on SIGHUP and calls Engine.SetShadowMode so an operator
+	// can flip the gate without a restart.
+	AuthzShadowMode bool
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -159,6 +169,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 
 	c.AllowInsecureHTTP = getenv("EDR_ALLOW_INSECURE_HTTP") == "1"
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
+	c.AuthzShadowMode = getenv("EDR_AUTHZ_SHADOW_MODE") == "1"
 
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		errs = append(errs, errors.New(

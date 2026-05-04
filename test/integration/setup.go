@@ -96,7 +96,7 @@ func Setup(t *testing.T) *Stack {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{
+	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:              db,
 		Logger:          logger,
 		LoginRatePerMin: 1000,

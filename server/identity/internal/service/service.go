@@ -8,29 +8,32 @@ import (
 	"log/slog"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
 // service implements api.Service by composing the users + sessions stores
-// and delegating to the seed package for first-boot setup.
+// and delegating to the seed package for first-boot setup. rbac is the
+// wave-1 role-binding read store the AuthZ chokepoint reaches through.
 type service struct {
 	users    *users.Store
 	sessions *sessions.Store
+	rbac     *rbac.Store
 	logger   *slog.Logger
 }
 
 // New constructs a Service. The Service is the cross-context entry point
-// for the identity bounded context; the login HTTP handler and the
-// session/CSRF middleware also call into it for business logic so the
-// orchestration is in one place.
+// for the identity bounded context; the login HTTP handler, the
+// session/CSRF middleware, and the AuthZ engine also call into it for
+// business logic so the orchestration is in one place.
 //
 // All inputs are required to be non-nil; bootstrap.New is the only caller
 // and provides them via Deps. A nil-defensive branch here would be dead
 // code, so we trust the caller.
-func New(u *users.Store, s *sessions.Store, logger *slog.Logger) api.Service {
-	return &service{users: u, sessions: s, logger: logger}
+func New(u *users.Store, s *sessions.Store, r *rbac.Store, logger *slog.Logger) api.Service {
+	return &service{users: u, sessions: s, rbac: r, logger: logger}
 }
 
 func (s *service) Login(ctx context.Context, email, password string) (api.LoginResult, error) {
@@ -114,6 +117,39 @@ func (s *service) UserExists(ctx context.Context, userID int64) (bool, error) {
 
 func (s *service) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 	return s.sessions.CleanupExpired(ctx)
+}
+
+// LoadActor builds the per-request actor for the AuthZ chokepoint.
+// Two queries: one for users (already on the call path of every login
+// today, so the row is hot in MySQL's buffer pool) and one for the
+// caller's live role bindings. Returns ErrUserNotFound if the user
+// row has been deleted out from under a still-valid session — the
+// caller (session middleware) maps it to a 401 + cookie clear.
+//
+// A future reauth-window implementation will populate
+// Actor.SessionFresh based on the session's last fresh-auth event;
+// until that lands the value stays false so destructive-action
+// policies that gate on it default to deny.
+func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string) (*api.Actor, error) {
+	u, err := s.users.Get(ctx, userID)
+	if errors.Is(err, users.ErrNotFound) {
+		return nil, api.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load actor user %d: %w", userID, err)
+	}
+	bindings, err := s.rbac.ListLiveBindings(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("load actor bindings: %w", err)
+	}
+	return &api.Actor{
+		UserID:       u.ID,
+		TenantID:     u.TenantID,
+		IsBreakglass: u.IsBreakglass,
+		AuthMethod:   authMethod,
+		Roles:        bindings,
+		SessionFresh: false,
+	}, nil
 }
 
 // toAPIUser converts the internal users.User row into the operator-visible

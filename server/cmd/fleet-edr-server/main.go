@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -149,6 +151,7 @@ func run() error {
 
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
+	go watchSIGHUPForAuthzShadowMode(ctx, identityCtx, logger)
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty.
 	// httpserver.Build skips installing the middleware on a nil resolver,
@@ -179,11 +182,12 @@ func openIdentity(
 	db *sqlx.DB,
 	cfg *config.Config,
 ) (*identitybootstrap.Identity, error) {
-	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{
+	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:              db,
 		Logger:          logger,
 		LoginRatePerMin: cfg.LoginRatePerMin,
 		CookieSecure:    cfg.TLSEnabled(),
+		AuthzShadowMode: cfg.AuthzShadowMode,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)
@@ -352,6 +356,33 @@ func runDetection(ctx context.Context, detectionCtx *detectionbootstrap.Detectio
 func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, logger *slog.Logger) {
 	if err := identityCtx.Run(ctx); err != nil && ctx.Err() == nil {
 		logger.ErrorContext(ctx, "identity run", "err", err)
+	}
+}
+
+// watchSIGHUPForAuthzShadowMode re-reads EDR_AUTHZ_SHADOW_MODE on every
+// SIGHUP and calls Identity.SetAuthzShadowMode. Multiple SIGHUP
+// listeners coexist via signal.Notify; the TLS reloader in
+// httpserver.ConfigureTLS uses the same signal for cert reload, so an
+// operator's `kill -HUP <pid>` flips both.
+//
+// The SIGHUP-driven reload exists so a pilot deployment can swap from
+// shadow to enforcement (or back, if the dashboard surfaces an
+// unexpected deny) without a server restart. The wave-1 production
+// rollout walks operators through this exact procedure.
+func watchSIGHUPForAuthzShadowMode(ctx context.Context, identityCtx *identitybootstrap.Identity, logger *slog.Logger) {
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	defer signal.Stop(sighup)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sighup:
+			on := os.Getenv("EDR_AUTHZ_SHADOW_MODE") == "1"
+			identityCtx.SetAuthzShadowMode(on)
+			logger.InfoContext(ctx, "authz shadow mode reloaded",
+				"edr.authz.shadow_mode", on)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
@@ -45,7 +46,8 @@ func setupServer(t *testing.T, ratePerMinute int) (*httptest.Server, *users.Stor
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	us := users.New(db)
 	ss := sessions.New(db, sessions.Options{})
-	svc := service.New(us, ss, slog.Default())
+	rb := rbac.New(db)
+	svc := service.New(us, ss, rb, slog.Default())
 
 	h := login.New(svc, login.Options{
 		RatePerMinute: ratePerMinute,

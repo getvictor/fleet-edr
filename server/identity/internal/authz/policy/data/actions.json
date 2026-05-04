@@ -1,0 +1,24 @@
+{
+  "actions": [
+    "host.read",
+    "process.read",
+    "host.isolate",
+    "host.kill_process",
+    "host.run_script",
+    "alert.read",
+    "alert.comment",
+    "alert.acknowledge",
+    "alert.resolve",
+    "alert.reopen",
+    "policy.read",
+    "policy.create",
+    "policy.update",
+    "policy.delete",
+    "enrollment.read",
+    "enrollment.revoke",
+    "enrollment.rotate_token",
+    "user.read",
+    "user.invite",
+    "audit.read"
+  ]
+}
