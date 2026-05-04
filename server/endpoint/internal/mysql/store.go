@@ -12,10 +12,13 @@ import (
 )
 
 const (
-	// hostTokenBase64Len is the base64url length of a 32-byte token: 32 bytes
-	// encodes to 43 characters (no padding). Anything else is a malformed
-	// presentation and we reject before paying the argon2id cost.
-	hostTokenBase64Len = 43
+	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte
+	// token (tokenLen lives in hash.go). For n bytes the encoded length is
+	// ceil(n*4/3) = (n*4+2)/3 — derived from tokenLen rather than hard-coded
+	// so a future tokenLen bump stays in sync without a second edit. Anything
+	// else is a malformed presentation; we reject before paying the argon2id
+	// cost.
+	hostTokenBase64Len = (tokenLen*4 + 2) / 3
 
 	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we
 	// hex-encode for audit metadata (8 hex chars). Long enough to disambiguate

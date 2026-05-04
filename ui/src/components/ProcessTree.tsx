@@ -230,8 +230,11 @@ export function ProcessTreeView() {
     setError(null);
 
     // Anchor the window on the alert time when arriving from the alert list; fall back to now.
+    // Validate the parsed value: a malformed ?at= would otherwise produce NaN, propagate
+    // through the multiplication, and land an invalid range on getProcessTree.
     const atParam = searchParams.get("at");
-    const anchorMs = atParam ? Number(atParam) : Date.now();
+    const parsedAt = atParam ? Number(atParam) : NaN;
+    const anchorMs = Number.isFinite(parsedAt) ? parsedAt : Date.now();
     const to = anchorMs * NANOSECONDS_PER_MILLISECOND;
     // rangeIdx is the user's pick from the segmented control above; it's
     // bounded to [0, TIME_RANGES.length-1] by the click handlers, so this
