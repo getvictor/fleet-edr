@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/endpoint/bootstrap"
-	"github.com/fleetdm/edr/server/testdb"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // TestSchema_TenantIDOnEnrollments locks in the wave-1
@@ -17,8 +17,7 @@ import (
 // tenant_id VARCHAR(64) NOT NULL DEFAULT 'default' column. Wave-1
 // reads do not query on it; the column exists for wave-2 MSSP scoping.
 func TestSchema_TenantIDOnEnrollments(t *testing.T) {
-	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	db := full.Open(t)
 
 	var nullable, dataType string
 	var defaultValue *string

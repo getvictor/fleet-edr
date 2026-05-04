@@ -78,8 +78,10 @@ var schemaMigrations = []string{
 	// Tenant scaffolding (wave-1 user-management). The column exists for
 	// future MSSP-style multi-tenancy; wave-1 reads do not filter on it.
 	// VARCHAR(64) DEFAULT 'default' so the ALTER backfills existing rows
-	// without a follow-up UPDATE.
+	// without a follow-up UPDATE. Paired with an index so the wave-2
+	// cutover does not need a backfill migration.
 	`ALTER TABLE enrollments ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
+	`ALTER TABLE enrollments ADD INDEX idx_enrollments_tenant_id (tenant_id)`,
 }
 
 // isAlreadyAppliedMigration returns true when err is one of the MySQL

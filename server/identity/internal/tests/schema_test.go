@@ -13,7 +13,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
-	"github.com/fleetdm/edr/server/testdb"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // columnInfo is one row from MySQL's INFORMATION_SCHEMA.COLUMNS.
@@ -143,11 +143,14 @@ func TestSchema_RoleBindingsScopeShape(t *testing.T) {
 
 	scopeType, ok := cols["scope_type"]
 	require.True(t, ok, "role_bindings.scope_type missing")
-	assert.True(t,
-		strings.Contains(scopeType.ColumnType, "'tenant'") &&
-			strings.Contains(scopeType.ColumnType, "'host_group'") &&
-			strings.Contains(scopeType.ColumnType, "'host'"),
-		"scope_type must be an ENUM('tenant','host_group','host'); got %q", scopeType.ColumnType)
+	// Pin the enum shape exactly so an additional value or a reorder
+	// fails loudly. The chokepoint vocabulary depends on this exact
+	// set; lowercase the column type because MySQL renders ENUM as
+	// `enum(...)` in INFORMATION_SCHEMA.COLUMNS.
+	assert.Equal(t,
+		"enum('tenant','host_group','host')",
+		strings.ToLower(scopeType.ColumnType),
+		"role_bindings.scope_type enum contract must not drift")
 	require.NotNil(t, scopeType.Default)
 	assert.Equal(t, "tenant", *scopeType.Default)
 
@@ -230,14 +233,16 @@ func TestSeed_Idempotent(t *testing.T) {
 	assert.Equal(t, len(seed.BuiltinRoles), roles, "roles seed must not duplicate on re-run")
 }
 
-// openIdentitySchema returns a fresh test DB with identity's schema +
-// seeds applied. The fixture is intentionally minimal: identity's
-// ApplySchema is the unit under test, so we don't pull in
-// testdb/full's whole-server fixture (which would also apply every
-// other context's schema).
+// openIdentitySchema returns a fresh test DB with every bounded
+// context's schema applied (via testdb/full.Open) plus a second
+// identity ApplySchema call so the assertions exercise the full
+// integration-test path the project's per-context tests use. Calling
+// identity ApplySchema twice is itself an idempotency check: a
+// regression in either schemaMigrations or the seed inserts would
+// surface here before the dedicated TestSchema_Idempotent runs.
 func openIdentitySchema(t *testing.T) *sqlx.DB {
 	t.Helper()
-	db := testdb.Open(t)
+	db := full.Open(t)
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
 	return db
 }

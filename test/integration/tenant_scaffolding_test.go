@@ -29,9 +29,13 @@ import (
 // Wave-1 reads do NOT filter on tenant_id; this test does not assert
 // that property because verifying it accurately would require
 // SQL-rendering inspection across every context. The wave-1 invariant
-// is human-enforced via code review; full_path_test exercises every
-// existing read endpoint and would notice if a tenant_id WHERE clause
-// silently broke them.
+// is human-enforced via code review; the existing full_path_test
+// exercises the enroll -> ingest -> command -> ack flow against the
+// new schema and would notice if a tenant_id WHERE clause broke any
+// of those endpoints. Read endpoints not on that path (rule
+// catalogue, policy GET, audit list) are pinned by their own
+// per-context tests; if any of them silently grew a tenant_id filter
+// the corresponding test suite would catch it.
 func TestTenantScaffolding_SchemaAndSeeds(t *testing.T) {
 	stack := Setup(t)
 	ctx := t.Context()

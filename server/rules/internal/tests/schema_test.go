@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/rules/bootstrap"
-	"github.com/fleetdm/edr/server/testdb"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // TestSchema_TenantIDOnPolicies locks in the wave-1 tenant-scaffolding
@@ -19,8 +19,7 @@ import (
 // half of the contract: an upgrade-path call to ApplySchema must
 // succeed even after the migration has run.
 func TestSchema_TenantIDOnPolicies(t *testing.T) {
-	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	db := full.Open(t)
 
 	var nullable, dataType string
 	var defaultValue *string

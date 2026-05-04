@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/detection/bootstrap"
-	"github.com/fleetdm/edr/server/testdb"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // TestSchema_TenantIDOnHostsAndAlerts locks in the wave-1
@@ -17,9 +17,13 @@ import (
 // tables both gain a tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'
 // column. Wave-1 reads do not query on it; the column is structural
 // scaffolding for wave-2 MSSP scoping.
+//
+// Uses testdb/full.Open so the test exercises the same full-schema
+// integration path the rest of the per-context test pyramid uses;
+// then re-runs the detection migrations on top of full's already-
+// applied schema as the idempotency assertion.
 func TestSchema_TenantIDOnHostsAndAlerts(t *testing.T) {
-	db := testdb.Open(t)
-	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+	db := full.Open(t)
 	require.NoError(t, bootstrap.MigrateSchema(t.Context(), db))
 
 	for _, table := range []string{"hosts", "alerts"} {

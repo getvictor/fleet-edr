@@ -129,6 +129,7 @@ var schemaStatements = []string{
 		scope_id    VARCHAR(255) NOT NULL DEFAULT '*',
 		expires_at  TIMESTAMP(6) NULL,
 		created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		UNIQUE KEY uk_role_bindings (user_id, role_id, tenant_id, scope_type, scope_id),
 		INDEX idx_role_bindings_user (user_id, expires_at),
 		INDEX idx_role_bindings_role (role_id),
 		INDEX idx_role_bindings_tenant (tenant_id)
@@ -201,14 +202,23 @@ var schemaMigrations = []string{
 	`ALTER TABLE users ADD COLUMN is_breakglass TINYINT(1) NOT NULL DEFAULT 0`,
 	`ALTER TABLE users MODIFY COLUMN password_hash VARBINARY(255) NULL`,
 	`ALTER TABLE users MODIFY COLUMN password_salt VARBINARY(32) NULL`,
+	// Tenant lookups will be a hot path once wave-2 starts filtering on
+	// tenant_id. Adding the index here keeps the migration purely
+	// schema-shape work and avoids a follow-up that has to backfill an
+	// already-populated table.
+	`ALTER TABLE users ADD INDEX idx_users_tenant_id (tenant_id)`,
 
 	// Sessions gain identity_id (which authn identity issued the
 	// session) and auth_method ('local_password' for break-glass,
 	// 'oidc' for SSO). Existing sessions default to 'local_password'
 	// because that's the only flow today; the OIDC path lands in a
 	// later phase and will populate identity_id at session creation.
+	// idx_sessions_identity_id supports the eventual "revoke all
+	// sessions for this identity" admin path (e.g. SSO subject
+	// recycled, break-glass credential rotated).
 	`ALTER TABLE sessions ADD COLUMN identity_id BIGINT NULL`,
 	`ALTER TABLE sessions ADD COLUMN auth_method VARCHAR(32) NOT NULL DEFAULT 'local_password'`,
+	`ALTER TABLE sessions ADD INDEX idx_sessions_identity_id (identity_id)`,
 }
 
 // isAlreadyAppliedMigration returns true when err is one of the MySQL

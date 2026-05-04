@@ -6,20 +6,18 @@ import (
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
-)
 
-// DefaultTenantID is the wave-1 scaffolding tenant. Every existing row
-// across every context defaults its tenant_id to this string; wave-1
-// reads do not filter on tenant_id, so the literal lives only in the
-// schema defaults and this seed. Wave 2 introduces additional rows;
-// the constant becomes the "fallback when no tenant header is set"
-// rather than the only tenant.
-const DefaultTenantID = "default"
+	"github.com/fleetdm/edr/server/identity/api"
+)
 
 // DefaultTenantName is the human-facing name used in the seeded row
 // and in any UI that resolves the default tenant. Operators may
 // rename it post-seed; the seed is INSERT IGNORE so re-runs do not
 // clobber an edited row.
+//
+// The id sentinel lives at api.DefaultTenantID so the public
+// boundary owns the canonical value; the seed reads from there to
+// avoid drift if the constant is ever renamed.
 const DefaultTenantName = "Default Tenant"
 
 // Tenants seeds the `tenants` table with the default tenant. Idempotent
@@ -38,7 +36,7 @@ func Tenants(ctx context.Context, db *sqlx.DB) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT IGNORE INTO tenants (id, name, status)
 		VALUES (?, ?, 'active')
-	`, DefaultTenantID, DefaultTenantName)
+	`, api.DefaultTenantID, DefaultTenantName)
 	if err != nil {
 		return fmt.Errorf("seed default tenant: %w", err)
 	}
