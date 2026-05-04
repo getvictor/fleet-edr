@@ -41,7 +41,7 @@ func TestHandler_CommandIssue_EmitsAudit(t *testing.T) {
 		return 99, nil
 	}}
 	rec := &captureRecorder{}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 	h.SetAudit(rec)
 
 	mux := http.NewServeMux()
@@ -77,7 +77,7 @@ func TestHandler_CommandIssue_NilAuditOK(t *testing.T) {
 	svc := fakeService{insert: func(_ context.Context, _ string, _ string, _ []byte) (int64, error) {
 		return 100, nil
 	}}
-	h := New(svc, nil) // SetAudit deliberately not called.
+	h := New(svc, allowAllAuthZ{}, nil) // SetAudit deliberately not called.
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -103,7 +103,7 @@ func TestHandler_CommandIssue_InsertErrorSkipsAudit(t *testing.T) {
 		return 0, api.ErrInvalidInsertRequest
 	}}
 	rec := &captureRecorder{}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 	h.SetAudit(rec)
 
 	mux := http.NewServeMux()

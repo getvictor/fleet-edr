@@ -57,10 +57,20 @@ func (c *captureRecorder) Record(_ context.Context, e identityapi.AuditEvent) er
 	return nil
 }
 
+// allowAllAuthZ stubs identityapi.AuthZ for endpoint operator tests
+// that exercise revoke / rotate semantics rather than the role
+// matrix. Per-action coverage lives in
+// server/identity/internal/authz/engine_test.go.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
+
 func TestHandler_Revoke_EmitsAudit(t *testing.T) {
 	svc := fakeRevokeService{revoke: func(_ context.Context, _, _, _ string) error { return nil }}
 	rec := &captureRecorder{}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 	h.SetAudit(rec)
 
 	mux := http.NewServeMux()
@@ -88,7 +98,7 @@ func TestHandler_Revoke_EmitsAudit(t *testing.T) {
 // Nil recorder must not panic; revoke still applies and audit silently no-ops.
 func TestHandler_Revoke_NilAuditOK(t *testing.T) {
 	svc := fakeRevokeService{revoke: func(_ context.Context, _, _, _ string) error { return nil }}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -123,7 +133,7 @@ func TestHandler_Rotate_HappyPath(t *testing.T) {
 		id := int64(7)
 		return api.RotateResult{PreviousTokenIDPrefix: "deadbeef", CommandID: &id}, nil
 	}}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -171,7 +181,7 @@ func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
 				t.Fatal("RotateToken must not be called when actor/reason validation fails")
 				return api.RotateResult{}, nil
 			}}
-			h := New(svc, nil)
+			h := New(svc, allowAllAuthZ{}, nil)
 			mux := http.NewServeMux()
 			h.RegisterRoutes(mux)
 			srv := httptest.NewServer(mux)
@@ -197,7 +207,7 @@ func TestHandler_Rotate_NotFound(t *testing.T) {
 	svc := fakeRevokeService{rotate: func(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
 		return api.RotateResult{}, api.ErrNotFound
 	}}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)

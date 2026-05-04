@@ -1,0 +1,80 @@
+// HTTP-shaped helpers for the authz chokepoint. Pulled into identity/api
+// so every operator handler can share one canonical implementation
+// instead of each context re-implementing the (svc.Allow → 503/403)
+// pattern. Without the share, Sonar reports the same 25-line block
+// duplicated five times across detection / rules / response / endpoint /
+// audit and fails the new-code duplication gate (PR #119, gate
+// FAILURE on new_duplicated_lines_density).
+//
+// Adding net/http + log/slog to identity/api is a deliberate
+// scope-expansion of the public-surface package: the contract of an
+// operator handler is now "use the chokepoint AND map its outcome to
+// HTTP", and the helper that does the mapping is part of that
+// contract. The same package already exports HTTP-adjacent types
+// (SessionCookieName, CSRFHeaderName) so the precedent is established.
+
+package api
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+
+	"github.com/fleetdm/edr/server/httpserver"
+)
+
+// AuthzReasonHeader is the response header an HTTP handler writes when
+// the chokepoint denies a privileged action. The operator UI reads it
+// to distinguish a policy deny ("forbidden — your role does not grant
+// this action") from a session expiry, which would otherwise share
+// the 403 status and produce identical UX.
+const AuthzReasonHeader = "X-Edr-Authz-Reason"
+
+// HTTPGate is the standard authz pattern every privileged operator
+// handler funnels through: evaluate the (action, resource) pair, write
+// 503 on engine error (transient infra), 403 + reason header on deny
+// (policy decision), and return true only when the handler should
+// proceed.
+//
+// 503 (not 500) on engine failure so the UI's retry semantics for 5xx
+// kick in instead of the 401-on-403 redirect-to-login. 403 (not 401)
+// on deny so a real "not allowed" doesn't bounce the operator to the
+// login screen and lose their work.
+//
+// The chokepoint records its own audit row; this helper does NOT
+// record one. Subsequent state-change audits remain the handler's
+// responsibility (the AuditRecorder.Record call at commit time).
+func HTTPGate(
+	ctx context.Context,
+	w http.ResponseWriter,
+	az AuthZ,
+	logger *slog.Logger,
+	action Action,
+	res Resource,
+) bool {
+	d, err := az.Allow(ctx, action, res)
+	if err != nil {
+		logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
+		httpserver.NoStoreJSON(ctx, logger, w, http.StatusServiceUnavailable, map[string]string{"error": "authz_unavailable"})
+		return false
+	}
+	if !d.Allow {
+		w.Header().Set(AuthzReasonHeader, d.Reason)
+		httpserver.NoStoreJSON(ctx, logger, w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return false
+	}
+	return true
+}
+
+// ActorTenantID returns the actor's tenant_id from ctx, or "" if no
+// actor is present. The chokepoint short-circuits empty TenantID with
+// reason resource_tenant_missing AND records the regression in the
+// audit log; callers therefore prefer this helper over an explicit
+// ActorFromContext check at the handler level (no 401 short-circuit
+// needed; the missing-actor case is itself an audit signal).
+func ActorTenantID(ctx context.Context) string {
+	if a, ok := ActorFromContext(ctx); ok {
+		return a.TenantID
+	}
+	return ""
+}

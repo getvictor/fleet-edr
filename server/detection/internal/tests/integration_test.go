@@ -27,6 +27,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
@@ -133,6 +134,17 @@ func (m *recordingMetrics) snapshot() (events, queries, alerts int, reconciled, 
 	return m.eventsIngested, m.dbQueries, m.alertsCreated, m.processesReconciled, m.rowsDeleted
 }
 
+// allowAllAuthZ is a chokepoint stub: every Allow returns granted.
+// Tests defined here exercise detection's ingest / processor paths,
+// which are NOT privileged operator routes; the operator-route allow
+// path is sufficiently covered by the engine's own per-action matrix
+// in server/identity/internal/authz/engine_test.go.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
+
 // detectionOpts bundles the per-test knobs that diverge from defaults.
 type detectionOpts struct {
 	mode          bootstrap.Mode
@@ -159,6 +171,7 @@ func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 		RetentionDays:        opts.retentionDays,
 		RetentionInterval:    20 * time.Millisecond,
 		UserExists:           opts.userExists,
+		AuthZ:                allowAllAuthZ{},
 	}
 	d, err := bootstrap.New(deps)
 	require.NoError(t, err)

@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/fleetdm/edr/server/detection/bootstrap"
+	identitytestkit "github.com/fleetdm/edr/server/identity/testkit"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -15,7 +16,11 @@ import (
 // bootstrap → testdb/full → bootstrap.
 func TestStoreAccessor(t *testing.T) {
 	db := full.Open(t)
-	d, err := bootstrap.New(bootstrap.Deps{DB: db, Mode: bootstrap.ModeFull})
+	d, err := bootstrap.New(bootstrap.Deps{
+		DB:    db,
+		Mode:  bootstrap.ModeFull,
+		AuthZ: identitytestkit.AllowAllAuthZ{},
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -13,24 +13,30 @@ import (
 )
 
 // Handler serves GET /api/audit. Cookie-auth gated by the identity
-// Session middleware (caller wraps before mounting); no role gate yet
-// because identity is single-admin in the MVP. When multi-user roles
-// land the handler grows a `requireAdmin` step at the top of List.
+// Session middleware (caller wraps before mounting); the handler also
+// gates the read on api.ActionAuditRead through the AuthZ chokepoint
+// so only roles whose grants include audit.read (auditor, super_admin)
+// can list audit history.
 type Handler struct {
 	reader api.AuditReader
+	authz  api.AuthZ
 	logger *slog.Logger
 }
 
 // NewHandler builds a handler around the given AuditReader. Panics if
-// reader is nil because a Handler that always 500s isn't useful.
-func NewHandler(reader api.AuditReader, logger *slog.Logger) *Handler {
+// reader or authz is nil; both are load-bearing dependencies and a
+// Handler that always 500s on either is not useful.
+func NewHandler(reader api.AuditReader, authz api.AuthZ, logger *slog.Logger) *Handler {
 	if reader == nil {
 		panic("audit.NewHandler: reader must not be nil")
+	}
+	if authz == nil {
+		panic("audit.NewHandler: authz must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{reader: reader, logger: logger}
+	return &Handler{reader: reader, authz: authz, logger: logger}
 }
 
 // RegisterAuthedRoutes wires GET /api/audit on mux. The mux is
@@ -50,6 +56,10 @@ type listResponse struct {
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionAuditRead,
+		api.Resource{TenantID: api.ActorTenantID(ctx), Type: "audit"}) {
+		return
+	}
 	filter, errCode, ok := parseAuditFilter(r.URL.Query())
 	if !ok {
 		writeListErr(ctx, h.logger, w, http.StatusBadRequest, errCode)

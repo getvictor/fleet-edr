@@ -25,10 +25,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
+
+// allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant for
+// the response-context integration tests. Per-action role coverage
+// lives in server/identity/internal/authz/engine_test.go.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
 
 // recordingHeartbeat captures every Heartbeat invocation so tests
 // can assert the per-poll last-seen bump fires (and only fires when
@@ -64,7 +74,8 @@ func newResponse(t *testing.T, hb *recordingHeartbeat) *bootstrap.Response {
 	t.Helper()
 	s := full.Open(t)
 	deps := bootstrap.Deps{
-		DB: s,
+		DB:    s,
+		AuthZ: allowAllAuthZ{},
 	}
 	if hb != nil {
 		deps.Heartbeat = hb.Bump
@@ -183,6 +194,7 @@ func newResponseWithHeartbeat(t *testing.T, hb bootstrap.Heartbeat) *bootstrap.R
 	r, err := bootstrap.New(bootstrap.Deps{
 		DB:        s,
 		Heartbeat: hb,
+		AuthZ:     allowAllAuthZ{},
 	})
 	require.NoError(t, err)
 	require.NoError(t, r.ApplySchema(t.Context()))

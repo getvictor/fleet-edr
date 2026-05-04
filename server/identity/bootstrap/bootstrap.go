@@ -104,7 +104,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 			Audit:         auditStore,
 		}),
 		auditStore:   auditStore,
-		auditHandler: audit.NewHandler(auditStore, logger),
+		auditHandler: audit.NewHandler(auditStore, authzEngine, logger),
 		sessionMW:    middleware.Session(svc, logger),
 		csrfMW:       middleware.CSRF(logger),
 		db:           deps.DB,

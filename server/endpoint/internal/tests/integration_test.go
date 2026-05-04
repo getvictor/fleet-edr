@@ -28,8 +28,18 @@ import (
 
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/endpoint/bootstrap"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
+
+// allowAllAuthZ stubs identityapi.AuthZ for endpoint integration
+// tests. Per-action role coverage is exercised in
+// server/identity/internal/authz/engine_test.go.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
 
 // fanoutWaitFor and fanoutWaitTick cap the post-enroll goroutine wait.
 // The fan-out is local in-memory work (no network), so 2s is generous.
@@ -111,6 +121,7 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 		Logger:              slog.Default(),
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
+		AuthZ:               allowAllAuthZ{},
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -406,6 +417,7 @@ func TestEnroll_PolicyFanoutOnFirstEnroll(t *testing.T) {
 		EnrollRatePerMinute: 600,
 		PolicyProvider:      policy,
 		CommandInserter:     commands.Insert,
+		AuthZ:               allowAllAuthZ{},
 	})
 	require.NoError(t, err)
 	require.NoError(t, ep.ApplySchema(t.Context()))
@@ -451,6 +463,7 @@ func TestEnroll_NoFanoutWhenPolicyEmpty(t *testing.T) {
 		EnrollRatePerMinute: 600,
 		PolicyProvider:      policy,
 		CommandInserter:     commands.Insert,
+		AuthZ:               allowAllAuthZ{},
 	})
 	require.NoError(t, err)
 	require.NoError(t, ep.ApplySchema(t.Context()))

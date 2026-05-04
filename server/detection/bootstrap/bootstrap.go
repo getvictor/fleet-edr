@@ -74,6 +74,11 @@ type Deps struct {
 	// audit emission for alert-status changes (existing tests pass nil
 	// without ceremony). cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
+	// AuthZ is the authorization chokepoint every privileged operator
+	// route gates on. Required in ModeFull. cmd/main wires
+	// identityCtx.AuthZ(); intake-only mode (ModeIntake) does not
+	// register the operator handler so AuthZ may be nil there.
+	AuthZ identityapi.AuthZ
 }
 
 // Detection is the handle cmd/main holds.
@@ -127,7 +132,10 @@ func New(deps Deps) (*Detection, error) {
 		}
 		query := graph.NewQuery(store)
 		det.svc = service.New(store, query, intakeH, deps.UserExists, logger)
-		det.operatorH = operator.New(det.svc, logger)
+		if deps.AuthZ == nil {
+			return nil, errors.New("detection bootstrap: AuthZ is required in ModeFull")
+		}
+		det.operatorH = operator.New(det.svc, deps.AuthZ, logger)
 		det.operatorH.SetAudit(deps.Audit)
 
 		processor := pipeline.NewProcessor(

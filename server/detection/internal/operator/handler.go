@@ -39,19 +39,29 @@ type alertDetailResponse struct {
 // Handler serves the operator-facing detection routes.
 type Handler struct {
 	svc    api.Service
+	authz  identityapi.AuthZ
 	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
-// New creates a detection operator handler. Authorization is NOT
-// enforced in this package; callers wrap the routes in the
-// operator-session middleware (identity.Session, then identity.CSRF
-// on unsafe methods) at registration time.
-func New(svc api.Service, logger *slog.Logger) *Handler {
+// New creates a detection operator handler. authz is the authorization
+// chokepoint every privileged route gates on; callers also wrap the
+// routes in the operator-session middleware (identity.Session, then
+// identity.CSRF on unsafe methods) at registration time. Panics on
+// nil svc or authz: a Handler without one would silently bypass the
+// role matrix or nil-deref on the first request, neither of which is
+// an acceptable boot-time silent failure.
+func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
+	if svc == nil {
+		panic("detection operator.New: api.Service must not be nil")
+	}
+	if authz == nil {
+		panic("detection operator.New: authz must not be nil")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{svc: svc, logger: logger}
+	return &Handler{svc: svc, authz: authz, logger: logger}
 }
 
 // SetAudit installs the operator audit recorder. Optional: when not
@@ -73,6 +83,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host"}) {
+		return
+	}
 	hosts, err := h.svc.ListHosts(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list hosts", "err", err)
@@ -92,6 +105,11 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "process", ID: hostID}) {
+		return
+	}
+
 	tr := httpserver.ParseTimeRange(r)
 	limit := httpserver.ParseIntParam(r, "limit", processTreeDefaultLimit)
 	if limit <= 0 {
@@ -101,7 +119,6 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		limit = processTreeMaxLimit
 	}
 
-	ctx := r.Context()
 	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
@@ -123,9 +140,13 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "process", ID: hostID}) {
+		return
+	}
+
 	atTime := httpserver.ParseInt64Param(r, "at", time.Now().UnixNano())
 
-	ctx := r.Context()
 	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
@@ -140,6 +161,10 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert"}) {
+		return
+	}
 	f := api.AlertFilter{
 		HostID:    r.URL.Query().Get("host_id"),
 		Status:    api.AlertStatus(r.URL.Query().Get("status")),
@@ -148,7 +173,6 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		Limit:     httpserver.ParseIntParam(r, "limit", 100),
 	}
 
-	ctx := r.Context()
 	alerts, err := h.svc.ListAlerts(ctx, f)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list alerts", "err", err)
@@ -169,6 +193,9 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
+		return
+	}
 	alert, eventIDs, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
 		if errors.Is(err, api.ErrAlertNotFound) {
@@ -200,16 +227,23 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	var action identityapi.Action
 	switch body.Status {
-	case string(api.AlertStatusOpen),
-		string(api.AlertStatusAcknowledged),
-		string(api.AlertStatusResolved):
+	case string(api.AlertStatusOpen):
+		action = identityapi.ActionAlertReopen
+	case string(api.AlertStatusAcknowledged):
+		action = identityapi.ActionAlertAcknowledge
+	case string(api.AlertStatusResolved):
+		action = identityapi.ActionAlertResolve
 	default:
 		http.Error(w, "invalid status: must be open, acknowledged, or resolved", http.StatusBadRequest)
 		return
 	}
 
 	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
+		return
+	}
 	userID, _ := identityapi.UserIDFromContext(ctx)
 	if _, err := h.svc.UpdateAlertStatus(ctx, id, api.AlertStatus(body.Status), userID); err != nil {
 		switch {
