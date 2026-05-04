@@ -7,7 +7,6 @@ Checks: >-
   misc-*,
   performance-*,
   readability-*,
-  -readability-magic-numbers,
   -readability-function-cognitive-complexity,
   -misc-include-cleaner,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
@@ -15,3 +14,18 @@ Checks: >-
 WarningsAsErrors: ''
 
 HeaderFilterRegex: '.*'
+
+CheckOptions:
+  # readability-magic-numbers config. Defaults flag every integer literal
+  # that isn't 0 or 1; our XPC bridge has bit-shift constants, audit-token
+  # indices, and small fixed sizes that read more naturally as literals.
+  # The list below is deliberately short - if a number isn't in this set
+  # it should live behind a named #define.
+  - key: readability-magic-numbers.IgnoredIntegerValues
+    value: '1;2;3;4;8;16;32;64;100;1000;1024'
+  - key: readability-magic-numbers.IgnorePowersOf2IntegerValues
+    value: 'true'
+  - key: readability-magic-numbers.IgnoreBitFieldsWidths
+    value: 'true'
+  - key: readability-magic-numbers.IgnoredFloatingPointValues
+    value: '1.0;100.0'

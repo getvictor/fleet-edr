@@ -39,7 +39,33 @@ var (
 	buildTime = ""
 )
 
-const serviceName = "fleet-edr-agent"
+const (
+	serviceName = "fleet-edr-agent"
+
+	// uploaderMaxRetries is the per-batch retry cap before the uploader gives up
+	// and falls through to the next drain tick.
+	uploaderMaxRetries = 5
+
+	// otelShutdownTimeout caps the OTel exporter flush so a dead collector cannot
+	// stall agent shutdown.
+	otelShutdownTimeout = 5 * time.Second
+
+	// shutdownDrainTimeout is the window the uploader gets to flush pending
+	// events after the SIGTERM/SIGINT trigger before the process exits.
+	shutdownDrainTimeout = 5 * time.Second
+
+	// agentHTTPTimeout is the per-request timeout shared by the uploader and
+	// commander HTTP clients.
+	agentHTTPTimeout = 30 * time.Second
+
+	// commanderPollInterval is how often the commander polls the server for
+	// pending commands. Mirrored as the package-level default in commander.New.
+	commanderPollInterval = 5 * time.Second
+
+	// receiverEventBuffer is the channel buffer between the XPC reader goroutine
+	// and the agent's enqueue loop. 4 KiB events is one ring of slow-drain margin.
+	receiverEventBuffer = 4096
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -117,7 +143,7 @@ func run() error {
 		OnAuthFail: tokenProvider.OnUnauthorized,
 		BatchSize:  cfg.BatchSize,
 		Interval:   cfg.UploadInterval,
-		MaxRetries: 5,
+		MaxRetries: uploaderMaxRetries,
 	}, httpClient, logger)
 
 	// policyDispatcher bridges the commander (which wants a stable PolicySender across
@@ -142,10 +168,10 @@ func run() error {
 	return nil
 }
 
-// flushOTel caps the OTel flush at 5s so a dead collector doesn't stall the
-// shutdown path.
+// flushOTel caps the OTel flush at otelShutdownTimeout so a dead collector
+// doesn't stall the shutdown path.
 func flushOTel(shutdown func(context.Context) error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
 	defer cancel()
 	if err := shutdown(ctx); err != nil {
 		slog.Default().WarnContext(ctx, "otel shutdown", "err", err)
@@ -210,7 +236,7 @@ func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTrip
 	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	baseTransport.TLSClientConfig = tlsCfg
 	agentTransport := otelhttp.NewTransport(baseTransport)
-	return agentTransport, &http.Client{Transport: agentTransport, Timeout: 30 * time.Second}, nil
+	return agentTransport, &http.Client{Transport: agentTransport, Timeout: agentHTTPTimeout}, nil
 }
 
 // runUploader owns the uploader goroutine; any non-shutdown-induced exit is
@@ -222,14 +248,15 @@ func runUploader(ctx context.Context, up *uploader.Uploader, logger *slog.Logger
 	}
 }
 
-// drainAndReport gives the uploader a 5s window to flush pending events after
-// the shutdown signal, then logs the final queue depth so post-mortems can
-// tell "clean drain" from "we hard-stopped with N events queued".
+// drainAndReport gives the uploader a shutdownDrainTimeout window to flush
+// pending events after the shutdown signal, then logs the final queue depth
+// so post-mortems can tell "clean drain" from "we hard-stopped with N events
+// queued".
 func drainAndReport(up *uploader.Uploader, q *queue.Queue, logger *slog.Logger) {
 	shutdownCtx := context.Background()
 	logger.InfoContext(shutdownCtx, "agent shutting down")
 
-	drainCtx, drainCancel := context.WithTimeout(shutdownCtx, 5*time.Second)
+	drainCtx, drainCancel := context.WithTimeout(shutdownCtx, shutdownDrainTimeout)
 	defer drainCancel()
 	if err := up.Drain(drainCtx); err != nil {
 		logger.WarnContext(drainCtx, "uploader drain", "err", err)
@@ -267,7 +294,7 @@ func startCommander(
 		OnAuthFail:    tokenProvider.OnUnauthorized,
 		RotateTokenFn: tokenProvider.Rotate,
 		HostID:        hostID,
-		Interval:      5 * time.Second,
+		Interval:      commanderPollInterval,
 		PolicySender:  policySender,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
 	go func() {
@@ -378,7 +405,7 @@ func runReceiverOnce(
 	updateTable bool,
 	dispatcher *policyDispatcher,
 ) (reconnect, connected bool) {
-	recv := receiver.New(xpcService, 4096)
+	recv := receiver.New(xpcService, receiverEventBuffer)
 	if err := recv.Connect(); err != nil {
 		logger.WarnContext(ctx, "receiver connect", "service", xpcService, "err", err)
 		return true, false

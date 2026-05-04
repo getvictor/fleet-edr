@@ -41,6 +41,19 @@ import (
 	"github.com/fleetdm/edr/agent/hostid"
 )
 
+const (
+	// tokenFileMode is the required Unix mode for the persisted token file.
+	// 0600 keeps the bearer token readable only by root; loading a more
+	// permissive file is a hard error so a misconfigured umask never silently
+	// becomes a credential exposure.
+	tokenFileMode os.FileMode = 0o600
+
+	// enrollErrorBodyLimit caps how much of an enrollment-error response body
+	// we read into a returned error string. The server is trusted; the cap is
+	// belt-and-braces against an unexpectedly large 5xx body.
+	enrollErrorBodyLimit = 2048
+)
+
 // Persisted is the on-disk representation of a successful enrollment.
 type Persisted struct {
 	HostID     string    `plist:"host_id" json:"host_id"`
@@ -262,7 +275,7 @@ func (p *provider) enroll(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, enrollErrorBodyLimit))
 		return fmt.Errorf("enroll server returned %d: %s", resp.StatusCode, string(b))
 	}
 
@@ -374,8 +387,8 @@ func loadPersisted(path string) (*Persisted, error) {
 	if err != nil {
 		return nil, err
 	}
-	if mode := st.Mode().Perm(); mode != 0o600 {
-		return nil, fmt.Errorf("token file %q has insecure permissions %#o (want 0600)", path, mode)
+	if mode := st.Mode().Perm(); mode != tokenFileMode {
+		return nil, fmt.Errorf("token file %q has insecure permissions %#o (want %#o)", path, mode, tokenFileMode)
 	}
 	buf, err := os.ReadFile(path) //nolint:gosec // Path is operator-controlled via EDR_TOKEN_FILE; no user input.
 	if err != nil {

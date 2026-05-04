@@ -27,6 +27,30 @@ import (
 	"github.com/fleetdm/edr/agent/proctable"
 )
 
+const (
+	// defaultInterval is the fallback for Options.Interval. 60s is short
+	// enough to close missed-exit gaps within a minute but long enough that
+	// the kill(pid, 0) sweep does not show up on the host's syscall trace.
+	defaultInterval = 60 * time.Second
+
+	// defaultMinAge is the fallback for Options.MinAge. The window guards
+	// against racing a brand-new exec — see the Options.MinAge comment.
+	defaultMinAge = 30 * time.Second
+
+	// defaultMaxPerPass caps synthetic-exit emissions per tick.
+	defaultMaxPerPass = 256
+
+	// RFC 4122 §4.4 specifies how to derive a v4 UUID from random bytes:
+	// clear the version nibble in byte 6 and set 0b0100 (version 4); clear
+	// the variant nibble's top two bits in byte 8 and set 0b10 (RFC 4122
+	// variant). The masks below are the bit-pattern definitions, not
+	// arbitrary tuning knobs.
+	uuidV4VersionMask byte = 0x0f
+	uuidV4VersionBits byte = 0x40
+	uuidV4VariantMask byte = 0x3f
+	uuidV4VariantBits byte = 0x80
+)
+
 // Enqueuer is the narrow queue-surface needed by the reconciler. The agent's
 // queue.Queue satisfies it; the test suite plugs in a recorder.
 type Enqueuer interface {
@@ -106,16 +130,16 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 		panic("reconcile.New: hostID provider must not be nil")
 	}
 	if opts.Interval <= 0 {
-		opts.Interval = 60 * time.Second
+		opts.Interval = defaultInterval
 	}
 	if opts.MinAge < 0 {
 		opts.MinAge = 0
 	}
 	if opts.MinAge == 0 {
-		opts.MinAge = 30 * time.Second
+		opts.MinAge = defaultMinAge
 	}
 	if opts.MaxPerPass <= 0 {
-		opts.MaxPerPass = 256
+		opts.MaxPerPass = defaultMaxPerPass
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
@@ -266,8 +290,8 @@ func newUUIDv4() (string, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	b[6] = (b[6] & uuidV4VersionMask) | uuidV4VersionBits
+	b[8] = (b[8] & uuidV4VariantMask) | uuidV4VariantBits
 	out := make([]byte, 36)
 	hex.Encode(out[0:8], b[0:4])
 	out[8] = '-'

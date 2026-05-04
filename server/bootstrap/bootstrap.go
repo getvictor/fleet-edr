@@ -20,6 +20,10 @@ import (
 	"github.com/fleetdm/edr/server/logging"
 )
 
+// otelFlushTimeout caps the OTel exporter flush so a dead collector cannot
+// stall server shutdown.
+const otelFlushTimeout = 5 * time.Second
+
 // Env is the bundle of ready-to-use primitives returned by Init.
 //
 // ctx is NOT a field on Env because Go convention says contexts flow through
@@ -90,10 +94,10 @@ func Init(opts Options) (context.Context, *Env, error) {
 	}, nil
 }
 
-// flushWithTimeout caps OTel flush at 5s so a dead collector doesn't stall the
-// shutdown path.
+// flushWithTimeout caps OTel flush at otelFlushTimeout so a dead collector
+// doesn't stall the shutdown path.
 func flushWithTimeout(shutdown func(context.Context) error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), otelFlushTimeout)
 	defer cancel()
 	if err := shutdown(ctx); err != nil {
 		slog.Default().WarnContext(ctx, "otel shutdown", "err", err)

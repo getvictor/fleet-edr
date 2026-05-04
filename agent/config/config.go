@@ -20,6 +20,23 @@ const (
 	defaultXPCService    = "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc"
 	defaultNetXPCService = "group.com.fleetdm.edr.networkextension"
 	defaultQueueDBPath   = "/var/db/fleet-edr/events.db"
+
+	// defaultPruneAge is the default for EDR_PRUNE_AGE: drop uploaded events
+	// older than 24h from the local SQLite queue.
+	defaultPruneAge = 24 * time.Hour
+
+	// defaultProcessReconcileInterval is the default for
+	// EDR_PROCESS_RECONCILE_INTERVAL: how often the agent sweeps its
+	// proctable for missed exit events. 60s tracks the server's freshness
+	// reconciler but is closer to ground truth on a single host.
+	defaultProcessReconcileInterval = 60 * time.Second
+
+	// defaultQueueMaxBytes is the default soft cap for the agent's SQLite
+	// queue (500 MiB). Operators set EDR_AGENT_QUEUE_MAX_BYTES=0 to disable.
+	defaultQueueMaxBytes = 500 * 1024 * 1024
+
+	// defaultBatchSize is the default upload batch size.
+	defaultBatchSize = 100
 )
 
 // Config is the resolved agent configuration.
@@ -62,13 +79,13 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	c := Config{
 		TokenFile:                "/var/db/fleet-edr/enrolled.plist",
 		QueueDBPath:              defaultQueueDBPath,
-		QueueMaxBytes:            500 * 1024 * 1024, // 500 MiB soft cap; 0 via env disables.
+		QueueMaxBytes:            defaultQueueMaxBytes,
 		XPCService:               defaultXPCService,
 		NetXPCService:            defaultNetXPCService,
-		BatchSize:                100,
+		BatchSize:                defaultBatchSize,
 		UploadInterval:           time.Second,
-		PruneAge:                 24 * time.Hour,
-		ProcessReconcileInterval: 60 * time.Second,
+		PruneAge:                 defaultPruneAge,
+		ProcessReconcileInterval: defaultProcessReconcileInterval,
 		LogLevel:                 "info",
 		LogFormat:                "json",
 	}

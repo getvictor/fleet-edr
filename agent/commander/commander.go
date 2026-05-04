@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+// defaultPollInterval is the fallback Interval when Config.Interval is zero.
+// Mirrored as commanderPollInterval in agent/cmd/fleet-edr-agent.
+const defaultPollInterval = 5 * time.Second
+
 // PolicySender forwards a raw policy JSON payload to the ESF extension over XPC. The
 // commander stays decoupled from the concrete receiver so tests can supply a recording
 // double. Nil is allowed (policy commands are then reported as `failed` with a clear
@@ -54,7 +58,7 @@ type Commander struct {
 // trace propagation is desired; nil gets a vanilla 10s-timeout client.
 func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	if cfg.Interval == 0 {
-		cfg.Interval = 5 * time.Second
+		cfg.Interval = defaultPollInterval
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -330,7 +334,7 @@ func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string
 	if resp.StatusCode == http.StatusUnauthorized && c.cfg.OnAuthFail != nil {
 		c.cfg.OnAuthFail(ctx)
 	}
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil

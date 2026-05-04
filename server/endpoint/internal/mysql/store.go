@@ -11,6 +11,22 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+const (
+	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte
+	// token (tokenLen lives in hash.go). For n bytes the encoded length is
+	// ceil(n*4/3) = (n*4+2)/3 — derived from tokenLen rather than hard-coded
+	// so a future tokenLen bump stays in sync without a second edit. Anything
+	// else is a malformed presentation; we reject before paying the argon2id
+	// cost.
+	hostTokenBase64Len = (tokenLen*4 + 2) / 3
+
+	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we
+	// hex-encode for audit metadata (8 hex chars). Long enough to disambiguate
+	// in operator UIs, short enough that the prefix stays a credential-free
+	// identifier.
+	tokenIDPrefixBytes = 4
+)
+
 // Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash
 // and salt are intentionally not exported; callers that need to verify a token go through
 // Verify, not direct row access.
@@ -140,7 +156,7 @@ func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult,
 	}
 	// Bearer tokens have 32 bytes of entropy (43 base64url chars); short-circuit obviously bad
 	// lengths before paying the argon2 price.
-	if len(token) != 43 {
+	if len(token) != hostTokenBase64Len {
 		return VerifyResult{}, ErrTokenMismatch
 	}
 	tid := tokenID(token)
@@ -301,8 +317,8 @@ func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentToken
 	}
 
 	prefix := ""
-	if len(currentTokenID) >= 4 {
-		prefix = hex.EncodeToString(currentTokenID[:4])
+	if len(currentTokenID) >= tokenIDPrefixBytes {
+		prefix = hex.EncodeToString(currentTokenID[:tokenIDPrefixBytes])
 	}
 	return RotateResult{
 		NewToken:              newToken,
@@ -388,8 +404,8 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 	committed = true
 
 	prefix := ""
-	if len(currentID) >= 4 {
-		prefix = hex.EncodeToString(currentID[:4])
+	if len(currentID) >= tokenIDPrefixBytes {
+		prefix = hex.EncodeToString(currentID[:tokenIDPrefixBytes])
 	}
 	return RotateResult{
 		NewToken:              newToken,
