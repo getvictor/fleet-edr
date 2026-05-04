@@ -40,13 +40,15 @@ var schemaStatements = []string{
 		agent_version              VARCHAR(64)    NOT NULL,
 		os_version                 VARCHAR(128)   NOT NULL,
 		source_ip                  VARCHAR(45)    NOT NULL,
+		tenant_id                  VARCHAR(64)    NOT NULL DEFAULT 'default',
 		enrolled_at                TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		expires_at                 TIMESTAMP(6)   NULL,
 		revoked_at                 TIMESTAMP(6)   NULL,
 		revoke_reason              VARCHAR(128)   NULL,
 		revoked_by                 VARCHAR(255)   NULL,
 		UNIQUE KEY uk_enrollments_token_id (host_token_id),
-		INDEX idx_enrollments_prev_token (previous_host_token_id)
+		INDEX idx_enrollments_prev_token (previous_host_token_id),
+		INDEX idx_enrollments_tenant_id (tenant_id)
 	)`,
 }
 
@@ -75,13 +77,6 @@ var schemaMigrations = []string{
 	`ALTER TABLE enrollments ADD COLUMN previous_host_token_salt  VARBINARY(32)  NULL`,
 	`ALTER TABLE enrollments ADD COLUMN previous_token_expires_at TIMESTAMP(6)   NULL`,
 	`ALTER TABLE enrollments ADD INDEX idx_enrollments_prev_token (previous_host_token_id)`,
-	// Tenant scaffolding (wave-1 user-management). The column exists for
-	// future MSSP-style multi-tenancy; wave-1 reads do not filter on it.
-	// VARCHAR(64) DEFAULT 'default' so the ALTER backfills existing rows
-	// without a follow-up UPDATE. Paired with an index so the wave-2
-	// cutover does not need a backfill migration.
-	`ALTER TABLE enrollments ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
-	`ALTER TABLE enrollments ADD INDEX idx_enrollments_tenant_id (tenant_id)`,
 }
 
 // isAlreadyAppliedMigration returns true when err is one of the MySQL

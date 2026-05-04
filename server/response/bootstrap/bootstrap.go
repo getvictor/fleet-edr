@@ -83,11 +83,10 @@ func (r *Response) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, r.db)
 }
 
-// ApplySchema is the package-level form: applies response's DDL +
-// idempotent ALTERs against the given DB without requiring a fully
-// constructed *Response. Used by server/testdb so tests can apply
-// every context's schema without faking out each bootstrap's service
-// dependencies.
+// ApplySchema is the package-level form: applies response's DDL
+// against the given DB without requiring a fully constructed
+// *Response. Used by server/testdb so tests can apply every context's
+// schema without faking out each bootstrap's service dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("response ApplySchema: db must not be nil")
@@ -95,11 +94,6 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("response schema apply: %w", err)
-		}
-	}
-	for _, stmt := range schemaMigrations {
-		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
-			return fmt.Errorf("response schema migration: %w", err)
 		}
 	}
 	return nil

@@ -106,33 +106,6 @@ var migrations = []migrationStep{
 		SQL:          `ALTER TABLE processes ADD INDEX idx_processes_previous_exec (previous_exec_id)`,
 		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
 	},
-	// Tenant scaffolding (wave-1 user-management). The column exists for
-	// future MSSP-style multi-tenancy; wave-1 reads do not filter on it.
-	// VARCHAR(64) DEFAULT 'default' so an existing-DB ALTER backfills
-	// every row to the seeded tenant without a follow-up UPDATE. Each
-	// column is paired with an index so the wave-2 cutover does not
-	// require a backfill migration on what are projected to be the
-	// largest tables in the system.
-	{
-		Name:         "hosts.tenant_id",
-		SQL:          `ALTER TABLE hosts ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
-		IgnoreErrors: []uint16{mysqlDuplicateColumn},
-	},
-	{
-		Name:         "hosts.idx_tenant_id",
-		SQL:          `ALTER TABLE hosts ADD INDEX idx_hosts_tenant_id (tenant_id)`,
-		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
-	},
-	{
-		Name:         "alerts.tenant_id",
-		SQL:          `ALTER TABLE alerts ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'`,
-		IgnoreErrors: []uint16{mysqlDuplicateColumn},
-	},
-	{
-		Name:         "alerts.idx_tenant_id",
-		SQL:          `ALTER TABLE alerts ADD INDEX idx_alerts_tenant_id (tenant_id)`,
-		IgnoreErrors: []uint16{mysqlDuplicateKey, mysqlDuplicateKeyAlt},
-	},
 }
 
 // shouldIgnore reports whether err matches any of the codes in the
