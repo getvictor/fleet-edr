@@ -1,0 +1,60 @@
+{
+  "roles": {
+    "super_admin": {
+      "grants": ["*"]
+    },
+    "admin": {
+      "grants": [
+        "user.read",
+        "user.invite",
+        "policy.read",
+        "policy.create",
+        "policy.update",
+        "policy.delete",
+        "host.read",
+        "host.isolate",
+        "host.kill_process",
+        "host.run_script",
+        "alert.read",
+        "alert.comment",
+        "alert.acknowledge",
+        "alert.resolve",
+        "alert.reopen",
+        "process.read",
+        "enrollment.read",
+        "enrollment.revoke",
+        "enrollment.rotate_token"
+      ]
+    },
+    "senior_analyst": {
+      "grants": [
+        "host.read",
+        "host.isolate",
+        "host.kill_process",
+        "host.run_script",
+        "alert.read",
+        "alert.comment",
+        "alert.acknowledge",
+        "alert.resolve",
+        "alert.reopen",
+        "process.read"
+      ]
+    },
+    "analyst": {
+      "grants": [
+        "host.read",
+        "process.read",
+        "alert.read",
+        "alert.comment"
+      ]
+    },
+    "auditor": {
+      "grants": [
+        "host.read",
+        "process.read",
+        "alert.read",
+        "audit.read"
+      ]
+    }
+  }
+}

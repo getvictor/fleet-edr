@@ -32,11 +32,16 @@ const (
 
 // User is the storage row. The password_hash / password_salt columns are intentionally
 // not exposed on the struct so callers that log a User can't accidentally leak them.
+//
+// TenantID and IsBreakglass back the wave-1 user-management surface; the AuthZ
+// chokepoint reads them when building the per-request Actor.
 type User struct {
-	ID        int64     `db:"id" json:"id"`
-	Email     string    `db:"email" json:"email"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+	ID           int64     `db:"id" json:"id"`
+	Email        string    `db:"email" json:"email"`
+	TenantID     string    `db:"tenant_id" json:"tenant_id"`
+	IsBreakglass bool      `db:"is_breakglass" json:"is_breakglass"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // ErrNotFound is returned by GetByEmail when no row matches.
@@ -97,7 +102,8 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	var u User
 	err := s.db.GetContext(ctx, &u, `
-		SELECT id, email, created_at, updated_at FROM users WHERE id = ?
+		SELECT id, email, tenant_id, is_breakglass, created_at, updated_at
+		FROM users WHERE id = ?
 	`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -132,13 +138,15 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 	var row struct {
 		ID           int64     `db:"id"`
 		Email        string    `db:"email"`
+		TenantID     string    `db:"tenant_id"`
+		IsBreakglass bool      `db:"is_breakglass"`
 		PasswordHash []byte    `db:"password_hash"`
 		PasswordSalt []byte    `db:"password_salt"`
 		CreatedAt    time.Time `db:"created_at"`
 		UpdatedAt    time.Time `db:"updated_at"`
 	}
 	err := s.db.GetContext(ctx, &row, `
-		SELECT id, email, password_hash, password_salt, created_at, updated_at
+		SELECT id, email, tenant_id, is_breakglass, password_hash, password_salt, created_at, updated_at
 		FROM users WHERE email = ?
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -157,7 +165,9 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 		return nil, ErrBadPassword
 	}
 	return &User{
-		ID: row.ID, Email: row.Email, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		ID: row.ID, Email: row.Email,
+		TenantID: row.TenantID, IsBreakglass: row.IsBreakglass,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 

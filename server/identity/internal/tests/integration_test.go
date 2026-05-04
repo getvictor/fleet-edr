@@ -40,7 +40,7 @@ func newIdentity(t *testing.T) *bootstrap.Identity {
 	// production code path and assert it is idempotent.
 	s := full.Open(t)
 
-	id, err := bootstrap.New(bootstrap.Deps{
+	id, err := bootstrap.New(t.Context(), bootstrap.Deps{
 		DB:              s,
 		Logger:          slog.Default(),
 		LoginRatePerMin: 60,
@@ -317,7 +317,7 @@ func TestService_GetUserNotFound(t *testing.T) {
 // at least once during the test (covering the cleanup-call branch).
 func TestRun_StopsOnContextCancel(t *testing.T) {
 	s := full.Open(t)
-	id, err := bootstrap.New(bootstrap.Deps{
+	id, err := bootstrap.New(t.Context(), bootstrap.Deps{
 		DB:              s,
 		Logger:          slog.Default(),
 		CleanupInterval: 25 * time.Millisecond, // short so the loop exercises CleanupExpired

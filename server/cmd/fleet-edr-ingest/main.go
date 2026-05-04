@@ -67,7 +67,7 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{DB: db, Logger: logger})
+	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{DB: db, Logger: logger})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)
 		return err

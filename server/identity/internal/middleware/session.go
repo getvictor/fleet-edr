@@ -56,12 +56,39 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
 				return
 			}
+			// Build the per-request actor (user row + live role bindings).
+			// Two indexed queries; both well under the chokepoint's
+			// p99 budget. A user-row deletion under a still-valid
+			// session manifests as ErrUserNotFound here; we treat it
+			// as an invalid session (the cookie points at no user).
+			//
+			// authMethod is the wave-1 placeholder 'local_password'
+			// because OIDC sessions don't yet exist. A future
+			// SSO-aware revision will read it off the sessions row.
+			actor, err := svc.LoadActor(ctx, sess.UserID, "local_password")
+			switch {
+			case errors.Is(err, api.ErrUserNotFound):
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+				return
+			case err != nil:
+				// LoadActor failure can come from the users store, the
+				// rbac store, or a future identity-context dependency.
+				// "session_store_unavailable" would be misleading here;
+				// "identity_store_unavailable" matches the failure
+				// surface so dashboards / runbooks point at the right
+				// thing.
+				logger.ErrorContext(ctx, "actor build", "err", err)
+				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "identity_store_unavailable")
+				return
+			}
+
 			trace.SpanFromContext(ctx).SetAttributes(
 				attribute.Int64(attrkeys.UserID, sess.UserID),
 				attribute.String(attrkeys.AuthResult, "ok"),
 			)
 			ctx = api.WithUserID(ctx, sess.UserID)
 			ctx = api.WithSession(ctx, sess)
+			ctx = api.WithActor(ctx, actor)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

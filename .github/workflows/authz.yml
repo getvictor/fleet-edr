@@ -1,0 +1,101 @@
+name: AuthZ
+
+# Authorization-chokepoint gates: OPA Rego policy correctness suite +
+# the p99 latency budget benchmark. Both fail the build hard so a
+# regression in policy logic OR engine throughput blocks the merge.
+#
+# Runs on every PR that touches the chokepoint surface
+# (server/identity/api/{authz,actions}.go, the engine, the embedded
+# policy bundles) plus on every push to main as a smoke. Path-filtered
+# so unrelated PRs don't pay the bench cost.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/identity/api/authz.go"
+      - "server/identity/api/actions.go"
+      - "server/identity/internal/authz/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/authz.yml"
+  pull_request:
+  workflow_dispatch:
+
+# Top-level token has no permissions; each job grants the exact scopes
+# it needs (Scorecard Token-Permissions, Sonar githubactions:S8264,
+# zizmor excessive-permissions).
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect authz changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^server/identity/api/(authz|actions)\.go$|^server/identity/internal/authz/|^go\.(mod|sum)$|^\.github/workflows/authz\.yml$'
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No authz-touching changes; skipping."
+          fi
+
+  policy-and-perf:
+    name: Policy correctness + p99 latency
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Create UI dist placeholder for embed
+        run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      # The Go-side test runner uses github.com/open-policy-agent/opa's
+      # tester package; semantics match `opa test` exactly. Running
+      # under `go test` means we don't need to install the opa CLI on
+      # the runner.
+      - name: Policy correctness (TestPolicy_RegoTestSuite + parity)
+        run: |
+          go test -count=1 -timeout=60s -run='TestPolicy|TestAllow_RoleActionMatrix|TestAllow_NoActor|TestAllow_Unregistered|TestAllow_HostScope|TestAllow_TenantGrant|TestAllow_CrossTenantDeny|TestAllow_ShadowMode|TestSetShadowMode|TestAllow_NilAudit' \
+            ./server/identity/internal/authz/...
+
+      # p99 < 1ms gate. The TestAllow_P99Latency Go test takes 1000
+      # samples and asserts the 990th percentile under 1 millisecond.
+      # Failure means the chokepoint is over budget on this PR's HEAD.
+      - name: Latency gate (p99 < 1ms)
+        run: |
+          go test -count=1 -timeout=60s -run='TestAllow_P99Latency' \
+            ./server/identity/internal/authz/...

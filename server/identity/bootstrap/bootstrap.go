@@ -12,8 +12,10 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
+	"github.com/fleetdm/edr/server/identity/internal/authz"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
@@ -33,17 +35,26 @@ type Deps struct {
 	// CleanupInterval overrides how often Run sweeps expired sessions. Zero
 	// means use the package default (5 min).
 	CleanupInterval time.Duration
+	// AuthzShadowMode is the wave-1 rollout flag for the authorization
+	// chokepoint. true = evaluate + audit but never deny; false =
+	// enforce. The flag is set at boot from EDR_AUTHZ_SHADOW_MODE;
+	// flipping it in a running deployment requires a restart in wave
+	// 1. A future admin endpoint (or a file-watch) can call
+	// Identity.SetAuthzShadowMode atomically; the in-memory flag is
+	// already hot-swap-safe via atomic.Bool.
+	AuthzShadowMode bool
 }
 
 const defaultCleanupInterval = 5 * time.Minute
 
 // Identity is the handle cmd/main holds for the identity bounded context. It
 // exposes the public Service for cross-context callers (and tests), the
-// middleware factories the operator HTTP surface chains, the route
-// registration methods, ApplySchema, and a Run method that owns this
-// context's background goroutines.
+// AuthZ engine for the chokepoint, the middleware factories the operator
+// HTTP surface chains, the route registration methods, ApplySchema, and a
+// Run method that owns this context's background goroutines.
 type Identity struct {
 	svc          api.Service
+	authzEngine  *authz.Engine
 	loginHandler *login.Handler
 	auditStore   *audit.Store
 	auditHandler *audit.Handler
@@ -56,8 +67,10 @@ type Identity struct {
 
 // New wires the identity context. It does NOT apply the schema (call
 // ApplySchema for that) and does NOT start any goroutines (call Run).
-// Returns an error if Deps is missing required fields.
-func New(deps Deps) (*Identity, error) {
+// Returns an error if Deps is missing required fields. ctx is used to
+// compile the AuthZ engine's OPA query at construction time; cancelling
+// it before New returns aborts engine setup.
+func New(ctx context.Context, deps Deps) (*Identity, error) {
 	if deps.DB == nil {
 		return nil, errors.New("identity bootstrap: DB is required")
 	}
@@ -72,11 +85,18 @@ func New(deps Deps) (*Identity, error) {
 
 	usersStore := users.New(deps.DB)
 	sessionsStore := sessions.New(deps.DB, sessions.Options{TTL: deps.SessionTTL})
-	svc := service.New(usersStore, sessionsStore, logger)
+	rbacStore := rbac.New(deps.DB)
+	svc := service.New(usersStore, sessionsStore, rbacStore, logger)
 	auditStore := audit.New(deps.DB)
 
+	authzEngine, err := authz.New(ctx, auditStore, logger, deps.AuthzShadowMode)
+	if err != nil {
+		return nil, fmt.Errorf("identity bootstrap: construct authz engine: %w", err)
+	}
+
 	return &Identity{
-		svc: svc,
+		svc:         svc,
+		authzEngine: authzEngine,
 		loginHandler: login.New(svc, login.Options{
 			RatePerMinute: deps.LoginRatePerMin,
 			CookieSecure:  deps.CookieSecure,
@@ -167,6 +187,23 @@ func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 // dependency and call Record() at the point an operator action commits;
 // see api.AuditRecorder for the interface contract.
 func (i *Identity) AuditRecorder() api.AuditRecorder { return i.auditStore }
+
+// AuthZ returns the chokepoint engine. Subsequent per-context
+// changes wire this into every privileged handler in detection /
+// rules / response / endpoint; today the only consumer is the
+// per-context tests that exercise the public api.AuthZ surface.
+func (i *Identity) AuthZ() api.AuthZ { return i.authzEngine }
+
+// SetAuthzShadowMode flips the chokepoint's enforcement gate at runtime.
+// cmd/main calls this on SIGHUP so an operator can swap shadow mode
+// without a restart; tests call it directly. The change is visible to
+// the next Allow call (atomic).
+func (i *Identity) SetAuthzShadowMode(on bool) { i.authzEngine.SetShadowMode(on) }
+
+// AuthzShadowMode reports the current value of the rollout flag. The
+// rollout dashboard reads this via a status endpoint to render
+// "shadow / enforcing" on the deny-decision panel.
+func (i *Identity) AuthzShadowMode() bool { return i.authzEngine.ShadowMode() }
 
 // Run owns the identity context's background goroutines. Today: a ticker
 // that sweeps expired session rows. Returns when ctx is cancelled. cmd/main

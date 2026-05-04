@@ -12,6 +12,7 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
@@ -37,7 +38,8 @@ func newService(t *testing.T) (api.Service, *sessions.Store) {
 	}
 	us := users.New(s)
 	ss := sessions.New(s, sessions.Options{})
-	return service.New(us, ss, slog.Default()), ss
+	rb := rbac.New(s)
+	return service.New(us, ss, rb, slog.Default()), ss
 }
 
 func fmtInt(i int64) string {

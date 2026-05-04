@@ -192,11 +192,12 @@ func openIdentity(
 	db *sqlx.DB,
 	cfg *config.Config,
 ) (*identitybootstrap.Identity, error) {
-	identityCtx, err := identitybootstrap.New(identitybootstrap.Deps{
+	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:              db,
 		Logger:          logger,
 		LoginRatePerMin: cfg.LoginRatePerMin,
 		CookieSecure:    cfg.TLSEnabled(),
+		AuthzShadowMode: cfg.AuthzShadowMode,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)
@@ -367,6 +368,15 @@ func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, l
 		logger.ErrorContext(ctx, "identity run", "err", err)
 	}
 }
+
+// (Removed: watchSIGHUPForAuthzShadowMode reloaded the rollout flag
+// from EDR_AUTHZ_SHADOW_MODE on SIGHUP, but a running process's
+// environment cannot be modified externally in most deployment
+// shapes — the reload would be a no-op except in test harnesses
+// that call os.Setenv before signaling. The flag is set at boot;
+// flipping it in production is a restart in wave 1. A future admin
+// endpoint or file-watch can call Identity.SetAuthzShadowMode
+// atomically; the in-memory flag is already hot-swap-safe.)
 
 func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, clientIPResolver *httpserver.ClientIPResolver) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{
