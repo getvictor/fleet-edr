@@ -15,11 +15,12 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// fakeRevokeService stubs api.Service. Only Revoke + List are exercised
-// by these tests; other methods panic so a regression that wires this
-// fake into a different path surfaces immediately.
+// fakeRevokeService stubs api.Service. Only Revoke + List + RotateToken
+// are exercised by these tests; other methods panic so a regression
+// that wires this fake into a different path surfaces immediately.
 type fakeRevokeService struct {
 	revoke func(ctx context.Context, hostID, reason, actor string) error
+	rotate func(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error)
 }
 
 func (f fakeRevokeService) Enroll(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
@@ -38,6 +39,12 @@ func (f fakeRevokeService) Revoke(ctx context.Context, hostID, reason, actor str
 }
 func (f fakeRevokeService) CountActive(context.Context) (int, error)        { panic("not used") }
 func (f fakeRevokeService) ActiveHostIDs(context.Context) ([]string, error) { panic("not used") }
+func (f fakeRevokeService) RotateToken(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error) {
+	if f.rotate == nil {
+		panic("fake.RotateToken not set")
+	}
+	return f.rotate(ctx, hostID, trigger, actor, reason)
+}
 
 type captureRecorder struct {
 	last   identityapi.AuditEvent
@@ -96,4 +103,113 @@ func TestHandler_Revoke_NilAuditOK(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+// Successful POST .../rotate returns 200 with a JSON body carrying the
+// CommandID + PreviousTokenIDPrefix the operator can pivot from to
+// audit / SigNoz traces.
+func TestHandler_Rotate_HappyPath(t *testing.T) {
+	captured := struct {
+		hostID  string
+		trigger api.RotationTrigger
+		actor   string
+		reason  string
+	}{}
+	svc := fakeRevokeService{rotate: func(_ context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error) {
+		captured.hostID = hostID
+		captured.trigger = trigger
+		captured.actor = actor
+		captured.reason = reason
+		id := int64(7)
+		return api.RotateResult{PreviousTokenIDPrefix: "deadbeef", CommandID: &id}, nil
+	}}
+	h := New(svc, nil)
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body, _ := json.Marshal(map[string]any{"actor": "victor@example", "reason": "incident-2026-Q2"})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/enrollments/H-1/rotate", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var got api.RotateResult
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	assert.Equal(t, "deadbeef", got.PreviousTokenIDPrefix)
+	require.NotNil(t, got.CommandID)
+	assert.Equal(t, int64(7), *got.CommandID)
+	// The handler tags the trigger as Operator so the service emits the
+	// right audit row payload (verified at the service layer).
+	assert.Equal(t, "H-1", captured.hostID)
+	assert.Equal(t, api.RotationTriggerOperator, captured.trigger)
+	assert.Equal(t, "victor@example", captured.actor)
+	assert.Equal(t, "incident-2026-Q2", captured.reason)
+}
+
+// Missing actor or reason returns 400; rotation is operator-attributed
+// audit material, so silent rotations without attribution would
+// undermine the audit story #87 just shipped.
+func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"missing actor", map[string]any{"reason": "x"}},
+		{"missing reason", map[string]any{"actor": "x"}},
+		{"both empty", map[string]any{}},
+		{"whitespace actor", map[string]any{"actor": "   ", "reason": "y"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := fakeRevokeService{rotate: func(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
+				t.Fatal("RotateToken must not be called when actor/reason validation fails")
+				return api.RotateResult{}, nil
+			}}
+			h := New(svc, nil)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+
+			body, _ := json.Marshal(tc.body)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+				srv.URL+"/api/enrollments/H-1/rotate", bytes.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
+// Missing host returns 404, not 500; the handler must surface
+// api.ErrNotFound from the service as the operator-facing
+// "not_found" code.
+func TestHandler_Rotate_NotFound(t *testing.T) {
+	svc := fakeRevokeService{rotate: func(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
+		return api.RotateResult{}, api.ErrNotFound
+	}}
+	h := New(svc, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body, _ := json.Marshal(map[string]any{"actor": "op", "reason": "x"})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		srv.URL+"/api/enrollments/missing/rotate", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

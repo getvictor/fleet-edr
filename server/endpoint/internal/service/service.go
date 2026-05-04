@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,12 +14,24 @@ import (
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// commandTypeSetBlocklist is the only command-type endpoint emits at
-// enroll time today. Exposed as a constant rather than scattered string
-// literals so future renames are mechanical.
-const commandTypeSetBlocklist = "set_blocklist"
+// Command-type constants for endpoint-emitted commands. Exposed as
+// constants so future renames are mechanical.
+const (
+	commandTypeSetBlocklist = "set_blocklist"
+	commandTypeRotateToken  = "rotate_token"
+)
+
+// Default rotation parameters, applied by the service when bootstrap
+// passes zero values. Lifetime = 24 hours matches #86's specified
+// default; grace = 5 minutes matches the issue body's "in-flight poll
+// must not 401" target.
+const (
+	defaultHostTokenLifetime = 24 * time.Hour
+	defaultHostTokenGrace    = 5 * time.Minute
+)
 
 // hardwareUUIDPattern accepts the canonical hyphenated UUID form in
 // either case. macOS IOPlatformUUID is uppercase-hyphenated. Future
@@ -32,34 +45,82 @@ var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-
 // The closure pattern matches what rules uses elsewhere.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
+// Options bundles every dependency the endpoint service needs. Replaces
+// the previous positional-arg constructor: rotation added Audit,
+// Lifetime, and Grace to the dep set, and an 8-arg positional
+// signature reads like a registry rather than a contract.
+type Options struct {
+	// Store, Secret, Logger are required.
+	Store  *mysql.Store
+	Secret string
+	Logger *slog.Logger
+
+	// Policy + Commands are an all-or-nothing pair (handler precondition).
+	// Both nil disables the post-enroll policy fan-out AND the
+	// rotate_token command emission; the rotation will still flip the DB
+	// row, but the agent won't get a command to apply the new token, so
+	// it'll re-enroll once the grace window expires. Acceptable in tests
+	// and the ingest binary; production wires both.
+	Policy   api.PolicyProvider
+	Commands CommandInserter
+
+	// Audit is the operator-action audit recorder. Nil disables audit
+	// emission for token rotations; tests that don't care can pass nil.
+	Audit identityapi.AuditRecorder
+
+	// Lifetime is the maximum age of a current token before the verify
+	// path triggers an auto-rotation. Zero -> defaultHostTokenLifetime.
+	Lifetime time.Duration
+	// Grace is the window during which the just-superseded token still
+	// verifies after rotation. Zero -> defaultHostTokenGrace.
+	Grace time.Duration
+}
+
 // service implements api.Service by composing the mysql.Store with
-// the optional PolicyProvider (today: rules.api.PolicyService) and
-// CommandInserter closure (today: response.api.Service.Insert) that
-// cmd/main supplies.
+// the optional PolicyProvider (today: rules.api.PolicyService),
+// CommandInserter closure (today: response.api.Service.Insert), and
+// audit recorder (today: identity.api.AuditRecorder) that cmd/main
+// supplies.
 type service struct {
 	store    *mysql.Store
 	secret   string
 	policy   api.PolicyProvider // nil-safe: handler skips fan-out
 	commands CommandInserter
+	audit    identityapi.AuditRecorder
+	lifetime time.Duration
+	grace    time.Duration
 	logger   *slog.Logger
 }
 
-// New constructs a Service. All inputs (other than the optional policy/
-// commands pair) are required to be non-nil; bootstrap.New is the only
-// caller in production and validates them upfront.
-//
-// PolicyProvider and CommandInserter are an all-or-nothing pair: if one
-// is set the other must be too (panic otherwise). This matches the
-// existing enrollment.NewHandler precondition.
-func New(s *mysql.Store, secret string, policy api.PolicyProvider, cmds CommandInserter, logger *slog.Logger) api.Service {
-	if (policy != nil) != (cmds != nil) {
-		panic("endpoint service: PolicyProvider and CommandInserter must be set together or both nil")
+// New constructs a Service. Policy without Commands panics: a
+// PolicyProvider that can't queue any command is a config error (the
+// enroll handler's post-enroll fan-out has nowhere to send the
+// resulting set_blocklist). Commands without Policy is allowed, since
+// rotation queues commands without consulting Policy.
+func New(opts Options) api.Service {
+	if opts.Policy != nil && opts.Commands == nil {
+		panic("endpoint service: PolicyProvider set but CommandInserter is nil; policy fan-out has nowhere to go")
+	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	lifetime := opts.Lifetime
+	if lifetime <= 0 {
+		lifetime = defaultHostTokenLifetime
+	}
+	grace := opts.Grace
+	if grace <= 0 {
+		grace = defaultHostTokenGrace
 	}
 	return &service{
-		store:    s,
-		secret:   secret,
-		policy:   policy,
-		commands: cmds,
+		store:    opts.Store,
+		secret:   opts.Secret,
+		policy:   opts.Policy,
+		commands: opts.Commands,
+		audit:    opts.Audit,
+		lifetime: lifetime,
+		grace:    grace,
 		logger:   logger,
 	}
 }
@@ -138,14 +199,130 @@ func (s *service) enqueueInitialPolicy(ctx context.Context, hostID string) {
 }
 
 func (s *service) VerifyToken(ctx context.Context, token string) (string, error) {
-	hostID, err := s.store.Verify(ctx, token)
+	res, err := s.store.VerifyWithMeta(ctx, token)
 	if errors.Is(err, mysql.ErrTokenMismatch) {
 		return "", api.ErrInvalidToken
 	}
 	if err != nil {
 		return "", fmt.Errorf("verify token: %w", err)
 	}
-	return hostID, nil
+
+	// Verify-time auto-rotation trigger. Conditions:
+	//   - The verify hit the CURRENT token (not the previous-token
+	//     grace path; if it hit previous, a rotation is already in
+	//     flight and another would be wasteful).
+	//   - The current token is past its lifetime.
+	// Best-effort: failures are warn-logged but do not fail the verify.
+	// The verify already succeeded; the agent's next poll will re-trigger
+	// any rotation we couldn't queue this time.
+	if !res.MatchedPrevious && time.Since(res.TokenIssuedAt) > s.lifetime {
+		s.maybeAutoRotate(ctx, res.HostID, res.CurrentTokenID)
+	}
+
+	return res.HostID, nil
+}
+
+// maybeAutoRotate is the verify-time auto-rotation path. Optimistic-
+// locked on currentTokenID so concurrent verifies for the same host
+// don't double-rotate: only the verify whose currentTokenID still
+// matches the row's host_token_id commits, the rest race-lose with
+// ErrRotateRaced (silently swallowed -- the other verify already did
+// the work).
+func (s *service) maybeAutoRotate(ctx context.Context, hostID string, currentTokenID []byte) {
+	rot, err := s.store.RotateHostToken(ctx, hostID, currentTokenID, s.grace)
+	if errors.Is(err, mysql.ErrRotateRaced) {
+		return
+	}
+	if err != nil {
+		s.logger.WarnContext(ctx, "auto-rotate failed",
+			attrkeys.HostID, hostID, "err", err)
+		return
+	}
+	s.deliverRotation(ctx, hostID, api.RotationTriggerAuto, "", "", rot)
+}
+
+func (s *service) RotateToken(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error) {
+	if hostID == "" {
+		return api.RotateResult{}, fmt.Errorf("rotate token: %w", api.ErrNotFound)
+	}
+	rot, err := s.store.RotateHostTokenForce(ctx, hostID, s.grace)
+	if errors.Is(err, mysql.ErrNotFound) {
+		return api.RotateResult{}, api.ErrNotFound
+	}
+	if err != nil {
+		return api.RotateResult{}, fmt.Errorf("rotate token: %w", err)
+	}
+	return api.RotateResult{
+		PreviousTokenIDPrefix: rot.PreviousTokenIDPrefix,
+		CommandID:             s.deliverRotation(ctx, hostID, trigger, actor, reason, rot),
+	}, nil
+}
+
+// deliverRotation queues the rotate_token command for the agent and
+// emits the audit row. Shared between the verify-time auto path and
+// the operator-driven RotateToken path so both audit row shapes are
+// byte-identical except for the trigger / actor / reason payload
+// fields. Returns *int64: a non-nil pointer carries the freshly-queued
+// command id, nil signals "rotation committed in the DB but the agent
+// command queue did not receive the new bearer." The operator UI uses
+// the nil case to surface "agent will recover via re-enroll once the
+// previous-token grace expires" rather than waiting indefinitely for
+// an ack.
+//
+// Best-effort on the command insert: rotation already committed in
+// the DB. If we can't queue the rotate_token command, the agent's
+// previous token still works during grace; once grace expires it'll
+// 401 and re-enroll. Acceptable failure mode for a queue hiccup.
+//
+// Best-effort on the audit emit too: a missed audit row is a follow-up
+// incident, not a reason to fail an HTTP response that already
+// returned 200/204.
+func (s *service) deliverRotation(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string, rot mysql.RotateResult) *int64 {
+	var cmdID *int64
+	if s.commands != nil {
+		payload, err := json.Marshal(map[string]string{"new_token": rot.NewToken})
+		switch {
+		case err != nil:
+			s.logger.WarnContext(ctx, "rotate_token marshal failed",
+				attrkeys.HostID, hostID, "err", err)
+		default:
+			id, err := s.commands(ctx, hostID, commandTypeRotateToken, payload)
+			if err != nil {
+				s.logger.WarnContext(ctx, "rotate_token enqueue failed",
+					attrkeys.HostID, hostID, "err", err)
+			} else {
+				cmdID = &id
+			}
+		}
+	}
+
+	if s.audit != nil {
+		payload := map[string]any{
+			"trigger":                  string(trigger),
+			"previous_token_id_prefix": rot.PreviousTokenIDPrefix,
+		}
+		if actor != "" {
+			payload["actor"] = actor
+		}
+		if reason != "" {
+			payload["reason"] = reason
+		}
+		if cmdID != nil {
+			payload["command_id"] = *cmdID
+		}
+		if err := s.audit.Record(ctx, identityapi.AuditEvent{
+			Action:     identityapi.AuditEnrollmentRotateToken,
+			TargetType: "host",
+			TargetID:   hostID,
+			Payload:    payload,
+		}); err != nil {
+			s.logger.WarnContext(ctx, "audit record failed",
+				attrkeys.HostID, hostID,
+				"action", string(identityapi.AuditEnrollmentRotateToken),
+				"err", err)
+		}
+	}
+	return cmdID
 }
 
 func (s *service) List(ctx context.Context) ([]api.Enrollment, error) {

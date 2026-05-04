@@ -50,11 +50,15 @@ type Persisted struct {
 }
 
 // TokenProvider returns the current host token. Callers call Token() on every request and
-// OnUnauthorized() when they see an HTTP 401 from the server.
+// OnUnauthorized() when they see an HTTP 401 from the server. Rotate replaces the
+// in-memory + on-disk token atomically; the commander's rotate_token dispatch (issue #86)
+// is the only caller in production. A nil error means subsequent Token() calls observe
+// the new value, even if the agent crashes mid-write (writePersisted is atomic-via-rename).
 type TokenProvider interface {
 	Token() string
 	HostID() string
 	OnUnauthorized(ctx context.Context)
+	Rotate(ctx context.Context, newToken string) error
 }
 
 // Options bundle the inputs to Ensure. Populate from agent/config and env.
@@ -161,6 +165,33 @@ func (p *provider) HostID() string {
 		return ""
 	}
 	return s.p.HostID
+}
+
+// Rotate replaces the persisted bearer token with newToken atomically (write to a temp
+// file + rename). Subsequent Token() calls return the new value. The provider's same
+// reenrollMu serialises Rotate against any concurrent re-enroll so a 401-driven re-enroll
+// and a server-driven rotate cannot interleave their writes. Returns an error when
+// newToken is empty (a programmer error, surfaced loudly), when there is no persisted
+// state to rotate from (the agent never enrolled), or when the on-disk write fails.
+func (p *provider) Rotate(ctx context.Context, newToken string) error {
+	if newToken == "" {
+		return errors.New("enrollment.Rotate: empty token")
+	}
+	p.reenrollMu.Lock()
+	defer p.reenrollMu.Unlock()
+
+	cur := p.state.Load()
+	if cur == nil || cur.p == nil {
+		return errors.New("enrollment.Rotate: no persisted state to rotate from")
+	}
+	next := *cur.p
+	next.HostToken = newToken
+	if err := writePersisted(p.opts.TokenFile, &next); err != nil {
+		return fmt.Errorf("persist rotated token: %w", err)
+	}
+	p.state.Store(&persistedState{p: &next})
+	p.logger.InfoContext(ctx, "agent token rotated", "edr.host_id", next.HostID)
+	return nil
 }
 
 // OnUnauthorized is called by the uploader/commander when the server returns 401. We throttle

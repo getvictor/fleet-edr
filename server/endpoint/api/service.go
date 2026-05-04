@@ -45,4 +45,18 @@ type Service interface {
 	// ActiveHostIDs returns the non-revoked host_ids in stable order.
 	// Used by the policy fan-out path.
 	ActiveHostIDs(ctx context.Context) ([]string, error)
+
+	// RotateToken atomically issues a fresh bearer token for hostID, moves
+	// the prior token into the grace-window slot (so an in-flight agent
+	// poll doesn't 401 mid-cycle), and queues a rotate_token command that
+	// delivers the new token to the agent on its next poll. Returns
+	// ErrNotFound when the host_id has no enrollment.
+	//
+	// trigger names who initiated the rotation; actor + reason are the
+	// operator-supplied attribution carried into the audit row when
+	// trigger == RotationTriggerOperator (both empty for auto). The raw
+	// new token is intentionally not in the response: the agent gets it
+	// via the rotate_token command, and exposing it via the operator API
+	// would invite copy-paste flows that bypass the command queue.
+	RotateToken(ctx context.Context, hostID string, trigger RotationTrigger, actor, reason string) (RotateResult, error)
 }

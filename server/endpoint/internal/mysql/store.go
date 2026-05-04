@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -96,45 +97,304 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	}, nil
 }
 
-// Verify returns the host_id associated with token, or an error. Returns ErrTokenMismatch
-// when the token does not match any active enrollment — callers should map that to 401.
-//
-// Implementation: look up the single candidate row by host_token_id (SHA-256 of the token),
-// then run argon2id verify against that row's hash+salt. This is O(1) regardless of fleet
-// size, and the argon2id step is still run on every auth so DB theft doesn't yield usable
-// tokens.
+// VerifyResult is the rotation-aware shape returned by VerifyWithMeta:
+// HostID identifies the matched enrollment, CurrentTokenID is the
+// SHA-256 of the matched token (used by the service layer as the
+// optimistic-lock key for RotateHostToken), TokenIssuedAt is the
+// current token's issue timestamp (the rotation-eligibility input),
+// and MatchedPrevious tells the caller whether the verify succeeded
+// against the grace-window previous token (in which case rotation is
+// already in flight and the caller must NOT trigger another).
+type VerifyResult struct {
+	HostID          string
+	CurrentTokenID  []byte
+	TokenIssuedAt   time.Time
+	MatchedPrevious bool
+}
+
+// Verify is the thin wrapper that callers who only need the host_id keep
+// using; new callers (the service-level rotation trigger) reach for
+// VerifyWithMeta below.
 func (s *Store) Verify(ctx context.Context, token string) (string, error) {
+	r, err := s.VerifyWithMeta(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	return r.HostID, nil
+}
+
+// VerifyWithMeta returns the host_id + rotation metadata for a presented
+// token, or ErrTokenMismatch on any kind of mismatch (unknown token,
+// revoked enrollment, expired previous-token grace, hash mismatch).
+//
+// Implementation: try the current token first by host_token_id (SHA-256
+// O(1) lookup, then argon2id verify). On miss, fall back to the previous
+// token via previous_host_token_id WHERE previous_token_expires_at >
+// NOW(): this is the grace window the rotation flow opens. Both lookups
+// pay one argon2id evaluation on a hit; a miss against the current path
+// still pays one argon2id on the previous path before declaring
+// mismatch, which is intentional rate-limiting against guessing.
+func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult, error) {
 	if token == "" {
-		return "", ErrTokenMismatch
+		return VerifyResult{}, ErrTokenMismatch
 	}
 	// Bearer tokens have 32 bytes of entropy (43 base64url chars); short-circuit obviously bad
 	// lengths before paying the argon2 price.
 	if len(token) != 43 {
-		return "", ErrTokenMismatch
+		return VerifyResult{}, ErrTokenMismatch
 	}
+	tid := tokenID(token)
 
+	if r, ok, err := s.verifyAgainstCurrent(ctx, token, tid); err != nil {
+		return VerifyResult{}, err
+	} else if ok {
+		return r, nil
+	}
+	return s.verifyAgainstPrevious(ctx, token, tid)
+}
+
+// verifyAgainstCurrent does the host_token_id lookup. ok=false means the
+// row was not found (caller should fall through to previous-token path);
+// any other error is surfaced as-is. ok=true with err=nil is the happy
+// path; ok=true with ErrTokenMismatch means the row was found but the
+// argon2id verify failed (treat as mismatch, do NOT fall through to
+// previous since that would be redundant computation against the same
+// host).
+func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []byte) (VerifyResult, bool, error) {
 	var row struct {
-		HostID string `db:"host_id"`
-		Hash   []byte `db:"host_token_hash"`
-		Salt   []byte `db:"host_token_salt"`
+		HostID   string    `db:"host_id"`
+		Hash     []byte    `db:"host_token_hash"`
+		Salt     []byte    `db:"host_token_salt"`
+		IssuedAt time.Time `db:"host_token_issued_at"`
 	}
 	err := s.db.GetContext(ctx, &row, `
-		SELECT host_id, host_token_hash, host_token_salt
+		SELECT host_id, host_token_hash, host_token_salt, host_token_issued_at
 		FROM enrollments
 		WHERE host_token_id = ? AND revoked_at IS NULL
-	`, tokenID(token))
+	`, tid)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrTokenMismatch
+		return VerifyResult{}, false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("query enrollment by token id: %w", err)
+		return VerifyResult{}, false, fmt.Errorf("query enrollment by token id: %w", err)
 	}
 	if !verifyToken(token, row.Hash, row.Salt) {
-		// Token_id match but hash mismatch would require a SHA-256 collision — treat as
-		// mismatch rather than internal error.
-		return "", ErrTokenMismatch
+		// Token_id match but hash mismatch would require a SHA-256 collision; treat as
+		// mismatch rather than internal error and do not fall through to previous-token
+		// lookup (which is for a different token entirely, by id).
+		return VerifyResult{}, true, ErrTokenMismatch
 	}
-	return row.HostID, nil
+	return VerifyResult{
+		HostID:         row.HostID,
+		CurrentTokenID: tid,
+		TokenIssuedAt:  row.IssuedAt,
+	}, true, nil
+}
+
+// verifyAgainstPrevious does the previous_host_token_id lookup, gated on
+// previous_token_expires_at > NOW. Returns the same VerifyResult shape
+// with MatchedPrevious=true so the service layer skips the rotation
+// trigger (rotation is already in flight; another would be wasteful).
+func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []byte) (VerifyResult, error) {
+	var row struct {
+		HostID   string    `db:"host_id"`
+		Hash     []byte    `db:"previous_host_token_hash"`
+		Salt     []byte    `db:"previous_host_token_salt"`
+		IssuedAt time.Time `db:"host_token_issued_at"`
+	}
+	err := s.db.GetContext(ctx, &row, `
+		SELECT host_id, previous_host_token_hash, previous_host_token_salt, host_token_issued_at
+		FROM enrollments
+		WHERE previous_host_token_id = ?
+		  AND revoked_at IS NULL
+		  AND previous_token_expires_at IS NOT NULL
+		  AND previous_token_expires_at > ?
+	`, tid, time.Now().UTC())
+	if errors.Is(err, sql.ErrNoRows) {
+		return VerifyResult{}, ErrTokenMismatch
+	}
+	if err != nil {
+		return VerifyResult{}, fmt.Errorf("query enrollment by previous token id: %w", err)
+	}
+	if !verifyToken(token, row.Hash, row.Salt) {
+		return VerifyResult{}, ErrTokenMismatch
+	}
+	return VerifyResult{
+		HostID:          row.HostID,
+		CurrentTokenID:  nil, // intentionally nil: caller must not trigger rotation against a previous-token match
+		TokenIssuedAt:   row.IssuedAt,
+		MatchedPrevious: true,
+	}, nil
+}
+
+// RotateResult carries the freshly minted token + audit-friendly metadata
+// back to the caller. NewToken is the raw bearer the service layer
+// queues into a rotate_token command for the agent. PreviousTokenIDPrefix
+// is the first 8 hex chars of the prior host_token_id, included on the
+// audit row so reviewers can correlate a rotation to the verify request
+// that triggered it without storing the full token id (which is
+// preimage-resistant but still a per-host identifier).
+type RotateResult struct {
+	NewToken              string
+	PreviousTokenIDPrefix string
+}
+
+// RotateHostToken atomically swaps a host's bearer token: generates a
+// fresh (id, hash, salt), captures the existing values into previous_*,
+// sets previous_token_expires_at = NOW + grace, and updates
+// host_token_issued_at to NOW. The atomic UPDATE is keyed on the
+// currentTokenID the caller asserts (typically the value returned from
+// a recent VerifyWithMeta), so two concurrent rotations serialise:
+// only the one whose currentTokenID matches the row's host_token_id
+// commits; the loser's UPDATE affects 0 rows and returns
+// ErrRotateRaced. Callers map ErrRotateRaced to a "no-op, the other
+// rotation already swapped the token" branch.
+//
+// The UPDATE uses LEFT-side ordering carefully (previous_* before
+// host_*) because MySQL evaluates SET assignments left-to-right and
+// uses the new value for subsequent right-side reads. Reversing the
+// order would copy the NEW host_token_id into previous_host_token_id,
+// not the old one.
+func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentTokenID []byte, grace time.Duration) (RotateResult, error) {
+	if hostID == "" {
+		return RotateResult{}, errors.New("RotateHostToken: hostID is required")
+	}
+	if len(currentTokenID) == 0 {
+		return RotateResult{}, errors.New("RotateHostToken: currentTokenID is required")
+	}
+	if grace <= 0 {
+		return RotateResult{}, errors.New("RotateHostToken: grace must be > 0")
+	}
+
+	newToken, err := generateToken()
+	if err != nil {
+		return RotateResult{}, err
+	}
+	newHash, newSalt, err := hashToken(newToken)
+	if err != nil {
+		return RotateResult{}, err
+	}
+	newID := tokenID(newToken)
+	expiresAt := time.Now().UTC().Add(grace)
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE enrollments
+		SET previous_host_token_id    = host_token_id,
+		    previous_host_token_hash  = host_token_hash,
+		    previous_host_token_salt  = host_token_salt,
+		    previous_token_expires_at = ?,
+		    host_token_id             = ?,
+		    host_token_hash           = ?,
+		    host_token_salt           = ?,
+		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
+		WHERE host_id = ? AND host_token_id = ? AND revoked_at IS NULL
+	`, expiresAt, newID, newHash, newSalt, hostID, currentTokenID)
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("rotate host token: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("rotate rows affected: %w", err)
+	}
+	if affected == 0 {
+		return RotateResult{}, ErrRotateRaced
+	}
+
+	prefix := ""
+	if len(currentTokenID) >= 4 {
+		prefix = hex.EncodeToString(currentTokenID[:4])
+	}
+	return RotateResult{
+		NewToken:              newToken,
+		PreviousTokenIDPrefix: prefix,
+	}, nil
+}
+
+// RotateHostTokenForce is the operator-driven counterpart to
+// RotateHostToken: it commits a rotation regardless of recent
+// rotations, gated only on (host exists AND not revoked). Used by the
+// POST /api/enrollments/{host_id}/rotate handler where the operator's
+// intent is "issue a fresh token NOW," not "rotate only if no other
+// rotation slipped in." Returns ErrNotFound when the host has no
+// non-revoked enrollment.
+//
+// Internally a SELECT FOR UPDATE inside a tx serialises concurrent
+// operator-clicks for the same host so the previous_* slot reflects
+// the most recently superseded token (not whichever one a non-locked
+// UPDATE happened to read mid-flip). The same SET-clause ordering rule
+// applies as RotateHostToken: previous_* assignments must come before
+// the host_* assignments since MySQL evaluates left-to-right.
+func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace time.Duration) (RotateResult, error) {
+	if hostID == "" {
+		return RotateResult{}, errors.New("RotateHostTokenForce: hostID is required")
+	}
+	if grace <= 0 {
+		return RotateResult{}, errors.New("RotateHostTokenForce: grace must be > 0")
+	}
+
+	newToken, err := generateToken()
+	if err != nil {
+		return RotateResult{}, err
+	}
+	newHash, newSalt, err := hashToken(newToken)
+	if err != nil {
+		return RotateResult{}, err
+	}
+	newID := tokenID(newToken)
+	expiresAt := time.Now().UTC().Add(grace)
+
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var currentID []byte
+	err = tx.GetContext(ctx, &currentID, `
+		SELECT host_token_id FROM enrollments
+		WHERE host_id = ? AND revoked_at IS NULL
+		FOR UPDATE
+	`, hostID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RotateResult{}, ErrNotFound
+	}
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force lock: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE enrollments
+		SET previous_host_token_id    = host_token_id,
+		    previous_host_token_hash  = host_token_hash,
+		    previous_host_token_salt  = host_token_salt,
+		    previous_token_expires_at = ?,
+		    host_token_id             = ?,
+		    host_token_hash           = ?,
+		    host_token_salt           = ?,
+		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
+		WHERE host_id = ? AND revoked_at IS NULL
+	`, expiresAt, newID, newHash, newSalt, hostID); err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force update: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return RotateResult{}, fmt.Errorf("rotate force commit: %w", err)
+	}
+	committed = true
+
+	prefix := ""
+	if len(currentID) >= 4 {
+		prefix = hex.EncodeToString(currentID[:4])
+	}
+	return RotateResult{
+		NewToken:              newToken,
+		PreviousTokenIDPrefix: prefix,
+	}, nil
 }
 
 // CountActive returns how many non-revoked enrollments exist. Cheaper than

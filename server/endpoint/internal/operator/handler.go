@@ -54,10 +54,11 @@ func New(svc api.Service, logger *slog.Logger) *Handler {
 // set, revoke still applies but no audit row is written.
 func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
-// RegisterRoutes wires the two operator routes on the given mux.
+// RegisterRoutes wires the operator routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/enrollments", h.handleList)
 	mux.HandleFunc("POST /api/enrollments/{host_id}/revoke", h.handleRevoke)
+	mux.HandleFunc("POST /api/enrollments/{host_id}/rotate", h.handleRotate)
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -160,10 +161,81 @@ func (h *Handler) recordRevokeAudit(r *http.Request, hostID string, body revokeR
 	}
 }
 
+// rotateRequest is the body shape accepted by POST
+// /api/enrollments/{host_id}/rotate. Actor + Reason are required so
+// the audit row records the operator who triggered the rotation and
+// why; making both required avoids silent rotations that audit
+// reviewers can't attribute later.
+type rotateRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	hostID := r.PathValue("host_id")
+	if hostID == "" {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
+		return
+	}
+
+	var body rotateRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, revokeBodyCap)).Decode(&body); err != nil {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
+		return
+	}
+	body.Actor = strings.TrimSpace(body.Actor)
+	body.Reason = strings.TrimSpace(body.Reason)
+	if body.Actor == "" || body.Reason == "" {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "actor and reason are required")
+		return
+	}
+
+	res, err := h.svc.RotateToken(ctx, hostID, api.RotationTriggerOperator, body.Actor, body.Reason)
+	switch {
+	case errors.Is(err, api.ErrNotFound):
+		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
+		return
+	case err != nil:
+		h.logger.ErrorContext(ctx, "rotate enrollment", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+
+	// Span attributes mirror the audit row payload so SigNoz dashboards
+	// can pivot from the trace to the audit event by trace_id.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String(attrkeys.AdminAction, "rotate_token"),
+		attribute.String(attrkeys.AdminActor, body.Actor),
+		attribute.String(attrkeys.HostID, hostID),
+	)
+	h.logger.InfoContext(ctx, "host token rotated",
+		attrkeys.AdminAction, "rotate_token",
+		attrkeys.AdminActor, body.Actor,
+		attrkeys.AdminReason, body.Reason,
+		attrkeys.HostID, hostID,
+		"edr.command.id", commandIDForLog(res.CommandID),
+		"edr.previous_token_id_prefix", res.PreviousTokenIDPrefix,
+	)
+	writeJSON(ctx, h.logger, w, http.StatusOK, res)
+}
+
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, body)
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
+}
+
+// commandIDForLog dereferences a *int64 for slog attribute output, returning
+// 0 when the rotation committed but no rotate_token command was queued (the
+// nil case carries that signal explicitly on the wire via the omitempty JSON
+// shape; the access log uses 0 to keep the attribute monomorphic int64
+// rather than mixing int64 and "absent").
+func commandIDForLog(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

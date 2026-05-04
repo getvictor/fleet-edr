@@ -47,8 +47,12 @@ const (
 	// Command issuance (response context).
 	AuditCommandIssue AuditAction = "command.issue"
 
-	// Enrollment lifecycle (endpoint context).
-	AuditEnrollmentRevoke AuditAction = "enrollment.revoke"
+	// Enrollment lifecycle (endpoint context). Constants follow the
+	// <resource>.<verb> convention documented at the top of this file:
+	// rotate_token reads as "rotate the host token of the enrollment,"
+	// matching the wire-shape command_type the agent dispatches on.
+	AuditEnrollmentRevoke      AuditAction = "enrollment.revoke"
+	AuditEnrollmentRotateToken AuditAction = "enrollment.rotate_token"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller fills

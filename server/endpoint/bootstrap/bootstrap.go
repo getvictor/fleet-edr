@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -46,9 +47,19 @@ type Deps struct {
 	CommandInserter CommandInserter
 
 	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for enrollment.revoke. cmd/main wires
-	// identityCtx.AuditRecorder().
+	// audit emission for enrollment.revoke + enrollment.rotate_token.
+	// cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
+
+	// HostTokenLifetime is how long a host bearer token may live before
+	// the verify path triggers an auto-rotation. Zero -> service
+	// default (24h). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
+	HostTokenLifetime time.Duration
+	// HostTokenGrace is the window during which the just-superseded
+	// token still verifies after rotation, so an in-flight agent poll
+	// doesn't 401 mid-cycle. Zero -> service default (5m). cmd/main
+	// reads EDR_HOST_TOKEN_GRACE.
+	HostTokenGrace time.Duration
 }
 
 // Endpoint is the handle cmd/main holds for the endpoint bounded
@@ -74,12 +85,13 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.EnrollSecret == "" {
 		return nil, errors.New("endpoint bootstrap: EnrollSecret is required")
 	}
-	// PolicyProvider + CommandInserter are paired. Letting the mismatch
-	// fall through to service.New's panic would crash startup with no
-	// recoverable error; surface it as a config error instead so the
-	// caller's err-handling sees it.
-	if (deps.PolicyProvider == nil) != (deps.CommandInserter == nil) {
-		return nil, errors.New("endpoint bootstrap: PolicyProvider and CommandInserter must be set together (or both nil)")
+	// Policy without Commands is a config error (policy fan-out has nowhere
+	// to send commands); Commands without Policy is allowed since rotation
+	// uses Commands without consulting Policy. Surface this here as a
+	// recoverable error rather than letting it fall through to service.New's
+	// panic at boot.
+	if deps.PolicyProvider != nil && deps.CommandInserter == nil {
+		return nil, errors.New("endpoint bootstrap: PolicyProvider set but CommandInserter is nil; policy fan-out has nowhere to go")
 	}
 	logger := deps.Logger
 	if logger == nil {
@@ -87,7 +99,16 @@ func New(deps Deps) (*Endpoint, error) {
 	}
 
 	store := mysql.NewStore(deps.DB)
-	svc := service.New(store, deps.EnrollSecret, deps.PolicyProvider, deps.CommandInserter, logger)
+	svc := service.New(service.Options{
+		Store:    store,
+		Secret:   deps.EnrollSecret,
+		Policy:   deps.PolicyProvider,
+		Commands: deps.CommandInserter,
+		Audit:    deps.Audit,
+		Lifetime: deps.HostTokenLifetime,
+		Grace:    deps.HostTokenGrace,
+		Logger:   logger,
+	})
 
 	opH := operator.New(svc, logger)
 	opH.SetAudit(deps.Audit)
@@ -115,6 +136,11 @@ func (e *Endpoint) ApplySchema(ctx context.Context) error {
 // against the given DB without requiring a fully constructed
 // *Endpoint. Used by server/testdb so tests can apply every context's
 // schema without faking out each bootstrap's service dependencies.
+//
+// Two passes: schemaStatements first (CREATE TABLE IF NOT EXISTS),
+// then schemaMigrations (idempotent ALTERs for upgrade paths).
+// Migration errors that signal "already applied" are swallowed so
+// re-running on a populated DB is a no-op.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("endpoint ApplySchema: db must not be nil")
@@ -122,6 +148,11 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("endpoint schema create: %w", err)
+		}
+	}
+	for _, stmt := range schemaMigrations {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
+			return fmt.Errorf("endpoint schema migration: %w", err)
 		}
 	}
 	return nil
