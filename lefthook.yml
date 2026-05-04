@@ -71,11 +71,13 @@ pre-commit:
     # tampering is the regression this hook exists to catch.
     # The Go test at server/identity/internal/audit/append_only_lint_test.go
     # is the CI backstop for developers who bypass with --no-verify.
+    # The audit package is NOT excluded (PR #120 review): the regex
+    # is UPDATE/DELETE-specific so the legitimate INSERT in mysql.go
+    # does not trip, and policing the package is the point.
     audit-append-only:
       glob: "**/*.go"
       exclude:
         - "**/*_test.go"
-        - "server/identity/internal/audit/**"
       run: |
         matched=0
         for f in {staged_files}; do

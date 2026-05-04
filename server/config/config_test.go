@@ -303,3 +303,98 @@ func withExtra(base, extra map[string]string) map[string]string {
 	maps.Copy(out, extra)
 	return out
 }
+
+// TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling +
+// async-queue env knobs in isolation. Mirrors the pattern in TestLoad
+// so a regression on either parser surfaces with a focused failure
+// message rather than a single-line "test failed".
+func TestLoad_AuditEnvKnobs(t *testing.T) {
+	minEnv := map[string]string{
+		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":       "enroll-me",
+		"EDR_ALLOW_INSECURE_HTTP": "1",
+	}
+
+	cases := []struct {
+		name     string
+		env      map[string]string
+		wantErr  string
+		validate func(t *testing.T, c *Config)
+	}{
+		{
+			name: "defaults: read sampling 0.0 + async queue cap 0 (uses package default)",
+			env:  minEnv,
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.InDelta(t, 0.0, c.AuditReadSampling, 0.0001)
+				assert.Equal(t, 0, c.AuditAsyncQueueCap,
+					"zero stays zero so identity bootstrap can fall back to the audit pkg default")
+			},
+		},
+		{
+			name: "EDR_AUDIT_READ_SAMPLING=1.0 audits all read events",
+			env:  withExtra(minEnv, map[string]string{"EDR_AUDIT_READ_SAMPLING": "1.0"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.InDelta(t, 1.0, c.AuditReadSampling, 0.0001)
+			},
+		},
+		{
+			name: "EDR_AUDIT_READ_SAMPLING=0.5 mid-band sampling",
+			env:  withExtra(minEnv, map[string]string{"EDR_AUDIT_READ_SAMPLING": "0.5"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.InDelta(t, 0.5, c.AuditReadSampling, 0.0001)
+			},
+		},
+		{
+			name:    "EDR_AUDIT_READ_SAMPLING=-0.1 rejected",
+			env:     withExtra(minEnv, map[string]string{"EDR_AUDIT_READ_SAMPLING": "-0.1"}),
+			wantErr: "EDR_AUDIT_READ_SAMPLING",
+		},
+		{
+			name:    "EDR_AUDIT_READ_SAMPLING=1.5 rejected (out of [0,1])",
+			env:     withExtra(minEnv, map[string]string{"EDR_AUDIT_READ_SAMPLING": "1.5"}),
+			wantErr: "EDR_AUDIT_READ_SAMPLING",
+		},
+		{
+			name:    "EDR_AUDIT_READ_SAMPLING=abc rejected as non-numeric",
+			env:     withExtra(minEnv, map[string]string{"EDR_AUDIT_READ_SAMPLING": "abc"}),
+			wantErr: "EDR_AUDIT_READ_SAMPLING",
+		},
+		{
+			name: "EDR_AUDIT_ASYNC_QUEUE_CAP=4096 picks operator-tuned size",
+			env:  withExtra(minEnv, map[string]string{"EDR_AUDIT_ASYNC_QUEUE_CAP": "4096"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, 4096, c.AuditAsyncQueueCap)
+			},
+		},
+		{
+			name:    "EDR_AUDIT_ASYNC_QUEUE_CAP=-1 rejected",
+			env:     withExtra(minEnv, map[string]string{"EDR_AUDIT_ASYNC_QUEUE_CAP": "-1"}),
+			wantErr: "EDR_AUDIT_ASYNC_QUEUE_CAP",
+		},
+		{
+			name:    "EDR_AUDIT_ASYNC_QUEUE_CAP=notanint rejected",
+			env:     withExtra(minEnv, map[string]string{"EDR_AUDIT_ASYNC_QUEUE_CAP": "notanint"}),
+			wantErr: "EDR_AUDIT_ASYNC_QUEUE_CAP",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := loadFrom(envMap(tc.env))
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			if tc.validate != nil {
+				tc.validate(t, got)
+			}
+		})
+	}
+}

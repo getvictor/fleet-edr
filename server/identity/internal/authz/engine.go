@@ -13,6 +13,7 @@ import (
 
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/open-policy-agent/opa/v1/storage/inmem"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
@@ -249,6 +250,13 @@ func (e *Engine) recordDecision(
 		TargetType: resource.Type,
 		TargetID:   resource.ID,
 		Payload:    auditPayload(d, shadow),
+		// Capture trace_id at decision time. The async path runs the
+		// eventual INSERT under a background ctx (so a request-scope
+		// cancellation doesn't break in-flight audits); without an
+		// explicit TraceID the row would land with NULL trace_id and
+		// lose correlation. Sync callers can leave the field empty
+		// and Store.Record falls back to the ctx-extracted id.
+		TraceID: traceIDFromContext(ctx),
 	}
 	if actor != nil {
 		uid := actor.UserID
@@ -295,6 +303,19 @@ func (e *Engine) routeAsync(action api.Action, d api.Decision, actor *api.Actor)
 		return false
 	}
 	return api.IsReadAction(action)
+}
+
+// traceIDFromContext extracts the active OTel trace id at chokepoint
+// time so the chokepoint can pin it on the AuditEvent before
+// submitting. Mirrors the audit package's private helper; arch-go
+// forbids reaching across into another context's internal package,
+// so the chokepoint owns its own copy. Empty when no span is active.
+func traceIDFromContext(ctx context.Context) string {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
 }
 
 func auditPayload(d api.Decision, shadow bool) map[string]any {

@@ -55,12 +55,19 @@ const (
 	AuditEnrollmentRotateToken AuditAction = "enrollment.rotate_token"
 )
 
-// AuditEvent is the value passed to AuditRecorder.Record. Caller fills
-// the application-layer fields; the Recorder pulls trace_id from ctx
-// (which equals the X-Request-ID echoed in response headers) so handler
-// code does not have to re-extract it. RemoteAddr is on the event
-// because it derives from *http.Request, which is not on ctx by
-// convention. occurred_at is set by the Recorder at INSERT time.
+// AuditEvent is the value passed to AuditRecorder.Record. Caller
+// fills the application-layer fields; the Recorder pulls trace_id
+// from ctx (which equals the X-Request-ID echoed in response headers)
+// so handler code does not have to re-extract it. RemoteAddr is on
+// the event because it derives from *http.Request, which is not on
+// ctx by convention. occurred_at is set by the Recorder at INSERT
+// time.
+//
+// TraceID is the explicit override path: when set, Recorder uses it
+// instead of probing ctx. The async chokepoint emission populates
+// TraceID at Submit time so the eventual INSERT (which runs under a
+// background ctx without the original span) still attributes the row
+// to the request that triggered it.
 type AuditEvent struct {
 	// UserID is the authenticated user, when one exists. Nil for
 	// pre-auth events (login_failed) so the audit row records "who
@@ -75,6 +82,13 @@ type AuditEvent struct {
 	// For unary actions (login, logout) leave both empty.
 	TargetType string
 	TargetID   string
+	// TraceID is the OTel- / X-Request-ID trace id to record. Optional:
+	// when empty, Recorder falls back to extracting it from the call's
+	// ctx (the wave-1 sync default). Set explicitly by the chokepoint
+	// before Submit so the async writer's background-ctx INSERT keeps
+	// trace correlation. Lower-case 32-char hex per the existing
+	// sync-path extractor.
+	TraceID string
 	// RemoteAddr is the peer address for retention/correlation. Today
 	// this is r.RemoteAddr verbatim (not X-Forwarded-For); see #81 for
 	// the trusted-proxy follow-up.
@@ -119,6 +133,15 @@ type AuditRecorder interface {
 // the implementation logged a slog WARN as the dual-emit fallback.
 //
 // Submit must be safe to call concurrently from multiple goroutines.
+//
+// ctx contract: ctx is valid only for the synchronous part of Submit
+// (the channel send + a slog.WarnContext on overflow). Implementations
+// MUST NOT retain it for the eventual asynchronous DB write — the
+// request-scoped ctx is cancelled the moment the handler returns,
+// and an INSERT under a cancelled ctx silently drops the row. Per the
+// AuditEvent doc: copy the trace_id (and any other ctx-derived fields)
+// onto AuditEvent.TraceID before Submit; the writer's Run loop owns
+// the lifecycle ctx for the actual INSERT.
 //
 // Lifecycle: implementations own a goroutine; cmd/main starts it via
 // the per-context Run loop and stops it on ctx cancel. Pending
