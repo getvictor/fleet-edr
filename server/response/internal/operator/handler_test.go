@@ -14,8 +14,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 )
+
+// allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant.
+// Tests in this package focus on response semantics; the per-action
+// role matrix is exercised exhaustively in
+// server/identity/internal/authz/engine_test.go.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
 
 // fakeService is a minimal api.Service stub. Each method delegates to a
 // closure so each test can inject the exact behavior it needs; unset
@@ -65,7 +76,7 @@ func (f fakeService) CountPending(ctx context.Context) (int, error) {
 
 func newOperatorServer(t *testing.T, svc api.Service) *httptest.Server {
 	t.Helper()
-	h := New(svc, slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -75,12 +86,12 @@ func newOperatorServer(t *testing.T, svc api.Service) *httptest.Server {
 
 func TestNew_NilServicePanics(t *testing.T) {
 	assert.PanicsWithValue(t, "response operator.New: api.Service must not be nil", func() {
-		New(nil, slog.Default())
+		New(nil, allowAllAuthZ{}, slog.Default())
 	})
 }
 
 func TestNew_NilLoggerFallsBackToDefault(t *testing.T) {
-	h := New(fakeService{}, nil)
+	h := New(fakeService{}, allowAllAuthZ{}, nil)
 	require.NotNil(t, h)
 	assert.NotNil(t, h.logger)
 }
@@ -119,6 +130,18 @@ func TestHandleCreate(t *testing.T) {
 			body:       `{"host_id":"host-a","command_type":"kill_process","payload":{"pid":1}}`,
 			insertID:   42,
 			wantStatus: http.StatusCreated,
+		},
+		{
+			// Unknown command_type is rejected at the chokepoint's
+			// command_type → action mapping before the service is
+			// touched. Defense-in-depth against an operator typo
+			// dropping a command into the queue under an audit-log
+			// label that doesn't match the role it would normally
+			// gate on.
+			name:       "unsupported command_type rejected",
+			body:       `{"host_id":"host-a","command_type":"unknown_action","payload":{}}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "unsupported_command_type",
 		},
 	}
 	for _, tc := range cases {

@@ -35,19 +35,25 @@ const revokeBodyCap = 64 << 10
 // Handler serves the operator-facing enrollment routes.
 type Handler struct {
 	svc    api.Service
+	authz  identityapi.AuthZ
 	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
-// New builds an operator handler. Panics if svc is nil.
-func New(svc api.Service, logger *slog.Logger) *Handler {
+// New builds an operator handler. Panics if svc or authz is nil.
+// authz is the authorization chokepoint every privileged route gates
+// on; a nil one would silently bypass the role matrix.
+func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("operator.New: api.Service must not be nil")
+	}
+	if authz == nil {
+		panic("operator.New: authz must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{svc: svc, logger: logger}
+	return &Handler{svc: svc, authz: authz, logger: logger}
 }
 
 // SetAudit installs the operator audit recorder. Optional: when not
@@ -63,6 +69,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if !h.authzGate(ctx, w, identityapi.ActionEnrollmentRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "enrollment"}) {
+		return
+	}
 	rows, err := h.svc.List(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list enrollments", "err", err)
@@ -85,6 +94,9 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
 	if hostID == "" {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
+		return
+	}
+	if !h.authzGate(ctx, w, identityapi.ActionEnrollmentRevoke, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "enrollment", ID: hostID}) {
 		return
 	}
 
@@ -178,6 +190,9 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
 		return
 	}
+	if !h.authzGate(ctx, w, identityapi.ActionEnrollmentRotateToken, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "enrollment", ID: hostID}) {
+		return
+	}
 
 	var body rotateRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, revokeBodyCap)).Decode(&body); err != nil {
@@ -226,6 +241,42 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
+}
+
+// authzGate is the standard chokepoint pattern: 503 on engine error,
+// 403 on deny (with the policy reason on a header so the operator UI
+// can distinguish "no role" from "session expired"), and true only
+// when the handler should proceed.
+func (h *Handler) authzGate(
+	ctx context.Context,
+	w http.ResponseWriter,
+	action identityapi.Action,
+	res identityapi.Resource,
+) bool {
+	d, err := h.authz.Allow(ctx, action, res)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
+		writeErr(ctx, h.logger, w, http.StatusServiceUnavailable, "authz_unavailable")
+		return false
+	}
+	if !d.Allow {
+		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
+		writeErr(ctx, h.logger, w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
+// actorTenantID returns the actor's tenant_id from ctx, or "" if no
+// actor is present. The chokepoint short-circuits empty TenantID with
+// reason resource_tenant_missing AND records the regression in the
+// audit log; callers therefore prefer this over an explicit
+// ActorFromContext check at the handler level.
+func actorTenantID(ctx context.Context) string {
+	if a, ok := identityapi.ActorFromContext(ctx); ok {
+		return a.TenantID
+	}
+	return ""
 }
 
 // commandIDForLog dereferences a *int64 for slog attribute output, returning

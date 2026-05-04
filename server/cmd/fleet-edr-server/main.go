@@ -234,6 +234,7 @@ func openDetection(
 		RetentionInterval:    cfg.RetentionInterval,
 		UserExists:           identityCtx.Service().UserExists,
 		Audit:                identityCtx.AuditRecorder(),
+		AuthZ:                identityCtx.AuthZ(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)
@@ -262,6 +263,7 @@ func openResponse(
 		Logger:    logger,
 		Heartbeat: detectionCtx.Service().RecordHostSeen,
 		Audit:     identityCtx.AuditRecorder(),
+		AuthZ:     identityCtx.AuthZ(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open response", "err", err)
@@ -295,6 +297,7 @@ func openRules(
 		ActiveHostsLister: activeHostsLister,
 		CommandInserter:   cmdInserter,
 		Audit:             identityCtx.AuditRecorder(),
+		AuthZ:             identityCtx.AuthZ(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
@@ -324,6 +327,7 @@ func openEndpoint(
 		PolicyProvider:      policySvc,
 		CommandInserter:     cmdInserter,
 		Audit:               identityCtx.AuditRecorder(),
+		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
 		HostTokenGrace:      cfg.HostTokenGrace,
 	})

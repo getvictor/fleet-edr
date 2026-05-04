@@ -50,6 +50,9 @@ type Deps struct {
 	// audit emission for policy updates. cmd/main wires
 	// identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
+	// AuthZ is the authorization chokepoint every privileged operator
+	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
+	AuthZ identityapi.AuthZ
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -74,11 +77,15 @@ func New(deps Deps) (*Rules, error) {
 		logger = slog.Default()
 	}
 
+	if deps.AuthZ == nil {
+		return nil, errors.New("rules bootstrap: AuthZ is required")
+	}
+
 	policyStore := policy.NewStore(deps.DB)
 	rules := catalog.New(deps.RegistryOptions)
 	svc := service.New(policyStore, rules, deps.ActiveHostsLister, deps.CommandInserter, logger)
 
-	opH := operator.New(svc, logger)
+	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
 	return &Rules{
 		svc:       svc,

@@ -111,6 +111,7 @@ func Setup(t *testing.T) *Stack {
 		ProcessInterval: 20 * time.Millisecond,
 		ProcessBatch:    100,
 		UserExists:      identityCtx.Service().UserExists,
+		AuthZ:           identityCtx.AuthZ(),
 	})
 	require.NoError(t, err, "open detection")
 
@@ -118,6 +119,7 @@ func Setup(t *testing.T) *Stack {
 		DB:        db,
 		Logger:    logger,
 		Heartbeat: detectionCtx.Service().RecordHostSeen,
+		AuthZ:     identityCtx.AuthZ(),
 	})
 	require.NoError(t, err, "open response")
 
@@ -136,6 +138,7 @@ func Setup(t *testing.T) *Stack {
 		Logger:            logger,
 		ActiveHostsLister: activeHostsLister,
 		CommandInserter:   responseCtx.Service().Insert,
+		AuthZ:             identityCtx.AuthZ(),
 	})
 	require.NoError(t, err, "open rules")
 
@@ -148,6 +151,7 @@ func Setup(t *testing.T) *Stack {
 		EnrollRatePerMinute: 1000,
 		PolicyProvider:      rulesCtx.PolicyService(),
 		CommandInserter:     responseCtx.Service().Insert,
+		AuthZ:               identityCtx.AuthZ(),
 	})
 	require.NoError(t, err, "open endpoint")
 

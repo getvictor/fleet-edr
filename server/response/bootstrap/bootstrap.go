@@ -41,6 +41,11 @@ type Deps struct {
 	// audit emission for command issuance. cmd/main wires
 	// identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
+
+	// AuthZ is the authorization chokepoint POST /api/commands and
+	// GET /api/commands/{id} gate on. Required. cmd/main wires
+	// identityCtx.AuthZ().
+	AuthZ identityapi.AuthZ
 }
 
 // Response is the handle cmd/main holds for the response bounded
@@ -63,9 +68,12 @@ func New(deps Deps) (*Response, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if deps.AuthZ == nil {
+		return nil, errors.New("response bootstrap: AuthZ is required")
+	}
 	store := mysql.NewStore(deps.DB)
 	svc := service.New(store, deps.Heartbeat, logger)
-	opH := operator.New(svc, logger)
+	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
 	return &Response{
 		svc:       svc,

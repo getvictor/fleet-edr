@@ -25,12 +25,24 @@ import (
 
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 const testEnrollSecret = "rules-integration-secret"
+
+// allowAllAuthZ satisfies identityapi.AuthZ unconditionally for the
+// rules-context integration tests. The chokepoint's per-action role
+// matrix is exercised in server/identity/internal/authz/engine_test.go;
+// here we only need the dependency satisfied so RegisterAuthedRoutes
+// can mount.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
 
 // recordingCommandInserter captures every fan-out closure call so the
 // test can assert on the per-host command payloads. Goroutine-safe so
@@ -72,6 +84,7 @@ func newRules(t *testing.T, ep **endpointbootstrap.Endpoint, cmds *recordingComm
 	deps := rulesbootstrap.Deps{
 		DB:     s,
 		Logger: slog.Default(),
+		AuthZ:  allowAllAuthZ{},
 	}
 	if ep != nil && cmds != nil {
 		deps.ActiveHostsLister = func(ctx context.Context) ([]string, error) {
@@ -213,6 +226,7 @@ func TestOperator_PutPolicyFanout(t *testing.T) {
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
 		DB:     s,
 		Logger: slog.Default(),
+		AuthZ:  allowAllAuthZ{},
 		ActiveHostsLister: func(ctx context.Context) ([]string, error) {
 			return ep.Service().ActiveHostIDs(ctx)
 		},
@@ -226,6 +240,7 @@ func TestOperator_PutPolicyFanout(t *testing.T) {
 		Logger:              slog.Default(),
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
+		AuthZ:               allowAllAuthZ{},
 	})
 	require.NoError(t, err)
 	require.NoError(t, ep.ApplySchema(t.Context()))

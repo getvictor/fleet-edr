@@ -64,6 +64,16 @@ func (c *captureRecorder) Record(_ context.Context, e identityapi.AuditEvent) er
 	return nil
 }
 
+// allowAllAuthZ satisfies identityapi.AuthZ as an unconditional grant.
+// This package's tests focus on policy + audit semantics, not the
+// chokepoint's role matrix (covered exhaustively in
+// server/identity/internal/authz/engine_test.go).
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
+
 // A successful policy update emits one audit row carrying the operator-
 // supplied actor + reason in the payload, alongside the new version,
 // path/hash counts, and fan-out stats. Reviewers later asking
@@ -85,7 +95,7 @@ func TestHandler_PolicyUpdate_EmitsAudit(t *testing.T) {
 		},
 	}
 	rec := &captureRecorder{}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 	h.SetAudit(rec)
 
 	mux := http.NewServeMux()
@@ -128,7 +138,7 @@ func TestHandler_PolicyUpdate_NilAuditOK(t *testing.T) {
 			return api.BlocklistPolicy{Name: api.DefaultPolicyName, Version: 1}, nil
 		},
 	}
-	h := New(svc, nil)
+	h := New(svc, allowAllAuthZ{}, nil)
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

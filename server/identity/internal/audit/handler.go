@@ -13,24 +13,30 @@ import (
 )
 
 // Handler serves GET /api/audit. Cookie-auth gated by the identity
-// Session middleware (caller wraps before mounting); no role gate yet
-// because identity is single-admin in the MVP. When multi-user roles
-// land the handler grows a `requireAdmin` step at the top of List.
+// Session middleware (caller wraps before mounting); the handler also
+// gates the read on api.ActionAuditRead through the AuthZ chokepoint
+// so only roles whose grants include audit.read (auditor, super_admin)
+// can list audit history.
 type Handler struct {
 	reader api.AuditReader
+	authz  api.AuthZ
 	logger *slog.Logger
 }
 
 // NewHandler builds a handler around the given AuditReader. Panics if
-// reader is nil because a Handler that always 500s isn't useful.
-func NewHandler(reader api.AuditReader, logger *slog.Logger) *Handler {
+// reader or authz is nil; both are load-bearing dependencies and a
+// Handler that always 500s on either is not useful.
+func NewHandler(reader api.AuditReader, authz api.AuthZ, logger *slog.Logger) *Handler {
 	if reader == nil {
 		panic("audit.NewHandler: reader must not be nil")
+	}
+	if authz == nil {
+		panic("audit.NewHandler: authz must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{reader: reader, logger: logger}
+	return &Handler{reader: reader, authz: authz, logger: logger}
 }
 
 // RegisterAuthedRoutes wires GET /api/audit on mux. The mux is
@@ -50,6 +56,9 @@ type listResponse struct {
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if !authzGate(ctx, h.authz, h.logger, w, api.ActionAuditRead, audithistoryResource(ctx)) {
+		return
+	}
 	filter, errCode, ok := parseAuditFilter(r.URL.Query())
 	if !ok {
 		writeListErr(ctx, h.logger, w, http.StatusBadRequest, errCode)
@@ -62,6 +71,50 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, listResponse{Items: items})
+}
+
+// audithistoryResource builds the Resource for an audit-history read.
+// TenantID is read from the actor on ctx; if absent, the chokepoint
+// short-circuits with reason resource_tenant_missing and audits the
+// regression. The handler does NOT 401 on missing actor because
+// session middleware should have already done so; reaching the
+// chokepoint anonymously is itself a signal worth recording.
+func audithistoryResource(ctx context.Context) api.Resource {
+	tenantID := ""
+	if a, ok := api.ActorFromContext(ctx); ok {
+		tenantID = a.TenantID
+	}
+	return api.Resource{TenantID: tenantID, Type: "audit"}
+}
+
+// authzGate is the standard chokepoint call pattern: evaluate the
+// action+resource, write 503 on engine error and 403 on deny (with the
+// reason on a header so the operator UI can surface it without parsing
+// the body), and return true only when the handler should proceed.
+//
+// The chokepoint records its own audit row; this helper does NOT.
+// Handlers record subsequent state-change audit rows via api.AuditRecorder
+// at commit time, which is the wave-1 contract.
+func authzGate(
+	ctx context.Context,
+	az api.AuthZ,
+	logger *slog.Logger,
+	w http.ResponseWriter,
+	action api.Action,
+	res api.Resource,
+) bool {
+	d, err := az.Allow(ctx, action, res)
+	if err != nil {
+		logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
+		writeListErr(ctx, logger, w, http.StatusServiceUnavailable, "authz_unavailable")
+		return false
+	}
+	if !d.Allow {
+		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
+		writeListErr(ctx, logger, w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
 }
 
 // parseAuditFilter centralises the per-query-param decode + validate so

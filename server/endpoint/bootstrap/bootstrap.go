@@ -51,6 +51,10 @@ type Deps struct {
 	// cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 
+	// AuthZ is the authorization chokepoint every privileged operator
+	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
+	AuthZ identityapi.AuthZ
+
 	// HostTokenLifetime is how long a host bearer token may live before
 	// the verify path triggers an auto-rotation. Zero -> service
 	// default (24h). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
@@ -93,6 +97,9 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.PolicyProvider != nil && deps.CommandInserter == nil {
 		return nil, errors.New("endpoint bootstrap: PolicyProvider set but CommandInserter is nil; policy fan-out has nowhere to go")
 	}
+	if deps.AuthZ == nil {
+		return nil, errors.New("endpoint bootstrap: AuthZ is required")
+	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -110,7 +117,7 @@ func New(deps Deps) (*Endpoint, error) {
 		Logger:   logger,
 	})
 
-	opH := operator.New(svc, logger)
+	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
 	return &Endpoint{
 		svc: svc,

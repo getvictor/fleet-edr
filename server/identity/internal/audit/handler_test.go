@@ -34,9 +34,36 @@ func (s *stubReader) List(_ context.Context, f api.AuditFilter) ([]api.AuditRow,
 	return s.rows, s.err
 }
 
+// allowAllAuthZ is the default chokepoint stub for handler tests that
+// are not exercising the authz gate. Returns Allow=true so the test
+// flows past authzGate and into the parse / read / response code under
+// test. Allow + deny paths get their own dedicated tests against the
+// real engine.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decision, error) {
+	return api.Decision{Allow: true, Reason: "granted"}, nil
+}
+
+// stubAuthZ lets a test pin a specific decision (or error) on the
+// chokepoint without standing up the real Rego engine.
+type stubAuthZ struct {
+	decision api.Decision
+	err      error
+}
+
+func (s stubAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decision, error) {
+	return s.decision, s.err
+}
+
 func newHandlerTestServer(t *testing.T, reader api.AuditReader) *httptest.Server {
 	t.Helper()
-	h := audit.NewHandler(reader, slog.Default())
+	return newHandlerTestServerWithAuthZ(t, reader, allowAllAuthZ{})
+}
+
+func newHandlerTestServerWithAuthZ(t *testing.T, reader api.AuditReader, az api.AuthZ) *httptest.Server {
+	t.Helper()
+	h := audit.NewHandler(reader, az, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -207,11 +234,64 @@ func TestHandler_ListReaderError(t *testing.T) {
 }
 
 func TestNewHandler_PanicsOnNilReader(t *testing.T) {
-	assert.Panics(t, func() { _ = audit.NewHandler(nil, slog.Default()) })
+	assert.Panics(t, func() { _ = audit.NewHandler(nil, allowAllAuthZ{}, slog.Default()) })
+}
+
+// authz must be supplied; a Handler without one cannot enforce the
+// chokepoint and would silently grant every read once a session
+// middleware places an actor on ctx.
+func TestNewHandler_PanicsOnNilAuthZ(t *testing.T) {
+	assert.Panics(t, func() { _ = audit.NewHandler(&stubReader{}, nil, slog.Default()) })
 }
 
 // Nil logger is permitted (slog.Default fallback). A handler that
 // panics on a missing logger is a footgun for early-boot code paths.
 func TestNewHandler_NilLoggerOK(t *testing.T) {
-	assert.NotPanics(t, func() { _ = audit.NewHandler(&stubReader{}, nil) })
+	assert.NotPanics(t, func() { _ = audit.NewHandler(&stubReader{}, allowAllAuthZ{}, nil) })
+}
+
+// AuthZ deny short-circuits before the reader is hit. The deny reason
+// surfaces on the X-Edr-Authz-Reason header so the operator UI can
+// distinguish "forbidden by policy" from "session expired" without
+// parsing a body shape that already varies by error class.
+func TestHandler_AuthZDeny(t *testing.T) {
+	reader := &stubReader{}
+	srv := newHandlerTestServerWithAuthZ(t, reader,
+		stubAuthZ{decision: api.Decision{Allow: false, Reason: "no_matching_rule"}})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Equal(t, "no_matching_rule", resp.Header.Get("X-Edr-Authz-Reason"))
+	body, _ := io.ReadAll(resp.Body)
+	var got map[string]string
+	require.NoError(t, json.Unmarshal(body, &got))
+	assert.Equal(t, "forbidden", got["error"])
+	assert.False(t, reader.calledOnce, "reader must not run when authz denies")
+}
+
+// AuthZ engine failure is a 503 (transient) and surfaces a stable wire
+// code so the UI's retry semantics for 5xx are exercised, not the
+// 401-on-403 redirect-to-login that 4xx triggers.
+func TestHandler_AuthZEngineError(t *testing.T) {
+	reader := &stubReader{}
+	srv := newHandlerTestServerWithAuthZ(t, reader,
+		stubAuthZ{err: errors.New("opa exploded")})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	var got map[string]string
+	require.NoError(t, json.Unmarshal(body, &got))
+	assert.Equal(t, "authz_unavailable", got["error"])
+	assert.False(t, reader.calledOnce, "reader must not run on engine error")
 }

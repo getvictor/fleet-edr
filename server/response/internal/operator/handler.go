@@ -31,19 +31,26 @@ const createBodyCap = 64 << 10
 // Handler serves the operator-facing command routes.
 type Handler struct {
 	svc    api.Service
+	authz  identityapi.AuthZ
 	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
-// New builds an operator handler. Panics if svc is nil.
-func New(svc api.Service, logger *slog.Logger) *Handler {
+// New builds an operator handler. Panics if svc or authz is nil.
+// authz is the authorization chokepoint POST /api/commands and
+// GET /api/commands/{id} gate on; a nil one would silently bypass
+// the role matrix.
+func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("response operator.New: api.Service must not be nil")
+	}
+	if authz == nil {
+		panic("response operator.New: authz must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{svc: svc, logger: logger}
+	return &Handler{svc: svc, authz: authz, logger: logger}
 }
 
 // SetAudit installs the operator audit recorder. Optional: when not
@@ -69,6 +76,15 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body createRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, createBodyCap)).Decode(&body); err != nil {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
+		return
+	}
+
+	action, ok := commandTypeToAction(body.CommandType)
+	if !ok {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "unsupported_command_type")
+		return
+	}
+	if !h.authzGate(ctx, w, action, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "host", ID: body.HostID}) {
 		return
 	}
 
@@ -141,6 +157,9 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_command_id")
 		return
 	}
+	if !h.authzGate(ctx, w, identityapi.ActionHostRead, identityapi.Resource{TenantID: actorTenantID(ctx), Type: "command", ID: strconv.FormatInt(id, 10)}) {
+		return
+	}
 	cmd, err := h.svc.Get(ctx, id)
 	switch {
 	case errors.Is(err, api.ErrCommandNotFound):
@@ -160,4 +179,62 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
+}
+
+// commandTypeToAction maps the wire-format command_type onto the
+// authorization action the chokepoint evaluates. Returns ok=false on
+// an unknown command_type so the handler can 400 before reaching the
+// chokepoint; an unrecognised command_type is a request-validation
+// failure, not a permission decision.
+//
+// kill_process is the wave-1 implemented type; isolate / run_script
+// are reserved per the spec for wave-1 destructive actions and are
+// validated here so the role matrix already covers them when the
+// command-execution side ships.
+func commandTypeToAction(commandType string) (identityapi.Action, bool) {
+	switch commandType {
+	case api.CommandTypeKillProcess:
+		return identityapi.ActionHostKillProcess, true
+	case "isolate":
+		return identityapi.ActionHostIsolate, true
+	case "run_script":
+		return identityapi.ActionHostRunScript, true
+	}
+	return "", false
+}
+
+// authzGate is the standard chokepoint pattern: 503 on engine error,
+// 403 on deny (with the policy reason on a header so the operator UI
+// can distinguish "no role" from "session expired"), and true only
+// when the handler should proceed.
+func (h *Handler) authzGate(
+	ctx context.Context,
+	w http.ResponseWriter,
+	action identityapi.Action,
+	res identityapi.Resource,
+) bool {
+	d, err := h.authz.Allow(ctx, action, res)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "authz", "err", err, "action", string(action))
+		writeErr(ctx, h.logger, w, http.StatusServiceUnavailable, "authz_unavailable")
+		return false
+	}
+	if !d.Allow {
+		w.Header().Set("X-Edr-Authz-Reason", d.Reason)
+		writeErr(ctx, h.logger, w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
+// actorTenantID returns the actor's tenant_id from ctx, or "" if no
+// actor is present. The chokepoint short-circuits empty TenantID with
+// reason resource_tenant_missing AND records the regression in the
+// audit log; callers therefore prefer this over an explicit
+// ActorFromContext check at the handler level.
+func actorTenantID(ctx context.Context) string {
+	if a, ok := identityapi.ActorFromContext(ctx); ok {
+		return a.TenantID
+	}
+	return ""
 }
