@@ -84,9 +84,11 @@
   (provider, subject), bind to `analyst` at tenant scope, audit `user.created`. Honors
   `auth.oidc.allow_jit_provisioning`.
 - [ ] **4.4** New package `server/identity/internal/breakglass/` covering bootstrap
-  token issuance + redemption, password validation (zxcvbn ≥ 14), WebAuthn registration
-  via `github.com/go-webauthn/webauthn`. Atomic redemption + user creation +
-  credential persistence.
+  token issuance + redemption, password length validation (≥ 12 characters), WebAuthn
+  registration via `github.com/go-webauthn/webauthn`. Atomic redemption + user
+  creation + credential persistence. Wave-1 password policy is length-only (CIS
+  guidance for MFA-protected accounts: 8+ chars; we land at 12); zxcvbn entropy
+  scoring is wave-2 polish.
 - [ ] **4.5** New routes: `GET /admin/break-glass`, `POST /admin/break-glass` (login
   with password + WebAuthn assertion), `GET /admin/break-glass/setup`,
   `POST /admin/break-glass/setup`. IP allowlist 404 enforcement when configured.

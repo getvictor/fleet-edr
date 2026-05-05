@@ -29,9 +29,11 @@ against the requirements pinned by this change).
 - **BREAKING** for the bootstrap flow: replace the existing "print a generated password to
   stderr on first boot" seed with a single-use bootstrap token whose redemption URL is
   printed instead. Operator visits `/admin/break-glass/setup?token=…` to set a password
-  (zxcvbn ≥14 chars) and register a WebAuthn credential before the break-glass account is
-  usable. Migration of an existing `admin@fleet-edr.local` row flips it to break-glass and
-  forces a token redemption before next login.
+  (≥ 12 characters) and register a WebAuthn credential before the break-glass account is
+  usable. WebAuthn carries the cryptographic factor; the password is the
+  defense-in-depth length gate per CIS guidance for MFA-protected accounts. Migration of
+  an existing `admin@fleet-edr.local` row flips it to break-glass and forces a token
+  redemption before next login.
 - Move ongoing break-glass login to a separate `/admin/break-glass` URL that is not linked
   from the SSO login page and that 404s for callers outside the optional reverse-proxy IP
   allowlist. Per-IP and per-email rate limits, P1 audit on every successful break-glass

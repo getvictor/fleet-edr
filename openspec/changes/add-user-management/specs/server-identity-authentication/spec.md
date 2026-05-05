@@ -93,9 +93,8 @@ single-use; consumption MUST be atomic with the user creation it triggers.
 #### Scenario: Token redemption sets the password and registers WebAuthn
 
 - **GIVEN** the operator opens the redemption URL in a browser before the token expires
-- **WHEN** the operator submits a password whose strength meets the configured policy
-  (minimum 14 characters, scored by zxcvbn) AND completes WebAuthn registration of a
-  hardware key in the same request
+- **WHEN** the operator submits a password of at least 12 characters AND completes
+  WebAuthn registration of a hardware key in the same request
 - **THEN** the server creates the break-glass `users` row with `is_breakglass=1`,
   hashes the password with argon2id, persists the WebAuthn credential, marks the token
   consumed, and writes an audit row with action `auth.breakglass.bootstrap`
