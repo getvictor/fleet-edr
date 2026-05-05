@@ -112,7 +112,7 @@ func TestSession_MalformedCookieReturns401(t *testing.T) {
 
 func TestSession_ValidCookieLetsHandlerRun(t *testing.T) {
 	svc, ss := newService(t)
-	sess, err := ss.Create(t.Context(), 42)
+	sess, err := ss.Create(t.Context(), 42, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	mw := middleware.Session(svc, slog.Default())
@@ -173,7 +173,7 @@ func TestCSRF_MisconfiguredReturns500(t *testing.T) {
 // CSRF stack: happy path + the two failure modes with a real Session pinned.
 func TestCSRF_Stack(t *testing.T) {
 	svc, ss := newService(t)
-	sess, err := ss.Create(t.Context(), 7)
+	sess, err := ss.Create(t.Context(), 7, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	csrf := api.EncodeToken(sess.CSRFToken)

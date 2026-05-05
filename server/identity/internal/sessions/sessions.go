@@ -38,9 +38,17 @@ var ErrNotFound = errors.New("sessions: not found or expired")
 // plaintext lives in memory for the lifetime of the request that created it and
 // inside the cookie the client holds. CSRFToken is kept as []byte rather than an
 // encoded string so constant-time compares in the authn middleware stay honest.
+//
+// AuthMethod records how the session was minted ("local_password" or "oidc").
+// Phase 2's chokepoint reads it through Service.LoadActor so the actor's
+// AuthMethod field reflects ground truth instead of a hardcoded default.
+// IdentityID FKs into the identities table; nullable so legacy local-password
+// rows (pre-Phase-4) and tests that don't track identities can stay valid.
 type Session struct {
 	ID         []byte
 	UserID     int64
+	IdentityID *int64
+	AuthMethod string
 	CSRFToken  []byte
 	CreatedAt  time.Time
 	LastSeenAt time.Time
@@ -84,11 +92,20 @@ func New(db *sqlx.DB, opts Options) *Store {
 	return &Store{db: db, ttl: ttl, now: now}
 }
 
+// CreateOptions carry the per-session metadata Phase 4 records on the row.
+// Zero AuthMethod defaults to "local_password" for legacy callers; nil
+// IdentityID is valid (legacy + tests).
+type CreateOptions struct {
+	IdentityID *int64
+	AuthMethod string
+}
+
 // Create inserts a new session for userID and returns the fully-populated row with
 // the PLAINTEXT id in Session.ID (that's what the caller puts in the Set-Cookie). The
 // DB row stores SHA-256(id) so a dump of the sessions table cannot be replayed as
-// active cookies.
-func (s *Store) Create(ctx context.Context, userID int64) (*Session, error) {
+// active cookies. opts pins identity_id + auth_method for the chokepoint to consume
+// later via the session middleware.
+func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*Session, error) {
 	id, err := randomBytes(IDLen)
 	if err != nil {
 		return nil, fmt.Errorf("generate session id: %w", err)
@@ -97,18 +114,32 @@ func (s *Store) Create(ctx context.Context, userID int64) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate csrf token: %w", err)
 	}
+	authMethod := opts.AuthMethod
+	if authMethod == "" {
+		authMethod = "local_password"
+	}
 	now := s.now()
 	expires := now.Add(s.ttl)
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (id, user_id, csrf_token, expires_at)
-		VALUES (?, ?, ?, ?)
-	`, digest(id), userID, csrf, expires); err != nil {
+		INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, digest(id), userID, nullInt64Ptr(opts.IdentityID), authMethod, csrf, expires); err != nil {
 		return nil, fmt.Errorf("insert session: %w", err)
 	}
 	return &Session{
-		ID: id, UserID: userID, CSRFToken: csrf,
-		CreatedAt: now, LastSeenAt: now, ExpiresAt: expires,
+		ID: id, UserID: userID, IdentityID: opts.IdentityID, AuthMethod: authMethod,
+		CSRFToken: csrf, CreatedAt: now, LastSeenAt: now, ExpiresAt: expires,
 	}, nil
+}
+
+// nullInt64Ptr converts a *int64 to a sql-nullable input the *sqlx driver
+// passes through to MySQL as NULL for nil and integer for non-nil. Local
+// helper so the Create signature stays clean.
+func nullInt64Ptr(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // Get takes the plaintext id from the cookie, hashes it, and looks up the row by that
@@ -120,15 +151,18 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 		return nil, ErrNotFound
 	}
 	var row struct {
-		UserID     int64     `db:"user_id"`
-		CSRFToken  []byte    `db:"csrf_token"`
-		CreatedAt  time.Time `db:"created_at"`
-		LastSeenAt time.Time `db:"last_seen_at"`
-		ExpiresAt  time.Time `db:"expires_at"`
+		UserID     int64         `db:"user_id"`
+		IdentityID sql.NullInt64 `db:"identity_id"`
+		AuthMethod string        `db:"auth_method"`
+		CSRFToken  []byte        `db:"csrf_token"`
+		CreatedAt  time.Time     `db:"created_at"`
+		LastSeenAt time.Time     `db:"last_seen_at"`
+		ExpiresAt  time.Time     `db:"expires_at"`
 	}
 	// `now` is passed in so tests can drive the clock; production uses s.now().
 	err := s.db.GetContext(ctx, &row, `
-		SELECT user_id, csrf_token, created_at, last_seen_at, expires_at
+		SELECT user_id, identity_id, auth_method, csrf_token,
+		       created_at, last_seen_at, expires_at
 		FROM sessions
 		WHERE id = ? AND expires_at > ?
 	`, digest(plaintextID), s.now())
@@ -138,11 +172,19 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query session: %w", err)
 	}
+	var idPtr *int64
+	if row.IdentityID.Valid {
+		v := row.IdentityID.Int64
+		idPtr = &v
+	}
 	return &Session{
 		// Return the plaintext id the caller passed in so downstream code (e.g.
 		// idPrefix for audit logs) can render a stable prefix for correlation.
-		ID: plaintextID, UserID: row.UserID, CSRFToken: row.CSRFToken,
-		CreatedAt: row.CreatedAt, LastSeenAt: row.LastSeenAt, ExpiresAt: row.ExpiresAt,
+		ID: plaintextID, UserID: row.UserID, IdentityID: idPtr, AuthMethod: row.AuthMethod,
+		CSRFToken:  row.CSRFToken,
+		CreatedAt:  row.CreatedAt,
+		LastSeenAt: row.LastSeenAt,
+		ExpiresAt:  row.ExpiresAt,
 	}, nil
 }
 

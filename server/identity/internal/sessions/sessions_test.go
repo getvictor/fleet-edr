@@ -56,7 +56,7 @@ func TestCreate_ReturnsNewRow(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	sess, err := s.Create(ctx, 42)
+	sess, err := s.Create(ctx, 42, sessions.CreateOptions{})
 	require.NoError(t, err)
 	assert.Len(t, sess.ID, sessions.IDLen)
 	assert.Len(t, sess.CSRFToken, sessions.IDLen)
@@ -69,9 +69,9 @@ func TestCreate_IDsAreUnique(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	a, err := s.Create(ctx, 1)
+	a, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
-	b, err := s.Create(ctx, 1)
+	b, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 	assert.False(t, bytes.Equal(a.ID, b.ID), "session ids must differ")
 	assert.False(t, bytes.Equal(a.CSRFToken, b.CSRFToken), "csrf tokens must differ")
@@ -81,7 +81,7 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	created, err := s.Create(ctx, 7)
+	created, err := s.Create(ctx, 7, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	got, err := s.Get(ctx, created.ID)
@@ -89,6 +89,47 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 	assert.Equal(t, created.ID, got.ID)
 	assert.Equal(t, int64(7), got.UserID)
 	assert.Equal(t, created.CSRFToken, got.CSRFToken)
+}
+
+// Phase 4 added IdentityID + AuthMethod columns. Round-trip both
+// through Create -> Get to pin the schema + scan path. A regression
+// here would silently strip OIDC sessions of their identity link
+// (breaking later admin queries that pivot on identities) or default
+// every session to local_password (breaking authz rules that branch
+// on auth_method).
+func TestGet_IdentityIDAndAuthMethodRoundTrip(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	for _, uid := range []int64{1, 7} {
+		_, err := db.ExecContext(t.Context(),
+			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
+			uid, "u"+intToStr(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
+		require.NoError(t, err)
+	}
+	const identityID int64 = 9001
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO identities (id, user_id, provider, subject) VALUES (?, ?, ?, ?)`,
+		identityID, int64(7), "oidc", "abc-subject")
+	require.NoError(t, err, "seed identities row")
+
+	s := sessions.New(db, sessions.Options{})
+	ctx := t.Context()
+
+	idCopy := identityID
+	created, err := s.Create(ctx, 7, sessions.CreateOptions{
+		IdentityID: &idCopy,
+		AuthMethod: "oidc",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.IdentityID)
+	assert.Equal(t, identityID, *created.IdentityID)
+	assert.Equal(t, "oidc", created.AuthMethod)
+
+	got, err := s.Get(ctx, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.IdentityID, "identity_id must round-trip")
+	assert.Equal(t, identityID, *got.IdentityID)
+	assert.Equal(t, "oidc", got.AuthMethod, "auth_method must round-trip")
 }
 
 func TestGet_WrongLengthReturnsNotFound(t *testing.T) {
@@ -112,7 +153,7 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
 	ctx := t.Context()
 
-	created, err := s.Create(ctx, 1)
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	advance(2 * time.Hour) // past the 1 hour TTL
@@ -124,7 +165,7 @@ func TestDelete_IsIdempotent(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	sess, err := s.Create(ctx, 1)
+	sess, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 	require.NoError(t, s.Delete(ctx, sess.ID))
 	require.NoError(t, s.Delete(ctx, sess.ID), "second delete of same id must not error")
@@ -137,12 +178,12 @@ func TestCleanupExpired_RemovesOnlyExpired(t *testing.T) {
 	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
 	ctx := t.Context()
 
-	active, err := s.Create(ctx, 1)
+	active, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	// Advance past TTL so the first row expires, then create a fresh row.
 	advance(2 * time.Hour)
-	stillActive, err := s.Create(ctx, 2)
+	stillActive, err := s.Create(ctx, 2, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	removed, err := s.CleanupExpired(ctx)

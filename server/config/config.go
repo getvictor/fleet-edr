@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,6 +44,11 @@ const (
 	// verifies after rotation. Wider than an agent's poll interval so an
 	// in-flight request does not 401 mid-cycle.
 	defaultHostTokenGrace = 5 * time.Minute
+	// defaultOIDCStateCookieTTL is how long the signed state cookie that
+	// carries (state, nonce, code_verifier) stays valid. 5 minutes
+	// matches the IdP's typical authorization-code window — long enough
+	// to survive an MFA prompt, short enough to bound CSRF replay.
+	defaultOIDCStateCookieTTL = 5 * time.Minute
 )
 
 // Config is the resolved server configuration.
@@ -164,6 +170,50 @@ type Config struct {
 	// of more memory; smaller catches a queue-leak earlier. Populated
 	// from EDR_AUDIT_ASYNC_QUEUE_CAP. Zero -> use the package default.
 	AuditAsyncQueueCap int
+
+	// OIDC authentication configuration. When OIDCIssuer is non-empty,
+	// the server enables the OIDC sign-in flow at /api/auth/login +
+	// /api/auth/callback. When OIDCIssuer is empty, the server refuses
+	// to start unless AuthAllowNoOIDC=true (which lets dev workflows
+	// run break-glass-only). All fields are populated from
+	// EDR_OIDC_* env vars.
+	OIDCIssuer       string
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCRedirectURL  string
+	// OIDCScopes are the scopes requested at AuthURL time. Default is
+	// [openid, email, profile] which gives the verifier the claims it
+	// needs (sub, email, name) without leaking unused permissions.
+	// Wave-2 will add `groups` for role mapping.
+	OIDCScopes []string
+	// OIDCAllowJITProvisioning controls whether a successful OIDC
+	// sign-in by an unknown subject creates a user + identity + default
+	// role binding. true = create on first sign-in (recommended for
+	// most deployments); false = require an admin to pre-provision the
+	// user. Default true.
+	OIDCAllowJITProvisioning bool
+	// OIDCStateCookieTTL bounds how long the signed state cookie
+	// (carrying state + nonce + PKCE verifier) stays valid. Defaults
+	// to 5m; tune up for slow IdPs / MFA prompts.
+	OIDCStateCookieTTL time.Duration
+
+	// AuthAllowNoOIDC is the dedicated dev flag that lets the server
+	// boot in break-glass-only mode (no OIDC). Default false:
+	// production deployments without OIDC config refuse to start with
+	// an explicit error pointing the operator at the missing env vars.
+	// Set EDR_AUTH_ALLOW_NO_OIDC=1 in dev environments where running
+	// against a real IdP is overkill. Pattern mirrors
+	// EDR_ALLOW_INSECURE_HTTP=1's "you must opt in to the unsafe
+	// path" shape.
+	AuthAllowNoOIDC bool
+
+	// SessionSigningKey is the HMAC key the OIDC state cookie uses to
+	// sign + verify per-flow secrets (state, nonce, PKCE verifier).
+	// Phase 5 will reuse the same key for signed session metadata.
+	// Populated from EDR_SESSION_SIGNING_KEY (or EDR_SESSION_SIGNING_KEY_FILE
+	// for docker-secret mounts). Required when OIDC is enabled;
+	// validated at boot to be at least 32 bytes.
+	SessionSigningKey []byte
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -174,19 +224,22 @@ func (c Config) TLSEnabled() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:           ":8088",
-		LogLevel:             "info",
-		LogFormat:            "json",
-		ProcessInterval:      defaultProcessInterval,
-		ProcessBatch:         defaultProcessBatch,
-		EnrollRatePerMin:     defaultEnrollRatePerMin,
-		LoginRatePerMin:      defaultLoginRatePerMin,
-		RetentionDays:        defaultRetentionDays,
-		RetentionInterval:    time.Hour,
-		StaleProcessTTL:      defaultStaleProcessTTL,
-		StaleProcessInterval: defaultStaleProcessInterval,
-		HostTokenLifetime:    defaultHostTokenLifetime,
-		HostTokenGrace:       defaultHostTokenGrace,
+		ListenAddr:               ":8088",
+		LogLevel:                 "info",
+		LogFormat:                "json",
+		ProcessInterval:          defaultProcessInterval,
+		ProcessBatch:             defaultProcessBatch,
+		EnrollRatePerMin:         defaultEnrollRatePerMin,
+		LoginRatePerMin:          defaultLoginRatePerMin,
+		RetentionDays:            defaultRetentionDays,
+		RetentionInterval:        time.Hour,
+		StaleProcessTTL:          defaultStaleProcessTTL,
+		StaleProcessInterval:     defaultStaleProcessInterval,
+		HostTokenLifetime:        defaultHostTokenLifetime,
+		HostTokenGrace:           defaultHostTokenGrace,
+		OIDCScopes:               []string{"openid", "email", "profile"},
+		OIDCAllowJITProvisioning: true,
+		OIDCStateCookieTTL:       defaultOIDCStateCookieTTL,
 	}
 }
 
@@ -221,6 +274,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	loadAllowlists(&c, getenv)
 	loadLogConfig(&c, getenv, &errs)
 	loadProcessConfig(&c, getenv, &errs)
+	loadOIDCConfig(&c, getenv, &errs)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -344,6 +398,93 @@ func loadLogConfig(c *Config, getenv func(string) string, errs *[]error) {
 func loadProcessConfig(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveDuration(getenv, "EDR_PROCESS_INTERVAL", &c.ProcessInterval, errs)
 	envparse.PositiveInt(getenv, "EDR_PROCESS_BATCH", &c.ProcessBatch, errs)
+}
+
+// loadOIDCConfig parses the Phase-4 authentication knobs and enforces
+// the "OIDC required unless explicitly opted out" gate. When
+// EDR_OIDC_ISSUER is non-empty, the rest of the config block is
+// validated as a coherent set; missing client_id / redirect URL
+// surfaces a focused error. When EDR_OIDC_ISSUER is empty, the gate
+// requires EDR_AUTH_ALLOW_NO_OIDC=1 so dev workflows can opt into
+// break-glass-only mode without a silent fallback in production.
+func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
+	optionalStr(&c.OIDCIssuer, "EDR_OIDC_ISSUER", getenv)
+	optionalStr(&c.OIDCClientID, "EDR_OIDC_CLIENT_ID", getenv)
+	optionalStr(&c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET", getenv)
+	optionalStr(&c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL", getenv)
+	parseOIDCOverrides(c, getenv, errs)
+	envparse.PositiveDuration(getenv, "EDR_OIDC_STATE_COOKIE_TTL", &c.OIDCStateCookieTTL, errs)
+	c.AuthAllowNoOIDC = getenv("EDR_AUTH_ALLOW_NO_OIDC") == "1"
+	if v := getenv("EDR_SESSION_SIGNING_KEY"); v != "" {
+		c.SessionSigningKey = []byte(v)
+	}
+	enforceOIDCGate(c, errs)
+}
+
+// parseOIDCOverrides reads the optional override env vars
+// (EDR_OIDC_SCOPES, EDR_OIDC_ALLOW_JIT_PROVISIONING) onto c. Pulled
+// out so loadOIDCConfig stays under the cognitive-complexity budget.
+func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
+	if v := getenv("EDR_OIDC_SCOPES"); v != "" {
+		c.OIDCScopes = splitCSV(v)
+		// openid is mandatory for the discovery + ID-token flow; an
+		// override that drops it leaves the operator with a worse
+		// failure mode (token endpoint succeeds, ID-token absent at
+		// callback) than a startup refusal.
+		if !slices.Contains(c.OIDCScopes, "openid") {
+			*errs = append(*errs, errors.New(
+				"EDR_OIDC_SCOPES must include \"openid\" (the OIDC core scope)"))
+		}
+	}
+	if v := getenv("EDR_OIDC_ALLOW_JIT_PROVISIONING"); v != "" {
+		c.OIDCAllowJITProvisioning = v == "1"
+	}
+}
+
+// enforceOIDCGate cross-checks the OIDC env block: every OIDC field
+// is set together, OR none is set AND AuthAllowNoOIDC is the explicit
+// dev opt-out. Anything else is a misconfiguration the operator
+// should surface at boot rather than silently fall back to
+// break-glass-only mode. The allow-no-oidc opt-out specifically does
+// NOT excuse partial configuration: if any EDR_OIDC_* knob is set,
+// the operator clearly intends OIDC and a missing companion is a
+// typo, not an opt-out.
+func enforceOIDCGate(c *Config, errs *[]error) {
+	if c.OIDCIssuer != "" && len(c.SessionSigningKey) < oidcSigningKeyMinBytes {
+		*errs = append(*errs, errors.New(
+			"EDR_SESSION_SIGNING_KEY is required when OIDC is enabled; "+
+				"must be at least 32 bytes (use EDR_SESSION_SIGNING_KEY_FILE for docker-secret mounts)"))
+	}
+	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != ""
+	switch {
+	case c.OIDCIssuer == "" && partialOIDC:
+		*errs = append(*errs, errors.New(
+			"EDR_OIDC_CLIENT_ID/CLIENT_SECRET/REDIRECT_URL set without EDR_OIDC_ISSUER; "+
+				"set EDR_OIDC_ISSUER to enable OIDC, or unset the partial values to opt out"))
+	case c.OIDCIssuer == "" && !c.AuthAllowNoOIDC:
+		*errs = append(*errs, errors.New(
+			"EDR_OIDC_ISSUER is required (set EDR_AUTH_ALLOW_NO_OIDC=1 for break-glass-only dev mode)"))
+	case c.OIDCIssuer != "":
+		appendIfMissing(c.OIDCClientID, "EDR_OIDC_CLIENT_ID is required when EDR_OIDC_ISSUER is set", errs)
+		appendIfMissing(c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET is required when EDR_OIDC_ISSUER is set"+
+			" (use EDR_OIDC_CLIENT_SECRET_FILE for docker-secret mounts)", errs)
+		appendIfMissing(c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL is required when EDR_OIDC_ISSUER is set", errs)
+	}
+}
+
+// oidcSigningKeyMinBytes is the wave-1 floor for EDR_SESSION_SIGNING_KEY.
+// 32 bytes matches the HMAC-SHA256 block size used by the state cookie
+// signer; shorter keys silently weaken the signature without an obvious
+// runtime symptom.
+const oidcSigningKeyMinBytes = 32
+
+// appendIfMissing emits msg when v is empty. Tiny helper so the gate
+// switch reads as a list of cross-checks rather than three near-
+// identical branches.
+func appendIfMissing(v, msg string, errs *[]error) {
+	if v == "" {
+		*errs = append(*errs, errors.New(msg))
+	}
 }
 
 func requireStr(dst *string, key string, getenv func(string) string, errs *[]error, nonEmpty bool) {
