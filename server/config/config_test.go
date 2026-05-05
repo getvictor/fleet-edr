@@ -444,6 +444,45 @@ func TestLoad_OIDCConfig(t *testing.T) {
 				assert.Equal(t, 10*time.Minute, c.OIDCStateCookieTTL)
 			},
 		},
+		{
+			// EDR_OIDC_SCOPES override that drops "openid" must refuse
+			// to start. Without openid the discovery + ID-token flow
+			// has no contract; the failure is "token endpoint succeeds,
+			// id_token absent at callback" which is harder to debug
+			// than a startup error.
+			name: "EDR_OIDC_SCOPES without openid is rejected",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_SCOPES":         "email,profile",
+				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+			}),
+			wantErr: "EDR_OIDC_SCOPES must include \"openid\"",
+		},
+		{
+			// Partial OIDC config + EDR_AUTH_ALLOW_NO_OIDC=1 must NOT
+			// silently disable OIDC. A typo in EDR_OIDC_ISSUER while
+			// EDR_OIDC_CLIENT_ID is set is unmistakeably an OIDC
+			// intent; falling through to break-glass-only mode masks
+			// the misconfiguration.
+			name: "partial OIDC config + allow-no-oidc still refuses",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_AUTH_ALLOW_NO_OIDC": "1",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+			}),
+			wantErr: "set without EDR_OIDC_ISSUER",
+		},
+		{
+			// Same as above but with the secret set instead of client_id.
+			name: "partial OIDC (secret only) + allow-no-oidc still refuses",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_AUTH_ALLOW_NO_OIDC": "1",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+			}),
+			wantErr: "set without EDR_OIDC_ISSUER",
+		},
 	}
 
 	for _, tc := range cases {

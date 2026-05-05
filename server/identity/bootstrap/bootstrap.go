@@ -140,7 +140,15 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		return nil, fmt.Errorf("identity bootstrap: construct authz engine: %w", err)
 	}
 
-	oidcHandler, err := buildOIDCHandler(ctx, deps, logger, sessionsStore, usersStore, identitiesStore, rbacStore, auditStore)
+	oidcHandler, err := buildOIDCHandler(ctx, oidcHandlerDeps{
+		deps:       deps,
+		logger:     logger,
+		sessions:   sessionsStore,
+		users:      usersStore,
+		identities: identitiesStore,
+		rbac:       rbacStore,
+		audit:      auditStore,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -166,48 +174,58 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	}, nil
 }
 
+// oidcHandlerDeps bundles the per-call inputs to buildOIDCHandler.
+// Pulled out of the function signature so the call stays under the
+// linter's per-call parameter budget without churning through fields
+// in two places when the wiring expands.
+type oidcHandlerDeps struct {
+	deps       Deps
+	logger     *slog.Logger
+	sessions   *sessions.Store
+	users      *users.Store
+	identities *identities.Store
+	rbac       *rbac.Store
+	audit      *audit.Store
+}
+
 // buildOIDCHandler constructs the OIDC handler when the deployment
 // supplied OIDC config. Returns (nil, nil) for break-glass-only
 // deployments — the route registration step skips it. Returns an
 // error when the OIDC discovery / verifier setup fails so cmd/main
 // refuses to start with an explicit error rather than silently
 // falling back.
-func buildOIDCHandler(
-	ctx context.Context, deps Deps, logger *slog.Logger,
-	sessionsStore *sessions.Store, usersStore *users.Store,
-	identitiesStore *identities.Store, rbacStore *rbac.Store,
-	auditStore *audit.Store,
-) (*oidc.Handler, error) {
-	if deps.OIDC.Issuer == "" {
+func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, error) {
+	if in.deps.OIDC.Issuer == "" {
 		return nil, nil
 	}
-	if len(deps.SessionSigningKey) == 0 {
+	if len(in.deps.SessionSigningKey) == 0 {
 		return nil, errors.New("identity bootstrap: SessionSigningKey is required when OIDC is configured")
 	}
 	client, err := oidc.New(ctx, oidc.Options{
-		Issuer:       deps.OIDC.Issuer,
-		ClientID:     deps.OIDC.ClientID,
-		ClientSecret: deps.OIDC.ClientSecret,
-		RedirectURL:  deps.OIDC.RedirectURL,
-		Scopes:       deps.OIDC.Scopes,
-		HTTPClient:   deps.OIDC.HTTPClient,
-		Logger:       logger,
+		Issuer:       in.deps.OIDC.Issuer,
+		ClientID:     in.deps.OIDC.ClientID,
+		ClientSecret: in.deps.OIDC.ClientSecret,
+		RedirectURL:  in.deps.OIDC.RedirectURL,
+		Scopes:       in.deps.OIDC.Scopes,
+		HTTPClient:   in.deps.OIDC.HTTPClient,
+		Logger:       in.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("identity bootstrap: construct OIDC client: %w", err)
 	}
-	prov := oidc.NewProvisioner(deps.DB, usersStore, identitiesStore, rbacStore, auditStore, oidc.ProvisionerOptions{
-		AllowJIT: deps.OIDC.AllowJITProvisioning,
+	prov := oidc.NewProvisioner(in.deps.DB, in.users, in.identities, in.rbac, in.audit, oidc.ProvisionerOptions{
+		AllowJIT: in.deps.OIDC.AllowJITProvisioning,
+		Logger:   in.logger,
 	})
 	return oidc.NewHandler(oidc.HandlerOptions{
 		Client:       client,
 		Provisioner:  prov,
-		Sessions:     sessionsStore,
-		SigningKey:   deps.SessionSigningKey,
-		StateTTL:     deps.OIDC.StateCookieTTL,
-		CookieSecure: deps.CookieSecure,
-		Audit:        auditStore,
-		Logger:       logger,
+		Sessions:     in.sessions,
+		SigningKey:   in.deps.SessionSigningKey,
+		StateTTL:     in.deps.OIDC.StateCookieTTL,
+		CookieSecure: in.deps.CookieSecure,
+		Audit:        in.audit,
+		Logger:       in.logger,
 	}), nil
 }
 

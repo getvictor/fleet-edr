@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"log/slog"
@@ -33,62 +34,14 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			cookie, err := r.Cookie(api.SessionCookieName)
-			if err != nil || cookie.Value == "" {
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "missing_session")
+			sess, ok := resolveSession(ctx, w, r, svc, logger)
+			if !ok {
 				return
 			}
-			raw, err := api.DecodeToken(cookie.Value)
-			if err != nil {
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+			actor, ok := resolveActor(ctx, w, svc, logger, sess)
+			if !ok {
 				return
 			}
-			sess, err := svc.GetSession(ctx, raw)
-			switch {
-			case errors.Is(err, api.ErrSessionNotFound):
-				// Covers both "cookie points at deleted row" (logout happened
-				// elsewhere) and "cookie points at expired row". The UI maps
-				// both to "redirect to login".
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
-				return
-			case err != nil:
-				logger.ErrorContext(ctx, "session lookup", "err", err)
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
-				return
-			}
-			// Build the per-request actor (user row + live role bindings).
-			// Two indexed queries; both well under the chokepoint's
-			// p99 budget. A user-row deletion under a still-valid
-			// session manifests as ErrUserNotFound here; we treat it
-			// as an invalid session (the cookie points at no user).
-			//
-			// authMethod reads the value the session was minted with.
-			// Phase 4 unhardcoded the wave-1 placeholder so OIDC
-			// sessions land with auth_method="oidc" and break-glass /
-			// password sessions land with auth_method="local_password".
-			// Legacy sessions inserted before the column existed default
-			// to "local_password" via the schema's column DEFAULT.
-			authMethod := sess.AuthMethod
-			if authMethod == "" {
-				authMethod = "local_password"
-			}
-			actor, err := svc.LoadActor(ctx, sess.UserID, authMethod)
-			switch {
-			case errors.Is(err, api.ErrUserNotFound):
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
-				return
-			case err != nil:
-				// LoadActor failure can come from the users store, the
-				// rbac store, or a future identity-context dependency.
-				// "session_store_unavailable" would be misleading here;
-				// "identity_store_unavailable" matches the failure
-				// surface so dashboards / runbooks point at the right
-				// thing.
-				logger.ErrorContext(ctx, "actor build", "err", err)
-				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "identity_store_unavailable")
-				return
-			}
-
 			trace.SpanFromContext(ctx).SetAttributes(
 				attribute.Int64(attrkeys.UserID, sess.UserID),
 				attribute.String(attrkeys.AuthResult, "ok"),
@@ -99,6 +52,71 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// resolveSession reads the cookie, decodes the token, and resolves
+// the session row through the service. On any failure it writes the
+// auth-failure response and returns ok=false; the caller short-circuits.
+func resolveSession(
+	ctx context.Context, w http.ResponseWriter, r *http.Request,
+	svc api.Service, logger *slog.Logger,
+) (*api.Session, bool) {
+	cookie, err := r.Cookie(api.SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "missing_session")
+		return nil, false
+	}
+	raw, err := api.DecodeToken(cookie.Value)
+	if err != nil {
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+		return nil, false
+	}
+	sess, err := svc.GetSession(ctx, raw)
+	switch {
+	case errors.Is(err, api.ErrSessionNotFound):
+		// Covers both "cookie points at deleted row" (logout happened
+		// elsewhere) and "cookie points at expired row". The UI maps
+		// both to "redirect to login".
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+		return nil, false
+	case err != nil:
+		logger.ErrorContext(ctx, "session lookup", "err", err)
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
+		return nil, false
+	}
+	return sess, true
+}
+
+// resolveActor builds the per-request actor (user row + live role
+// bindings). A user-row deletion under a still-valid session
+// manifests as ErrUserNotFound; we treat it as an invalid session.
+// authMethod reads the value the session was minted with; legacy
+// sessions inserted before the column existed default to
+// "local_password".
+func resolveActor(
+	ctx context.Context, w http.ResponseWriter,
+	svc api.Service, logger *slog.Logger, sess *api.Session,
+) (*api.Actor, bool) {
+	authMethod := sess.AuthMethod
+	if authMethod == "" {
+		authMethod = "local_password"
+	}
+	actor, err := svc.LoadActor(ctx, sess.UserID, authMethod)
+	switch {
+	case errors.Is(err, api.ErrUserNotFound):
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
+		return nil, false
+	case err != nil:
+		// LoadActor failure can come from the users store, the rbac
+		// store, or a future identity-context dependency.
+		// "session_store_unavailable" would be misleading here;
+		// "identity_store_unavailable" matches the failure surface so
+		// dashboards / runbooks point at the right thing.
+		logger.ErrorContext(ctx, "actor build", "err", err)
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "identity_store_unavailable")
+		return nil, false
+	}
+	return actor, true
 }
 
 // CSRF returns the CSRF middleware. It expects to run AFTER Session has

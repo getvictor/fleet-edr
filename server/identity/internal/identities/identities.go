@@ -75,19 +75,21 @@ func (s *Store) FindByProviderSubject(ctx context.Context, provider, subject str
 	return &i, nil
 }
 
-// ExecContext is the executor subset Insert / InsertWith consume.
-// Pass an *sqlx.Tx for the JIT provisioner's atomic insert; pass the
+// Executor is the executor subset Insert / InsertWith consume. Pass
+// an *sqlx.Tx for the JIT provisioner's atomic insert; pass the
 // Store's db for standalone calls. Caller is responsible for matching
 // tx + user_id — the identity row's FK CASCADEs on user delete, so
-// inserting into an uncommitted user orphans if the parent rolls back.
-type ExecContext interface {
+// inserting into an uncommitted user orphans if the parent rolls
+// back. Named per the Go convention (single-method interface ends
+// in -er).
+type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // InsertWith persists a new identity row using the provided executor
 // (typically the *sqlx.Tx wrapping a JIT provision). Returns the row
 // id assigned by MySQL's auto_increment.
-func (s *Store) InsertWith(ctx context.Context, ec ExecContext, userID int64, provider, subject string) (int64, error) {
+func (s *Store) InsertWith(ctx context.Context, ec Executor, userID int64, provider, subject string) (int64, error) {
 	res, err := ec.ExecContext(ctx, `
 		INSERT INTO identities (user_id, provider, subject) VALUES (?, ?, ?)
 	`, userID, provider, subject)

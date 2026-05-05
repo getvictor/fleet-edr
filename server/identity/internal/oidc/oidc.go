@@ -130,12 +130,31 @@ func (c *Client) AuthURL(state, nonce, codeChallenge string) string {
 // Claims is the per-flow subset of ID-token claims the JIT provisioner
 // reads. Subject is the stable per-user identifier (always present
 // per OIDC spec). Email is best-effort; some IdPs require an extra
-// scope. Name is whatever the IdP populates as preferred display
+// scope. EmailVerified mirrors the IdP's email_verified claim — true
+// when the IdP attests the address is owned by the subject, false
+// when the IdP says it is not, nil when the IdP omitted the claim
+// entirely. Name is whatever the IdP populates as preferred display
 // (preferred_username falls through to name when present).
 type Claims struct {
-	Subject string
-	Email   string
-	Name    string
+	Subject       string
+	Email         string
+	EmailVerified *bool
+	Name          string
+}
+
+// EmailTrusted reports whether c.Email may be used as a primary
+// account binding. Per OIDC core §5.1: when email_verified is present
+// it is authoritative; when omitted, callers may fall back to
+// out-of-band trust in the IdP. Wave-1 trusts an absent claim because
+// the seeded IdPs (Okta, Auth0) emit it on every standard scope.
+func (c *Claims) EmailTrusted() bool {
+	if c == nil {
+		return false
+	}
+	if c.EmailVerified == nil {
+		return true
+	}
+	return *c.EmailVerified
 }
 
 // Exchange swaps the authorization code for tokens, verifies the ID
@@ -169,6 +188,7 @@ func (c *Client) Exchange(ctx context.Context, code, codeVerifier, expectedNonce
 	}
 	var raw struct {
 		Email             string `json:"email"`
+		EmailVerified     *bool  `json:"email_verified"`
 		Name              string `json:"name"`
 		PreferredUsername string `json:"preferred_username"`
 	}
@@ -180,9 +200,10 @@ func (c *Client) Exchange(ctx context.Context, code, codeVerifier, expectedNonce
 		display = raw.PreferredUsername
 	}
 	return &Claims{
-		Subject: idToken.Subject,
-		Email:   raw.Email,
-		Name:    display,
+		Subject:       idToken.Subject,
+		Email:         raw.Email,
+		EmailVerified: raw.EmailVerified,
+		Name:          display,
 	}, nil
 }
 

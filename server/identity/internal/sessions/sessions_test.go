@@ -91,6 +91,47 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 	assert.Equal(t, created.CSRFToken, got.CSRFToken)
 }
 
+// Phase 4 added IdentityID + AuthMethod columns. Round-trip both
+// through Create -> Get to pin the schema + scan path. A regression
+// here would silently strip OIDC sessions of their identity link
+// (breaking later admin queries that pivot on identities) or default
+// every session to local_password (breaking authz rules that branch
+// on auth_method).
+func TestGet_IdentityIDAndAuthMethodRoundTrip(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	for _, uid := range []int64{1, 7} {
+		_, err := db.ExecContext(t.Context(),
+			`INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)`,
+			uid, "u"+intToStr(uid)+"@test", []byte("stub-hash"), []byte("stub-salt"))
+		require.NoError(t, err)
+	}
+	const identityID int64 = 9001
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO identities (id, user_id, provider, subject) VALUES (?, ?, ?, ?)`,
+		identityID, int64(7), "oidc", "abc-subject")
+	require.NoError(t, err, "seed identities row")
+
+	s := sessions.New(db, sessions.Options{})
+	ctx := t.Context()
+
+	idCopy := identityID
+	created, err := s.Create(ctx, 7, sessions.CreateOptions{
+		IdentityID: &idCopy,
+		AuthMethod: "oidc",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.IdentityID)
+	assert.Equal(t, identityID, *created.IdentityID)
+	assert.Equal(t, "oidc", created.AuthMethod)
+
+	got, err := s.Get(ctx, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.IdentityID, "identity_id must round-trip")
+	assert.Equal(t, identityID, *got.IdentityID)
+	assert.Equal(t, "oidc", got.AuthMethod, "auth_method must round-trip")
+}
+
 func TestGet_WrongLengthReturnsNotFound(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	_, err := s.Get(t.Context(), []byte("short"))

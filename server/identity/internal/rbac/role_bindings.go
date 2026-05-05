@@ -44,29 +44,37 @@ type roleBindingRow struct {
 	CreatedAt time.Time    `db:"created_at"`
 }
 
-// ExecContext is the executor subset BindRole consumes; lets the
-// JIT provisioner pass an *sqlx.Tx so the role binding lands in the
-// same transaction as the user + identity insert.
-type ExecContext interface {
+// Executor is the executor subset BindRole consumes; lets the JIT
+// provisioner pass an *sqlx.Tx so the role binding lands in the same
+// transaction as the user + identity insert. Named per the Go
+// convention (single-method interface ends in -er).
+type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// BindRoleRequest is the input to BindRole. Pulled out of the
+// function signature so the call site reads as named fields and stays
+// under the linter's per-call parameter budget. Wave-1 defaults:
+// ExpiresAt nil (non-expiring), ScopeType "tenant", ScopeID "*".
+type BindRoleRequest struct {
+	UserID    int64
+	RoleID    string
+	TenantID  string
+	ScopeType string
+	ScopeID   string
+	ExpiresAt *time.Time
 }
 
 // BindRole inserts a role_bindings row. Used by Phase-4 JIT
 // provisioning to bind a freshly-provisioned OIDC user to the
-// default role at the seeded tenant. expiresAt may be nil for
-// non-expiring bindings (the wave-1 default).
-func (s *Store) BindRole(
-	ctx context.Context, ec ExecContext,
-	userID int64,
-	roleID, tenantID, scopeType, scopeID string,
-	expiresAt *time.Time,
-) error {
+// default role at the seeded tenant.
+func (s *Store) BindRole(ctx context.Context, ec Executor, req BindRoleRequest) error {
 	_, err := ec.ExecContext(ctx, `
 		INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`, userID, roleID, tenantID, scopeType, scopeID, expiresAt)
+	`, req.UserID, req.RoleID, req.TenantID, req.ScopeType, req.ScopeID, req.ExpiresAt)
 	if err != nil {
-		return fmt.Errorf("bind role %q to user %d: %w", roleID, userID, err)
+		return fmt.Errorf("bind role %q to user %d: %w", req.RoleID, req.UserID, err)
 	}
 	return nil
 }

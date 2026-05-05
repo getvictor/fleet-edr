@@ -3,12 +3,14 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 )
@@ -20,6 +22,11 @@ const defaultRedirect = "/ui/"
 // defaultStateTTL is the wave-1 fall-through when caller doesn't
 // pin opts.StateTTL. Mirrors config's defaultOIDCStateCookieTTL.
 const defaultStateTTL = 5 * time.Minute
+
+// httpServerErrorThreshold is the smallest 5xx code; the audit row's
+// decision flips to "error" at or above it (per spec 4xx audits as
+// "deny", 5xx as "error").
+const httpServerErrorThreshold = 500
 
 // Handler serves the OIDC login + callback routes. Construct via
 // NewHandler; mount with RegisterPublicRoutes.
@@ -97,79 +104,84 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // (off-site URLs, javascript: schemes) are dropped silently and the
 // flow falls through to defaultRedirect.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	state, nonce, codeVerifier, codeChallenge, err := GenerateFlowSecrets()
 	if err != nil {
-		h.logger.ErrorContext(ctx, "oidc generate flow secrets", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		h.callbackError(r, w, http.StatusInternalServerError, "flow_secrets_failed", err)
 		return
 	}
 	redirect := safeRedirect(r.URL.Query().Get("next"))
 	cookieValue, err := EncodeStateClaim(h.signingKey, state, nonce, codeVerifier, redirect, time.Now())
 	if err != nil {
-		h.logger.ErrorContext(ctx, "oidc encode state", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		h.callbackError(r, w, http.StatusInternalServerError, "state_encode_failed", err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     StateCookieName,
-		Value:    cookieValue,
-		Path:     "/api/auth/",
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(h.stateTTL.Seconds()),
-	})
+	h.writeStateCookie(w, cookieValue, int(h.stateTTL.Seconds()))
 	http.Redirect(w, r, h.client.AuthURL(state, nonce, codeChallenge), http.StatusFound)
 }
 
 // handleCallback finishes the flow: verify state cookie, exchange
 // code, run JIT, mint a session, redirect to the original next URL.
-// Every error path returns a 4xx (state-related) or 5xx (engine /
-// IdP / DB) with a wire-format reason header so the UI can render a
-// directed error page.
+// Every error path emits an audit row keyed by spec action
+// (auth.oidc.callback.error or auth.oidc.failure) and redirects the
+// browser to /login?error=<reason> so the UI renders a directed error
+// page; the operator never sees raw plaintext.
 func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cookie, err := r.Cookie(StateCookieName)
 	if err != nil {
-		h.fail(ctx, w, http.StatusBadRequest, "missing_state", err)
+		h.callbackError(r, w, http.StatusBadRequest, "missing_state", err)
 		return
 	}
 	decoded, err := DecodeStateClaim(h.signingKey, cookie.Value, time.Now(), h.stateTTL)
 	if err != nil {
-		h.fail(ctx, w, http.StatusBadRequest, "invalid_state", err)
+		h.callbackError(r, w, http.StatusBadRequest, "invalid_state", err)
 		return
 	}
 	if r.URL.Query().Get("state") != decoded.State {
-		h.fail(ctx, w, http.StatusBadRequest, "state_mismatch",
+		h.callbackError(r, w, http.StatusBadRequest, "state_mismatch",
 			errors.New("state query param does not match cookie"))
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		// IdP errors land in the query string per OAuth2 §4.1.2.1.
-		h.fail(ctx, w, http.StatusBadRequest, "missing_code",
-			errors.New("idp returned: "+r.URL.Query().Get("error")))
+		idpErr := r.URL.Query().Get("error")
+		h.callbackError(r, w, http.StatusBadRequest, "missing_code",
+			fmt.Errorf("idp returned: %s", idpErr))
 		return
 	}
 	claims, err := h.client.Exchange(ctx, code, decoded.CodeVerifier, decoded.Nonce)
 	if err != nil {
-		h.fail(ctx, w, http.StatusBadRequest, "exchange_failed", err)
+		// Exchange failure crosses two boundaries: a malformed code
+		// (caller's fault, 400) is indistinguishable in the wire from
+		// an IdP/token-endpoint outage. Treat as 502 — closer to the
+		// truth: the upstream we depend on did not produce a usable
+		// token. Operators get a "try again" redirect either way.
+		h.callbackError(r, w, http.StatusBadGateway, "exchange_failed", err)
 		return
 	}
 	userID, identityID, err := h.provisioner.ProvisionOrFind(ctx, claims)
 	if err != nil {
 		if errors.Is(err, ErrUnknownIdentity) {
-			h.recordAudit(ctx, api.AuditEvent{
+			h.failureAudit(r, "oidc.unknown_subject", api.AuditEvent{
 				ActorEmail: claims.Email,
-				Action:     api.AuditAction("auth.oidc.unknown_subject"),
 				Payload:    map[string]any{"subject": claims.Subject},
 			})
-			h.fail(ctx, w, http.StatusForbidden, "unknown_subject", err)
+			h.errorRedirect(w, r, http.StatusForbidden, "unknown_subject")
 			return
 		}
-		h.logger.ErrorContext(ctx, "oidc jit provision", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		if errors.Is(err, ErrEmailConflict) {
+			// Email already binds another account — surface a directed
+			// reason so the operator knows to ask an admin to merge,
+			// not a 500.
+			h.failureAudit(r, "oidc.email_conflict", api.AuditEvent{
+				ActorEmail: claims.Email,
+				Payload:    map[string]any{"subject": claims.Subject},
+			})
+			h.errorRedirect(w, r, http.StatusConflict, "email_conflict")
+			return
+		}
+		h.callbackError(r, w, http.StatusInternalServerError, "provision_failed", err)
 		return
 	}
 	idCopy := identityID
@@ -178,69 +190,139 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		AuthMethod: "oidc",
 	})
 	if err != nil {
-		h.logger.ErrorContext(ctx, "oidc create session", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		h.callbackError(r, w, http.StatusInternalServerError, "session_create_failed", err)
 		return
 	}
 	uid := userID
+	idForAudit := identityID
 	h.recordAudit(ctx, api.AuditEvent{
 		UserID:     &uid,
 		ActorEmail: claims.Email,
 		Action:     api.AuditAction("auth.oidc.success"),
 		TargetType: "user",
 		TargetID:   strconv.FormatInt(userID, 10),
+		RemoteAddr: httpserver.ClientIP(r),
+		Payload: map[string]any{
+			"decision":    "allow",
+			"user_agent":  r.UserAgent(),
+			"identity_id": idForAudit,
+		},
 	})
-	http.SetCookie(w, &http.Cookie{
+	h.writeSessionCookie(w, sess)
+	h.writeStateCookie(w, "", -1) // clear state cookie post-flow
+	http.Redirect(w, r, decoded.Redirect, http.StatusFound)
+}
+
+// callbackError audits an auth.oidc.callback.error row (the OAuth
+// callback machinery itself rejected the request: bad state, bad code,
+// upstream failure) and redirects the operator to the login page with
+// the reason in the query string. status influences the slog level:
+// 5xx errors warrant ERROR; 4xx warrants WARN. The wire-format reason
+// header is preserved so direct callers (curl, tests) can still discern
+// the failure mode without parsing redirects.
+func (h *Handler) callbackError(r *http.Request, w http.ResponseWriter, status int, reason string, err error) {
+	ctx := r.Context()
+	if err != nil {
+		if status >= httpServerErrorThreshold {
+			h.logger.ErrorContext(ctx, "oidc callback failed",
+				"reason", reason, "status", status, "err", err)
+		} else {
+			h.logger.WarnContext(ctx, "oidc callback failed",
+				"reason", reason, "status", status, "err", err)
+		}
+	}
+	decision := "deny"
+	if status >= httpServerErrorThreshold {
+		decision = "error"
+	}
+	h.recordAudit(ctx, api.AuditEvent{
+		Action:     api.AuditAction("auth.oidc.callback.error"),
+		RemoteAddr: httpserver.ClientIP(r),
+		Payload: map[string]any{
+			"decision":   decision,
+			"reason":     "oidc." + reason,
+			"status":     status,
+			"user_agent": r.UserAgent(),
+		},
+	})
+	h.errorRedirect(w, r, status, reason)
+}
+
+// failureAudit records an auth.oidc.failure row (a denied login with a
+// known actor: e.g., unknown subject under JIT-disabled). Caller sets
+// the reason verbatim per spec wording (e.g. "oidc.unknown_subject").
+func (h *Handler) failureAudit(r *http.Request, reason string, base api.AuditEvent) {
+	base.Action = api.AuditAction("auth.oidc.failure")
+	if base.RemoteAddr == "" {
+		base.RemoteAddr = httpserver.ClientIP(r)
+	}
+	if base.Payload == nil {
+		base.Payload = map[string]any{}
+	}
+	base.Payload["decision"] = "deny"
+	base.Payload["reason"] = reason
+	if _, ok := base.Payload["user_agent"]; !ok {
+		base.Payload["user_agent"] = r.UserAgent()
+	}
+	h.recordAudit(r.Context(), base)
+}
+
+// errorRedirect sends the operator to /login with the failure reason
+// in the query string. The reason header is also set so non-browser
+// clients can still discriminate without following the 302. The state
+// cookie is cleared on every error so a stuck flow doesn't replay.
+func (h *Handler) errorRedirect(w http.ResponseWriter, r *http.Request, status int, reason string) {
+	h.writeStateCookie(w, "", -1)
+	w.Header().Set("X-Edr-Auth-Reason", reason)
+	w.Header().Set("X-Edr-Auth-Status", strconv.Itoa(status))
+	dest := "/login?error=" + url.QueryEscape(reason)
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// writeStateCookie writes (or clears, when maxAge<0) the per-flow
+// state cookie. Single audited construction site so the security
+// flags (Secure, HttpOnly, SameSite, Path scope) live in one place.
+// Secure binds to h.cookieSecure, the deployment-wired TLS flag —
+// dev mode runs http and must not require a TLS-only cookie.
+func (h *Handler) writeStateCookie(w http.ResponseWriter, value string, maxAge int) {
+	c := &http.Cookie{
+		Name:     StateCookieName,
+		Value:    value,
+		Path:     "/api/auth/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   maxAge,
+	}
+	c.Secure = h.cookieSecure
+	http.SetCookie(w, c)
+}
+
+// writeSessionCookie writes the session cookie. Same single-site
+// rationale as writeStateCookie.
+func (h *Handler) writeSessionCookie(w http.ResponseWriter, sess *sessions.Session) {
+	c := &http.Cookie{
 		Name:     api.SessionCookieName,
 		Value:    api.EncodeToken(sess.ID),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  sess.ExpiresAt,
 		MaxAge:   int(time.Until(sess.ExpiresAt).Seconds()),
-	})
-	// Clear the state cookie now that the flow finished.
-	http.SetCookie(w, &http.Cookie{
-		Name:     StateCookieName,
-		Value:    "",
-		Path:     "/api/auth/",
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
-	http.Redirect(w, r, decoded.Redirect, http.StatusFound)
-}
-
-// fail writes a uniform error response with the wire-format reason
-// header the UI reads. Audits the reason via auth.oidc.failed unless
-// the caller already recorded a more specific row (e.g.
-// unknown_subject).
-func (h *Handler) fail(ctx context.Context, w http.ResponseWriter, status int, reason string, err error) {
-	if err != nil {
-		h.logger.WarnContext(ctx, "oidc callback failed",
-			"reason", reason, "err", err)
 	}
-	if reason != "unknown_subject" {
-		h.recordAudit(ctx, api.AuditEvent{
-			Action:  api.AuditAction("auth.oidc.failed"),
-			Payload: map[string]any{"reason": reason},
-		})
-	}
-	w.Header().Set("X-Edr-Auth-Reason", reason)
-	http.Error(w, reason, status)
+	c.Secure = h.cookieSecure
+	http.SetCookie(w, c)
 }
 
 // recordAudit is the soft-fail audit recorder. A missing audit row
-// does not propagate as an HTTP error; the slog WARN preserves the
-// signal.
+// does not propagate as an HTTP error; the spec mandates ERROR-level
+// logging on write failure plus a metric so the operator pipeline
+// notices the gap even when the user request still succeeds.
 func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
 	if h.audit == nil {
 		return
 	}
 	if err := h.audit.Record(ctx, e); err != nil {
-		h.logger.WarnContext(ctx, "oidc audit record",
+		h.logger.ErrorContext(ctx, "oidc audit record failed",
 			"err", err, "action", string(e.Action))
 	}
 }
@@ -268,8 +350,15 @@ func safeRedirect(next string) string {
 }
 
 // pathStartsWithSingleSlash returns true for "/foo" but false for
-// "//foo" — the latter is a protocol-relative URL the browser would
-// resolve cross-origin.
+// "//foo" or "/\foo". Some browsers normalise "\" to "/" before
+// resolving redirects, so /\evil.com would otherwise be treated as a
+// protocol-relative URL pointing off-origin.
 func pathStartsWithSingleSlash(p string) bool {
-	return len(p) > 0 && p[0] == '/' && (len(p) == 1 || p[1] != '/')
+	if len(p) == 0 || p[0] != '/' {
+		return false
+	}
+	if len(p) == 1 {
+		return true
+	}
+	return p[1] != '/' && p[1] != '\\'
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -413,6 +414,14 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	optionalStr(&c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL", getenv)
 	if v := getenv("EDR_OIDC_SCOPES"); v != "" {
 		c.OIDCScopes = splitCSV(v)
+		// openid is mandatory for the discovery + ID-token flow; an
+		// override that drops it leaves the operator with a worse
+		// failure mode (token endpoint succeeds, ID-token absent at
+		// callback) than a startup refusal.
+		if !containsString(c.OIDCScopes, "openid") {
+			*errs = append(*errs, errors.New(
+				"EDR_OIDC_SCOPES must include \"openid\" (the OIDC core scope)"))
+		}
 	}
 	if v := getenv("EDR_OIDC_ALLOW_JIT_PROVISIONING"); v != "" {
 		c.OIDCAllowJITProvisioning = v == "1"
@@ -431,8 +440,16 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	// Enforcement: every OIDC field is set together, OR none is set
 	// AND AuthAllowNoOIDC is the explicit dev opt-out. Anything else
 	// is a misconfiguration the operator should surface at boot rather
-	// than silently fall back to break-glass-only mode.
+	// than silently fall back to break-glass-only mode. The
+	// allow-no-oidc opt-out specifically does NOT excuse partial
+	// configuration: if any EDR_OIDC_* knob is set, the operator clearly
+	// intends OIDC and a missing companion is a typo, not an opt-out.
+	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != ""
 	switch {
+	case c.OIDCIssuer == "" && partialOIDC:
+		*errs = append(*errs, errors.New(
+			"EDR_OIDC_CLIENT_ID/CLIENT_SECRET/REDIRECT_URL set without EDR_OIDC_ISSUER; "+
+				"set EDR_OIDC_ISSUER to enable OIDC, or unset the partial values to opt out"))
 	case c.OIDCIssuer == "" && !c.AuthAllowNoOIDC:
 		*errs = append(*errs, errors.New(
 			"EDR_OIDC_ISSUER is required (set EDR_AUTH_ALLOW_NO_OIDC=1 for break-glass-only dev mode)"))
@@ -449,6 +466,14 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 			*errs = append(*errs, errors.New("EDR_OIDC_REDIRECT_URL is required when EDR_OIDC_ISSUER is set"))
 		}
 	}
+}
+
+// containsString reports whether ss contains s. Wrapper around
+// slices.Contains kept so the call site reads in domain terms
+// (does the configured scope set include the openid scope) rather
+// than in stdlib terms.
+func containsString(ss []string, s string) bool {
+	return slices.Contains(ss, s)
 }
 
 func requireStr(dst *string, key string, getenv func(string) string, errs *[]error, nonEmpty bool) {

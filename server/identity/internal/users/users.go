@@ -17,6 +17,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/argon2"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on
@@ -119,14 +121,14 @@ type CreateOIDCRequest struct {
 // invisible until commit. The synthesized row carries enough fields
 // for the JIT path's audit + session-mint; CreatedAt/UpdatedAt are
 // left zero (the audit row carries the wall clock independently).
-func (s *Store) CreateOIDC(ctx context.Context, ec ExecContext, req CreateOIDCRequest) (*User, error) {
+func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
 		return nil, errors.New("users: email is required")
 	}
 	tenantID := req.TenantID
 	if tenantID == "" {
-		tenantID = "default"
+		tenantID = api.DefaultTenantID
 	}
 	res, err := ec.ExecContext(ctx,
 		`INSERT INTO users (email, tenant_id) VALUES (?, ?)`,
@@ -146,11 +148,12 @@ func (s *Store) CreateOIDC(ctx context.Context, ec ExecContext, req CreateOIDCRe
 	}, nil
 }
 
-// ExecContext is the subset of sqlx.Tx / sqlx.DB that CreateOIDC
-// (and any future under-transaction insert) consumes. Lets the JIT
+// Executor is the subset of sqlx.Tx / sqlx.DB that CreateOIDC (and
+// any future under-transaction insert) consumes. Lets the JIT
 // provisioner pass a *sqlx.Tx without the users package importing
-// the JIT or transaction-management code.
-type ExecContext interface {
+// the JIT or transaction-management code. Named per the Go
+// convention (single-method interface ends in -er).
+type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
