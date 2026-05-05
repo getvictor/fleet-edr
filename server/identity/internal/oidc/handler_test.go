@@ -37,14 +37,13 @@ func newTestHandler(t *testing.T) (*Handler, *captureAudit) {
 		signingKey[i] = byte(i + 1)
 	}
 	h := &Handler{
-		client:       nil, // never reached on failure paths
-		provisioner:  nil,
-		sessions:     nil,
-		signingKey:   signingKey,
-		stateTTL:     5 * time.Minute,
-		cookieSecure: false,
-		audit:        rec,
-		logger:       slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+		client:      nil, // never reached on failure paths
+		provisioner: nil,
+		sessions:    nil,
+		signingKey:  signingKey,
+		stateTTL:    5 * time.Minute,
+		audit:       rec,
+		logger:      slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	}
 	return h, rec
 }
@@ -156,7 +155,7 @@ func TestWriteStateCookie(t *testing.T) {
 	assert.True(t, c.HttpOnly)
 	assert.Equal(t, http.SameSiteLaxMode, c.SameSite)
 	assert.Equal(t, 60, c.MaxAge)
-	assert.False(t, c.Secure, "test handler runs in insecure mode")
+	assert.True(t, c.Secure, "OIDC cookies are unconditionally Secure; localhost browser carve-out keeps dev working")
 }
 
 // HandleCallback failure paths: state-cookie absent, malformed,

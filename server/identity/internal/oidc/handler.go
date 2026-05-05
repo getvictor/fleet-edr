@@ -43,29 +43,34 @@ type IDPClient interface {
 // Handler serves the OIDC login + callback routes. Construct via
 // NewHandler; mount with RegisterPublicRoutes.
 type Handler struct {
-	client       IDPClient
-	provisioner  *Provisioner
-	sessions     *sessions.Store
-	signingKey   []byte
-	stateTTL     time.Duration
-	cookieSecure bool
-	audit        api.AuditRecorder
-	logger       *slog.Logger
+	client      IDPClient
+	provisioner *Provisioner
+	sessions    *sessions.Store
+	signingKey  []byte
+	stateTTL    time.Duration
+	audit       api.AuditRecorder
+	logger      *slog.Logger
 }
 
 // HandlerOptions configures the Handler. SigningKey is the same key
 // used by the session cookie; reusing it (per spec) avoids a second
-// secret to rotate. CookieSecure should mirror the deployment's TLS
-// state so the state cookie won't leak over plaintext.
+// secret to rotate.
+//
+// All cookies emitted by this handler are unconditionally Secure. The
+// browser carve-out for `localhost`/`127.0.0.1` over HTTP keeps dev
+// workflows working without an opt-out flag, and production behind a
+// TLS-terminating proxy is the only other supported deployment. A
+// configurable Secure flag here would risk shipping plaintext cookies
+// in misconfigured production deployments and trips
+// CodeQL go/cookie-secure-not-set on every static analysis pass.
 type HandlerOptions struct {
-	Client       *Client
-	Provisioner  *Provisioner
-	Sessions     *sessions.Store
-	SigningKey   []byte
-	StateTTL     time.Duration
-	CookieSecure bool
-	Audit        api.AuditRecorder
-	Logger       *slog.Logger
+	Client      *Client
+	Provisioner *Provisioner
+	Sessions    *sessions.Store
+	SigningKey  []byte
+	StateTTL    time.Duration
+	Audit       api.AuditRecorder
+	Logger      *slog.Logger
 }
 
 // NewHandler constructs a Handler. Panics on missing dependencies —
@@ -92,14 +97,13 @@ func NewHandler(opts HandlerOptions) *Handler {
 		logger = slog.Default()
 	}
 	return &Handler{
-		client:       opts.Client,
-		provisioner:  opts.Provisioner,
-		sessions:     opts.Sessions,
-		signingKey:   opts.SigningKey,
-		stateTTL:     stateTTL,
-		cookieSecure: opts.CookieSecure,
-		audit:        opts.Audit,
-		logger:       logger,
+		client:      opts.Client,
+		provisioner: opts.Provisioner,
+		sessions:    opts.Sessions,
+		signingKey:  opts.SigningKey,
+		stateTTL:    stateTTL,
+		audit:       opts.Audit,
+		logger:      logger,
 	}
 }
 
@@ -294,11 +298,10 @@ func (h *Handler) errorRedirect(w http.ResponseWriter, r *http.Request, status i
 // writeStateCookie writes (or clears, when maxAge<0) the per-flow
 // state cookie. Single audited construction site so the security
 // flags (Secure, HttpOnly, SameSite, Path scope) live in one place.
-// The struct literal pins Secure=true; only the explicit dev-mode
-// opt-out (h.cookieSecure=false, gated by EDR_ALLOW_INSECURE_HTTP=1)
-// degrades it post-construction so plain-http localhost still works.
+// Secure is unconditional; see the package-level rationale on
+// HandlerOptions.
 func (h *Handler) writeStateCookie(w http.ResponseWriter, value string, maxAge int) {
-	c := &http.Cookie{
+	http.SetCookie(w, &http.Cookie{
 		Name:     StateCookieName,
 		Value:    value,
 		Path:     "/api/auth/",
@@ -306,18 +309,13 @@ func (h *Handler) writeStateCookie(w http.ResponseWriter, value string, maxAge i
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   maxAge,
-	}
-	if !h.cookieSecure {
-		c.Secure = false
-	}
-	http.SetCookie(w, c)
+	})
 }
 
 // writeSessionCookie writes the session cookie. Same single-site
-// rationale as writeStateCookie; same Secure=true default with
-// dev-mode opt-out.
+// rationale + unconditional Secure as writeStateCookie.
 func (h *Handler) writeSessionCookie(w http.ResponseWriter, sess *sessions.Session) {
-	c := &http.Cookie{
+	http.SetCookie(w, &http.Cookie{
 		Name:     api.SessionCookieName,
 		Value:    api.EncodeToken(sess.ID),
 		Path:     "/",
@@ -326,11 +324,7 @@ func (h *Handler) writeSessionCookie(w http.ResponseWriter, sess *sessions.Sessi
 		SameSite: http.SameSiteLaxMode,
 		Expires:  sess.ExpiresAt,
 		MaxAge:   int(time.Until(sess.ExpiresAt).Seconds()),
-	}
-	if !h.cookieSecure {
-		c.Secure = false
-	}
-	http.SetCookie(w, c)
+	})
 }
 
 // recordAudit is the soft-fail audit recorder. A missing audit row

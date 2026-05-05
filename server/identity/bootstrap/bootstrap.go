@@ -218,14 +218,13 @@ func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, e
 		Logger:   in.logger,
 	})
 	return oidc.NewHandler(oidc.HandlerOptions{
-		Client:       client,
-		Provisioner:  prov,
-		Sessions:     in.sessions,
-		SigningKey:   in.deps.SessionSigningKey,
-		StateTTL:     in.deps.OIDC.StateCookieTTL,
-		CookieSecure: in.deps.CookieSecure,
-		Audit:        in.audit,
-		Logger:       in.logger,
+		Client:      client,
+		Provisioner: prov,
+		Sessions:    in.sessions,
+		SigningKey:  in.deps.SessionSigningKey,
+		StateTTL:    in.deps.OIDC.StateCookieTTL,
+		Audit:       in.audit,
+		Logger:      in.logger,
 	}), nil
 }
 

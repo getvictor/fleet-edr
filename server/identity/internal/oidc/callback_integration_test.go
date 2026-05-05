@@ -90,7 +90,7 @@ func newCallbackEnv(t *testing.T, jitEnabled bool, claims *oidc.Claims) *callbac
 	}
 	idp := &fakeIDPClient{claims: claims}
 	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
-	h := oidc.TestHandler(idp, prov, sessionsStore, signingKey, rec, logger)
+	h := oidc.NewHandlerForTest(idp, prov, sessionsStore, signingKey, rec, logger)
 	return &callbackTestEnv{
 		db: db, handler: h, idp: idp, rec: rec,
 		signingKey: signingKey, now: time.Now(),

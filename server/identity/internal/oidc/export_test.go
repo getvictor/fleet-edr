@@ -22,14 +22,13 @@ func NewHandlerForTest(
 		logger = slog.Default()
 	}
 	return &Handler{
-		client:       idp,
-		provisioner:  prov,
-		sessions:     sess,
-		signingKey:   signingKey,
-		stateTTL:     defaultStateTTL,
-		cookieSecure: false,
-		audit:        audit,
-		logger:       logger,
+		client:      idp,
+		provisioner: prov,
+		sessions:    sess,
+		signingKey:  signingKey,
+		stateTTL:    defaultStateTTL,
+		audit:       audit,
+		logger:      logger,
 	}
 }
 
