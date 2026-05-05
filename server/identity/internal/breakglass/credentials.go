@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -181,12 +182,21 @@ func (s *CredentialStore) FindByID(ctx context.Context, credID []byte) (*Credent
 func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 	out := make([]webauthn.Credential, len(rows))
 	for i, r := range rows {
+		// SignCount is uint64 in the schema (matches MySQL UNSIGNED
+		// BIGINT); the WebAuthn library carries uint32 because the
+		// authenticatorData wire shape uses 32 bits. A counter that
+		// somehow exceeds uint32 indicates either a bug in the
+		// authenticator or a tampered database row; clamp to MaxUint32
+		// so the comparison still rejects future regressions
+		// deterministically.
+		signCount := min(r.SignCount, math.MaxUint32)
+		//nolint:gosec // signCount is clamped to MaxUint32 above; the conversion is safe.
 		out[i] = webauthn.Credential{
 			ID:        r.CredentialID,
 			PublicKey: r.PublicKey,
 			Transport: decodeTransports(r.Transports.String),
 			Authenticator: webauthn.Authenticator{
-				SignCount: uint32(r.SignCount),
+				SignCount: uint32(signCount),
 			},
 		}
 	}

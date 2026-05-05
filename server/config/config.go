@@ -214,6 +214,37 @@ type Config struct {
 	// for docker-secret mounts). Required when OIDC is enabled;
 	// validated at boot to be at least 32 bytes.
 	SessionSigningKey []byte
+
+	// Phase 4b break-glass surface knobs. Empty / zero values fall
+	// through to the per-package defaults documented at each field.
+
+	// BreakglassBootstrapTokenTTL bounds how long the redemption URL
+	// printed at first boot stays redeemable. Default 1h. Shorter
+	// caps the value of an exfiltrated stderr log; longer gives a
+	// busy operator more time to redeem before re-launching.
+	BreakglassBootstrapTokenTTL time.Duration
+	// BreakglassIPAllowlist is the optional CIDR (or bare-IP) list
+	// the /admin/break-glass surface gates on. Off-list callers
+	// receive a generic 404. Empty default = no gate (dev workflow
+	// shape; production should set this to the operator bastion's
+	// CIDR).
+	BreakglassIPAllowlist []string
+	// BreakglassRPID is the WebAuthn relying-party identifier — the
+	// canonical host that browser-stored credentials bind to.
+	// Typically the registrable host portion of the EDR UI URL
+	// without scheme (e.g. "edr.example.com"). Required when the
+	// break-glass surface is enabled; changing it post-deploy
+	// invalidates every registered credential.
+	BreakglassRPID string
+	// BreakglassRPDisplayName is the operator-visible name shown by
+	// the browser during authenticator enrollment. Defaults to
+	// "EDR Break-glass" if unset.
+	BreakglassRPDisplayName string
+	// BreakglassRPOrigins enumerates the absolute URLs the RP
+	// accepts in the authenticator's origin attestation. At least
+	// one is required when the break-glass surface is enabled;
+	// production typically pins the externally reachable HTTPS URL.
+	BreakglassRPOrigins []string
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -275,6 +306,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	loadLogConfig(&c, getenv, &errs)
 	loadProcessConfig(&c, getenv, &errs)
 	loadOIDCConfig(&c, getenv, &errs)
+	loadBreakglassConfig(&c, getenv, &errs)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -525,4 +557,25 @@ func validLogLevel(lvl string) bool {
 		return true
 	}
 	return false
+}
+
+// loadBreakglassConfig reads the Phase 4b break-glass surface knobs.
+// All fields are optional; the bootstrap layer treats an unset RPID
+// as "break-glass not configured" and falls back to a localhost
+// default for dev workflows so an operator running `task dev:server`
+// gets a working surface without explicit env vars. Production
+// deployments MUST set EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS;
+// the bootstrap layer enforces that with a refuse-to-start error.
+func loadBreakglassConfig(c *Config, getenv func(string) string, errs *[]error) {
+	envparse.PositiveDuration(getenv,
+		"EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL",
+		&c.BreakglassBootstrapTokenTTL, errs)
+	if v := getenv("EDR_BREAKGLASS_IP_ALLOWLIST"); v != "" {
+		c.BreakglassIPAllowlist = splitCSV(v)
+	}
+	optionalStr(&c.BreakglassRPID, "EDR_BREAKGLASS_RP_ID", getenv)
+	optionalStr(&c.BreakglassRPDisplayName, "EDR_BREAKGLASS_RP_DISPLAY_NAME", getenv)
+	if v := getenv("EDR_BREAKGLASS_RP_ORIGINS"); v != "" {
+		c.BreakglassRPOrigins = splitCSV(v)
+	}
 }

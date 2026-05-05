@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -347,6 +348,32 @@ func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*ses
 	return sess, nil
 }
 
+// IssueSetupToken mints a fresh bootstrap token bound to userID and
+// returns the plaintext (caller prints once to the operator banner)
+// + the persisted row id (for audit). Thin wrapper over the
+// TokenStore so cmd/main does not need to import the underlying
+// store directly.
+func (s *Service) IssueSetupToken(ctx context.Context, userID int64, ttl time.Duration) (string, *Token, error) {
+	plaintext, tok, err := s.tokens.IssueSetup(ctx, userID, ttl)
+	if err != nil {
+		return "", nil, err
+	}
+	return plaintext, &tok, nil
+}
+
+// HasCredential reports whether the user has at least one
+// registered WebAuthn credential. cmd/main uses this to decide
+// whether to print a (re)redemption banner: a fresh-deployment
+// admin with no credentials should see the URL on every boot until
+// they redeem.
+func (s *Service) HasCredential(ctx context.Context, userID int64) (bool, error) {
+	rows, err := s.credentials.ListByUserID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0, nil
+}
+
 // recordAudit is the soft-fail audit recorder. Spec mandates ERROR
 // log on write failure plus a metric (metric is wired in cmd/main).
 func (s *Service) recordAudit(ctx context.Context, e api.AuditEvent) {
@@ -396,4 +423,4 @@ func (s *Service) AuditSuccess(ctx context.Context, user *users.User, remoteAddr
 }
 
 // formatID is a tiny helper to keep the call sites tidy.
-func formatID(id int64) string { return fmt.Sprintf("%d", id) }
+func formatID(id int64) string { return strconv.FormatInt(id, 10) }

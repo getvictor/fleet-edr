@@ -148,7 +148,7 @@ func run() error {
 	)
 	detectionCtx.SetMetrics(metricsRec)
 
-	seedAdmin(ctx, logger, identityCtx)
+	seedAdmin(ctx, logger, cfg, identityCtx)
 
 	mux := buildMux(muxDeps{
 		detectionCtx: detectionCtx,
@@ -209,6 +209,13 @@ func openIdentity(
 			Scopes:               cfg.OIDCScopes,
 			AllowJITProvisioning: cfg.OIDCAllowJITProvisioning,
 			StateCookieTTL:       cfg.OIDCStateCookieTTL,
+		},
+		Breakglass: identitybootstrap.BreakglassDeps{
+			BootstrapTokenTTL: cfg.BreakglassBootstrapTokenTTL,
+			IPAllowlist:       cfg.BreakglassIPAllowlist,
+			RPID:              cfg.BreakglassRPID,
+			RPDisplayName:     cfg.BreakglassRPDisplayName,
+			RPOrigins:         cfg.BreakglassRPOrigins,
 		},
 	})
 	if err != nil {
@@ -354,10 +361,64 @@ func openEndpoint(
 	return endpointCtx, nil
 }
 
-func seedAdmin(ctx context.Context, logger *slog.Logger, identityCtx *identitybootstrap.Identity) {
-	if _, _, err := identityCtx.Service().SeedAdmin(ctx, os.Stderr); err != nil &&
-		!errors.Is(err, identityapi.ErrAlreadySeeded) {
+func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, identityCtx *identitybootstrap.Identity) {
+	admin, _, err := identityCtx.Service().SeedAdmin(ctx, os.Stderr)
+	if err != nil && !errors.Is(err, identityapi.ErrAlreadySeeded) {
 		logger.ErrorContext(ctx, "admin seed failed", "err", err)
+		return
+	}
+	if admin.ID == 0 {
+		// SeedAdmin returned ErrAlreadySeeded for a non-canonical
+		// pre-existing row. Nothing to do.
+		return
+	}
+	// Phase 4b: print the redemption URL banner when the admin
+	// account has no registered WebAuthn credentials yet. Idempotent
+	// across container restarts: a fresh deployment prints on every
+	// boot until the operator redeems; once the credential is
+	// stored, this is silent.
+	bg := identityCtx.BreakglassService()
+	if bg == nil {
+		return
+	}
+	hasCred, err := bg.HasCredential(ctx, admin.ID)
+	if err != nil {
+		logger.ErrorContext(ctx, "breakglass credential check failed", "err", err)
+		return
+	}
+	if hasCred {
+		return
+	}
+	plaintext, _, err := bg.IssueSetupToken(ctx, admin.ID, cfg.BreakglassBootstrapTokenTTL)
+	if err != nil {
+		logger.ErrorContext(ctx, "breakglass issue setup token failed", "err", err)
+		return
+	}
+	printBreakglassBanner(ctx, logger, admin.Email, plaintext, cfg)
+}
+
+// printBreakglassBanner writes the redemption URL to stderr in a
+// single write. The plaintext token appears once; the structured
+// log line carries the user id only.
+func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plaintext string, cfg *config.Config) {
+	scheme := "http"
+	if cfg.TLSEnabled() {
+		scheme = "https"
+	}
+	host := cfg.ListenAddr
+	if len(host) > 0 && host[0] == ':' {
+		host = "localhost" + host
+	}
+	url := scheme + "://" + host + "/admin/break-glass/setup?token=" + plaintext
+	banner := "" +
+		"================================================================\n" +
+		"BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)\n" +
+		"  Email: " + email + "\n" +
+		"  URL:   " + url + "\n" +
+		"  TTL:   " + cfg.BreakglassBootstrapTokenTTL.String() + "\n" +
+		"================================================================\n"
+	if _, err := os.Stderr.WriteString(banner); err != nil {
+		logger.ErrorContext(ctx, "write breakglass banner", "err", err)
 	}
 }
 

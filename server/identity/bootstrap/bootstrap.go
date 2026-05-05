@@ -13,6 +13,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
 	"github.com/fleetdm/edr/server/identity/internal/authz"
+	"github.com/fleetdm/edr/server/identity/internal/breakglass"
 	"github.com/fleetdm/edr/server/identity/internal/identities"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
@@ -63,8 +64,29 @@ type Deps struct {
 	OIDC OIDCDeps
 	// SessionSigningKey is the HMAC key the OIDC state cookie reuses
 	// (per spec). Required when OIDC.Issuer is set; ignored otherwise.
-	// 32+ bytes recommended.
+	// 32+ bytes recommended. Phase 4b reuses the same key for the
+	// break-glass challenge cookie.
 	SessionSigningKey []byte
+
+	// Breakglass carries the Phase 4b break-glass surface knobs.
+	// When Breakglass.RPID is empty AND OIDC is configured, the
+	// break-glass surface is not constructed (operator opted out by
+	// not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC
+	// is also unconfigured, the bootstrap layer falls through to a
+	// localhost default so dev workflows have a working surface.
+	Breakglass BreakglassDeps
+}
+
+// BreakglassDeps is the per-deployment configuration the Phase 4b
+// break-glass surface needs. Lifted out of Deps so further
+// break-glass-related additions don't keep widening the parent
+// struct.
+type BreakglassDeps struct {
+	BootstrapTokenTTL time.Duration
+	IPAllowlist       []string
+	RPID              string
+	RPDisplayName     string
+	RPOrigins         []string
 }
 
 // OIDCDeps mirrors the deployment-specific OIDC config the identity
@@ -89,18 +111,20 @@ const defaultCleanupInterval = 5 * time.Minute
 // HTTP surface chains, the route registration methods, ApplySchema, and a
 // Run method that owns this context's background goroutines.
 type Identity struct {
-	svc          api.Service
-	authzEngine  *authz.Engine
-	loginHandler *login.Handler
-	oidcHandler  *oidc.Handler // nil in break-glass-only deployments
-	auditStore   *audit.Store
-	auditHandler *audit.Handler
-	auditAsync   *audit.AsyncWriter
-	sessionMW    func(http.Handler) http.Handler
-	csrfMW       func(http.Handler) http.Handler
-	db           *sqlx.DB
-	logger       *slog.Logger
-	cleanupEvery time.Duration
+	svc               api.Service
+	authzEngine       *authz.Engine
+	loginHandler      *login.Handler
+	oidcHandler       *oidc.Handler       // nil in break-glass-only deployments
+	breakglassHandler *breakglass.Handler // nil when RPID is unset (opt-out)
+	breakglassService *breakglass.Service // exposed for cmd/main first-boot seed
+	auditStore        *audit.Store
+	auditHandler      *audit.Handler
+	auditAsync        *audit.AsyncWriter
+	sessionMW         func(http.Handler) http.Handler
+	csrfMW            func(http.Handler) http.Handler
+	db                *sqlx.DB
+	logger            *slog.Logger
+	cleanupEvery      time.Duration
 }
 
 // New wires the identity context. It does NOT apply the schema (call
@@ -153,6 +177,18 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		return nil, err
 	}
 
+	bgService, bgHandler, err := buildBreakglass(breakglassDeps{
+		deps:       deps,
+		logger:     logger,
+		sessions:   sessionsStore,
+		users:      usersStore,
+		identities: identitiesStore,
+		audit:      auditStore,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &Identity{
 		svc:         svc,
 		authzEngine: authzEngine,
@@ -162,16 +198,99 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 			Logger:        logger,
 			Audit:         auditStore,
 		}),
-		oidcHandler:  oidcHandler,
-		auditStore:   auditStore,
-		auditHandler: audit.NewHandler(auditStore, authzEngine, logger),
-		auditAsync:   auditAsync,
-		sessionMW:    middleware.Session(svc, logger),
-		csrfMW:       middleware.CSRF(logger),
-		db:           deps.DB,
-		logger:       logger,
-		cleanupEvery: cleanupEvery,
+		oidcHandler:       oidcHandler,
+		breakglassHandler: bgHandler,
+		breakglassService: bgService,
+		auditStore:        auditStore,
+		auditHandler:      audit.NewHandler(auditStore, authzEngine, logger),
+		auditAsync:        auditAsync,
+		sessionMW:         middleware.Session(svc, logger),
+		csrfMW:            middleware.CSRF(logger),
+		db:                deps.DB,
+		logger:            logger,
+		cleanupEvery:      cleanupEvery,
 	}, nil
+}
+
+// breakglassDeps bundles the per-call inputs to buildBreakglass.
+// Same shape pattern as oidcHandlerDeps so future field additions
+// don't widen the function signature.
+type breakglassDeps struct {
+	deps       Deps
+	logger     *slog.Logger
+	sessions   *sessions.Store
+	users      *users.Store
+	identities *identities.Store
+	audit      *audit.Store
+}
+
+// buildBreakglass constructs the break-glass Service + Handler.
+// Returns (nil, nil, nil) when the deployment opted out (no RP ID +
+// OIDC enabled). Returns an error when the operator partially
+// configured the surface — same pattern as the OIDC gate.
+func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handler, error) {
+	bg := in.deps.Breakglass
+	rpID := bg.RPID
+	rpOrigins := bg.RPOrigins
+	if rpID == "" && len(rpOrigins) == 0 && in.deps.OIDC.Issuer == "" {
+		// Dev fallback: neither OIDC nor break-glass explicitly
+		// configured. Default to localhost so first-boot works
+		// without a long env var prelude. Production is covered by
+		// the explicit-config branch below.
+		rpID = "localhost"
+		rpOrigins = []string{"http://localhost:8088", "http://127.0.0.1:8088"}
+	}
+	if rpID == "" {
+		// OIDC is configured but break-glass is not — operator
+		// opted out. Routes will not be mounted; the seed flow
+		// still issues bootstrap tokens for first-boot recovery
+		// once RPID is later configured.
+		return nil, nil, nil
+	}
+	if len(rpOrigins) == 0 {
+		return nil, nil, errors.New(
+			"identity bootstrap: EDR_BREAKGLASS_RP_ID set without EDR_BREAKGLASS_RP_ORIGINS")
+	}
+	if len(in.deps.SessionSigningKey) == 0 {
+		return nil, nil, errors.New(
+			"identity bootstrap: SessionSigningKey is required when break-glass is configured")
+	}
+	displayName := bg.RPDisplayName
+	if displayName == "" {
+		displayName = "EDR Break-glass"
+	}
+	wa, err := breakglass.NewWebAuthn(breakglass.WebAuthnOptions{
+		RPID:          rpID,
+		RPDisplayName: displayName,
+		RPOrigins:     rpOrigins,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity bootstrap: webauthn: %w", err)
+	}
+	tokens := breakglass.NewTokenStore(in.deps.DB)
+	credentials := breakglass.NewCredentialStore(in.deps.DB)
+	svc := breakglass.NewService(breakglass.ServiceOptions{
+		DB:          in.deps.DB,
+		Users:       in.users,
+		Identities:  in.identities,
+		Tokens:      tokens,
+		Credentials: credentials,
+		Sessions:    in.sessions,
+		WebAuthn:    wa,
+		Audit:       in.audit,
+		Logger:      in.logger,
+	})
+	allowlist, err := breakglass.NewAllowlist(bg.IPAllowlist)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity bootstrap: breakglass allowlist: %w", err)
+	}
+	h := breakglass.NewHandler(breakglass.HandlerOptions{
+		Service:    svc,
+		SigningKey: in.deps.SessionSigningKey,
+		Allowlist:  allowlist,
+		Logger:     in.logger,
+	})
+	return svc, h, nil
 }
 
 // oidcHandlerDeps bundles the per-call inputs to buildOIDCHandler.
@@ -295,6 +414,16 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	if i.oidcHandler != nil {
 		i.oidcHandler.RegisterPublicRoutes(mux)
 	}
+	if i.breakglassHandler != nil {
+		i.breakglassHandler.RegisterPublicRoutes(mux)
+	}
+}
+
+// BreakglassService exposes the Phase 4b break-glass service so
+// cmd/main can call IssueSetupToken on first boot. Returns nil when
+// the deployment opted out of the break-glass surface.
+func (i *Identity) BreakglassService() *breakglass.Service {
+	return i.breakglassService
 }
 
 // RegisterAuthedRoutes wires GET /api/session (who-am-i) and

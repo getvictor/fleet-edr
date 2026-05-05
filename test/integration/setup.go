@@ -96,11 +96,16 @@ func Setup(t *testing.T) *Stack {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
-		DB:              db,
-		Logger:          logger,
-		LoginRatePerMin: 1000,
-		CookieSecure:    false,
+		DB:                db,
+		Logger:            logger,
+		LoginRatePerMin:   1000,
+		CookieSecure:      false,
+		SessionSigningKey: signingKey,
 	})
 	require.NoError(t, err, "open identity")
 

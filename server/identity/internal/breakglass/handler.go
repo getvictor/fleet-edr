@@ -1,6 +1,7 @@
 package breakglass
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -20,9 +21,19 @@ import (
 // challenge cookie doesn't leak to /api/* on the same origin.
 const cookiePath = "/admin/break-glass/"
 
-// challengeCookieMaxAge is the per-flow cookie lifetime. Matches
-// the WebAuthn challenge timeout the browser enforces (5 min).
-const challengeCookieMaxAge = 5 * 60
+// challengeCookieMaxAge is the per-flow cookie lifetime in seconds.
+// Matches the WebAuthn challenge timeout the browser enforces.
+const challengeCookieMaxAge = 300
+
+// loginBodyMaxBytes caps the JSON body the login handler reads.
+// 64 KiB comfortably accommodates a CredentialAssertionResponse
+// (with attestationObject) without inviting OOM via a hostile
+// payload.
+const loginBodyMaxBytes = 64 * 1024
+
+// emailBodyMaxBytes caps the begin-login challenge body — only the
+// email field, so 4 KiB is generous.
+const emailBodyMaxBytes = 4 * 1024
 
 // Handler serves the four break-glass routes. Construct via
 // NewHandler; mount via RegisterPublicRoutes.
@@ -100,23 +111,23 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // browser shim).
 func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(w, "rate_limited")
+		h.tooMany(r.Context(), w, "rate_limited")
 		return
 	}
 	if !h.rates.AllowSetup() {
-		h.tooMany(w, "setup_rate_limited")
+		h.tooMany(r.Context(), w, "setup_rate_limited")
 		return
 	}
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
-		h.gone(w, "token_missing")
+		h.gone(r.Context(), w, "token_missing")
 		return
 	}
 	challenge, _, _, err := h.svc.BeginSetup(r.Context(), token)
 	if err != nil {
 		h.svc.AuditFailure(r.Context(), "", reasonForTokenErr(err),
 			httpserver.ClientIP(r), r.UserAgent())
-		h.gone(w, reasonForTokenErr(err))
+		h.gone(r.Context(), w, reasonForTokenErr(err))
 		return
 	}
 	cookieValue, err := EncodeChallengeState(h.signingKey, challenge.SessionData)
@@ -126,7 +137,7 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setChallengeCookie(w, cookieValue)
-	h.writeJSON(w, http.StatusOK, map[string]any{
+	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"publicKey": challenge.Options.Response,
 	})
 }
@@ -138,26 +149,26 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 //	  body: {"password": "...", "credential_name": "yk1", "attestation": <CredentialCreationResponse JSON>}
 func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(w, "rate_limited")
+		h.tooMany(r.Context(), w, "rate_limited")
 		return
 	}
 	if !h.rates.AllowSetup() {
-		h.tooMany(w, "setup_rate_limited")
+		h.tooMany(r.Context(), w, "setup_rate_limited")
 		return
 	}
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
-		h.gone(w, "token_missing")
+		h.gone(r.Context(), w, "token_missing")
 		return
 	}
 	cookie, err := r.Cookie(ChallengeStateCookieName)
 	if err != nil {
-		h.badRequest(w, "challenge_missing")
+		h.badRequest(r.Context(), w, "challenge_missing")
 		return
 	}
 	sd, err := DecodeChallengeState(h.signingKey, cookie.Value)
 	if err != nil {
-		h.badRequest(w, "challenge_invalid")
+		h.badRequest(r.Context(), w, "challenge_invalid")
 		return
 	}
 	var body struct {
@@ -165,24 +176,24 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 		CredentialName string          `json:"credential_name"`
 		Attestation    json.RawMessage `json:"attestation"`
 	}
-	if err := decodeJSONBody(r, &body, 64*1024); err != nil {
-		h.badRequest(w, "body_invalid")
+	if err := decodeJSONBody(r, &body, loginBodyMaxBytes); err != nil {
+		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
 	if len(body.Attestation) == 0 {
-		h.badRequest(w, "attestation_missing")
+		h.badRequest(r.Context(), w, "attestation_missing")
 		return
 	}
 	parsed, err := protocol.ParseCredentialCreationResponseBytes(body.Attestation)
 	if err != nil {
-		h.badRequest(w, "attestation_parse_failed")
+		h.badRequest(r.Context(), w, "attestation_parse_failed")
 		return
 	}
 	_, tok, user, err := h.svc.BeginSetup(r.Context(), token)
 	if err != nil {
 		h.svc.AuditFailure(r.Context(), "", reasonForTokenErr(err),
 			httpserver.ClientIP(r), r.UserAgent())
-		h.gone(w, reasonForTokenErr(err))
+		h.gone(r.Context(), w, reasonForTokenErr(err))
 		return
 	}
 	res, err := h.svc.FinishSetup(r.Context(), FinishSetupRequest{
@@ -197,12 +208,12 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 		reason := reasonForSetupErr(err)
 		h.svc.AuditFailure(r.Context(), user.Email, reason,
 			httpserver.ClientIP(r), r.UserAgent())
-		h.badRequest(w, reason)
+		h.badRequest(r.Context(), w, reason)
 		return
 	}
 	h.clearChallengeCookie(w)
 	h.setSessionCookie(w, res.Session)
-	h.writeJSON(w, http.StatusOK, map[string]any{
+	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"redirect": "/ui/",
 	})
 }
@@ -216,10 +227,10 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 // browser shim.
 func (h *Handler) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(w, "rate_limited")
+		h.tooMany(r.Context(), w, "rate_limited")
 		return
 	}
-	h.writeJSON(w, http.StatusOK, map[string]any{
+	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"endpoints": map[string]string{
 			"challenge": "/admin/break-glass/challenge",
 			"submit":    "/admin/break-glass",
@@ -232,14 +243,14 @@ func (h *Handler) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 // presented email. JSON body: {"email": "..."}.
 func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(w, "rate_limited")
+		h.tooMany(r.Context(), w, "rate_limited")
 		return
 	}
 	var body struct {
 		Email string `json:"email"`
 	}
-	if err := decodeJSONBody(r, &body, 4*1024); err != nil {
-		h.badRequest(w, "body_invalid")
+	if err := decodeJSONBody(r, &body, emailBodyMaxBytes); err != nil {
+		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
 	challenge, _, err := h.svc.BeginLogin(r.Context(), body.Email)
@@ -247,7 +258,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 		// Email enumeration: collapse all not-found / no-credentials
 		// to the same wire response so an attacker cannot probe.
 		if errors.Is(err, ErrNoCredentials) {
-			h.badRequest(w, "no_credentials")
+			h.badRequest(r.Context(), w, "no_credentials")
 			return
 		}
 		h.logger.ErrorContext(r.Context(), "breakglass begin login", "err", err)
@@ -261,7 +272,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setChallengeCookie(w, cookieValue)
-	h.writeJSON(w, http.StatusOK, map[string]any{
+	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"publicKey": challenge.Options.Response,
 	})
 }
@@ -270,17 +281,17 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 // session. JSON body: {"email": "...", "password": "...", "assertion": <CredentialAssertionResponse JSON>}.
 func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(w, "rate_limited")
+		h.tooMany(r.Context(), w, "rate_limited")
 		return
 	}
 	cookie, err := r.Cookie(ChallengeStateCookieName)
 	if err != nil {
-		h.badRequest(w, "challenge_missing")
+		h.badRequest(r.Context(), w, "challenge_missing")
 		return
 	}
 	sd, err := DecodeChallengeState(h.signingKey, cookie.Value)
 	if err != nil {
-		h.badRequest(w, "challenge_invalid")
+		h.badRequest(r.Context(), w, "challenge_invalid")
 		return
 	}
 	var body struct {
@@ -288,30 +299,30 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 		Password  string          `json:"password"`
 		Assertion json.RawMessage `json:"assertion"`
 	}
-	if err := decodeJSONBody(r, &body, 64*1024); err != nil {
-		h.badRequest(w, "body_invalid")
+	if err := decodeJSONBody(r, &body, loginBodyMaxBytes); err != nil {
+		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
 	if !h.rates.AllowEmailFail(body.Email) {
-		h.tooMany(w, "email_rate_limited")
+		h.tooMany(r.Context(), w, "email_rate_limited")
 		return
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(body.Assertion)
 	if err != nil {
-		h.badRequest(w, "assertion_parse_failed")
+		h.badRequest(r.Context(), w, "assertion_parse_failed")
 		return
 	}
 	user, err := h.svc.users.GetByEmail(r.Context(), body.Email)
 	if err != nil {
 		h.svc.AuditFailure(r.Context(), body.Email, "user_not_found",
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(w, "invalid_credentials")
+		h.unauthorized(r.Context(), w, "invalid_credentials")
 		return
 	}
 	if !user.IsBreakglass {
 		h.svc.AuditFailure(r.Context(), body.Email, "not_breakglass",
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(w, "invalid_credentials")
+		h.unauthorized(r.Context(), w, "invalid_credentials")
 		return
 	}
 	sess, err := h.svc.FinishLogin(r.Context(), FinishLoginRequest{
@@ -324,46 +335,46 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 		reason := reasonForLoginErr(err)
 		h.svc.AuditFailure(r.Context(), user.Email, reason,
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(w, "invalid_credentials")
+		h.unauthorized(r.Context(), w, "invalid_credentials")
 		return
 	}
 	h.clearChallengeCookie(w)
 	h.setSessionCookie(w, sess)
 	h.svc.AuditSuccess(r.Context(), user, httpserver.ClientIP(r), r.UserAgent())
-	h.writeJSON(w, http.StatusOK, map[string]any{
+	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"redirect": "/ui/",
 	})
 }
 
 // ---- helpers ---------------------------------------------------------------
 
-func (h *Handler) writeJSON(w http.ResponseWriter, status int, body any) {
+func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.Warn("breakglass write json", "err", err)
+		h.logger.WarnContext(ctx, "breakglass write json", "err", err)
 	}
 }
 
-func (h *Handler) badRequest(w http.ResponseWriter, reason string) {
+func (h *Handler) badRequest(ctx context.Context, w http.ResponseWriter, reason string) {
 	w.Header().Set("X-Edr-Auth-Reason", reason)
-	h.writeJSON(w, http.StatusBadRequest, map[string]any{"reason": reason})
+	h.writeJSON(ctx, w, http.StatusBadRequest, map[string]any{"reason": reason})
 }
 
-func (h *Handler) unauthorized(w http.ResponseWriter, reason string) {
+func (h *Handler) unauthorized(ctx context.Context, w http.ResponseWriter, reason string) {
 	w.Header().Set("X-Edr-Auth-Reason", reason)
-	h.writeJSON(w, http.StatusUnauthorized, map[string]any{"reason": reason})
+	h.writeJSON(ctx, w, http.StatusUnauthorized, map[string]any{"reason": reason})
 }
 
-func (h *Handler) gone(w http.ResponseWriter, reason string) {
+func (h *Handler) gone(ctx context.Context, w http.ResponseWriter, reason string) {
 	w.Header().Set("X-Edr-Auth-Reason", reason)
-	h.writeJSON(w, http.StatusGone, map[string]any{"reason": reason})
+	h.writeJSON(ctx, w, http.StatusGone, map[string]any{"reason": reason})
 }
 
-func (h *Handler) tooMany(w http.ResponseWriter, reason string) {
+func (h *Handler) tooMany(ctx context.Context, w http.ResponseWriter, reason string) {
 	w.Header().Set("X-Edr-Auth-Reason", reason)
 	w.Header().Set("Retry-After", "60")
-	h.writeJSON(w, http.StatusTooManyRequests, map[string]any{"reason": reason})
+	h.writeJSON(ctx, w, http.StatusTooManyRequests, map[string]any{"reason": reason})
 }
 
 func (h *Handler) setChallengeCookie(w http.ResponseWriter, value string) {
@@ -458,10 +469,10 @@ func reasonForLoginErr(err error) string {
 }
 
 // decodeJSONBody is the standard limited-reader + strict-JSON
-// pattern used elsewhere in identity. cap caps the body size so a
-// hostile payload cannot exhaust memory.
-func decodeJSONBody(r *http.Request, dst any, cap int64) error {
-	body := http.MaxBytesReader(nil, r.Body, cap)
+// pattern used elsewhere in identity. maxBytes caps the body size
+// so a hostile payload cannot exhaust memory.
+func decodeJSONBody(r *http.Request, dst any, maxBytes int64) error {
+	body := http.MaxBytesReader(nil, r.Body, maxBytes)
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)

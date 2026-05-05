@@ -1,6 +1,7 @@
 package breakglass
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
@@ -82,15 +83,14 @@ type User struct {
 }
 
 // WebAuthnID returns the user handle: an 8-byte big-endian encoding
-// of the database id, padded to ensure go-webauthn never sees a
+// of the database id (negative ids reinterpreted as uint64 via the
+// stdlib encoding rule), padded to ensure go-webauthn never sees a
 // zero-length handle (which it rejects). 8 bytes is well under the
 // 64-byte spec maximum.
 func (u User) WebAuthnID() []byte {
-	id := uint64(u.ID)
-	return []byte{
-		byte(id >> 56), byte(id >> 48), byte(id >> 40), byte(id >> 32),
-		byte(id >> 24), byte(id >> 16), byte(id >> 8), byte(id),
-	}
+	out := make([]byte, 8)
+	binary.BigEndian.PutUint64(out, uint64(u.ID)) //nolint:gosec // negative ids reinterpret deterministically
+	return out
 }
 
 // WebAuthnName returns the email — operator-friendly when the

@@ -21,16 +21,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
+	identityusers "github.com/fleetdm/edr/server/identity/internal/users"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // newIdentity wires identity.bootstrap.New against a fresh test DB,
-// matching what cmd/main does in production. Returns the *Identity handle
-// and the underlying *sqlx.DB so individual tests can poke the schema if
-// needed.
+// matching what cmd/main does in production. Returns the *Identity handle.
+// Tests that need to poke the schema directly call newIdentityWithDB.
 func newIdentity(t *testing.T) *bootstrap.Identity {
+	id, _ := newIdentityWithDB(t)
+	return id
+}
+
+// newIdentityWithDB returns the bootstrap.Identity AND the underlying
+// *sqlx.DB for tests that need to seed users directly (the Phase 4b
+// SeedAdmin path no longer returns a usable password, so /api/session
+// login tests need a separately-created password user).
+func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 	t.Helper()
 	// testdb/full.Open is the project's standard MySQL fixture for
 	// per-context integration tests. It applies every context's schema
@@ -40,21 +51,28 @@ func newIdentity(t *testing.T) *bootstrap.Identity {
 	// production code path and assert it is idempotent.
 	s := full.Open(t)
 
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
 	id, err := bootstrap.New(t.Context(), bootstrap.Deps{
-		DB:              s,
-		Logger:          slog.Default(),
-		LoginRatePerMin: 60,
-		CookieSecure:    false,
-		SessionTTL:      time.Hour,
-		CleanupInterval: time.Hour, // not exercised by these tests
+		DB:                s,
+		Logger:            slog.Default(),
+		LoginRatePerMin:   60,
+		CookieSecure:      false,
+		SessionTTL:        time.Hour,
+		CleanupInterval:   time.Hour, // not exercised by these tests
+		SessionSigningKey: signingKey,
 	})
 	require.NoError(t, err)
 	require.NoError(t, id.ApplySchema(t.Context()))
-	return id
+	return id, s
 }
 
-// TestSeedAdmin_FirstBootCreatesAndIsIdempotent walks the seed-admin path:
-// first call mints + prints; second call returns ErrAlreadySeeded.
+// TestSeedAdmin_FirstBootCreatesAndIsIdempotent walks the seed-admin
+// path. Phase 4b: SeedAdmin returns a NULL-password break-glass row;
+// the redemption URL banner lives in cmd/main, not in seed.Admin.
+// Second call is idempotent on the same DB (returns the same row).
 func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	id := newIdentity(t)
 	ctx := t.Context()
@@ -64,30 +82,34 @@ func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotZero(t, user.ID)
 	assert.NotEmpty(t, user.Email)
-	assert.NotEmpty(t, pw)
-	assert.Contains(t, stderr.String(), "SEEDED ADMIN USER")
-	assert.Contains(t, stderr.String(), pw)
+	assert.Empty(t, pw, "Phase 4b removed the password return value")
+	assert.Empty(t, stderr.String(),
+		"Phase 4b: redemption banner is emitted by cmd/main, not by seed.Admin")
 
-	// Second call: noop, no banner printed, ErrAlreadySeeded returned.
-	var stderr2 bytes.Buffer
-	user2, pw2, err := id.Service().SeedAdmin(ctx, &stderr2)
-	require.ErrorIs(t, err, api.ErrAlreadySeeded)
-	assert.Zero(t, user2.ID)
-	assert.Empty(t, pw2)
-	assert.Empty(t, stderr2.String())
+	// Second call returns the same row (idempotent on container restart).
+	user2, _, err := id.Service().SeedAdmin(ctx, &stderr)
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, user2.ID)
 }
 
 // TestLoginToLogout walks Login -> GetSession -> Logout via Service. The
 // HTTP-level shape is covered by login/handler_test.go; here we assert
 // the Service surface that other contexts depend on.
 func TestLoginToLogout(t *testing.T) {
-	id := newIdentity(t)
+	id, db := newIdentityWithDB(t)
 	ctx := t.Context()
 
-	// Seed an admin so we have a user to login as.
-	var stderr bytes.Buffer
-	admin, pw, err := id.Service().SeedAdmin(ctx, &stderr)
+	// Seed a non-break-glass user with a password so /api/session
+	// login works end-to-end. The break-glass admin uses
+	// /admin/break-glass with WebAuthn — that flow is exercised by
+	// the breakglass package's own integration tests.
+	const password = "long-enough-password-for-test"
+	usersStore := identityusers.New(db)
+	created, err := usersStore.Create(ctx, identityusers.CreateRequest{
+		Email: "tester@example.com", Password: password,
+	})
 	require.NoError(t, err)
+	admin, pw := api.User{ID: created.ID, Email: created.Email}, password
 
 	// Wrong password -> ErrBadPassword (which wraps ErrInvalidCredentials).
 	_, err = id.Service().Login(ctx, admin.Email, "wrong-password")
@@ -139,14 +161,16 @@ func TestLoginToLogout(t *testing.T) {
 // cmd/main wires the operator surface. Verifies the cookie + middleware
 // dance is wire-compatible.
 func TestSessionMiddlewareEndToEnd(t *testing.T) {
-	id := newIdentity(t)
+	id, db := newIdentityWithDB(t)
 	ctx := t.Context()
 
-	// Seed + login to mint a real session.
-	var stderr bytes.Buffer
-	admin, pw, err := id.Service().SeedAdmin(ctx, &stderr)
+	const password = "long-enough-password-for-test"
+	usersStore := identityusers.New(db)
+	created, err := usersStore.Create(ctx, identityusers.CreateRequest{
+		Email: "tester@example.com", Password: password,
+	})
 	require.NoError(t, err)
-	res, err := id.Service().Login(ctx, admin.Email, pw)
+	res, err := id.Service().Login(ctx, created.Email, password)
 	require.NoError(t, err)
 
 	// Build a tiny test server: GET / under Session+CSRF; POST / same.
@@ -195,16 +219,17 @@ func TestSessionMiddlewareEndToEnd(t *testing.T) {
 // Constructs a sessions store with TTL = 1ns so the row is expired the
 // moment it's written.
 func TestCleanupExpiredSessions(t *testing.T) {
-	id := newIdentity(t)
+	id, db := newIdentityWithDB(t)
 	ctx := t.Context()
 
-	// Seed + login a user. The default identity TTL is 1h here so this
-	// session won't expire on its own.
-	var stderr bytes.Buffer
-	admin, pw, err := id.Service().SeedAdmin(ctx, &stderr)
+	const password = "long-enough-password-for-test"
+	usersStore := identityusers.New(db)
+	created, err := usersStore.Create(ctx, identityusers.CreateRequest{
+		Email: "tester@example.com", Password: password,
+	})
 	require.NoError(t, err)
 
-	freshLogin, err := id.Service().Login(ctx, admin.Email, pw)
+	freshLogin, err := id.Service().Login(ctx, created.Email, password)
 	require.NoError(t, err)
 
 	// Cleanup with all sessions still in TTL: zero rows removed.
@@ -225,13 +250,24 @@ func TestCleanupExpiredSessions(t *testing.T) {
 // TestRegisterRoutes_Public asserts RegisterPublicRoutes wires both
 // POST and DELETE /api/session on the supplied mux, and that the routes
 // are reachable end-to-end (login + logout) through the registered mux.
+//
+// Phase 4b: SeedAdmin now returns a NULL-password break-glass row, so
+// this test seeds a separate non-break-glass user via users.Store
+// directly to drive POST /api/session. The break-glass account uses
+// /admin/break-glass with WebAuthn — that flow is exercised by the
+// breakglass package's own integration tests.
 func TestRegisterRoutes_Public(t *testing.T) {
-	id := newIdentity(t)
+	id, db := newIdentityWithDB(t)
 	ctx := t.Context()
 
-	// Seed an admin so we have a credential to test login with.
-	var stderr bytes.Buffer
-	admin, pw, err := id.Service().SeedAdmin(ctx, &stderr)
+	const (
+		testEmail    = "tester@example.com"
+		testPassword = "long-enough-password-for-test"
+	)
+	usersStore := identityusers.New(db)
+	_, err := usersStore.Create(ctx, identityusers.CreateRequest{
+		Email: testEmail, Password: testPassword,
+	})
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
@@ -240,7 +276,7 @@ func TestRegisterRoutes_Public(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// POST /api/session: route registered; login succeeds.
-	body := bytes.NewBufferString(`{"email":"` + admin.Email + `","password":"` + pw + `"}`)
+	body := bytes.NewBufferString(`{"email":"` + testEmail + `","password":"` + testPassword + `"}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/session", body)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -317,10 +353,15 @@ func TestService_GetUserNotFound(t *testing.T) {
 // at least once during the test (covering the cleanup-call branch).
 func TestRun_StopsOnContextCancel(t *testing.T) {
 	s := full.Open(t)
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
 	id, err := bootstrap.New(t.Context(), bootstrap.Deps{
-		DB:              s,
-		Logger:          slog.Default(),
-		CleanupInterval: 25 * time.Millisecond, // short so the loop exercises CleanupExpired
+		DB:                s,
+		Logger:            slog.Default(),
+		CleanupInterval:   25 * time.Millisecond, // short so the loop exercises CleanupExpired
+		SessionSigningKey: signingKey,
 	})
 	require.NoError(t, err)
 	require.NoError(t, id.ApplySchema(t.Context()))
