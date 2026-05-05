@@ -412,13 +412,26 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	optionalStr(&c.OIDCClientID, "EDR_OIDC_CLIENT_ID", getenv)
 	optionalStr(&c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET", getenv)
 	optionalStr(&c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL", getenv)
+	parseOIDCOverrides(c, getenv, errs)
+	envparse.PositiveDuration(getenv, "EDR_OIDC_STATE_COOKIE_TTL", &c.OIDCStateCookieTTL, errs)
+	c.AuthAllowNoOIDC = getenv("EDR_AUTH_ALLOW_NO_OIDC") == "1"
+	if v := getenv("EDR_SESSION_SIGNING_KEY"); v != "" {
+		c.SessionSigningKey = []byte(v)
+	}
+	enforceOIDCGate(c, errs)
+}
+
+// parseOIDCOverrides reads the optional override env vars
+// (EDR_OIDC_SCOPES, EDR_OIDC_ALLOW_JIT_PROVISIONING) onto c. Pulled
+// out so loadOIDCConfig stays under the cognitive-complexity budget.
+func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
 	if v := getenv("EDR_OIDC_SCOPES"); v != "" {
 		c.OIDCScopes = splitCSV(v)
 		// openid is mandatory for the discovery + ID-token flow; an
 		// override that drops it leaves the operator with a worse
 		// failure mode (token endpoint succeeds, ID-token absent at
 		// callback) than a startup refusal.
-		if !containsString(c.OIDCScopes, "openid") {
+		if !slices.Contains(c.OIDCScopes, "openid") {
 			*errs = append(*errs, errors.New(
 				"EDR_OIDC_SCOPES must include \"openid\" (the OIDC core scope)"))
 		}
@@ -426,24 +439,22 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	if v := getenv("EDR_OIDC_ALLOW_JIT_PROVISIONING"); v != "" {
 		c.OIDCAllowJITProvisioning = v == "1"
 	}
-	envparse.PositiveDuration(getenv, "EDR_OIDC_STATE_COOKIE_TTL", &c.OIDCStateCookieTTL, errs)
-	c.AuthAllowNoOIDC = getenv("EDR_AUTH_ALLOW_NO_OIDC") == "1"
-	if v := getenv("EDR_SESSION_SIGNING_KEY"); v != "" {
-		c.SessionSigningKey = []byte(v)
-	}
-	if c.OIDCIssuer != "" && len(c.SessionSigningKey) < 32 {
+}
+
+// enforceOIDCGate cross-checks the OIDC env block: every OIDC field
+// is set together, OR none is set AND AuthAllowNoOIDC is the explicit
+// dev opt-out. Anything else is a misconfiguration the operator
+// should surface at boot rather than silently fall back to
+// break-glass-only mode. The allow-no-oidc opt-out specifically does
+// NOT excuse partial configuration: if any EDR_OIDC_* knob is set,
+// the operator clearly intends OIDC and a missing companion is a
+// typo, not an opt-out.
+func enforceOIDCGate(c *Config, errs *[]error) {
+	if c.OIDCIssuer != "" && len(c.SessionSigningKey) < oidcSigningKeyMinBytes {
 		*errs = append(*errs, errors.New(
 			"EDR_SESSION_SIGNING_KEY is required when OIDC is enabled; "+
 				"must be at least 32 bytes (use EDR_SESSION_SIGNING_KEY_FILE for docker-secret mounts)"))
 	}
-
-	// Enforcement: every OIDC field is set together, OR none is set
-	// AND AuthAllowNoOIDC is the explicit dev opt-out. Anything else
-	// is a misconfiguration the operator should surface at boot rather
-	// than silently fall back to break-glass-only mode. The
-	// allow-no-oidc opt-out specifically does NOT excuse partial
-	// configuration: if any EDR_OIDC_* knob is set, the operator clearly
-	// intends OIDC and a missing companion is a typo, not an opt-out.
 	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != ""
 	switch {
 	case c.OIDCIssuer == "" && partialOIDC:
@@ -454,26 +465,26 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 		*errs = append(*errs, errors.New(
 			"EDR_OIDC_ISSUER is required (set EDR_AUTH_ALLOW_NO_OIDC=1 for break-glass-only dev mode)"))
 	case c.OIDCIssuer != "":
-		if c.OIDCClientID == "" {
-			*errs = append(*errs, errors.New("EDR_OIDC_CLIENT_ID is required when EDR_OIDC_ISSUER is set"))
-		}
-		if c.OIDCClientSecret == "" {
-			*errs = append(*errs, errors.New(
-				"EDR_OIDC_CLIENT_SECRET is required when EDR_OIDC_ISSUER is set"+
-					" (use EDR_OIDC_CLIENT_SECRET_FILE for docker-secret mounts)"))
-		}
-		if c.OIDCRedirectURL == "" {
-			*errs = append(*errs, errors.New("EDR_OIDC_REDIRECT_URL is required when EDR_OIDC_ISSUER is set"))
-		}
+		appendIfMissing(c.OIDCClientID, "EDR_OIDC_CLIENT_ID is required when EDR_OIDC_ISSUER is set", errs)
+		appendIfMissing(c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET is required when EDR_OIDC_ISSUER is set"+
+			" (use EDR_OIDC_CLIENT_SECRET_FILE for docker-secret mounts)", errs)
+		appendIfMissing(c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL is required when EDR_OIDC_ISSUER is set", errs)
 	}
 }
 
-// containsString reports whether ss contains s. Wrapper around
-// slices.Contains kept so the call site reads in domain terms
-// (does the configured scope set include the openid scope) rather
-// than in stdlib terms.
-func containsString(ss []string, s string) bool {
-	return slices.Contains(ss, s)
+// oidcSigningKeyMinBytes is the wave-1 floor for EDR_SESSION_SIGNING_KEY.
+// 32 bytes matches the HMAC-SHA256 block size used by the state cookie
+// signer; shorter keys silently weaken the signature without an obvious
+// runtime symptom.
+const oidcSigningKeyMinBytes = 32
+
+// appendIfMissing emits msg when v is empty. Tiny helper so the gate
+// switch reads as a list of cross-checks rather than three near-
+// identical branches.
+func appendIfMissing(v, msg string, errs *[]error) {
+	if v == "" {
+		*errs = append(*errs, errors.New(msg))
+	}
 }
 
 func requireStr(dst *string, key string, getenv func(string) string, errs *[]error, nonEmpty bool) {

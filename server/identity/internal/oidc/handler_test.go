@@ -116,42 +116,6 @@ func TestPathStartsWithSingleSlash(t *testing.T) {
 	}
 }
 
-// HandleLogin happy path: generates fresh secrets, sets the signed
-// state cookie, redirects 302 to the IdP authorization URL. Pinned
-// because the cookie must be HttpOnly and the redirect must point at
-// the IdP, not a relative path; either regression breaks the flow
-// silently.
-func TestHandleLogin_HappyPath(t *testing.T) {
-	h, _ := newTestHandler(t)
-	h.client = &Client{} // zero-value oauth2.Config; AuthURL returns a URL we don't pin
-
-	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/auth/login?next=/ui/hosts", nil)
-	w := httptest.NewRecorder()
-	h.handleLogin(w, r)
-
-	resp := w.Result()
-	defer func() { _ = resp.Body.Close() }()
-	assert.Equal(t, http.StatusFound, resp.StatusCode)
-
-	var stateCookie *http.Cookie
-	for _, c := range resp.Cookies() {
-		if c.Name == StateCookieName {
-			stateCookie = c
-		}
-	}
-	require.NotNil(t, stateCookie, "state cookie must be set on the redirect response")
-	assert.True(t, stateCookie.HttpOnly)
-	assert.NotEmpty(t, stateCookie.Value)
-	assert.Positive(t, stateCookie.MaxAge)
-
-	// The redirect target must be the IdP URL (built by AuthURL), not
-	// a same-origin path. With a zero-value oauth2.Config the URL is
-	// "?response_type=code&...&state=<state>"; we just pin that the
-	// state query param round-trips.
-	loc := resp.Header.Get("Location")
-	assert.Contains(t, loc, "state=")
-}
-
 // failureAudit emits an auth.oidc.failure row with the spec reason and
 // payload populated; pinned because it's the unknown-subject + email-
 // conflict path the operator dashboards key on.

@@ -28,10 +28,22 @@ const defaultStateTTL = 5 * time.Minute
 // "deny", 5xx as "error").
 const httpServerErrorThreshold = 500
 
+// IDPClient is the per-flow IdP-facing surface the handler depends
+// on. *Client implements it; tests in this package's _test sibling
+// inject a fake so handleCallback's happy path can be exercised
+// without spinning up a discovery server + signed-token fixture.
+//
+// Exported only for the test seam below; production code constructs
+// via NewHandler with a real *Client.
+type IDPClient interface {
+	AuthURL(state, nonce, codeChallenge string) string
+	Exchange(ctx context.Context, code, codeVerifier, expectedNonce string) (*Claims, error)
+}
+
 // Handler serves the OIDC login + callback routes. Construct via
 // NewHandler; mount with RegisterPublicRoutes.
 type Handler struct {
-	client       *Client
+	client       IDPClient
 	provisioner  *Provisioner
 	sessions     *sessions.Store
 	signingKey   []byte
@@ -282,34 +294,42 @@ func (h *Handler) errorRedirect(w http.ResponseWriter, r *http.Request, status i
 // writeStateCookie writes (or clears, when maxAge<0) the per-flow
 // state cookie. Single audited construction site so the security
 // flags (Secure, HttpOnly, SameSite, Path scope) live in one place.
-// Secure binds to h.cookieSecure, the deployment-wired TLS flag —
-// dev mode runs http and must not require a TLS-only cookie.
+// The struct literal pins Secure=true; only the explicit dev-mode
+// opt-out (h.cookieSecure=false, gated by EDR_ALLOW_INSECURE_HTTP=1)
+// degrades it post-construction so plain-http localhost still works.
 func (h *Handler) writeStateCookie(w http.ResponseWriter, value string, maxAge int) {
 	c := &http.Cookie{
 		Name:     StateCookieName,
 		Value:    value,
 		Path:     "/api/auth/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   maxAge,
 	}
-	c.Secure = h.cookieSecure
+	if !h.cookieSecure {
+		c.Secure = false
+	}
 	http.SetCookie(w, c)
 }
 
 // writeSessionCookie writes the session cookie. Same single-site
-// rationale as writeStateCookie.
+// rationale as writeStateCookie; same Secure=true default with
+// dev-mode opt-out.
 func (h *Handler) writeSessionCookie(w http.ResponseWriter, sess *sessions.Session) {
 	c := &http.Cookie{
 		Name:     api.SessionCookieName,
 		Value:    api.EncodeToken(sess.ID),
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  sess.ExpiresAt,
 		MaxAge:   int(time.Until(sess.ExpiresAt).Seconds()),
 	}
-	c.Secure = h.cookieSecure
+	if !h.cookieSecure {
+		c.Secure = false
+	}
 	http.SetCookie(w, c)
 }
 
