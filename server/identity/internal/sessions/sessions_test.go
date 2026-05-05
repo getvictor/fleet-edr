@@ -56,7 +56,7 @@ func TestCreate_ReturnsNewRow(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	sess, err := s.Create(ctx, 42)
+	sess, err := s.Create(ctx, 42, sessions.CreateOptions{})
 	require.NoError(t, err)
 	assert.Len(t, sess.ID, sessions.IDLen)
 	assert.Len(t, sess.CSRFToken, sessions.IDLen)
@@ -69,9 +69,9 @@ func TestCreate_IDsAreUnique(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	a, err := s.Create(ctx, 1)
+	a, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
-	b, err := s.Create(ctx, 1)
+	b, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 	assert.False(t, bytes.Equal(a.ID, b.ID), "session ids must differ")
 	assert.False(t, bytes.Equal(a.CSRFToken, b.CSRFToken), "csrf tokens must differ")
@@ -81,7 +81,7 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	created, err := s.Create(ctx, 7)
+	created, err := s.Create(ctx, 7, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	got, err := s.Get(ctx, created.ID)
@@ -112,7 +112,7 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
 	ctx := t.Context()
 
-	created, err := s.Create(ctx, 1)
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	advance(2 * time.Hour) // past the 1 hour TTL
@@ -124,7 +124,7 @@ func TestDelete_IsIdempotent(t *testing.T) {
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
-	sess, err := s.Create(ctx, 1)
+	sess, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 	require.NoError(t, s.Delete(ctx, sess.ID))
 	require.NoError(t, s.Delete(ctx, sess.ID), "second delete of same id must not error")
@@ -137,12 +137,12 @@ func TestCleanupExpired_RemovesOnlyExpired(t *testing.T) {
 	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
 	ctx := t.Context()
 
-	active, err := s.Create(ctx, 1)
+	active, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	// Advance past TTL so the first row expires, then create a fresh row.
 	advance(2 * time.Hour)
-	stillActive, err := s.Create(ctx, 2)
+	stillActive, err := s.Create(ctx, 2, sessions.CreateOptions{})
 	require.NoError(t, err)
 
 	removed, err := s.CleanupExpired(ctx)

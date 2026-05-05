@@ -41,8 +41,17 @@ type User struct {
 //
 // CSRFToken is exposed as raw bytes because the CSRF middleware compares
 // it via constant-time compare against the decoded X-Csrf-Token header.
+//
+// AuthMethod records how the session was minted. Phase 4 unhardcodes
+// the wave-1 placeholder so the chokepoint's actor.AuthMethod field
+// reflects ground truth ("local_password" for break-glass /
+// password-authenticated sessions, "oidc" for IdP-authenticated
+// ones). IdentityID FKs into the identities table; nil for legacy
+// password rows that pre-date Phase 4.
 type Session struct {
 	UserID     int64
+	IdentityID *int64
+	AuthMethod string
 	CreatedAt  time.Time
 	LastSeenAt time.Time
 	ExpiresAt  time.Time

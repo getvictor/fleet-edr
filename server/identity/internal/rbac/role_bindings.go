@@ -44,6 +44,33 @@ type roleBindingRow struct {
 	CreatedAt time.Time    `db:"created_at"`
 }
 
+// ExecContext is the executor subset BindRole consumes; lets the
+// JIT provisioner pass an *sqlx.Tx so the role binding lands in the
+// same transaction as the user + identity insert.
+type ExecContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// BindRole inserts a role_bindings row. Used by Phase-4 JIT
+// provisioning to bind a freshly-provisioned OIDC user to the
+// default role at the seeded tenant. expiresAt may be nil for
+// non-expiring bindings (the wave-1 default).
+func (s *Store) BindRole(
+	ctx context.Context, ec ExecContext,
+	userID int64,
+	roleID, tenantID, scopeType, scopeID string,
+	expiresAt *time.Time,
+) error {
+	_, err := ec.ExecContext(ctx, `
+		INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, userID, roleID, tenantID, scopeType, scopeID, expiresAt)
+	if err != nil {
+		return fmt.Errorf("bind role %q to user %d: %w", roleID, userID, err)
+	}
+	return nil
+}
+
 // ListLiveBindings returns every role binding for a user that is not
 // expired. The (user_id, expires_at) index keeps the query indexed
 // even on very large role_bindings tables.

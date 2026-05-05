@@ -13,8 +13,10 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
 	"github.com/fleetdm/edr/server/identity/internal/authz"
+	"github.com/fleetdm/edr/server/identity/internal/identities"
 	"github.com/fleetdm/edr/server/identity/internal/login"
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
+	"github.com/fleetdm/edr/server/identity/internal/oidc"
 	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/service"
@@ -53,6 +55,30 @@ type Deps struct {
 	// AuditAsyncQueueCap sizes the bounded async-writer buffer. Zero
 	// uses the audit package default (8192).
 	AuditAsyncQueueCap int
+
+	// OIDC carries the Phase-4a auth knobs. When OIDC.Issuer is empty,
+	// the OIDC handler + routes are not constructed (break-glass-only
+	// deployment); cfg validation upstream is responsible for refusing
+	// to boot if the operator did not opt into that mode.
+	OIDC OIDCDeps
+	// SessionSigningKey is the HMAC key the OIDC state cookie reuses
+	// (per spec). Required when OIDC.Issuer is set; ignored otherwise.
+	// 32+ bytes recommended.
+	SessionSigningKey []byte
+}
+
+// OIDCDeps mirrors the deployment-specific OIDC config the identity
+// context needs. Lifted out of Deps so OIDC-related additions don't
+// keep widening the parent struct.
+type OIDCDeps struct {
+	Issuer               string
+	ClientID             string
+	ClientSecret         string
+	RedirectURL          string
+	Scopes               []string
+	AllowJITProvisioning bool
+	StateCookieTTL       time.Duration
+	HTTPClient           *http.Client // optional; tests inject a fixture
 }
 
 const defaultCleanupInterval = 5 * time.Minute
@@ -66,6 +92,7 @@ type Identity struct {
 	svc          api.Service
 	authzEngine  *authz.Engine
 	loginHandler *login.Handler
+	oidcHandler  *oidc.Handler // nil in break-glass-only deployments
 	auditStore   *audit.Store
 	auditHandler *audit.Handler
 	auditAsync   *audit.AsyncWriter
@@ -97,6 +124,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	usersStore := users.New(deps.DB)
 	sessionsStore := sessions.New(deps.DB, sessions.Options{TTL: deps.SessionTTL})
 	rbacStore := rbac.New(deps.DB)
+	identitiesStore := identities.New(deps.DB)
 	svc := service.New(usersStore, sessionsStore, rbacStore, logger)
 	auditStore := audit.New(deps.DB)
 	auditAsync := audit.NewAsyncWriter(auditStore, audit.AsyncOptions{
@@ -112,6 +140,11 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		return nil, fmt.Errorf("identity bootstrap: construct authz engine: %w", err)
 	}
 
+	oidcHandler, err := buildOIDCHandler(ctx, deps, logger, sessionsStore, usersStore, identitiesStore, rbacStore, auditStore)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Identity{
 		svc:         svc,
 		authzEngine: authzEngine,
@@ -121,6 +154,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 			Logger:        logger,
 			Audit:         auditStore,
 		}),
+		oidcHandler:  oidcHandler,
 		auditStore:   auditStore,
 		auditHandler: audit.NewHandler(auditStore, authzEngine, logger),
 		auditAsync:   auditAsync,
@@ -130,6 +164,51 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		logger:       logger,
 		cleanupEvery: cleanupEvery,
 	}, nil
+}
+
+// buildOIDCHandler constructs the OIDC handler when the deployment
+// supplied OIDC config. Returns (nil, nil) for break-glass-only
+// deployments — the route registration step skips it. Returns an
+// error when the OIDC discovery / verifier setup fails so cmd/main
+// refuses to start with an explicit error rather than silently
+// falling back.
+func buildOIDCHandler(
+	ctx context.Context, deps Deps, logger *slog.Logger,
+	sessionsStore *sessions.Store, usersStore *users.Store,
+	identitiesStore *identities.Store, rbacStore *rbac.Store,
+	auditStore *audit.Store,
+) (*oidc.Handler, error) {
+	if deps.OIDC.Issuer == "" {
+		return nil, nil
+	}
+	if len(deps.SessionSigningKey) == 0 {
+		return nil, errors.New("identity bootstrap: SessionSigningKey is required when OIDC is configured")
+	}
+	client, err := oidc.New(ctx, oidc.Options{
+		Issuer:       deps.OIDC.Issuer,
+		ClientID:     deps.OIDC.ClientID,
+		ClientSecret: deps.OIDC.ClientSecret,
+		RedirectURL:  deps.OIDC.RedirectURL,
+		Scopes:       deps.OIDC.Scopes,
+		HTTPClient:   deps.OIDC.HTTPClient,
+		Logger:       logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("identity bootstrap: construct OIDC client: %w", err)
+	}
+	prov := oidc.NewProvisioner(deps.DB, usersStore, identitiesStore, rbacStore, auditStore, oidc.ProvisionerOptions{
+		AllowJIT: deps.OIDC.AllowJITProvisioning,
+	})
+	return oidc.NewHandler(oidc.HandlerOptions{
+		Client:       client,
+		Provisioner:  prov,
+		Sessions:     sessionsStore,
+		SigningKey:   deps.SessionSigningKey,
+		StateTTL:     deps.OIDC.StateCookieTTL,
+		CookieSecure: deps.CookieSecure,
+		Audit:        auditStore,
+		Logger:       logger,
+	}), nil
 }
 
 // ApplySchema runs the DDL statements identity owns and seeds the
@@ -187,10 +266,18 @@ func (i *Identity) SessionMiddleware() func(http.Handler) http.Handler { return 
 // CSRFMiddleware returns the CSRF middleware. Always inner to Session.
 func (i *Identity) CSRFMiddleware() func(http.Handler) http.Handler { return i.csrfMW }
 
+// OIDCEnabled reports whether the OIDC handler was constructed at
+// boot. cmd/main uses it to log a single info-level line at startup
+// summarising the auth modes the deployment honours.
+func (i *Identity) OIDCEnabled() bool { return i.oidcHandler != nil }
+
 // RegisterPublicRoutes wires POST /api/session and DELETE /api/session
 // (login + logout). Public because they have no session yet.
 func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterPublicRoutes(mux)
+	if i.oidcHandler != nil {
+		i.oidcHandler.RegisterPublicRoutes(mux)
+	}
 }
 
 // RegisterAuthedRoutes wires GET /api/session (who-am-i) and

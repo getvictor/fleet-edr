@@ -46,7 +46,7 @@ func (s *service) Login(ctx context.Context, email, password string) (api.LoginR
 	case err != nil:
 		return api.LoginResult{}, fmt.Errorf("verify password: %w", err)
 	}
-	sess, err := s.sessions.Create(ctx, u.ID)
+	sess, err := s.sessions.Create(ctx, u.ID, sessions.CreateOptions{AuthMethod: "local_password"})
 	if err != nil {
 		return api.LoginResult{}, fmt.Errorf("create session: %w", err)
 	}
@@ -172,6 +172,8 @@ func toAPIUser(u *users.User) api.User {
 func toAPISession(s *sessions.Session) *api.Session {
 	return &api.Session{
 		UserID:     s.UserID,
+		IdentityID: s.IdentityID,
+		AuthMethod: s.AuthMethod,
 		CreatedAt:  s.CreatedAt,
 		LastSeenAt: s.LastSeenAt,
 		ExpiresAt:  s.ExpiresAt,

@@ -62,10 +62,17 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 			// session manifests as ErrUserNotFound here; we treat it
 			// as an invalid session (the cookie points at no user).
 			//
-			// authMethod is the wave-1 placeholder 'local_password'
-			// because OIDC sessions don't yet exist. A future
-			// SSO-aware revision will read it off the sessions row.
-			actor, err := svc.LoadActor(ctx, sess.UserID, "local_password")
+			// authMethod reads the value the session was minted with.
+			// Phase 4 unhardcoded the wave-1 placeholder so OIDC
+			// sessions land with auth_method="oidc" and break-glass /
+			// password sessions land with auth_method="local_password".
+			// Legacy sessions inserted before the column existed default
+			// to "local_password" via the schema's column DEFAULT.
+			authMethod := sess.AuthMethod
+			if authMethod == "" {
+				authMethod = "local_password"
+			}
+			actor, err := svc.LoadActor(ctx, sess.UserID, authMethod)
 			switch {
 			case errors.Is(err, api.ErrUserNotFound):
 				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")

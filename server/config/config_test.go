@@ -17,10 +17,15 @@ func envMap(pairs map[string]string) func(string) string {
 }
 
 func TestLoad(t *testing.T) {
+	// Minimal env mirrors the wave-1 dev workflow: TLS off + the
+	// Phase-4 break-glass-only opt-out. Production sets neither flag
+	// and provides EDR_OIDC_*; that interaction is covered in a
+	// dedicated sub-test below.
 	minEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
 		"EDR_ENROLL_SECRET":       "enroll-me",
 		"EDR_ALLOW_INSECURE_HTTP": "1",
+		"EDR_AUTH_ALLOW_NO_OIDC":  "1",
 	}
 
 	cases := []struct {
@@ -297,6 +302,167 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a
+// production deployment without OIDC config refuses to start;
+// dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER
+// without the rest produces focused per-field errors.
+func TestLoad_OIDCConfig(t *testing.T) {
+	prodLikeEnv := map[string]string{
+		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":       "enroll-me",
+		"EDR_ALLOW_INSECURE_HTTP": "1",
+	}
+
+	cases := []struct {
+		name     string
+		env      map[string]string
+		wantErr  string
+		validate func(t *testing.T, c *Config)
+	}{
+		{
+			name:    "no OIDC + no dev flag -> refuse",
+			env:     prodLikeEnv,
+			wantErr: "EDR_OIDC_ISSUER is required",
+		},
+		{
+			name: "no OIDC + dev flag -> ok",
+			env:  withExtra(prodLikeEnv, map[string]string{"EDR_AUTH_ALLOW_NO_OIDC": "1"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.True(t, c.AuthAllowNoOIDC)
+				assert.Empty(t, c.OIDCIssuer)
+			},
+		},
+		{
+			name: "issuer set without client_id -> per-field error",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER": "https://example.okta.com",
+			}),
+			wantErr: "EDR_OIDC_CLIENT_ID is required",
+		},
+		{
+			name: "issuer + client_id without secret -> per-field error",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":    "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID": "edr",
+			}),
+			wantErr: "EDR_OIDC_CLIENT_SECRET is required",
+		},
+		{
+			name: "issuer + client_id + secret without redirect -> per-field error",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+			}),
+			wantErr: "EDR_OIDC_REDIRECT_URL is required",
+		},
+		{
+			name: "OIDC enabled without signing key -> per-field error",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
+			}),
+			wantErr: "EDR_SESSION_SIGNING_KEY is required",
+		},
+		{
+			name: "OIDC enabled with short signing key -> per-field error",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_SESSION_SIGNING_KEY": "tooshort",
+			}),
+			wantErr: "EDR_SESSION_SIGNING_KEY is required",
+		},
+		{
+			name: "complete OIDC config -> ok with default scopes",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "https://example.okta.com", c.OIDCIssuer)
+				assert.Equal(t, "edr", c.OIDCClientID)
+				assert.Equal(t, "shh", c.OIDCClientSecret)
+				assert.Equal(t, "https://edr.example.com/api/auth/callback", c.OIDCRedirectURL)
+				assert.Equal(t, []string{"openid", "email", "profile"}, c.OIDCScopes)
+				assert.True(t, c.OIDCAllowJITProvisioning)
+				assert.Equal(t, 5*time.Minute, c.OIDCStateCookieTTL)
+				assert.False(t, c.AuthAllowNoOIDC)
+			},
+		},
+		{
+			name: "EDR_OIDC_SCOPES override",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_SCOPES":         "openid,email",
+				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, []string{"openid", "email"}, c.OIDCScopes)
+			},
+		},
+		{
+			name: "EDR_OIDC_ALLOW_JIT_PROVISIONING=0 disables JIT",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":                 "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":              "edr",
+				"EDR_OIDC_CLIENT_SECRET":          "shh",
+				"EDR_OIDC_REDIRECT_URL":           "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_ALLOW_JIT_PROVISIONING": "0",
+				"EDR_SESSION_SIGNING_KEY":         "0123456789abcdef0123456789abcdef",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.False(t, c.OIDCAllowJITProvisioning)
+			},
+		},
+		{
+			name: "EDR_OIDC_STATE_COOKIE_TTL override",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":           "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":        "edr",
+				"EDR_OIDC_CLIENT_SECRET":    "shh",
+				"EDR_OIDC_REDIRECT_URL":     "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_STATE_COOKIE_TTL": "10m",
+				"EDR_SESSION_SIGNING_KEY":   "0123456789abcdef0123456789abcdef",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, 10*time.Minute, c.OIDCStateCookieTTL)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := loadFrom(envMap(tc.env))
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			if tc.validate != nil {
+				tc.validate(t, got)
+			}
+		})
+	}
+}
+
 func withExtra(base, extra map[string]string) map[string]string {
 	out := make(map[string]string, len(base)+len(extra))
 	maps.Copy(out, base)
@@ -313,6 +479,7 @@ func TestLoad_AuditEnvKnobs(t *testing.T) {
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
 		"EDR_ENROLL_SECRET":       "enroll-me",
 		"EDR_ALLOW_INSECURE_HTTP": "1",
+		"EDR_AUTH_ALLOW_NO_OIDC":  "1",
 	}
 
 	cases := []struct {

@@ -200,6 +200,16 @@ func openIdentity(
 		AuthzShadowMode:    cfg.AuthzShadowMode,
 		AuditReadSampling:  cfg.AuditReadSampling,
 		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
+		SessionSigningKey:  cfg.SessionSigningKey,
+		OIDC: identitybootstrap.OIDCDeps{
+			Issuer:               cfg.OIDCIssuer,
+			ClientID:             cfg.OIDCClientID,
+			ClientSecret:         cfg.OIDCClientSecret,
+			RedirectURL:          cfg.OIDCRedirectURL,
+			Scopes:               cfg.OIDCScopes,
+			AllowJITProvisioning: cfg.OIDCAllowJITProvisioning,
+			StateCookieTTL:       cfg.OIDCStateCookieTTL,
+		},
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)

@@ -98,6 +98,62 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	return s.Get(ctx, id)
 }
 
+// CreateOIDCRequest is the shape accepted by CreateOIDC. password_*
+// columns are NULL on the resulting row — OIDC users have no
+// server-stored credential, only an external identity binding.
+type CreateOIDCRequest struct {
+	Email string
+	// TenantID may be empty; the schema's column DEFAULT 'default'
+	// fills it in. Phase 4a JIT always uses the seeded default tenant.
+	TenantID string
+}
+
+// CreateOIDC inserts a new user without a password and returns a
+// synthesized row carrying the inserted id + normalised email +
+// tenant. Email is normalised the same way Create does. Caller passes
+// an *sqlx.Tx executor so the JIT provisioner can roll the whole flow
+// back if the identity insert or role binding fails downstream.
+//
+// The returned User does NOT round-trip through Get because Get reads
+// against s.db (outside the caller's tx) and the in-flight INSERT is
+// invisible until commit. The synthesized row carries enough fields
+// for the JIT path's audit + session-mint; CreatedAt/UpdatedAt are
+// left zero (the audit row carries the wall clock independently).
+func (s *Store) CreateOIDC(ctx context.Context, ec ExecContext, req CreateOIDCRequest) (*User, error) {
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		return nil, errors.New("users: email is required")
+	}
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	res, err := ec.ExecContext(ctx,
+		`INSERT INTO users (email, tenant_id) VALUES (?, ?)`,
+		email, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("insert oidc user: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("last insert id: %w", err)
+	}
+	return &User{
+		ID:           id,
+		Email:        email,
+		TenantID:     tenantID,
+		IsBreakglass: false,
+	}, nil
+}
+
+// ExecContext is the subset of sqlx.Tx / sqlx.DB that CreateOIDC
+// (and any future under-transaction insert) consumes. Lets the JIT
+// provisioner pass a *sqlx.Tx without the users package importing
+// the JIT or transaction-management code.
+type ExecContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // Get returns a user by id without hash/salt. Returns ErrNotFound if absent.
 func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	var u User
