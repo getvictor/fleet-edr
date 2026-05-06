@@ -19,10 +19,24 @@ interface TopNavProps {
   // from App.tsx whenever a session is active; when absent we just hide the identity
   // + logout UI.
   readonly user?: { id: number; email: string };
+  // authMethod is the session's authn flow ("oidc" / "local_password").
+  // Phase 4c shows a small badge when the session was minted via the
+  // break-glass flow so an operator who hit the recovery surface knows
+  // they are NOT in a normal SSO session.
+  readonly authMethod?: string;
   readonly onLogout?: () => void;
 }
 
-export function TopNav({ user, onLogout }: TopNavProps) {
+// authMethodLabel turns the wire-shape AuthMethod ("oidc" /
+// "local_password") into operator-friendly copy. break-glass is the
+// only case worth surfacing — an OIDC session is the default and
+// doesn't need a badge.
+function authMethodLabel(authMethod?: string): string | null {
+  if (authMethod === "local_password") return "Break-glass";
+  return null;
+}
+
+export function TopNav({ user, authMethod, onLogout }: TopNavProps) {
   const location = useLocation();
 
   return (
@@ -58,6 +72,11 @@ export function TopNav({ user, onLogout }: TopNavProps) {
               {user.email.charAt(0) || "?"}
             </span>
             <span className="top-nav__user">{user.email}</span>
+            {authMethodLabel(authMethod) && (
+              <span className="top-nav__auth-method" title="This session was minted via the break-glass recovery flow.">
+                {authMethodLabel(authMethod)}
+              </span>
+            )}
             <button
               type="button"
               className="top-nav__logout"

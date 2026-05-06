@@ -22,6 +22,15 @@ export class Unauthorized401Error extends Error {
 export interface SessionInfo {
   user: { id: number; email: string };
   csrf_token: string;
+  // auth_method records the flow that minted the session ("oidc" /
+  // "local_password"). The UI surfaces it on the TopNav so an
+  // operator who hit the break-glass recovery path knows they're
+  // not in a normal SSO session. Optional in the wire shape because
+  // wave-1 sessions inserted before the column existed default to
+  // an empty string; the server normalises empty → "local_password"
+  // before sending, but the field remains optional for forward-
+  // compatibility.
+  auth_method?: string;
 }
 
 export function getCsrfToken(): string {

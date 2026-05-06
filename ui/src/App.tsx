@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
@@ -7,73 +7,102 @@ import { PolicyEditor } from "./components/PolicyEditor";
 import { AttackCoverage } from "./components/AttackCoverage";
 import { RuleDetail } from "./components/RuleDetail";
 import { Login } from "./components/Login";
+import { BreakGlassSetup } from "./components/BreakGlassSetup";
+import { BreakGlassLogin } from "./components/BreakGlassLogin";
 import { TopNav } from "./components/ui/TopNav";
 import { currentSession, logout, Unauthorized401Error, SessionInfo } from "./api";
 
 type AuthState =
   | { status: "loading" }
   | { status: "anon" }
-  | { status: "authed"; user: SessionInfo["user"] };
+  | { status: "authed"; user: SessionInfo["user"]; authMethod: string };
 
-// The UI probes GET /api/session on mount. On 200 we render the app; on 401 we
-// render the Login component. The cookie is HttpOnly so JS can't see it directly,
-// and the server is the source of truth for "am I logged in?".
+// Phase 4c: routes are top-level. /ui/login (and the break-glass
+// pages) are public; /ui/* otherwise probes /api/session and gates
+// rendering on a live session. The auth-state switch lives inside
+// the router so route changes can drive re-checks (e.g. after a
+// successful break-glass login the operator lands on /ui/ and the
+// session probe runs there).
 export function App() {
+  return (
+    <BrowserRouter basename="/ui">
+      <Routes>
+        {/* Public pre-auth pages */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/admin/break-glass" element={<BreakGlassLogin />} />
+        <Route path="/admin/break-glass/setup" element={<BreakGlassSetup />} />
+        {/* Authed app */}
+        <Route path="/*" element={<AuthedApp />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+// AuthedApp is everything behind the /api/session gate. On mount it
+// probes the session; on 401 it redirects to /ui/login carrying the
+// attempted path as ?next= so a successful sign-in returns the
+// operator to where they were heading.
+function AuthedApp() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
+  const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const controller = new AbortController();
-    // `void` marks the floating promise as intentional for
-    // @typescript-eslint/no-floating-promises. We don't need to await it — React's
-    // useEffect already handles async component lifecycle via the cleanup closure.
     void (async () => {
       try {
         const info = await currentSession();
-        if (!controller.signal.aborted) setAuth({ status: "authed", user: info.user });
+        if (controller.signal.aborted) return;
+        setAuth({
+          status: "authed",
+          user: info.user,
+          authMethod: info.auth_method ?? "local_password",
+        });
       } catch (err) {
         if (controller.signal.aborted) return;
-        // 401 -> not logged in; network/5xx -> we also fall back to the login page
-        // rather than render with no data. The user can retry after reconnecting.
         if (!(err instanceof Unauthorized401Error)) {
+          // Network / 5xx — same outcome as 401: send to login. The
+          // server is the source of truth; rendering with stale
+          // state is worse than showing the sign-in page.
+          // eslint-disable-next-line no-console
           console.warn("session probe failed", err);
         }
         setAuth({ status: "anon" });
       }
     })();
     return () => { controller.abort(); };
-  }, []);
+    // Re-run on path change so logout that doesn't navigate (e.g. a
+    // background API call returning 401) still triggers a redirect
+    // on the next mount.
+  }, [location.pathname]);
 
-  async function handleLogout() {
-    await logout().catch(() => { /* Logout failures are best-effort; we still clear locally. */ });
+  const handleLogout = useCallback(async () => {
+    await logout().catch(() => { /* best-effort: clear locally regardless */ });
     setAuth({ status: "anon" });
-  }
+    void navigate("/login", { replace: true });
+  }, [navigate]);
 
   if (auth.status === "loading") {
-    // Tiny blank state — the session probe is ~100ms; rendering a spinner here caused
-    // more layout flash than the blank did in informal testing.
     return <div className="app-loading" />;
   }
 
   if (auth.status === "anon") {
-    return (
-      <Login
-        onLogin={() => {
-          // The login() call in the Login component already set the CSRF token; we
-          // just need to re-read the session to populate the user info for TopNav.
-          void (async () => {
-            try {
-              const info = await currentSession();
-              setAuth({ status: "authed", user: info.user });
-            } catch { /* shouldn't happen immediately after a successful login */ }
-          })();
-        }}
-      />
-    );
+    // Pass the current path as ?next= so the IdP returns the
+    // operator to the page they tried to reach. Strip /ui/ from
+    // basename-relative paths since react-router gives us the
+    // path AFTER the basename.
+    const next = location.pathname === "/" ? undefined : `/ui${location.pathname}${location.search}`;
+    const search = next ? `?next=${encodeURIComponent(next)}` : "";
+    return <Navigate to={`/login${search}`} replace />;
   }
 
   return (
-    <BrowserRouter basename="/ui">
-      <TopNav user={auth.user} onLogout={() => { void handleLogout(); }} />
+    <>
+      <TopNav
+        user={auth.user}
+        authMethod={auth.authMethod}
+        onLogout={() => { void handleLogout(); }}
+      />
       <main className="app-page">
         <Routes>
           <Route path="/" element={<HostList />} />
@@ -85,6 +114,6 @@ export function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
-    </BrowserRouter>
+    </>
   );
 }
