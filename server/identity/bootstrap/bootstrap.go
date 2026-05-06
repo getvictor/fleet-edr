@@ -201,6 +201,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		users:      usersStore,
 		identities: identitiesStore,
 		audit:      auditStore,
+		identity:   svc,
 	})
 	if err != nil {
 		return nil, err
@@ -239,6 +240,7 @@ type breakglassDeps struct {
 	users      *users.Store
 	identities *identities.Store
 	audit      *audit.Store
+	identity   api.Service // for the Phase 5 reauth POST endpoint
 }
 
 // buildBreakglass constructs the break-glass Service + Handler.
@@ -313,6 +315,7 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 	}
 	h := breakglass.NewHandler(breakglass.HandlerOptions{
 		Service:    svc,
+		Identity:   in.identity,
 		SigningKey: in.deps.SessionSigningKey,
 		Allowlist:  allowlist,
 		Logger:     in.logger,
@@ -470,12 +473,16 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 	return i.breakglassHandler.AllowlistMiddleware
 }
 
-// RegisterAuthedRoutes wires GET /api/session (who-am-i) and
-// GET /api/audit-events (operator-action history). Caller wraps in
+// RegisterAuthedRoutes wires GET /api/session (who-am-i),
+// GET /api/audit-events (operator-action history), and the Phase 5
+// break-glass reauth POST endpoints. Caller wraps in
 // SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
+	if i.breakglassHandler != nil {
+		i.breakglassHandler.RegisterAuthedRoutes(mux)
+	}
 }
 
 // AuditRecorder returns the cross-context-callable AuditRecorder.

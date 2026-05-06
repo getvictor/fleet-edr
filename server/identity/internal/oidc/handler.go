@@ -119,6 +119,14 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // ?next= query parameter pins the post-login redirect; unsafe values
 // (off-site URLs, javascript: schemes) are dropped silently and the
 // flow falls through to defaultRedirect.
+//
+// Phase 5: ?reauth=1 forces the IdP to re-prompt for credentials by
+// appending prompt=login to the authorize URL. The callback flow is
+// unchanged — a successful reauth mints a fresh session whose
+// last_auth_at = NOW(), implicitly resetting the freshness window.
+// The previous session row is orphaned (cleaned up on its absolute
+// expiry); accepting the orphan was the simpler tradeoff than
+// threading session-continuity through the state cookie.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	state, nonce, codeVerifier, codeChallenge, err := GenerateFlowSecrets()
 	if err != nil {
@@ -132,7 +140,30 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeStateCookie(w, cookieValue, int(h.stateTTL.Seconds()))
-	http.Redirect(w, r, h.client.AuthURL(state, nonce, codeChallenge), http.StatusFound)
+	authorizeURL := h.client.AuthURL(state, nonce, codeChallenge)
+	if r.URL.Query().Get("reauth") == "1" {
+		authorizeURL = withPromptLogin(authorizeURL)
+	}
+	http.Redirect(w, r, authorizeURL, http.StatusFound)
+}
+
+// withPromptLogin returns the authorize URL with prompt=login set.
+// Used by Phase 5's reauth flow so the IdP rejects its existing
+// session for this request and forces a fresh credential prompt;
+// without it, an IdP that's mid-session would silently re-issue a
+// token, defeating the freshness model. RFC 6749 / OIDC core both
+// reserve `prompt`; conformant IdPs honour it. Non-conformant ones
+// will silently issue a token from their existing session — flag in
+// the operator runbook.
+func withPromptLogin(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	q.Set("prompt", "login")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // handleCallback finishes the flow: verify state cookie, exchange
