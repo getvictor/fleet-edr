@@ -159,7 +159,7 @@ func run() error {
 		responseCtx:  responseCtx,
 		logger:       logger,
 	})
-	registerUIRoutes(mux, logger)
+	registerUIRoutes(mux, identityCtx.BreakglassUIMiddleware(), logger)
 
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
@@ -559,7 +559,11 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	}
 }
 
-func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
+func registerUIRoutes(
+	mux *http.ServeMux,
+	breakglassUIGate func(http.Handler) http.Handler,
+	logger *slog.Logger,
+) {
 	uiDist, err := fs.Sub(ui.DistFS, "dist")
 	if err != nil {
 		logger.ErrorContext(context.Background(), "embed ui", "err", err)
@@ -572,6 +576,22 @@ func registerUIRoutes(mux *http.ServeMux, logger *slog.Logger) {
 		return
 	}
 	fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(uiDist)))
+
+	// /ui/admin/break-glass{,/setup} are the React routes for the
+	// break-glass login + setup pages. The breakglass.Handler gates
+	// the API endpoints with an IP allowlist and promises the path's
+	// existence is concealed from off-list callers; gate the UI
+	// shell with the same allowlist so that promise extends to the
+	// React layer. Off-list callers see a 404 indistinguishable
+	// from "no such path" instead of a fully rendered form they
+	// can't actually submit. Register BEFORE the /ui/ catch-all so
+	// the more-specific patterns win.
+	breakglassUI := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveIndex(w, r, uiDist, logger)
+	})
+	mux.Handle("/ui/admin/break-glass", breakglassUIGate(breakglassUI))
+	mux.Handle("/ui/admin/break-glass/setup", breakglassUIGate(breakglassUI))
+
 	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
 		// Serve the requested file when it exists; otherwise rewrite to
 		// index.html so React Router takes over for client-side deep

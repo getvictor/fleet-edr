@@ -103,8 +103,9 @@ type userResponse struct {
 }
 
 type sessionResponse struct {
-	User      userResponse `json:"user"`
-	CSRFToken string       `json:"csrf_token"`
+	User       userResponse `json:"user"`
+	CSRFToken  string       `json:"csrf_token"`
+	AuthMethod string       `json:"auth_method"`
 }
 
 type errBody struct {
@@ -293,9 +294,20 @@ func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, s
 }
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {
+	// auth_method is read off the session pinned to ctx (Session
+	// middleware wired by App.tsx's authed routes). On the login
+	// path no session is on ctx yet, so fall through to
+	// "local_password" — the only path that produces a session
+	// without an existing one is /api/session POST, which mints a
+	// local_password session.
+	authMethod := "local_password"
+	if sess, ok := api.SessionFromContext(ctx); ok && sess.AuthMethod != "" {
+		authMethod = sess.AuthMethod
+	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
-		User:      userResponse{ID: u.ID, Email: u.Email},
-		CSRFToken: api.EncodeToken(csrfToken),
+		User:       userResponse{ID: u.ID, Email: u.Email},
+		CSRFToken:  api.EncodeToken(csrfToken),
+		AuthMethod: authMethod,
 	})
 }
 

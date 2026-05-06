@@ -90,9 +90,34 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 }
 
-// RegisterPublicRoutes mounts the four break-glass routes onto mux.
-// All four are pre-auth; access is gated by the IP allowlist
-// middleware + per-IP rate limit at request time.
+// AllowlistMiddleware returns next wrapped by the configured IP
+// allowlist. When no allowlist is configured (dev mode), returns next
+// unchanged. Exported so cmd/main can apply the same gate to the
+// React UI's break-glass subroutes — without it, an off-allowlist
+// caller could load /ui/admin/break-glass and see the React form
+// shell, defeating the path-concealment promise of the API gate.
+func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
+	if h.allowlist == nil {
+		return next
+	}
+	return h.allowlist.Middleware(next)
+}
+
+// RegisterPublicRoutes mounts the break-glass routes onto mux.
+// Phase 4c shape:
+//
+//	GET  /admin/break-glass            → 302 /ui/admin/break-glass (UI page)
+//	GET  /admin/break-glass/setup      → 302 /ui/admin/break-glass/setup (UI)
+//	POST /admin/break-glass/challenge       → JSON: assertion challenge
+//	POST /admin/break-glass/setup/challenge → JSON: registration challenge
+//	POST /admin/break-glass                  → JSON: finish login
+//	POST /admin/break-glass/setup            → JSON: atomic redemption
+//
+// All paths are pre-auth; the IP allowlist middleware + per-IP rate
+// limit gate access at request time. The GET redirects do NOT consume
+// the rate-limit budget — they're the public landing for an operator
+// who clicked the printed redemption URL, and a redirect is cheaper
+// than an HTML payload.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	wrap := func(handler http.HandlerFunc) http.Handler {
 		// IP allowlist runs FIRST so off-list callers see a 404
@@ -104,11 +129,36 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 		}
 		return inner
 	}
-	mux.Handle("GET /admin/break-glass/setup", wrap(h.handleBeginSetup))
+	mux.Handle("GET /admin/break-glass/setup", wrap(h.handleSetupRedirect))
+	mux.Handle("GET /admin/break-glass", wrap(h.handleLoginRedirect))
+	mux.Handle("POST /admin/break-glass/setup/challenge", wrap(h.handleBeginSetup))
 	mux.Handle("POST /admin/break-glass/setup", wrap(h.handleFinishSetup))
-	mux.Handle("GET /admin/break-glass", wrap(h.handleLoginForm))
 	mux.Handle("POST /admin/break-glass/challenge", wrap(h.handleBeginLogin))
 	mux.Handle("POST /admin/break-glass", wrap(h.handleFinishLogin))
+}
+
+// handleSetupRedirect 302s to the React setup page, preserving the
+// `token` query string. The redirection target is /ui/admin/break-glass/setup
+// because the React UI is mounted under /ui/. The IP allowlist still
+// applies so off-list callers see 404 instead of a redirect (don't
+// leak the path's existence). Cache-Control: no-store keeps the
+// token-bearing Location header out of browser history / proxy
+// caches: the redemption URL is sensitive bearer state.
+func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	dest := "/ui/admin/break-glass/setup"
+	if q := r.URL.RawQuery; q != "" {
+		dest += "?" + q
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// handleLoginRedirect 302s to the React login page. Same no-store
+// posture as handleSetupRedirect for consistency, even though this
+// path carries no token.
+func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, "/ui/admin/break-glass", http.StatusFound)
 }
 
 // ---- /admin/break-glass/setup ----------------------------------------------
@@ -121,6 +171,10 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // with curl + a WebAuthn CLI (or the operator runbook's example
 // browser shim).
 func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
+	// no-store on every break-glass auth response: success paths set
+	// signed challenge / session cookies; error paths are throwaway.
+	// Either way the response should not land in a shared cache.
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -159,6 +213,7 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 //	POST /admin/break-glass/setup
 //	  body: {"password": "...", "credential_name": "yk1", "attestation": <CredentialCreationResponse JSON>}
 func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -242,28 +297,10 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 
 // ---- /admin/break-glass (login) --------------------------------------------
 
-// handleLoginForm returns a tiny JSON descriptor describing the
-// route shape so the 4c UI (or any caller) can introspect at GET
-// time. Pre-4c there's no HTML to render here; the operator hits
-// /challenge → /admin/break-glass directly via the runbook's
-// browser shim.
-func (h *Handler) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(r.Context(), w, "rate_limited")
-		return
-	}
-	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
-		"endpoints": map[string]string{
-			"challenge": cookiePath + "/challenge",
-			"submit":    cookiePath,
-		},
-		"requires": []string{"email", "password", "webauthn_assertion"},
-	})
-}
-
 // handleBeginLogin issues the WebAuthn assertion challenge for the
 // presented email. JSON body: {"email": "..."}.
 func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -302,6 +339,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 // handleFinishLogin verifies password + assertion and mints a
 // session. JSON body: {"email": "...", "password": "...", "assertion": <CredentialAssertionResponse JSON>}.
 func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
