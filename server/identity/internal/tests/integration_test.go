@@ -60,7 +60,7 @@ func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 		Logger:            slog.Default(),
 		LoginRatePerMin:   60,
 		CookieSecure:      false,
-		SessionTTL:        time.Hour,
+		SessionAbsolute:   time.Hour,
 		CleanupInterval:   time.Hour, // not exercised by these tests
 		SessionSigningKey: signingKey,
 	})

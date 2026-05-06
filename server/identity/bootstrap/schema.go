@@ -196,6 +196,7 @@ var schemaStatements = []string{
 		created_at    TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		last_seen_at  TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 		                             ON UPDATE CURRENT_TIMESTAMP(6),
+		last_auth_at  TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		expires_at    TIMESTAMP(6)   NOT NULL,
 		INDEX idx_sessions_expires (expires_at),
 		INDEX idx_sessions_user_id (user_id),
@@ -205,6 +206,15 @@ var schemaStatements = []string{
 		CONSTRAINT fk_sessions_identity FOREIGN KEY (identity_id)
 			REFERENCES identities(id) ON DELETE CASCADE
 	)`,
+	// last_auth_at tracks the most recent authentication event for the
+	// session — initial login, OIDC callback re-use during reauth, or
+	// break-glass reauth POST. Phase 5's reauth window compares it to
+	// NOW() to compute Actor.SessionFresh; destructive actions
+	// (host.isolate, host.kill_process, host.run_script,
+	// alert.resolve when severity=critical) deny with reason
+	// "reauth_required" when SessionFresh is false. Distinct from
+	// last_seen_at, which tracks any authenticated request and is the
+	// idle-timeout source.
 	// audit_events is the append-only operator audit trail. Append-only is
 	// enforced primarily by the application code (no UPDATE/DELETE paths
 	// in the audit package, no Update/Delete methods on AuditRecorder)

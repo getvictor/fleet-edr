@@ -251,6 +251,39 @@ type Config struct {
 	// one is required when the break-glass surface is enabled;
 	// production typically pins the externally reachable HTTPS URL.
 	BreakglassRPOrigins []string
+
+	// Phase 5 session timeouts + reauth window. All zero-valued
+	// fields fall through to the sessions package defaults
+	// (Normal: 8h idle / 24h absolute; Break-glass: 15m idle / 1h
+	// absolute; reauth window: 30m). Operators tune these per
+	// deployment via the corresponding env vars; the package
+	// defaults match the wave-1 spec.
+	//
+	// SessionIdleTimeout is the inactivity cap for OIDC-minted
+	// sessions. Idle = NOW() - last_seen_at; the middleware slides
+	// last_seen_at on every authenticated request so an active
+	// operator never trips it.
+	SessionIdleTimeout time.Duration
+	// SessionAbsoluteTimeout is the hard age cap for OIDC-minted
+	// sessions. The session expires at created_at + this value
+	// regardless of activity, forcing a periodic re-authentication.
+	SessionAbsoluteTimeout time.Duration
+	// BreakglassSessionIdleTimeout is the strict idle cap for the
+	// recovery surface. Recovery sessions are short-lived by
+	// design; a stolen cookie has at most this much time to be
+	// abused before idle expiry kicks in.
+	BreakglassSessionIdleTimeout time.Duration
+	// BreakglassSessionAbsoluteTimeout is the absolute cap for
+	// recovery sessions. Tighter than the OIDC cap because the
+	// recovery account carries elevated privilege.
+	BreakglassSessionAbsoluteTimeout time.Duration
+	// ReauthWindow is the freshness gate the chokepoint reads via
+	// Actor.SessionFresh. Destructive actions (host.isolate,
+	// host.kill_process, host.run_script, alert.resolve when
+	// severity=critical) deny with reason="reauth_required" when
+	// last_auth_at is older than this. The UI's useReauthRetry
+	// wrapper converts the deny into an inline reauth prompt.
+	ReauthWindow time.Duration
 }
 
 // TLSEnabled reports whether TLS cert and key are both set.
@@ -313,6 +346,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	loadProcessConfig(&c, getenv, &errs)
 	loadOIDCConfig(&c, getenv, &errs)
 	loadBreakglassConfig(&c, getenv, &errs)
+	loadSessionTimeouts(&c, getenv, &errs)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -584,4 +618,21 @@ func loadBreakglassConfig(c *Config, getenv func(string) string, errs *[]error) 
 	if v := getenv("EDR_BREAKGLASS_RP_ORIGINS"); v != "" {
 		c.BreakglassRPOrigins = splitCSV(v)
 	}
+}
+
+// loadSessionTimeouts reads the Phase 5 session-timeout knobs. Every
+// field is optional; bootstrap passes zero values through to the
+// sessions package which substitutes its documented defaults
+// (8h/24h normal, 15m/1h break-glass, 30m reauth window).
+func loadSessionTimeouts(c *Config, getenv func(string) string, errs *[]error) {
+	envparse.PositiveDuration(getenv,
+		"EDR_SESSION_IDLE_TIMEOUT", &c.SessionIdleTimeout, errs)
+	envparse.PositiveDuration(getenv,
+		"EDR_SESSION_ABSOLUTE_TIMEOUT", &c.SessionAbsoluteTimeout, errs)
+	envparse.PositiveDuration(getenv,
+		"EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT", &c.BreakglassSessionIdleTimeout, errs)
+	envparse.PositiveDuration(getenv,
+		"EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT", &c.BreakglassSessionAbsoluteTimeout, errs)
+	envparse.PositiveDuration(getenv,
+		"EDR_REAUTH_WINDOW", &c.ReauthWindow, errs)
 }

@@ -116,6 +116,13 @@ type Resource struct {
 	TenantID string `json:"tenant_id"`
 	Type     string `json:"type,omitempty"`
 	ID       string `json:"id,omitempty"`
+	// Severity is set only on alert-typed resources; it conditions
+	// the reauth-required gate. Phase 5: alert.resolve when
+	// severity=="critical" requires actor.session_fresh; lower
+	// severities pass through. Empty string for non-alert
+	// resources, and `omitempty` keeps OPA's input.resource map
+	// from carrying a meaningless field for them.
+	Severity string `json:"severity,omitempty"`
 }
 
 // Decision is the chokepoint's response. Reason is the policy-supplied
@@ -137,10 +144,29 @@ type Resource struct {
 //   - "shadow_mode": the policy decision was deny but the engine is
 //     in shadow mode; Allow is forced to true and the audit row
 //     records the would-be deny in its payload.
+//   - "reauth_required": the actor has the role to perform the
+//     action but session_fresh is false (Phase 5). HTTPGate maps
+//     this to 403 + body { error, challenge } that the UI converts
+//     into an inline reauth prompt + retry.
 type Decision struct {
 	Allow  bool   `json:"allow"`
 	Reason string `json:"reason"`
 }
+
+// Reason* are the canonical Decision.Reason values. Authz callers
+// compare against these constants rather than string literals so a
+// rename or addition is a compile error, not a silent drift between
+// the engine, HTTPGate, and the audit-log dashboard.
+const (
+	ReasonGranted               = "granted"
+	ReasonNoMatchingRule        = "no_matching_rule"
+	ReasonScopeNotYetSupported  = "scope_not_yet_supported"
+	ReasonActionNotRegistered   = "action_not_registered"
+	ReasonNoActor               = "no_actor"
+	ReasonResourceTenantMissing = "resource_tenant_missing"
+	ReasonShadowMode            = "shadow_mode"
+	ReasonReauthRequired        = "reauth_required"
+)
 
 // Actor is built once by session middleware and threaded through
 // context.Context. The chokepoint reads Actor.* + Roles to evaluate

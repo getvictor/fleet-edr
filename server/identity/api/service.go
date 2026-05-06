@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // Service is the identity bounded context's full business surface.
@@ -59,10 +60,35 @@ type Service interface {
 	// well under the chokepoint's p99 latency budget.
 	//
 	// authMethod records how the session was authenticated
-	// ('local_password' for break-glass, 'oidc' for SSO). A future
-	// reauth-window implementation will populate Actor.SessionFresh;
-	// for now callers pass authMethod and SessionFresh defaults to
-	// false so destructive-action policies that gate on it default
-	// to deny.
-	LoadActor(ctx context.Context, userID int64, authMethod string) (*Actor, error)
+	// ('local_password' for break-glass, 'oidc' for SSO).
+	// sessionFresh is the Phase 5 reauth-window flag (true when
+	// last_auth_at is within the reauth window); the chokepoint's
+	// destructive-action rules deny with reason="reauth_required"
+	// when the role grants the action but sessionFresh is false.
+	LoadActor(ctx context.Context, userID int64, authMethod string, sessionFresh bool) (*Actor, error)
+
+	// UpdateLastAuthAt stamps the session's freshness timestamp to
+	// NOW(), resetting the reauth window. Called from the OIDC
+	// callback when handling a reauth=1 dispatch (re-uses the
+	// existing session row instead of minting a new one) and from
+	// the break-glass reauth POST endpoint after credential
+	// verification. Returns ErrSessionNotFound when no session
+	// matches the token.
+	UpdateLastAuthAt(ctx context.Context, sessionToken []byte) error
+
+	// IsFresh reports whether the session's last_auth_at falls
+	// within the configured reauth window. The Session middleware
+	// reads it at request time to populate Actor.SessionFresh.
+	// Returns false for a nil session.
+	IsFresh(s *Session) bool
+
+	// TouchSession advances the session's last_seen_at to NOW(),
+	// throttled so a tight-loop of authenticated requests collapses
+	// to one DB write per ~minute. The Session middleware calls it
+	// on every authed request as the sliding-extension mechanism
+	// behind the idle timeout. cachedLastSeen lets the store skip
+	// the UPDATE without a SELECT when the cached value is already
+	// fresh. Errors are non-fatal — a missed touch costs at most
+	// the throttle window of idle granularity.
+	TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) error
 }

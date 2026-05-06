@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/rbac"
@@ -135,11 +136,10 @@ func (s *service) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 // row has been deleted out from under a still-valid session — the
 // caller (session middleware) maps it to a 401 + cookie clear.
 //
-// A future reauth-window implementation will populate
-// Actor.SessionFresh based on the session's last fresh-auth event;
-// until that lands the value stays false so destructive-action
-// policies that gate on it default to deny.
-func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string) (*api.Actor, error) {
+// sessionFresh is the Phase 5 reauth-window flag the middleware
+// computes from sess.LastAuthAt; the chokepoint's destructive-action
+// rules read it via Actor.SessionFresh.
+func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string, sessionFresh bool) (*api.Actor, error) {
 	u, err := s.users.Get(ctx, userID)
 	if errors.Is(err, users.ErrNotFound) {
 		return nil, api.ErrUserNotFound
@@ -157,8 +157,46 @@ func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string
 		IsBreakglass: u.IsBreakglass,
 		AuthMethod:   authMethod,
 		Roles:        bindings,
-		SessionFresh: false,
+		SessionFresh: sessionFresh,
 	}, nil
+}
+
+// UpdateLastAuthAt stamps the session's freshness window. Called from
+// the OIDC callback when handling a reauth=1 dispatch and from the
+// break-glass reauth POST endpoint. Returns ErrSessionNotFound when
+// no row matches the digest.
+func (s *service) UpdateLastAuthAt(ctx context.Context, sessionToken []byte) error {
+	if err := s.sessions.UpdateLastAuthAt(ctx, sessionToken); err != nil {
+		if errors.Is(err, sessions.ErrNotFound) {
+			return api.ErrSessionNotFound
+		}
+		return fmt.Errorf("update last_auth_at: %w", err)
+	}
+	return nil
+}
+
+// IsFresh reports whether sess.LastAuthAt falls within the configured
+// reauth window. Pass-through to the sessions store; lifted to the
+// public Service surface so middleware can call it through the api
+// boundary without importing internal/sessions.
+func (s *service) IsFresh(sess *api.Session) bool {
+	if sess == nil {
+		return false
+	}
+	// Reconstruct a sessions.Session shell with LastAuthAt — that's
+	// the only field the store's IsFresh inspects.
+	return s.sessions.IsFresh(&sessions.Session{LastAuthAt: sess.LastAuthAt})
+}
+
+// TouchSession advances the session's last_seen_at if the cached value
+// is older than the store's throttle window. Wraps sessions.Store.Touch.
+// Errors are returned but middleware logs + continues; a missed touch
+// costs at most one minute of idle granularity.
+func (s *service) TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) error {
+	if _, err := s.sessions.Touch(ctx, sessionToken, cachedLastSeen); err != nil {
+		return fmt.Errorf("touch session: %w", err)
+	}
+	return nil
 }
 
 // toAPIUser converts the internal users.User row into the operator-visible
@@ -195,6 +233,7 @@ func toAPISession(s *sessions.Session) *api.Session {
 		AuthMethod: authMethod,
 		CreatedAt:  s.CreatedAt,
 		LastSeenAt: s.LastSeenAt,
+		LastAuthAt: s.LastAuthAt,
 		ExpiresAt:  s.ExpiresAt,
 		CSRFToken:  s.CSRFToken,
 	}

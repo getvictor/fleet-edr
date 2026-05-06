@@ -150,14 +150,163 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	// doesn't tie the test to wall-clock duration.
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
-	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
+	s := newTestStore(t, sessions.Options{
+		Normal: sessions.Timeouts{Idle: time.Hour, Absolute: time.Hour},
+		Now:    nowFn,
+	})
 	ctx := t.Context()
 
 	created, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 
-	advance(2 * time.Hour) // past the 1 hour TTL
+	advance(2 * time.Hour) // past the 1 hour absolute cap
 	_, err = s.Get(ctx, created.ID)
+	require.ErrorIs(t, err, sessions.ErrNotFound)
+}
+
+// TestGet_IdleExpiryReturnsNotFound covers the idle-cap branch: created
+// recently (so absolute hasn't elapsed) but last_seen_at hasn't been touched
+// in longer than Idle. Real-world shape: operator opens a tab, walks away
+// without interacting for the idle window.
+func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
+	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
+	nowFn, advance := frozenClock(start)
+	s := newTestStore(t, sessions.Options{
+		Normal: sessions.Timeouts{Idle: 30 * time.Minute, Absolute: 24 * time.Hour},
+		Now:    nowFn,
+	})
+	ctx := t.Context()
+
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{AuthMethod: "oidc"})
+	require.NoError(t, err)
+
+	advance(31 * time.Minute) // past idle, well within absolute
+	_, err = s.Get(ctx, created.ID)
+	require.ErrorIs(t, err, sessions.ErrNotFound)
+}
+
+// TestGet_BreakglassUsesStrictTimeouts pins the per-class behaviour: a
+// session minted with auth_method="local_password" expires under the
+// break-glass pair, not the normal pair. The Idle here would be inside the
+// break-glass cap if normal applied; under break-glass it's past.
+func TestGet_BreakglassUsesStrictTimeouts(t *testing.T) {
+	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
+	nowFn, advance := frozenClock(start)
+	s := newTestStore(t, sessions.Options{
+		Normal:     sessions.Timeouts{Idle: 8 * time.Hour, Absolute: 24 * time.Hour},
+		Breakglass: sessions.Timeouts{Idle: 15 * time.Minute, Absolute: 1 * time.Hour},
+		Now:        nowFn,
+	})
+	ctx := t.Context()
+
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{AuthMethod: "local_password"})
+	require.NoError(t, err)
+
+	advance(20 * time.Minute) // past break-glass idle (15m), well inside normal idle (8h)
+	_, err = s.Get(ctx, created.ID)
+	require.ErrorIs(t, err, sessions.ErrNotFound, "break-glass session must enforce the strict pair")
+}
+
+// TestTouch_SlidingExtensionWithinAbsoluteCap proves the user-visible
+// behaviour: a continuously-active session stays alive past the idle window
+// because each Touch advances last_seen_at. The absolute cap still wins.
+func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {
+	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
+	nowFn, advance := frozenClock(start)
+	s := newTestStore(t, sessions.Options{
+		Normal: sessions.Timeouts{Idle: 30 * time.Minute, Absolute: 2 * time.Hour},
+		Now:    nowFn,
+	})
+	ctx := t.Context()
+
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{AuthMethod: "oidc"})
+	require.NoError(t, err)
+	cached := created.LastSeenAt
+
+	// Three iterations of "20 min activity then a Touch" — total 60 min of
+	// continuous activity past what would otherwise be a 30-min idle expiry.
+	for range 3 {
+		advance(20 * time.Minute)
+		newSeen, err := s.Touch(ctx, created.ID, cached)
+		require.NoError(t, err)
+		assert.True(t, newSeen.After(cached), "touch must advance last_seen_at past throttle")
+		cached = newSeen
+	}
+
+	// Session is still alive 60min after creation despite a 30min idle window.
+	got, err := s.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.WithinDuration(t, nowFn(), got.LastSeenAt, time.Second)
+
+	// Push past the absolute cap (2h). Touch can't save it.
+	advance(2 * time.Hour)
+	_, _ = s.Touch(ctx, created.ID, cached)
+	_, err = s.Get(ctx, created.ID)
+	require.ErrorIs(t, err, sessions.ErrNotFound, "absolute cap wins over sliding extension")
+}
+
+// TestTouch_ThrottleSkipsRecentWrites verifies the per-session write-rate
+// cap: a Touch within the throttle window is a no-op. Without this the
+// middleware would write last_seen_at on every authenticated request,
+// turning a busy session into a high-rate write.
+func TestTouch_ThrottleSkipsRecentWrites(t *testing.T) {
+	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
+	nowFn, advance := frozenClock(start)
+	s := newTestStore(t, sessions.Options{Normal: sessions.Timeouts{Idle: time.Hour, Absolute: time.Hour}, Now: nowFn})
+	ctx := t.Context()
+
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{AuthMethod: "oidc"})
+	require.NoError(t, err)
+
+	// Inside throttle: caller's cached value is returned, no UPDATE runs.
+	advance(30 * time.Second)
+	got, err := s.Touch(ctx, created.ID, created.LastSeenAt)
+	require.NoError(t, err)
+	assert.Equal(t, created.LastSeenAt, got, "touch within throttle must not advance the cached value")
+
+	// Past throttle: UPDATE runs, returned value is the new clock reading.
+	advance(2 * time.Minute)
+	got2, err := s.Touch(ctx, created.ID, created.LastSeenAt)
+	require.NoError(t, err)
+	assert.True(t, got2.After(created.LastSeenAt), "touch past throttle must advance last_seen_at")
+}
+
+// TestUpdateLastAuthAt_StampsAndBumpsLastSeen pins the contract Phase 5
+// relies on: a successful reauth resets BOTH freshness and idle timers.
+// IsFresh flips back to true; idle countdown restarts.
+func TestUpdateLastAuthAt_StampsAndBumpsLastSeen(t *testing.T) {
+	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
+	nowFn, advance := frozenClock(start)
+	s := newTestStore(t, sessions.Options{
+		Normal:       sessions.Timeouts{Idle: time.Hour, Absolute: 24 * time.Hour},
+		ReauthWindow: 30 * time.Minute,
+		Now:          nowFn,
+	})
+	ctx := t.Context()
+
+	created, err := s.Create(ctx, 1, sessions.CreateOptions{AuthMethod: "oidc"})
+	require.NoError(t, err)
+	assert.True(t, s.IsFresh(created), "freshly minted session must be fresh")
+
+	advance(45 * time.Minute) // past reauth window
+	stale, err := s.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.False(t, s.IsFresh(stale), "session past reauth window must be stale")
+
+	require.NoError(t, s.UpdateLastAuthAt(ctx, created.ID))
+
+	refreshed, err := s.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.True(t, s.IsFresh(refreshed), "session must be fresh after UpdateLastAuthAt")
+	assert.WithinDuration(t, nowFn(), refreshed.LastSeenAt, time.Second,
+		"UpdateLastAuthAt must also bump last_seen_at — successful auth is activity")
+}
+
+// TestUpdateLastAuthAt_UnknownIDReturnsNotFound covers the defensive branch:
+// a stale cookie that no longer matches a row must not silently succeed.
+func TestUpdateLastAuthAt_UnknownIDReturnsNotFound(t *testing.T) {
+	s := newTestStore(t, sessions.Options{})
+	err := s.UpdateLastAuthAt(t.Context(), make([]byte, sessions.IDLen))
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
@@ -175,13 +324,16 @@ func TestDelete_IsIdempotent(t *testing.T) {
 func TestCleanupExpired_RemovesOnlyExpired(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
-	s := newTestStore(t, sessions.Options{TTL: time.Hour, Now: nowFn})
+	s := newTestStore(t, sessions.Options{
+		Normal: sessions.Timeouts{Idle: time.Hour, Absolute: time.Hour},
+		Now:    nowFn,
+	})
 	ctx := t.Context()
 
 	active, err := s.Create(ctx, 1, sessions.CreateOptions{})
 	require.NoError(t, err)
 
-	// Advance past TTL so the first row expires, then create a fresh row.
+	// Advance past the absolute cap so the first row expires, then create a fresh row.
 	advance(2 * time.Hour)
 	stillActive, err := s.Create(ctx, 2, sessions.CreateOptions{})
 	require.NoError(t, err)

@@ -32,9 +32,16 @@ type Deps struct {
 	Logger          *slog.Logger
 	LoginRatePerMin int
 	CookieSecure    bool
-	// SessionTTL overrides the default session lifetime. Zero means use the
-	// sessions package default (12 h).
-	SessionTTL time.Duration
+	// Session timeouts (Phase 5). Per-class idle + absolute caps replace
+	// the pre-Phase-5 flat TTL. Zero means use the sessions package
+	// defaults: normal 8h idle / 24h absolute, break-glass 15m / 1h.
+	SessionIdle               time.Duration
+	SessionAbsolute           time.Duration
+	BreakglassSessionIdle     time.Duration
+	BreakglassSessionAbsolute time.Duration
+	// ReauthWindow is the freshness gate for destructive actions. Zero
+	// means the sessions package default (30m).
+	ReauthWindow time.Duration
 	// CleanupInterval overrides how often Run sweeps expired sessions. Zero
 	// means use the package default (5 min).
 	CleanupInterval time.Duration
@@ -146,7 +153,17 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	}
 
 	usersStore := users.New(deps.DB)
-	sessionsStore := sessions.New(deps.DB, sessions.Options{TTL: deps.SessionTTL})
+	sessionsStore := sessions.New(deps.DB, sessions.Options{
+		Normal: sessions.Timeouts{
+			Idle:     deps.SessionIdle,
+			Absolute: deps.SessionAbsolute,
+		},
+		Breakglass: sessions.Timeouts{
+			Idle:     deps.BreakglassSessionIdle,
+			Absolute: deps.BreakglassSessionAbsolute,
+		},
+		ReauthWindow: deps.ReauthWindow,
+	})
 	rbacStore := rbac.New(deps.DB)
 	identitiesStore := identities.New(deps.DB)
 	svc := service.New(usersStore, sessionsStore, rbacStore, logger)

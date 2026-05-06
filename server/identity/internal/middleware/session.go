@@ -34,7 +34,7 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			sess, ok := resolveSession(ctx, w, r, svc, logger)
+			sess, rawToken, ok := resolveSession(ctx, w, r, svc, logger)
 			if !ok {
 				return
 			}
@@ -50,6 +50,15 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 			ctx = api.WithSession(ctx, sess)
 			ctx = api.WithActor(ctx, actor)
 			next.ServeHTTP(w, r.WithContext(ctx))
+			// Phase 5 sliding-extension: stamp last_seen_at after the
+			// handler returns so the request itself isn't blocked on the
+			// write. TouchSession is throttled internally — most calls
+			// are a no-op against the cached LastSeenAt. Errors are
+			// logged + dropped; idle granularity tolerates a missed
+			// touch.
+			if err := svc.TouchSession(ctx, rawToken, sess.LastSeenAt); err != nil {
+				logger.WarnContext(ctx, "touch session", "err", err)
+			}
 		})
 	}
 }
@@ -57,19 +66,24 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 // resolveSession reads the cookie, decodes the token, and resolves
 // the session row through the service. On any failure it writes the
 // auth-failure response and returns ok=false; the caller short-circuits.
+//
+// The raw plaintext token is returned alongside the session so the
+// caller can pass it to write-side service methods (TouchSession,
+// UpdateLastAuthAt) without re-reading the cookie. api.Session
+// deliberately does not carry the plaintext.
 func resolveSession(
 	ctx context.Context, w http.ResponseWriter, r *http.Request,
 	svc api.Service, logger *slog.Logger,
-) (*api.Session, bool) {
+) (*api.Session, []byte, bool) {
 	cookie, err := r.Cookie(api.SessionCookieName)
 	if err != nil || cookie.Value == "" {
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "missing_session")
-		return nil, false
+		return nil, nil, false
 	}
 	raw, err := api.DecodeToken(cookie.Value)
 	if err != nil {
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
-		return nil, false
+		return nil, nil, false
 	}
 	sess, err := svc.GetSession(ctx, raw)
 	switch {
@@ -78,13 +92,13 @@ func resolveSession(
 		// elsewhere) and "cookie points at expired row". The UI maps
 		// both to "redirect to login".
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
-		return nil, false
+		return nil, nil, false
 	case err != nil:
 		logger.ErrorContext(ctx, "session lookup", "err", err)
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "session_store_unavailable")
-		return nil, false
+		return nil, nil, false
 	}
-	return sess, true
+	return sess, raw, true
 }
 
 // resolveActor builds the per-request actor (user row + live role
@@ -101,7 +115,11 @@ func resolveActor(
 	if authMethod == "" {
 		authMethod = "local_password"
 	}
-	actor, err := svc.LoadActor(ctx, sess.UserID, authMethod)
+	// Phase 5: Actor.SessionFresh is computed from the session's
+	// last_auth_at and the configured reauth window. The chokepoint
+	// reads it via input.actor.session_fresh to gate destructive
+	// actions; everywhere else the value is informational.
+	actor, err := svc.LoadActor(ctx, sess.UserID, authMethod, svc.IsFresh(sess))
 	switch {
 	case errors.Is(err, api.ErrUserNotFound):
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
