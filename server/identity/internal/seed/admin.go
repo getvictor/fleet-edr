@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
@@ -73,8 +74,8 @@ func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, _ io.Write
 			// password.
 			logger.WarnContext(ctx,
 				"admin seed skipped — canonical email exists but is_breakglass=0; run wave-0 migration",
-				"edr.user.id", existing.ID,
-				"edr.user.email", existing.Email,
+				attrkeys.UserID, existing.ID,
+				attrkeys.UserEmail, existing.Email,
 			)
 			return nil, "", nil
 		}
@@ -90,7 +91,7 @@ func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, _ io.Write
 		// above branch.
 		logger.WarnContext(ctx,
 			"admin seed skipped — canonical email exists but is_breakglass=0; run wave-0 migration",
-			"edr.user.email", DefaultAdminEmail,
+			attrkeys.UserEmail, DefaultAdminEmail,
 		)
 		return nil, "", nil
 	}
@@ -98,8 +99,8 @@ func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, _ io.Write
 		return nil, "", fmt.Errorf("create breakglass admin: %w", err)
 	}
 	logger.InfoContext(ctx, "break-glass admin user seeded",
-		"edr.user.id", u.ID,
-		"edr.user.email", u.Email,
+		attrkeys.UserID, u.ID,
+		attrkeys.UserEmail, u.Email,
 	)
 	return u, "", nil
 }

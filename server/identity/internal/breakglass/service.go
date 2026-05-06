@@ -31,9 +31,32 @@ type Service struct {
 	tokens      *TokenStore
 	credentials *CredentialStore
 	sessions    *sessions.Store
-	webauthn    *webauthn.WebAuthn
+	webauthn    WebAuthnEngine
 	audit       api.AuditRecorder
 	logger      *slog.Logger
+}
+
+// WebAuthnEngine is the slice of *webauthn.WebAuthn the service
+// consumes. Exposed as an interface so test code can swap in a fake
+// without standing up a real browser ceremony — the production
+// path uses *webauthn.WebAuthn (which satisfies the interface
+// natively), tests use a fake that returns deterministic
+// SessionData + Credential values.
+type WebAuthnEngine interface {
+	BeginRegistration(
+		user webauthn.User, opts ...webauthn.RegistrationOption,
+	) (*protocol.CredentialCreation, *webauthn.SessionData, error)
+	CreateCredential(
+		user webauthn.User, session webauthn.SessionData,
+		parsedResponse *protocol.ParsedCredentialCreationData,
+	) (*webauthn.Credential, error)
+	BeginLogin(
+		user webauthn.User, opts ...webauthn.LoginOption,
+	) (*protocol.CredentialAssertion, *webauthn.SessionData, error)
+	ValidateLogin(
+		user webauthn.User, session webauthn.SessionData,
+		parsedResponse *protocol.ParsedCredentialAssertionData,
+	) (*webauthn.Credential, error)
 }
 
 // ServiceOptions carries every dependency Service needs at
@@ -46,7 +69,7 @@ type ServiceOptions struct {
 	Tokens      *TokenStore
 	Credentials *CredentialStore
 	Sessions    *sessions.Store
-	WebAuthn    *webauthn.WebAuthn
+	WebAuthn    WebAuthnEngine
 	Audit       api.AuditRecorder
 	Logger      *slog.Logger
 }

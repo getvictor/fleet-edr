@@ -162,14 +162,14 @@ func TestSetHashedPassword_GuardPaths(t *testing.T) {
 	s := users.New(db)
 
 	err := s.SetHashedPassword(t.Context(), db, 1, nil, []byte("salt"))
-	assert.Error(t, err)
+	require.Error(t, err)
 	err = s.SetHashedPassword(t.Context(), db, 1, []byte("hash"), nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	hash, salt, err := users.HashPassword("a-strong-pass-12c")
 	require.NoError(t, err)
 	err = s.SetHashedPassword(t.Context(), db, 9999999, hash, salt)
-	assert.ErrorIs(t, err, users.ErrNotFound)
+	require.ErrorIs(t, err, users.ErrNotFound)
 }
 
 // CreateBreakglass on an empty table inserts the row with
@@ -201,7 +201,7 @@ func TestCreateBreakglass_ExistingNonBreakglass(t *testing.T) {
 	got, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{
 		Email: "wave0@example.com",
 	})
-	assert.ErrorIs(t, err, users.ErrExistingNonBreakglass)
+	require.ErrorIs(t, err, users.ErrExistingNonBreakglass)
 	require.NotNil(t, got)
 	assert.Equal(t, pre.ID, got.ID)
 	assert.False(t, got.IsBreakglass)

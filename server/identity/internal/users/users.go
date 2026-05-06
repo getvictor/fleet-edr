@@ -67,6 +67,10 @@ var ErrExistingNonBreakglass = errors.New("users: existing non-breakglass user")
 // stays satisfied as new helpers land.
 const errEmailRequired = "users: email is required"
 
+// errPasswordRequired is the password-required twin: same Sonar
+// S1192 reasoning. Used by Create, HashPassword, and SetPassword.
+const errPasswordRequired = "users: password is required"
+
 // Store owns the users table.
 type Store struct {
 	db *sqlx.DB
@@ -93,7 +97,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		return nil, errors.New(errEmailRequired)
 	}
 	if req.Password == "" {
-		return nil, errors.New("users: password is required")
+		return nil, errors.New(errPasswordRequired)
 	}
 	hash, salt, err := hashPassword(req.Password)
 	if err != nil {
@@ -232,7 +236,7 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 // a multi-statement transaction.
 func HashPassword(password string) (hash, salt []byte, err error) {
 	if password == "" {
-		return nil, nil, errors.New("users: password is required")
+		return nil, nil, errors.New(errPasswordRequired)
 	}
 	return hashPassword(password)
 }
@@ -244,7 +248,7 @@ func HashPassword(password string) (hash, salt []byte, err error) {
 // identity insert in one transaction.
 func (s *Store) SetPassword(ctx context.Context, ec Executor, userID int64, password string) error {
 	if password == "" {
-		return errors.New("users: password is required")
+		return errors.New(errPasswordRequired)
 	}
 	hash, salt, err := hashPassword(password)
 	if err != nil {

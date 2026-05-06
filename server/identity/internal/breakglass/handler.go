@@ -229,7 +229,7 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 		// in via /admin/break-glass to get a session. Surface a
 		// directed redirect rather than silently failing.
 		h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
-			"redirect": "/admin/break-glass",
+			"redirect": cookiePath,
 			"hint":     "session_mint_failed",
 		})
 		return
@@ -254,8 +254,8 @@ func (h *Handler) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 	}
 	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"endpoints": map[string]string{
-			"challenge": "/admin/break-glass/challenge",
-			"submit":    "/admin/break-glass",
+			"challenge": cookiePath + "/challenge",
+			"submit":    cookiePath,
 		},
 		"requires": []string{"email", "password", "webauthn_assertion"},
 	})
