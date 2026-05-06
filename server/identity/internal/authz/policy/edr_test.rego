@@ -21,6 +21,7 @@ test_super_admin_can_isolate_host if {
 		"actor": {
 			"tenant_id": "default",
 			"roles": [{"role_id": "super_admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": true,
 		},
 		"action": "host.isolate",
 		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
@@ -61,7 +62,11 @@ test_admin_cannot_read_audit if {
 
 test_senior_analyst_can_kill_process if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "senior_analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "senior_analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": true,
+		},
 		"action": "host.kill_process",
 		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
 	}
@@ -156,8 +161,130 @@ test_tenant_grant_wins_over_host_scope_deny if {
 				{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"},
 				{"role_id": "admin", "tenant_id": "default", "scope_type": "host", "scope_id": "abc"},
 			],
+			"session_fresh": true,
 		},
 		"action": "host.isolate",
+		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+	}
+	d == {"allow": true, "reason": "granted"}
+}
+
+# --- Phase 5 reauth window: destructive actions deny with
+#     reauth_required when the role grants the action but session
+#     freshness is stale. Lower severities pass through.
+
+test_admin_can_isolate_host_when_session_fresh if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": true,
+		},
+		"action": "host.isolate",
+		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+	}
+	d == {"allow": true, "reason": "granted"}
+}
+
+test_admin_isolate_host_denied_when_stale if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.isolate",
+		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+	}
+	d == {"allow": false, "reason": "reauth_required"}
+}
+
+test_admin_kill_process_denied_when_stale if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.kill_process",
+		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+	}
+	d == {"allow": false, "reason": "reauth_required"}
+}
+
+test_admin_run_script_denied_when_stale if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.run_script",
+		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+	}
+	d == {"allow": false, "reason": "reauth_required"}
+}
+
+# Critical-severity alert.resolve is reauth-gated; lower severities
+# pass through even with a stale session. The handler is responsible
+# for fetching alert.severity before the gate.
+
+test_admin_resolve_critical_alert_denied_when_stale if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "alert.resolve",
+		"resource": {"tenant_id": "default", "type": "alert", "id": "12", "severity": "critical"},
+	}
+	d == {"allow": false, "reason": "reauth_required"}
+}
+
+test_admin_resolve_high_alert_allowed_when_stale if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "alert.resolve",
+		"resource": {"tenant_id": "default", "type": "alert", "id": "12", "severity": "high"},
+	}
+	d == {"allow": true, "reason": "granted"}
+}
+
+# Critical defense-in-depth: an analyst (no role granting host.isolate)
+# hitting the destructive surface MUST see no_matching_rule, not
+# reauth_required. Otherwise the wire response leaks role information
+# to a probing attacker.
+
+test_analyst_isolate_host_says_no_matching_rule_not_reauth if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.isolate",
+		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+	}
+	d == {"allow": false, "reason": "no_matching_rule"}
+}
+
+# Reads + non-destructive lifecycle actions are NOT reauth-gated even
+# when the actor's session is stale — the freshness window applies
+# only to the destructive set.
+
+test_admin_read_host_unaffected_by_stale_session if {
+	d := authz.decision with input as {
+		"actor": {
+			"tenant_id": "default",
+			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.read",
 		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
 	}
 	d == {"allow": true, "reason": "granted"}

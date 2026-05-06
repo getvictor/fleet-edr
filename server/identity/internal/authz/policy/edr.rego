@@ -44,11 +44,42 @@ default decision := {"allow": false, "reason": "no_matching_rule"}
 #   - binding.tenant_id matches resource.tenant_id (wave-1 has one
 #     tenant; wave-2 cross-tenant bindings will need their own rule)
 #   - role's grant list contains the action OR the wildcard "*"
+#   - the action does NOT require a fresh auth event, OR the actor's
+#     session_fresh is true (Phase 5 reauth window)
 decision := {"allow": true, "reason": "granted"} if {
-	some binding in input.actor.roles
-	binding.scope_type == "tenant"
-	binding.tenant_id == input.resource.tenant_id
-	role_grants_action(binding.role_id, input.action)
+	granted_via_tenant
+	not requires_fresh_auth(input.action, input.resource)
+}
+
+decision := {"allow": true, "reason": "granted"} if {
+	granted_via_tenant
+	requires_fresh_auth(input.action, input.resource)
+	input.actor.session_fresh
+}
+
+# Phase 5 reauth-required deny: only fires when the role WOULD have
+# granted the action via a tenant binding but the actor's session is
+# stale. Layered on top of granted_via_tenant so an actor without the
+# role sees no_matching_rule (the actually-correct reason) rather than
+# reauth_required, which would leak role information to a probing
+# attacker. Tested in edr_test.rego.
+decision := {"allow": false, "reason": "reauth_required"} if {
+	granted_via_tenant
+	requires_fresh_auth(input.action, input.resource)
+	not input.actor.session_fresh
+}
+
+# requires_fresh_auth pins the destructive-action set: host commands
+# always need freshness; alert.resolve needs it only when the alert is
+# critical-severity. Add new rules here as the action set grows; the
+# pattern is "rule fires when this action+resource pair is destructive
+# enough to warrant proving recent possession of credentials."
+requires_fresh_auth(action, _) if {
+	action in {"host.isolate", "host.kill_process", "host.run_script"}
+}
+
+requires_fresh_auth("alert.resolve", resource) if {
+	resource.severity == "critical"
 }
 
 # Non-tenant scopes (host_group, host) are persisted in role_bindings
