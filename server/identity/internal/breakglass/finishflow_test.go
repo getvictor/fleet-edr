@@ -459,8 +459,12 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 	plaintext, _, err := breakglass.NewTokenStore(db).IssueSetup(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
 
-	// 1. GET the challenge — sets the signed challenge cookie.
-	resp1, err := srv.Client().Get(srv.URL + "/admin/break-glass/setup?token=" + plaintext)
+	// 1. POST the challenge — Phase 4c moved challenge issuance off
+	// GET (now a redirect to /ui/...) onto a dedicated POST so the
+	// React UI can fetch it after the GET landed it. Sets the
+	// signed challenge cookie.
+	resp1, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token="+plaintext,
+		"application/json", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp1.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp1.StatusCode)

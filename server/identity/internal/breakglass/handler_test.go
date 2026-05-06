@@ -81,30 +81,33 @@ func newHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit) {
 // GET /admin/break-glass/setup with no token returns 410. Pinned
 // because a regression that fell through to a free-form challenge
 // would let an attacker farm setup challenges.
-func TestHandleSetupGet_TokenMissing(t *testing.T) {
+func TestHandleSetupChallenge_TokenMissing(t *testing.T) {
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/admin/break-glass/setup")
+	resp, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge",
+		"application/json", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.Equal(t, "token_missing", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// GET /admin/break-glass/setup with an invalid token returns 410
-// with reason bootstrap.invalid in the audit row.
-func TestHandleSetupGet_TokenInvalid(t *testing.T) {
+// POST /admin/break-glass/setup/challenge with an invalid token
+// returns 410 with reason bootstrap.invalid in the audit row.
+func TestHandleSetupChallenge_TokenInvalid(t *testing.T) {
 	h, _, rec := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/admin/break-glass/setup?token=not-a-real-token")
+	resp, err := srv.Client().Post(srv.URL+
+		"/admin/break-glass/setup/challenge?token=not-a-real-token",
+		"application/json", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
@@ -115,10 +118,11 @@ func TestHandleSetupGet_TokenInvalid(t *testing.T) {
 	assert.Equal(t, "bootstrap.invalid", rec.events[0].Payload["reason"])
 }
 
-// GET /admin/break-glass/setup with a VALID, freshly issued token
-// returns 200 + a CredentialCreationOptions JSON body + the signed
-// challenge cookie. Pinned to confirm the BeginSetup path round-trips.
-func TestHandleSetupGet_ValidTokenIssuesChallenge(t *testing.T) {
+// POST /admin/break-glass/setup/challenge with a VALID, freshly
+// issued token returns 200 + a CredentialCreationOptions JSON body
+// + the signed challenge cookie. Pinned to confirm the BeginSetup
+// path round-trips through the new POST endpoint.
+func TestHandleSetupChallenge_ValidTokenIssuesChallenge(t *testing.T) {
 	h, db, _ := newHandler(t)
 	ctx := t.Context()
 
@@ -138,7 +142,9 @@ func TestHandleSetupGet_ValidTokenIssuesChallenge(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/admin/break-glass/setup?token=" + plaintext)
+	resp, err := srv.Client().Post(srv.URL+
+		"/admin/break-glass/setup/challenge?token="+plaintext,
+		"application/json", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -159,6 +165,49 @@ func TestHandleSetupGet_ValidTokenIssuesChallenge(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "challenge cookie must be set")
+}
+
+// GET /admin/break-glass/setup redirects 302 to /ui/admin/break-glass/setup
+// preserving the token query string. The operator clicks the
+// printed redemption URL → server sends them to the React UI →
+// React page POSTs to /admin/break-glass/setup/challenge.
+func TestHandleSetupRedirect_PreservesToken(t *testing.T) {
+	h, _, _ := newHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	// httptest.Client follows redirects by default; build a
+	// non-following client so we can inspect the 302.
+	client := *srv.Client()
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Get(srv.URL + "/admin/break-glass/setup?token=abc-123")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, "/ui/admin/break-glass/setup?token=abc-123",
+		resp.Header.Get("Location"))
+}
+
+// GET /admin/break-glass redirects 302 to /ui/admin/break-glass
+// (no query string to preserve).
+func TestHandleLoginRedirect(t *testing.T) {
+	h, _, _ := newHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	client := *srv.Client()
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Get(srv.URL + "/admin/break-glass")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, "/ui/admin/break-glass", resp.Header.Get("Location"))
 }
 
 // POST /admin/break-glass with no challenge cookie returns 400
@@ -220,28 +269,6 @@ func TestHandleBeginLogin_UnknownEmail(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assert.Equal(t, "no_credentials", resp.Header.Get("X-Edr-Auth-Reason"))
-}
-
-// GET /admin/break-glass returns the JSON descriptor without
-// requiring auth or a challenge cookie. Pinned because the route
-// MUST stay reachable so 4c (or curl-driven recovery) can
-// introspect.
-func TestHandleLoginForm_ReturnsDescriptor(t *testing.T) {
-	h, _, _ := newHandler(t)
-	mux := http.NewServeMux()
-	h.RegisterPublicRoutes(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	resp, err := srv.Client().Get(srv.URL + "/admin/break-glass")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	assert.Contains(t, body, "endpoints")
-	assert.Contains(t, body, "requires")
 }
 
 // POST /admin/break-glass/setup with no token returns 410.

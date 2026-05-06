@@ -90,9 +90,21 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 }
 
-// RegisterPublicRoutes mounts the four break-glass routes onto mux.
-// All four are pre-auth; access is gated by the IP allowlist
-// middleware + per-IP rate limit at request time.
+// RegisterPublicRoutes mounts the break-glass routes onto mux.
+// Phase 4c shape:
+//
+//	GET  /admin/break-glass            → 302 /ui/admin/break-glass (UI page)
+//	GET  /admin/break-glass/setup      → 302 /ui/admin/break-glass/setup (UI)
+//	POST /admin/break-glass/challenge       → JSON: assertion challenge
+//	POST /admin/break-glass/setup/challenge → JSON: registration challenge
+//	POST /admin/break-glass                  → JSON: finish login
+//	POST /admin/break-glass/setup            → JSON: atomic redemption
+//
+// All paths are pre-auth; the IP allowlist middleware + per-IP rate
+// limit gate access at request time. The GET redirects do NOT consume
+// the rate-limit budget — they're the public landing for an operator
+// who clicked the printed redemption URL, and a redirect is cheaper
+// than an HTML payload.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	wrap := func(handler http.HandlerFunc) http.Handler {
 		// IP allowlist runs FIRST so off-list callers see a 404
@@ -104,11 +116,30 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 		}
 		return inner
 	}
-	mux.Handle("GET /admin/break-glass/setup", wrap(h.handleBeginSetup))
+	mux.Handle("GET /admin/break-glass/setup", wrap(h.handleSetupRedirect))
+	mux.Handle("GET /admin/break-glass", wrap(h.handleLoginRedirect))
+	mux.Handle("POST /admin/break-glass/setup/challenge", wrap(h.handleBeginSetup))
 	mux.Handle("POST /admin/break-glass/setup", wrap(h.handleFinishSetup))
-	mux.Handle("GET /admin/break-glass", wrap(h.handleLoginForm))
 	mux.Handle("POST /admin/break-glass/challenge", wrap(h.handleBeginLogin))
 	mux.Handle("POST /admin/break-glass", wrap(h.handleFinishLogin))
+}
+
+// handleSetupRedirect 302s to the React setup page, preserving the
+// `token` query string. The redirection target is /ui/admin/break-glass/setup
+// because the React UI is mounted under /ui/. The IP allowlist still
+// applies so off-list callers see 404 instead of a redirect (don't
+// leak the path's existence).
+func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
+	dest := "/ui/admin/break-glass/setup"
+	if q := r.URL.RawQuery; q != "" {
+		dest += "?" + q
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// handleLoginRedirect 302s to the React login page.
+func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/ui/admin/break-glass", http.StatusFound)
 }
 
 // ---- /admin/break-glass/setup ----------------------------------------------
@@ -241,25 +272,6 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- /admin/break-glass (login) --------------------------------------------
-
-// handleLoginForm returns a tiny JSON descriptor describing the
-// route shape so the 4c UI (or any caller) can introspect at GET
-// time. Pre-4c there's no HTML to render here; the operator hits
-// /challenge → /admin/break-glass directly via the runbook's
-// browser shim.
-func (h *Handler) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(r.Context(), w, "rate_limited")
-		return
-	}
-	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
-		"endpoints": map[string]string{
-			"challenge": cookiePath + "/challenge",
-			"submit":    cookiePath,
-		},
-		"requires": []string{"email", "password", "webauthn_assertion"},
-	})
-}
 
 // handleBeginLogin issues the WebAuthn assertion challenge for the
 // presented email. JSON body: {"email": "..."}.
