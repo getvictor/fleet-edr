@@ -117,3 +117,119 @@ func TestCount(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 }
+
+// HashPassword + SetHashedPassword: the Phase 4b split that lets
+// the break-glass redemption flow run argon2id BEFORE BeginTxx,
+// keeping the ~30ms hash off the transaction's lock window.
+func TestHashPassword_AndSetHashedPassword(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	s := users.New(db)
+	created, err := s.Create(t.Context(), users.CreateRequest{
+		Email: "hash@example.com", Password: "initial-password-long-enough",
+	})
+	require.NoError(t, err)
+
+	hash, salt, err := users.HashPassword("new-strong-password-12chars")
+	require.NoError(t, err)
+	assert.NotEmpty(t, hash)
+	assert.NotEmpty(t, salt)
+	assert.NotEqual(t, hash, salt)
+
+	require.NoError(t, s.SetHashedPassword(t.Context(), db, created.ID, hash, salt))
+
+	// The new password verifies; the old one does not.
+	verified, err := s.VerifyPassword(t.Context(),
+		"hash@example.com", "new-strong-password-12chars")
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, verified.ID)
+	_, err = s.VerifyPassword(t.Context(),
+		"hash@example.com", "initial-password-long-enough")
+	assert.ErrorIs(t, err, users.ErrBadPassword)
+}
+
+// HashPassword refuses an empty plaintext.
+func TestHashPassword_EmptyRejects(t *testing.T) {
+	_, _, err := users.HashPassword("")
+	require.Error(t, err)
+}
+
+// SetHashedPassword refuses empty hash + salt; against unknown user
+// id surfaces ErrNotFound (rows-affected == 0).
+func TestSetHashedPassword_GuardPaths(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	s := users.New(db)
+
+	err := s.SetHashedPassword(t.Context(), db, 1, nil, []byte("salt"))
+	assert.Error(t, err)
+	err = s.SetHashedPassword(t.Context(), db, 1, []byte("hash"), nil)
+	assert.Error(t, err)
+
+	hash, salt, err := users.HashPassword("a-strong-pass-12c")
+	require.NoError(t, err)
+	err = s.SetHashedPassword(t.Context(), db, 9999999, hash, salt)
+	assert.ErrorIs(t, err, users.ErrNotFound)
+}
+
+// CreateBreakglass on an empty table inserts the row with
+// is_breakglass=1 and NULL password; idempotent on re-call.
+func TestCreateBreakglass_FreshInsertAndIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{
+		Email: "bg@example.com",
+	})
+	require.NoError(t, err)
+	assert.True(t, u.IsBreakglass)
+	again, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{
+		Email: "bg@example.com",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, u.ID, again.ID)
+}
+
+// CreateBreakglass over a pre-existing non-breakglass row surfaces
+// ErrExistingNonBreakglass + the existing user. The wave-0
+// migration runbook handles the row-mutation explicitly; the
+// service layer must not silently flip is_breakglass=0 → 1.
+func TestCreateBreakglass_ExistingNonBreakglass(t *testing.T) {
+	s := newTestStore(t)
+	pre, err := s.Create(t.Context(), users.CreateRequest{
+		Email: "wave0@example.com", Password: "wave0-password-long",
+	})
+	require.NoError(t, err)
+	got, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{
+		Email: "wave0@example.com",
+	})
+	assert.ErrorIs(t, err, users.ErrExistingNonBreakglass)
+	require.NotNil(t, got)
+	assert.Equal(t, pre.ID, got.ID)
+	assert.False(t, got.IsBreakglass)
+}
+
+// CreateBreakglass refuses an empty email.
+func TestCreateBreakglass_EmptyEmail(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{Email: ""})
+	require.Error(t, err)
+}
+
+// GetByEmail returns ErrNotFound for an unknown email.
+func TestGetByEmail_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.GetByEmail(t.Context(), "ghost@example.com")
+	assert.ErrorIs(t, err, users.ErrNotFound)
+}
+
+// GetByEmail normalises whitespace + case.
+func TestGetByEmail_NormalisedLookup(t *testing.T) {
+	s := newTestStore(t)
+	created, err := s.Create(t.Context(), users.CreateRequest{
+		Email: "Admin@Example.COM", Password: "long-enough-password",
+	})
+	require.NoError(t, err)
+	got, err := s.GetByEmail(t.Context(), "  admin@example.com ")
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, got.ID)
+	assert.Equal(t, "admin@example.com", got.Email)
+}

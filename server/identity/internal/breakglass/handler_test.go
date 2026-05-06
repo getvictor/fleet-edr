@@ -222,6 +222,131 @@ func TestHandleBeginLogin_UnknownEmail(t *testing.T) {
 	assert.Equal(t, "no_credentials", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
+// GET /admin/break-glass returns the JSON descriptor without
+// requiring auth or a challenge cookie. Pinned because the route
+// MUST stay reachable so 4c (or curl-driven recovery) can
+// introspect.
+func TestHandleLoginForm_ReturnsDescriptor(t *testing.T) {
+	h, _, _ := newHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL + "/admin/break-glass")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Contains(t, body, "endpoints")
+	assert.Contains(t, body, "requires")
+}
+
+// POST /admin/break-glass/setup with no token returns 410.
+func TestHandleSetupPost_TokenMissing(t *testing.T) {
+	h, _, _ := newHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup",
+		"application/json", strings.NewReader(`{"password":"long-enough-password","attestation":{}}`))
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.Equal(t, "token_missing", resp.Header.Get("X-Edr-Auth-Reason"))
+}
+
+// POST /admin/break-glass/setup without the challenge cookie returns
+// 400 challenge_missing. The cookie is the integrity gate; absence
+// is unrecoverable.
+func TestHandleSetupPost_ChallengeMissing(t *testing.T) {
+	h, _, _ := newHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup?token=anything",
+		"application/json", strings.NewReader(`{"password":"long-enough-password","attestation":{}}`))
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "challenge_missing", resp.Header.Get("X-Edr-Auth-Reason"))
+}
+
+// POST /admin/break-glass/challenge with malformed JSON returns 400
+// body_invalid. Pinned because handler must reject before reaching
+// the service layer.
+func TestHandleBeginLogin_BadBody(t *testing.T) {
+	h, _, _ := newHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Post(srv.URL+"/admin/break-glass/challenge",
+		"application/json", strings.NewReader(`not-json`))
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "body_invalid", resp.Header.Get("X-Edr-Auth-Reason"))
+}
+
+// POST /admin/break-glass with malformed assertion JSON returns 400
+// assertion_parse_failed.
+func TestHandleFinishLogin_AssertionParseFailed(t *testing.T) {
+	h, db, _ := newHandler(t)
+	ctx := t.Context()
+	// Seed an admin user + credential so we get past GetByEmail.
+	res, err := db.ExecContext(ctx,
+		`INSERT INTO users (email, is_breakglass) VALUES (?, 1)`,
+		"admin@fleet-edr.local")
+	require.NoError(t, err)
+	uid, err := res.LastInsertId()
+	require.NoError(t, err)
+	creds := breakglass.NewCredentialStore(db)
+	_, err = creds.InsertWith(ctx, db, uid, fakeCredential("a", "pk", 1), "")
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Need a valid challenge cookie. Issue one via BeginLogin.
+	respChal, err := srv.Client().Post(srv.URL+"/admin/break-glass/challenge",
+		"application/json", strings.NewReader(`{"email":"admin@fleet-edr.local"}`))
+	require.NoError(t, err)
+	defer func() { _ = respChal.Body.Close() }()
+	require.Equal(t, http.StatusOK, respChal.StatusCode)
+
+	var challengeCookie *http.Cookie
+	for _, c := range respChal.Cookies() {
+		if c.Name == breakglass.ChallengeStateCookieName {
+			challengeCookie = c
+		}
+	}
+	require.NotNil(t, challengeCookie)
+
+	// Submit a malformed assertion. Server must reject with 400
+	// assertion_parse_failed BEFORE reaching the FinishLogin path.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		srv.URL+"/admin/break-glass",
+		strings.NewReader(`{"email":"admin@fleet-edr.local","password":"x","assertion":{"not":"valid"}}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(challengeCookie)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "assertion_parse_failed", resp.Header.Get("X-Edr-Auth-Reason"))
+}
+
 // IP allowlist 404 for off-list callers. Pinned because the spec
 // requires the surface's existence to NOT be acknowledged.
 func TestHandle_OffAllowlist404(t *testing.T) {
