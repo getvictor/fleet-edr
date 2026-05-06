@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jmoiron/sqlx"
@@ -166,6 +167,14 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	if err := ValidatePassword(req.Password); err != nil {
 		return nil, err
 	}
+	// Hash the password BEFORE opening the transaction. Argon2id
+	// holds ~30ms of CPU per call on M-series hardware; running it
+	// inside the redemption tx would extend lock duration and cause
+	// contention under any nontrivial load.
+	hash, salt, err := users.HashPassword(req.Password)
+	if err != nil {
+		return nil, fmt.Errorf("breakglass: hash password: %w", err)
+	}
 	wuser := User{ID: req.User.ID, Email: req.User.Email}
 	cred, err := s.webauthn.CreateCredential(wuser, req.Session, req.Attestation)
 	if err != nil {
@@ -186,25 +195,16 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	if err := s.tokens.MarkRedeemed(ctx, tx, req.Token.ID); err != nil {
 		return nil, err
 	}
-	if err := s.users.SetPassword(ctx, tx, req.User.ID, req.Password); err != nil {
+	if err := s.users.SetHashedPassword(ctx, tx, req.User.ID, hash, salt); err != nil {
 		return nil, fmt.Errorf("breakglass: set password: %w", err)
 	}
 	credID, err := s.credentials.InsertWith(ctx, tx, req.User.ID, *cred, req.CredentialName)
 	if err != nil {
 		return nil, fmt.Errorf("breakglass: persist credential: %w", err)
 	}
-	identityID, err := s.identities.InsertWith(ctx, tx,
-		req.User.ID, identities.ProviderLocalPassword, req.User.Email)
+	identityID, err := s.resolveLocalPasswordIdentityID(ctx, tx, req.User)
 	if err != nil {
-		// Identity row may already exist from an earlier seed; reuse it.
-		// Look up the existing row outside the transaction (CASCADE
-		// guarantees consistency even if we read post-commit).
-		existing, lookupErr := s.identities.FindByProviderSubject(ctx,
-			identities.ProviderLocalPassword, req.User.Email)
-		if lookupErr != nil {
-			return nil, fmt.Errorf("breakglass: insert identity: %w", err)
-		}
-		identityID = existing.ID
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -235,9 +235,62 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 		AuthMethod: identities.ProviderLocalPassword,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("breakglass: mint session: %w", err)
+		// Setup committed; only the post-commit session mint failed.
+		// The redemption is a one-shot, so we MUST NOT return an
+		// error that suggests the operator should retry the URL —
+		// the token is already consumed. Return a successful result
+		// with Session=nil; the handler renders a "log in via
+		// /admin/break-glass" hint instead of setting the cookie.
+		s.logger.ErrorContext(ctx, "breakglass post-commit session mint failed",
+			"err", err, "user_id", req.User.ID,
+			"credential_id", credID, "identity_id", identityID)
+		return &FinishSetupResult{Session: nil, CredentialID: credID}, nil
 	}
 	return &FinishSetupResult{Session: sess, CredentialID: credID}, nil
+}
+
+// resolveLocalPasswordIdentityID inserts the local_password
+// identity row for the redeeming user, OR — when the row already
+// exists from an earlier seed — finds it. Distinguishes
+// duplicate-key (the only acceptable path to "row already exists")
+// from any other DB failure: a transient outage or permission
+// glitch must propagate so the redemption rolls back instead of
+// silently committing a partial account.
+func (s *Service) resolveLocalPasswordIdentityID(
+	ctx context.Context, tx *sqlx.Tx, u *users.User,
+) (int64, error) {
+	id, err := s.identities.InsertWith(ctx, tx,
+		u.ID, identities.ProviderLocalPassword, u.Email)
+	if err == nil {
+		return id, nil
+	}
+	if !isMySQLDuplicateKey(err) {
+		return 0, fmt.Errorf("breakglass: insert identity: %w", err)
+	}
+	// Dup-key only: the row exists from a prior seed/migration.
+	// Look it up via the same tx so the CASCADE guarantees a
+	// consistent read.
+	existing, lookupErr := s.identities.FindByProviderSubject(ctx,
+		identities.ProviderLocalPassword, u.Email)
+	if lookupErr != nil {
+		return 0, fmt.Errorf("breakglass: lookup existing identity: %w", lookupErr)
+	}
+	return existing.ID, nil
+}
+
+// mysqlErrDupEntry is the MySQL "Duplicate entry" code we expect on
+// the local_password identity insert when the row already exists.
+// Lifted to a const so the magic-number lint is satisfied.
+const mysqlErrDupEntry = 1062
+
+// isMySQLDuplicateKey reports whether err wraps the MySQL 1062
+// "Duplicate entry" code. Mirrors the helper in jit.go.
+func isMySQLDuplicateKey(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == mysqlErrDupEntry
 }
 
 // LoginChallenge mirrors SetupChallenge but for the assertion flow.
@@ -299,19 +352,22 @@ type FinishLoginRequest struct {
 // `webauthn.no_credentials`.
 var ErrNoCredentials = errors.New("breakglass: no registered credentials")
 
-// FinishLogin verifies password + WebAuthn assertion and mints a
+// FinishLogin verifies WebAuthn assertion + password and mints a
 // fresh session. Both factors must succeed; either failure yields
 // the same wire 401 + audit row with the precise reason in payload.
 // The new sign_count is persisted via CredentialStore.RecordAssertion;
 // a sign_count regression hard-rejects with ErrCredentialClonedDetected.
+//
+// Order of operations: WebAuthn assertion BEFORE password
+// verification. WebAuthn validation is constant-time crypto;
+// argon2id is intentionally CPU-expensive. An attacker who can
+// trigger the password path before satisfying the cryptographic
+// gate could exhaust server CPU by spraying email + arbitrary
+// password against the endpoint. Inverting the order means the
+// argon2 work runs only after a valid signed assertion lands —
+// which an attacker without the hardware authenticator cannot
+// produce.
 func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*sessions.Session, error) {
-	// Password verification first: a brute-force attacker who hits
-	// FinishLogin without a valid WebAuthn assertion still spends
-	// argon2 cycles per attempt, capping the throughput.
-	if _, err := s.users.VerifyPassword(ctx, req.User.Email, req.Password); err != nil {
-		return nil, err
-	}
-
 	rows, err := s.credentials.ListByUserID(ctx, req.User.ID)
 	if err != nil {
 		return nil, fmt.Errorf("breakglass: list credentials: %w", err)
@@ -324,6 +380,11 @@ func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*ses
 	cred, err := s.webauthn.ValidateLogin(wuser, req.Session, req.Assertion)
 	if err != nil {
 		return nil, fmt.Errorf("breakglass: validate login: %w", err)
+	}
+	// Password second: only callers that already proved possession
+	// of a registered authenticator pay the argon2 cost.
+	if _, err := s.users.VerifyPassword(ctx, req.User.Email, req.Password); err != nil {
+		return nil, err
 	}
 	// Persist the new sign_count + last_used_at. Sign-count regression
 	// is fatal — surfaces ErrCredentialClonedDetected.

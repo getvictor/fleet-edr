@@ -154,7 +154,7 @@ func TestHandleSetupGet_ValidTokenIssuesChallenge(t *testing.T) {
 	for _, c := range resp.Cookies() {
 		if c.Name == breakglass.ChallengeStateCookieName {
 			found = true
-			assert.Equal(t, "/admin/break-glass/", c.Path)
+			assert.Equal(t, "/admin/break-glass", c.Path)
 			assert.True(t, c.HttpOnly)
 		}
 	}

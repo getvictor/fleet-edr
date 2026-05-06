@@ -50,11 +50,11 @@ func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, _ io.Write
 	}
 	if n > 0 {
 		// Existing row(s) present. Look up the canonical break-glass
-		// admin specifically: if it already exists, return it so the
-		// caller can decide whether to issue a fresh redemption
-		// token. If a different user is in the table (wave-0
-		// upgrade), do not destructively rewrite — the operator
-		// runbook covers that migration path.
+		// admin specifically: if it already exists AND is_breakglass=1,
+		// return it so the caller can decide whether to issue a fresh
+		// redemption token. If a wave-0 row exists at the same email
+		// without is_breakglass=1, refuse to silently flip the flag —
+		// the operator runbook covers that migration path explicitly.
 		existing, err := us.GetByEmail(ctx, DefaultAdminEmail)
 		if errors.Is(err, users.ErrNotFound) {
 			logger.DebugContext(ctx, "admin seed skipped — users table non-empty without canonical admin")
@@ -63,12 +63,37 @@ func Admin(ctx context.Context, us *users.Store, logger *slog.Logger, _ io.Write
 		if err != nil {
 			return nil, "", fmt.Errorf("look up existing admin: %w", err)
 		}
+		if !existing.IsBreakglass {
+			// Wave-0 admin row at the canonical email: the operator
+			// must run the migration runbook (DELETE FROM users WHERE
+			// email='admin@fleet-edr.local' followed by a restart, or
+			// a future admin endpoint). Returning (nil, "", nil) skips
+			// the redemption-token banner so the operator does not see
+			// an invalid URL pointing at a row that still has the old
+			// password.
+			logger.WarnContext(ctx,
+				"admin seed skipped — canonical email exists but is_breakglass=0; run wave-0 migration",
+				"edr.user.id", existing.ID,
+				"edr.user.email", existing.Email,
+			)
+			return nil, "", nil
+		}
 		return existing, "", nil
 	}
 
 	u, err := us.CreateBreakglass(ctx, users.CreateBreakglassRequest{
 		Email: DefaultAdminEmail,
 	})
+	if errors.Is(err, users.ErrExistingNonBreakglass) {
+		// Race: someone created a non-breakglass row at the email
+		// between our Count and our Insert. Same handling as the
+		// above branch.
+		logger.WarnContext(ctx,
+			"admin seed skipped — canonical email exists but is_breakglass=0; run wave-0 migration",
+			"edr.user.email", DefaultAdminEmail,
+		)
+		return nil, "", nil
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("create breakglass admin: %w", err)
 	}

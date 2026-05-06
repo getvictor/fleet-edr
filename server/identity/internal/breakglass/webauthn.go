@@ -43,8 +43,22 @@ func NewWebAuthn(opts WebAuthnOptions) (*webauthn.WebAuthn, error) {
 		return nil, errors.New("breakglass: WebAuthn RPOrigins is required (at least one absolute URL)")
 	}
 	for _, origin := range opts.RPOrigins {
-		if _, err := url.Parse(origin); err != nil {
+		o := strings.TrimSpace(origin)
+		if o == "" {
+			return nil, fmt.Errorf("breakglass: WebAuthn RPOrigins[%q] is empty", origin)
+		}
+		// url.Parse accepts relative-only inputs ("example.com",
+		// "/path") without erroring; the WebAuthn engine needs an
+		// ABSOLUTE URL. ParseRequestURI rejects relative URLs, and
+		// the explicit Scheme/Host check guards the case where
+		// ParseRequestURI accepts opaque shapes the browser would
+		// reject at the origin-attestation step.
+		u, err := url.ParseRequestURI(o)
+		if err != nil {
 			return nil, fmt.Errorf("breakglass: WebAuthn RPOrigins[%q] is not a valid URL: %w", origin, err)
+		}
+		if u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("breakglass: WebAuthn RPOrigins[%q] must be an absolute URL with scheme + host", origin)
 		}
 	}
 	cfg := &webauthn.Config{

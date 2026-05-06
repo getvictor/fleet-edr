@@ -49,6 +49,12 @@ const (
 	// matches the IdP's typical authorization-code window — long enough
 	// to survive an MFA prompt, short enough to bound CSRF replay.
 	defaultOIDCStateCookieTTL = 5 * time.Minute
+	// DefaultBreakglassBootstrapTokenTTL mirrors the package-side
+	// fallback in server/identity/internal/breakglass/tokens.go.
+	// Exposed at the config layer so cmd/main can build the
+	// redemption-URL banner with a non-zero TTL string when the
+	// operator did not pin EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL.
+	DefaultBreakglassBootstrapTokenTTL = time.Hour
 )
 
 // Config is the resolved server configuration.

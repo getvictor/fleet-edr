@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -389,18 +390,54 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 	if hasCred {
 		return
 	}
-	plaintext, _, err := bg.IssueSetupToken(ctx, admin.ID, cfg.BreakglassBootstrapTokenTTL)
+	// Default the TTL HERE (not when assembling the banner) so the
+	// banner reflects the actual TTL the token was issued with.
+	// IssueSetupToken's internal default is fine for the DB row,
+	// but the banner string has to match. Mirrors the package-side
+	// 1h default in breakglass/tokens.go.
+	ttl := cfg.BreakglassBootstrapTokenTTL
+	if ttl <= 0 {
+		ttl = config.DefaultBreakglassBootstrapTokenTTL
+	}
+	plaintext, _, err := bg.IssueSetupToken(ctx, admin.ID, ttl)
 	if err != nil {
 		logger.ErrorContext(ctx, "breakglass issue setup token failed", "err", err)
 		return
 	}
-	printBreakglassBanner(ctx, logger, admin.Email, plaintext, cfg)
+	printBreakglassBanner(ctx, logger, admin.Email, plaintext, ttl, cfg)
 }
 
 // printBreakglassBanner writes the redemption URL to stderr in a
 // single write. The plaintext token appears once; the structured
-// log line carries the user id only.
-func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plaintext string, cfg *config.Config) {
+// log line carries the user id only. The URL is built from the
+// first configured RPOrigin (the externally reachable address an
+// operator's browser can use); falls back to ListenAddr only when
+// no RPOrigin is set, which is the dev-localhost path.
+func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plaintext string, ttl time.Duration, cfg *config.Config) {
+	url := redemptionURL(cfg, plaintext)
+	banner := "" +
+		"================================================================\n" +
+		"BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)\n" +
+		"  Email: " + email + "\n" +
+		"  URL:   " + url + "\n" +
+		"  TTL:   " + ttl.String() + "\n" +
+		"================================================================\n"
+	if _, err := os.Stderr.WriteString(banner); err != nil {
+		logger.ErrorContext(ctx, "write breakglass banner", "err", err)
+	}
+}
+
+// redemptionURL builds the operator-visible redemption URL. Prefers
+// the first BreakglassRPOrigins entry because that is the URL the
+// browser uses to talk to the server (and the WebAuthn engine binds
+// credentials to that origin). Falls back to scheme + ListenAddr
+// when no origin is configured — the dev-localhost path.
+func redemptionURL(cfg *config.Config, plaintext string) string {
+	const path = "/admin/break-glass/setup?token="
+	if len(cfg.BreakglassRPOrigins) > 0 {
+		origin := strings.TrimRight(cfg.BreakglassRPOrigins[0], "/")
+		return origin + path + plaintext
+	}
 	scheme := "http"
 	if cfg.TLSEnabled() {
 		scheme = "https"
@@ -409,17 +446,7 @@ func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plai
 	if len(host) > 0 && host[0] == ':' {
 		host = "localhost" + host
 	}
-	url := scheme + "://" + host + "/admin/break-glass/setup?token=" + plaintext
-	banner := "" +
-		"================================================================\n" +
-		"BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)\n" +
-		"  Email: " + email + "\n" +
-		"  URL:   " + url + "\n" +
-		"  TTL:   " + cfg.BreakglassBootstrapTokenTTL.String() + "\n" +
-		"================================================================\n"
-	if _, err := os.Stderr.WriteString(banner); err != nil {
-		logger.ErrorContext(ctx, "write breakglass banner", "err", err)
-	}
+	return scheme + "://" + host + path + plaintext
 }
 
 func configureTLSIfEnabled(ctx context.Context, logger *slog.Logger, srv *http.Server, cfg *config.Config) error {

@@ -71,11 +71,13 @@ func DecodeChallengeState(signingKey []byte, raw string) (webauthn.SessionData, 
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(string(parts[0]))
 	if err != nil {
-		return webauthn.SessionData{}, fmt.Errorf("signature decode: %w (%w)", ErrChallengeStateInvalid, err)
+		return webauthn.SessionData{}, errors.Join(ErrChallengeStateInvalid,
+			fmt.Errorf("signature decode: %w", err))
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(string(parts[1]))
 	if err != nil {
-		return webauthn.SessionData{}, fmt.Errorf("payload decode: %w: %w", ErrChallengeStateInvalid, err)
+		return webauthn.SessionData{}, errors.Join(ErrChallengeStateInvalid,
+			fmt.Errorf("payload decode: %w", err))
 	}
 	mac := hmac.New(sha256.New, signingKey)
 	mac.Write(payload)
@@ -85,7 +87,8 @@ func DecodeChallengeState(signingKey []byte, raw string) (webauthn.SessionData, 
 	}
 	var sd webauthn.SessionData
 	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&sd); err != nil {
-		return webauthn.SessionData{}, fmt.Errorf("gob decode: %w: %w", ErrChallengeStateInvalid, err)
+		return webauthn.SessionData{}, errors.Join(ErrChallengeStateInvalid,
+			fmt.Errorf("gob decode: %w", err))
 	}
 	return sd, nil
 }

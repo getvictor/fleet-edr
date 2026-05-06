@@ -64,7 +64,7 @@ func NewCredentialStore(db *sqlx.DB) *CredentialStore {
 // insert lands in the same transaction as the bootstrap-token
 // redemption + password set, preserving the spec's atomic-redemption
 // guarantee.
-func (s *CredentialStore) InsertWith(ctx context.Context, ec sqlxExec, userID int64, c webauthn.Credential, name string) (int64, error) {
+func (s *CredentialStore) InsertWith(ctx context.Context, ec Executor, userID int64, c webauthn.Credential, name string) (int64, error) {
 	transports := encodeTransports(c.Transport)
 	res, err := ec.ExecContext(ctx, `
 		INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name)

@@ -18,8 +18,14 @@ import (
 )
 
 // Cookie path scope: only sent on /admin/break-glass paths so the
-// challenge cookie doesn't leak to /api/* on the same origin.
-const cookiePath = "/admin/break-glass/"
+// challenge cookie doesn't leak to /api/* on the same origin. NO
+// trailing slash: per RFC 6265 §5.1.4, a cookie with Path=/foo/
+// matches request paths whose prefix is "/foo/" — `/foo` (without
+// the trailing slash) does NOT match. Since the login route is
+// /admin/break-glass (no trailing slash), the cookie path must be
+// /admin/break-glass for the assertion cookie to round-trip
+// between the GET-challenge POST and the POST-login.
+const cookiePath = "/admin/break-glass"
 
 // challengeCookieMaxAge is the per-flow cookie lifetime in seconds.
 // Matches the WebAuthn challenge timeout the browser enforces.
@@ -34,6 +40,11 @@ const loginBodyMaxBytes = 64 * 1024
 // emailBodyMaxBytes caps the begin-login challenge body — only the
 // email field, so 4 KiB is generous.
 const emailBodyMaxBytes = 4 * 1024
+
+// authReasonHeader is the wire-format header the failure helpers
+// emit. Lifted to a const so Sonar's S1192 (duplicated literal) is
+// satisfied as new helpers land.
+const authReasonHeader = "X-Edr-Auth-Reason"
 
 // Handler serves the four break-glass routes. Construct via
 // NewHandler; mount via RegisterPublicRoutes.
@@ -176,7 +187,7 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 		CredentialName string          `json:"credential_name"`
 		Attestation    json.RawMessage `json:"attestation"`
 	}
-	if err := decodeJSONBody(r, &body, loginBodyMaxBytes); err != nil {
+	if err := decodeJSONBody(w, r, &body, loginBodyMaxBytes); err != nil {
 		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
@@ -212,6 +223,17 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.clearChallengeCookie(w)
+	if res.Session == nil {
+		// Token redemption committed but the post-commit session
+		// mint failed. The token is consumed; the operator must log
+		// in via /admin/break-glass to get a session. Surface a
+		// directed redirect rather than silently failing.
+		h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
+			"redirect": "/admin/break-glass",
+			"hint":     "session_mint_failed",
+		})
+		return
+	}
 	h.setSessionCookie(w, res.Session)
 	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"redirect": "/ui/",
@@ -249,7 +271,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email string `json:"email"`
 	}
-	if err := decodeJSONBody(r, &body, emailBodyMaxBytes); err != nil {
+	if err := decodeJSONBody(w, r, &body, emailBodyMaxBytes); err != nil {
 		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
@@ -299,10 +321,21 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 		Password  string          `json:"password"`
 		Assertion json.RawMessage `json:"assertion"`
 	}
-	if err := decodeJSONBody(r, &body, loginBodyMaxBytes); err != nil {
+	if err := decodeJSONBody(w, r, &body, loginBodyMaxBytes); err != nil {
 		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
+	// Per-email budget: token-bucket Allow() is consume-or-reject;
+	// no non-consuming peek is exposed by the IPLimiter primitive.
+	// Consume one token at the START of the attempt so a brute-
+	// forcer who exhausted the budget on prior failures cannot
+	// trigger another argon2 + WebAuthn round-trip. Successful
+	// logins burn one slot too, but break-glass logins are rare by
+	// design (incident-only) so the wasted slot is harmless. Spec
+	// nuance: this is the failed-login budget, but practical
+	// constraint of consume-only limiters means it gates EVERY
+	// attempt; the documentation in ratelimit.go has been updated
+	// to reflect this.
 	if !h.rates.AllowEmailFail(body.Email) {
 		h.tooMany(r.Context(), w, "email_rate_limited")
 		return
@@ -357,22 +390,22 @@ func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status i
 }
 
 func (h *Handler) badRequest(ctx context.Context, w http.ResponseWriter, reason string) {
-	w.Header().Set("X-Edr-Auth-Reason", reason)
+	w.Header().Set(authReasonHeader, reason)
 	h.writeJSON(ctx, w, http.StatusBadRequest, map[string]any{"reason": reason})
 }
 
 func (h *Handler) unauthorized(ctx context.Context, w http.ResponseWriter, reason string) {
-	w.Header().Set("X-Edr-Auth-Reason", reason)
+	w.Header().Set(authReasonHeader, reason)
 	h.writeJSON(ctx, w, http.StatusUnauthorized, map[string]any{"reason": reason})
 }
 
 func (h *Handler) gone(ctx context.Context, w http.ResponseWriter, reason string) {
-	w.Header().Set("X-Edr-Auth-Reason", reason)
+	w.Header().Set(authReasonHeader, reason)
 	h.writeJSON(ctx, w, http.StatusGone, map[string]any{"reason": reason})
 }
 
 func (h *Handler) tooMany(ctx context.Context, w http.ResponseWriter, reason string) {
-	w.Header().Set("X-Edr-Auth-Reason", reason)
+	w.Header().Set(authReasonHeader, reason)
 	w.Header().Set("Retry-After", "60")
 	h.writeJSON(ctx, w, http.StatusTooManyRequests, map[string]any{"reason": reason})
 }
@@ -470,9 +503,11 @@ func reasonForLoginErr(err error) string {
 
 // decodeJSONBody is the standard limited-reader + strict-JSON
 // pattern used elsewhere in identity. maxBytes caps the body size
-// so a hostile payload cannot exhaust memory.
-func decodeJSONBody(r *http.Request, dst any, maxBytes int64) error {
-	body := http.MaxBytesReader(nil, r.Body, maxBytes)
+// so a hostile payload cannot exhaust memory. Passing the
+// ResponseWriter lets net/http emit the canonical 413 response on
+// overflow rather than falling through to a generic decode error.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) error {
+	body := http.MaxBytesReader(w, r.Body, maxBytes)
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)

@@ -55,6 +55,18 @@ var ErrNotFound = errors.New("users: not found")
 // the server-side audit log.
 var ErrBadPassword = errors.New("users: password mismatch")
 
+// ErrExistingNonBreakglass is returned by CreateBreakglass when a row
+// for the requested email already exists with is_breakglass=0. Caller
+// (seed.Admin / cmd/main wave-0 migration check) handles the wave-0
+// non-breakglass admin via an operator runbook rather than
+// destructively rewriting the row.
+var ErrExistingNonBreakglass = errors.New("users: existing non-breakglass user")
+
+// errEmailRequired is the canonical message every "email is required"
+// path emits. Lifted to a const so Sonar's S1192 (duplicated literal)
+// stays satisfied as new helpers land.
+const errEmailRequired = "users: email is required"
+
 // Store owns the users table.
 type Store struct {
 	db *sqlx.DB
@@ -78,7 +90,7 @@ type CreateRequest struct {
 func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
-		return nil, errors.New("users: email is required")
+		return nil, errors.New(errEmailRequired)
 	}
 	if req.Password == "" {
 		return nil, errors.New("users: password is required")
@@ -124,7 +136,7 @@ type CreateOIDCRequest struct {
 func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
-		return nil, errors.New("users: email is required")
+		return nil, errors.New(errEmailRequired)
 	}
 	tenantID := req.TenantID
 	if tenantID == "" {
@@ -173,7 +185,7 @@ type CreateBreakglassRequest struct {
 func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
-		return nil, errors.New("users: email is required")
+		return nil, errors.New(errEmailRequired)
 	}
 	tenantID := req.TenantID
 	if tenantID == "" {
@@ -200,7 +212,29 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 	if err != nil {
 		return nil, fmt.Errorf("read breakglass user: %w", err)
 	}
+	// A pre-existing row at the same email that is NOT
+	// is_breakglass came from the wave-0 schema (admin with a
+	// printed password). Surface a typed error so the caller
+	// (seed.Admin / cmd/main wave-0 migration) can handle it
+	// explicitly via the operator runbook rather than silently
+	// flipping the row's flag and stranding the existing password.
+	if !u.IsBreakglass {
+		return &u, ErrExistingNonBreakglass
+	}
 	return &u, nil
+}
+
+// HashPassword runs argon2id over the plaintext and returns the
+// resulting (hash, salt) pair. Exported so callers (specifically the
+// break-glass FinishSetup flow) can do the CPU-intensive hash
+// BEFORE opening a database transaction — argon2 holds locks for
+// ~30ms per call on M-series hardware, which is unacceptable inside
+// a multi-statement transaction.
+func HashPassword(password string) (hash, salt []byte, err error) {
+	if password == "" {
+		return nil, nil, errors.New("users: password is required")
+	}
+	return hashPassword(password)
 }
 
 // SetPassword updates password_hash + password_salt for an existing
@@ -215,6 +249,18 @@ func (s *Store) SetPassword(ctx context.Context, ec Executor, userID int64, pass
 	hash, salt, err := hashPassword(password)
 	if err != nil {
 		return err
+	}
+	return s.SetHashedPassword(ctx, ec, userID, hash, salt)
+}
+
+// SetHashedPassword updates password_hash + password_salt for an
+// existing user using a pre-computed argon2 hash. Skips the argon2
+// CPU work — caller MUST have computed (hash, salt) via HashPassword
+// or an equivalent argon2id-compatible helper. Used by the break-glass
+// FinishSetup flow so the hash runs OUTSIDE the redemption tx.
+func (s *Store) SetHashedPassword(ctx context.Context, ec Executor, userID int64, hash, salt []byte) error {
+	if len(hash) == 0 || len(salt) == 0 {
+		return errors.New("users: hash + salt are required")
 	}
 	res, err := ec.ExecContext(ctx, `
 		UPDATE users SET password_hash = ?, password_salt = ?

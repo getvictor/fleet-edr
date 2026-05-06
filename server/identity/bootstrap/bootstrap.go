@@ -240,11 +240,21 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 		rpID = "localhost"
 		rpOrigins = []string{"http://localhost:8088", "http://127.0.0.1:8088"}
 	}
+	// Reject partial config: an operator who set RPOrigins WITHOUT
+	// RPID intended to configure break-glass; silently opting out
+	// would brick recovery. Same guard direction as the
+	// EDR_OIDC_ISSUER-without-companion check in config.go.
+	if rpID == "" && len(rpOrigins) > 0 {
+		return nil, nil, errors.New(
+			"identity bootstrap: EDR_BREAKGLASS_RP_ORIGINS set without EDR_BREAKGLASS_RP_ID")
+	}
 	if rpID == "" {
 		// OIDC is configured but break-glass is not — operator
-		// opted out. Routes will not be mounted; the seed flow
-		// still issues bootstrap tokens for first-boot recovery
-		// once RPID is later configured.
+		// opted out. Routes will not be mounted AND the seed flow
+		// will not issue bootstrap tokens (cmd/main short-circuits
+		// when BreakglassService() returns nil). The operator can
+		// later opt in by setting EDR_BREAKGLASS_RP_ID; the seed
+		// step on the next boot will then issue a token.
 		return nil, nil, nil
 	}
 	if len(rpOrigins) == 0 {

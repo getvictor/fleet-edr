@@ -93,7 +93,8 @@ func (s *TokenStore) IssueSetup(ctx context.Context, userID int64, ttl time.Dura
 		return "", Token{}, fmt.Errorf("breakglass tokens: random: %w", err)
 	}
 	hash := hashTokenPlaintext(plaintext)
-	expiresAt := time.Now().Add(ttl)
+	issuedAt := time.Now()
+	expiresAt := issuedAt.Add(ttl)
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO bootstrap_tokens (token_hash, user_id, kind, expires_at)
 		VALUES (?, ?, ?, ?)
@@ -109,6 +110,7 @@ func (s *TokenStore) IssueSetup(ctx context.Context, userID int64, ttl time.Dura
 		ID:        id,
 		UserID:    sql.NullInt64{Int64: userID, Valid: true},
 		Kind:      TokenKindBreakglassSetup,
+		IssuedAt:  issuedAt,
 		ExpiresAt: expiresAt,
 	}, nil
 }
@@ -171,7 +173,7 @@ func (s *TokenStore) FindValid(ctx context.Context, plaintext string, now time.T
 // credential-persist + identity-insert it gates: the redemption is
 // the atomic gate that prevents replay against a partially-applied
 // account state. Caller passes the transaction's executor.
-func (s *TokenStore) MarkRedeemed(ctx context.Context, ec sqlxExec, id int64) error {
+func (s *TokenStore) MarkRedeemed(ctx context.Context, ec Executor, id int64) error {
 	res, err := ec.ExecContext(ctx, `
 		UPDATE bootstrap_tokens
 		SET redeemed_at = NOW(6)
@@ -192,9 +194,10 @@ func (s *TokenStore) MarkRedeemed(ctx context.Context, ec sqlxExec, id int64) er
 	return nil
 }
 
-// sqlxExec is the executor subset MarkRedeemed accepts. *sqlx.Tx
-// implements it; tests pass *sqlx.DB.
-type sqlxExec interface {
+// Executor is the executor subset MarkRedeemed accepts. *sqlx.Tx
+// implements it; tests pass *sqlx.DB. Named per the Go convention
+// (single-method interface ends in -er).
+type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
@@ -210,13 +213,13 @@ func randomTokenPlaintext() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// hashTokenPlaintext is the keyed SHA-256 of the plaintext bytes the
-// store persists. Plaintext is base64-encoded random; SHA-256 is
-// preimage-resistant against the per-token entropy budget. We do
-// NOT use argon2 here because the token's TTL (≤ 1h) and rotation
-// frequency mean an offline attack on the stored hash has at most
-// minutes to be useful, and the SHA-256 hash makes a stolen DB
-// dump useless.
+// hashTokenPlaintext is the SHA-256 of the plaintext bytes the
+// store persists. The hash is unkeyed: the plaintext is 256 bits of
+// cryptographic randomness so the hash's preimage-resistance derives
+// from the input entropy rather than a server secret. We do NOT use
+// argon2 here because the token's TTL (≤ 1h) and one-shot redemption
+// mean an offline attack on the stored hash has at most minutes to
+// be useful, and the SHA-256 hash makes a stolen DB dump useless.
 func hashTokenPlaintext(plaintext string) [32]byte {
 	return sha256.Sum256([]byte(plaintext))
 }

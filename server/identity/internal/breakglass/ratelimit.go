@@ -24,10 +24,15 @@ const (
 	// first volley.
 	DefaultPerIPRatePerMin = 10
 
-	// DefaultPerEmailFailedRatePerMin caps FAILED logins against
-	// any single break-glass email at 3/min. Distinct from the
-	// per-IP bucket so a botnet spraying many IPs against one
-	// email still hits this.
+	// DefaultPerEmailFailedRatePerMin caps logins against any
+	// single break-glass email at 3/min. Distinct from the per-IP
+	// bucket so a botnet spraying many IPs against one email still
+	// hits this. NOTE: consume-only token-bucket semantics mean
+	// every attempt consumes one slot — a successful login also
+	// burns a token, but break-glass logins are rare by design so
+	// the wasted slot is acceptable. The pre-attempt consumption
+	// is what prevents argon2 + WebAuthn CPU cycles after the
+	// budget is exhausted.
 	DefaultPerEmailFailedRatePerMin = 3
 
 	// DefaultSetupRatePerMin caps total submissions against
