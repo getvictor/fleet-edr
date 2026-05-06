@@ -55,6 +55,22 @@ var ErrNotFound = errors.New("users: not found")
 // the server-side audit log.
 var ErrBadPassword = errors.New("users: password mismatch")
 
+// ErrExistingNonBreakglass is returned by CreateBreakglass when a row
+// for the requested email already exists with is_breakglass=0. Caller
+// (seed.Admin / cmd/main wave-0 migration check) handles the wave-0
+// non-breakglass admin via an operator runbook rather than
+// destructively rewriting the row.
+var ErrExistingNonBreakglass = errors.New("users: existing non-breakglass user")
+
+// errEmailRequired is the canonical message every "email is required"
+// path emits. Lifted to a const so Sonar's S1192 (duplicated literal)
+// stays satisfied as new helpers land.
+const errEmailRequired = "users: email is required"
+
+// errPasswordRequired is the password-required twin: same Sonar
+// S1192 reasoning. Used by Create, HashPassword, and SetPassword.
+const errPasswordRequired = "users: password is required"
+
 // Store owns the users table.
 type Store struct {
 	db *sqlx.DB
@@ -78,10 +94,10 @@ type CreateRequest struct {
 func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
-		return nil, errors.New("users: email is required")
+		return nil, errors.New(errEmailRequired)
 	}
 	if req.Password == "" {
-		return nil, errors.New("users: password is required")
+		return nil, errors.New(errPasswordRequired)
 	}
 	hash, salt, err := hashPassword(req.Password)
 	if err != nil {
@@ -124,7 +140,7 @@ type CreateOIDCRequest struct {
 func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
-		return nil, errors.New("users: email is required")
+		return nil, errors.New(errEmailRequired)
 	}
 	tenantID := req.TenantID
 	if tenantID == "" {
@@ -155,6 +171,137 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 // convention (single-method interface ends in -er).
 type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// CreateBreakglassRequest is the shape accepted by CreateBreakglass.
+// password_* columns are NULL on the resulting row — the
+// break-glass redemption flow sets them later in the same
+// transaction that consumes the bootstrap token.
+type CreateBreakglassRequest struct {
+	Email    string
+	TenantID string
+}
+
+// CreateBreakglass inserts the wave-1 break-glass admin user with
+// is_breakglass=1 and NULL password. Idempotent on email: returns
+// the existing row when one is present so first-boot seeding is
+// safe to re-run on container restart. Used by seed/admin.go.
+func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassRequest) (*User, error) {
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		return nil, errors.New(errEmailRequired)
+	}
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = api.DefaultTenantID
+	}
+	// INSERT ... ON DUPLICATE KEY UPDATE id=id is the canonical
+	// MySQL idiom for "INSERT IGNORE that returns the row id".
+	// Plain INSERT IGNORE doesn't populate LastInsertId on
+	// duplicate, which would leave the caller without an id. The
+	// no-op UPDATE keeps the INSERT path cheap on repeated calls.
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO users (email, tenant_id, is_breakglass)
+		VALUES (?, ?, 1)
+		ON DUPLICATE KEY UPDATE id = id
+	`, email, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("upsert breakglass user: %w", err)
+	}
+	var u User
+	err = s.db.GetContext(ctx, &u, `
+		SELECT id, email, tenant_id, is_breakglass, created_at, updated_at
+		FROM users WHERE email = ?
+	`, email)
+	if err != nil {
+		return nil, fmt.Errorf("read breakglass user: %w", err)
+	}
+	// A pre-existing row at the same email that is NOT
+	// is_breakglass came from the wave-0 schema (admin with a
+	// printed password). Surface a typed error so the caller
+	// (seed.Admin / cmd/main wave-0 migration) can handle it
+	// explicitly via the operator runbook rather than silently
+	// flipping the row's flag and stranding the existing password.
+	if !u.IsBreakglass {
+		return &u, ErrExistingNonBreakglass
+	}
+	return &u, nil
+}
+
+// HashPassword runs argon2id over the plaintext and returns the
+// resulting (hash, salt) pair. Exported so callers (specifically the
+// break-glass FinishSetup flow) can do the CPU-intensive hash
+// BEFORE opening a database transaction — argon2 holds locks for
+// ~30ms per call on M-series hardware, which is unacceptable inside
+// a multi-statement transaction.
+func HashPassword(password string) (hash, salt []byte, err error) {
+	if password == "" {
+		return nil, nil, errors.New(errPasswordRequired)
+	}
+	return hashPassword(password)
+}
+
+// SetPassword updates password_hash + password_salt for an existing
+// user. Argon2id-hashed via the same helper Create uses. Runs against
+// a caller-supplied executor (typically *sqlx.Tx) so the break-glass
+// redemption flow can wrap the password set + credential persist +
+// identity insert in one transaction.
+func (s *Store) SetPassword(ctx context.Context, ec Executor, userID int64, password string) error {
+	if password == "" {
+		return errors.New(errPasswordRequired)
+	}
+	hash, salt, err := hashPassword(password)
+	if err != nil {
+		return err
+	}
+	return s.SetHashedPassword(ctx, ec, userID, hash, salt)
+}
+
+// SetHashedPassword updates password_hash + password_salt for an
+// existing user using a pre-computed argon2 hash. Skips the argon2
+// CPU work — caller MUST have computed (hash, salt) via HashPassword
+// or an equivalent argon2id-compatible helper. Used by the break-glass
+// FinishSetup flow so the hash runs OUTSIDE the redemption tx.
+func (s *Store) SetHashedPassword(ctx context.Context, ec Executor, userID int64, hash, salt []byte) error {
+	if len(hash) == 0 || len(salt) == 0 {
+		return errors.New("users: hash + salt are required")
+	}
+	res, err := ec.ExecContext(ctx, `
+		UPDATE users SET password_hash = ?, password_salt = ?
+		WHERE id = ?
+	`, hash, salt, userID)
+	if err != nil {
+		return fmt.Errorf("set password for user %d: %w", userID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for set password: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetByEmail looks up a user row by its normalised email. Returns
+// ErrNotFound when no row matches. Distinct from VerifyPassword
+// because the break-glass login flow needs the user id BEFORE
+// password verification (to look up the user's WebAuthn credentials
+// and issue the assertion challenge against them).
+func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var u User
+	err := s.db.GetContext(ctx, &u, `
+		SELECT id, email, tenant_id, is_breakglass, created_at, updated_at
+		FROM users WHERE email = ?
+	`, email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get user by email: %w", err)
+	}
+	return &u, nil
 }
 
 // Get returns a user by id without hash/salt. Returns ErrNotFound if absent.

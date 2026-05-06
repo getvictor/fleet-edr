@@ -21,6 +21,9 @@ func newUsersStore(t *testing.T) *users.Store {
 	return users.New(db)
 }
 
+// SeedsOnEmptyTable: admin row inserted with NULL password +
+// is_breakglass=1. The Phase 4b flow does NOT print a password
+// banner — the redemption URL banner lives in cmd/main.
 func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	us := newUsersStore(t)
 	var stderr bytes.Buffer
@@ -29,40 +32,41 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	assert.Equal(t, seed.DefaultAdminEmail, u.Email)
-	assert.NotEmpty(t, pw)
-	assert.Len(t, pw, 32, "24 random bytes base64url-encodes to 32 chars")
-
-	// stderr banner printed the password exactly once.
-	banner := stderr.String()
-	assert.Contains(t, banner, "SEEDED ADMIN USER")
-	assert.Contains(t, banner, seed.DefaultAdminEmail)
-	assert.Contains(t, banner, pw)
-
-	// The password we returned round-trips to login: the user store can verify it.
-	verified, err := us.VerifyPassword(t.Context(), seed.DefaultAdminEmail, pw)
-	require.NoError(t, err)
-	assert.Equal(t, u.ID, verified.ID)
+	assert.True(t, u.IsBreakglass, "Phase 4b admin must be break-glass")
+	assert.Empty(t, pw, "Phase 4b removed the password return value")
+	assert.Empty(t, stderr.String(), "Phase 4b: banner is emitted by cmd/main, not by seed")
 }
 
-func TestAdmin_IdempotentWhenUsersExist(t *testing.T) {
+// Idempotent: a second seed against the same DB returns the existing
+// row instead of attempting another insert. Pinned because container
+// restarts re-run the seed step.
+func TestAdmin_IdempotentOnRerun(t *testing.T) {
 	us := newUsersStore(t)
-	// Pre-seed a different admin. Admin() should leave it alone.
-	existing, err := us.Create(t.Context(), users.CreateRequest{
-		Email: "first@example.com", Password: "pw",
+	first, _, err := seed.Admin(t.Context(), us, slog.Default(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	second, _, err := seed.Admin(t.Context(), us, slog.Default(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.Equal(t, first.ID, second.ID, "second seed must return the same row")
+}
+
+// PreExistingNonAdminTable: when an unrelated user is in the table
+// AND no canonical admin exists, Admin returns (nil, "", nil) so the
+// operator runbook handles the wave-0 migration explicitly. Pinned
+// to prevent a regression that destructively rewrites a wave-0 row.
+func TestAdmin_PreExistingTableSkippedWhenNoCanonicalAdmin(t *testing.T) {
+	us := newUsersStore(t)
+	_, err := us.Create(t.Context(), users.CreateRequest{
+		Email: "first@example.com", Password: "this-is-a-long-pw",
 	})
 	require.NoError(t, err)
 
-	var stderr bytes.Buffer
-	u, pw, err := seed.Admin(t.Context(), us, slog.Default(), &stderr)
+	u, pw, err := seed.Admin(t.Context(), us, slog.Default(), nil)
 	require.NoError(t, err)
 	assert.Nil(t, u)
 	assert.Empty(t, pw)
-	assert.Empty(t, stderr.String(), "must not print the banner when seeding is skipped")
-
-	// Pre-existing user is untouched.
-	got, err := us.Get(t.Context(), existing.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "first@example.com", got.Email)
 }
 
 func TestAdmin_NilStoreErrors(t *testing.T) {

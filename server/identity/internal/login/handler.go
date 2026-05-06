@@ -157,6 +157,16 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 			attrkeys.AuthReason, "password_mismatch")
 		h.recordLoginFailed(ctx, req.Email, ip, "password_mismatch")
 		return
+	case errors.Is(err, api.ErrBreakglassUseAdminURL):
+		// Same wire 401 as a bad password so an attacker cannot
+		// enumerate break-glass accounts. The X-Edr-Auth-Hint header
+		// gives legitimate operators the directed redirect; the
+		// audit row carries the precise reason.
+		w.Header().Set("X-Edr-Auth-Hint", "/admin/break-glass")
+		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
+			attrkeys.AuthReason, "use_admin_breakglass")
+		h.recordLoginFailed(ctx, req.Email, ip, "use_admin_breakglass")
+		return
 	case err != nil:
 		h.logger.ErrorContext(ctx, "login", "err", err)
 		h.fail(ctx, w, http.StatusInternalServerError, "internal", failInfo{IP: ip, Email: req.Email},

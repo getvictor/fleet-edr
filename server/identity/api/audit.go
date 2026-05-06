@@ -53,6 +53,16 @@ const (
 	// matching the wire-shape command_type the agent dispatches on.
 	AuditEnrollmentRevoke      AuditAction = "enrollment.revoke"
 	AuditEnrollmentRotateToken AuditAction = "enrollment.rotate_token"
+
+	// Break-glass flow (Phase 4b). Action names match the spec
+	// scenario language verbatim: dashboards filter on the literal
+	// strings, so any rename is a contract break. The flow is
+	// distinct from auth.login.* because the recovery path needs a
+	// dedicated row category for retention + alerting (a successful
+	// break-glass login is rare and inherently noteworthy).
+	AuditAuthBreakglassBootstrap AuditAction = "auth.breakglass.bootstrap"
+	AuditAuthBreakglassSuccess   AuditAction = "auth.breakglass.success"
+	AuditAuthBreakglassFailure   AuditAction = "auth.breakglass.failure"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller

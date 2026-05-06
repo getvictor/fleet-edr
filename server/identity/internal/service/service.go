@@ -46,6 +46,15 @@ func (s *service) Login(ctx context.Context, email, password string) (api.LoginR
 	case err != nil:
 		return api.LoginResult{}, fmt.Errorf("verify password: %w", err)
 	}
+	// Phase 4b: break-glass accounts MUST log in via
+	// /admin/break-glass (password + WebAuthn). /api/session POST
+	// would mint a session with only the password factor, violating
+	// the MFA mandate. The audit row records the precise reason;
+	// the wire response collapses to the same 401 as a bad password
+	// so an attacker cannot enumerate break-glass accounts.
+	if u.IsBreakglass {
+		return api.LoginResult{}, api.ErrBreakglassUseAdminURL
+	}
 	sess, err := s.sessions.Create(ctx, u.ID, sessions.CreateOptions{AuthMethod: "local_password"})
 	if err != nil {
 		return api.LoginResult{}, fmt.Errorf("create session: %w", err)

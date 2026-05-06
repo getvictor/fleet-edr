@@ -80,8 +80,17 @@ var (
 	ErrInvalidCredentials = errors.New("identity: invalid credentials")
 	ErrUserNotFound       = fmt.Errorf("identity: user not found: %w", ErrInvalidCredentials)
 	ErrBadPassword        = fmt.Errorf("identity: password mismatch: %w", ErrInvalidCredentials)
-	ErrSessionNotFound    = errors.New("identity: session not found or expired")
-	ErrAlreadySeeded      = errors.New("identity: admin already seeded")
+	// ErrBreakglassUseAdminURL is returned by Service.Login when the
+	// authenticated user is_breakglass=true. Per Phase 4b spec, the
+	// recovery account MUST log in via /admin/break-glass (password
+	// + WebAuthn assertion); /api/session POST does not satisfy the
+	// MFA mandate and is refused. Wraps ErrInvalidCredentials so an
+	// attacker probing emails cannot distinguish "this is a
+	// break-glass account" from "wrong password" through the wire
+	// response, but the audit row records the precise reason.
+	ErrBreakglassUseAdminURL = fmt.Errorf("identity: break-glass account must use /admin/break-glass: %w", ErrInvalidCredentials)
+	ErrSessionNotFound       = errors.New("identity: session not found or expired")
+	ErrAlreadySeeded         = errors.New("identity: admin already seeded")
 )
 
 // ctxKey is unexported so ctx values can only be set via the With*
