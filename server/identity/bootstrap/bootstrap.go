@@ -436,6 +436,23 @@ func (i *Identity) BreakglassService() *breakglass.Service {
 	return i.breakglassService
 }
 
+// BreakglassUIMiddleware returns the IP allowlist gate cmd/main wraps
+// around the React UI's break-glass subroutes (/ui/admin/break-glass
+// and /ui/admin/break-glass/setup). Without this gate, an off-allowlist
+// caller could load the React shell at those paths even though the
+// API endpoints behind them 404 — defeating the path-concealment
+// promise the breakglass.Handler comment makes for /admin/break-glass.
+//
+// Returns a passthrough middleware (no-op) when the deployment opted
+// out of break-glass entirely; the React routes still render but
+// hitting them is harmless because no API surface backs them.
+func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
+	if i.breakglassHandler == nil {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return i.breakglassHandler.AllowlistMiddleware
+}
+
 // RegisterAuthedRoutes wires GET /api/session (who-am-i) and
 // GET /api/audit-events (operator-action history). Caller wraps in
 // SessionMiddleware + CSRFMiddleware before mounting.

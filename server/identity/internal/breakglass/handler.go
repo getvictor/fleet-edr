@@ -90,6 +90,19 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 }
 
+// AllowlistMiddleware returns next wrapped by the configured IP
+// allowlist. When no allowlist is configured (dev mode), returns next
+// unchanged. Exported so cmd/main can apply the same gate to the
+// React UI's break-glass subroutes — without it, an off-allowlist
+// caller could load /ui/admin/break-glass and see the React form
+// shell, defeating the path-concealment promise of the API gate.
+func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
+	if h.allowlist == nil {
+		return next
+	}
+	return h.allowlist.Middleware(next)
+}
+
 // RegisterPublicRoutes mounts the break-glass routes onto mux.
 // Phase 4c shape:
 //
@@ -158,6 +171,10 @@ func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
 // with curl + a WebAuthn CLI (or the operator runbook's example
 // browser shim).
 func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
+	// no-store on every break-glass auth response: success paths set
+	// signed challenge / session cookies; error paths are throwaway.
+	// Either way the response should not land in a shared cache.
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -196,6 +213,7 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 //	POST /admin/break-glass/setup
 //	  body: {"password": "...", "credential_name": "yk1", "attestation": <CredentialCreationResponse JSON>}
 func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -282,6 +300,7 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 // handleBeginLogin issues the WebAuthn assertion challenge for the
 // presented email. JSON body: {"email": "..."}.
 func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -320,6 +339,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 // handleFinishLogin verifies password + assertion and mints a
 // session. JSON body: {"email": "...", "password": "...", "assertion": <CredentialAssertionResponse JSON>}.
 func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
