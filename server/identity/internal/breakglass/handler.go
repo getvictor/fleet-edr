@@ -128,8 +128,11 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // `token` query string. The redirection target is /ui/admin/break-glass/setup
 // because the React UI is mounted under /ui/. The IP allowlist still
 // applies so off-list callers see 404 instead of a redirect (don't
-// leak the path's existence).
+// leak the path's existence). Cache-Control: no-store keeps the
+// token-bearing Location header out of browser history / proxy
+// caches: the redemption URL is sensitive bearer state.
 func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	dest := "/ui/admin/break-glass/setup"
 	if q := r.URL.RawQuery; q != "" {
 		dest += "?" + q
@@ -137,8 +140,11 @@ func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-// handleLoginRedirect 302s to the React login page.
+// handleLoginRedirect 302s to the React login page. Same no-store
+// posture as handleSetupRedirect for consistency, even though this
+// path carries no token.
 func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, "/ui/admin/break-glass", http.StatusFound)
 }
 

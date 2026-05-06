@@ -30,16 +30,22 @@ import {
 } from "../auth";
 import "./Login.scss";
 
-const loginErrorLabels: Record<string, string> = {
-  invalid_credentials: "Invalid email, password, or security key.",
-  no_credentials: "No security key is registered for this account.",
-  challenge_missing: "Your sign-in session expired. Please try again.",
-  challenge_invalid: "Your sign-in session is invalid. Please try again.",
-  body_invalid: "We couldn't read your sign-in data. Please try again.",
-  assertion_parse_failed: "We couldn't read your security-key response. Please try again.",
-  rate_limited: "Too many attempts from this address. Wait a minute and try again.",
-  email_rate_limited: "Too many failed attempts for this email. Wait a minute and try again.",
-};
+// Reason -> message indirection. Stored as a Map (rather than a plain
+// Record<string, string>) so the read site is `.get(reason)` instead
+// of `loginErrorLabels[reason]` — eslint-plugin-security flags
+// computed-property reads on plain objects as object-injection sinks
+// when the key is server-derived. Same shape Login.tsx uses for the
+// OIDC error reasons.
+const loginErrorLabels = new Map<string, string>([
+  ["invalid_credentials", "Invalid email, password, or security key."],
+  ["no_credentials", "No security key is registered for this account."],
+  ["challenge_missing", "Your sign-in session expired. Please try again."],
+  ["challenge_invalid", "Your sign-in session is invalid. Please try again."],
+  ["body_invalid", "We couldn't read your sign-in data. Please try again."],
+  ["assertion_parse_failed", "We couldn't read your security-key response. Please try again."],
+  ["rate_limited", "Too many attempts from this address. Wait a minute and try again."],
+  ["email_rate_limited", "Too many failed attempts for this email. Wait a minute and try again."],
+]);
 
 export function BreakGlassLogin() {
   const navigate = useNavigate();
@@ -58,13 +64,18 @@ export function BreakGlassLogin() {
     try {
       const assertion = await breakglassBeginLogin(email.trim());
       const result = await breakglassFinishLogin(email.trim(), password, assertion);
-      const dest = result.redirect.startsWith("/ui")
-        ? result.redirect.slice("/ui".length) || "/"
-        : result.redirect;
-      void navigate(dest, { replace: true });
+      // Strip the basename only when result.redirect is exactly /ui or
+      // a /ui/-prefixed path. A bare startsWith("/ui") would mis-match
+      // unrelated paths like /uipreview, slicing off "/ui" and routing
+      // somewhere unintended.
+      const dest =
+        result.redirect === "/ui" || result.redirect.startsWith("/ui/")
+          ? result.redirect.slice("/ui".length) || "/"
+          : result.redirect;
+      await navigate(dest, { replace: true });
     } catch (err) {
       if (err instanceof BreakglassError) {
-        setError(loginErrorLabels[err.reason] ?? "Sign-in failed. Please try again.");
+        setError(loginErrorLabels.get(err.reason) ?? "Sign-in failed. Please try again.");
       } else if (err instanceof DOMException && err.name === "NotAllowedError") {
         setError("Security-key sign-in was cancelled or timed out. Please try again.");
       } else {

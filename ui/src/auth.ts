@@ -25,6 +25,10 @@ import {
 // HTTP status threshold above which the response is an error.
 const HTTP_BAD_REQUEST = 400;
 
+// HTTP_NO_CONTENT is the empty-body 2xx that the requestJSON guard
+// returns as `undefined` instead of feeding to res.json().
+const HTTP_NO_CONTENT = 204;
+
 // Maximum size of a 'next' query parameter we'll forward to the
 // IdP-redirect endpoint. The server already sanitises (off-site URLs
 // fall through to /ui/), but capping here too prevents an absurdly
@@ -86,6 +90,18 @@ async function requestJSON<T>(
   if (res.status >= HTTP_BAD_REQUEST) {
     const reason = res.headers.get("X-Edr-Auth-Reason") ?? `http_${String(res.status)}`;
     throw new BreakglassError(res.status, reason);
+  }
+  // Guard against 204 / empty / non-JSON 2xx bodies. Today every
+  // break-glass endpoint returns a JSON envelope, but routing this
+  // through res.json() unconditionally turns "successful but empty"
+  // into a SyntaxError that surfaces as the generic "Sign-in failed"
+  // fallback — masking what was actually a successful call. Treat
+  // those as `undefined` and let typed call sites decide.
+  const noBody = res.status === HTTP_NO_CONTENT
+    || res.headers.get("Content-Length") === "0"
+    || !(res.headers.get("Content-Type") ?? "").includes("application/json");
+  if (noBody) {
+    return undefined as T;
   }
   return (await res.json()) as T;
 }

@@ -71,15 +71,18 @@ function AuthedApp() {
       }
     })();
     return () => { controller.abort(); };
-    // Re-run on path change so logout that doesn't navigate (e.g. a
-    // background API call returning 401) still triggers a redirect
-    // on the next mount.
-  }, [location.pathname]);
+    // One-shot probe on mount. Background 401s from individual
+    // /api/* fetches already throw Unauthorized401Error and call
+    // sites surface that to flip auth -> 'anon'; re-running on every
+    // route change cost an extra /api/session round-trip per
+    // navigation and made the app flicker back to 'loading'
+    // mid-route.
+  }, []);
 
   const handleLogout = useCallback(async () => {
     await logout().catch(() => { /* best-effort: clear locally regardless */ });
     setAuth({ status: "anon" });
-    void navigate("/login", { replace: true });
+    await navigate("/login", { replace: true });
   }, [navigate]);
 
   if (auth.status === "loading") {

@@ -43,9 +43,15 @@ const errorMessages = new Map<string, string>([
 export function Login({ next }: LoginProps) {
   const [params] = useSearchParams();
   const errorReason = params.get("error");
-  // Memoise so the URL is built once per next-change rather than on
-  // every render. The URL is the href of the call-to-action.
-  const continueHref = useMemo(() => oidcLoginUrl(next ?? "/ui/"), [next]);
+  // Prefer the explicit prop, then the URL-borne ?next= AuthedApp
+  // attaches when redirecting unauthenticated requests. Without this,
+  // every operator who hits a protected URL while signed-out lands on
+  // /ui/ after SSO instead of the page they were trying to reach.
+  // oidcLoginUrl re-validates the value (same-origin path only); off-
+  // shape values fall through to the default.
+  const nextFromUrl = params.get("next") ?? undefined;
+  const effectiveNext = next ?? nextFromUrl ?? "/ui/";
+  const continueHref = useMemo(() => oidcLoginUrl(effectiveNext), [effectiveNext]);
 
   // hint text rendered when the URL query carries an OIDC reason. We
   // accept the wire-shape strings 4a/4b emit; anything else falls

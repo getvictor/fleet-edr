@@ -36,19 +36,24 @@ const MIN_PASSWORD_RUNES = 12;
 
 // Friendly labels for the wire reasons returned by the redemption
 // endpoint. Mirrors the breakglass package's reasonForSetupErr.
-const setupErrorLabels: Record<string, string> = {
-  "bootstrap.expired": "This redemption link has expired. Ask an administrator for a new one.",
-  "bootstrap.consumed": "This redemption link has already been used.",
-  "bootstrap.invalid": "This redemption link is invalid. Ask an administrator for a new one.",
-  "password.too_short": `Password must be at least ${String(MIN_PASSWORD_RUNES)} characters.`,
-  "challenge_missing": "Your setup session expired. Please reload this page and try again.",
-  "challenge_invalid": "Your setup session is invalid. Please reload this page and try again.",
-  "attestation_missing": "We didn't receive a security-key attestation. Please try again.",
-  "attestation_parse_failed": "We couldn't read your security-key attestation. Please try again.",
-  "rate_limited": "Too many attempts from this address. Wait a minute and try again.",
-  "setup_rate_limited": "Setup is rate-limited globally. Wait a minute and try again.",
-  "token_missing": "This page is missing its redemption token.",
-};
+//
+// Stored as a Map (rather than Record<string, string>) so the read
+// site is `.get(reason)` instead of `setupErrorLabels[reason]` —
+// eslint-plugin-security flags computed-property reads on plain
+// objects as object-injection sinks when the key is server-derived.
+const setupErrorLabels = new Map<string, string>([
+  ["bootstrap.expired", "This redemption link has expired. Ask an administrator for a new one."],
+  ["bootstrap.consumed", "This redemption link has already been used."],
+  ["bootstrap.invalid", "This redemption link is invalid. Ask an administrator for a new one."],
+  ["password.too_short", `Password must be at least ${String(MIN_PASSWORD_RUNES)} characters.`],
+  ["challenge_missing", "Your setup session expired. Please reload this page and try again."],
+  ["challenge_invalid", "Your setup session is invalid. Please reload this page and try again."],
+  ["attestation_missing", "We didn't receive a security-key attestation. Please try again."],
+  ["attestation_parse_failed", "We couldn't read your security-key attestation. Please try again."],
+  ["rate_limited", "Too many attempts from this address. Wait a minute and try again."],
+  ["setup_rate_limited", "Setup is rate-limited globally. Wait a minute and try again."],
+  ["token_missing", "This page is missing its redemption token."],
+]);
 
 // runeCount counts Unicode code points (matches the server's
 // utf8.RuneCountInString). Uses Array.from over the string iterator
@@ -57,6 +62,17 @@ const setupErrorLabels: Record<string, string> = {
 // code points the same way without tripping the security rule.
 function runeCount(s: string): number {
   return Array.from(s).length;
+}
+
+type SetupPhase = "idle" | "registering" | "submitting";
+
+// submitButtonLabel returns the user-visible button copy for the
+// current setup phase. Extracted so the JSX is a single expression
+// (Sonar S3358 flags nested ternaries inline).
+function submitButtonLabel(phase: SetupPhase): string {
+  if (phase === "registering") return "Touch your security key…";
+  if (phase === "submitting") return "Saving…";
+  return "Register security key";
 }
 
 export function BreakGlassSetup() {
@@ -72,10 +88,10 @@ export function BreakGlassSetup() {
   // state on mount is exactly the cascading-render pattern lint
   // flags.
   const [error, setError] = useState<string | null>(
-    token ? null : setupErrorLabels.token_missing,
+    token ? null : (setupErrorLabels.get("token_missing") ?? null),
   );
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState<"idle" | "registering" | "submitting">("idle");
+  const [phase, setPhase] = useState<SetupPhase>("idle");
 
   const passwordRuneLen = runeCount(password);
   const passwordMeetsMin = passwordRuneLen >= MIN_PASSWORD_RUNES;
@@ -98,14 +114,17 @@ export function BreakGlassSetup() {
       );
       // Navigate inside the basename-aware router. result.redirect
       // is "/ui/" — strip the basename so react-router doesn't
-      // double-prefix it.
-      const dest = result.redirect.startsWith("/ui")
-        ? result.redirect.slice("/ui".length) || "/"
-        : result.redirect;
-      void navigate(dest, { replace: true });
+      // double-prefix it. The `===` plus `startsWith("/ui/")` guard
+      // avoids mis-matching unrelated paths like /uipreview that
+      // happen to share the substring.
+      const dest =
+        result.redirect === "/ui" || result.redirect.startsWith("/ui/")
+          ? result.redirect.slice("/ui".length) || "/"
+          : result.redirect;
+      await navigate(dest, { replace: true });
     } catch (err) {
       if (err instanceof BreakglassError) {
-        setError(setupErrorLabels[err.reason] ?? "Setup failed. Please try again.");
+        setError(setupErrorLabels.get(err.reason) ?? "Setup failed. Please try again.");
       } else if (err instanceof DOMException && err.name === "NotAllowedError") {
         setError("Security-key registration was cancelled or timed out. Please try again.");
       } else {
@@ -163,11 +182,7 @@ export function BreakGlassSetup() {
             disabled={busy || !token}
           />
           <Button type="submit" disabled={submitDisabled} isLoading={busy}>
-            {phase === "registering"
-              ? "Touch your security key…"
-              : phase === "submitting"
-                ? "Saving…"
-                : "Register security key"}
+            {submitButtonLabel(phase)}
           </Button>
         </form>
       </Card>
