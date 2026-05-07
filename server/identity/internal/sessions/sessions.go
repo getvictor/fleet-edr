@@ -20,10 +20,30 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// DefaultTTL is the session lifetime. 12 hours matches common SaaS admin-console
-// defaults: long enough that operators aren't constantly re-logging in, short enough
-// that a stolen cookie expires before the end of a work day.
-const DefaultTTL = 12 * time.Hour
+// Phase 5 lifetime defaults: idle (inactivity) + absolute (hard cap)
+// per session class. Normal sessions get the lenient pair; break-
+// glass sessions get the strict pair so a stolen recovery cookie
+// expires before the end of an incident shift. The pre-Phase-5
+// flat 12h DefaultTTL is gone — every caller is now class-aware.
+const (
+	DefaultIdleTimeout               = 8 * time.Hour
+	DefaultAbsoluteTimeout           = 24 * time.Hour
+	DefaultBreakglassIdleTimeout     = 15 * time.Minute
+	DefaultBreakglassAbsoluteTimeout = 1 * time.Hour
+)
+
+// DefaultReauthWindow is the freshness window the chokepoint reads
+// via Actor.SessionFresh. last_auth_at within this window means the
+// operator has proven possession of credentials recently enough to
+// run destructive actions without re-prompting.
+const DefaultReauthWindow = 30 * time.Minute
+
+// touchThrottle is the minimum interval between sliding extensions
+// of one session's last_seen_at column. Middleware skips the UPDATE
+// when the cached value is fresher than this; idle-timeout
+// granularity is therefore 1 minute, invisible at the 8h scale and
+// caps the write rate at 1/min/active session.
+const touchThrottle = 1 * time.Minute
 
 // IDLen is the session id + CSRF token length in bytes. 32 bytes ≈ 256 bits of entropy,
 // well past any practical guessing bound.
@@ -44,6 +64,11 @@ var ErrNotFound = errors.New("sessions: not found or expired")
 // AuthMethod field reflects ground truth instead of a hardcoded default.
 // IdentityID FKs into the identities table; nullable so legacy local-password
 // rows (pre-Phase-4) and tests that don't track identities can stay valid.
+//
+// LastAuthAt records the most recent authentication event for this session
+// — initial login, OIDC reauth callback, or break-glass reauth POST.
+// Phase 5's chokepoint reads it via Store.IsFresh / Actor.SessionFresh
+// to gate destructive actions.
 type Session struct {
 	ID         []byte
 	UserID     int64
@@ -52,6 +77,7 @@ type Session struct {
 	CSRFToken  []byte
 	CreatedAt  time.Time
 	LastSeenAt time.Time
+	LastAuthAt time.Time
 	ExpiresAt  time.Time
 }
 
@@ -62,10 +88,21 @@ func digest(id []byte) []byte {
 	return h[:]
 }
 
+// Timeouts is the idle/absolute pair that gates one session class's
+// lifetime. Idle is the inactivity cap (last_seen_at + idle); absolute
+// is the hard cap (created_at + absolute). Either elapsing makes the
+// row not-found at lookup time.
+type Timeouts struct {
+	Idle     time.Duration
+	Absolute time.Duration
+}
+
 // Store owns the sessions table.
 type Store struct {
-	db  *sqlx.DB
-	ttl time.Duration
+	db         *sqlx.DB
+	normal     Timeouts
+	breakglass Timeouts
+	reauthWin  time.Duration
 	// now is the clock source; overridable for tests that need to manipulate expires_at
 	// without wall-clock coupling. Defaults to time.Now.UTC.
 	now func() time.Time
@@ -73,23 +110,57 @@ type Store struct {
 
 // Options customise Store behaviour. Leave unset fields as zero values to use defaults.
 type Options struct {
-	// TTL is the session lifetime. Zero means DefaultTTL.
-	TTL time.Duration
+	// Normal is the timeout pair for OIDC-minted sessions.
+	// Zero values fall through to DefaultIdleTimeout +
+	// DefaultAbsoluteTimeout.
+	Normal Timeouts
+	// Breakglass is the strict timeout pair for the recovery
+	// surface. Zero values fall through to
+	// DefaultBreakglassIdleTimeout + DefaultBreakglassAbsoluteTimeout.
+	Breakglass Timeouts
+	// ReauthWindow is the last_auth_at freshness gate. Zero means
+	// DefaultReauthWindow.
+	ReauthWindow time.Duration
 	// Now is the clock source. Nil means time.Now.UTC.
 	Now func() time.Time
 }
 
 // New constructs a Store over an existing sqlx.DB handle.
 func New(db *sqlx.DB, opts Options) *Store {
-	ttl := opts.TTL
-	if ttl <= 0 {
-		ttl = DefaultTTL
+	normal := opts.Normal
+	if normal.Idle <= 0 {
+		normal.Idle = DefaultIdleTimeout
+	}
+	if normal.Absolute <= 0 {
+		normal.Absolute = DefaultAbsoluteTimeout
+	}
+	bg := opts.Breakglass
+	if bg.Idle <= 0 {
+		bg.Idle = DefaultBreakglassIdleTimeout
+	}
+	if bg.Absolute <= 0 {
+		bg.Absolute = DefaultBreakglassAbsoluteTimeout
+	}
+	rw := opts.ReauthWindow
+	if rw <= 0 {
+		rw = DefaultReauthWindow
 	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Store{db: db, ttl: ttl, now: now}
+	return &Store{db: db, normal: normal, breakglass: bg, reauthWin: rw, now: now}
+}
+
+// timeoutsFor returns the (idle, absolute) pair appropriate to the
+// session's auth_method. Phase 4 design pins
+// auth_method=='local_password' to the break-glass surface; OIDC
+// sessions get the normal pair.
+func (s *Store) timeoutsFor(authMethod string) Timeouts {
+	if authMethod == "local_password" {
+		return s.breakglass
+	}
+	return s.normal
 }
 
 // CreateOptions carry the per-session metadata Phase 4 records on the row.
@@ -105,6 +176,11 @@ type CreateOptions struct {
 // DB row stores SHA-256(id) so a dump of the sessions table cannot be replayed as
 // active cookies. opts pins identity_id + auth_method for the chokepoint to consume
 // later via the session middleware.
+//
+// Phase 5: expires_at is the absolute cap (created_at + Timeouts.Absolute) for the
+// session's class. The idle cap is enforced at Get time against last_seen_at, not
+// stored on the row. last_auth_at is initialised to NOW() since a fresh session is
+// definitionally fresh.
 func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*Session, error) {
 	id, err := randomBytes(IDLen)
 	if err != nil {
@@ -119,16 +195,24 @@ func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*
 		authMethod = "local_password"
 	}
 	now := s.now()
-	expires := now.Add(s.ttl)
+	expires := now.Add(s.timeoutsFor(authMethod).Absolute)
+	// All three timestamps are set explicitly from the store's clock so frozen-
+	// clock tests and the production wall-clock path stay self-consistent. The
+	// columns' DB defaults (CURRENT_TIMESTAMP(6) on insert, ON UPDATE for
+	// last_seen_at) only apply when the field is omitted from the INSERT or
+	// when an UPDATE doesn't name last_seen_at — which Touch / UpdateLastAuthAt
+	// always do.
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, digest(id), userID, nullInt64Ptr(opts.IdentityID), authMethod, csrf, expires); err != nil {
+		INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token,
+			created_at, last_seen_at, last_auth_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, digest(id), userID, nullInt64Ptr(opts.IdentityID), authMethod, csrf,
+		now, now, now, expires); err != nil {
 		return nil, fmt.Errorf("insert session: %w", err)
 	}
 	return &Session{
 		ID: id, UserID: userID, IdentityID: opts.IdentityID, AuthMethod: authMethod,
-		CSRFToken: csrf, CreatedAt: now, LastSeenAt: now, ExpiresAt: expires,
+		CSRFToken: csrf, CreatedAt: now, LastSeenAt: now, LastAuthAt: now, ExpiresAt: expires,
 	}, nil
 }
 
@@ -143,9 +227,15 @@ func nullInt64Ptr(p *int64) any {
 }
 
 // Get takes the plaintext id from the cookie, hashes it, and looks up the row by that
-// digest. Returns ErrNotFound if missing / expired. We filter `expires_at > NOW()`
-// inside the SQL so a stale row is indistinguishable from a nonexistent one — the
-// middleware can treat both as "401 invalid_session".
+// digest. Returns ErrNotFound when no row matches OR when either timeout has elapsed.
+// Both surfaces map to the same 401 invalid_session in the middleware so a stale row
+// is indistinguishable from a nonexistent one.
+//
+// Phase 5: idle (last_seen_at + Timeouts.Idle) and absolute (created_at +
+// Timeouts.Absolute) caps are enforced in Go after the row is fetched. The class-
+// specific timeout pair depends on auth_method (break-glass uses the strict pair).
+// Doing the comparison in Go keeps the SQL identical for both classes; the post-
+// fetch cost is two time comparisons against an already-loaded row.
 func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 	if len(plaintextID) != IDLen {
 		return nil, ErrNotFound
@@ -157,20 +247,34 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 		CSRFToken  []byte        `db:"csrf_token"`
 		CreatedAt  time.Time     `db:"created_at"`
 		LastSeenAt time.Time     `db:"last_seen_at"`
+		LastAuthAt time.Time     `db:"last_auth_at"`
 		ExpiresAt  time.Time     `db:"expires_at"`
 	}
-	// `now` is passed in so tests can drive the clock; production uses s.now().
 	err := s.db.GetContext(ctx, &row, `
 		SELECT user_id, identity_id, auth_method, csrf_token,
-		       created_at, last_seen_at, expires_at
+		       created_at, last_seen_at, last_auth_at, expires_at
 		FROM sessions
-		WHERE id = ? AND expires_at > ?
-	`, digest(plaintextID), s.now())
+		WHERE id = ?
+	`, digest(plaintextID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query session: %w", err)
+	}
+	now := s.now()
+	// Absolute cap: pinned at mint time via expires_at so a config
+	// change to Absolute doesn't retroactively extend or shorten
+	// existing sessions, and Get's verdict matches CleanupExpired's
+	// (which also deletes by expires_at). The auth_method-derived
+	// pair below is only consulted for the idle gate.
+	if !row.ExpiresAt.After(now) {
+		return nil, ErrNotFound
+	}
+	t := s.timeoutsFor(row.AuthMethod)
+	// Idle cap: inactivity timeout sliding off last_seen_at.
+	if now.Sub(row.LastSeenAt) >= t.Idle {
+		return nil, ErrNotFound
 	}
 	var idPtr *int64
 	if row.IdentityID.Valid {
@@ -184,9 +288,75 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 		CSRFToken:  row.CSRFToken,
 		CreatedAt:  row.CreatedAt,
 		LastSeenAt: row.LastSeenAt,
+		LastAuthAt: row.LastAuthAt,
 		ExpiresAt:  row.ExpiresAt,
 	}, nil
 }
+
+// Touch advances last_seen_at to NOW() if the cached value is older than
+// touchThrottle (default 1 minute). Returns the resulting last_seen_at — the
+// cached value when no UPDATE was needed, or NOW() when an UPDATE ran. Pass
+// the cached LastSeenAt so a tight loop of Touch calls doesn't rewrite the row
+// when it's already fresh — middleware uses sess.LastSeenAt as the cache.
+//
+// On UPDATE failure the cached value is returned with a wrapped error; callers
+// SHOULD log + continue rather than fail the request. Idle expiry is enforced
+// at Get time, so a missed Touch costs at most one minute of idle granularity.
+func (s *Store) Touch(ctx context.Context, plaintextID []byte, cached time.Time) (time.Time, error) {
+	if len(plaintextID) != IDLen {
+		return cached, nil
+	}
+	now := s.now()
+	if now.Sub(cached) < touchThrottle {
+		return cached, nil
+	}
+	// Explicit UPDATE wins over the column's ON UPDATE CURRENT_TIMESTAMP — we
+	// want the value the store's clock returned, not whatever MySQL sees.
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE sessions SET last_seen_at = ? WHERE id = ?
+	`, now, digest(plaintextID)); err != nil {
+		return cached, fmt.Errorf("touch session: %w", err)
+	}
+	return now, nil
+}
+
+// UpdateLastAuthAt stamps last_auth_at = NOW() on the matching session,
+// resetting the freshness window. Called from every login site (initial mint,
+// OIDC reauth callback dispatch, break-glass reauth POST). Also bumps
+// last_seen_at since a successful authentication is by definition activity.
+//
+// Returns ErrNotFound when no row matches the digest.
+func (s *Store) UpdateLastAuthAt(ctx context.Context, plaintextID []byte) error {
+	if len(plaintextID) != IDLen {
+		return ErrNotFound
+	}
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sessions SET last_auth_at = ?, last_seen_at = ? WHERE id = ?
+	`, now, now, digest(plaintextID))
+	if err != nil {
+		return fmt.Errorf("update last_auth_at: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// IsFresh reports whether the session's last_auth_at falls within the
+// configured reauth window. The chokepoint reads it via Actor.SessionFresh
+// to gate destructive actions.
+func (s *Store) IsFresh(sess *Session) bool {
+	if sess == nil {
+		return false
+	}
+	return s.now().Sub(sess.LastAuthAt) < s.reauthWin
+}
+
+// ReauthWindow returns the configured freshness window. Exposed so the reauth
+// handler + operator-facing copy share one source of truth for the value.
+func (s *Store) ReauthWindow() time.Duration { return s.reauthWin }
 
 // Delete removes a session by plaintext id. Idempotent — no error on a row that
 // doesn't exist so logout works even when the cookie is already stale on the client.
@@ -210,10 +380,6 @@ func (s *Store) CleanupExpired(ctx context.Context) (int64, error) {
 	n, _ := res.RowsAffected()
 	return n, nil
 }
-
-// TTL returns the configured session lifetime. Exposed so the session handler can set
-// the cookie's Max-Age consistently with the DB row's expires_at.
-func (s *Store) TTL() time.Duration { return s.ttl }
 
 func randomBytes(n int) ([]byte, error) {
 	b := make([]byte, n)

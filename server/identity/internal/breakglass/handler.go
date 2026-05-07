@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -26,6 +27,21 @@ import (
 // /admin/break-glass for the assertion cookie to round-trip
 // between the GET-challenge POST and the POST-login.
 const cookiePath = "/admin/break-glass"
+
+// reauthCookiePath scopes the Phase 5 reauth challenge cookie to
+// /api/auth/reauth. The login challenge cookie at cookiePath is path-
+// scoped to /admin/break-glass and would NOT round-trip on the reauth
+// POST (browsers only send a cookie when the request path matches the
+// cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name
+// keeps the two flows independent — an operator running a break-glass
+// login in one tab and a reauth in another won't have one flow's
+// cookie clobber the other's.
+const reauthCookiePath = "/api/auth/reauth"
+
+// reauthChallengeCookieName is distinct from the login challenge cookie
+// so a tab running the login flow + a tab running reauth don't trample
+// each other's WebAuthn challenges.
+const reauthChallengeCookieName = "edr_reauth_challenge"
 
 // challengeCookieMaxAge is the per-flow cookie lifetime in seconds.
 // Matches the WebAuthn challenge timeout the browser enforces.
@@ -50,6 +66,7 @@ const authReasonHeader = "X-Edr-Auth-Reason"
 // NewHandler; mount via RegisterPublicRoutes.
 type Handler struct {
 	svc        *Service
+	identity   api.Service // used by Phase 5 reauth POST to stamp last_auth_at
 	signingKey []byte
 	rates      *RateLimits
 	allowlist  *Allowlist
@@ -59,6 +76,7 @@ type Handler struct {
 // HandlerOptions bundles the per-deployment knobs.
 type HandlerOptions struct {
 	Service    *Service
+	Identity   api.Service // optional; required only when RegisterAuthedRoutes is called
 	SigningKey []byte
 	RateLimits *RateLimits
 	Allowlist  *Allowlist
@@ -83,6 +101,7 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 	return &Handler{
 		svc:        opts.Service,
+		identity:   opts.Identity,
 		signingKey: opts.SigningKey,
 		rates:      rates,
 		allowlist:  opts.Allowlist,
@@ -135,6 +154,27 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /admin/break-glass/setup", wrap(h.handleFinishSetup))
 	mux.Handle("POST /admin/break-glass/challenge", wrap(h.handleBeginLogin))
 	mux.Handle("POST /admin/break-glass", wrap(h.handleFinishLogin))
+}
+
+// RegisterAuthedRoutes mounts the Phase 5 break-glass reauth surface.
+// Both routes assume the operator already has a valid session — they
+// run BEHIND the session + CSRF middleware. Calling this method without
+// a non-nil HandlerOptions.Identity panics, so a misconfigured wiring
+// fails at boot rather than producing nil-pointer 500s at request time.
+//
+//	POST /api/auth/reauth/challenge → assertion options + signed
+//	    challenge cookie. The operator's email is read from the
+//	    current session — no email enumeration vector since the
+//	    caller is already authenticated.
+//	POST /api/auth/reauth → verify password + assertion against the
+//	    current session's user; on success stamp last_auth_at
+//	    via the identity Service. No new cookie minted.
+func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+	if h.identity == nil {
+		panic("breakglass.RegisterAuthedRoutes: HandlerOptions.Identity is required")
+	}
+	mux.HandleFunc("POST /api/auth/reauth/challenge", h.handleReauthChallenge)
+	mux.HandleFunc("POST /api/auth/reauth", h.handleReauth)
 }
 
 // handleSetupRedirect 302s to the React setup page, preserving the
@@ -449,26 +489,36 @@ func (h *Handler) tooMany(ctx context.Context, w http.ResponseWriter, reason str
 }
 
 func (h *Handler) setChallengeCookie(w http.ResponseWriter, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     ChallengeStateCookieName,
-		Value:    value,
-		Path:     cookiePath,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   challengeCookieMaxAge,
-	})
+	h.writeChallengeCookie(w, ChallengeStateCookieName, cookiePath, value, challengeCookieMaxAge)
 }
 
 func (h *Handler) clearChallengeCookie(w http.ResponseWriter) {
+	h.writeChallengeCookie(w, ChallengeStateCookieName, cookiePath, "", -1)
+}
+
+func (h *Handler) setReauthChallengeCookie(w http.ResponseWriter, value string) {
+	h.writeChallengeCookie(w, reauthChallengeCookieName, reauthCookiePath, value, challengeCookieMaxAge)
+}
+
+func (h *Handler) clearReauthChallengeCookie(w http.ResponseWriter) {
+	h.writeChallengeCookie(w, reauthChallengeCookieName, reauthCookiePath, "", -1)
+}
+
+// writeChallengeCookie is the shared cookie-emit helper for both the
+// login (cookiePath / ChallengeStateCookieName) and reauth
+// (reauthCookiePath / reauthChallengeCookieName) WebAuthn flows. The
+// per-flow path scoping keeps each flow's cookie from leaking onto
+// the other's request paths and preserves the path-existence
+// concealment property of the IP allowlist gate on the login routes.
+func (h *Handler) writeChallengeCookie(w http.ResponseWriter, name, path, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     ChallengeStateCookieName,
-		Value:    "",
-		Path:     cookiePath,
+		Name:     name,
+		Value:    value,
+		Path:     path,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
+		MaxAge:   maxAge,
 	})
 }
 
@@ -519,6 +569,170 @@ func reasonForSetupErr(err error) string {
 	default:
 		return "setup.error"
 	}
+}
+
+// handleReauthChallenge issues a fresh assertion challenge for the
+// operator on the current session. Phase 5 reauth flow: an authed
+// operator hit a destructive action that's outside the reauth window;
+// the UI calls this endpoint to get assertion options + a signed
+// challenge cookie before prompting the authenticator.
+//
+// The operator's email is read from the current session, NOT a request
+// body — there's no email-enumeration vector here (the caller is
+// already authenticated) and reading from session pins the reauth to
+// the operator who's actually signed in. Sessions whose auth_method
+// is not "local_password" get 400 reauth_not_supported; the UI is
+// expected to dispatch OIDC reauth via /api/auth/login?reauth=1.
+func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ctx := r.Context()
+	sess, ok := api.SessionFromContext(ctx)
+	if !ok {
+		// Middleware mis-wiring: route mounted without Session().
+		// Fail loud with 500 because the misconfig is server-side.
+		h.logger.ErrorContext(ctx, "reauth challenge invoked without session on ctx")
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if sess.AuthMethod != "local_password" {
+		h.badRequest(ctx, w, "reauth_not_supported")
+		return
+	}
+	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
+		h.tooMany(ctx, w, "rate_limited")
+		return
+	}
+	user, err := h.svc.users.Get(ctx, sess.UserID)
+	if err != nil {
+		// Session refers to a deleted user — middleware should have
+		// caught this; treat as session-invalid.
+		h.unauthorized(ctx, w, "invalid_credentials")
+		return
+	}
+	challenge, _, err := h.svc.BeginLogin(ctx, user.Email)
+	if err != nil {
+		if errors.Is(err, ErrNoCredentials) {
+			h.badRequest(ctx, w, "no_credentials")
+			return
+		}
+		h.logger.ErrorContext(ctx, "reauth begin login", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	cookieValue, err := EncodeChallengeState(h.signingKey, challenge.SessionData)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "reauth encode state", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	// Use the reauth-scoped cookie (Path=/api/auth/reauth) so the
+	// browser sends it back on POST /api/auth/reauth. The login
+	// challenge cookie is path-scoped to /admin/break-glass and would
+	// not round-trip here.
+	h.setReauthChallengeCookie(w, cookieValue)
+	h.writeJSON(ctx, w, http.StatusOK, map[string]any{
+		"publicKey": challenge.Options.Response,
+	})
+}
+
+// handleReauth verifies password + assertion against the current
+// session's user and stamps last_auth_at to NOW(), resetting the
+// freshness window. No new session is minted — the existing cookie
+// keeps working with a refreshed timestamp. On success returns 200
+// + {"ok": true}; on failure returns 401 invalid_credentials with the
+// same wire-shape as a regular break-glass login so an attacker who
+// hijacks a session cookie cannot enumerate password-correctness via
+// the reauth endpoint.
+func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ctx := r.Context()
+	sess, ok := api.SessionFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "reauth invoked without session on ctx")
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if sess.AuthMethod != "local_password" {
+		h.badRequest(ctx, w, "reauth_not_supported")
+		return
+	}
+	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
+		h.tooMany(ctx, w, "rate_limited")
+		return
+	}
+	cookie, err := r.Cookie(reauthChallengeCookieName)
+	if err != nil {
+		h.badRequest(ctx, w, "challenge_missing")
+		return
+	}
+	sd, err := DecodeChallengeState(h.signingKey, cookie.Value)
+	if err != nil {
+		h.badRequest(ctx, w, "challenge_invalid")
+		return
+	}
+	var body struct {
+		Password  string          `json:"password"`
+		Assertion json.RawMessage `json:"assertion"`
+	}
+	if err := decodeJSONBody(w, r, &body, loginBodyMaxBytes); err != nil {
+		h.badRequest(ctx, w, "body_invalid")
+		return
+	}
+	user, err := h.svc.users.Get(ctx, sess.UserID)
+	if err != nil {
+		h.unauthorized(ctx, w, "invalid_credentials")
+		return
+	}
+	if !h.rates.AllowEmailFail(user.Email) {
+		h.tooMany(ctx, w, "email_rate_limited")
+		return
+	}
+	parsed, err := protocol.ParseCredentialRequestResponseBytes(body.Assertion)
+	if err != nil {
+		h.badRequest(ctx, w, "assertion_parse_failed")
+		return
+	}
+	if err := h.svc.VerifyLogin(ctx, FinishLoginRequest{
+		User:      user,
+		Session:   sd,
+		Password:  body.Password,
+		Assertion: parsed,
+	}); err != nil {
+		reason := reasonForLoginErr(err)
+		h.svc.AuditFailure(ctx, user.Email, reason,
+			httpserver.ClientIP(r), r.UserAgent())
+		h.unauthorized(ctx, w, "invalid_credentials")
+		return
+	}
+	// Re-derive the raw cookie token from the request so the identity
+	// service can stamp last_auth_at on this session row. The plaintext
+	// is the cookie value; api.Session deliberately does not carry it.
+	rawToken, err := readSessionCookieToken(r)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "reauth read session cookie", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if err := h.identity.UpdateLastAuthAt(ctx, rawToken); err != nil {
+		h.logger.ErrorContext(ctx, "reauth update last_auth_at", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	h.clearReauthChallengeCookie(w)
+	h.svc.AuditSuccess(ctx, user, httpserver.ClientIP(r), r.UserAgent())
+	h.writeJSON(ctx, w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// readSessionCookieToken decodes the api.SessionCookieName value back
+// into the raw plaintext token bytes. Mirrors the middleware's cookie-
+// read path so the reauth endpoint stamps last_auth_at on the SAME
+// row the middleware loaded.
+func readSessionCookieToken(r *http.Request) ([]byte, error) {
+	cookie, err := r.Cookie(api.SessionCookieName)
+	if err != nil {
+		return nil, fmt.Errorf("read session cookie: %w", err)
+	}
+	return api.DecodeToken(cookie.Value)
 }
 
 // reasonForLoginErr maps login-time errors to audit reasons.

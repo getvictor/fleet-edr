@@ -32,9 +32,16 @@ type Deps struct {
 	Logger          *slog.Logger
 	LoginRatePerMin int
 	CookieSecure    bool
-	// SessionTTL overrides the default session lifetime. Zero means use the
-	// sessions package default (12 h).
-	SessionTTL time.Duration
+	// Session timeouts (Phase 5). Per-class idle + absolute caps replace
+	// the pre-Phase-5 flat TTL. Zero means use the sessions package
+	// defaults: normal 8h idle / 24h absolute, break-glass 15m / 1h.
+	SessionIdle               time.Duration
+	SessionAbsolute           time.Duration
+	BreakglassSessionIdle     time.Duration
+	BreakglassSessionAbsolute time.Duration
+	// ReauthWindow is the freshness gate for destructive actions. Zero
+	// means the sessions package default (30m).
+	ReauthWindow time.Duration
 	// CleanupInterval overrides how often Run sweeps expired sessions. Zero
 	// means use the package default (5 min).
 	CleanupInterval time.Duration
@@ -146,7 +153,17 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	}
 
 	usersStore := users.New(deps.DB)
-	sessionsStore := sessions.New(deps.DB, sessions.Options{TTL: deps.SessionTTL})
+	sessionsStore := sessions.New(deps.DB, sessions.Options{
+		Normal: sessions.Timeouts{
+			Idle:     deps.SessionIdle,
+			Absolute: deps.SessionAbsolute,
+		},
+		Breakglass: sessions.Timeouts{
+			Idle:     deps.BreakglassSessionIdle,
+			Absolute: deps.BreakglassSessionAbsolute,
+		},
+		ReauthWindow: deps.ReauthWindow,
+	})
 	rbacStore := rbac.New(deps.DB)
 	identitiesStore := identities.New(deps.DB)
 	svc := service.New(usersStore, sessionsStore, rbacStore, logger)
@@ -184,6 +201,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		users:      usersStore,
 		identities: identitiesStore,
 		audit:      auditStore,
+		identity:   svc,
 	})
 	if err != nil {
 		return nil, err
@@ -222,6 +240,7 @@ type breakglassDeps struct {
 	users      *users.Store
 	identities *identities.Store
 	audit      *audit.Store
+	identity   api.Service // for the Phase 5 reauth POST endpoint
 }
 
 // buildBreakglass constructs the break-glass Service + Handler.
@@ -296,6 +315,7 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 	}
 	h := breakglass.NewHandler(breakglass.HandlerOptions{
 		Service:    svc,
+		Identity:   in.identity,
 		SigningKey: in.deps.SessionSigningKey,
 		Allowlist:  allowlist,
 		Logger:     in.logger,
@@ -453,12 +473,16 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 	return i.breakglassHandler.AllowlistMiddleware
 }
 
-// RegisterAuthedRoutes wires GET /api/session (who-am-i) and
-// GET /api/audit-events (operator-action history). Caller wraps in
+// RegisterAuthedRoutes wires GET /api/session (who-am-i),
+// GET /api/audit-events (operator-action history), and the Phase 5
+// break-glass reauth POST endpoints. Caller wraps in
 // SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
+	if i.breakglassHandler != nil {
+		i.breakglassHandler.RegisterAuthedRoutes(mux)
+	}
 }
 
 // AuditRecorder returns the cross-context-callable AuditRecorder.

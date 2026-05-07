@@ -265,6 +265,44 @@ func TestHandleLogin_SetsCookieAndRedirects(t *testing.T) {
 	assert.Positive(t, stateCookie.MaxAge)
 }
 
+// HandleLogin?reauth=1 forces the IdP to re-prompt for credentials by
+// setting prompt=login on the authorize URL. Without it, an IdP that's
+// mid-session would silently re-issue a token, defeating the Phase 5
+// freshness model. Pin here so a regression in withPromptLogin or in
+// handleLogin's branch surfaces immediately.
+func TestHandleLogin_ReauthSetsPromptLogin(t *testing.T) {
+	env := newCallbackEnv(t, true, nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET",
+		"/api/auth/login?reauth=1&next=/ui/hosts", nil)
+	w := httptest.NewRecorder()
+
+	env.handler.HandleLoginForTest()(w, r)
+
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Location"), "prompt=login",
+		"reauth=1 must append prompt=login to the authorize URL")
+}
+
+// HandleLogin without reauth=1 must NOT set prompt=login. Guards a
+// regression that always sets it (which would defeat the IdP's own
+// session reuse on every login).
+func TestHandleLogin_NormalLoginOmitsPromptLogin(t *testing.T) {
+	env := newCallbackEnv(t, true, nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET",
+		"/api/auth/login?next=/ui/hosts", nil)
+	w := httptest.NewRecorder()
+
+	env.handler.HandleLoginForTest()(w, r)
+
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.NotContains(t, resp.Header.Get("Location"), "prompt=login",
+		"normal login must not force prompt=login — the IdP picks its own session policy")
+}
+
 // RegisterPublicRoutes mounts both routes against a mux. Pinned to
 // catch a regression that splits the prefix or mounts only one.
 func TestRegisterPublicRoutes(t *testing.T) {

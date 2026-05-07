@@ -391,27 +391,7 @@ var ErrNoCredentials = errors.New("breakglass: no registered credentials")
 // which an attacker without the hardware authenticator cannot
 // produce.
 func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*sessions.Session, error) {
-	rows, err := s.credentials.ListByUserID(ctx, req.User.ID)
-	if err != nil {
-		return nil, fmt.Errorf("breakglass: list credentials: %w", err)
-	}
-	wuser := User{
-		ID:          req.User.ID,
-		Email:       req.User.Email,
-		Credentials: ToWebauthnCredentials(rows),
-	}
-	cred, err := s.webauthn.ValidateLogin(wuser, req.Session, req.Assertion)
-	if err != nil {
-		return nil, fmt.Errorf("breakglass: validate login: %w", err)
-	}
-	// Password second: only callers that already proved possession
-	// of a registered authenticator pay the argon2 cost.
-	if _, err := s.users.VerifyPassword(ctx, req.User.Email, req.Password); err != nil {
-		return nil, err
-	}
-	// Persist the new sign_count + last_used_at. Sign-count regression
-	// is fatal — surfaces ErrCredentialClonedDetected.
-	if err := s.credentials.RecordAssertion(ctx, cred.ID, cred.Authenticator.SignCount); err != nil {
+	if err := s.VerifyLogin(ctx, req); err != nil {
 		return nil, err
 	}
 	// Resolve the local_password identity for session.identity_id.
@@ -430,6 +410,41 @@ func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*ses
 		return nil, fmt.Errorf("breakglass: mint session: %w", err)
 	}
 	return sess, nil
+}
+
+// VerifyLogin runs the same credential checks FinishLogin runs (signed
+// assertion → password → sign-count regression) but does NOT mint a new
+// session. Phase 5's reauth flow uses it to stamp last_auth_at on the
+// EXISTING session instead of issuing a fresh cookie. The break-glass
+// session a reauth runs against is already bound to req.User; minting
+// a new one would orphan the old row + invalidate any in-flight CSRF
+// tokens the operator's UI tab is holding.
+//
+// Caller responsibilities are identical to FinishLogin: req.Session
+// must be the decoded WebAuthn challenge from the begin step,
+// req.Assertion must be the parsed CredentialAssertionResponse, and
+// the per-email rate-limit budget is the caller's to consume.
+func (s *Service) VerifyLogin(ctx context.Context, req FinishLoginRequest) error {
+	rows, err := s.credentials.ListByUserID(ctx, req.User.ID)
+	if err != nil {
+		return fmt.Errorf("breakglass: list credentials: %w", err)
+	}
+	wuser := User{
+		ID:          req.User.ID,
+		Email:       req.User.Email,
+		Credentials: ToWebauthnCredentials(rows),
+	}
+	cred, err := s.webauthn.ValidateLogin(wuser, req.Session, req.Assertion)
+	if err != nil {
+		return fmt.Errorf("breakglass: validate login: %w", err)
+	}
+	if _, err := s.users.VerifyPassword(ctx, req.User.Email, req.Password); err != nil {
+		return err
+	}
+	if err := s.credentials.RecordAssertion(ctx, cred.ID, cred.Authenticator.SignCount); err != nil {
+		return err
+	}
+	return nil
 }
 
 // IssueSetupToken mints a fresh bootstrap token bound to userID and

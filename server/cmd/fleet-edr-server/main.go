@@ -218,6 +218,11 @@ func openIdentity(
 			RPDisplayName:     cfg.BreakglassRPDisplayName,
 			RPOrigins:         cfg.BreakglassRPOrigins,
 		},
+		SessionIdle:               cfg.SessionIdleTimeout,
+		SessionAbsolute:           cfg.SessionAbsoluteTimeout,
+		BreakglassSessionIdle:     cfg.BreakglassSessionIdleTimeout,
+		BreakglassSessionAbsolute: cfg.BreakglassSessionAbsoluteTimeout,
+		ReauthWindow:              cfg.ReauthWindow,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)

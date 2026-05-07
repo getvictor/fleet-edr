@@ -50,6 +50,12 @@ func actorWithRoles(uid int64, tenant string, roles ...api.RoleBinding) *api.Act
 		TenantID:   tenant,
 		AuthMethod: "local_password",
 		Roles:      roles,
+		// Default to fresh so the role/action matrix tests can pin
+		// grant correctness without entangling Phase 5's reauth
+		// window. Tests that need to exercise the stale-session deny
+		// path build their actor inline and set SessionFresh=false
+		// explicitly.
+		SessionFresh: true,
 	}
 }
 

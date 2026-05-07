@@ -54,6 +54,12 @@ type Session struct {
 	AuthMethod string
 	CreatedAt  time.Time
 	LastSeenAt time.Time
+	// LastAuthAt records the most recent authentication event for this
+	// session — initial login or a successful reauth (Phase 5). The
+	// chokepoint reads it through Service.LoadActor to decide whether
+	// the actor is "fresh enough" to perform destructive actions (host
+	// commands, critical alert resolves) without re-prompting.
+	LastAuthAt time.Time
 	ExpiresAt  time.Time
 	CSRFToken  []byte
 }
