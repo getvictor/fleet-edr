@@ -81,10 +81,13 @@ type ReauthChallenge struct {
 }
 
 // ReauthChallengeFor builds the challenge payload for the actor on
-// ctx. OIDC actors get a redirect to /api/auth/login?reauth=1 with
-// the original path preserved; break-glass actors get the POST
-// endpoint URL the UI submits credentials against. When no actor is
-// on ctx (the no-actor reason path), a zero challenge is returned.
+// ctx. OIDC actors get the bare /api/auth/login?reauth=1 URL; the UI
+// is responsible for appending its own &next=<original-path> so the
+// post-reauth redirect lands the operator back on the page that
+// triggered the reauth_required deny. Break-glass actors get the
+// POST endpoint URL the UI submits credentials against. When no
+// actor is on ctx (the no-actor reason path), a zero challenge is
+// returned.
 func ReauthChallengeFor(ctx context.Context) ReauthChallenge {
 	a, ok := ActorFromContext(ctx)
 	if !ok {

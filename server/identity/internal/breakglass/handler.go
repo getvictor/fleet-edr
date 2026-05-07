@@ -28,6 +28,21 @@ import (
 // between the GET-challenge POST and the POST-login.
 const cookiePath = "/admin/break-glass"
 
+// reauthCookiePath scopes the Phase 5 reauth challenge cookie to
+// /api/auth/reauth. The login challenge cookie at cookiePath is path-
+// scoped to /admin/break-glass and would NOT round-trip on the reauth
+// POST (browsers only send a cookie when the request path matches the
+// cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name
+// keeps the two flows independent — an operator running a break-glass
+// login in one tab and a reauth in another won't have one flow's
+// cookie clobber the other's.
+const reauthCookiePath = "/api/auth/reauth"
+
+// reauthChallengeCookieName is distinct from the login challenge cookie
+// so a tab running the login flow + a tab running reauth don't trample
+// each other's WebAuthn challenges.
+const reauthChallengeCookieName = "edr_reauth_challenge"
+
 // challengeCookieMaxAge is the per-flow cookie lifetime in seconds.
 // Matches the WebAuthn challenge timeout the browser enforces.
 const challengeCookieMaxAge = 300
@@ -474,26 +489,36 @@ func (h *Handler) tooMany(ctx context.Context, w http.ResponseWriter, reason str
 }
 
 func (h *Handler) setChallengeCookie(w http.ResponseWriter, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     ChallengeStateCookieName,
-		Value:    value,
-		Path:     cookiePath,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   challengeCookieMaxAge,
-	})
+	h.writeChallengeCookie(w, ChallengeStateCookieName, cookiePath, value, challengeCookieMaxAge)
 }
 
 func (h *Handler) clearChallengeCookie(w http.ResponseWriter) {
+	h.writeChallengeCookie(w, ChallengeStateCookieName, cookiePath, "", -1)
+}
+
+func (h *Handler) setReauthChallengeCookie(w http.ResponseWriter, value string) {
+	h.writeChallengeCookie(w, reauthChallengeCookieName, reauthCookiePath, value, challengeCookieMaxAge)
+}
+
+func (h *Handler) clearReauthChallengeCookie(w http.ResponseWriter) {
+	h.writeChallengeCookie(w, reauthChallengeCookieName, reauthCookiePath, "", -1)
+}
+
+// writeChallengeCookie is the shared cookie-emit helper for both the
+// login (cookiePath / ChallengeStateCookieName) and reauth
+// (reauthCookiePath / reauthChallengeCookieName) WebAuthn flows. The
+// per-flow path scoping keeps each flow's cookie from leaking onto
+// the other's request paths and preserves the path-existence
+// concealment property of the IP allowlist gate on the login routes.
+func (h *Handler) writeChallengeCookie(w http.ResponseWriter, name, path, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     ChallengeStateCookieName,
-		Value:    "",
-		Path:     cookiePath,
+		Name:     name,
+		Value:    value,
+		Path:     path,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
+		MaxAge:   maxAge,
 	})
 }
 
@@ -600,7 +625,11 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	h.setChallengeCookie(w, cookieValue)
+	// Use the reauth-scoped cookie (Path=/api/auth/reauth) so the
+	// browser sends it back on POST /api/auth/reauth. The login
+	// challenge cookie is path-scoped to /admin/break-glass and would
+	// not round-trip here.
+	h.setReauthChallengeCookie(w, cookieValue)
 	h.writeJSON(ctx, w, http.StatusOK, map[string]any{
 		"publicKey": challenge.Options.Response,
 	})
@@ -631,7 +660,7 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 		h.tooMany(ctx, w, "rate_limited")
 		return
 	}
-	cookie, err := r.Cookie(ChallengeStateCookieName)
+	cookie, err := r.Cookie(reauthChallengeCookieName)
 	if err != nil {
 		h.badRequest(ctx, w, "challenge_missing")
 		return
@@ -689,7 +718,7 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	h.clearChallengeCookie(w)
+	h.clearReauthChallengeCookie(w)
 	h.svc.AuditSuccess(ctx, user, httpserver.ClientIP(r), r.UserAgent())
 	h.writeJSON(ctx, w, http.StatusOK, map[string]any{"ok": true})
 }

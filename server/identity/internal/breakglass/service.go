@@ -391,27 +391,7 @@ var ErrNoCredentials = errors.New("breakglass: no registered credentials")
 // which an attacker without the hardware authenticator cannot
 // produce.
 func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*sessions.Session, error) {
-	rows, err := s.credentials.ListByUserID(ctx, req.User.ID)
-	if err != nil {
-		return nil, fmt.Errorf("breakglass: list credentials: %w", err)
-	}
-	wuser := User{
-		ID:          req.User.ID,
-		Email:       req.User.Email,
-		Credentials: ToWebauthnCredentials(rows),
-	}
-	cred, err := s.webauthn.ValidateLogin(wuser, req.Session, req.Assertion)
-	if err != nil {
-		return nil, fmt.Errorf("breakglass: validate login: %w", err)
-	}
-	// Password second: only callers that already proved possession
-	// of a registered authenticator pay the argon2 cost.
-	if _, err := s.users.VerifyPassword(ctx, req.User.Email, req.Password); err != nil {
-		return nil, err
-	}
-	// Persist the new sign_count + last_used_at. Sign-count regression
-	// is fatal — surfaces ErrCredentialClonedDetected.
-	if err := s.credentials.RecordAssertion(ctx, cred.ID, cred.Authenticator.SignCount); err != nil {
+	if err := s.VerifyLogin(ctx, req); err != nil {
 		return nil, err
 	}
 	// Resolve the local_password identity for session.identity_id.

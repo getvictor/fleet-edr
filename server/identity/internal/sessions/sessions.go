@@ -263,11 +263,15 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 		return nil, fmt.Errorf("query session: %w", err)
 	}
 	now := s.now()
-	t := s.timeoutsFor(row.AuthMethod)
-	// Absolute cap: hard limit on session age regardless of activity.
-	if now.Sub(row.CreatedAt) >= t.Absolute {
+	// Absolute cap: pinned at mint time via expires_at so a config
+	// change to Absolute doesn't retroactively extend or shorten
+	// existing sessions, and Get's verdict matches CleanupExpired's
+	// (which also deletes by expires_at). The auth_method-derived
+	// pair below is only consulted for the idle gate.
+	if !row.ExpiresAt.After(now) {
 		return nil, ErrNotFound
 	}
+	t := s.timeoutsFor(row.AuthMethod)
 	// Idle cap: inactivity timeout sliding off last_seen_at.
 	if now.Sub(row.LastSeenAt) >= t.Idle {
 		return nil, ErrNotFound

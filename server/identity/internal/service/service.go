@@ -190,13 +190,19 @@ func (s *service) IsFresh(sess *api.Session) bool {
 
 // TouchSession advances the session's last_seen_at if the cached value
 // is older than the store's throttle window. Wraps sessions.Store.Touch.
-// Errors are returned but middleware logs + continues; a missed touch
-// costs at most one minute of idle granularity.
-func (s *service) TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) error {
-	if _, err := s.sessions.Touch(ctx, sessionToken, cachedLastSeen); err != nil {
-		return fmt.Errorf("touch session: %w", err)
+// Returns the resulting last_seen_at (cachedLastSeen when the throttle
+// skipped, otherwise NOW()) so the middleware can refresh its cached
+// *Session — without that, a long-running request that touches the
+// row mid-flight would hand the next request a stale cache and force
+// another write inside the throttle window. Errors are returned;
+// middleware logs + continues since a missed touch costs at most one
+// minute of idle granularity.
+func (s *service) TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) (time.Time, error) {
+	t, err := s.sessions.Touch(ctx, sessionToken, cachedLastSeen)
+	if err != nil {
+		return cachedLastSeen, fmt.Errorf("touch session: %w", err)
 	}
-	return nil
+	return t, nil
 }
 
 // toAPIUser converts the internal users.User row into the operator-visible

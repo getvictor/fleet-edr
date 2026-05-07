@@ -68,12 +68,19 @@ type Service interface {
 	LoadActor(ctx context.Context, userID int64, authMethod string, sessionFresh bool) (*Actor, error)
 
 	// UpdateLastAuthAt stamps the session's freshness timestamp to
-	// NOW(), resetting the reauth window. Called from the OIDC
-	// callback when handling a reauth=1 dispatch (re-uses the
-	// existing session row instead of minting a new one) and from
-	// the break-glass reauth POST endpoint after credential
-	// verification. Returns ErrSessionNotFound when no session
-	// matches the token.
+	// NOW(), resetting the reauth window. Called from the break-glass
+	// reauth POST endpoint after credential verification — the same
+	// cookie keeps working with a refreshed timestamp, no new session
+	// minted. Returns ErrSessionNotFound when no session matches the
+	// token.
+	//
+	// OIDC reauth does NOT use this method: the OIDC callback always
+	// mints a fresh session on a successful exchange (whose
+	// Create-time last_auth_at is NOW() automatically). The previous
+	// session is orphaned and reaped on its absolute expiry. This was
+	// an explicit Phase 5a tradeoff to avoid threading session-
+	// continuity through the OIDC state cookie; revisit if the orphan
+	// rate becomes a concern at scale.
 	UpdateLastAuthAt(ctx context.Context, sessionToken []byte) error
 
 	// IsFresh reports whether the session's last_auth_at falls
@@ -88,7 +95,12 @@ type Service interface {
 	// on every authed request as the sliding-extension mechanism
 	// behind the idle timeout. cachedLastSeen lets the store skip
 	// the UPDATE without a SELECT when the cached value is already
-	// fresh. Errors are non-fatal — a missed touch costs at most
-	// the throttle window of idle granularity.
-	TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) error
+	// fresh. Returns the resulting last_seen_at — when the throttle
+	// skipped the UPDATE this is cachedLastSeen, otherwise the
+	// store clock at write time. Caller should plumb the returned
+	// value back onto its cached *Session so a chain of Touches
+	// inside the same throttle window stays a no-op against the
+	// updated cache. Errors are non-fatal — a missed touch costs
+	// at most the throttle window of idle granularity.
+	TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) (time.Time, error)
 }
