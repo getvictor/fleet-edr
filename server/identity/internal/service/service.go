@@ -37,37 +37,6 @@ func New(u *users.Store, s *sessions.Store, r *rbac.Store, logger *slog.Logger) 
 	return &service{users: u, sessions: s, rbac: r, logger: logger}
 }
 
-func (s *service) Login(ctx context.Context, email, password string) (api.LoginResult, error) {
-	u, err := s.users.VerifyPassword(ctx, email, password)
-	switch {
-	case errors.Is(err, users.ErrNotFound):
-		return api.LoginResult{}, api.ErrUserNotFound
-	case errors.Is(err, users.ErrBadPassword):
-		return api.LoginResult{}, api.ErrBadPassword
-	case err != nil:
-		return api.LoginResult{}, fmt.Errorf("verify password: %w", err)
-	}
-	// Phase 4b: break-glass accounts MUST log in via
-	// /admin/break-glass (password + WebAuthn). /api/session POST
-	// would mint a session with only the password factor, violating
-	// the MFA mandate. The audit row records the precise reason;
-	// the wire response collapses to the same 401 as a bad password
-	// so an attacker cannot enumerate break-glass accounts.
-	if u.IsBreakglass {
-		return api.LoginResult{}, api.ErrBreakglassUseAdminURL
-	}
-	sess, err := s.sessions.Create(ctx, u.ID, sessions.CreateOptions{AuthMethod: "local_password"})
-	if err != nil {
-		return api.LoginResult{}, fmt.Errorf("create session: %w", err)
-	}
-	return api.LoginResult{
-		User:         toAPIUser(u),
-		SessionToken: sess.ID,
-		CSRFToken:    sess.CSRFToken,
-		ExpiresAt:    sess.ExpiresAt,
-	}, nil
-}
-
 func (s *service) Logout(ctx context.Context, sessionToken []byte) error {
 	if len(sessionToken) == 0 {
 		return nil

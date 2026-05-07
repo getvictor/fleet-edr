@@ -28,10 +28,9 @@ import (
 // Deps bundles what New needs to wire the identity context. cmd/main owns
 // the *sqlx.DB handle and shares it across every context's bootstrap.
 type Deps struct {
-	DB              *sqlx.DB
-	Logger          *slog.Logger
-	LoginRatePerMin int
-	CookieSecure    bool
+	DB           *sqlx.DB
+	Logger       *slog.Logger
+	CookieSecure bool
 	// Session timeouts (Phase 5). Per-class idle + absolute caps replace
 	// the pre-Phase-5 flat TTL. Zero means use the sessions package
 	// defaults: normal 8h idle / 24h absolute, break-glass 15m / 1h.
@@ -211,10 +210,9 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		svc:         svc,
 		authzEngine: authzEngine,
 		loginHandler: login.New(svc, login.Options{
-			RatePerMinute: deps.LoginRatePerMin,
-			CookieSecure:  deps.CookieSecure,
-			Logger:        logger,
-			Audit:         auditStore,
+			CookieSecure: deps.CookieSecure,
+			Logger:       logger,
+			Audit:        auditStore,
 		}),
 		oidcHandler:       oidcHandler,
 		breakglassHandler: bgHandler,
@@ -437,8 +435,10 @@ func (i *Identity) CSRFMiddleware() func(http.Handler) http.Handler { return i.c
 // summarising the auth modes the deployment honours.
 func (i *Identity) OIDCEnabled() bool { return i.oidcHandler != nil }
 
-// RegisterPublicRoutes wires POST /api/session and DELETE /api/session
-// (login + logout). Public because they have no session yet.
+// RegisterPublicRoutes wires DELETE /api/session (logout) plus the
+// pre-auth OIDC + break-glass routes (when configured). Phase 5b
+// retired POST /api/session; sessions are now minted by the OIDC
+// callback or the break-glass FinishLogin / FinishSetup endpoints.
 func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterPublicRoutes(mux)
 	if i.oidcHandler != nil {

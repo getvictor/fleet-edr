@@ -12,15 +12,14 @@ import (
 // through this api package, never through the internal implementation.
 //
 // Implementation lives in server/identity/internal/service.
+//
+// Phase 5b retired the password-based Login method and the
+// `POST /api/session` route it backed. Sessions are now minted only by
+// the OIDC callback (server/identity/internal/oidc) and the break-
+// glass FinishLogin / FinishSetup paths (server/identity/internal/
+// breakglass). The remaining surface is session lifecycle, user lookup,
+// chokepoint actor loading, and reauth-window helpers.
 type Service interface {
-	// Login verifies the credentials and creates a session. Returns
-	// ErrUserNotFound (wraps ErrInvalidCredentials) for unknown email
-	// and ErrBadPassword (also wraps ErrInvalidCredentials) for wrong
-	// password; callers that want a single 401 response use
-	// errors.Is(err, ErrInvalidCredentials). Both paths spend the same
-	// argon2 cost so login latency cannot be used to enumerate emails.
-	Login(ctx context.Context, email, password string) (LoginResult, error)
-
 	// Logout deletes the session identified by the cookie token. Idempotent:
 	// returns nil if the session is already gone, so logout under network
 	// retry is safe.

@@ -1,7 +1,12 @@
-// Login handler: POST /api/session, GET /api/session, DELETE /api/session.
-// Delegates business logic to identity/api.Service; owns HTTP-flavoured
-// concerns (rate limiting, request body parsing, cookie construction,
-// audit log).
+// Login handler: GET /api/session (who-am-i) and DELETE /api/session
+// (logout). The Phase 4 OIDC + break-glass refactor replaced the
+// password-based POST /api/session login path with the dedicated
+// `/api/auth/login` (OIDC) and `/admin/break-glass` flows; the legacy
+// POST handler was retired in Phase 5b along with Service.Login.
+//
+// This handler owns HTTP-flavoured concerns for the session-read +
+// session-delete surface: cookie parsing, audit log emission on
+// logout, and the session-JSON response shape returned by GET.
 
 package login
 
@@ -9,42 +14,35 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/time/rate"
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
-// Handler serves the login + session-check + logout endpoints.
+// Handler serves the session-check + logout endpoints.
 type Handler struct {
 	svc       api.Service
 	audit     api.AuditRecorder
 	logger    *slog.Logger
-	limiter   *httpserver.IPLimiter
 	cookieSec bool
 }
 
 // Options tune handler behaviour.
 type Options struct {
-	// RatePerMinute is the per-source-IP login attempt cap. Defaults to 6.
-	RatePerMinute int
 	// CookieSecure controls the Secure cookie flag. Set true when TLS is on.
 	CookieSecure bool
 	// Logger for audit lines.
 	Logger *slog.Logger
 	// Audit is the operator-action audit recorder. Optional: when nil the
 	// handler skips the Record calls (existing tests that don't care about
-	// the audit trail need not stand one up). When set, login_success,
-	// login_failed, and logout each emit one row through this recorder
-	// after the action commits.
+	// the audit trail need not stand one up). When set, the logout path
+	// emits one row through this recorder after the action commits.
 	Audit api.AuditRecorder
 }
 
@@ -52,9 +50,6 @@ type Options struct {
 func New(svc api.Service, opts Options) *Handler {
 	if svc == nil {
 		panic("login.New: identity service must not be nil")
-	}
-	if opts.RatePerMinute <= 0 {
-		opts.RatePerMinute = 6
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -64,16 +59,14 @@ func New(svc api.Service, opts Options) *Handler {
 		svc:       svc,
 		audit:     opts.Audit,
 		logger:    logger,
-		limiter:   httpserver.NewIPLimiter(rate.Every(time.Minute/time.Duration(opts.RatePerMinute)), opts.RatePerMinute),
 		cookieSec: opts.CookieSecure,
 	}
 }
 
-// RegisterPublicRoutes wires POST + DELETE /api/session on the given mux.
-// Both are public: login mints a session, logout is permissive by design
-// (a stale cookie still needs a clearing Set-Cookie).
+// RegisterPublicRoutes wires DELETE /api/session on the given mux.
+// Logout is public (and permissive) by design — a stale cookie still
+// needs a clearing Set-Cookie regardless of session validity.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/session", h.handleLogin)
 	mux.HandleFunc("DELETE /api/session", h.handleLogout)
 }
 
@@ -81,20 +74,6 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // wraps the mux in Session + CSRF middleware before mounting.
 func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/session", h.handleGet)
-}
-
-type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-// String redacts the password so an accidental %v / slog("req", r) doesn't leak.
-func (r loginRequest) String() string {
-	// Use a literal that doesn't have the secret-equals-string shape so
-	// static analyzers (Sonar S2068) don't flag the redaction marker as
-	// a hard-coded credential. The visible field name is preserved for
-	// log readability.
-	return "loginRequest{email=" + r.Email + " password:[redacted]}"
 }
 
 type userResponse struct {
@@ -110,93 +89,6 @@ type sessionResponse struct {
 
 type errBody struct {
 	Error string `json:"error"`
-}
-
-const loginBodyCap = 4 << 10 // 4 KiB
-
-func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	span := trace.SpanFromContext(ctx)
-	ip := httpserver.ClientIP(r)
-	span.SetAttributes(attribute.String(attrkeys.RemoteAddr, ip))
-
-	if !h.limiter.Allow(ip) {
-		w.Header().Set("Retry-After", "60")
-		h.fail(ctx, w, http.StatusTooManyRequests, "rate_limited", failInfo{IP: ip},
-			attrkeys.AuthReason, "rate_limited")
-		// Audit-record the throttled attempt: a brute force shows up as a
-		// dense sequence of rate_limited rows, which is an observability
-		// signal even though the wire response is just "try again."
-		h.recordLoginFailed(ctx, "", ip, "rate_limited")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, loginBodyCap)
-	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.fail(ctx, w, http.StatusBadRequest, "bad_body", failInfo{IP: ip},
-			attrkeys.AuthReason, "bad_body", "err", err.Error())
-		return
-	}
-	if req.Email == "" || req.Password == "" {
-		h.fail(ctx, w, http.StatusBadRequest, "bad_body", failInfo{IP: ip, Email: req.Email},
-			attrkeys.AuthReason, "bad_body", "missing_fields", true)
-		return
-	}
-
-	result, err := h.svc.Login(ctx, req.Email, req.Password)
-	switch {
-	case errors.Is(err, api.ErrUserNotFound):
-		// Same wire response as ErrBadPassword so the caller cannot enumerate
-		// emails. Audit log records the distinction.
-		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
-			attrkeys.AuthReason, "user_not_found")
-		h.recordLoginFailed(ctx, req.Email, ip, "user_not_found")
-		return
-	case errors.Is(err, api.ErrBadPassword):
-		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
-			attrkeys.AuthReason, "password_mismatch")
-		h.recordLoginFailed(ctx, req.Email, ip, "password_mismatch")
-		return
-	case errors.Is(err, api.ErrBreakglassUseAdminURL):
-		// Same wire 401 as a bad password so an attacker cannot
-		// enumerate break-glass accounts. The X-Edr-Auth-Hint header
-		// gives legitimate operators the directed redirect; the
-		// audit row carries the precise reason.
-		w.Header().Set("X-Edr-Auth-Hint", "/admin/break-glass")
-		h.fail(ctx, w, http.StatusUnauthorized, "invalid_credentials", failInfo{IP: ip, Email: req.Email},
-			attrkeys.AuthReason, "use_admin_breakglass")
-		h.recordLoginFailed(ctx, req.Email, ip, "use_admin_breakglass")
-		return
-	case err != nil:
-		h.logger.ErrorContext(ctx, "login", "err", err)
-		h.fail(ctx, w, http.StatusInternalServerError, "internal", failInfo{IP: ip, Email: req.Email},
-			attrkeys.AuthReason, "internal")
-		return
-	}
-
-	http.SetCookie(w, h.buildCookie(result.SessionToken, result.ExpiresAt))
-	span.SetAttributes(
-		attribute.String(attrkeys.AuthAction, "login"),
-		attribute.String(attrkeys.AuthResult, "ok"),
-		attribute.Int64(attrkeys.UserID, result.User.ID),
-	)
-	h.logger.InfoContext(ctx, "login ok",
-		attrkeys.AuthAction, "login",
-		attrkeys.UserID, result.User.ID,
-		attrkeys.UserEmail, result.User.Email,
-		attrkeys.SessionIDPrefix, idPrefix(result.SessionToken),
-		attrkeys.RemoteAddr, ip,
-	)
-
-	h.recordAudit(ctx, api.AuditEvent{
-		UserID:     &result.User.ID,
-		ActorEmail: result.User.Email,
-		Action:     api.AuditAuthLoginSuccess,
-		RemoteAddr: ip,
-	})
-
-	h.writeSessionJSON(ctx, w, result.User, result.CSRFToken)
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -295,11 +187,13 @@ func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, s
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {
 	// auth_method is read off the session pinned to ctx (Session
-	// middleware wired by App.tsx's authed routes). On the login
-	// path no session is on ctx yet, so fall through to
-	// "local_password" — the only path that produces a session
-	// without an existing one is /api/session POST, which mints a
-	// local_password session.
+	// middleware wired by App.tsx's authed routes). Every session in
+	// the system is now minted by either the OIDC callback or the
+	// break-glass FinishLogin path; if no session is on ctx the
+	// caller is misconfigured (this handler is GET /api/session,
+	// always behind Session middleware). The "local_password"
+	// fallback remains as a defense-in-depth default since reading
+	// it as the empty string would surface as "" in the wire response.
 	authMethod := "local_password"
 	if sess, ok := api.SessionFromContext(ctx); ok && sess.AuthMethod != "" {
 		authMethod = sess.AuthMethod
@@ -309,19 +203,6 @@ func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u
 		CSRFToken:  api.EncodeToken(csrfToken),
 		AuthMethod: authMethod,
 	})
-}
-
-func (h *Handler) buildCookie(sessionToken []byte, expiresAt time.Time) *http.Cookie {
-	return &http.Cookie{
-		Name:     api.SessionCookieName,
-		Value:    api.EncodeToken(sessionToken),
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.cookieSec,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  expiresAt,
-		MaxAge:   int(time.Until(expiresAt).Seconds()),
-	}
 }
 
 func (h *Handler) expireCookie() *http.Cookie {
@@ -344,31 +225,6 @@ func idPrefix(id []byte) string {
 		return ""
 	}
 	return hex.EncodeToString(id[:n])
-}
-
-// failInfo carries the identity + audit fields for a failed login attempt.
-type failInfo struct {
-	IP     string
-	UserID int64
-	Email  string
-}
-
-func (h *Handler) fail(ctx context.Context, w http.ResponseWriter, status int, code string, info failInfo, attrs ...any) {
-	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(
-		attribute.String(attrkeys.AuthResult, "fail"),
-		attribute.Int("http.response.status_code", status),
-	)
-	logAttrs := append([]any{
-		attrkeys.AuthResult, "fail",
-		attrkeys.RemoteAddr, info.IP,
-		attrkeys.UserEmail, info.Email,
-	}, attrs...)
-	if info.UserID > 0 {
-		logAttrs = append(logAttrs, attrkeys.UserID, info.UserID)
-	}
-	h.logger.WarnContext(ctx, "login failed", logAttrs...)
-	writeJSON(ctx, h.logger, w, status, errBody{Error: code})
 }
 
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
@@ -397,19 +253,4 @@ func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
 			attrkeys.UserEmail, e.ActorEmail,
 		)
 	}
-}
-
-// recordLoginFailed writes an auth.login.failed audit row with the
-// reason the login was rejected. UserID is always nil for failed
-// attempts: the email may map to no user (user_not_found), to the
-// wrong password (password_mismatch), or be untouched by the rate
-// limiter (rate_limited), and recording a UserID would imply the
-// attempt got past authentication.
-func (h *Handler) recordLoginFailed(ctx context.Context, email, ip, reason string) {
-	h.recordAudit(ctx, api.AuditEvent{
-		ActorEmail: email,
-		Action:     api.AuditAuthLoginFailed,
-		RemoteAddr: ip,
-		Payload:    map[string]any{"reason": reason},
-	})
 }
