@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listAlerts, updateAlertStatus } from "../api";
 import type { Alert } from "../types";
+import { useReauthRetry } from "../hooks/useReauthRetry";
+import { ReauthModal } from "./ReauthModal";
 import { Table, EmptyState } from "./ui/Table";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
@@ -57,8 +59,22 @@ export function AlertList() {
     return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
   };
 
+  // Phase 5: alert.resolve on a critical-severity alert is reauth-
+  // gated; the chokepoint denies stale sessions with 403 +
+  // reauth_required. Wrap the mutation through useReauthRetry so the
+  // operator gets an inline reauth prompt (modal) and the original
+  // call retries on success. Other status transitions (acknowledge,
+  // reopen, resolve on lower severities) pass through the same
+  // wrapper unchanged — useReauthRetry is a no-op until the chokepoint
+  // throws ReauthRequiredError.
+  const updateStatus = useCallback(
+    async (alertId: number, newStatus: string) => updateAlertStatus(alertId, newStatus),
+    [],
+  );
+  const { call: callUpdateStatus, modal: reauthModal } = useReauthRetry(updateStatus);
+
   const handleStatusChange = (alertId: number, newStatus: string) => {
-    updateAlertStatus(alertId, newStatus)
+    callUpdateStatus(alertId, newStatus)
       .then(() => { setAlerts((prev) => applyStatus(prev, alertId, newStatus)); })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Failed to update status");
@@ -193,6 +209,7 @@ export function AlertList() {
           </tbody>
         </Table>
       )}
+      <ReauthModal {...reauthModal} />
     </>
   );
 }

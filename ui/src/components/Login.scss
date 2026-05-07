@@ -85,3 +85,26 @@
     }
   }
 }
+
+// Phase 5b reauth modal: a centred overlay that floats the same
+// .login-card layout above the destructive-action page. The backdrop
+// dims + intercepts clicks; a backdrop click is interpreted as a
+// cancel by the keyboard-equivalent "Cancel" button, so accidental
+// double-clicks on a destructive button have a low-friction back-out.
+.reauth-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: $pad-medium;
+}
+
+.reauth-card {
+  // Tighter than the login page since the modal is overlay context;
+  // reusing the .login-card visual + form scaffolding keeps the
+  // ceremony recognisable to operators who've used break-glass before.
+  max-width: 380px;
+}

@@ -9,6 +9,7 @@
 // session-probe endpoint.
 import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail, Command } from "./types";
 import {
+  HTTP_STATUS_FORBIDDEN,
   HTTP_STATUS_NO_CONTENT,
   HTTP_STATUS_UNAUTHORIZED,
   MAX_CSRF_TOKEN_LENGTH,
@@ -22,6 +23,44 @@ const CSRF_KEY = "edr_csrf_token";
 // to decide "show the login page", so callers don't need to know the status code.
 export class Unauthorized401Error extends Error {
   constructor() { super("unauthorized"); this.name = "Unauthorized401Error"; }
+}
+
+// ReauthAuthMethod enumerates the per-flow recovery shapes the server's
+// reauth_required response carries. The wire is open-ended (the server
+// could grow new auth methods later); the UI narrows here so the
+// ReauthModal's switch is exhaustive at compile time.
+export type ReauthAuthMethod = "oidc" | "local_password";
+
+export interface ReauthChallenge {
+  authMethod: ReauthAuthMethod;
+  reauthURL: string;
+}
+
+// ReauthRequiredError is thrown whenever the server returns
+// 403 + body { error: "reauth_required", challenge: {...} }. Phase 5
+// gates destructive actions on a fresh-auth window; callers don't
+// invoke this directly — they wrap their mutation through
+// useReauthRetry, which catches the error, runs the per-flow
+// challenge, and retries the original call.
+export class ReauthRequiredError extends Error {
+  readonly challenge: ReauthChallenge;
+  constructor(challenge: ReauthChallenge) {
+    super("reauth_required");
+    this.name = "ReauthRequiredError";
+    this.challenge = challenge;
+  }
+}
+
+// reauthBodyShape is the minimal JSON shape the fetchJSON wrapper
+// looks for when distinguishing a "regular" 403 from the typed reauth
+// 403. Kept narrow so the detection is robust against the body
+// growing additional sibling fields.
+interface reauthBodyShape {
+  error?: string;
+  challenge?: {
+    auth_method?: string;
+    reauth_url?: string;
+  };
 }
 
 export interface SessionInfo {
@@ -123,6 +162,18 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     clearCsrfToken();
     throw new Unauthorized401Error();
   }
+  if (res.status === HTTP_STATUS_FORBIDDEN) {
+    // Phase 5: the chokepoint denies destructive actions outside the
+    // reauth window with 403 + { error: "reauth_required",
+    // challenge: { auth_method, reauth_url } }. Disambiguate from a
+    // regular forbidden (which is genuinely "your role does not
+    // grant this action") before throwing the typed error so
+    // useReauthRetry can pick it up. .clone() so the underlying body
+    // is still readable if this is NOT a reauth deny — falls through
+    // to the !res.ok branch below.
+    const reauth = await readReauthChallenge(res);
+    if (reauth) throw new ReauthRequiredError(reauth);
+  }
   if (!res.ok) {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
@@ -131,21 +182,21 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// --- Session endpoints ---
-
-export async function login(email: string, password: string): Promise<SessionInfo> {
-  const info = await fetchJSON<SessionInfo>("/session", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-  // Fail loudly if the server's token doesn't match the expected shape — silently
-  // dropping it would pass login() but break every subsequent unsafe request with
-  // a confusing 403.
-  if (!setCsrfToken(info.csrf_token)) {
-    throw new Error("server returned an unexpected CSRF token shape");
-  }
-  return info;
+// readReauthChallenge inspects a 403 response body for the
+// reauth_required envelope and returns a typed ReauthChallenge when
+// the shape matches, or null otherwise. Kept narrow: any of body
+// missing, error mismatch, missing challenge, or unrecognised
+// auth_method falls through to null so the caller emits a plain
+// "forbidden" error.
+async function readReauthChallenge(res: Response): Promise<ReauthChallenge | null> {
+  const body = await res.clone().json().catch((): null => null) as reauthBodyShape | null;
+  if (!body || body.error !== "reauth_required" || !body.challenge) return null;
+  const am = body.challenge.auth_method;
+  if (am !== "oidc" && am !== "local_password") return null;
+  return { authMethod: am, reauthURL: body.challenge.reauth_url ?? "" };
 }
+
+// --- Session endpoints ---
 
 export async function currentSession(): Promise<SessionInfo> {
   const info = await fetchJSON<SessionInfo>("/session");

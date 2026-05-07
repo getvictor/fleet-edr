@@ -17,6 +17,7 @@ export const MILLISECONDS_PER_DAY = MILLISECONDS_PER_HOUR * HOURS_PER_DAY;
 // on a string literal table so the lint allow-list stays tight.
 export const HTTP_STATUS_NO_CONTENT = 204;
 export const HTTP_STATUS_UNAUTHORIZED = 401;
+export const HTTP_STATUS_FORBIDDEN = 403;
 
 // Upper bound on a stored CSRF token. The server mints URL-safe base64 of a
 // 32-byte secret (~43 chars); 256 leaves headroom for a future widening

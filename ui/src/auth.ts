@@ -182,3 +182,58 @@ export async function breakglassFinishLogin(
     },
   );
 }
+
+// reauthBreakglass runs the Phase 5 break-glass reauth ceremony
+// against the operator's CURRENT session: WebAuthn assertion against
+// /api/auth/reauth/challenge → password + assertion submitted to
+// /api/auth/reauth → server stamps last_auth_at on the existing row.
+// No new session is minted. The challenge cookie is path-scoped to
+// /api/auth/reauth so it doesn't collide with an in-flight break-
+// glass login flow in another tab.
+//
+// Throws BreakglassError on the server-side rejection paths (rate
+// limit, invalid credentials, no_credentials, reauth_not_supported);
+// callers translate .reason into operator-facing copy via the same
+// label maps the login flow uses.
+export async function reauthBreakglass(password: string): Promise<void> {
+  const challenge = await requestJSON<{ publicKey: PublicKeyCredentialRequestOptionsJSON }>(
+    `/api/auth/reauth/challenge`,
+    { method: "POST" },
+  );
+  const assertion = await startAuthentication({ optionsJSON: challenge.publicKey });
+  await requestJSON<{ ok: boolean }>(
+    `/api/auth/reauth`,
+    {
+      method: "POST",
+      body: JSON.stringify({ password, assertion }),
+    },
+  );
+}
+
+// reauthOIDC kicks off the OIDC reauth round-trip. Server appends
+// prompt=login on the authorize URL when ?reauth=1 is set, forcing
+// the IdP to re-prompt for credentials regardless of its existing
+// session. The IdP's callback lands a fresh session whose
+// last_auth_at is NOW(); the previous session is orphaned + reaped
+// on its absolute expiry. UI returns to the path the operator was
+// on (next param) so a button re-click finishes the destructive
+// action.
+//
+// Full-page navigation (not fetch): the React tree unmounts during
+// the redirect. Callers should await the returning Promise<never>
+// only for type wiring — the function never resolves, browser
+// navigation takes over.
+export function reauthOIDC(): never {
+  const next = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
+  // Mirror oidcLoginUrl's same-origin path validation so a hostile
+  // location (rare — would require a malicious window.history.push or
+  // similar) can't steer the redirect at the IdP.
+  const safeNext = next.length <= MAX_NEXT_PARAM && NEXT_PATH_RE.test(next) ? next : "";
+  const url = safeNext
+    ? `/api/auth/login?reauth=1&next=${encodeURIComponent(safeNext)}`
+    : `/api/auth/login?reauth=1`;
+  globalThis.location.assign(url);
+  // The assign() call replaces the current document; everything below
+  // is unreachable but TS needs a return path. throw for total clarity.
+  throw new Error("redirecting to IdP for reauth");
+}
