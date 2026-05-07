@@ -86,25 +86,24 @@
   }
 }
 
-// Phase 5b reauth modal: a centred overlay that floats the same
-// .login-card layout above the destructive-action page. The backdrop
-// dims + intercepts clicks; a backdrop click is interpreted as a
-// cancel by the keyboard-equivalent "Cancel" button, so accidental
-// double-clicks on a destructive button have a low-friction back-out.
-.reauth-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: $pad-medium;
-}
-
-.reauth-card {
-  // Tighter than the login page since the modal is overlay context;
-  // reusing the .login-card visual + form scaffolding keeps the
-  // ceremony recognisable to operators who've used break-glass before.
+// Phase 5b reauth modal: native <dialog> opened via showModal() so
+// the browser provides the backdrop, focus trap, and Escape-to-
+// cancel for free. The dialog reuses the .login-card visual scaffold
+// from the SSO + break-glass login pages so the ceremony feels
+// continuous to operators.
+.reauth-dialog {
+  // Reset the user-agent default border + padding; .login-card already
+  // owns the visual surface.
+  border: 0;
+  padding: $pad-large;
+  // Tighter than the login page since the modal is overlay context.
   max-width: 380px;
+  // Non-modal dialogs render in normal flow; showModal() centres the
+  // dialog, but if the host page ever opens it declaratively the
+  // margin: auto keeps it visible.
+  margin: auto;
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.55);
+  }
 }

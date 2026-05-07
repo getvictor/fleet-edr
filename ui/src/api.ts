@@ -51,11 +51,11 @@ export class ReauthRequiredError extends Error {
   }
 }
 
-// reauthBodyShape is the minimal JSON shape the fetchJSON wrapper
+// ReauthBodyShape is the minimal JSON shape the fetchJSON wrapper
 // looks for when distinguishing a "regular" 403 from the typed reauth
 // 403. Kept narrow so the detection is robust against the body
 // growing additional sibling fields.
-interface reauthBodyShape {
+interface ReauthBodyShape {
   error?: string;
   challenge?: {
     auth_method?: string;
@@ -189,8 +189,8 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
 // auth_method falls through to null so the caller emits a plain
 // "forbidden" error.
 async function readReauthChallenge(res: Response): Promise<ReauthChallenge | null> {
-  const body = await res.clone().json().catch((): null => null) as reauthBodyShape | null;
-  if (!body || body.error !== "reauth_required" || !body.challenge) return null;
+  const body = await res.clone().json().catch((): null => null) as ReauthBodyShape | null;
+  if (body?.error !== "reauth_required" || !body.challenge) return null;
   const am = body.challenge.auth_method;
   if (am !== "oidc" && am !== "local_password") return null;
   return { authMethod: am, reauthURL: body.challenge.reauth_url ?? "" };

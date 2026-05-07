@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listAlerts, updateAlertStatus } from "../api";
+import { listAlerts, ReauthRequiredError, updateAlertStatus } from "../api";
 import type { Alert } from "../types";
 import { useReauthRetry } from "../hooks/useReauthRetry";
 import { ReauthModal } from "./ReauthModal";
@@ -77,6 +77,11 @@ export function AlertList() {
     callUpdateStatus(alertId, newStatus)
       .then(() => { setAlerts((prev) => applyStatus(prev, alertId, newStatus)); })
       .catch((err: unknown) => {
+        // Operator cancelled reauth — no real failure to report. The
+        // hook rethrows the original gate-deny so onError fires; we
+        // silence it because the action genuinely never ran and the
+        // UI's pre-click state is the right resting place.
+        if (err instanceof ReauthRequiredError) return;
         setError(err instanceof Error ? err.message : "Failed to update status");
       });
   };

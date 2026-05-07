@@ -8,19 +8,19 @@
 //   - "local_password" (break-glass): password input + WebAuthn
 //     ceremony against /api/auth/reauth, no full-page navigation.
 //   - "oidc": "Continue" button → reauthOIDC() does a full-page
-//     redirect to /api/auth/login?reauth=1&next=<current URL>; the
-//     IdP forces a fresh credential prompt via prompt=login. The
-//     React tree unmounts during the redirect; the operator returns
-//     to the same URL with a fresh session and can re-click the
-//     destructive button.
+//     redirect to the server-supplied reauthURL with &next=<current
+//     path> appended so the IdP returns the operator to the page
+//     that triggered the reauth_required.
 //
-// Cancellation surfaces the original gate-deny back through the
-// hook's `resolve(false)` so the wrapped mutation's onError fires —
-// the operator deserves to know the action did not land.
+// Renders as a native <dialog> opened via showModal() so the browser
+// provides backdrop, focus trap, and Escape-to-cancel for free. The
+// onCancel handler maps Escape + the mirrored backdrop click onto
+// resolve(false) — cancellation surfaces the original gate-deny back
+// through the hook so the wrapped mutation's onError fires (rather
+// than silent success).
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/Button";
-import { Card } from "./ui/Card";
 import { Input } from "./ui/Input";
 import { BreakglassError, reauthBreakglass, reauthOIDC } from "../auth";
 import type { ReauthModalProps } from "../hooks/useReauthRetry";
@@ -42,31 +42,72 @@ const reauthErrorLabels = new Map<string, string>([
   ["reauth_not_supported", "This session can't reauth here. Please sign out and back in."],
 ]);
 
-export function ReauthModal({ open, challenge, resolve }: ReauthModalProps) {
-  if (!open || !challenge) return null;
-  // Modal renders one of two flows. The wrapping <div> is the
-  // backdrop; clicks on it cancel (same as the explicit Cancel
-  // button) so accidental destructive-action clicks have a
-  // low-friction back-out path.
+const DIALOG_TITLE_ID = "reauth-modal-title";
+
+export function ReauthModal({ open, challenge, resolve }: Readonly<ReauthModalProps>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  // Open / close the native dialog imperatively. showModal() is what
+  // gives us the backdrop, focus trap, and Escape-to-cancel
+  // semantics; the declarative `open` attribute would render a
+  // non-modal dialog without those affordances.
+  useEffect(() => {
+    const dlg = dialogRef.current;
+    if (!dlg) return;
+    if (open && !dlg.open) {
+      dlg.showModal();
+    } else if (!open && dlg.open) {
+      dlg.close();
+    }
+  }, [open]);
+
+  // The dialog's `cancel` event fires on Escape; route it through
+  // resolve(false) so cancellation has one path. preventDefault
+  // suppresses the browser's default "cancel + close" so React stays
+  // in charge of the open-state transition.
+  const handleCancel = useCallback((e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.preventDefault();
+    resolve(false);
+  }, [resolve]);
+
+  // Native modal dialog: a click on the dialog element itself (NOT
+  // its children) is a backdrop click — the ::backdrop pseudo-element
+  // bubbles a click on the dialog. Mirror Escape semantics: cancel.
+  const handleBackdropClick = useCallback((e: React.MouseEvent<HTMLDialogElement>) => {
+    if (e.target === dialogRef.current) {
+      resolve(false);
+    }
+  }, [resolve]);
+
+  if (!challenge) return null;
   return (
-    <div className="reauth-backdrop" role="dialog" aria-modal="true">
-      <Card padding="large" className="login-card reauth-card">
-        {challenge.authMethod === "oidc" ? (
-          <OIDCReauthFlow resolve={resolve} />
-        ) : (
-          <BreakglassReauthFlow resolve={resolve} />
-        )}
-      </Card>
-    </div>
+    <dialog
+      ref={dialogRef}
+      className="reauth-dialog login-card"
+      aria-labelledby={DIALOG_TITLE_ID}
+      onCancel={handleCancel}
+      onClick={handleBackdropClick}
+    >
+      {challenge.authMethod === "oidc" ? (
+        <OIDCReauthFlow reauthURL={challenge.reauthURL} resolve={resolve} />
+      ) : (
+        <BreakglassReauthFlow resolve={resolve} />
+      )}
+    </dialog>
   );
 }
 
-function OIDCReauthFlow({ resolve }: { readonly resolve: (ok: boolean) => void }) {
+interface OIDCReauthFlowProps {
+  readonly reauthURL: string;
+  readonly resolve: (ok: boolean) => void;
+}
+
+function OIDCReauthFlow({ reauthURL, resolve }: Readonly<OIDCReauthFlowProps>) {
   const [navigating, setNavigating] = useState(false);
   return (
     <>
       <div className="login-card__header">
-        <h2 className="login-card__title">Confirm your identity</h2>
+        <h2 id={DIALOG_TITLE_ID} className="login-card__title">Confirm your identity</h2>
         <p className="login-card__subtitle">
           This action requires a fresh sign-in. Continue to your identity
           provider to confirm, then re-run the action.
@@ -77,10 +118,11 @@ function OIDCReauthFlow({ resolve }: { readonly resolve: (ok: boolean) => void }
         isLoading={navigating}
         onClick={() => {
           setNavigating(true);
-          // reauthOIDC() never returns — it replaces the document via
-          // location.assign. The resolve(true) path here is purely
-          // for code shape; the page is already navigating away.
-          reauthOIDC();
+          // reauthOIDC navigates the page away; control doesn't
+          // return here in any meaningful sense. The setNavigating
+          // above is purely UX (button shows the loading state for
+          // the brief moment before the document unmounts).
+          reauthOIDC(reauthURL);
         }}
       >
         Continue with single sign-on
@@ -92,7 +134,11 @@ function OIDCReauthFlow({ resolve }: { readonly resolve: (ok: boolean) => void }
   );
 }
 
-function BreakglassReauthFlow({ resolve }: { readonly resolve: (ok: boolean) => void }) {
+interface BreakglassReauthFlowProps {
+  readonly resolve: (ok: boolean) => void;
+}
+
+function BreakglassReauthFlow({ resolve }: Readonly<BreakglassReauthFlowProps>) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -123,7 +169,7 @@ function BreakglassReauthFlow({ resolve }: { readonly resolve: (ok: boolean) => 
   return (
     <>
       <div className="login-card__header">
-        <h2 className="login-card__title">Confirm your identity</h2>
+        <h2 id={DIALOG_TITLE_ID} className="login-card__title">Confirm your identity</h2>
         <p className="login-card__subtitle">
           Re-enter your break-glass password and touch your security key
           to continue.

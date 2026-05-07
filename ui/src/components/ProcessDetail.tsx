@@ -5,6 +5,7 @@ import {
   updateAlertStatus,
   createCommand,
   getCommand,
+  ReauthRequiredError,
 } from "../api";
 import type {
   ProcessNode,
@@ -127,7 +128,14 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
           created_at: new Date().toISOString(),
         });
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        // Cancelled reauth surfaces as ReauthRequiredError (the hook
+        // rethrows the original gate-deny when the operator dismisses
+        // the modal). That isn't a send failure — no command was
+        // ever dispatched. Leave killCommand untouched so the UI
+        // returns to its pre-click state instead of showing a
+        // misleading "Failed to send command" row.
+        if (err instanceof ReauthRequiredError) return;
         setKillCommand({
           id: 0,
           host_id: hostId,

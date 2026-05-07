@@ -6,10 +6,18 @@
 // mutation's onError fires (rather than silently succeeding) — the
 // operator deserves to know the action didn't land.
 //
-// Single-flight: a flurry of clicks on the destructive button while
-// the modal is open share one challenge; only the first one opens
-// the modal, subsequent clicks await the same resolution. Modal-
-// stacking is bad UX and a double-click is one operator intent.
+// Challenge-level single-flight: a flurry of clicks while the modal
+// is open share ONE challenge / modal cycle. Only the first click
+// opens the modal; subsequent clicks await the same resolution
+// promise. After the operator completes the challenge, EACH click
+// retries fn(...args) independently, so the mutation runs once per
+// click. The destructive actions this hook wraps today
+// (host.kill_process and alert.resolve) are idempotent at the agent
+// / DB level (the agent dedupes kill on the same PID; two
+// alert-status PUTs with the same target status are a no-op), so
+// per-click retries land at the correct end state. Coalescing the
+// retried mutation itself would require fingerprinting args across
+// concurrent calls, which isn't worth the complexity for v1.
 
 import { useCallback, useRef, useState } from "react";
 import { ReauthRequiredError } from "../api";

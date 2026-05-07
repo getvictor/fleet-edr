@@ -219,21 +219,36 @@ export async function reauthBreakglass(password: string): Promise<void> {
 // on (next param) so a button re-click finishes the destructive
 // action.
 //
-// Full-page navigation (not fetch): the React tree unmounts during
-// the redirect. Callers should await the returning Promise<never>
-// only for type wiring — the function never resolves, browser
-// navigation takes over.
-export function reauthOIDC(): never {
+// baseURL is the server-supplied reauthURL from the chokepoint's
+// 403 reauth_required body — the contract from
+// server/identity/api/authzhttp.go's ReauthChallenge. Validating it
+// against NEXT_PATH_RE (same-origin path only) means a compromised
+// server response can't steer the redirect off-origin. We append
+// &next=<encoded current path> so the IdP returns the operator to
+// the page that triggered the reauth_required.
+//
+// Returns void rather than throwing: globalThis.location.assign
+// replaces the current document, so anything after it is effectively
+// unreachable. A bare throw would surface in React 19's
+// onUncaughtError before navigation visibly completes; a clean
+// return keeps the error surface quiet.
+export function reauthOIDC(baseURL: string): void {
   const next = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
   // Mirror oidcLoginUrl's same-origin path validation so a hostile
   // location (rare — would require a malicious window.history.push or
   // similar) can't steer the redirect at the IdP.
   const safeNext = next.length <= MAX_NEXT_PARAM && NEXT_PATH_RE.test(next) ? next : "";
+  // Reject anything that isn't a same-origin path with a leading
+  // slash. The chokepoint's typed body always returns
+  // /api/auth/login?reauth=1, but defending here means a future
+  // server bug can't silently steer the IdP redirect.
+  const safeBase = NEXT_PATH_RE.test(baseURL) ? baseURL : "/api/auth/login?reauth=1";
+  const sep = safeBase.includes("?") ? "&" : "?";
   const url = safeNext
-    ? `/api/auth/login?reauth=1&next=${encodeURIComponent(safeNext)}`
-    : `/api/auth/login?reauth=1`;
+    ? `${safeBase}${sep}next=${encodeURIComponent(safeNext)}`
+    : safeBase;
   globalThis.location.assign(url);
   // The assign() call replaces the current document; everything below
-  // is unreachable but TS needs a return path. throw for total clarity.
-  throw new Error("redirecting to IdP for reauth");
+  // is unreachable. Return void rather than throw — see CodeRabbit
+  // note re React 19's onUncaughtError surfacing pre-navigation.
 }
