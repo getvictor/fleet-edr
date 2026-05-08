@@ -126,6 +126,43 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 	}
 }
 
+// TestAllow_EveryRegisteredActionGrantedSomewhere asserts the seeded
+// role matrix grants each Action constant to at least one role.
+// Catches an action being added to RegisteredActions without a
+// matching grant in roles.json — that action would silently produce
+// no_matching_rule for every caller forever, which would land as a
+// 403 the first time a real user invoked it with no obvious
+// diagnosis path. The Rego-side parity check in
+// TestPolicy_ActionsParity covers symbol drift; this test covers the
+// "registered but unreachable" gap on top.
+func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
+	e, _ := newEngine(t, false)
+	// Mirror the seed/roles.go set; super_admin is the wildcard so any
+	// action it doesn't grant under * would point at a parser bug. The
+	// per-Action loop short-circuits on the first allow, so a wildcard
+	// hit usually wins instantly.
+	seededRoles := []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
+	for _, action := range api.RegisteredActions() {
+		t.Run(string(action), func(t *testing.T) {
+			granted := false
+			for _, role := range seededRoles {
+				actor := actorWithRoles(1, "default", tenantBinding(role, "default"))
+				ctx := api.WithActor(t.Context(), actor)
+				d, err := e.Allow(ctx, action, api.Resource{TenantID: "default"})
+				require.NoError(t, err)
+				if d.Allow {
+					granted = true
+					break
+				}
+			}
+			assert.Truef(t, granted,
+				"action %q is registered in api.RegisteredActions but no seeded "+
+					"role grants it; either add a grant in policy/data/roles.json "+
+					"or remove the constant from api.RegisteredActions", action)
+		})
+	}
+}
+
 // TestAllow_UnregisteredAction_Denied verifies the defense-in-depth
 // gate: a caller passing an action string outside RegisteredActions
 // is denied with reason action_not_registered before Rego sees it.

@@ -145,16 +145,17 @@ type Config struct {
 	// out everyone behind the proxy.
 	TrustedProxies []string
 
-	// AuthzShadowMode is the wave-1 rollout knob for the authorization
+	// AuthzShadowMode is the audit-only knob for the authorization
 	// chokepoint. When true, every Allow call evaluates the policy and
-	// audits the would-be decision but ALWAYS returns Allow=true so
-	// pilot deployments observe the deny dashboard before enforcement
-	// flips on. Populated from EDR_AUTHZ_SHADOW_MODE; default false
-	// (enforcement on) for fresh deployments. The flag is read at
-	// boot only — flipping it in production is a restart in wave 1
-	// (a future admin endpoint or file-watch can call
-	// Identity.SetAuthzShadowMode atomically; the in-memory engine
-	// flag is already hot-swap-safe via atomic.Bool).
+	// audits the would-be decision but ALWAYS returns Allow=true. The
+	// default is false: a fresh deployment enforces from boot. Set
+	// EDR_AUTHZ_SHADOW_MODE=1 to flip the chokepoint into audit-only
+	// mode while verifying role-binding coverage against the audit
+	// log; never leave it on for routine operation. The flag is read
+	// at boot only — a restart picks up the change. The in-memory
+	// engine flag is already hot-swap-safe via atomic.Bool, so a
+	// future admin endpoint or file-watch can call
+	// Identity.SetAuthzShadowMode atomically without a restart.
 	AuthzShadowMode bool
 
 	// AuditReadSampling is the inclusion probability (0.0-1.0) the

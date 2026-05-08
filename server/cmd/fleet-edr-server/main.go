@@ -93,6 +93,20 @@ func run() error {
 		"tls", cfg.TLSEnabled(),
 		"tls12_allowed", cfg.AllowTLS12,
 	)
+	// AuthZ posture is announced on its own line so a typo on
+	// EDR_AUTHZ_SHADOW_MODE surfaces at boot rather than via a
+	// confused 403 — or worse, a silently-allowed request — hours
+	// later. Log it as a separate event so the deny dashboard /
+	// SigNoz query that pivots on `posture` doesn't have to parse it
+	// out of the noisier "starting" event.
+	authzPosture := "ENABLED"
+	if cfg.AuthzShadowMode {
+		authzPosture = "SHADOW (denies audited but allowed)"
+	}
+	logger.InfoContext(ctx, "authz enforcement",
+		"posture", authzPosture,
+		"env_var", "EDR_AUTHZ_SHADOW_MODE",
+	)
 	if !cfg.TLSEnabled() {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
 	}
