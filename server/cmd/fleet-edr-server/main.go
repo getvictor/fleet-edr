@@ -98,13 +98,18 @@ func run() error {
 	// confused 403 — or worse, a silently-allowed request — hours
 	// later. Log it as a separate event so the deny dashboard /
 	// SigNoz query that pivots on `posture` doesn't have to parse it
-	// out of the noisier "starting" event.
+	// out of the noisier "starting" event. `posture` is a stable
+	// enum (ENABLED | SHADOW) for log filters / dashboard groupings;
+	// `mode_description` carries the operator-facing prose.
 	authzPosture := "ENABLED"
+	authzDescription := "enforcing"
 	if cfg.AuthzShadowMode {
-		authzPosture = "SHADOW (denies audited but allowed)"
+		authzPosture = "SHADOW"
+		authzDescription = "denies audited but allowed"
 	}
 	logger.InfoContext(ctx, "authz enforcement",
 		"posture", authzPosture,
+		"mode_description", authzDescription,
 		"env_var", "EDR_AUTHZ_SHADOW_MODE",
 	)
 	if !cfg.TLSEnabled() {

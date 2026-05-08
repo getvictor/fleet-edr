@@ -16,12 +16,13 @@ enforcement on.
 
 The boot log announces the posture explicitly:
 
-```
-INFO authz enforcement posture=ENABLED env_var=EDR_AUTHZ_SHADOW_MODE
+```text
+INFO authz enforcement posture=ENABLED mode_description=enforcing env_var=EDR_AUTHZ_SHADOW_MODE
 ```
 
-(or `posture="SHADOW (denies audited but allowed)"` when the env
-var is set). Grep `posture=ENABLED` in your log shipper to confirm
+(or `posture=SHADOW mode_description="denies audited but allowed"`
+when the env var is set). The `posture` field is a stable enum —
+filter on `posture=ENABLED` in your log shipper to confirm
 production deployments are enforcing.
 
 ## Seeded role matrix
@@ -51,7 +52,7 @@ them from accidental delete via a future admin endpoint.
 
 When the chokepoint denies, the response is:
 
-```
+```http
 HTTP/1.1 403 Forbidden
 X-Edr-Authz-Reason: <reason>
 Content-Type: application/json
@@ -64,7 +65,7 @@ When the deny is `reauth_required` (Phase 5: destructive action on a
 session past the freshness window), the body is structured so the
 UI can prompt for re-authentication inline:
 
-```
+```http
 HTTP/1.1 403 Forbidden
 X-Edr-Authz-Reason: reauth_required
 Content-Type: application/json
@@ -93,11 +94,18 @@ diagnosis flow.
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
 | `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug — the session middleware is misconfigured for the route. Check the route's middleware chain. |
 | `resource_tenant_missing` | The handler built a `Resource` with an empty `TenantID`. | Server bug. The handler should call `api.ActorTenantID(ctx)` to populate the field. |
-| `shadow_mode` | The deployment is running with `EDR_AUTHZ_SHADOW_MODE=1`. The deny was audited, but the wire response is allow. | Inspect the audit row to see which deny was masked, then unset the env var. |
 
-The audit-log row carries `payload.reason` matching the header, plus
-`payload.role` (the seeded role that would have granted, if any) and
-`payload.shadow_mode=true` when shadow mode is on.
+`shadow_mode` is NOT a wire-shape reason — when the deployment runs
+with `EDR_AUTHZ_SHADOW_MODE=1`, the engine forces `Allow=true` and
+HTTPGate emits no 403 / no reason header. The audit-only mode shows
+up in the audit log as `payload.shadow_mode=true` on the row that
+records the would-be-deny verdict. To find masked denies, query
+`audit_events WHERE payload->'$.shadow_mode' IS NOT NULL`.
+
+The audit-log row's `payload` carries `reason` matching the header
+plus `shadow_mode=true` when audit-only mode is on. The granting
+role is not on the payload today — derive it by joining
+`role_bindings` for the actor's `user_id` if needed.
 
 ## Binding a role to a user (wave 1)
 
@@ -116,8 +124,10 @@ VALUES (
 ```
 
 The `(user_id, role_id, tenant_id, scope_type, scope_id)` tuple is
-the primary key — re-running the same statement is a duplicate-key
-error rather than a silent no-op, which is the safer direction.
+the `uk_role_bindings` UNIQUE key (the row's primary key is an
+auto-increment `id`). Re-running the same INSERT raises a
+duplicate-key error rather than a silent no-op, which is the safer
+direction. To upsert deliberately, add `ON DUPLICATE KEY UPDATE`.
 
 To revoke: `DELETE FROM role_bindings WHERE user_id = <user_id>
 AND role_id = 'admin'`. Sessions don't get bounced automatically;
@@ -141,14 +151,14 @@ matrix matches the operators-and-roles you expect.
 
 The boot log line for shadow mode reads:
 
-```
-INFO authz enforcement posture="SHADOW (denies audited but allowed)" env_var=EDR_AUTHZ_SHADOW_MODE
+```text
+INFO authz enforcement posture=SHADOW mode_description="denies audited but allowed" env_var=EDR_AUTHZ_SHADOW_MODE
 ```
 
 This is the canonical signal that audit-only mode is active. A
-production log shipper should alert on this line — if shadow mode
-landed in production accidentally, you want to know within minutes,
-not by the time the next deploy runs.
+production log shipper should alert on `posture=SHADOW` — if
+audit-only mode landed in production accidentally, you want to know
+within minutes, not by the time the next deploy runs.
 
 ## Behind the chokepoint
 
