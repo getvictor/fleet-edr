@@ -5,6 +5,7 @@ import {
   updateAlertStatus,
   createCommand,
   getCommand,
+  ReauthRequiredError,
 } from "../api";
 import type {
   ProcessNode,
@@ -12,7 +13,9 @@ import type {
   Alert,
   Command,
 } from "../types";
+import { useReauthRetry } from "../hooks/useReauthRetry";
 import { NetworkConnections } from "./NetworkConnections";
+import { ReauthModal } from "./ReauthModal";
 import { Card } from "./ui/Card";
 import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
@@ -92,10 +95,29 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     return () => { clearInterval(timer); };
   }, [killCommand]);
 
+  // Phase 5: kill_process is reauth-gated by the chokepoint when the
+  // session is stale. Same pattern for alert.resolve on critical
+  // alerts. Wrap both mutations through useReauthRetry so the
+  // operator gets an inline reauth modal + the action retries on
+  // success. Non-gated mutations (e.g. alert.acknowledge or kill on
+  // a fresh session) pass through unchanged — useReauthRetry is a
+  // no-op until the chokepoint throws ReauthRequiredError.
+  const sendKillCommand = useCallback(
+    async (): Promise<{ id: number }> => createCommand(hostId, "kill_process", { pid: node.pid }),
+    [hostId, node.pid],
+  );
+  const { call: callKill, modal: killReauthModal } = useReauthRetry(sendKillCommand);
+
+  const updateStatus = useCallback(
+    async (alertId: number, newStatus: string) => updateAlertStatus(alertId, newStatus),
+    [],
+  );
+  const { call: callUpdateStatus, modal: alertReauthModal } = useReauthRetry(updateStatus);
+
   const handleKillProcess = useCallback(() => {
     if (killSending) return;
     setKillSending(true);
-    createCommand(hostId, "kill_process", { pid: node.pid })
+    callKill()
       .then((res) => {
         setKillCommand({
           id: res.id,
@@ -106,7 +128,14 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
           created_at: new Date().toISOString(),
         });
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        // Cancelled reauth surfaces as ReauthRequiredError (the hook
+        // rethrows the original gate-deny when the operator dismisses
+        // the modal). That isn't a send failure — no command was
+        // ever dispatched. Leave killCommand untouched so the UI
+        // returns to its pre-click state instead of showing a
+        // misleading "Failed to send command" row.
+        if (err instanceof ReauthRequiredError) return;
         setKillCommand({
           id: 0,
           host_id: hostId,
@@ -118,14 +147,14 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         });
       })
       .finally(() => { setKillSending(false); });
-  }, [hostId, node.pid, killSending]);
+  }, [callKill, hostId, node.pid, killSending]);
 
   const applyAlertStatus = (prev: Alert[], alertId: number, newStatus: string): Alert[] => {
     return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
   };
 
   const handleAlertStatusChange = (alertId: number, newStatus: string) => {
-    updateAlertStatus(alertId, newStatus)
+    callUpdateStatus(alertId, newStatus)
       .then(() => { setAlerts((prev) => applyAlertStatus(prev, alertId, newStatus)); })
       .catch(() => { /* ignore */ });
   };
@@ -313,6 +342,8 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
           ))}
         </div>
       )}
+      <ReauthModal {...killReauthModal} />
+      <ReauthModal {...alertReauthModal} />
     </Card>
   );
 }

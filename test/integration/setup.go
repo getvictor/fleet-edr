@@ -85,8 +85,6 @@ func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Ser
 //   - StaleProcessTTL = 0 (default; disables forced reconciliation, which
 //     would invent exit events for fixture processes).
 //   - RetentionDays = 0 (disabled; tests are short-lived; nothing to GC).
-//   - LoginRatePerMin = 1000 so per-test login bursts don't trip the
-//     rate limiter.
 //   - CookieSecure = false because httptest is plain HTTP.
 func Setup(t *testing.T) *Stack {
 	t.Helper()
@@ -103,7 +101,6 @@ func Setup(t *testing.T) *Stack {
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:                db,
 		Logger:            logger,
-		LoginRatePerMin:   1000,
 		CookieSecure:      false,
 		SessionSigningKey: signingKey,
 	})

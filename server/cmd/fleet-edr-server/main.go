@@ -196,7 +196,6 @@ func openIdentity(
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:                 db,
 		Logger:             logger,
-		LoginRatePerMin:    cfg.LoginRatePerMin,
 		CookieSecure:       cfg.TLSEnabled(),
 		AuthzShadowMode:    cfg.AuthzShadowMode,
 		AuditReadSampling:  cfg.AuditReadSampling,

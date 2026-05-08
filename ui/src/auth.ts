@@ -182,3 +182,73 @@ export async function breakglassFinishLogin(
     },
   );
 }
+
+// reauthBreakglass runs the Phase 5 break-glass reauth ceremony
+// against the operator's CURRENT session: WebAuthn assertion against
+// /api/auth/reauth/challenge → password + assertion submitted to
+// /api/auth/reauth → server stamps last_auth_at on the existing row.
+// No new session is minted. The challenge cookie is path-scoped to
+// /api/auth/reauth so it doesn't collide with an in-flight break-
+// glass login flow in another tab.
+//
+// Throws BreakglassError on the server-side rejection paths (rate
+// limit, invalid credentials, no_credentials, reauth_not_supported);
+// callers translate .reason into operator-facing copy via the same
+// label maps the login flow uses.
+export async function reauthBreakglass(password: string): Promise<void> {
+  const challenge = await requestJSON<{ publicKey: PublicKeyCredentialRequestOptionsJSON }>(
+    `/api/auth/reauth/challenge`,
+    { method: "POST" },
+  );
+  const assertion = await startAuthentication({ optionsJSON: challenge.publicKey });
+  await requestJSON<{ ok: boolean }>(
+    `/api/auth/reauth`,
+    {
+      method: "POST",
+      body: JSON.stringify({ password, assertion }),
+    },
+  );
+}
+
+// reauthOIDC kicks off the OIDC reauth round-trip. Server appends
+// prompt=login on the authorize URL when ?reauth=1 is set, forcing
+// the IdP to re-prompt for credentials regardless of its existing
+// session. The IdP's callback lands a fresh session whose
+// last_auth_at is NOW(); the previous session is orphaned + reaped
+// on its absolute expiry. UI returns to the path the operator was
+// on (next param) so a button re-click finishes the destructive
+// action.
+//
+// baseURL is the server-supplied reauthURL from the chokepoint's
+// 403 reauth_required body — the contract from
+// server/identity/api/authzhttp.go's ReauthChallenge. Validating it
+// against NEXT_PATH_RE (same-origin path only) means a compromised
+// server response can't steer the redirect off-origin. We append
+// &next=<encoded current path> so the IdP returns the operator to
+// the page that triggered the reauth_required.
+//
+// Returns void rather than throwing: globalThis.location.assign
+// replaces the current document, so anything after it is effectively
+// unreachable. A bare throw would surface in React 19's
+// onUncaughtError before navigation visibly completes; a clean
+// return keeps the error surface quiet.
+export function reauthOIDC(baseURL: string): void {
+  const next = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
+  // Mirror oidcLoginUrl's same-origin path validation so a hostile
+  // location (rare — would require a malicious window.history.push or
+  // similar) can't steer the redirect at the IdP.
+  const safeNext = next.length <= MAX_NEXT_PARAM && NEXT_PATH_RE.test(next) ? next : "";
+  // Reject anything that isn't a same-origin path with a leading
+  // slash. The chokepoint's typed body always returns
+  // /api/auth/login?reauth=1, but defending here means a future
+  // server bug can't silently steer the IdP redirect.
+  const safeBase = NEXT_PATH_RE.test(baseURL) ? baseURL : "/api/auth/login?reauth=1";
+  const sep = safeBase.includes("?") ? "&" : "?";
+  const url = safeNext
+    ? `${safeBase}${sep}next=${encodeURIComponent(safeNext)}`
+    : safeBase;
+  globalThis.location.assign(url);
+  // The assign() call replaces the current document; everything below
+  // is unreachable. Return void rather than throw — see CodeRabbit
+  // note re React 19's onUncaughtError surfacing pre-navigation.
+}

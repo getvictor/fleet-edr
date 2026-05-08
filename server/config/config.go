@@ -25,9 +25,6 @@ const (
 	defaultProcessBatch = 500
 	// defaultEnrollRatePerMin is the per-IP enrollment rate cap.
 	defaultEnrollRatePerMin = 30
-	// defaultLoginRatePerMin is the per-IP login attempt cap. Tighter than
-	// enroll because a brute-force login is the higher-value target.
-	defaultLoginRatePerMin = 6
 	// defaultRetentionDays is the event-row retention window.
 	defaultRetentionDays = 30
 	// defaultStaleProcessTTL is the fork-time age past which a still-running
@@ -67,7 +64,6 @@ type Config struct {
 	AllowInsecureHTTP bool
 	AllowTLS12        bool
 	EnrollRatePerMin  int
-	LoginRatePerMin   int
 	LogLevel          string
 	LogFormat         string
 	ProcessInterval   time.Duration
@@ -300,7 +296,6 @@ func defaults() Config {
 		ProcessInterval:          defaultProcessInterval,
 		ProcessBatch:             defaultProcessBatch,
 		EnrollRatePerMin:         defaultEnrollRatePerMin,
-		LoginRatePerMin:          defaultLoginRatePerMin,
 		RetentionDays:            defaultRetentionDays,
 		RetentionInterval:        time.Hour,
 		StaleProcessTTL:          defaultStaleProcessTTL,
@@ -400,7 +395,6 @@ func loadTLSConfig(c *Config, errs *[]error) {
 // the documented "disable" sentinel.
 func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
-	envparse.PositiveInt(getenv, "EDR_LOGIN_RATE_PER_MIN", &c.LoginRatePerMin, errs)
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
 	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, errs)
 	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, errs)

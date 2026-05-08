@@ -1,6 +1,6 @@
 module github.com/fleetdm/edr
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/XSAM/otelsql v0.42.0

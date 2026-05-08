@@ -25,6 +25,7 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
+	identitysessions "github.com/fleetdm/edr/server/identity/internal/sessions"
 	identityusers "github.com/fleetdm/edr/server/identity/internal/users"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
@@ -58,7 +59,6 @@ func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 	id, err := bootstrap.New(t.Context(), bootstrap.Deps{
 		DB:                s,
 		Logger:            slog.Default(),
-		LoginRatePerMin:   60,
 		CookieSecure:      false,
 		SessionAbsolute:   time.Hour,
 		CleanupInterval:   time.Hour, // not exercised by these tests
@@ -92,206 +92,48 @@ func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, user.ID, user2.ID)
 }
 
-// TestLoginToLogout walks Login -> GetSession -> Logout via Service. The
-// HTTP-level shape is covered by login/handler_test.go; here we assert
-// the Service surface that other contexts depend on.
-func TestLoginToLogout(t *testing.T) {
+// TestService_SessionLifecycle exercises the post-Phase-5b session
+// surface (Logout + GetSession + UserExists). Sessions are minted via
+// the sessions store directly because Phase 5b retired
+// Service.Login + the POST /api/session HTTP path; production sessions
+// now come from the OIDC callback or break-glass FinishLogin/FinishSetup
+// flows, both of which have their own integration tests.
+func TestService_SessionLifecycle(t *testing.T) {
 	id, db := newIdentityWithDB(t)
 	ctx := t.Context()
 
-	// Seed a non-break-glass user with a password so /api/session
-	// login works end-to-end. The break-glass admin uses
-	// /admin/break-glass with WebAuthn — that flow is exercised by
-	// the breakglass package's own integration tests.
-	const password = "long-enough-password-for-test"
 	usersStore := identityusers.New(db)
 	created, err := usersStore.Create(ctx, identityusers.CreateRequest{
-		Email: "tester@example.com", Password: password,
+		Email: "tester@example.com", Password: "long-enough-password-for-test",
 	})
 	require.NoError(t, err)
-	admin, pw := api.User{ID: created.ID, Email: created.Email}, password
 
-	// Wrong password -> ErrBadPassword (which wraps ErrInvalidCredentials).
-	_, err = id.Service().Login(ctx, admin.Email, "wrong-password")
-	require.ErrorIs(t, err, api.ErrBadPassword)
-	require.ErrorIs(t, err, api.ErrInvalidCredentials)
-
-	// Unknown email -> ErrUserNotFound (also wraps ErrInvalidCredentials).
-	_, err = id.Service().Login(ctx, "nobody@example.invalid", "anything")
-	require.ErrorIs(t, err, api.ErrUserNotFound)
-	require.ErrorIs(t, err, api.ErrInvalidCredentials)
-
-	// Happy path.
-	res, err := id.Service().Login(ctx, admin.Email, pw)
+	sessionsStore := identitysessions.New(db, identitysessions.Options{})
+	sess, err := sessionsStore.Create(ctx, created.ID,
+		identitysessions.CreateOptions{AuthMethod: "oidc"})
 	require.NoError(t, err)
-	assert.Equal(t, admin.ID, res.User.ID)
-	assert.NotEmpty(t, res.SessionToken)
-	assert.NotEmpty(t, res.CSRFToken)
-	assert.True(t, res.ExpiresAt.After(time.Now()))
 
 	// GetSession round-trips the token.
-	sess, err := id.Service().GetSession(ctx, res.SessionToken)
+	got, err := id.Service().GetSession(ctx, sess.ID)
 	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, admin.ID, sess.UserID)
-	assert.Equal(t, res.CSRFToken, sess.CSRFToken)
+	require.NotNil(t, got)
+	assert.Equal(t, created.ID, got.UserID)
+	assert.Equal(t, sess.CSRFToken, got.CSRFToken)
 
-	// UserExists is happy.
-	exists, err := id.Service().UserExists(ctx, admin.ID)
+	// UserExists is happy on a real id, false on a bogus one.
+	exists, err := id.Service().UserExists(ctx, created.ID)
 	require.NoError(t, err)
 	assert.True(t, exists)
-
-	// Bogus user id -> false, no error.
 	exists, err = id.Service().UserExists(ctx, 999999)
 	require.NoError(t, err)
 	assert.False(t, exists)
 
-	// Logout invalidates the token.
-	require.NoError(t, id.Service().Logout(ctx, res.SessionToken))
-
-	// Subsequent GetSession is ErrSessionNotFound.
-	_, err = id.Service().GetSession(ctx, res.SessionToken)
+	// Logout invalidates the token; subsequent GetSession is
+	// ErrSessionNotFound. Logout is idempotent on already-deleted rows.
+	require.NoError(t, id.Service().Logout(ctx, sess.ID))
+	_, err = id.Service().GetSession(ctx, sess.ID)
 	require.ErrorIs(t, err, api.ErrSessionNotFound)
-
-	// Logout again is idempotent (no error on already-deleted session).
-	require.NoError(t, id.Service().Logout(ctx, res.SessionToken))
-}
-
-// TestSessionMiddlewareEndToEnd hits a tiny mux assembled the same way
-// cmd/main wires the operator surface. Verifies the cookie + middleware
-// dance is wire-compatible.
-func TestSessionMiddlewareEndToEnd(t *testing.T) {
-	id, db := newIdentityWithDB(t)
-	ctx := t.Context()
-
-	const password = "long-enough-password-for-test"
-	usersStore := identityusers.New(db)
-	created, err := usersStore.Create(ctx, identityusers.CreateRequest{
-		Email: "tester@example.com", Password: password,
-	})
-	require.NoError(t, err)
-	res, err := id.Service().Login(ctx, created.Email, password)
-	require.NoError(t, err)
-
-	// Build a tiny test server: GET / under Session+CSRF; POST / same.
-	authedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid, _ := api.UserIDFromContext(r.Context())
-		_ = uid
-		w.WriteHeader(http.StatusNoContent)
-	})
-	stack := id.SessionMiddleware()(id.CSRFMiddleware()(authedHandler))
-	srv := httptest.NewServer(stack)
-	t.Cleanup(srv.Close)
-
-	cookie := &http.Cookie{Name: api.SessionCookieName, Value: api.EncodeToken(res.SessionToken)}
-	csrfHeader := api.EncodeToken(res.CSRFToken)
-
-	// GET with cookie: 204.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/", nil)
-	require.NoError(t, err)
-	req.AddCookie(cookie)
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
-
-	// POST without CSRF header: 403.
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/", nil)
-	require.NoError(t, err)
-	req.AddCookie(cookie)
-	resp, err = srv.Client().Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-
-	// POST with correct CSRF header: 204.
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/", nil)
-	require.NoError(t, err)
-	req.AddCookie(cookie)
-	req.Header.Set(api.CSRFHeaderName, csrfHeader)
-	resp, err = srv.Client().Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
-}
-
-// TestCleanupExpiredSessions removes only sessions past their expires_at.
-// Constructs a sessions store with TTL = 1ns so the row is expired the
-// moment it's written.
-func TestCleanupExpiredSessions(t *testing.T) {
-	id, db := newIdentityWithDB(t)
-	ctx := t.Context()
-
-	const password = "long-enough-password-for-test"
-	usersStore := identityusers.New(db)
-	created, err := usersStore.Create(ctx, identityusers.CreateRequest{
-		Email: "tester@example.com", Password: password,
-	})
-	require.NoError(t, err)
-
-	freshLogin, err := id.Service().Login(ctx, created.Email, password)
-	require.NoError(t, err)
-
-	// Cleanup with all sessions still in TTL: zero rows removed.
-	n, err := id.Service().CleanupExpiredSessions(ctx)
-	require.NoError(t, err)
-	assert.Zero(t, n)
-
-	// Login should still work.
-	_, err = id.Service().GetSession(ctx, freshLogin.SessionToken)
-	require.NoError(t, err)
-
-	// Errors-aren't-thrown sanity: ErrAlreadySeeded check from a different
-	// path. Defensive coverage that we haven't broken the wrap chain.
-	require.ErrorIs(t, api.ErrUserNotFound, api.ErrInvalidCredentials)
-	require.ErrorIs(t, api.ErrBadPassword, api.ErrInvalidCredentials)
-}
-
-// TestRegisterRoutes_Public asserts RegisterPublicRoutes wires both
-// POST and DELETE /api/session on the supplied mux, and that the routes
-// are reachable end-to-end (login + logout) through the registered mux.
-//
-// Phase 4b: SeedAdmin now returns a NULL-password break-glass row, so
-// this test seeds a separate non-break-glass user via users.Store
-// directly to drive POST /api/session. The break-glass account uses
-// /admin/break-glass with WebAuthn — that flow is exercised by the
-// breakglass package's own integration tests.
-func TestRegisterRoutes_Public(t *testing.T) {
-	id, db := newIdentityWithDB(t)
-	ctx := t.Context()
-
-	const (
-		testEmail    = "tester@example.com"
-		testPassword = "long-enough-password-for-test"
-	)
-	usersStore := identityusers.New(db)
-	_, err := usersStore.Create(ctx, identityusers.CreateRequest{
-		Email: testEmail, Password: testPassword,
-	})
-	require.NoError(t, err)
-
-	mux := http.NewServeMux()
-	id.RegisterPublicRoutes(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	// POST /api/session: route registered; login succeeds.
-	body := bytes.NewBufferString(`{"email":"` + testEmail + `","password":"` + testPassword + `"}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/session", body)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode, "POST /api/session via RegisterPublicRoutes")
-
-	// DELETE /api/session: route registered; logout 204 even without cookie (idempotent).
-	req2, err := http.NewRequestWithContext(ctx, http.MethodDelete, srv.URL+"/api/session", nil)
-	require.NoError(t, err)
-	resp2, err := srv.Client().Do(req2)
-	require.NoError(t, err)
-	resp2.Body.Close()
-	assert.Equal(t, http.StatusNoContent, resp2.StatusCode, "DELETE /api/session via RegisterPublicRoutes")
+	require.NoError(t, id.Service().Logout(ctx, sess.ID))
 }
 
 // TestRegisterRoutes_Authed asserts RegisterAuthedRoutes wires GET

@@ -5,7 +5,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -64,39 +63,19 @@ type Session struct {
 	CSRFToken  []byte
 }
 
-// LoginResult bundles everything the login HTTP handler needs to respond
-// to a successful login. SessionToken is the raw plaintext token; the
-// handler encodes it for the cookie value. CSRFToken is the raw token;
-// the handler encodes it for the JSON body. Both are returned exactly
-// once at Login -- the server never persists either in plaintext.
-type LoginResult struct {
-	User         User
-	SessionToken []byte
-	CSRFToken    []byte
-	ExpiresAt    time.Time
-}
-
 // Error sentinels returned across the api boundary. Callers compare with
-// errors.Is. Login error wrapping: ErrUserNotFound and ErrBadPassword both
-// wrap ErrInvalidCredentials so the typical caller can errors.Is(err,
-// ErrInvalidCredentials) for the 401 case while audit logging can
-// distinguish "unknown email" from "wrong password" with a separate
-// errors.Is against the more specific sentinel.
+// errors.Is.
+//
+// Phase 5b retired the password-based Login method, so the wrap chain
+// that used to thread ErrUserNotFound + ErrBadPassword through a parent
+// ErrInvalidCredentials is gone. ErrUserNotFound remains because the
+// session middleware reads it (a deleted user under a still-valid
+// session manifests as ErrUserNotFound, mapped to invalid_session in
+// the wire response).
 var (
-	ErrInvalidCredentials = errors.New("identity: invalid credentials")
-	ErrUserNotFound       = fmt.Errorf("identity: user not found: %w", ErrInvalidCredentials)
-	ErrBadPassword        = fmt.Errorf("identity: password mismatch: %w", ErrInvalidCredentials)
-	// ErrBreakglassUseAdminURL is returned by Service.Login when the
-	// authenticated user is_breakglass=true. Per Phase 4b spec, the
-	// recovery account MUST log in via /admin/break-glass (password
-	// + WebAuthn assertion); /api/session POST does not satisfy the
-	// MFA mandate and is refused. Wraps ErrInvalidCredentials so an
-	// attacker probing emails cannot distinguish "this is a
-	// break-glass account" from "wrong password" through the wire
-	// response, but the audit row records the precise reason.
-	ErrBreakglassUseAdminURL = fmt.Errorf("identity: break-glass account must use /admin/break-glass: %w", ErrInvalidCredentials)
-	ErrSessionNotFound       = errors.New("identity: session not found or expired")
-	ErrAlreadySeeded         = errors.New("identity: admin already seeded")
+	ErrUserNotFound    = errors.New("identity: user not found")
+	ErrSessionNotFound = errors.New("identity: session not found or expired")
+	ErrAlreadySeeded   = errors.New("identity: admin already seeded")
 )
 
 // ctxKey is unexported so ctx values can only be set via the With*
