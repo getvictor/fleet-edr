@@ -12,7 +12,7 @@
     {
       "id": "1",
       "title": "Authz deny rate by reason",
-      "description": "Count of audit-row INFO logs whose action starts with authz. and whose payload.decision = deny, grouped by payload.reason. The chokepoint emits exactly one such row per privileged HTTP request (allow + deny), so this panel is a faithful proxy for chokepoint deny rate. A baseline of low-volume reauth_required denies is healthy (operators triggering the freshness gate); a sudden spike on role_missing or actor_anonymous is worth chasing. Cross-reference with HTTP traces (status_code=403) to attribute denies to specific routes.",
+      "description": "Count of audit-row INFO logs whose action starts with authz. and whose payload.allow = false, grouped by payload.reason. The chokepoint emits exactly one such row per privileged HTTP request (allow + deny), so this panel is a faithful proxy for chokepoint deny rate. A baseline of low-volume reauth_required denies is healthy (operators triggering the freshness gate); a sudden spike on no_matching_rule or no_actor is worth chasing. Cross-reference with HTTP traces (status_code=403) to attribute denies to specific routes.",
       "panelTypes": "graph",
       "query": {
         "queryType": "builder",
@@ -27,7 +27,7 @@
                 "items": [
                   {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
                   {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^authz\\."},
-                  {"key": {"key": "payload.decision", "type": "tag"}, "op": "=", "value": "deny"}
+                  {"key": {"key": "payload.allow", "type": "tag"}, "op": "=", "value": "false"}
                 ]
               },
               "groupBy": [{"key": "payload.reason", "type": "tag"}],

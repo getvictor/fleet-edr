@@ -19,11 +19,15 @@ package testkit
 
 import (
 	"context"
+	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
+	"github.com/fleetdm/edr/server/identity/internal/sessions"
 )
 
 // ApplySchema runs identity's DDL + idempotent ALTERs against db.
@@ -64,4 +68,89 @@ func (d DenyAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decisio
 		r = "no_matching_rule"
 	}
 	return api.Decision{Allow: false, Reason: r}, nil
+}
+
+// SeededUser is the result of SeedJITUser: the user row + a live
+// session ready to drop into a cookie. ID is the user's primary key;
+// SessionCookie is the base64url-encoded session token (use this for
+// the `edr_session` cookie value); CSRFToken is the per-session CSRF
+// secret base64url-encoded for the `X-Csrf-Token` header.
+type SeededUser struct {
+	ID            int64
+	Email         string
+	Role          string
+	SessionCookie string
+	CSRFToken     string
+}
+
+// SeedJITUser inserts the rows an OIDC JIT-provisioned operator would
+// land in: users + identities (provider='oidc', subject=email) +
+// role_bindings (tenant scope, no expiry) + a fresh session. Returns
+// the user id + the cookie/CSRF pair the test plugs into HTTP requests
+// against the protected mux.
+//
+// Cross-context tests use this to skip the full OIDC dance — the OIDC
+// callback flow is exhaustively covered in the oidc package's own
+// tests, and a cross-context test re-running the parsing dance would
+// just be re-testing OIDC. The end-state SQL shape and the live
+// session cookie are what every downstream chokepoint check actually
+// reads, so this helper matches that shape exactly.
+//
+// auth_method is hardcoded to "oidc" because that's the JIT-provisioned
+// path's session class (break-glass goes through a distinct flow with
+// its own helper). last_auth_at is set to NOW() by sessions.Store so
+// the chokepoint's freshness gate (Phase 5 reauth window) returns true
+// for destructive actions; tests that need a stale session age the
+// row directly.
+func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
+	t.Helper()
+	ctx := t.Context()
+
+	userRes, err := db.ExecContext(ctx,
+		`INSERT INTO users (email, tenant_id, status) VALUES (?, ?, 'active')`,
+		email, api.DefaultTenantID)
+	require.NoErrorf(t, err, "seed user %q", email)
+	userID, err := userRes.LastInsertId()
+	require.NoError(t, err)
+
+	identityRes, err := db.ExecContext(ctx,
+		`INSERT INTO identities (user_id, provider, subject) VALUES (?, 'oidc', ?)`,
+		userID, email)
+	require.NoErrorf(t, err, "seed identity for %q", email)
+	identityID, err := identityRes.LastInsertId()
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id)
+		 VALUES (?, ?, ?, 'tenant', '*')`,
+		userID, role, api.DefaultTenantID)
+	require.NoErrorf(t, err, "seed role binding %s for user %d", role, userID)
+
+	sessionStore := sessions.New(db, sessions.Options{})
+	sess, err := sessionStore.Create(ctx, userID, sessions.CreateOptions{
+		IdentityID: &identityID,
+		AuthMethod: "oidc",
+	})
+	require.NoError(t, err, "mint session")
+
+	return SeededUser{
+		ID:            userID,
+		Email:         email,
+		Role:          role,
+		SessionCookie: api.EncodeToken(sess.ID),
+		CSRFToken:     api.EncodeToken(sess.CSRFToken),
+	}
+}
+
+// AgeSession backdates a seeded session's last_auth_at column so the
+// chokepoint's freshness gate (Phase 5 reauth window) returns false.
+// Used to verify that a destructive action that would normally be
+// granted denies with reauth_required when the session is stale.
+func AgeSession(t *testing.T, db *sqlx.DB, userID int64, age time.Duration) {
+	t.Helper()
+	ctx := t.Context()
+	_, err := db.ExecContext(ctx,
+		`UPDATE sessions SET last_auth_at = NOW(6) - INTERVAL ? SECOND WHERE user_id = ?`,
+		int64(age.Seconds()), userID)
+	require.NoErrorf(t, err, "age session for user %d", userID)
 }
