@@ -28,7 +28,7 @@ func newWriterWithStore(t *testing.T, capHint int, logger *slog.Logger) (*audit.
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	store := audit.New(db)
+	store := audit.New(db, logger)
 	w := audit.NewAsyncWriter(store, audit.AsyncOptions{QueueCap: capHint, Logger: logger})
 	return w, store, db
 }
@@ -187,7 +187,7 @@ func TestAsyncWriter_NilStorePanics(t *testing.T) {
 // defaults; the writer constructs without ceremony for cmd/main's
 // "use the defaults" path.
 func TestAsyncWriter_ZeroOptionsUsesDefaults(t *testing.T) {
-	store := audit.New(testdb.Open(t))
+	store := audit.New(testdb.Open(t), nil)
 	w := audit.NewAsyncWriter(store, audit.AsyncOptions{})
 	assert.NotNil(t, w)
 }

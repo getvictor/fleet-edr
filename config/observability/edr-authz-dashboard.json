@@ -1,0 +1,126 @@
+{
+  "title": "EDR auth + authz",
+  "description": "Operator dashboard for the wave-1 auth + authz surface. Imported into SigNoz via Dashboards -> Import. Every successful audit row is dual-emitted to slog at INFO with stable attribute keys (action, target_type, target_id, actor_email, edr.user.id, optional trace_id + payload), and the async writer emits structured slog WARNs on drops + INSERT errors. Panel queries below assume the EDR server is exporting via OTLP with service.name=fleet-edr-server. SigNoz's import dialog re-numbers panels; the layout block is a starting hint only.",
+  "tags": ["edr", "auth", "authz"],
+  "layout": [
+    {"i": "1", "x": 0, "y": 0, "w": 6, "h": 4},
+    {"i": "2", "x": 6, "y": 0, "w": 6, "h": 4},
+    {"i": "3", "x": 0, "y": 4, "w": 6, "h": 4},
+    {"i": "4", "x": 6, "y": 4, "w": 6, "h": 4}
+  ],
+  "panels": [
+    {
+      "id": "1",
+      "title": "Authz deny rate by reason",
+      "description": "Count of audit-row INFO logs whose action starts with authz. and whose payload.decision = deny, grouped by payload.reason. The chokepoint emits exactly one such row per privileged HTTP request (allow + deny), so this panel is a faithful proxy for chokepoint deny rate. A baseline of low-volume reauth_required denies is healthy (operators triggering the freshness gate); a sudden spike on role_missing or actor_anonymous is worth chasing. Cross-reference with HTTP traces (status_code=403) to attribute denies to specific routes.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "logs",
+              "queryName": "A",
+              "aggregateOperator": "count",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
+                  {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^authz\\."},
+                  {"key": {"key": "payload.decision", "type": "tag"}, "op": "=", "value": "deny"}
+                ]
+              },
+              "groupBy": [{"key": "payload.reason", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2",
+      "title": "Login outcomes (OIDC + break-glass)",
+      "description": "Stack of successful and failed logins across both auth surfaces. Reads directly from audit-row INFO logs: OIDC emits auth.oidc.success / auth.oidc.failure / auth.oidc.callback.error; break-glass emits auth.breakglass.success / auth.breakglass.failure on the day-to-day login flow. A flat success line plus a sustained failure line means brute-force or a misconfig; a failure spike with no success spike often means the IdP is down.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "logs",
+              "queryName": "A",
+              "aggregateOperator": "count",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
+                  {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^auth\\.(oidc|breakglass)\\."}
+                ]
+              },
+              "groupBy": [{"key": "action", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3",
+      "title": "Break-glass redemption rate",
+      "description": "Count of auth.breakglass.bootstrap audit rows. Emitted on successful redemption (token issuance itself is not audited), so this panel charts how often the operator completes the WebAuthn-mandatory setup flow. A non-zero rate outside a deploy window means a manual SQL recovery insert was redeemed; a sustained zero with a known token outstanding means the operator never finished the ceremony.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "logs",
+              "queryName": "A",
+              "aggregateOperator": "count",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
+                  {"key": {"key": "action", "type": "tag"}, "op": "=", "value": "auth.breakglass.bootstrap"}
+                ]
+              },
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "4",
+      "title": "Audit-write failures (drops + INSERT errors)",
+      "description": "The async audit writer emits a slog WARN when it cannot enqueue (queue_full / writer_stopped / drain_deadline_exceeded) or when an INSERT into audit_events fails. Any non-zero rate here is a hard alert: the audit log is the spec's append-only invariant and dropping rows breaks it. Drop logs carry a 'reason' attribute; INSERT-failure logs carry an 'err' attribute instead. Grouping by body cleanly splits the two cases.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "logs",
+              "queryName": "A",
+              "aggregateOperator": "count",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
+                  {"key": {"key": "severity_text", "type": "tag"}, "op": "=", "value": "WARN"},
+                  {"key": {"key": "body", "type": "tag"}, "op": "REGEXP", "value": "audit (dropped|async record failed)"}
+                ]
+              },
+              "groupBy": [{"key": "body", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

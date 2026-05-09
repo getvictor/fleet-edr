@@ -17,27 +17,45 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jmoiron/sqlx"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // Store implements both api.AuditRecorder and api.AuditReader against
 // MySQL. Constructed once at boot from bootstrap.New and shared across
 // every audit-emitting handler in the process.
+//
+// On every successful INSERT, Store dual-emits the row to slog at INFO
+// with the same attribute shape the async writer uses on drops. The
+// log line is the OTel-side mirror of the MySQL row; SigNoz dashboards
+// chart auth + authz signal off these log entries (chokepoint denies
+// surface as `action=authz.*` with `payload.decision=deny`, OIDC and
+// break-glass outcomes surface as `action=auth.oidc.*` /
+// `action=auth.breakglass.*`). MySQL remains the canonical store; the
+// log emission is best-effort and runs after the row is durably
+// committed, so a slog handler outage does not affect persistence.
 type Store struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	logger *slog.Logger
 }
 
 // New returns a Store. Panics if db is nil because a Store with a nil
 // db is a programming error that would only surface at request time.
-func New(db *sqlx.DB) *Store {
+// A nil logger falls through to slog.Default(), matching AsyncWriter's
+// shape so test code and lightweight wiring stays terse.
+func New(db *sqlx.DB, logger *slog.Logger) *Store {
 	if db == nil {
 		panic("audit.New: db must not be nil")
 	}
-	return &Store{db: db}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{db: db, logger: logger}
 }
 
 // Record inserts one audit row. trace_id is pulled from ctx so handler
@@ -101,7 +119,38 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	if err != nil {
 		return fmt.Errorf("audit.Record insert: %w", err)
 	}
+	s.emitDualEmit(ctx, e, actorEmail, traceID)
 	return nil
+}
+
+// emitDualEmit logs the just-committed audit row to slog at INFO with
+// the structured-attribute shape the async writer uses on drops, so a
+// SigNoz / OTLP backend has the row's content without a separate
+// audit_events export. Mirrors logDropped's attribute set minus the
+// "reason" key (drops carry queue_full / writer_stopped /
+// drain_deadline_exceeded; a successful row has none). Payload is
+// included verbatim when non-empty so dashboards can filter on
+// payload.decision (chokepoint allow/deny) and payload.reason (OIDC
+// + break-glass failure mode codes).
+func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, traceID string) {
+	uid := int64(0)
+	if e.UserID != nil {
+		uid = *e.UserID
+	}
+	attrs := []any{
+		"action", string(e.Action),
+		"target_type", e.TargetType,
+		"target_id", e.TargetID,
+		"actor_email", actorEmail,
+		attrkeys.UserID, uid,
+	}
+	if traceID != "" {
+		attrs = append(attrs, "trace_id", traceID)
+	}
+	if len(e.Payload) > 0 {
+		attrs = append(attrs, "payload", e.Payload)
+	}
+	s.logger.InfoContext(ctx, "audit recorded", attrs...)
 }
 
 // resolveActorEmail returns the email to denormalise onto the audit row.

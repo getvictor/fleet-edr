@@ -14,6 +14,9 @@ repo-root `README.md`.
 | Upgrading, rotating secrets, recovering from a wiped server, reading logs | [`operations.md`](operations.md) |
 | Integrating with the server's HTTP API | [`api.md`](api.md) |
 | Understanding how the pieces fit together | [`architecture.md`](architecture.md) |
+| Setting up Okta or another OIDC IdP for operator login | [`okta-setup.md`](okta-setup.md) |
+| Recovering when SSO is unavailable, registering a second security key | [`breakglass.md`](breakglass.md) |
+| Reviewing what threats v0.1 covers and where the gaps are | [`threat-model.md`](threat-model.md) |
 
 ## Shape of a Fleet EDR deployment
 
