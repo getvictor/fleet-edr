@@ -126,16 +126,22 @@
 
 ## Phase 7: documentation
 
-- [ ] **7.1** Operator runbook: break-glass redemption + WebAuthn registration,
+- [x] **7.1** Operator runbook: break-glass redemption + WebAuthn registration,
   break-glass credential rotation, lost-credential recovery procedure.
-- [ ] **7.2** Okta tenant setup guide: app type (web), redirect URLs, scope set,
+  (`docs/breakglass.md`)
+- [x] **7.2** Okta tenant setup guide: app type (web), redirect URLs, scope set,
   group claim posture (group → role mapping deferred to wave 2).
-- [ ] **7.3** Role + permission matrix: machine-readable copy under
+  (`docs/okta-setup.md`)
+- [x] **7.3** Role + permission matrix: machine-readable copy under
   `server/identity/internal/authz/policy/data/actions.json` plus a human-readable
-  rendering in `docs/`.
-- [ ] **7.4** SigNoz dashboard wiring: deny-decision rate by handler, break-glass
+  rendering in `docs/`. (Delivered in Phase 6: `policy/data/actions.json` +
+  `policy/data/roles.json` are the machine source; `docs/authz.md` renders the
+  human view.)
+- [x] **7.4** SigNoz dashboard wiring: deny-decision rate by handler, break-glass
   login rate, bootstrap-token issuance count, audit-write-failure count.
-- [ ] **7.5** Update `docs/threat-model.md` to reflect the new identity boundary,
+  (`config/observability/edr-authz-dashboard.json` + `docs/operations.md`
+  Auth + authz dashboard section.)
+- [x] **7.5** Update `docs/threat-model.md` to reflect the new identity boundary,
   the chokepoint, the audit log, and the WebAuthn-mandatory break-glass control.
 
 ## Phase 8: validation gates (run continuously, not a separate phase)
