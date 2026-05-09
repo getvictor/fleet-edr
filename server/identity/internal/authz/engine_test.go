@@ -10,6 +10,7 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/authz"
+	"github.com/fleetdm/edr/server/identity/internal/seed"
 )
 
 // recordingAudit collects every AuditEvent the engine writes so tests
@@ -122,6 +123,63 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 			d, err := e.Allow(ctx, tc.action, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantAllow, d.Allow, "decision %+v", d)
+		})
+	}
+}
+
+// TestAllow_EveryRegisteredActionGrantedSomewhere asserts the seeded
+// role matrix grants each Action constant to at least one role
+// OTHER than super_admin. Catches an action being added to
+// RegisteredActions without a matching grant in roles.json — that
+// action would silently produce no_matching_rule for every caller
+// forever, which would land as a 403 the first time a real user
+// invoked it with no obvious diagnosis path. The Rego-side parity
+// check in TestPolicy_ActionsParity covers symbol drift; this test
+// covers the "registered but unreachable for real operators" gap on
+// top.
+//
+// super_admin is excluded from the probe because its `*` wildcard
+// would silently mask a new action that's only reachable by
+// break-glass — break-glass is for incident response, not routine
+// operator workflows. The wildcard is exercised separately by
+// TestAllow_RoleActionMatrix; here we want to know that every
+// action has a non-wildcard role that can do it.
+//
+// The seeded role list is derived from seed.BuiltinRoles to stay in
+// sync with the seeder: a future PR that introduces a new role
+// picks it up automatically (and the test keeps holding the line
+// "every action must reach a non-wildcard role").
+func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
+	e, _ := newEngine(t, false)
+	var roles []string
+	for _, r := range seed.BuiltinRoles {
+		if r.ID == "super_admin" {
+			continue
+		}
+		roles = append(roles, r.ID)
+	}
+	require.NotEmptyf(t, roles,
+		"seed.BuiltinRoles produced no non-wildcard roles; the seeded "+
+			"matrix has changed shape and this test needs a fresh look")
+	for _, action := range api.RegisteredActions() {
+		t.Run(string(action), func(t *testing.T) {
+			granted := false
+			for _, role := range roles {
+				actor := actorWithRoles(1, "default", tenantBinding(role, "default"))
+				ctx := api.WithActor(t.Context(), actor)
+				d, err := e.Allow(ctx, action, api.Resource{TenantID: "default"})
+				require.NoError(t, err)
+				if d.Allow {
+					granted = true
+					break
+				}
+			}
+			assert.Truef(t, granted,
+				"action %q is registered in api.RegisteredActions but no "+
+					"non-wildcard seeded role grants it; either add a grant in "+
+					"policy/data/roles.json (admin / senior_analyst / analyst / "+
+					"auditor) or remove the constant from api.RegisteredActions",
+				action)
 		})
 	}
 }
