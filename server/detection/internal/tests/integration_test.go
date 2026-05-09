@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -625,22 +626,36 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	}
 	insertEventsViaIngest(ctx, t, d, "h", events)
 
+	// Wait until the LAST exec has been applied — not just until 3 rows
+	// exist. A fork creates a row with the parent's path inherited; the
+	// exec that follows rewrites that row's path. If we polled on
+	// countNodes >= 3 we'd race the window where row 200's path is
+	// still the inherited "/bin/sh" because exec-pl hasn't been
+	// processed yet (CI surfaced exactly that as
+	// `["/usr/bin/python3", "/bin/sh", "/bin/sh"]`).
 	require.Eventually(t, func() bool {
 		tree, err := d.Service().BuildTree(ctx, "h",
 			api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100)
 		if err != nil {
 			return false
 		}
-		return countNodes(tree) >= 3
-	}, 5*time.Second, 50*time.Millisecond, "expected 3 process rows materialised")
+		paths := flattenPaths(tree)
+		// All three exec'd paths must be present; the third one is the
+		// last event in the batch, so its presence implies every prior
+		// fork + exec has materialised.
+		return slices.Contains(paths, "/usr/bin/python3") &&
+			slices.Contains(paths, "/bin/sh") &&
+			slices.Contains(paths, "/tmp/payload")
+	}, 5*time.Second, 50*time.Millisecond, "expected /usr/bin/python3 -> /bin/sh -> /tmp/payload chain to materialise")
 
 	tree, err := d.Service().BuildTree(ctx, "h",
 		api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100)
 	require.NoError(t, err)
 	assert.NotEmpty(t, tree, "BuildTree must return at least one root")
 
-	// At least one process must have a non-empty path that points at
-	// /usr/bin/python3 (the chain root).
+	// Final post-condition mirrors what Eventually waited on; kept as
+	// explicit asserts so a failure points at the missing path
+	// directly rather than at the polling timeout.
 	paths := flattenPaths(tree)
 	assert.Contains(t, paths, "/usr/bin/python3")
 	assert.Contains(t, paths, "/bin/sh")
