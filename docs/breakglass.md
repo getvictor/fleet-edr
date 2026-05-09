@@ -54,8 +54,10 @@ checks for an existing WebAuthn credential at boot).
 - `webauthn_credentials` row binding the registered authenticator
   to the user.
 - `bootstrap_tokens.redeemed_at` set on the row that minted the URL.
-- One `auth.breakglass.bootstrap` audit row at issuance and one
-  `auth.breakglass.success` audit row at redemption.
+- One `auth.breakglass.bootstrap` audit row recording the successful
+  redemption (token issuance itself is not audited). The next
+  `auth.breakglass.success` row lands the first time the operator
+  signs in via the day-to-day login flow.
 
 If the page errors mid-ceremony (browser closed, USB disconnected),
 the token is **not** consumed - retry on the same URL until the TTL
@@ -165,8 +167,8 @@ SSH + MySQL access and rotate that list when staff change.
 
 | Action | When |
 |---|---|
-| `auth.breakglass.bootstrap` | Bootstrap token issued (first-boot banner OR manual recovery insert). |
-| `auth.breakglass.success` | Successful redemption / login (same constant; `payload.flow` distinguishes). |
+| `auth.breakglass.bootstrap` | Successful redemption: the operator's password + authenticator are now persisted and the token row has been marked `redeemed_at`. Token issuance itself (banner re-print, manual recovery insert) is not audited. |
+| `auth.breakglass.success` | Successful day-to-day login (POST `/admin/break-glass`). The redemption flow does not emit this row directly; the next login does. |
 | `auth.breakglass.failure` | Any rejection: wrong password, wrong assertion, no credentials, sign-count regression, expired token, redeemed token. `payload.reason` carries the precise wire reason. |
 
 To review the full break-glass timeline:

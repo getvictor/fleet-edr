@@ -1,35 +1,33 @@
 {
   "title": "EDR auth + authz",
-  "description": "Operator dashboard for the wave-1 auth surface: OIDC + break-glass logins, authz chokepoint denies, bootstrap-token issuance, and audit-write health. Imported into SigNoz via Dashboards -> Import. The queries below use the structured-log shape the EDR audit async writer emits (see server/identity/internal/audit/async.go) plus the OTel span attributes declared in server/attrkeys/keys.go. SigNoz's import dialog re-numbers panels; the layout block is a starting hint only.",
+  "description": "Operator dashboard for the wave-1 auth surface, scoped to signals that actually populate in SigNoz today. Two panels: HTTP-trace-based authz deny rate (spans whose response status is 403, the chokepoint deny shape), and audit-write failures (slog WARNs the async writer emits on drops + INSERT errors). The wave-1 audit pipeline writes every successful row to MySQL only; it does not dual-emit to the OTel log stream on success. Panels for OIDC + break-glass login outcomes and bootstrap-token issuance need slog dual-emit on success first (a wave-2 deliverable); querying audit_events directly in MySQL is the only reliable source until then. SigNoz's import dialog re-numbers panels; the layout block is a starting hint only.",
   "tags": ["edr", "auth", "authz"],
   "layout": [
-    {"i": "1", "x": 0, "y": 0, "w": 6, "h": 4},
-    {"i": "2", "x": 6, "y": 0, "w": 6, "h": 4},
-    {"i": "3", "x": 0, "y": 4, "w": 6, "h": 4},
-    {"i": "4", "x": 6, "y": 4, "w": 6, "h": 4}
+    {"i": "1", "x": 0, "y": 0, "w": 12, "h": 4},
+    {"i": "2", "x": 0, "y": 4, "w": 12, "h": 4}
   ],
   "panels": [
     {
       "id": "1",
-      "title": "Authz deny rate by reason",
-      "description": "Count of audit rows whose action starts with authz. and whose payload.decision = deny, grouped by payload.reason. A baseline of low-volume reauth_required denies is healthy (operators triggering the freshness gate); a sudden spike on role_missing or actor_anonymous is worth chasing. Source: structured slog stream emitted by the async audit writer.",
+      "title": "Authz deny rate by handler",
+      "description": "Count of HTTP request spans whose response status is 403, grouped by route. The chokepoint returns 403 (with header X-Edr-Authz-Reason) on every deny verdict, so this panel is a faithful proxy for chokepoint deny rate without requiring slog dual-emit on the audit row. A sudden spike on a single handler usually means a recent role-binding change; a flat baseline of low-volume denies on /api/host/.../isolate (etc.) means the freshness gate is firing as designed. The deny reason itself is not in OTel today: cross-reference audit_events.payload.reason in MySQL when investigating a specific spike.",
       "panelTypes": "graph",
       "query": {
         "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "logs",
+              "dataSource": "traces",
               "queryName": "A",
               "aggregateOperator": "count",
               "filters": {
                 "op": "AND",
                 "items": [
-                  {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^authz\\."},
-                  {"key": {"key": "payload.decision", "type": "tag"}, "op": "=", "value": "deny"}
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
+                  {"key": {"key": "http.status_code", "type": "tag"}, "op": "=", "value": "403"}
                 ]
               },
-              "groupBy": [{"key": "payload.reason", "type": "tag"}],
+              "groupBy": [{"key": "http.route", "type": "tag"}],
               "stepInterval": 60,
               "timeAggregation": "rate"
             }
@@ -39,8 +37,8 @@
     },
     {
       "id": "2",
-      "title": "Login outcomes (OIDC + break-glass)",
-      "description": "Stack of successful and failed logins across both auth surfaces. Reads directly from audit-row structured logs: OIDC emits auth.oidc.success / auth.oidc.failure / auth.oidc.callback.error; break-glass emits auth.breakglass.success / auth.breakglass.failure. A flat success line plus a sustained failure line means brute-force or a misconfig; a failure spike with no success spike often means the IdP is down.",
+      "title": "Audit-write failures (drops + INSERT errors)",
+      "description": "The async audit writer emits a slog WARN when it cannot enqueue a row (queue_full / writer_stopped) or when the global drain deadline expires (drain_deadline_exceeded), and a separate WARN when an INSERT into audit_events fails. Any non-zero rate here is a hard alert: the audit log is the spec's append-only invariant and dropping rows breaks it. Drops carry a 'reason' attribute; INSERT failures carry an 'err' attribute instead; the body string distinguishes the two cases. The query below filters on the body regex and groups by body so the panel splits drop vs INSERT-failure cleanly.",
       "panelTypes": "graph",
       "query": {
         "queryType": "builder",
@@ -53,64 +51,12 @@
               "filters": {
                 "op": "AND",
                 "items": [
-                  {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^auth\\.(oidc|breakglass)\\."}
-                ]
-              },
-              "groupBy": [{"key": "action", "type": "tag"}],
-              "stepInterval": 60,
-              "timeAggregation": "rate"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "3",
-      "title": "Bootstrap-token issuance",
-      "description": "Count of auth.breakglass.bootstrap audit rows. First-boot redemption issues exactly one row per banner re-print, so a steady non-zero rate means the operator never redeemed; a one-off spike outside a deploy window means a manual SQL insert (recovery path) or a fresh boot. Compare against deploy timeline before paging.",
-      "panelTypes": "graph",
-      "query": {
-        "queryType": "builder",
-        "builder": {
-          "queryData": [
-            {
-              "dataSource": "logs",
-              "queryName": "A",
-              "aggregateOperator": "count",
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {"key": {"key": "action", "type": "tag"}, "op": "=", "value": "auth.breakglass.bootstrap"}
-                ]
-              },
-              "stepInterval": 60,
-              "timeAggregation": "rate"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "4",
-      "title": "Audit-write failures (dropped / store error)",
-      "description": "The async audit writer emits a slog WARN when it cannot enqueue (queue_full / writer_stopped) or when the global drain deadline expires (drain_deadline_exceeded), and a separate WARN when an INSERT into audit_events fails. Any non-zero rate here is a hard alert: the audit log is the spec's append-only invariant and dropping rows breaks it. Cross-reference dropped count via the AsyncWriter.Dropped() counter on the /healthz endpoint.",
-      "panelTypes": "graph",
-      "query": {
-        "queryType": "builder",
-        "builder": {
-          "queryData": [
-            {
-              "dataSource": "logs",
-              "queryName": "A",
-              "aggregateOperator": "count",
-              "filters": {
-                "op": "AND",
-                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
                   {"key": {"key": "severity_text", "type": "tag"}, "op": "=", "value": "WARN"},
                   {"key": {"key": "body", "type": "tag"}, "op": "REGEXP", "value": "audit (dropped|async record failed)"}
                 ]
               },
-              "groupBy": [{"key": "reason", "type": "tag"}],
+              "groupBy": [{"key": "body", "type": "tag"}],
               "stepInterval": 60,
               "timeAggregation": "rate"
             }

@@ -54,7 +54,7 @@ exactly match the value Okta has on file: query strings, trailing
 slashes, and case all matter.
 
 The sign-out redirect is informational for the wave-1 build (the EDR
-UI's logout calls `POST /api/auth/logout` to drop the local session,
+UI's logout calls `DELETE /api/session` to drop the local session,
 not Okta's RP-initiated logout). It still needs to be on Okta's
 allowlist if you ever add the RP-initiated path; preconfiguring it
 costs nothing.
@@ -69,10 +69,11 @@ In the **Assignments** step:
 - Click **Save**.
 
 Wave-1 does NOT consume Okta groups. Every JIT-provisioned user
-lands in the `super_admin` role for now (see
-`openspec/specs/identity-roles/spec.md`). Wave-2 will add a
-`groups` claim to the scope set and map Okta groups to EDR roles;
-until then, who can sign in is the only knob.
+lands in the lowest-privilege role (`analyst`); see `docs/authz.md`
+for the role matrix and the SQL pattern an `admin` uses to promote
+the new operator. Wave-2 will add a `groups` claim to the scope set
+and map Okta groups to EDR roles; until then, who can sign in is
+the only knob.
 
 ## Note the client credentials
 
@@ -132,7 +133,7 @@ Notes on the optional knobs:
   fails the consent step at Okta, not the EDR server. Do not add
   `groups` until wave-2.
 - **JIT provisioning.** `EDR_OIDC_ALLOW_JIT_PROVISIONING=1`
-  (default) creates a user + identity + default role binding on
+  (default) creates a user + identity + `analyst` role binding on
   first successful sign-in. Set to `0` to require an operator to
   pre-create the user via SQL; an unknown subject then sees a
   directed `403 unknown_subject` instead of being auto-onboarded.
@@ -160,7 +161,7 @@ prints a single error block listing every missing knob.
 3. On success, Okta redirects to `/api/auth/callback?...` and the
    EDR server redirects you to `/ui/`. The top nav shows the
    signed-in user's email.
-4. Open a new browser profile (or incognito) and try a user that is
+4. Open a new browser profile (or incognito) and try a user who is
    **not** assigned to the application. Okta serves its own access
    denied page; you never reach the EDR server.
 
@@ -196,7 +197,8 @@ The `payload.reason` column on a failure narrows the cause
 - `docs/breakglass.md` - the recovery path when SSO is unavailable.
 - `docs/install-server.md` - the rest of the `EDR_*` env vars the
   server reads at boot.
-- `docs/authz.md` - the role bindings JIT-provisioned OIDC users
-  inherit (wave-1: every new identity lands in `super_admin`).
+- `docs/authz.md` - the role matrix and the role JIT-provisioned
+  OIDC users inherit (wave-1: every new identity lands in
+  `analyst`; admins promote via SQL).
 - `docs/threat-model.md` - the threat coverage the OIDC + reauth
   controls close.
