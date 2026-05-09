@@ -1,7 +1,10 @@
 package audit_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -24,7 +27,17 @@ func newStore(t *testing.T) (*audit.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	return audit.New(db), db
+	return audit.New(db, nil), db
+}
+
+// newStoreWithLogger is like newStore but binds the supplied logger so
+// dual-emit assertions can capture the INFO line. Tests that don't
+// care about the slog side use newStore (slog.Default()).
+func newStoreWithLogger(t *testing.T, logger *slog.Logger) (*audit.Store, *sqlx.DB) {
+	t.Helper()
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	return audit.New(db, logger), db
 }
 
 // seedUser inserts a users row so audit rows that reference it can be
@@ -209,7 +222,70 @@ func TestRecord_RejectsEmptyAction(t *testing.T) {
 // that would only surface at request time (when the user's audit row
 // disappears into a nil-pointer panic).
 func TestNew_PanicsOnNilDB(t *testing.T) {
-	assert.Panics(t, func() { _ = audit.New(nil) })
+	assert.Panics(t, func() { _ = audit.New(nil, nil) })
+}
+
+// Record dual-emits the just-committed audit row to slog at INFO so
+// SigNoz and other OTLP backends have the row's content without a
+// separate audit_events export. The line MUST carry the same
+// attribute keys the async-writer drop log uses, so a single dashboard
+// query can match success, drop, and failure states uniformly. This
+// test captures the slog handler output and pins the wire shape:
+// renaming a key here is renaming a dashboard contract.
+func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store, db := newStoreWithLogger(t, logger)
+
+	const userID = int64(7)
+	seedUser(t, db, userID, "operator-7@test")
+	uid := userID
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
+		UserID:     &uid,
+		ActorEmail: "operator-7@test",
+		Action:     api.AuditAuthLoginSuccess,
+		TargetType: "user",
+		TargetID:   "7",
+		RemoteAddr: "127.0.0.1:54321",
+		Payload:    map[string]any{"decision": "allow"},
+	}))
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.Equal(t, "audit recorded", entry["msg"])
+	assert.Equal(t, "INFO", entry["level"])
+	assert.Equal(t, "auth.login.success", entry["action"])
+	assert.Equal(t, "user", entry["target_type"])
+	assert.Equal(t, "7", entry["target_id"])
+	assert.Equal(t, "operator-7@test", entry["actor_email"])
+	assert.InDelta(t, float64(userID), entry["edr.user.id"], 0)
+
+	payload, ok := entry["payload"].(map[string]any)
+	require.True(t, ok, "payload must serialize as a nested object so SigNoz can index payload.decision")
+	assert.Equal(t, "allow", payload["decision"])
+}
+
+// When UserID is nil (e.g. a pre-auth audit row like
+// auth.oidc.callback.error), the dual-emit still fires and emits
+// edr.user.id=0. The audit row itself stays attributable via the
+// actor_email column. Pinning this so a future "skip the log when
+// no user" optimization doesn't silently break dashboards.
+func TestRecord_EmitsInfoLogWhenUserIDNil(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store, _ := newStoreWithLogger(t, logger)
+
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
+		ActorEmail: "operator@test",
+		Action:     api.AuditAction("auth.oidc.failure"),
+		Payload:    map[string]any{"reason": "oidc.unknown_subject"},
+	}))
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.Equal(t, "audit recorded", entry["msg"])
+	assert.Equal(t, "auth.oidc.failure", entry["action"])
+	assert.InDelta(t, float64(0), entry["edr.user.id"], 0)
 }
 
 // Sanity: the action constants are stable strings — anyone changing

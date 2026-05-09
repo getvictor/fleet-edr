@@ -166,7 +166,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	rbacStore := rbac.New(deps.DB)
 	identitiesStore := identities.New(deps.DB)
 	svc := service.New(usersStore, sessionsStore, rbacStore, logger)
-	auditStore := audit.New(deps.DB)
+	auditStore := audit.New(deps.DB, logger)
 	auditAsync := audit.NewAsyncWriter(auditStore, audit.AsyncOptions{
 		QueueCap: deps.AuditAsyncQueueCap,
 		Logger:   logger,

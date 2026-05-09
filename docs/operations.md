@@ -272,33 +272,37 @@ events with `user.id`).
 ### Auth + authz dashboard
 
 A starter SigNoz dashboard for the auth + authz surface lives at
-`config/observability/edr-authz-dashboard.json`. Wave-1 covers two
-panels with reliable signal: HTTP-trace-based authz deny rate
-(spans whose response status is 403), and audit-write failures
-(slog WARNs the async writer emits on dropped rows + INSERT
-errors). Import via the SigNoz UI: **Dashboards -> New Dashboard
--> Import JSON** -> paste the file contents -> save.
+`config/observability/edr-authz-dashboard.json`. It covers four
+panels: chokepoint deny rate by reason, OIDC + break-glass login
+outcomes, break-glass redemption rate, and audit-write failures
+(dropped rows + INSERT errors). Import via the SigNoz UI:
+**Dashboards -> New Dashboard -> Import JSON** -> paste the file
+contents -> save.
 
-The wave-1 audit pipeline writes every successful audit row to
-MySQL only; it does not dual-emit to the OTel log stream on
-success. That means the panels you'd want for OIDC + break-glass
-login outcomes and bootstrap-token issuance counts have no signal
-in SigNoz today; querying `audit_events` directly in MySQL is the
-only reliable path until wave-2 adds slog dual-emit on success.
-The dashboard JSON's description block calls this out so an
-operator who imports it sees the scope up front.
+Every successful audit row is dual-emitted to slog at INFO with a
+stable attribute shape (`action`, `target_type`, `target_id`,
+`actor_email`, `edr.user.id`, optional `trace_id` and `payload`),
+so the dashboard's queries match audit signal directly without
+needing a separate `audit_events` MySQL export. Failures (drops,
+INSERT errors) hit slog at WARN with a body the dashboard's
+fourth panel pattern-matches. SigNoz's import dialog re-numbers
+panels and may re-key some filter fields on first import; if a
+panel comes in empty, edit it and re-pick the `action` log
+attribute from the field-key dropdown so SigNoz binds the filter
+to the indexed attribute rather than a free string.
 
 Recommended alerts to add against this dashboard:
 
 - `rate(slog WARN body matches "audit dropped" OR "audit async
   record failed") > 0 for 5m`: paging condition. The audit log's
   append-only invariant is broken if rows drop.
-- `rate(HTTP spans with status_code=403 on /admin/break-glass) >
-  5/min for 5m`: brute-force on the recovery surface. Cross-check
+- `rate(action="auth.breakglass.failure") > 5/min for 5m`:
+  brute-force on the recovery surface. Cross-check
   `EDR_BREAKGLASS_IP_ALLOWLIST`.
-- `rate(HTTP spans with status_code in (400, 502) on
-  /api/auth/callback) > 0 for 5m`: IdP misconfig or load-balancer
-  affinity issue (see `docs/okta-setup.md` troubleshooting table).
+- `rate(action="auth.oidc.failure" AND payload.reason matches
+  state_mismatch|exchange_failed) > 0 for 5m`: IdP misconfig or
+  load-balancer affinity issue (see `docs/okta-setup.md`
+  troubleshooting table).
 
 ## Handling offline hosts
 
