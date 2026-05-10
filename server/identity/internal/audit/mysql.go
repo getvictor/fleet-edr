@@ -18,13 +18,22 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/identity/api"
 )
+
+// auditMeterName is the OTel instrumentation-scope name for the
+// audit-recorder's metric. Stable string so a dashboard alert keyed
+// on instrumentation.scope.name matches across versions.
+const auditMeterName = "github.com/fleetdm/edr/server/identity/audit"
 
 // Store implements both api.AuditRecorder and api.AuditReader against
 // MySQL. Constructed once at boot from bootstrap.New and shared across
@@ -40,14 +49,18 @@ import (
 // log emission is best-effort and runs after the row is durably
 // committed, so a slog handler outage does not affect persistence.
 type Store struct {
-	db     *sqlx.DB
-	logger *slog.Logger
+	db            *sqlx.DB
+	logger        *slog.Logger
+	writeFailures metric.Int64Counter
 }
 
 // New returns a Store. Panics if db is nil because a Store with a nil
 // db is a programming error that would only surface at request time.
 // A nil logger falls through to slog.Default(), matching AsyncWriter's
-// shape so test code and lightweight wiring stays terse.
+// shape so test code and lightweight wiring stays terse. The
+// audit-write-failure counter is registered against the global meter
+// so a Recorder injection is not required; when OTel is not wired
+// (no OTEL_EXPORTER_OTLP_ENDPOINT) the counter is a no-op.
 func New(db *sqlx.DB, logger *slog.Logger) *Store {
 	if db == nil {
 		panic("audit.New: db must not be nil")
@@ -55,7 +68,12 @@ func New(db *sqlx.DB, logger *slog.Logger) *Store {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Store{db: db, logger: logger}
+	counter, _ := otel.Meter(auditMeterName).Int64Counter(
+		"edr.audit.write_failures",
+		metric.WithDescription("Audit row INSERT failures into the audit_events table. Each increment is one row that the slog dual-emit captured but the DB rejected; the audit's append-only contract is broken."),
+		metric.WithUnit("{failure}"),
+	)
+	return &Store{db: db, logger: logger, writeFailures: counter}
 }
 
 // Record inserts one audit row. trace_id is pulled from ctx so handler
@@ -116,22 +134,41 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 		nullString(e.RemoteAddr),
 		nullBytes(payloadBytes),
 	)
+	// Dual-emit BEFORE returning on INSERT failure so the
+	// observability pipeline always sees a record, even when the DB
+	// rejected the row. Per server-identity-audit-log spec: "The
+	// dual emit MUST happen even when the database insert fails so
+	// the observability pipeline sees a record."
+	s.emitDualEmit(ctx, e, actorEmail, traceID)
 	if err != nil {
+		s.logger.ErrorContext(ctx, "audit row INSERT failed",
+			"err", err,
+			"action", string(e.Action),
+			"target_type", e.TargetType,
+			"target_id", e.TargetID,
+		)
+		if s.writeFailures != nil {
+			s.writeFailures.Add(ctx, 1,
+				metric.WithAttributes(attribute.String("action", string(e.Action))))
+		}
 		return fmt.Errorf("audit.Record insert: %w", err)
 	}
-	s.emitDualEmit(ctx, e, actorEmail, traceID)
 	return nil
 }
 
-// emitDualEmit logs the just-committed audit row to slog at INFO with
-// the structured-attribute shape the async writer uses on drops, so a
-// SigNoz / OTLP backend has the row's content without a separate
-// audit_events export. Mirrors logDropped's attribute set minus the
-// "reason" key (drops carry queue_full / writer_stopped /
-// drain_deadline_exceeded; a successful row has none). Payload is
-// included verbatim when non-empty so dashboards can filter on
-// payload.decision (chokepoint allow/deny) and payload.reason (OIDC
-// + break-glass failure mode codes).
+// emitDualEmit logs the audit row to slog and sets OTel span
+// attributes on the active request span so a SigNoz / OTLP backend
+// has the row's content without a separate audit_events export. The
+// slog level dispatches by spec: INFO when the decision is allow,
+// WARN when the decision is deny / error or the action is a
+// break-glass action (every break-glass row is operationally
+// noteworthy because the recovery surface is the high-privilege
+// path). Mirrors logDropped's attribute set minus the "reason" key
+// (drops carry queue_full / writer_stopped / drain_deadline_exceeded;
+// a successful row has none). Payload is included verbatim when
+// non-empty so dashboards can filter on payload.decision (chokepoint
+// allow/deny) and payload.reason (OIDC + break-glass failure mode
+// codes).
 func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, traceID string) {
 	uid := int64(0)
 	if e.UserID != nil {
@@ -150,7 +187,99 @@ func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, 
 	if len(e.Payload) > 0 {
 		attrs = append(attrs, "payload", e.Payload)
 	}
-	s.logger.InfoContext(ctx, "audit recorded", attrs...)
+	level := auditLogLevel(e)
+	s.logger.Log(ctx, level, "audit recorded", attrs...)
+
+	// Per server-identity-audit-log spec: every audit emission must
+	// set the three edr.audit.* attributes on the active request
+	// span. Pulled out of the OTel span (not the slog attrs) so the
+	// trace UI can pivot on the same dimensions the SigNoz log query
+	// uses, regardless of where the operator entered the dashboard.
+	span := trace.SpanFromContext(ctx)
+	if span.SpanContext().IsValid() {
+		span.SetAttributes(
+			attribute.String("edr.audit.action", string(e.Action)),
+			attribute.String("edr.audit.decision", auditDecision(e)),
+			attribute.String("edr.audit.reason", auditReason(e)),
+		)
+	}
+}
+
+// auditLogLevel maps an audit event to the slog level the
+// server-identity-audit-log spec mandates: allow -> INFO; deny /
+// error / break-glass action -> WARN. The dispatcher accepts both
+// the chokepoint payload shape ({"allow": bool, "reason": string})
+// and the breakglass/oidc payload shape ({"decision": string,
+// "reason": string}) so a single function covers every audit-row
+// producer.
+func auditLogLevel(e api.AuditEvent) slog.Level {
+	a := string(e.Action)
+	// Break-glass actions are operationally noteworthy even on
+	// success: the recovery surface is the high-privilege path and
+	// every interaction should land in the WARN-or-higher log
+	// stream operators monitor.
+	if strings.HasPrefix(a, "auth.breakglass.") {
+		return slog.LevelWarn
+	}
+	// Failure / error suffix actions (auth.oidc.failure,
+	// auth.oidc.callback.error) are the auth-side "decision=error"
+	// shape; emit at WARN so they group with chokepoint denies on
+	// the dashboard's "things to investigate" panel.
+	if strings.HasSuffix(a, ".failure") || strings.HasSuffix(a, ".error") {
+		return slog.LevelWarn
+	}
+	if p := e.Payload; p != nil {
+		if allow, ok := p["allow"].(bool); ok && !allow {
+			return slog.LevelWarn
+		}
+		if d, ok := p["decision"].(string); ok {
+			switch d {
+			case "deny", "error":
+				return slog.LevelWarn
+			}
+		}
+	}
+	return slog.LevelInfo
+}
+
+// auditDecision extracts the decision string from the audit event's
+// payload, normalizing the two payload shapes the codebase emits
+// (chokepoint's {allow: bool} and breakglass/oidc's {decision: str}).
+// Returns "allow" / "deny" / "error" / "unspecified" — the OTel
+// attribute lands in SigNoz's traces UI where operators filter on it.
+func auditDecision(e api.AuditEvent) string {
+	if p := e.Payload; p != nil {
+		if allow, ok := p["allow"].(bool); ok {
+			if allow {
+				return "allow"
+			}
+			return "deny"
+		}
+		if d, ok := p["decision"].(string); ok {
+			return d
+		}
+	}
+	a := string(e.Action)
+	if strings.HasSuffix(a, ".failure") || strings.HasSuffix(a, ".error") {
+		return "error"
+	}
+	if strings.HasSuffix(a, ".success") {
+		return "allow"
+	}
+	return "unspecified"
+}
+
+// auditReason extracts the reason string. Empty when no reason is
+// declared on the payload — that's still a valid OTel attribute
+// (queries on edr.audit.reason=” surface 'reasonless' rows like
+// user.created which carry no decision context).
+func auditReason(e api.AuditEvent) string {
+	if p := e.Payload; p != nil {
+		if r, ok := p["reason"].(string); ok {
+			return r
+		}
+	}
+	return ""
 }
 
 // resolveActorEmail returns the email to denormalise onto the audit row.
