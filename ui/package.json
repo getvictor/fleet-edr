@@ -18,7 +18,7 @@
     "d3": "^7.9.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-router-dom": "^7.14.1",
+    "react-router-dom": "^7.14.2",
     "sass": "^1.99.0"
   },
   "devDependencies": {
@@ -37,7 +37,7 @@
     "eslint-plugin-security": "^4.0.0",
     "jsdom": "^28.1.0",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.59.0",
+    "typescript-eslint": "^8.59.1",
     "vite": "^6.4.2",
     "vitest": "^4.1.5"
   }
