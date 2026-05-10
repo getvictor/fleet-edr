@@ -228,10 +228,28 @@ func buildMux(
 	// Detection's health probes are public (livez/readyz).
 	detectionCtx.RegisterHealthRoutes(mux)
 
-	// Operator routes (session+CSRF gated). Tests that need admin paths
-	// use the Stack's per-context Service methods rather than HTTP, so
-	// we don't bother stitching login + cookie jar here.
-	_ = rulesCtx
+	// Operator routes (session+CSRF gated). The cross-context authz
+	// journey test in authz_journey_test.go drives these via real
+	// HTTP with seeded session cookies, so the chokepoint + audit
+	// pipeline are exercised end-to-end. Tests that don't care about
+	// the admin path simply ignore them; the routes wire onto the
+	// same mux but the session middleware shorts-circuits anonymous
+	// callers with a 401 before any handler runs.
+	sessionMW := identityCtx.SessionMiddleware()
+	csrfMW := identityCtx.CSRFMiddleware()
+	apiMux := http.NewServeMux()
+	detectionCtx.RegisterAuthedRoutes(apiMux)
+	rulesCtx.RegisterAuthedRoutes(apiMux)
+	endpointCtx.RegisterAuthedRoutes(apiMux)
+	responseCtx.RegisterAuthedRoutes(apiMux)
+	identityCtx.RegisterAuthedRoutes(apiMux)
+	sessionProtected := sessionMW(csrfMW(apiMux))
+	for _, p := range []string{
+		"POST /api/commands",
+		"GET /api/audit-events",
+	} {
+		mux.Handle(p, sessionProtected)
+	}
 	_ = logger
 
 	return mux
