@@ -408,19 +408,6 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 			return fmt.Errorf("identity schema create: %w", err)
 		}
 	}
-	// Apply idempotent ALTERs for columns added to existing tables.
-	// On a fresh DB the CREATE TABLE above already declares each
-	// column, so each ALTER hits a "duplicate column" the
-	// shouldIgnore swallow path lets through. On a pre-existing dev
-	// DB the column lands in place without a manual SQL session.
-	for _, m := range migrations {
-		if _, err := db.ExecContext(ctx, m.SQL); err != nil {
-			if m.shouldIgnore(err) {
-				continue
-			}
-			return fmt.Errorf("identity migration %q: %w", m.Name, err)
-		}
-	}
 	if err := seed.Tenants(ctx, db); err != nil {
 		return fmt.Errorf("identity seed tenants: %w", err)
 	}
