@@ -140,12 +140,10 @@ export function BreakGlassSetup() {
     <div className="login-page">
       <Card padding="large" className="login-card">
         <div className="login-card__header">
-          <div className="login-card__brand">
-            <span className="login-card__logo">F</span>
-            <h1 className="login-card__title">
-              Break-glass <span className="login-card__accent">setup</span>
-            </h1>
-          </div>
+          <span className="login-card__logo" aria-hidden="true">F</span>
+          <h1 className="login-card__title">
+            Break-glass <span className="login-card__accent">setup</span>
+          </h1>
           <p className="login-card__subtitle">
             Set a recovery password and register a security key.
           </p>
@@ -181,7 +179,7 @@ export function BreakGlassSetup() {
             onChange={(e) => { setCredentialName(e.target.value); }}
             disabled={busy || !token}
           />
-          <Button type="submit" disabled={submitDisabled} isLoading={busy}>
+          <Button type="submit" fullWidth disabled={submitDisabled} isLoading={busy}>
             {submitButtonLabel(phase)}
           </Button>
         </form>

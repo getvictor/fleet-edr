@@ -90,12 +90,10 @@ export function BreakGlassLogin() {
     <div className="login-page">
       <Card padding="large" className="login-card">
         <div className="login-card__header">
-          <div className="login-card__brand">
-            <span className="login-card__logo">F</span>
-            <h1 className="login-card__title">
-              Break-glass <span className="login-card__accent">sign-in</span>
-            </h1>
-          </div>
+          <span className="login-card__logo" aria-hidden="true">F</span>
+          <h1 className="login-card__title">
+            Break-glass <span className="login-card__accent">sign-in</span>
+          </h1>
           <p className="login-card__subtitle">
             Recovery sign-in with email + password + security key.
           </p>
@@ -127,7 +125,7 @@ export function BreakGlassLogin() {
             onChange={(e) => { setPassword(e.target.value); }}
             disabled={busy}
           />
-          <Button type="submit" disabled={submitDisabled} isLoading={busy}>
+          <Button type="submit" fullWidth disabled={submitDisabled} isLoading={busy}>
             {busy ? "Signing in…" : "Sign in with security key"}
           </Button>
         </form>

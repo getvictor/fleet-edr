@@ -125,6 +125,7 @@ function OIDCReauthFlow({ reauthURL, resolve }: Readonly<OIDCReauthFlowProps>) {
       </div>
       <Button
         type="button"
+        fullWidth
         isLoading={navigating}
         onClick={() => {
           setNavigating(true);
@@ -203,7 +204,7 @@ function BreakglassReauthFlow({ resolve }: Readonly<BreakglassReauthFlowProps>) 
           autoFocus
           disabled={busy}
         />
-        <Button type="submit" disabled={submitDisabled} isLoading={busy}>
+        <Button type="submit" fullWidth disabled={submitDisabled} isLoading={busy}>
           {busy ? "Confirming…" : "Confirm with security key"}
         </Button>
         <Button type="button" variant="text-link" disabled={busy} onClick={() => { resolve(false); }}>

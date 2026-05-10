@@ -327,6 +327,19 @@ tasks:
     cmds:
       - npm run dev
 
+  dev:
+    desc: |
+      Run backend + UI dev servers in parallel for fast iteration. Backend lives at
+      http://127.0.0.1:8088 (Go server, serves the bundled `server/ui/dist/` -- so it
+      shows the LAST `task build:ui` output, not your live edits); UI HMR lives at
+      http://localhost:5173/ui/ (Vite dev server, proxies /api/* back to :8088). Edit
+      .tsx/.scss -> browser updates in <1s; edit .go -> Ctrl-C and re-run `task dev`
+      (Go has no built-in HMR). For QA against the embedded bundle (production shape),
+      use `task build:ui && task dev:server` instead.
+    deps:
+      - dev:server
+      - dev:ui
+
   # -------- database --------
 
   db:up:
