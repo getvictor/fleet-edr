@@ -345,6 +345,59 @@ tasks:
     cmds:
       - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
 
+  db:backup:
+    desc: |
+      Snapshot the dev database to a timestamped tmp/edr-dev-<ts>.sql.gz file.
+      Use before a destructive QA step (db:reset, manual schema surgery, walking
+      the break-glass redemption flow from scratch) so you can rewind if the run
+      goes sideways.
+
+      --single-transaction takes an InnoDB consistent snapshot without blocking
+      writes; --routines + --triggers pull in stored procedures the events table
+      doesn't have today but the schema may grow into. Output is gzipped because
+      audit_events + events tables compress 10x.
+    cmds:
+      - mkdir -p tmp
+      - |
+        OUT="tmp/edr-dev-$(date +%Y%m%d-%H%M%S).sql.gz"
+        mysqldump -uroot -h127.0.0.1 -P3316 \
+          --single-transaction --routines --triggers \
+          edr | gzip > "$OUT"
+        echo "wrote $OUT ($(du -h "$OUT" | cut -f1))"
+
+  db:restore:
+    desc: |
+      DESTRUCTIVE: drop the dev database and reload it from a .sql or .sql.gz
+      backup produced by db:backup (or a manual mysqldump). Requires
+      confirmation. Pass the file path via BACKUP_FILE:
+
+          task db:restore BACKUP_FILE=tmp/edr-dev-20260510-145322.sql.gz
+
+      The restore drops + recreates the edr schema first so it's idempotent
+      against the previous state; nothing in the current DB survives. Use
+      db:backup to snapshot before invoking this if you might want to walk
+      back the restore itself.
+    vars:
+      BACKUP_FILE: '{{.BACKUP_FILE}}'
+    prompt: 'About to DROP DATABASE edr and reload from {{.BACKUP_FILE}}. Continue?'
+    preconditions:
+      - sh: 'test -n "{{.BACKUP_FILE}}"'
+        msg: 'BACKUP_FILE is required. Usage: task db:restore BACKUP_FILE=tmp/edr-dev-<ts>.sql.gz'
+      - sh: 'test -f "{{.BACKUP_FILE}}"'
+        msg: 'BACKUP_FILE not found: {{.BACKUP_FILE}}'
+    cmds:
+      - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+      - |
+        # gzcat handles both .gz and plain .sql (gzcat is a symlink to zcat on
+        # macOS, transparently passes plaintext through; on Linux use `zcat -f`
+        # for the same behaviour - both ship with gzip).
+        if [[ "{{.BACKUP_FILE}}" == *.gz ]]; then
+          gzcat "{{.BACKUP_FILE}}" | mysql -uroot -h127.0.0.1 -P3316 edr
+        else
+          mysql -uroot -h127.0.0.1 -P3316 edr < "{{.BACKUP_FILE}}"
+        fi
+        echo "restored edr from {{.BACKUP_FILE}}"
+
   # -------- install tools / hooks --------
 
   install:
