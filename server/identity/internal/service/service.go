@@ -70,7 +70,7 @@ func (s *service) GetUser(ctx context.Context, userID int64) (api.User, error) {
 }
 
 func (s *service) SeedAdmin(ctx context.Context, w io.Writer) (api.User, string, error) {
-	u, pw, err := seed.Admin(ctx, s.users, s.logger, w)
+	u, pw, err := seed.Admin(ctx, s.users, s.rbac, s.logger, w)
 	if err != nil {
 		return api.User{}, "", err
 	}
