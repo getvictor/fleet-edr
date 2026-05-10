@@ -26,25 +26,31 @@ var rolesFS embed.FS
 
 const rolesPath = "policy/data/roles.json"
 
-// TestEngine_ActionRegistryParity_PBT generates random (role x action)
-// pairs and asserts the chokepoint's decision matches the policy's
-// declared invariants for every sampled pair. Properties pinned:
+// TestEngine_ActionRegistryParity_PBT generates random (role x action
+// x resource_type x severity x session_fresh) tuples and asserts the
+// chokepoint's decision matches the policy's declared invariants for
+// every sampled tuple. Properties pinned:
 //
 //  1. Engine.Allow never returns a non-nil error for a registered
 //     action against a well-formed Resource.
 //  2. Decision.Reason is one of the canonical Reason* constants.
 //  3. Allow=true iff the role's grants list contains the action OR "*",
-//     except when the action requires a fresh auth event and the
-//     actor's SessionFresh=false (then it denies with reauth_required).
+//     except when the action+resource pair requires a fresh auth
+//     event and the actor's SessionFresh=false (then it denies with
+//     reauth_required). The Rego policy's requires_fresh_auth covers
+//     host.{isolate,kill_process,run_script} unconditionally and
+//     alert.resolve when resource.severity=="critical"; the test's
+//     requiresFreshAuth predicate mirrors that table.
 //  4. Determinism: two Allow calls with the same input return the
 //     identical Decision.
 //
 // The PBT complements the example-based engine tests: the table tests
 // pin specific named scenarios (super_admin grants everything; analyst
 // cannot host.isolate; etc.) and stay readable; the PBT covers the
-// (5 roles x 20 actions x freshness) cross-product so a missing entry
-// in roles.json or a regressed grant list is caught even when no
-// example test happens to name that combination.
+// (5 roles x 20 actions x 5 resource types x severity x freshness)
+// cross-product so a missing entry in roles.json or a regressed grant
+// list is caught even when no example test happens to name that
+// combination.
 func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 	engine := newEnginePBT(t)
 	roleSet := loadRolesFromBundle(t)
@@ -59,6 +65,9 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 		role := rapid.SampledFrom(roleNames).Draw(rt, "role")
 		action := rapid.SampledFrom(actionSet).Draw(rt, "action")
 		fresh := rapid.Bool().Draw(rt, "session_fresh")
+		resourceType := rapid.SampledFrom([]string{"host", "alert", "policy", "user", "audit"}).
+			Draw(rt, "resource_type")
+		severity := rapid.SampledFrom([]string{"", "low", "high", "critical"}).Draw(rt, "severity")
 
 		actor := api.Actor{
 			UserID:       1,
@@ -69,15 +78,16 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 				UserID:    1,
 				RoleID:    role,
 				TenantID:  api.DefaultTenantID,
-				ScopeType: "tenant",
+				ScopeType: api.RoleBindingScopeTenant,
 				ScopeID:   "*",
 			}},
 		}
 		ctx := api.WithActor(context.Background(), &actor)
 		resource := api.Resource{
 			TenantID: api.DefaultTenantID,
-			Type:     "host",
-			ID:       "host-1",
+			Type:     resourceType,
+			ID:       "resource-1",
+			Severity: severity,
 		}
 
 		first, err := engine.Allow(ctx, action, resource)
@@ -88,7 +98,7 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 
 		grants := roleSet[role]
 		grantsAction := slices.Contains(grants, string(action)) || slices.Contains(grants, "*")
-		needsFresh := requiresFreshAuth(action)
+		needsFresh := requiresFreshAuth(action, resource)
 
 		switch {
 		case grantsAction && (!needsFresh || fresh):
@@ -116,6 +126,124 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 	})
 }
 
+// TestEngine_NonTenantScope_PBT covers the scope_not_yet_supported
+// branch in the Rego policy. The wave-1 resolver only honors
+// scope_type=='tenant'; bindings with 'host_group' or 'host' scope
+// MAY land in the table (the column is forward-compatible with
+// wave-2) but the chokepoint denies them with the distinguishable
+// reason so dashboards can chart "would have been allowed under
+// wave-2" as its own dimension.
+//
+// Property: for any role whose grants list contains the action AND
+// any non-tenant scope_type, Engine.Allow denies with reason
+// scope_not_yet_supported. For non-granting roles, the policy's
+// no_matching_rule deny still wins (the scope branch only fires
+// when the role would otherwise have granted).
+func TestEngine_NonTenantScope_PBT(t *testing.T) {
+	engine := newEnginePBT(t)
+	roleSet := loadRolesFromBundle(t)
+	actionSet := api.RegisteredActions()
+	roleNames := make([]string, 0, len(roleSet))
+	for name := range roleSet {
+		roleNames = append(roleNames, name)
+	}
+	slices.Sort(roleNames)
+
+	rapid.Check(t, func(rt *rapid.T) {
+		role := rapid.SampledFrom(roleNames).Draw(rt, "role")
+		action := rapid.SampledFrom(actionSet).Draw(rt, "action")
+		scope := rapid.SampledFrom([]api.RoleBindingScopeType{
+			api.RoleBindingScopeHost,
+			api.RoleBindingScopeHostGroup,
+		}).Draw(rt, "scope")
+
+		actor := api.Actor{
+			UserID:       1,
+			TenantID:     api.DefaultTenantID,
+			AuthMethod:   "oidc",
+			SessionFresh: true,
+			Roles: []api.RoleBinding{{
+				UserID:    1,
+				RoleID:    role,
+				TenantID:  api.DefaultTenantID,
+				ScopeType: scope,
+				ScopeID:   "scope-1",
+			}},
+		}
+		ctx := api.WithActor(context.Background(), &actor)
+		resource := api.Resource{
+			TenantID: api.DefaultTenantID,
+			Type:     "host",
+			ID:       "host-1",
+		}
+
+		got, err := engine.Allow(ctx, action, resource)
+		require.NoError(rt, err)
+		require.Falsef(rt, got.Allow,
+			"non-tenant scope must never allow role=%s action=%s scope=%s decision=%+v",
+			role, action, scope, got)
+
+		grants := roleSet[role]
+		grantsAction := slices.Contains(grants, string(action)) || slices.Contains(grants, "*")
+		want := api.ReasonNoMatchingRule
+		if grantsAction {
+			want = api.ReasonScopeNotYetSupported
+		}
+		require.Equalf(rt, want, got.Reason,
+			"unexpected deny reason role=%s action=%s scope=%s grants=%v",
+			role, action, scope, grantsAction)
+	})
+}
+
+// TestEngine_MissingResourceTenant_PBT covers the
+// resource_tenant_missing defense-in-depth path. The chokepoint
+// short-circuits before invoking Rego when resource.TenantID is
+// empty so a misconfigured caller surfaces a distinct deny reason
+// instead of a silent no_matching_rule.
+//
+// Property: empty resource.TenantID always yields a deny with reason
+// resource_tenant_missing, regardless of role / action / scope.
+func TestEngine_MissingResourceTenant_PBT(t *testing.T) {
+	engine := newEnginePBT(t)
+	roleSet := loadRolesFromBundle(t)
+	actionSet := api.RegisteredActions()
+	roleNames := make([]string, 0, len(roleSet))
+	for name := range roleSet {
+		roleNames = append(roleNames, name)
+	}
+	slices.Sort(roleNames)
+
+	rapid.Check(t, func(rt *rapid.T) {
+		role := rapid.SampledFrom(roleNames).Draw(rt, "role")
+		action := rapid.SampledFrom(actionSet).Draw(rt, "action")
+
+		actor := api.Actor{
+			UserID:       1,
+			TenantID:     api.DefaultTenantID,
+			AuthMethod:   "oidc",
+			SessionFresh: true,
+			Roles: []api.RoleBinding{{
+				UserID:    1,
+				RoleID:    role,
+				TenantID:  api.DefaultTenantID,
+				ScopeType: api.RoleBindingScopeTenant,
+				ScopeID:   "*",
+			}},
+		}
+		ctx := api.WithActor(context.Background(), &actor)
+		resource := api.Resource{TenantID: "", Type: "host", ID: "host-1"}
+
+		got, err := engine.Allow(ctx, action, resource)
+		require.NoError(rt, err)
+		require.Falsef(rt, got.Allow,
+			"empty resource tenant must always deny role=%s action=%s decision=%+v",
+			role, action, got)
+		require.Equalf(rt, api.ReasonResourceTenantMissing, got.Reason,
+			"empty resource tenant must surface resource_tenant_missing role=%s action=%s",
+			role, action)
+	})
+}
+
 // canonicalReasons is the closed set of strings api.ReasonReauthRequired
 // and friends declare. The PBT asserts every decision lands in this
 // set; a regression that introduces a freeform reason string fails
@@ -139,20 +267,22 @@ var canonicalReasons = []string{
 // real regression the PBT catches (the engine returns reauth_required
 // where the table predicted granted, or vice versa).
 //
-// freshAuthActions is the closed set policy/edr.rego treats as
-// destructive enough to require Actor.SessionFresh. Pulled out as a
-// map so the lint's exhaustive-switch rule doesn't fire — tests
-// shouldn't enumerate every action just to declare three of them
-// require fresh auth.
+// freshAuthActions is the unconditional-fresh-auth subset
+// policy/edr.rego treats as destructive enough to require
+// Actor.SessionFresh regardless of resource attributes. The
+// alert.resolve case is conditional on resource.severity=="critical"
+// and is handled inline below.
 var freshAuthActions = map[api.Action]struct{}{
 	api.ActionHostIsolate:     {},
 	api.ActionHostKillProcess: {},
 	api.ActionHostRunScript:   {},
 }
 
-func requiresFreshAuth(action api.Action) bool {
-	_, ok := freshAuthActions[action]
-	return ok
+func requiresFreshAuth(action api.Action, resource api.Resource) bool {
+	if _, ok := freshAuthActions[action]; ok {
+		return true
+	}
+	return action == api.ActionAlertResolve && resource.Severity == "critical"
 }
 
 // newEnginePBT builds a real Engine over the embedded policy bundle.

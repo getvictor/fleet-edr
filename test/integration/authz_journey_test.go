@@ -30,13 +30,17 @@ import (
 //     chokepoint denies with reauth_required (Phase 5 freshness
 //     gate).
 //  4. An auditor reads /api/audit-events -> sees the deny + allow
-//     authz.host.isolate rows alongside the command.issue row.
+//     authz.host.isolate rows. The auditor subtest seeds its own
+//     analyst + senior_analyst pair and emits the deny/allow chain
+//     itself, so it stays runnable in isolation (go test -run
+//     ...auditor_reads_journey_audit_rows) without depending on the
+//     earlier subtests' side effects.
 //
 // If this test goes red on a future PR, the wave-1 ship promise
 // (operators see the alerts they're allowed to see; destructive
 // actions are gated; the audit log is operator-readable) is broken.
-// The subtests are independent fixtures so a regression on any one
-// pinpoints the broken path.
+// Each subtest is a self-contained fixture so a regression on any
+// one pinpoints the broken path.
 func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 	stack := Setup(t)
 
@@ -47,7 +51,7 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 			"analyst must be denied host.isolate at the chokepoint")
-		assert.Equal(t, identityapi.ReasonNoMatchingRule, resp.Header.Get("X-Edr-Authz-Reason"),
+		assert.Equal(t, identityapi.ReasonNoMatchingRule, resp.Header.Get(identityapi.AuthzReasonHeader),
 			"deny reason header carries the policy verdict for the analyst path")
 	})
 
@@ -58,7 +62,7 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 
 		require.Equal(t, http.StatusCreated, resp.StatusCode,
 			"senior_analyst must be allowed host.isolate; got header reason=%q",
-			resp.Header.Get("X-Edr-Authz-Reason"))
+			resp.Header.Get(identityapi.AuthzReasonHeader))
 		var got struct {
 			ID int64 `json:"id"`
 		}
@@ -78,15 +82,29 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 			"stale-session senior_analyst must be denied with reauth_required")
-		assert.Equal(t, identityapi.ReasonReauthRequired, resp.Header.Get("X-Edr-Authz-Reason"),
+		assert.Equal(t, identityapi.ReasonReauthRequired, resp.Header.Get(identityapi.AuthzReasonHeader),
 			"deny reason carries the freshness-gate verdict for the UI to render an inline reauth prompt")
 	})
 
 	t.Run("auditor_reads_journey_audit_rows", func(t *testing.T) {
+		// Self-contained: seed the analyst + senior_analyst pair this
+		// subtest cares about and emit the deny + allow chain inline,
+		// rather than relying on the preceding subtests' side effects.
+		// Keeps the subtest runnable in isolation (go test -run ...)
+		// and pins exactly which audit rows the auditor must see.
+		analyst := testkit.SeedJITUser(t, stack.DB, "analyst-aud@journey.test", "analyst")
+		denyResp := postCommand(t, stack, analyst, isolateBody("host-journey-aud-deny"))
+		denyResp.Body.Close()
+		require.Equal(t, http.StatusForbidden, denyResp.StatusCode,
+			"audit-row prep: analyst must be denied so a deny row lands in audit_events")
+
+		senior := testkit.SeedJITUser(t, stack.DB, "senior-aud@journey.test", "senior_analyst")
+		allowResp := postCommand(t, stack, senior, isolateBody("host-journey-aud-allow"))
+		allowResp.Body.Close()
+		require.Equal(t, http.StatusCreated, allowResp.StatusCode,
+			"audit-row prep: senior_analyst must be allowed so an allow row lands in audit_events")
+
 		auditor := testkit.SeedJITUser(t, stack.DB, "auditor@journey.test", "auditor")
-		// The earlier subtests have already emitted the authz audit
-		// rows (one deny on the analyst, one allow on the senior).
-		// The auditor reads the trail.
 		req := newGet(t, stack.Server.URL+"/api/audit-events?action=authz.host.isolate&limit=50", auditor)
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
@@ -94,7 +112,7 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 
 		require.Equalf(t, http.StatusOK, resp.StatusCode,
 			"auditor must be allowed audit.read; got header reason=%q",
-			resp.Header.Get("X-Edr-Authz-Reason"))
+			resp.Header.Get(identityapi.AuthzReasonHeader))
 		var body struct {
 			Items []identityapi.AuditRow `json:"items"`
 		}
@@ -105,17 +123,20 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 			if row.Action != identityapi.AuditAction("authz.host.isolate") {
 				continue
 			}
+			if row.UserID == nil {
+				continue
+			}
 			allow, _ := row.Payload["allow"].(bool)
 			reason, _ := row.Payload["reason"].(string)
-			if !allow && reason == identityapi.ReasonNoMatchingRule {
+			switch {
+			case *row.UserID == analyst.ID && !allow && reason == identityapi.ReasonNoMatchingRule:
 				sawDeny = true
-			}
-			if allow && reason == identityapi.ReasonGranted {
+			case *row.UserID == senior.ID && allow && reason == identityapi.ReasonGranted:
 				sawAllow = true
 			}
 		}
-		assert.True(t, sawDeny, "auditor must see the analyst's deny row; rows=%+v", body.Items)
-		assert.True(t, sawAllow, "auditor must see the senior_analyst's allow row; rows=%+v", body.Items)
+		assert.True(t, sawDeny, "auditor must see the analyst's deny row for this subtest; rows=%+v", body.Items)
+		assert.True(t, sawAllow, "auditor must see the senior_analyst's allow row for this subtest; rows=%+v", body.Items)
 	})
 }
 
@@ -128,17 +149,18 @@ func postCommand(t *testing.T, stack *Stack, user testkit.SeededUser, body strin
 		stack.Server.URL+"/api/commands", strings.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Csrf-Token", user.CSRFToken)
+	req.Header.Set(identityapi.CSRFHeaderName, user.CSRFToken)
 	req.AddCookie(&http.Cookie{Name: identityapi.SessionCookieName, Value: user.SessionCookie})
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	return resp
 }
 
-// newGet builds an authenticated GET request: session cookie + the
-// CSRF header. GET is a safe method so CSRF isn't enforced, but
-// production middleware accepts it without complaint and tests stay
-// uniform with the unsafe-method helper above.
+// newGet builds an authenticated GET request with the session
+// cookie. GET is a safe method so the CSRF middleware does not
+// require the X-Csrf-Token header; the cookie alone is enough to
+// pass the session middleware, which is what the read-side endpoint
+// gates on. Tests that hit unsafe methods use postCommand above.
 func newGet(t *testing.T, url string, user testkit.SeededUser) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)

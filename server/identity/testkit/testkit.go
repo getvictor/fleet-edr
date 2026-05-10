@@ -84,7 +84,8 @@ type SeededUser struct {
 }
 
 // SeedJITUser inserts the rows an OIDC JIT-provisioned operator would
-// land in: users + identities (provider='oidc', subject=email) +
+// land in: users + identities (provider='oidc', subject="oidc:<email>"
+// to mimic an IdP-stable subject distinct from the email column) +
 // role_bindings (tenant scope, no expiry) + a fresh session. Returns
 // the user id + the cookie/CSRF pair the test plugs into HTTP requests
 // against the protected mux.
@@ -95,6 +96,12 @@ type SeededUser struct {
 // just be re-testing OIDC. The end-state SQL shape and the live
 // session cookie are what every downstream chokepoint check actually
 // reads, so this helper matches that shape exactly.
+//
+// The synthetic "oidc:<email>" subject keeps the helper deterministic
+// (same email -> same identity row on re-seed) while still distinct
+// from the email column the way a real IdP-issued `sub` claim is.
+// Tests that need a specific subject string can drop the helper and
+// INSERT the row by hand.
 //
 // auth_method is hardcoded to "oidc" because that's the JIT-provisioned
 // path's session class (break-glass goes through a distinct flow with
@@ -113,9 +120,10 @@ func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
 	userID, err := userRes.LastInsertId()
 	require.NoError(t, err)
 
+	subject := "oidc:" + email
 	identityRes, err := db.ExecContext(ctx,
 		`INSERT INTO identities (user_id, provider, subject) VALUES (?, 'oidc', ?)`,
-		userID, email)
+		userID, subject)
 	require.NoErrorf(t, err, "seed identity for %q", email)
 	identityID, err := identityRes.LastInsertId()
 	require.NoError(t, err)
@@ -146,11 +154,17 @@ func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
 // chokepoint's freshness gate (Phase 5 reauth window) returns false.
 // Used to verify that a destructive action that would normally be
 // granted denies with reauth_required when the session is stale.
+//
+// The interval uses MICROSECOND granularity so callers can age the
+// session by any duration the sessions table's TIMESTAMP(6) column
+// can represent, including sub-second offsets near the reauth-window
+// boundary. age.Microseconds() preserves the full precision Go's
+// time.Duration carries.
 func AgeSession(t *testing.T, db *sqlx.DB, userID int64, age time.Duration) {
 	t.Helper()
 	ctx := t.Context()
 	_, err := db.ExecContext(ctx,
-		`UPDATE sessions SET last_auth_at = NOW(6) - INTERVAL ? SECOND WHERE user_id = ?`,
-		int64(age.Seconds()), userID)
+		`UPDATE sessions SET last_auth_at = NOW(6) - INTERVAL ? MICROSECOND WHERE user_id = ?`,
+		age.Microseconds(), userID)
 	require.NoErrorf(t, err, "age session for user %d", userID)
 }
