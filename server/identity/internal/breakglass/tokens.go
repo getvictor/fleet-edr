@@ -95,7 +95,36 @@ func (s *TokenStore) IssueSetup(ctx context.Context, userID int64, ttl time.Dura
 	hash := hashTokenPlaintext(plaintext)
 	issuedAt := time.Now()
 	expiresAt := issuedAt.Add(ttl)
-	res, err := s.db.ExecContext(ctx, `
+
+	// Supersede any prior unredeemed setup tokens for this user before
+	// inserting the new one. Without this, a server restart re-runs
+	// the cmd/main first-boot path and emits a fresh banner while the
+	// previously-printed URL stays valid until its own TTL elapses:
+	// two independently-redeemable bearer credentials, with stderr
+	// scrollback or an exfiltrated log file enough to use the older
+	// one. The cleanest fix is to DELETE the stale rows; the audit
+	// trail for "this token existed" lives in the redemption-path
+	// audit row (auth.breakglass.bootstrap), which the redemption
+	// emits only on successful use, so a deleted unredeemed row
+	// never carried audit value. Wrapped in a transaction with the
+	// INSERT so a partial failure leaves no rows behind.
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return "", Token{}, fmt.Errorf("breakglass tokens: begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM bootstrap_tokens
+		WHERE user_id = ? AND kind = ? AND redeemed_at IS NULL
+	`, userID, TokenKindBreakglassSetup); err != nil {
+		return "", Token{}, fmt.Errorf("breakglass tokens: supersede prior: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO bootstrap_tokens (token_hash, user_id, kind, expires_at)
 		VALUES (?, ?, ?, ?)
 	`, hash[:], userID, TokenKindBreakglassSetup, expiresAt)
@@ -106,6 +135,10 @@ func (s *TokenStore) IssueSetup(ctx context.Context, userID int64, ttl time.Dura
 	if err != nil {
 		return "", Token{}, fmt.Errorf("breakglass tokens: last insert id: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return "", Token{}, fmt.Errorf("breakglass tokens: commit: %w", err)
+	}
+	committed = true
 	return plaintext, Token{
 		ID:        id,
 		UserID:    sql.NullInt64{Int64: userID, Valid: true},

@@ -25,9 +25,13 @@ BREAK-GLASS ADMIN SETUP (one-shot redemption URL - open in a browser)
 
 The TTL defaults to one hour and is configurable via
 `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` (Go duration string). The
-banner is idempotent: it re-prints on every restart until the
-operator redeems the token, and is silent thereafter (the server
-checks for an existing WebAuthn credential at boot).
+banner re-prints on every restart until the operator redeems the
+token, and is silent thereafter (the server checks for an
+existing WebAuthn credential at boot). Each restart supersedes
+the prior unredeemed token: the new banner's URL is the only one
+that works, and the previous URL returns 410 Gone if anyone
+tries it. This prevents stale banners in terminal scrollback or
+log files from staying live alongside the freshly printed one.
 
 ### Steps
 

@@ -123,3 +123,81 @@ func TestIssueSetup_PlaintextFormat(t *testing.T) {
 	assert.False(t, strings.ContainsAny(plaintext, "+/"),
 		"URL-safe alphabet only (- and _, not + and /)")
 }
+
+// IssueSetup supersedes any prior unredeemed setup token for the same
+// user so a server restart cycle doesn't leave the previously-printed
+// banner URL valid alongside the freshly-printed one. The cmd/main
+// first-boot path re-runs IssueSetup on every restart while no
+// WebAuthn credential exists; without supersession the operator
+// accumulates one independently-redeemable bearer credential per
+// restart, each viable until its own TTL elapses. Pinned because
+// regressing this would re-introduce the credential-lifetime bug QA
+// surfaced before v0.1.
+func TestIssueSetup_SupersedesPriorUnredeemed(t *testing.T) {
+	s, db, uid := newTokenStore(t)
+	ctx := t.Context()
+
+	priorPlaintext, priorTok, err := s.IssueSetup(ctx, uid, time.Hour)
+	require.NoError(t, err)
+
+	freshPlaintext, freshTok, err := s.IssueSetup(ctx, uid, time.Hour)
+	require.NoError(t, err)
+	require.NotEqual(t, priorPlaintext, freshPlaintext)
+	require.NotEqual(t, priorTok.ID, freshTok.ID)
+
+	// Prior plaintext no longer resolves: the row was deleted by the
+	// supersession step inside IssueSetup's transaction.
+	_, err = s.FindValid(ctx, priorPlaintext, time.Now())
+	require.Error(t, err, "prior plaintext must not resolve after a fresh IssueSetup")
+
+	// Fresh plaintext does resolve.
+	got, err := s.FindValid(ctx, freshPlaintext, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, freshTok.ID, got.ID)
+
+	// At most one unredeemed setup token row exists for the user (the
+	// fresh one). Any prior row was deleted, not just hidden behind a
+	// flag.
+	var unredeemedCount int
+	require.NoError(t, db.GetContext(ctx, &unredeemedCount, `
+		SELECT COUNT(*) FROM bootstrap_tokens
+		WHERE user_id = ? AND kind = ? AND redeemed_at IS NULL
+	`, uid, breakglass.TokenKindBreakglassSetup))
+	assert.Equal(t, 1, unredeemedCount,
+		"exactly one unredeemed setup token per user after a re-issue")
+}
+
+// IssueSetup only supersedes unredeemed tokens; redeemed-and-historic
+// rows are preserved. The break-glass surface treats redeemed_at as
+// the canonical "this token was used" marker; deleting redeemed rows
+// would erase the audit trail of which tokens were spent. Pinned so
+// the supersession sweep stays narrow.
+func TestIssueSetup_LeavesRedeemedRowsIntact(t *testing.T) {
+	s, db, uid := newTokenStore(t)
+	ctx := t.Context()
+
+	// Mint + mark redeemed: simulates the post-redemption state where
+	// the operator has a registered WebAuthn credential. MarkRedeemed
+	// requires a transactional executor; the equivalent direct UPDATE
+	// keeps this test independent of the redemption transaction
+	// machinery while pinning the same row shape.
+	_, redeemedTok, err := s.IssueSetup(ctx, uid, time.Hour)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`UPDATE bootstrap_tokens SET redeemed_at = NOW(6) WHERE id = ?`,
+		redeemedTok.ID)
+	require.NoError(t, err)
+
+	// New IssueSetup (simulates the operator's "register a second key"
+	// SQL-recovery flow) must NOT touch the redeemed row.
+	_, _, err = s.IssueSetup(ctx, uid, time.Hour)
+	require.NoError(t, err)
+
+	var redeemedCount int
+	require.NoError(t, db.GetContext(ctx, &redeemedCount, `
+		SELECT COUNT(*) FROM bootstrap_tokens
+		WHERE user_id = ? AND kind = ? AND redeemed_at IS NOT NULL
+	`, uid, breakglass.TokenKindBreakglassSetup))
+	assert.Equal(t, 1, redeemedCount,
+		"redeemed rows must survive a subsequent IssueSetup")
+}
