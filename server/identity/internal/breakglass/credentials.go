@@ -34,15 +34,17 @@ var ErrCredentialNotFound = errors.New("breakglass: webauthn credential not foun
 // flows; the "exported" fields here are read+written together via
 // CredentialStore methods (no direct field-by-field exposure).
 type CredentialRow struct {
-	ID           int64          `db:"id"`
-	UserID       int64          `db:"user_id"`
-	CredentialID []byte         `db:"credential_id"`
-	PublicKey    []byte         `db:"public_key"`
-	SignCount    uint64         `db:"sign_count"`
-	Transports   sql.NullString `db:"transports"`
-	Name         sql.NullString `db:"name"`
-	CreatedAt    time.Time      `db:"created_at"`
-	LastUsedAt   sql.NullTime   `db:"last_used_at"`
+	ID             int64          `db:"id"`
+	UserID         int64          `db:"user_id"`
+	CredentialID   []byte         `db:"credential_id"`
+	PublicKey      []byte         `db:"public_key"`
+	SignCount      uint64         `db:"sign_count"`
+	Transports     sql.NullString `db:"transports"`
+	Name           sql.NullString `db:"name"`
+	BackupEligible bool           `db:"backup_eligible"`
+	BackupState    bool           `db:"backup_state"`
+	CreatedAt      time.Time      `db:"created_at"`
+	LastUsedAt     sql.NullTime   `db:"last_used_at"`
 }
 
 // CredentialStore owns the webauthn_credentials table.
@@ -67,10 +69,13 @@ func NewCredentialStore(db *sqlx.DB) *CredentialStore {
 func (s *CredentialStore) InsertWith(ctx context.Context, ec Executor, userID int64, c webauthn.Credential, name string) (int64, error) {
 	transports := encodeTransports(c.Transport)
 	res, err := ec.ExecContext(ctx, `
-		INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO webauthn_credentials
+			(user_id, credential_id, public_key, sign_count, transports, name,
+			 backup_eligible, backup_state)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, userID, c.ID, c.PublicKey, c.Authenticator.SignCount,
-		nullableString(transports), nullableString(strings.TrimSpace(name)))
+		nullableString(transports), nullableString(strings.TrimSpace(name)),
+		c.Flags.BackupEligible, c.Flags.BackupState)
 	if err != nil {
 		return 0, fmt.Errorf("breakglass credentials: insert: %w", err)
 	}
@@ -91,7 +96,8 @@ func (s *CredentialStore) ListByUserID(ctx context.Context, userID int64) ([]Cre
 	rows := []CredentialRow{}
 	err := s.db.SelectContext(ctx, &rows, `
 		SELECT id, user_id, credential_id, public_key, sign_count,
-		       transports, name, created_at, last_used_at
+		       transports, name, backup_eligible, backup_state,
+		       created_at, last_used_at
 		FROM webauthn_credentials
 		WHERE user_id = ?
 	`, userID)
@@ -101,53 +107,58 @@ func (s *CredentialStore) ListByUserID(ctx context.Context, userID int64) ([]Cre
 	return rows, nil
 }
 
-// RecordAssertion bumps sign_count + last_used_at after a successful
-// FinishLogin. Rejects with ErrCredentialClonedDetected when the
-// authenticator's reported counter has not advanced past the stored
-// value (WebAuthn §6.1.1). The atomicity guarantee here is weaker
-// than InsertWith on purpose: a successful login that fails to
-// record sign_count is still a successful login (the user already
-// proved possession), but the missed update means the next attempt
-// can no longer detect a clone via this credential. The slog WARN
-// preserves the signal.
-func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, newSignCount uint32) error {
-	res, err := s.db.ExecContext(ctx, `
+// RecordAssertion bumps sign_count + last_used_at + backup_state
+// after a successful FinishLogin. Rejects with
+// ErrCredentialClonedDetected when the authenticator's reported
+// counter has DECREASED past the stored value (WebAuthn §6.1.1).
+// Note: many platform authenticators (Apple Touch ID Passkey, Google
+// Password Manager) report SignCount=0 unconditionally. The spec
+// says the relying party SHOULD NOT treat 0=0 as a clone (the
+// authenticator simply doesn't implement counters), so the check
+// here is "strictly less than stored AND stored > 0", not "<=
+// stored". backup_state is updated unconditionally because BS can
+// transition 0->1 over the credential's lifetime (and the library
+// already enforced the spec's "1->0 not allowed" rule before we
+// got here).
+//
+// The atomicity guarantee here is weaker than InsertWith on
+// purpose: a successful login that fails to record sign_count is
+// still a successful login (the user already proved possession),
+// but the missed update means the next attempt can no longer detect
+// a clone via this credential. The slog WARN preserves the signal.
+func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, newSignCount uint32, backupState bool) error {
+	// Check for the clone case before updating so we can return a
+	// typed error. A row with stored sign_count > newSignCount + a
+	// stored value > 0 indicates a regression that the spec
+	// considers a clone signal.
+	var stored uint64
+	err := s.db.GetContext(ctx, &stored,
+		`SELECT sign_count FROM webauthn_credentials WHERE credential_id = ?`,
+		credID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrCredentialNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("breakglass credentials: probe sign_count: %w", err)
+	}
+	if stored > 0 && uint64(newSignCount) <= stored {
+		return ErrCredentialClonedDetected
+	}
+
+	// Update unconditionally: sign_count is set to the max of stored
+	// and new (so a counter that legitimately stays at 0 doesn't
+	// regress); last_used_at always stamps NOW(); backup_state
+	// reflects whatever the authenticator just reported.
+	bump := max(uint64(newSignCount), stored)
+	_, err = s.db.ExecContext(ctx, `
 		UPDATE webauthn_credentials
 		SET sign_count   = ?,
-		    last_used_at = NOW(6)
+		    last_used_at = NOW(6),
+		    backup_state = ?
 		WHERE credential_id = ?
-		  AND ? > sign_count
-	`, newSignCount, credID, newSignCount)
+	`, bump, backupState, credID)
 	if err != nil {
 		return fmt.Errorf("breakglass credentials: record assertion: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("breakglass credentials: rows affected: %w", err)
-	}
-	if n == 0 {
-		// The UPDATE matched zero rows. Either the credential was
-		// removed mid-flight (vanishingly rare) OR the new
-		// sign_count did not exceed the stored one. Probe the row
-		// to discriminate; only the regression case is a security
-		// alarm.
-		var stored uint64
-		err = s.db.GetContext(ctx, &stored,
-			`SELECT sign_count FROM webauthn_credentials WHERE credential_id = ?`,
-			credID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrCredentialNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("breakglass credentials: probe sign_count: %w", err)
-		}
-		if uint64(newSignCount) <= stored {
-			return ErrCredentialClonedDetected
-		}
-		// Defensive: row exists, sign_count is fine, but UPDATE
-		// matched zero. Should not happen; treat as transient and
-		// surface as not-found so the operator retries.
-		return ErrCredentialNotFound
 	}
 	return nil
 }
@@ -162,7 +173,8 @@ func (s *CredentialStore) FindByID(ctx context.Context, credID []byte) (*Credent
 	var row CredentialRow
 	err := s.db.GetContext(ctx, &row, `
 		SELECT id, user_id, credential_id, public_key, sign_count,
-		       transports, name, created_at, last_used_at
+		       transports, name, backup_eligible, backup_state,
+		       created_at, last_used_at
 		FROM webauthn_credentials
 		WHERE credential_id = ?
 	`, credID)
@@ -195,6 +207,15 @@ func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 			ID:        r.CredentialID,
 			PublicKey: r.PublicKey,
 			Transport: decodeTransports(r.Transports.String),
+			Flags: webauthn.CredentialFlags{
+				// BE is invariant per the WebAuthn spec; the library
+				// rejects assertions where the asserted BE differs
+				// from this stored value, so getting these flags onto
+				// the credential is what makes platform-authenticator
+				// Passkey logins work past first use.
+				BackupEligible: r.BackupEligible,
+				BackupState:    r.BackupState,
+			},
 			Authenticator: webauthn.Authenticator{
 				SignCount: uint32(signCount),
 			},

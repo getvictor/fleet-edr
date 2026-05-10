@@ -441,7 +441,7 @@ func (s *Service) VerifyLogin(ctx context.Context, req FinishLoginRequest) error
 	if _, err := s.users.VerifyPassword(ctx, req.User.Email, req.Password); err != nil {
 		return err
 	}
-	if err := s.credentials.RecordAssertion(ctx, cred.ID, cred.Authenticator.SignCount); err != nil {
+	if err := s.credentials.RecordAssertion(ctx, cred.ID, cred.Authenticator.SignCount, cred.Flags.BackupState); err != nil {
 		return err
 	}
 	return nil

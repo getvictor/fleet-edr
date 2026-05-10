@@ -112,7 +112,7 @@ func TestCredentialStore_RecordAssertion_Forward(t *testing.T) {
 	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
 	require.NoError(t, err)
 
-	require.NoError(t, s.RecordAssertion(t.Context(), cred.ID, 7))
+	require.NoError(t, s.RecordAssertion(t.Context(), cred.ID, 7, false))
 
 	got, err := s.FindByID(t.Context(), cred.ID)
 	require.NoError(t, err)
@@ -129,13 +129,13 @@ func TestCredentialStore_RecordAssertion_RejectsRegression(t *testing.T) {
 	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
 	require.NoError(t, err)
 
-	err = s.RecordAssertion(t.Context(), cred.ID, 8)
+	err = s.RecordAssertion(t.Context(), cred.ID, 8, false)
 	assert.ErrorIs(t, err, breakglass.ErrCredentialClonedDetected)
 
 	// Equal sign_count is also a regression (counter must strictly
 	// advance — anything less suggests the authenticator was
 	// duplicated and the clone re-played a previous assertion).
-	err = s.RecordAssertion(t.Context(), cred.ID, 10)
+	err = s.RecordAssertion(t.Context(), cred.ID, 10, false)
 	assert.ErrorIs(t, err, breakglass.ErrCredentialClonedDetected)
 }
 
@@ -143,8 +143,56 @@ func TestCredentialStore_RecordAssertion_RejectsRegression(t *testing.T) {
 // ErrCredentialNotFound, not the cloned-detection alarm.
 func TestCredentialStore_RecordAssertion_Unknown(t *testing.T) {
 	s, _, _ := newCredentialStore(t)
-	err := s.RecordAssertion(t.Context(), []byte("ghost-cred"), 1)
+	err := s.RecordAssertion(t.Context(), []byte("ghost-cred"), 1, false)
 	assert.ErrorIs(t, err, breakglass.ErrCredentialNotFound)
+}
+
+// RecordAssertion accepts SignCount=0 from a SignCount=0 stored
+// credential. Many platform authenticators (Apple Touch ID Passkey,
+// Google Password Manager) don't implement the counter and report 0
+// unconditionally. Per WebAuthn §6.1.1 a relying party SHOULD NOT
+// treat this as a clone signal - the counter check only fires when
+// the stored value is nonzero. Pinned because the previous shape
+// (`WHERE ? > sign_count`) rejected this case incorrectly and broke
+// every Touch ID Passkey login after first use.
+func TestCredentialStore_RecordAssertion_ZeroCounterAccepted(t *testing.T) {
+	s, db, uid := newCredentialStore(t)
+	cred := fakeCredential("cred-touch-id", "pk", 0)
+	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
+	require.NoError(t, err)
+
+	// Subsequent login also reports SignCount=0; must succeed.
+	require.NoError(t, s.RecordAssertion(t.Context(), cred.ID, 0, false))
+	got, err := s.FindByID(t.Context(), cred.ID)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), got.SignCount,
+		"sign_count stays 0 when both stored and asserted are 0")
+	assert.True(t, got.LastUsedAt.Valid, "last_used_at stamps on success")
+}
+
+// RecordAssertion persists backup_state flips from 0 to 1 - the
+// "credential just got synced to iCloud Keychain" case. Spec allows
+// BS to transition 0->1 over a credential's lifetime; the library
+// already enforces 1->0 not allowed before this code runs.
+func TestCredentialStore_RecordAssertion_BackupStateFlip(t *testing.T) {
+	s, db, uid := newCredentialStore(t)
+	cred := fakeCredential("cred-passkey", "pk", 1)
+	// Register with BS=false.
+	cred.Flags.BackupEligible = true
+	cred.Flags.BackupState = false
+	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
+	require.NoError(t, err)
+
+	got, err := s.FindByID(t.Context(), cred.ID)
+	require.NoError(t, err)
+	require.False(t, got.BackupState, "BS starts at the registered value")
+
+	// Subsequent login reports BS=true (credential now backed up).
+	require.NoError(t, s.RecordAssertion(t.Context(), cred.ID, 2, true))
+	got, err = s.FindByID(t.Context(), cred.ID)
+	require.NoError(t, err)
+	assert.True(t, got.BackupState, "BS flips on the successful login that reported it")
+	assert.True(t, got.BackupEligible, "BE remains invariant across login")
 }
 
 // ToWebauthnCredentials converts a slice of stored rows into the
