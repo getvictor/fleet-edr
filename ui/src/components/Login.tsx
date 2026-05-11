@@ -72,12 +72,10 @@ export function Login({ next }: LoginProps) {
     <div className="login-page">
       <Card padding="large" className="login-card">
         <div className="login-card__header">
-          <div className="login-card__brand">
-            <span className="login-card__logo">F</span>
-            <h1 className="login-card__title">
-              Fleet <span className="login-card__accent">EDR</span>
-            </h1>
-          </div>
+          <span className="login-card__logo" aria-hidden="true">F</span>
+          <h1 className="login-card__title">
+            Fleet <span className="login-card__accent">EDR</span>
+          </h1>
           <p className="login-card__subtitle">Sign in with your identity provider.</p>
         </div>
 
@@ -89,6 +87,7 @@ export function Login({ next }: LoginProps) {
 
         <Button
           type="button"
+          fullWidth
           isLoading={navigating}
           onClick={() => {
             setNavigating(true);

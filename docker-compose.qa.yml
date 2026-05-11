@@ -1,0 +1,37 @@
+# QA-only compose overlay. Brings up dex (https://dexidp.io) so the
+# OIDC flow at `/api/auth/login` can be exercised against a local IdP
+# instead of a real Okta tenant. Used by:
+#
+#   task qa:up      # base mysql + mysql_test + this dex service
+#   task qa:down    # tears all of them down
+#
+# Run alongside `task dev:server:qa-oidc` which wires the EDR's
+# EDR_OIDC_* env vars to point at this dex.
+#
+# See config/dex/dev-config.yaml for credentials + scope set. Both the
+# config and these credentials are dev-only - they are checked into the
+# repo by design. Production OIDC config lives in env vars loaded from
+# a real secrets manager per docs/okta-setup.md.
+#
+# Usage shorthand (no task runner):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.qa.yml up -d
+#
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    container_name: fleet-edr-dex
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "127.0.0.1:5556:5556"
+    volumes:
+      - ./config/dex/dev-config.yaml:/etc/dex/config.yaml:ro
+      - dex-data:/var/dex
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dex-data:

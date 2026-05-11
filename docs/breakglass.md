@@ -25,9 +25,13 @@ BREAK-GLASS ADMIN SETUP (one-shot redemption URL - open in a browser)
 
 The TTL defaults to one hour and is configurable via
 `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` (Go duration string). The
-banner is idempotent: it re-prints on every restart until the
-operator redeems the token, and is silent thereafter (the server
-checks for an existing WebAuthn credential at boot).
+banner re-prints on every restart until the operator redeems the
+token, and is silent thereafter (the server checks for an
+existing WebAuthn credential at boot). Each restart supersedes
+the prior unredeemed token: the new banner's URL is the only one
+that works, and the previous URL returns 410 Gone if anyone
+tries it. This prevents stale banners in terminal scrollback or
+log files from staying live alongside the freshly printed one.
 
 ### Steps
 
@@ -199,11 +203,56 @@ LIMIT 100;
   break-glass account phishing-resistant. Recovery via the SQL path
   above is the only escape hatch.
 
+## Configuration
+
+The break-glass surface reads the following env vars at boot. The
+production deployments MUST set `EDR_BREAKGLASS_RP_ID` and
+`EDR_BREAKGLASS_RP_ORIGINS`; the bootstrap layer refuses to start without
+them. Everything else falls through to the documented defaults.
+
+| Env var | Required? | Default | What it controls | Production guidance |
+|---|---|---|---|---|
+| `EDR_BREAKGLASS_RP_ID` | yes (prod) | none (dev falls back to localhost) | WebAuthn relying-party identifier - the canonical host that browser-stored credentials bind to. Registrable host portion of the EDR UI URL, no scheme, no port (e.g. `edr.example.com`). | Pin to your externally reachable hostname. Changing it post-deploy INVALIDATES every registered credential (WebAuthn scopes credentials to RP_ID); recovery then requires the SQL path in "Lost-credential recovery" above. |
+| `EDR_BREAKGLASS_RP_ORIGINS` | yes (prod) | none | Comma-separated absolute URLs the RP accepts in the authenticator's origin attestation. The browser-observed origin must match one entry exactly. | Pin to the externally reachable HTTPS URL (e.g. `https://edr.example.com`). Mismatches between configured and observed origin reject the WebAuthn ceremony with a generic failure. |
+| `EDR_BREAKGLASS_RP_DISPLAY_NAME` | no | `EDR Break-glass` | Operator-visible name the browser shows during authenticator enrollment. Metadata only; the chokepoint does not read it. | Set to something a human recognizes in the YubiKey / Touch ID prompt (e.g. `ExampleCorp EDR`). |
+| `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` | no | `1h` | Go duration string. How long the redemption URL printed at first boot stays redeemable. | Default 1h is fine for most deployments. Shorten to cap the value of an exfiltrated stderr log; lengthen for a busy operator who needs more time between launch and redemption. |
+| `EDR_BREAKGLASS_IP_ALLOWLIST` | no | empty (no gate; dev shape) | Comma-separated CIDR list (bare IPs accepted) that gates the entire `/admin/break-glass*` surface. Off-list callers receive a generic 404; the path's existence is concealed. | Set to the operator bastion's CIDR (or your office egress). Leaving empty is a dev convenience; production should always pin a list. |
+| `EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT` | no | `15m` | Strict idle cap for recovery sessions. Idle = NOW() - last_seen_at. | Recovery is a short, focused surface; keep tight unless you have a specific reason. Tightening below 5m starts to chafe; loosening above 1h erodes the "recovery is brief" model. |
+| `EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT` | no | `1h` | Absolute age cap for recovery sessions. Tighter than the OIDC cap because the recovery account is super_admin. | Default is fine. If a recovery action regularly bumps against this, the work probably belongs back in the day-to-day OIDC-authenticated UI. |
+
+Production-deployment example, server reachable at `https://edr.example.com`
+behind a reverse proxy:
+
+```sh
+EDR_BREAKGLASS_RP_ID=edr.example.com
+EDR_BREAKGLASS_RP_ORIGINS=https://edr.example.com
+EDR_BREAKGLASS_RP_DISPLAY_NAME=ExampleCorp EDR
+EDR_BREAKGLASS_IP_ALLOWLIST=10.20.30.0/24
+EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL=1h
+```
+
+`EDR_BREAKGLASS_RP_ID` and `EDR_BREAKGLASS_RP_ORIGINS` are distinct values
+with different shapes: `RP_ID` is the bare registrable host (no scheme,
+no port); `RP_ORIGINS` is the absolute URL the browser sees in the
+authenticator's origin attestation. They MUST agree at the host level -
+a browser visiting `https://edr.example.com` whose `RP_ID` is configured
+as `edr.example.com` is valid; configuring `RP_ID=otheredr.example.com`
+makes every assertion fail with a generic ceremony error.
+
+The break-glass surface also depends on `EDR_SESSION_SIGNING_KEY` (the
+HMAC secret that signs the WebAuthn registration session cookie and the
+OIDC state cookie). See `docs/install-server.md` for the full env-var
+table and `docs/operations.md` for rotation impact - rotating that key
+invalidates every in-flight break-glass redemption ceremony and forces
+the operator to restart the redemption flow.
+
 ## Related docs
 
 - `docs/authz.md` - the role matrix the break-glass admin lands in
   (super_admin) and the SQL pattern for binding other roles.
 - `docs/install-server.md` - the env vars (`EDR_BREAKGLASS_*`) the
   server reads at boot.
+- `docs/operations.md` - the `EDR_SESSION_SIGNING_KEY` rotation runbook
+  and what break-glass artefacts a rotation invalidates.
 - `docs/threat-model.md` - the threat coverage the WebAuthn-
   mandatory break-glass control closes.

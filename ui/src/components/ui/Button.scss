@@ -34,6 +34,14 @@
     font-size: $xx-small;
   }
 
+  // Stretch to fill the parent's inline width instead of shrinking
+  // to content. Used on auth-card primary CTAs and modal footers
+  // where the button is the page's primary action.
+  &--full-width {
+    display: flex;
+    width: 100%;
+  }
+
   &--disabled,
   &:disabled {
     opacity: 0.5;

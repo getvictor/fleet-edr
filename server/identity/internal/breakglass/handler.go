@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 
+	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
@@ -444,6 +445,21 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		reason := reasonForLoginErr(err)
+		// When the failure falls through to the generic "login.error"
+		// catch-all, the audit row's redacted reason leaves the
+		// operator without a way to diagnose what actually failed
+		// (origin mismatch, signature verify fail, missing challenge
+		// cookie, etc.). Log the underlying error at WARN so SigNoz
+		// captures the breadcrumb. The wire response and audit row
+		// stay generic so a probing attacker can't enumerate failure
+		// modes; the log is operator-only.
+		if reason == "login.error" {
+			h.logger.WarnContext(r.Context(), "breakglass login fell through to generic error",
+				"err", err,
+				attrkeys.UserEmail, user.Email,
+				attrkeys.RemoteAddr, httpserver.ClientIP(r),
+			)
+		}
 		h.svc.AuditFailure(r.Context(), user.Email, reason,
 			httpserver.ClientIP(r), r.UserAgent())
 		h.unauthorized(r.Context(), w, "invalid_credentials")

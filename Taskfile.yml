@@ -182,6 +182,31 @@ tasks:
     cmds:
       - npm test -- --run
 
+  test:e2e:install:
+    desc: |
+      Install Playwright + Chromium for the E2E suite at test/e2e/.
+      One-time setup; subsequent test:e2e invocations skip this. The
+      Playwright browser download is ~300 MB and lives outside the
+      repo, under ~/Library/Caches/ms-playwright on macOS.
+    dir: test/e2e
+    cmds:
+      - npm install
+      - npx playwright install --with-deps chromium
+
+  test:e2e:
+    desc: |
+      Run the Playwright E2E suite at test/e2e/. Covers the browser-
+      driven flows the Go integration suite can't: WebAuthn ceremonies
+      (via a virtual authenticator), OIDC sign-in (via the local dex
+      from `task qa:up`), UI affordances. The playwright.config.ts
+      auto-starts the dev server pointed at dex via
+      task:dev:server:qa-oidc when no listener is on :8088. Pre-req:
+      `task qa:up` (mysql + dex).
+    deps: [test:e2e:install]
+    dir: test/e2e
+    cmds:
+      - npm test
+
   test:short:
     desc: Fast Go tests only (no -race, no DB-dependent suites)
     cmds:
@@ -296,6 +321,23 @@ tasks:
       EDR_LOG_FORMAT: text
       EDR_HOST_TOKEN_LIFETIME: 24h
       EDR_HOST_TOKEN_GRACE: 5m
+      # Dev-only deterministic session HMAC key. Required when break-glass or OIDC is
+      # configured (the server refuses to boot without it). Production deployments
+      # MUST supply a real random secret via EDR_SESSION_SIGNING_KEY_FILE (Docker
+      # secrets convention) — never reuse this placeholder. Length: 49 bytes, well
+      # past the 32-byte minimum the bootstrap validates.
+      EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
+      # Default break-glass relying-party config bound to the dev listen address.
+      # RP_ID must be the registrable host portion (no scheme, no port) of every
+      # entry in RP_ORIGINS - if they disagree, the browser rejects the WebAuthn
+      # ceremony with a generic "Setup failed" in the UI. Browsers also allow
+      # WebAuthn over plaintext HTTP only when the origin host is literally
+      # `localhost` (not 127.0.0.1), so both vars use `localhost` here. The
+      # printed redemption banner's URL is built from RP_ORIGINS[0], so the
+      # operator clicks through the banner and lands on the matching origin
+      # automatically. Override both together when QA-ing against a remote host.
+      EDR_BREAKGLASS_RP_ID: localhost
+      EDR_BREAKGLASS_RP_ORIGINS: http://localhost:8088
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_EXPORTER_OTLP_INSECURE: "true"
@@ -309,6 +351,19 @@ tasks:
     deps: [ui:setup]
     cmds:
       - npm run dev
+
+  dev:
+    desc: |
+      Run backend + UI dev servers in parallel for fast iteration. Backend lives at
+      http://127.0.0.1:8088 (Go server, serves the bundled `server/ui/dist/` -- so it
+      shows the LAST `task build:ui` output, not your live edits); UI HMR lives at
+      http://localhost:5173/ui/ (Vite dev server, proxies /api/* back to :8088). Edit
+      .tsx/.scss -> browser updates in <1s; edit .go -> Ctrl-C and re-run `task dev`
+      (Go has no built-in HMR). For QA against the embedded bundle (production shape),
+      use `task build:ui && task dev:server` instead.
+    deps:
+      - dev:server
+      - dev:ui
 
   # -------- database --------
 
@@ -333,6 +388,127 @@ tasks:
     prompt: About to DROP DATABASE edr. Continue?
     cmds:
       - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+
+  db:backup:
+    desc: |
+      Snapshot the dev database to a timestamped tmp/edr-dev-<ts>.sql.gz file.
+      Use before a destructive QA step (db:reset, manual schema surgery, walking
+      the break-glass redemption flow from scratch) so you can rewind if the run
+      goes sideways.
+
+      --single-transaction takes an InnoDB consistent snapshot without blocking
+      writes; --routines + --triggers pull in stored procedures the events table
+      doesn't have today but the schema may grow into. Output is gzipped because
+      audit_events + events tables compress 10x.
+    cmds:
+      - mkdir -p tmp
+      - |
+        OUT="tmp/edr-dev-$(date +%Y%m%d-%H%M%S).sql.gz"
+        mysqldump -uroot -h127.0.0.1 -P3316 \
+          --single-transaction --routines --triggers \
+          edr | gzip > "$OUT"
+        echo "wrote $OUT ($(du -h "$OUT" | cut -f1))"
+
+  db:restore:
+    desc: |
+      DESTRUCTIVE: drop the dev database and reload it from a .sql or .sql.gz
+      backup produced by db:backup (or a manual mysqldump). Requires
+      confirmation. Pass the file path via BACKUP_FILE:
+
+          task db:restore BACKUP_FILE=tmp/edr-dev-20260510-145322.sql.gz
+
+      The restore drops + recreates the edr schema first so it's idempotent
+      against the previous state; nothing in the current DB survives. Use
+      db:backup to snapshot before invoking this if you might want to walk
+      back the restore itself.
+    vars:
+      BACKUP_FILE: '{{.BACKUP_FILE}}'
+    prompt: 'About to DROP DATABASE edr and reload from {{.BACKUP_FILE}}. Continue?'
+    preconditions:
+      - sh: 'test -n "{{.BACKUP_FILE}}"'
+        msg: 'BACKUP_FILE is required. Usage: task db:restore BACKUP_FILE=tmp/edr-dev-<ts>.sql.gz'
+      - sh: 'test -f "{{.BACKUP_FILE}}"'
+        msg: 'BACKUP_FILE not found: {{.BACKUP_FILE}}'
+    cmds:
+      - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+      - |
+        # gzip -dcf works on both macOS and Linux: -d decompresses,
+        # -c streams to stdout, -f passes plaintext through
+        # transparently when the file isn't gzipped. POSIX-portable
+        # so the task runs the same on Debian/Ubuntu (where /bin/sh
+        # is dash and doesn't grok [[ ]]) as it does on macOS bash.
+        case "{{.BACKUP_FILE}}" in
+          *.gz) gzip -dcf "{{.BACKUP_FILE}}" | mysql -uroot -h127.0.0.1 -P3316 edr ;;
+          *)    mysql -uroot -h127.0.0.1 -P3316 edr < "{{.BACKUP_FILE}}" ;;
+        esac
+        echo "restored edr from {{.BACKUP_FILE}}"
+
+  # -------- qa / local IdP --------
+
+  qa:up:
+    desc: |
+      Bring up the full QA stack: dev mysql, test mysql, and a local
+      dex (https://dexidp.io) OIDC provider on 127.0.0.1:5556. Used by
+      operators walking section B of claude/qa/user-management.md
+      against a local IdP instead of a real Okta tenant. The dex
+      static-passwords config lives at config/dex/dev-config.yaml; the
+      compose overlay is docker-compose.qa.yml. See `task
+      dev:server:qa-oidc` for the matching EDR-side env wiring.
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.qa.yml up -d
+      - |
+        echo "waiting for dex discovery endpoint to be ready..."
+        for _ in $(seq 1 30); do
+          if curl -fsS http://localhost:5556/dex/.well-known/openid-configuration > /dev/null 2>&1; then
+            echo "dex ready at http://localhost:5556/dex"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "dex did not become ready within 30s; check 'docker logs fleet-edr-dex'"
+        exit 1
+
+  qa:down:
+    desc: |
+      Tear down the qa stack (mysql + dex). Use when switching between
+      OIDC and break-glass-only QA runs, or to free port 5556.
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.qa.yml down
+
+  dev:server:qa-oidc:
+    desc: |
+      Run the dev server pointed at the local dex (qa:up) instead of a
+      real Okta tenant. Mirrors dev:server's env block + adds the four
+      EDR_OIDC_* env vars matching config/dex/dev-config.yaml. Drop
+      EDR_AUTH_ALLOW_NO_OIDC=1 so the server actually exercises the
+      OIDC sign-in path; the four pre-provisioned dex users
+      (analyst@qa.local, senior@qa.local, auditor@qa.local,
+      admin@qa.local) all share password `qa-password-123`. First
+      sign-in JIT-provisions the user as `analyst`; promote via SQL
+      per docs/authz.md to test the role matrix.
+    env:
+      EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
+      EDR_ENROLL_SECRET: dev-enroll-secret
+      EDR_ALLOW_INSECURE_HTTP: "1"
+      EDR_LISTEN_ADDR: "0.0.0.0:8088"
+      EDR_LOG_FORMAT: text
+      EDR_HOST_TOKEN_LIFETIME: 24h
+      EDR_HOST_TOKEN_GRACE: 5m
+      EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
+      EDR_BREAKGLASS_RP_ID: localhost
+      EDR_BREAKGLASS_RP_ORIGINS: http://localhost:8088
+      # OIDC: point at the local dex from qa:up.
+      EDR_OIDC_ISSUER: http://localhost:5556/dex
+      EDR_OIDC_CLIENT_ID: edr-qa
+      EDR_OIDC_CLIENT_SECRET: edr-qa-client-secret-do-not-use-in-prod
+      EDR_OIDC_REDIRECT_URL: http://localhost:8088/api/auth/callback
+      EDR_OIDC_ALLOW_JIT_PROVISIONING: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_SERVICE_NAME: fleet-edr-server
+    cmds:
+      - go run {{.SERVER_PKG}}
 
   # -------- install tools / hooks --------
 

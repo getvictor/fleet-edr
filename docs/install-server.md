@@ -194,24 +194,36 @@ unset uses the documented default.
 
 | Env var | Required | Default | Purpose |
 |---|---|---|---|
-| `EDR_DSN` / `EDR_DSN_FILE` | yes | — | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
-| `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | — | Shared secret agents present at enrollment |
+| `EDR_DSN` / `EDR_DSN_FILE` | yes | - | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
+| `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | - | Shared secret agents present at enrollment |
 | `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTP server binds |
-| `EDR_TLS_CERT_FILE` | no | — | PEM cert for TLS termination (pair with key) |
-| `EDR_TLS_KEY_FILE` | no | — | PEM key (pair with cert) |
+| `EDR_TLS_CERT_FILE` | no | - | PEM cert for TLS termination (pair with key) |
+| `EDR_TLS_KEY_FILE` | no | - | PEM key (pair with cert) |
 | `EDR_ALLOW_INSECURE_HTTP` | no | 0 | Set to `1` to skip TLS (only behind an upstream terminator) |
 | `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_LOGIN_RATE_PER_MIN` | no | 6 | Per-IP UI login rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
 | `EDR_RETENTION_INTERVAL` | no | 1h | How often the retention job runs |
-| `EDR_LAUNCHAGENT_ALLOWLIST` | no | — | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
-| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | — | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
-| `EDR_SUDOERS_WRITER_ALLOWLIST` | no | — | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
-| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | no | — | Comma-separated non-shell parent absolute paths the `suspicious_exec` rule treats as benign roots for BOTH trigger shapes — the `parent → shell → /tmp/binary` chain AND the `parent → shell` followed by an outbound network connection. Recommended on fleets with interactive admin SSH: `/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on servers where interactive SSH is unusual |
+| `EDR_LAUNCHAGENT_ALLOWLIST` | no | - | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
+| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | - | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
+| `EDR_SUDOERS_WRITER_ALLOWLIST` | no | - | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
+| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | no | - | Comma-separated non-shell parent absolute paths the `suspicious_exec` rule treats as benign roots for BOTH trigger shapes: the `parent → shell → /tmp/binary` chain AND the `parent → shell` followed by an outbound network connection. Recommended on fleets with interactive admin SSH: `/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on servers where interactive SSH is unusual |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | — | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
+| `EDR_SESSION_SIGNING_KEY` / `EDR_SESSION_SIGNING_KEY_FILE` | yes when OIDC or break-glass is configured | - | HMAC secret (≥ 32 bytes) signing the OIDC state cookie + the WebAuthn registration session. Rotating it invalidates every session and in-flight ceremony; see [operations.md](operations.md#edr-session-signing-key) |
+| `EDR_BREAKGLASS_RP_ID` | yes in prod | - | WebAuthn relying-party identifier (registrable host, no scheme, no port). Changing post-deploy invalidates every registered credential. See [breakglass.md](breakglass.md#configuration) |
+| `EDR_BREAKGLASS_RP_ORIGINS` | yes in prod | - | Comma-separated absolute URLs accepted as the WebAuthn origin (e.g. `https://edr.example.com`). See [breakglass.md](breakglass.md#configuration) |
+| `EDR_BREAKGLASS_RP_DISPLAY_NAME` | no | `EDR Break-glass` | Operator-visible name shown during authenticator enrollment |
+| `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` | no | 1h | Go duration. Lifetime of the first-boot redemption URL |
+| `EDR_BREAKGLASS_IP_ALLOWLIST` | no | - | Comma-separated CIDR list gating `/admin/break-glass*`. Off-list callers get a 404 |
+| `EDR_SESSION_IDLE_TIMEOUT` | no | 8h | Inactivity cap for OIDC-minted sessions. Sliding window on last_seen_at |
+| `EDR_SESSION_ABSOLUTE_TIMEOUT` | no | 24h | Hard age cap for OIDC-minted sessions (forces periodic re-auth) |
+| `EDR_REAUTH_WINDOW` | no | 30m | Freshness window for destructive actions (host.isolate, host.kill_process, host.run_script, critical alert resolve) |
+| `EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT` | no | 15m | Strict idle cap for recovery sessions |
+| `EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT` | no | 1h | Absolute cap for recovery sessions |
+| `EDR_AUTH_ALLOW_NO_OIDC` | no | 0 | Dev-only opt-in to boot in break-glass-only mode. Production refuses to start without OIDC unless this is `1`. See [okta-setup.md](okta-setup.md) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | - | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
 
 Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`,
 `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents

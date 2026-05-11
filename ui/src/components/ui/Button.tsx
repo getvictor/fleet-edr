@@ -9,6 +9,11 @@ interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "siz
   readonly variant?: ButtonVariant;
   readonly size?: ButtonSize;
   readonly isLoading?: boolean;
+  // fullWidth makes the button span its parent's full inline width
+  // instead of shrinking to its content (the inline-flex default).
+  // Standard for primary CTAs on auth cards, modal footers, and
+  // form submits where the button IS the page's primary action.
+  readonly fullWidth?: boolean;
   readonly children: ReactNode;
 }
 
@@ -16,6 +21,7 @@ export function Button({
   variant = "primary",
   size = "default",
   isLoading = false,
+  fullWidth = false,
   disabled,
   className,
   children,
@@ -27,6 +33,7 @@ export function Button({
     `button--${variant}`,
     {
       "button--small": size === "small",
+      "button--full-width": fullWidth,
       "button--disabled": disabled || isLoading,
       "button--loading": isLoading,
     },

@@ -29,6 +29,14 @@ func New(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
+// DB returns the underlying executor for callers that need to invoke
+// BindRole outside of a transaction (e.g. seed.Admin's idempotent
+// bootstrap-time bind). JIT + admin-promotion paths thread their own
+// transactional executor and don't need this accessor.
+func (s *Store) DB() Executor {
+	return s.db
+}
+
 // roleBindingRow is the storage shape; the public api.RoleBinding is
 // the read shape callers see. Keeping them distinct means a wave-2
 // schema add (e.g. created_by) can grow the storage row without

@@ -32,3 +32,5 @@ build/
 /coverage-agent.out
 /coverage-server.out
 /ui/coverage/
+# Taskfile.dev temp cache
+.task/

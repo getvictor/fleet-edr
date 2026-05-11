@@ -161,15 +161,27 @@ var schemaStatements = []string{
 	// CASCADE on user delete so a removed user's authenticators do not
 	// linger.
 	`CREATE TABLE IF NOT EXISTS webauthn_credentials (
-		id            BIGINT          AUTO_INCREMENT PRIMARY KEY,
-		user_id       BIGINT          NOT NULL,
-		credential_id VARBINARY(255)  NOT NULL,
-		public_key    BLOB            NOT NULL,
-		sign_count    BIGINT UNSIGNED NOT NULL DEFAULT 0,
-		transports    VARCHAR(64)     NULL,
-		name          VARCHAR(255)    NULL,
-		created_at    TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		last_used_at  TIMESTAMP(6)    NULL,
+		id               BIGINT          AUTO_INCREMENT PRIMARY KEY,
+		user_id          BIGINT          NOT NULL,
+		credential_id    VARBINARY(255)  NOT NULL,
+		public_key       BLOB            NOT NULL,
+		sign_count       BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		transports       VARCHAR(64)     NULL,
+		name             VARCHAR(255)    NULL,
+		-- backup_eligible: the BE flag the authenticator advertised at
+		-- registration. INVARIANT per the WebAuthn spec; the library
+		-- rejects logins where the asserted BE differs from this
+		-- stored value. Persisted so platform-authenticator Passkeys
+		-- (iCloud Keychain, Google Password Manager, Windows Hello
+		-- with sync) work past the first login.
+		backup_eligible  TINYINT(1)      NOT NULL DEFAULT 0,
+		-- backup_state: the BS flag. Spec allows 0->1 transitions
+		-- (when a credential first gets backed up); 1->0 is rejected.
+		-- Updated on every successful login so subsequent logins see
+		-- the current state.
+		backup_state     TINYINT(1)      NOT NULL DEFAULT 0,
+		created_at       TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		last_used_at     TIMESTAMP(6)    NULL,
 		UNIQUE KEY uk_webauthn_credential (credential_id),
 		INDEX idx_webauthn_user (user_id),
 		CONSTRAINT fk_webauthn_user FOREIGN KEY (user_id)

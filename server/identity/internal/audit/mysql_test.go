@@ -268,9 +268,10 @@ func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 // When UserID is nil (e.g. a pre-auth audit row like
 // auth.oidc.callback.error), the dual-emit still fires and emits
 // edr.user.id=0. The audit row itself stays attributable via the
-// actor_email column. Pinning this so a future "skip the log when
-// no user" optimization doesn't silently break dashboards.
-func TestRecord_EmitsInfoLogWhenUserIDNil(t *testing.T) {
+// actor_email column. Per server-identity-audit-log spec, failure
+// suffix actions land at WARN so a SigNoz alert on
+// severity_text=WARN catches them without a separate filter.
+func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store, _ := newStoreWithLogger(t, logger)
@@ -284,8 +285,130 @@ func TestRecord_EmitsInfoLogWhenUserIDNil(t *testing.T) {
 	var entry map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
 	assert.Equal(t, "audit recorded", entry["msg"])
+	assert.Equal(t, "WARN", entry["level"],
+		"server-identity-audit-log spec: error decision must emit slog at WARN")
 	assert.Equal(t, "auth.oidc.failure", entry["action"])
 	assert.InDelta(t, float64(0), entry["edr.user.id"], 0)
+}
+
+// Spec contract: a chokepoint deny emits slog at WARN. Pinned so the
+// observability dashboard's "WARN threshold" alert catches chokepoint
+// denies without a separate severity filter per decision type.
+// server-identity-audit-log spec §"Audit rows are dual-emitted":
+// "WARN when the decision is `deny`, the action is a break-glass
+// action, or the decision is `error`."
+func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store, db := newStoreWithLogger(t, logger)
+	uid := int64(11)
+	seedUser(t, db, uid, "denied@test")
+
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
+		UserID:     &uid,
+		ActorEmail: "denied@test",
+		Action:     api.AuditAction("authz.host.isolate"),
+		TargetType: "host",
+		TargetID:   "h-1",
+		Payload:    map[string]any{"allow": false, "reason": "no_matching_rule"},
+	}))
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.Equal(t, "WARN", entry["level"],
+		"chokepoint deny (payload.allow=false) must emit slog at WARN per spec")
+	assert.Equal(t, "authz.host.isolate", entry["action"])
+}
+
+// Spec contract: every break-glass action emits slog at WARN -
+// regardless of outcome - because the recovery surface is the
+// high-privilege path and every interaction is operationally
+// noteworthy. server-identity-audit-log spec: "WARN when ... the
+// action is a break-glass action."
+func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
+	cases := []api.AuditAction{
+		api.AuditAuthBreakglassBootstrap,
+		api.AuditAuthBreakglassSuccess,
+		api.AuditAuthBreakglassFailure,
+	}
+	for _, action := range cases {
+		t.Run(string(action), func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			store, _ := newStoreWithLogger(t, logger)
+			require.NoError(t, store.Record(t.Context(), api.AuditEvent{
+				ActorEmail: "admin@fleet-edr.local",
+				Action:     action,
+				TargetType: "user",
+				TargetID:   "1",
+			}))
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+			assert.Equal(t, "WARN", entry["level"],
+				"break-glass action %q must emit slog at WARN per spec", string(action))
+		})
+	}
+}
+
+// Spec contract: the dual emit MUST happen even when the DB INSERT
+// fails. Closes the observability gap where a transient DB outage
+// erases the audit row's content from the OTel log stream.
+// server-identity-audit-log spec: "The dual emit MUST happen even
+// when the database insert fails so the observability pipeline sees
+// a record."
+func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store, db := newStoreWithLogger(t, logger)
+
+	// Force INSERT failure by violating the action NOT NULL constraint
+	// via a NULL UserID + missing required column. Simpler: close the
+	// db connection so the ExecContext fails fast with a known error.
+	require.NoError(t, db.Close())
+
+	err := store.Record(t.Context(), api.AuditEvent{
+		ActorEmail: "operator@test",
+		Action:     api.AuditAction("authz.host.read"),
+		Payload:    map[string]any{"allow": false, "reason": "no_matching_rule"},
+	})
+	require.Error(t, err, "INSERT against a closed DB must surface as an error")
+
+	// The dual-emit + the ERROR-level "INSERT failed" message should
+	// both be in the buffer; the audit-row content is preserved.
+	entries := parseJSONLogs(t, buf.Bytes())
+	require.GreaterOrEqual(t, len(entries), 2, "expected dual-emit + ERROR log; got %d", len(entries))
+
+	var sawAuditRecorded, sawInsertFailed bool
+	for _, e := range entries {
+		switch e["msg"] {
+		case "audit recorded":
+			sawAuditRecorded = true
+			assert.Equal(t, "authz.host.read", e["action"])
+			assert.Equal(t, "WARN", e["level"], "deny decision must still be WARN even on insert failure")
+		case "audit row INSERT failed":
+			sawInsertFailed = true
+			assert.Equal(t, "ERROR", e["level"])
+		}
+	}
+	assert.True(t, sawAuditRecorded, "dual-emit must fire even on INSERT failure")
+	assert.True(t, sawInsertFailed, "INSERT failure must emit a separate ERROR log")
+}
+
+// parseJSONLogs splits a buffer's JSON-per-line slog output into a
+// slice of decoded maps. Pulled out so the dual-emit-on-failure test
+// stays focused on the property being verified.
+func parseJSONLogs(t *testing.T, raw []byte) []map[string]any {
+	t.Helper()
+	var entries []map[string]any
+	for line := range bytes.SplitSeq(raw, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(line, &entry), "line: %s", line)
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // Sanity: the action constants are stable strings — anyone changing
