@@ -1,4 +1,5 @@
-import { test, expect, BrowserContext, Page } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
+import { test, expect } from "../../fixtures/test";
 import { openDB, resetDB, mintBootstrapToken } from "../../fixtures/db";
 import {
   installVirtualAuthenticator,
@@ -18,7 +19,7 @@ import {
 const RIGHT_PASSWORD = "qa-precise-reason-password";
 const WRONG_PASSWORD = "definitely-not-the-password";
 
-let setupCtx: BrowserContext;
+let setupCtx: BrowserContext | undefined;
 let setupPage: Page;
 let setupVA: VirtualAuthenticator | undefined;
 
@@ -52,7 +53,9 @@ test.describe.serial("qa: Sections A.5 + A.7", () => {
 
   test.afterAll(async () => {
     if (setupVA) await uninstallVirtualAuthenticator(setupVA);
-    await setupCtx.close();
+    // Guard against beforeAll failing before setupCtx is set —
+    // otherwise the afterAll throws and masks the original failure.
+    if (setupCtx) await setupCtx.close();
   });
 
   // A.5: wrong password + valid WebAuthn assertion. ValidateLogin
@@ -71,16 +74,20 @@ test.describe.serial("qa: Sections A.5 + A.7", () => {
     // Capture the final /admin/break-glass POST status. The Playwright
     // Response handle returned by waitForResponse becomes unusable
     // once the page re-renders, so read status() synchronously inside
-    // the on('response') listener instead of holding the body.
+    // a one-shot response listener instead of holding the body.
+    // page.once() removes itself after firing so subsequent tests in
+    // this serial suite don't get spurious callbacks.
     let finalStatus: number | undefined;
-    setupPage.on("response", (r) => {
+    const onResponse = (r: { url: () => string; request: () => { method: () => string }; status: () => number }) => {
       if (
         r.url().endsWith("/admin/break-glass") &&
         r.request().method() === "POST"
       ) {
         finalStatus = r.status();
+        setupPage.off("response", onResponse);
       }
-    });
+    };
+    setupPage.on("response", onResponse);
 
     await setupPage
       .getByRole("button", { name: /sign in with security key/i })

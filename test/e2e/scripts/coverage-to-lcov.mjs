@@ -13,7 +13,7 @@
 // extra path in sonar.javascript.lcov.reportPaths.
 
 import { readdir, readFile, mkdir, stat } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CoverageReport } from "monocart-coverage-reports";
@@ -67,7 +67,8 @@ async function main() {
     sourceMapResolver: async (url, fallback) => {
       const p = diskPathFor(url);
       if (p && existsSync(p)) {
-        return JSON.parse(readFileSync(p, "utf8"));
+        const content = await readFile(p, "utf8");
+        return JSON.parse(content);
       }
       return fallback(url);
     },
@@ -91,12 +92,27 @@ async function main() {
       !sourcePath.includes("/node_modules/"),
   });
 
+  // One malformed JSON file shouldn't poison the merge — a partial
+  // result is more useful than no result. Skip + log each bad payload
+  // so an operator can investigate but the LCOV still emits.
+  let merged = 0;
+  let skipped = 0;
   for (const f of files) {
-    const raw = await readFile(join(RAW_DIR, f), "utf8");
-    const entries = JSON.parse(raw);
-    if (!Array.isArray(entries) || entries.length === 0) continue;
-    await report.add(entries);
+    try {
+      const raw = await readFile(join(RAW_DIR, f), "utf8");
+      const entries = JSON.parse(raw);
+      if (!Array.isArray(entries) || entries.length === 0) {
+        skipped++;
+        continue;
+      }
+      await report.add(entries);
+      merged++;
+    } catch (err) {
+      skipped++;
+      console.warn(`skipping malformed coverage payload ${f}: ${(err instanceof Error ? err.message : String(err))}`);
+    }
   }
+  console.log(`merged ${merged} payload(s), skipped ${skipped}`);
 
   await report.generate();
   const outPath = join(OUT_DIR, "lcov-e2e.info");

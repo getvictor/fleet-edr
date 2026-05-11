@@ -20,8 +20,9 @@
 // path via sonar.javascript.lcov.reportPaths.
 
 import { test as base, expect, BrowserContext, Page } from "@playwright/test";
-import { mkdir, writeFile } from "fs/promises";
-import { join } from "path";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 const COVERAGE_DIR = join(__dirname, "..", "coverage-raw");
 
@@ -45,7 +46,12 @@ async function dumpCoverage(page: Page, testId: string): Promise<void> {
     return;
   }
   await mkdir(COVERAGE_DIR, { recursive: true });
-  const slug = `${testId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // randomUUID() rather than Math.random — the filename only needs to
+  // be unique across concurrent test executions, but Math.random
+  // trips Sonar's typescript:S2245 (pseudorandom for security-
+  // sensitive use); crypto-grade randomness is the right primitive
+  // for "unique tag" semantics regardless.
+  const slug = `${testId}-${Date.now()}-${randomUUID()}`;
   await writeFile(join(COVERAGE_DIR, `${slug}.json`), JSON.stringify(entries));
 }
 

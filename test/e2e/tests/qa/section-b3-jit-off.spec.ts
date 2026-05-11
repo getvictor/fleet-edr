@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures/test";
 import { openDB, resetDB } from "../../fixtures/db";
 
 // Section B.3: with EDR_OIDC_ALLOW_JIT_PROVISIONING=0 the OIDC

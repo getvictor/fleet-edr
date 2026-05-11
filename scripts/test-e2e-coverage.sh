@@ -74,9 +74,13 @@ stop_server() {
       kill -KILL "$SERVER_PID" 2>/dev/null || true
     fi
   fi
-  # Wait for the port to fully release so the next start doesn't EADDRINUSE.
+  # Wait for the port to fully release so the next start doesn't
+  # EADDRINUSE. Probe via /readyz instead of lsof: lsof isn't
+  # guaranteed in minimal CI images, and a 200 reply from /readyz
+  # specifically means there's still a working server on the port,
+  # which is what we'd care about either way.
   for _ in $(seq 1 10); do
-    if ! lsof -iTCP:8088 -sTCP:LISTEN -P > /dev/null 2>&1; then
+    if ! curl -fsS http://localhost:8088/readyz > /dev/null 2>&1; then
       break
     fi
     sleep 1
@@ -99,6 +103,16 @@ start_server() {
   echo "  phase=$phase pid=$SERVER_PID env_overrides=$*"
 
   for i in $(seq 1 30); do
+    # Fail fast if the server PID exited before /readyz answered —
+    # otherwise a 8088 hand-off to a foreign process would silently
+    # invalidate the coverage profile (no covcounters file from this
+    # PID) and pass the readiness check against the wrong server.
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "::error::server PID $SERVER_PID died during boot for phase=$phase"
+      cat "$log"
+      SERVER_PID=""
+      exit 1
+    fi
     if curl -fsS http://localhost:8088/readyz > /dev/null 2>&1; then
       echo "  ready after ${i}s"
       return 0
@@ -128,7 +142,7 @@ start_server "default-env-auth" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
   cd "$REPO_ROOT/test/e2e"
-  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 npx playwright test tests/auth
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test tests/auth
 )
 stop_server
 echo "::endgroup::"
@@ -139,7 +153,7 @@ start_server "default-env-qa" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
   cd "$REPO_ROOT/test/e2e"
-  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 npx playwright test \
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
     tests/qa/sections-c-d-f.spec.ts tests/qa/sections-a5-a7.spec.ts \
     --workers=1
 )
@@ -152,7 +166,7 @@ start_server "default-env-a7" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
   cd "$REPO_ROOT/test/e2e"
-  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 npx playwright test \
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
     tests/qa/section-a7-rate-limit.spec.ts --workers=1
 )
 stop_server
@@ -165,7 +179,7 @@ start_server "envspec-allowlist-jit-off" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=0
 (
   cd "$REPO_ROOT/test/e2e"
-  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 npx playwright test \
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
     tests/qa/section-a6-allowlist.spec.ts \
     tests/qa/section-b3-jit-off.spec.ts \
     --workers=1
@@ -190,7 +204,7 @@ start_server "short-session-timeouts" \
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 \
     E2E_OIDC_IDLE_WAIT_MS=7000 \
     E2E_BREAKGLASS_IDLE_WAIT_MS=5000 \
-    npx playwright test tests/qa/section-e-lifecycle.spec.ts --workers=1
+    ./node_modules/.bin/playwright test tests/qa/section-e-lifecycle.spec.ts --workers=1
 )
 stop_server
 echo "::endgroup::"
@@ -209,6 +223,6 @@ echo "::endgroup::"
 echo "::group::Convert UI V8 coverage → lcov-e2e.info"
 (
   cd "$REPO_ROOT/test/e2e"
-  npm run coverage:lcov
+  node scripts/coverage-to-lcov.mjs
 )
 echo "::endgroup::"

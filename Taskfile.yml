@@ -250,7 +250,7 @@ tasks:
       lives at scripts/test-e2e-coverage.sh so the shell-glue logic
       stays in bash (Taskfile's default mvdan/sh interpreter chokes
       on the `VAR=value ./binary &` background pattern).
-    deps: [test:e2e:install]
+    deps: [test:e2e:install, build:ui:e2e]
     cmds:
       - bash scripts/test-e2e-coverage.sh
 
