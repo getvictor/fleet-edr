@@ -4,6 +4,7 @@ package breakglass_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -623,6 +624,103 @@ func TestHandle_FullLogin_Success(t *testing.T) {
 		assert.Equal(t, "assertion_parse_failed",
 			resp2.Header.Get("X-Edr-Auth-Reason"))
 	}
+}
+
+// Generic WebAuthn failure (origin mismatch, signature verify fail,
+// etc.) maps to the catch-all "login.error" audit reason. The
+// handler logs the underlying error at WARN so an operator can
+// diagnose the failure in SigNoz; the wire response stays redacted
+// so a probing attacker cannot enumerate failure modes. Pinned
+// because the WARN branch is the operator's only diagnostic
+// breadcrumb when the failure isn't one of the named cases.
+func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
+	h, db, rec, uid, fake := newFakeHandler(t)
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	plaintext, _, err := breakglass.NewTokenStore(db).IssueSetup(t.Context(), uid, time.Hour)
+	require.NoError(t, err)
+	svcs := breakglass.NewService(breakglass.ServiceOptions{
+		DB: db, Users: users.New(db), Identities: identities.New(db),
+		Tokens: breakglass.NewTokenStore(db), Credentials: breakglass.NewCredentialStore(db),
+		Sessions: sessions.New(db, sessions.Options{}), WebAuthn: fake, Audit: rec,
+	})
+	_, tok, user, err := svcs.BeginSetup(t.Context(), plaintext)
+	require.NoError(t, err)
+	_, err = svcs.FinishSetup(t.Context(), breakglass.FinishSetupRequest{
+		Token: tok, User: user,
+		Session:     webauthn.SessionData{Challenge: "fake-challenge"},
+		Password:    "long-enough-password",
+		Attestation: fakeAttestation(),
+	})
+	require.NoError(t, err)
+
+	// Drive ValidateLogin into a generic (unclassified) error so
+	// reasonForLoginErr falls through to "login.error".
+	fake.validateLoginErr = errors.New("origin mismatch (synthetic)")
+
+	resp1, err := srv.Client().Post(srv.URL+"/admin/break-glass/challenge",
+		"application/json",
+		strings.NewReader(`{"email":"admin@fleet-edr.local"}`))
+	require.NoError(t, err)
+	defer func() { _ = resp1.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp1.StatusCode)
+	var challengeCookie *http.Cookie
+	for _, c := range resp1.Cookies() {
+		if c.Name == breakglass.ChallengeStateCookieName {
+			challengeCookie = c
+		}
+	}
+	require.NotNil(t, challengeCookie)
+
+	// Construct a parseable WebAuthn assertion. The fields just need
+	// to satisfy protocol.ParseCredentialRequestResponseBytes' shape
+	// checks (base64url-decodable clientDataJSON with valid JSON,
+	// authenticatorData ≥ 37 bytes, base64url-decodable signature) —
+	// the fake ValidateLogin pre-set above rejects this regardless of
+	// content, so we skip the full ceremony.
+	clientDataJSON, err := json.Marshal(map[string]any{
+		"type":      "webauthn.get",
+		"challenge": "fake-challenge",
+		"origin":    "http://localhost:8088",
+	})
+	require.NoError(t, err)
+	authData := make([]byte, 37)
+	body, err := json.Marshal(map[string]any{
+		"email":    "admin@fleet-edr.local",
+		"password": "long-enough-password",
+		"assertion": map[string]any{
+			"id":    base64.RawURLEncoding.EncodeToString([]byte("cred-id-1")),
+			"rawId": base64.RawURLEncoding.EncodeToString([]byte("cred-id-1")),
+			"type":  "public-key",
+			"response": map[string]any{
+				"clientDataJSON":    base64.RawURLEncoding.EncodeToString(clientDataJSON),
+				"authenticatorData": base64.RawURLEncoding.EncodeToString(authData),
+				"signature":         base64.RawURLEncoding.EncodeToString([]byte{0, 0, 0, 0, 0, 0, 0, 0}),
+			},
+		},
+	})
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		srv.URL+"/admin/break-glass",
+		strings.NewReader(string(body)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(challengeCookie)
+	resp2, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, resp2.StatusCode,
+		"assertion must parse so the generic-error branch fires; got %d (reason=%s)",
+		resp2.StatusCode, resp2.Header.Get("X-Edr-Auth-Reason"))
+	assert.Equal(t, "invalid_credentials", resp2.Header.Get("X-Edr-Auth-Reason"))
+	require.NotEmpty(t, rec.events)
+	last := rec.events[len(rec.events)-1]
+	assert.Equal(t, api.AuditAuthBreakglassFailure, last.Action)
+	assert.Equal(t, "login.error", last.Payload["reason"])
 }
 
 // Per-IP rate-limit exhaustion. Covers the handler's tooMany path

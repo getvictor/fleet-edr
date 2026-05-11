@@ -4,6 +4,7 @@ package breakglass_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -193,6 +194,47 @@ func TestCredentialStore_RecordAssertion_BackupStateFlip(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.BackupState, "BS flips on the successful login that reported it")
 	assert.True(t, got.BackupEligible, "BE remains invariant across login")
+}
+
+// Concurrent successful assertions must not roll the sign counter
+// back: with the old read-then-write shape, two callers could SELECT
+// the same stored counter and then race their UPDATEs, overwriting a
+// higher counter with a lower one and weakening clone detection. The
+// atomic GREATEST() write closes that window. Pinned so a future
+// refactor doesn't accidentally reintroduce the TOCTOU.
+//
+// Likewise, backup_state must monotonically transition 0->1: a
+// concurrent assertion that reports BS=false while another reports
+// BS=true cannot regress the column. The `backup_state OR ?` write
+// is what makes this safe.
+func TestCredentialStore_RecordAssertion_ConcurrentMonotonic(t *testing.T) {
+	s, db, uid := newCredentialStore(t)
+	cred := fakeCredential("cred-concurrent", "pk", 0)
+	cred.Flags.BackupEligible = true
+	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
+	require.NoError(t, err)
+
+	// Race two writers: one reports SignCount=100 + BS=true, one
+	// reports SignCount=50 + BS=false. Final state must be
+	// sign_count >= 100 AND BS=true regardless of execution order.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = s.RecordAssertion(t.Context(), cred.ID, 100, true)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.RecordAssertion(t.Context(), cred.ID, 50, false)
+	}()
+	wg.Wait()
+
+	got, err := s.FindByID(t.Context(), cred.ID)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, got.SignCount, uint64(100),
+		"sign_count must not roll back when two assertions race")
+	assert.True(t, got.BackupState,
+		"backup_state must stay true once any assertion reports it true")
 }
 
 // ToWebauthnCredentials converts a slice of stored rows into the

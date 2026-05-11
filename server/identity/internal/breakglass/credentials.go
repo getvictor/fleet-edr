@@ -127,12 +127,44 @@ func (s *CredentialStore) ListByUserID(ctx context.Context, userID int64) ([]Cre
 // but the missed update means the next attempt can no longer detect
 // a clone via this credential. The slog WARN preserves the signal.
 func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, newSignCount uint32, backupState bool) error {
-	// Check for the clone case before updating so we can return a
-	// typed error. A row with stored sign_count > newSignCount + a
-	// stored value > 0 indicates a regression that the spec
-	// considers a clone signal.
+	// Atomic conditional UPDATE: avoids the TOCTOU window the
+	// previous read-then-write shape opened (two concurrent
+	// assertions could both SELECT the same stored counter and
+	// then race to overwrite each other, weakening clone detection
+	// AND rolling backup_state back from 1 to 0). The WHERE clause
+	// rejects clone signals server-side (stored > 0 AND new <=
+	// stored); GREATEST keeps sign_count monotonic; backup_state OR
+	// new BS preserves the spec's "BS only goes 0->1" invariant.
+	//
+	// RowsAffected discriminates the four outcomes:
+	//   - 1: success, counter advanced + flags updated
+	//   - 0 AND row exists with sign_count > 0: clone signal
+	//   - 0 AND no row: credential not found
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE webauthn_credentials
+		SET sign_count   = GREATEST(sign_count, ?),
+		    last_used_at = NOW(6),
+		    backup_state = backup_state OR ?
+		WHERE credential_id = ?
+		  AND NOT (sign_count > 0 AND ? <= sign_count)
+	`, newSignCount, backupState, credID, newSignCount)
+	if err != nil {
+		return fmt.Errorf("breakglass credentials: record assertion: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("breakglass credentials: rows affected: %w", err)
+	}
+	if n != 0 {
+		return nil
+	}
+	// Zero rows updated. Probe to disambiguate the row-missing case
+	// from the clone-detected case. The probe runs against the
+	// post-state which is fine: the clone WHERE clause guards every
+	// writer, so the stored value we read now is exactly what
+	// blocked the UPDATE.
 	var stored uint64
-	err := s.db.GetContext(ctx, &stored,
+	err = s.db.GetContext(ctx, &stored,
 		`SELECT sign_count FROM webauthn_credentials WHERE credential_id = ?`,
 		credID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -144,23 +176,10 @@ func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, ne
 	if stored > 0 && uint64(newSignCount) <= stored {
 		return ErrCredentialClonedDetected
 	}
-
-	// Update unconditionally: sign_count is set to the max of stored
-	// and new (so a counter that legitimately stays at 0 doesn't
-	// regress); last_used_at always stamps NOW(); backup_state
-	// reflects whatever the authenticator just reported.
-	bump := max(uint64(newSignCount), stored)
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE webauthn_credentials
-		SET sign_count   = ?,
-		    last_used_at = NOW(6),
-		    backup_state = ?
-		WHERE credential_id = ?
-	`, bump, backupState, credID)
-	if err != nil {
-		return fmt.Errorf("breakglass credentials: record assertion: %w", err)
-	}
-	return nil
+	// Defensive: row exists, sign_count is healthy, but UPDATE
+	// matched zero rows. Shouldn't happen; treat as not-found so
+	// the operator retries with a fresh assertion.
+	return ErrCredentialNotFound
 }
 
 // FindByID returns the row for a single credential id (raw bytes,

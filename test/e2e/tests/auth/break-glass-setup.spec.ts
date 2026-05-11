@@ -39,8 +39,12 @@ test.describe("break-glass redemption ceremony", () => {
     // boot (the first /livez warmed the seed path). Mint a fresh
     // bootstrap token bound to that admin.
     const db = await openDB();
-    const plaintext = await mintBootstrapToken(db);
-    await db.end();
+    let plaintext: string;
+    try {
+      plaintext = await mintBootstrapToken(db);
+    } finally {
+      await db.end();
+    }
 
     await page.goto(`/admin/break-glass/setup?token=${plaintext}`);
 

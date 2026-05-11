@@ -42,8 +42,13 @@ export default defineConfig({
   webServer: {
     // Boot the dev server with OIDC pointed at the local dex. Both
     // break-glass and OIDC flows route through this one instance.
+    // Probe /readyz instead of /livez: the spec + docs/install-server.md
+    // + docs/operations.md treat /readyz as the readiness signal
+    // (returns 200 when the DB ping succeeds). /livez only proves
+    // the process is up; tests that hit DB-backed endpoints need
+    // the readiness guarantee.
     command: "cd ../.. && task dev:server:qa-oidc",
-    url: `http://localhost:${PORT}/livez`,
+    url: `http://localhost:${PORT}/readyz`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
     stderr: "pipe",

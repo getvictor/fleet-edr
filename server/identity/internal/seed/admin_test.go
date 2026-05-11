@@ -125,3 +125,31 @@ func TestAdmin_NilRBACErrors(t *testing.T) {
 	_, _, err := seed.Admin(t.Context(), us, nil, slog.Default(), nil)
 	require.Error(t, err)
 }
+
+// Wave-0 migration guard: when the canonical admin email already
+// exists but is_breakglass=0 (a pre-Phase-4b row), Admin refuses to
+// silently flip the flag and returns (nil, "", nil). Pinned because
+// silently rewriting that row would destroy operator data and bypass
+// the runbook's explicit migration step.
+func TestAdmin_CanonicalEmailNonBreakglassSkipped(t *testing.T) {
+	us, rb, _ := newSeedFixture(t)
+	_, err := us.Create(t.Context(), users.CreateRequest{
+		Email: seed.DefaultAdminEmail, Password: "this-is-a-long-pw",
+	})
+	require.NoError(t, err)
+
+	u, pw, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
+	require.NoError(t, err, "wave-0 row at canonical email is not an error")
+	assert.Nil(t, u, "Admin returns nil so the operator runbook handles migration")
+	assert.Empty(t, pw)
+}
+
+// Nil logger falls back to slog.Default(). Pinned so a caller that
+// forgets to pass a logger does not nil-deref the WarnContext /
+// InfoContext calls inside the seed flow.
+func TestAdmin_NilLoggerUsesDefault(t *testing.T) {
+	us, rb, _ := newSeedFixture(t)
+	u, _, err := seed.Admin(t.Context(), us, rb, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+}

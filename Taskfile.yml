@@ -432,14 +432,15 @@ tasks:
     cmds:
       - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
       - |
-        # gzcat handles both .gz and plain .sql (gzcat is a symlink to zcat on
-        # macOS, transparently passes plaintext through; on Linux use `zcat -f`
-        # for the same behaviour - both ship with gzip).
-        if [[ "{{.BACKUP_FILE}}" == *.gz ]]; then
-          gzcat "{{.BACKUP_FILE}}" | mysql -uroot -h127.0.0.1 -P3316 edr
-        else
-          mysql -uroot -h127.0.0.1 -P3316 edr < "{{.BACKUP_FILE}}"
-        fi
+        # gzip -dcf works on both macOS and Linux: -d decompresses,
+        # -c streams to stdout, -f passes plaintext through
+        # transparently when the file isn't gzipped. POSIX-portable
+        # so the task runs the same on Debian/Ubuntu (where /bin/sh
+        # is dash and doesn't grok [[ ]]) as it does on macOS bash.
+        case "{{.BACKUP_FILE}}" in
+          *.gz) gzip -dcf "{{.BACKUP_FILE}}" | mysql -uroot -h127.0.0.1 -P3316 edr ;;
+          *)    mysql -uroot -h127.0.0.1 -P3316 edr < "{{.BACKUP_FILE}}" ;;
+        esac
         echo "restored edr from {{.BACKUP_FILE}}"
 
   # -------- qa / local IdP --------
