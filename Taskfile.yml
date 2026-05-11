@@ -182,6 +182,31 @@ tasks:
     cmds:
       - npm test -- --run
 
+  test:e2e:install:
+    desc: |
+      Install Playwright + Chromium for the E2E suite at test/e2e/.
+      One-time setup; subsequent test:e2e invocations skip this. The
+      Playwright browser download is ~300 MB and lives outside the
+      repo, under ~/Library/Caches/ms-playwright on macOS.
+    dir: test/e2e
+    cmds:
+      - npm install
+      - npx playwright install --with-deps chromium
+
+  test:e2e:
+    desc: |
+      Run the Playwright E2E suite at test/e2e/. Covers the browser-
+      driven flows the Go integration suite can't: WebAuthn ceremonies
+      (via a virtual authenticator), OIDC sign-in (via the local dex
+      from `task qa:up`), UI affordances. The playwright.config.ts
+      auto-starts the dev server pointed at dex via
+      task:dev:server:qa-oidc when no listener is on :8088. Pre-req:
+      `task qa:up` (mysql + dex).
+    deps: [test:e2e:install]
+    dir: test/e2e
+    cmds:
+      - npm test
+
   test:short:
     desc: Fast Go tests only (no -race, no DB-dependent suites)
     cmds:
@@ -416,6 +441,73 @@ tasks:
           mysql -uroot -h127.0.0.1 -P3316 edr < "{{.BACKUP_FILE}}"
         fi
         echo "restored edr from {{.BACKUP_FILE}}"
+
+  # -------- qa / local IdP --------
+
+  qa:up:
+    desc: |
+      Bring up the full QA stack: dev mysql, test mysql, and a local
+      dex (https://dexidp.io) OIDC provider on 127.0.0.1:5556. Used by
+      operators walking section B of claude/qa/user-management.md
+      against a local IdP instead of a real Okta tenant. The dex
+      static-passwords config lives at config/dex/dev-config.yaml; the
+      compose overlay is docker-compose.qa.yml. See `task
+      dev:server:qa-oidc` for the matching EDR-side env wiring.
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.qa.yml up -d
+      - |
+        echo "waiting for dex discovery endpoint to be ready..."
+        for _ in $(seq 1 30); do
+          if curl -fsS http://localhost:5556/dex/.well-known/openid-configuration > /dev/null 2>&1; then
+            echo "dex ready at http://localhost:5556/dex"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "dex did not become ready within 30s; check 'docker logs fleet-edr-dex'"
+        exit 1
+
+  qa:down:
+    desc: |
+      Tear down the qa stack (mysql + dex). Use when switching between
+      OIDC and break-glass-only QA runs, or to free port 5556.
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.qa.yml down
+
+  dev:server:qa-oidc:
+    desc: |
+      Run the dev server pointed at the local dex (qa:up) instead of a
+      real Okta tenant. Mirrors dev:server's env block + adds the four
+      EDR_OIDC_* env vars matching config/dex/dev-config.yaml. Drop
+      EDR_AUTH_ALLOW_NO_OIDC=1 so the server actually exercises the
+      OIDC sign-in path; the four pre-provisioned dex users
+      (analyst@qa.local, senior@qa.local, auditor@qa.local,
+      admin@qa.local) all share password `qa-password-123`. First
+      sign-in JIT-provisions the user as `analyst`; promote via SQL
+      per docs/authz.md to test the role matrix.
+    env:
+      EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
+      EDR_ENROLL_SECRET: dev-enroll-secret
+      EDR_ALLOW_INSECURE_HTTP: "1"
+      EDR_LISTEN_ADDR: "0.0.0.0:8088"
+      EDR_LOG_FORMAT: text
+      EDR_HOST_TOKEN_LIFETIME: 24h
+      EDR_HOST_TOKEN_GRACE: 5m
+      EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
+      EDR_BREAKGLASS_RP_ID: localhost
+      EDR_BREAKGLASS_RP_ORIGINS: http://localhost:8088
+      # OIDC: point at the local dex from qa:up.
+      EDR_OIDC_ISSUER: http://localhost:5556/dex
+      EDR_OIDC_CLIENT_ID: edr-qa
+      EDR_OIDC_CLIENT_SECRET: edr-qa-client-secret-do-not-use-in-prod
+      EDR_OIDC_REDIRECT_URL: http://localhost:8088/api/auth/callback
+      EDR_OIDC_ALLOW_JIT_PROVISIONING: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_SERVICE_NAME: fleet-edr-server
+    cmds:
+      - go run {{.SERVER_PKG}}
 
   # -------- install tools / hooks --------
 

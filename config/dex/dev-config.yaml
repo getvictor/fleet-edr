@@ -1,0 +1,62 @@
+# dex (https://dexidp.io) configuration for local QA of the EDR's
+# OIDC flow. Spun up via docker-compose.qa.yml; the EDR points at this
+# instance instead of a real Okta tenant when running `task
+# dev:server:qa-oidc`.
+#
+# Three static users are pre-provisioned so an operator can walk
+# section B of `claude/qa/user-management.md` end-to-end without
+# clicking through Okta's signup. All three share the same password
+# (qa-password-123); the bcrypt hashes below were generated with
+# `htpasswd -bnBC 10 "" qa-password-123 | tr -d ':\n'`.
+#
+# DO NOT use this config or these credentials in production. The
+# issuer URL, client secret, and static passwords are all checked
+# into the repo by design; production OIDC config lives in env vars
+# loaded from a real secrets manager per docs/okta-setup.md.
+
+issuer: http://localhost:5556/dex
+
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+
+# Tell dex to skip the consent prompt for our test client; an operator
+# QA-ing the SSO flow doesn't need to click through "approve this app"
+# every time.
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: edr-qa
+    name: "EDR QA"
+    secret: edr-qa-client-secret-do-not-use-in-prod
+    redirectURIs:
+      - "http://localhost:8088/api/auth/callback"
+
+enablePasswordDB: true
+
+staticPasswords:
+  # First-sign-in JIT lands every user in the `analyst` role per
+  # docs/authz.md. To exercise the role matrix (analyst denied vs
+  # senior_analyst allowed), the operator promotes via the SQL pattern
+  # documented in docs/authz.md after signing in once with each user.
+  - email: "analyst@qa.local"
+    username: "analyst-qa"
+    userID: "1273fb87-ee79-422c-9500-f7ed8f88b04a"
+    hash: "$2y$10$sRTTnP4tqQz2oW8BklM9qeOP9ZCMzjhNK.rkRPVMoRSy/iaxjozPq"
+  - email: "senior@qa.local"
+    username: "senior-qa"
+    userID: "7112e6af-3784-4e00-a816-e269773c3753"
+    hash: "$2y$10$sRTTnP4tqQz2oW8BklM9qeOP9ZCMzjhNK.rkRPVMoRSy/iaxjozPq"
+  - email: "auditor@qa.local"
+    username: "auditor-qa"
+    userID: "dd6b54f5-7c77-4c6c-a56e-fb91ac702789"
+    hash: "$2y$10$sRTTnP4tqQz2oW8BklM9qeOP9ZCMzjhNK.rkRPVMoRSy/iaxjozPq"
+  - email: "admin@qa.local"
+    username: "admin-qa"
+    userID: "d36ce76a-cb2c-44bf-8392-d27b455972d3"
+    hash: "$2y$10$sRTTnP4tqQz2oW8BklM9qeOP9ZCMzjhNK.rkRPVMoRSy/iaxjozPq"
