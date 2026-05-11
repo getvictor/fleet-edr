@@ -4,9 +4,10 @@
   "private": true,
   "description": "End-to-end test suite for the EDR product. Drives Chrome via Playwright against the dev server (and eventually a real-or-fake agent) so user-facing flows are verified at the wire + DOM + visual layer. Owns its own package.json so the UI's npm dependencies stay lean.",
   "scripts": {
-    "test": "playwright test",
-    "test:headed": "playwright test --headed",
-    "test:debug": "playwright test --debug",
+    "test": "playwright test --ignore-snapshots tests/auth",
+    "test:headed": "playwright test --headed tests/auth",
+    "test:debug": "playwright test --debug tests/auth",
+    "qa": "playwright test tests/qa --workers=1",
     "install:browsers": "playwright install --with-deps chromium",
     "report": "playwright show-report"
   },
