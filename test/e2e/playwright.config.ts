@@ -49,7 +49,17 @@ export default defineConfig({
     // the readiness guarantee.
     command: "cd ../.. && task dev:server:qa-oidc",
     url: `http://localhost:${PORT}/readyz`,
-    reuseExistingServer: !process.env.CI,
+    // The default `!CI` reuse rule prevents the coverage runner from
+    // attaching to a server it just booted (CI is set in GH Actions,
+    // so Playwright would normally spawn its own `task dev:server:
+    // qa-oidc`, bypassing the instrumented binary). E2E_REUSE_SERVER=1
+    // is the opt-in that lets `task test:e2e:coverage` start the
+    // covered server in the foreground and then ask Playwright to
+    // reuse it. Other CI contexts (e.g. a future hosted runner that
+    // boots its own webServer) leave the env unset and get the
+    // standard !CI behavior.
+    reuseExistingServer:
+      !process.env.CI || process.env.E2E_REUSE_SERVER === "1",
     timeout: 60_000,
     stderr: "pipe",
     stdout: "pipe",

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures/test";
 import { openDB, resetDB } from "../../fixtures/db";
 
 // Section B of the manual QA plan: SSO sign-in via the local dex

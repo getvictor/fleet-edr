@@ -9,7 +9,13 @@ export default defineConfig(({ mode }) => ({
     outDir: "../server/ui/dist",
     emptyOutDir: true,
     minify: mode === "production",
-    sourcemap: mode !== "production",
+    // Source maps in dev/test mode by default; in production, opt in
+    // via UI_BUILD_SOURCEMAP=1 so the E2E coverage job can ship the
+    // production-shape bundle (minified) WITH the .map files
+    // monocart-coverage-reports needs to remap V8 coverage back to
+    // ui/src/**. Regular `task build:ui` keeps emitting no maps so
+    // production bundles stay lean.
+    sourcemap: mode !== "production" || process.env.UI_BUILD_SOURCEMAP === "1",
   },
   server: {
     proxy: {

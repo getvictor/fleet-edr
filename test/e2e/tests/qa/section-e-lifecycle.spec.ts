@@ -37,6 +37,16 @@ import { signInViaDex } from "./_setup";
 const BREAKGLASS_PASSWORD = "qa-section-e-password";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Sleep durations are driven by the server's actual idle-timeout
+// envs so a CI job that runs with idle=5s doesn't sit for the
+// 18-second local-dev sleep. Defaults match the original
+// section-E env (idle=15s / break-glass-idle=8s) so the local
+// `npm run qa:e` flow still works without any extra env wrangling.
+const OIDC_IDLE_WAIT_MS = Number(process.env.E2E_OIDC_IDLE_WAIT_MS ?? 18_000);
+const BREAKGLASS_IDLE_WAIT_MS = Number(
+  process.env.E2E_BREAKGLASS_IDLE_WAIT_MS ?? 11_000,
+);
+
 test.describe.serial("qa: Section E — session lifecycle", () => {
   test("E.1 OIDC idle timeout evicts session past the configured window", async ({
     browser,
@@ -52,10 +62,11 @@ test.describe.serial("qa: Section E — session lifecycle", () => {
       }
       await signInViaDex(page, "analyst@qa.local");
 
-      // Wait past EDR_SESSION_IDLE_TIMEOUT (15s) without sending any
-      // request. The session row's last_seen_at goes stale; the next
-      // hit should be evicted.
-      await sleep(18_000);
+      // Wait past EDR_SESSION_IDLE_TIMEOUT (15s locally, tighter in
+      // CI — see E2E_OIDC_IDLE_WAIT_MS) without sending any request.
+      // The session row's last_seen_at goes stale; the next hit
+      // should be evicted.
+      await sleep(OIDC_IDLE_WAIT_MS);
       const resp = await ctx.request.get("/api/session");
       expect(resp.status()).toBe(401);
     } finally {
@@ -85,10 +96,11 @@ test.describe.serial("qa: Section E — session lifecycle", () => {
         await db.end();
       }
 
-      // Wait past EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT (8s). OIDC's
-      // 15s would still be alive; the break-glass session must be
-      // gone.
-      await sleep(11_000);
+      // Wait past EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT (8s locally,
+      // tighter in CI — see E2E_BREAKGLASS_IDLE_WAIT_MS). OIDC's
+      // longer idle window would still be alive at this point; the
+      // break-glass session must be gone.
+      await sleep(BREAKGLASS_IDLE_WAIT_MS);
       const resp = await ctx.request.get("/api/session");
       expect(resp.status()).toBe(401);
     } finally {
