@@ -7,10 +7,12 @@
     "test": "playwright test --ignore-snapshots tests/auth",
     "test:headed": "playwright test --headed tests/auth",
     "test:debug": "playwright test --debug tests/auth",
+    "test:all": "playwright test tests/auth && playwright test tests/qa --workers=1",
     "qa": "playwright test tests/qa --workers=1",
     "install:browsers": "playwright install --with-deps chromium",
     "report": "playwright show-report"
   },
+  "//": "test = fast auth/session ceremonies, runs in CI. qa = the manual-QA-plan matrix (Sections C/D/F.4), serial-only because rebuildQAState trips the break-glass setup rate-limit (5/min) if run twice in close succession. Use test:all to run both end-to-end.",
   "devDependencies": {
     "@playwright/test": "1.50.1",
     "@types/node": "22.10.5",
