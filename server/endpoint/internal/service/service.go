@@ -287,12 +287,10 @@ func (s *service) enqueueRotateCommand(ctx context.Context, hostID, newToken str
 	if s.commands == nil {
 		return nil
 	}
-	payload, err := json.Marshal(map[string]string{"new_token": newToken})
-	if err != nil {
-		s.logger.WarnContext(ctx, "rotate_token marshal failed",
-			attrkeys.HostID, hostID, "err", err)
-		return nil
-	}
+	// json.Marshal on map[string]string cannot fail (UTF-8 string keys + values
+	// always serialize); the err is intentionally dropped so the call has no
+	// unreachable branch dragging coverage down.
+	payload, _ := json.Marshal(map[string]string{"new_token": newToken}) //nolint:errcheck // map[string]string never fails to marshal
 	id, err := s.commands(ctx, hostID, commandTypeRotateToken, payload)
 	if err != nil {
 		s.logger.WarnContext(ctx, "rotate_token enqueue failed",

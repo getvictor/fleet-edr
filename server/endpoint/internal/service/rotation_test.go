@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -260,4 +261,85 @@ func TestRotateToken_NilDepsOK(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, res.CommandID, "nil CommandInserter -> CommandID nil so the wire shape omits command_id")
 	assert.NotEmpty(t, res.PreviousTokenIDPrefix)
+}
+
+// erroringRecorder satisfies identityapi.AuditRecorder by returning a
+// fixed error for every Record call so tests can drive the audit-emit
+// error branch.
+type erroringRecorder struct{}
+
+func (erroringRecorder) Record(_ context.Context, _ identityapi.AuditEvent) error {
+	return errors.New("audit sink offline")
+}
+
+// RotateToken must not surface an audit-record failure to the caller:
+// rotation already committed in the DB and a missed audit row is a
+// follow-up incident, not a reason to fail the HTTP 200. The error
+// is logged + swallowed.
+func TestRotateToken_AuditRecordErrorIsSwallowed(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	cmds := &commandCapture{}
+	svc := service.New(service.Options{
+		Store:    mysql.NewStore(db),
+		Secret:   testSecret,
+		Audit:    erroringRecorder{},
+		Commands: cmds.Insert,
+		Lifetime: 24 * time.Hour,
+		Grace:    time.Minute,
+		Logger:   slog.Default(),
+	})
+	_, err := svc.Enroll(t.Context(), api.EnrollRequest{
+		EnrollSecret: testSecret, HardwareUUID: testHostID,
+		Hostname: "h", AgentVersion: "v", OSVersion: "o",
+	}, "127.0.0.1")
+	require.NoError(t, err)
+
+	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "victor@example", "incident")
+	require.NoError(t, err, "audit failure must not fail rotation")
+	assert.NotEmpty(t, res.PreviousTokenIDPrefix, "DB rotation must still commit")
+	require.NotNil(t, res.CommandID, "command must still queue even when audit fails")
+	assert.Equal(t, int64(1), cmds.calls.Load())
+}
+
+// erroringInserter satisfies api.CommandInserter by returning a fixed
+// error so tests can drive the rotate_token enqueue-error branch.
+func erroringInserter(_ context.Context, _, _ string, _ []byte) (int64, error) {
+	return 0, errors.New("commands queue offline")
+}
+
+// RotateToken must not surface a commands-enqueue failure: the agent's
+// previous token still works during grace; once grace expires it'll
+// 401 and re-enroll. Acceptable failure mode for a queue hiccup.
+// CommandID must be nil so the wire shape omits command_id.
+func TestRotateToken_CommandsEnqueueErrorIsSwallowed(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	audit := &fakeRecorder{}
+	svc := service.New(service.Options{
+		Store:    mysql.NewStore(db),
+		Secret:   testSecret,
+		Audit:    audit,
+		Commands: erroringInserter,
+		Lifetime: 24 * time.Hour,
+		Grace:    time.Minute,
+		Logger:   slog.Default(),
+	})
+	_, err := svc.Enroll(t.Context(), api.EnrollRequest{
+		EnrollSecret: testSecret, HardwareUUID: testHostID,
+		Hostname: "h", AgentVersion: "v", OSVersion: "o",
+	}, "127.0.0.1")
+	require.NoError(t, err)
+
+	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "victor@example", "incident")
+	require.NoError(t, err, "commands enqueue failure must not fail rotation")
+	assert.NotEmpty(t, res.PreviousTokenIDPrefix, "DB rotation must still commit")
+	assert.Nil(t, res.CommandID, "failed commands enqueue must surface as nil CommandID")
+
+	// Audit row still emitted so operator visibility is preserved; the
+	// command_id field is omitted from the payload.
+	require.Len(t, audit.Snapshot(), 1)
+	got := audit.Snapshot()[0]
+	assert.NotContains(t, got.Payload, "command_id",
+		"failed enqueue: audit payload must omit command_id rather than carry a stale zero")
 }
