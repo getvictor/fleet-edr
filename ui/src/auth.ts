@@ -21,6 +21,7 @@ import {
   type PublicKeyCredentialCreationOptionsJSON,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
+import { attachCsrfHeader } from "./api";
 
 // HTTP status threshold above which the response is an error.
 const HTTP_BAD_REQUEST = 400;
@@ -82,6 +83,13 @@ async function requestJSON<T>(
     Accept: "application/json",
     ...(init.headers as Record<string, string> | undefined),
   };
+  // Reauth POSTs (/api/auth/reauth/challenge + /api/auth/reauth)
+  // ride the session-protected mux, so the server's CSRF middleware
+  // requires X-CSRF-Token on unsafe methods. The PRE-auth break-glass
+  // endpoints (/admin/break-glass/*) are public + don't require CSRF;
+  // attachCsrfHeader no-ops when getCsrfToken() returns empty, so
+  // calling it on the unauthenticated path is harmless.
+  attachCsrfHeader(headers, init.method);
   const res = await fetch(target, {
     ...init,
     headers,

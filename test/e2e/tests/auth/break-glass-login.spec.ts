@@ -6,10 +6,14 @@ import {
 } from "../../fixtures/webauthn";
 import { openDB, resetDB, mintBootstrapToken } from "../../fixtures/db";
 
-// Section A.4 of the manual QA plan: a freshly-redeemed admin can
-// sign back in via /admin/break-glass with email + password +
-// virtual-authenticator assertion. End-to-end registration first
-// (so the credential row exists), then logout, then login.
+// Day-to-day break-glass login: a freshly-redeemed admin can sign
+// back in via /admin/break-glass with email + password +
+// virtual-authenticator assertion. End-to-end registration first (so
+// the credential row exists), then logout, then login. Separate from
+// the redemption ceremony spec because the registration -> sign-in
+// transition is itself the regression surface (a credential that
+// silently rolled back at FinishSetup would still flip the URL to
+// /ui/ but fail at the next sign-in).
 test.describe("break-glass day-to-day login", () => {
   let va: VirtualAuthenticator;
   const password = "qa-login-password-12-chars";
@@ -89,7 +93,7 @@ test.describe("break-glass day-to-day login", () => {
   // Wrong-password / unknown-email enumeration-resistance is covered
   // exhaustively at the Go layer in
   // server/identity/internal/breakglass/handler_test.go. A UI-layer
-  // version is desirable but the dynamic error-text shape (varies
-  // by browser, by phase) makes it brittle as a v1 E2E. Reintroduce
-  // here once the UI's error-rendering contract is pinned.
+  // version is desirable but the dynamic error-text shape varies by
+  // browser + render path, which makes it brittle here. Reintroduce
+  // once the UI's error-rendering contract is pinned.
 });

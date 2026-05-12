@@ -7,14 +7,21 @@ import {
   VirtualAuthenticator,
 } from "../../fixtures/webauthn";
 
-// Sections A.5 (precise reason on failure) and A.7 (rate limiting).
-// Both run against the default `task dev:server:qa-oidc` server with
-// no env overrides. The break-glass setup ceremony runs ONCE in
-// beforeAll on a long-lived browser context; A.5 reuses that same
-// context so the virtual authenticator + its registered credential
-// stay in scope (a fresh test context would have a new VA that
-// doesn't know about the credential). This keeps the spec to a
-// single setup ceremony, well under DefaultSetupRatePerMin (5/min).
+// Break-glass login wrong-password path: the wire response collapses
+// to a generic invalid_credentials (to resist user/credential
+// enumeration), but the audit row carries the precise reason
+// password.mismatch — so an operator scanning the audit log can tell
+// a password failure apart from a missing-user / bad-assertion / no-
+// credentials rejection. Sibling shape coverage at the Go layer is in
+// server/identity/internal/breakglass/handler_test.go.
+//
+// Runs against the default dev server with no env overrides. The
+// break-glass setup ceremony runs ONCE in beforeAll on a long-lived
+// browser context; the wrong-password test reuses that same context
+// so the virtual authenticator + its registered credential stay in
+// scope (a fresh test context would have a new VA that doesn't know
+// about the credential). One setup ceremony per file fits comfortably
+// under DefaultSetupRatePerMin (5/min).
 
 const RIGHT_PASSWORD = "qa-precise-reason-password";
 const WRONG_PASSWORD = "definitely-not-the-password";
@@ -23,7 +30,7 @@ let setupCtx: BrowserContext | undefined;
 let setupPage: Page;
 let setupVA: VirtualAuthenticator | undefined;
 
-test.describe.serial("qa: Sections A.5 + A.7", () => {
+test.describe.serial("break-glass login failure reason", () => {
   test.beforeAll(async ({ browser }) => {
     setupCtx = await browser.newContext();
     setupPage = await setupCtx.newPage();
@@ -43,8 +50,8 @@ test.describe.serial("qa: Sections A.5 + A.7", () => {
         { timeout: 15_000 },
       );
       await setupPage.request.delete("/api/session");
-      // Clear audit rows from the setup so A.5's assertion only sees
-      // its own failure row.
+      // Clear audit rows from the setup so the wrong-password test's
+      // assertion sees only its own failure row.
       await db.query("DELETE FROM audit_events");
     } finally {
       await db.end();
@@ -58,12 +65,12 @@ test.describe.serial("qa: Sections A.5 + A.7", () => {
     if (setupCtx) await setupCtx.close();
   });
 
-  // A.5: wrong password + valid WebAuthn assertion. ValidateLogin
-  // passes (the VA signs correctly with the registered credential);
+  // Wrong password + valid WebAuthn assertion. ValidateLogin passes
+  // (the VA signs correctly with the registered credential); the
   // password check fails with ErrBadPassword; reasonForLoginErr maps
-  // it to "password.mismatch". Wire shows the redacted
-  // invalid_credentials; audit row carries the precise reason.
-  test("A.5 wrong password collapses to invalid_credentials on the wire; audit carries password.mismatch", async () => {
+  // that to "password.mismatch". Wire shows the redacted
+  // invalid_credentials; the audit row carries the precise reason.
+  test("wrong password collapses to invalid_credentials on the wire; audit carries password.mismatch", async () => {
     // setupPage retains the VA + registered credential from
     // beforeAll. Drive the wrong-password login here.
     await setupPage.goto("/ui/login");
@@ -117,8 +124,8 @@ test.describe.serial("qa: Sections A.5 + A.7", () => {
     }
   });
 
-  // A.7 lives in section-a7-rate-limit.spec.ts. Burning the per-IP
-  // rate budget here would pollute the bucket for ~3 minutes and
-  // break any subsequent break-glass-touching spec in the same
-  // `npm run qa` run.
+  // The brute-force rate-limit case lives in
+  // breakglass-challenge-rate-limit.spec.ts. Burning the per-IP rate
+  // budget here would pollute the bucket for ~3 minutes and break any
+  // subsequent break-glass-touching spec in the same default-env run.
 });
