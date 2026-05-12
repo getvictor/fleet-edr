@@ -74,20 +74,12 @@ func TestEveryPrivilegedHandlerCallsHTTPGate(t *testing.T) {
 		entries, err := os.ReadDir(dir)
 		require.NoErrorf(t, err, "read operator dir %s", dir)
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
-				continue
+			scanned, offender := scanHandlerEntry(t, relDir, dir, e)
+			if scanned {
+				handlerFilesScanned++
 			}
-			rel := filepath.Join(relDir, e.Name())
-			if gateExceptions[rel] {
-				continue
-			}
-			full := filepath.Join(dir, e.Name())
-			if !fileHasHandlerFunc(t, full) {
-				continue
-			}
-			handlerFilesScanned++
-			if !fileReferencesHTTPGate(t, full) {
-				offenders = append(offenders, rel)
+			if offender != "" {
+				offenders = append(offenders, offender)
 			}
 		}
 	}
@@ -106,6 +98,31 @@ func TestEveryPrivilegedHandlerCallsHTTPGate(t *testing.T) {
 			"function but never reference HTTPGate; either add a chokepoint call "+
 			"or add the file to gateExceptions with a justification:\n  %s",
 		strings.Join(offenders, "\n  "))
+}
+
+// scanHandlerEntry classifies a single dirent under an operator-handler
+// directory. Returns (scanned, offender): scanned=true when the entry
+// is a non-test .go file that declares at least one HTTP-handler
+// function (i.e., it counted toward the floor); offender holds the
+// rel-path when the file declares a handler but never references the
+// HTTPGate chokepoint (offender="" means clean).
+func scanHandlerEntry(t *testing.T, relDir, dir string, e os.DirEntry) (bool, string) {
+	t.Helper()
+	if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+		return false, ""
+	}
+	rel := filepath.Join(relDir, e.Name())
+	if gateExceptions[rel] {
+		return false, ""
+	}
+	full := filepath.Join(dir, e.Name())
+	if !fileHasHandlerFunc(t, full) {
+		return false, ""
+	}
+	if !fileReferencesHTTPGate(t, full) {
+		return true, rel
+	}
+	return true, ""
 }
 
 // fileHasHandlerFunc returns true if any function in the file has a

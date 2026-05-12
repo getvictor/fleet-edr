@@ -104,7 +104,7 @@ function AuthedApp() {
       <TopNav
         user={auth.user}
         authMethod={auth.authMethod}
-        onLogout={() => { void handleLogout(); }}
+        onLogout={() => { handleLogout().catch(() => undefined); }}
       />
       <main className="app-page">
         <Routes>

@@ -233,7 +233,7 @@ export function ProcessTreeView() {
     // Validate the parsed value: a malformed ?at= would otherwise produce NaN, propagate
     // through the multiplication, and land an invalid range on getProcessTree.
     const atParam = searchParams.get("at");
-    const parsedAt = atParam ? Number(atParam) : NaN;
+    const parsedAt = atParam ? Number(atParam) : Number.NaN;
     const anchorMs = Number.isFinite(parsedAt) ? parsedAt : Date.now();
     const to = anchorMs * NANOSECONDS_PER_MILLISECOND;
     // rangeIdx is the user's pick from the segmented control above; it's

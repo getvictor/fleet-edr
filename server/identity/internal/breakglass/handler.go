@@ -48,6 +48,15 @@ const reauthChallengeCookieName = "edr_reauth_challenge"
 // Matches the WebAuthn challenge timeout the browser enforces.
 const challengeCookieMaxAge = 300
 
+// Cache-Control header semantics applied uniformly to break-glass auth
+// responses. Success paths set signed challenge / session cookies;
+// error paths are throwaway. Either way the response should not land
+// in any shared cache.
+const (
+	headerCacheControl  = "Cache-Control"
+	cacheControlNoStore = "no-store"
+)
+
 // loginBodyMaxBytes caps the JSON body the login handler reads.
 // 64 KiB comfortably accommodates a CredentialAssertionResponse
 // (with attestationObject) without inviting OOM via a hostile
@@ -186,7 +195,7 @@ func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
 // token-bearing Location header out of browser history / proxy
 // caches: the redemption URL is sensitive bearer state.
 func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	dest := "/ui/admin/break-glass/setup"
 	if q := r.URL.RawQuery; q != "" {
 		dest += "?" + q
@@ -198,11 +207,39 @@ func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
 // posture as handleSetupRedirect for consistency, even though this
 // path carries no token.
 func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	http.Redirect(w, r, "/ui/admin/break-glass", http.StatusFound)
 }
 
 // ---- /admin/break-glass/setup ----------------------------------------------
+
+// gateSetupRequest applies the public-setup admission gate shared by
+// handleBeginSetup + handleFinishSetup: write the no-store cache header,
+// enforce per-IP + setup-flow rate limits, and parse the redemption
+// token from the query string. Returns the trimmed token and ok=true
+// when the caller should continue; ok=false means the response has
+// already been written (4xx) and the caller must return.
+func (h *Handler) gateSetupRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+	// no-store on every break-glass auth response: success paths set
+	// signed challenge / session cookies; error paths are throwaway.
+	// Either way the response should not land in a shared cache.
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
+	ctx := r.Context()
+	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
+		h.tooMany(ctx, w, "rate_limited")
+		return "", false
+	}
+	if !h.rates.AllowSetup() {
+		h.tooMany(ctx, w, "setup_rate_limited")
+		return "", false
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		h.gone(ctx, w, "token_missing")
+		return "", false
+	}
+	return token, true
+}
 
 // handleBeginSetup validates the redemption token query parameter
 // and issues a WebAuthn registration challenge. The challenge state
@@ -212,21 +249,8 @@ func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
 // with curl + a WebAuthn CLI (or the operator runbook's example
 // browser shim).
 func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
-	// no-store on every break-glass auth response: success paths set
-	// signed challenge / session cookies; error paths are throwaway.
-	// Either way the response should not land in a shared cache.
-	w.Header().Set("Cache-Control", "no-store")
-	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(r.Context(), w, "rate_limited")
-		return
-	}
-	if !h.rates.AllowSetup() {
-		h.tooMany(r.Context(), w, "setup_rate_limited")
-		return
-	}
-	token := strings.TrimSpace(r.URL.Query().Get("token"))
-	if token == "" {
-		h.gone(r.Context(), w, "token_missing")
+	token, ok := h.gateSetupRequest(w, r)
+	if !ok {
 		return
 	}
 	challenge, _, _, err := h.svc.BeginSetup(r.Context(), token)
@@ -254,18 +278,8 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 //	POST /admin/break-glass/setup
 //	  body: {"password": "...", "credential_name": "yk1", "attestation": <CredentialCreationResponse JSON>}
 func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(r.Context(), w, "rate_limited")
-		return
-	}
-	if !h.rates.AllowSetup() {
-		h.tooMany(r.Context(), w, "setup_rate_limited")
-		return
-	}
-	token := strings.TrimSpace(r.URL.Query().Get("token"))
-	if token == "" {
-		h.gone(r.Context(), w, "token_missing")
+	token, ok := h.gateSetupRequest(w, r)
+	if !ok {
 		return
 	}
 	cookie, err := r.Cookie(ChallengeStateCookieName)
@@ -341,7 +355,7 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 // handleBeginLogin issues the WebAuthn assertion challenge for the
 // presented email. JSON body: {"email": "..."}.
 func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -380,7 +394,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 // handleFinishLogin verifies password + assertion and mints a
 // session. JSON body: {"email": "...", "password": "...", "assertion": <CredentialAssertionResponse JSON>}.
 func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -587,6 +601,38 @@ func reasonForSetupErr(err error) string {
 	}
 }
 
+// gateReauthRequest applies the authed-reauth admission gate shared
+// by handleReauthChallenge + handleReauth: write the no-store cache
+// header, require a session on the request context, require
+// auth_method=local_password (OIDC sessions dispatch reauth via
+// /api/auth/login?reauth=1 instead), and enforce per-IP rate limits.
+// Returns the resolved session and ok=true to continue; ok=false means
+// the response is already written and the caller must return. The
+// caller re-derives the context with r.Context() to keep contextcheck
+// happy (linter cannot trace context inheritance through a helper
+// return value).
+func (h *Handler) gateReauthRequest(w http.ResponseWriter, r *http.Request) (*api.Session, bool) {
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
+	ctx := r.Context()
+	sess, ok := api.SessionFromContext(ctx)
+	if !ok {
+		// Middleware mis-wiring: route mounted without Session().
+		// Fail loud with 500 because the misconfig is server-side.
+		h.logger.ErrorContext(ctx, "reauth invoked without session on ctx")
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return nil, false
+	}
+	if sess.AuthMethod != "local_password" {
+		h.badRequest(ctx, w, "reauth_not_supported")
+		return nil, false
+	}
+	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
+		h.tooMany(ctx, w, "rate_limited")
+		return nil, false
+	}
+	return sess, true
+}
+
 // handleReauthChallenge issues a fresh assertion challenge for the
 // operator on the current session. Phase 5 reauth flow: an authed
 // operator hit a destructive action that's outside the reauth window;
@@ -600,24 +646,11 @@ func reasonForSetupErr(err error) string {
 // is not "local_password" get 400 reauth_not_supported; the UI is
 // expected to dispatch OIDC reauth via /api/auth/login?reauth=1.
 func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	ctx := r.Context()
-	sess, ok := api.SessionFromContext(ctx)
+	sess, ok := h.gateReauthRequest(w, r)
 	if !ok {
-		// Middleware mis-wiring: route mounted without Session().
-		// Fail loud with 500 because the misconfig is server-side.
-		h.logger.ErrorContext(ctx, "reauth challenge invoked without session on ctx")
-		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	if sess.AuthMethod != "local_password" {
-		h.badRequest(ctx, w, "reauth_not_supported")
-		return
-	}
-	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(ctx, w, "rate_limited")
-		return
-	}
+	ctx := r.Context()
 	user, err := h.svc.users.Get(ctx, sess.UserID)
 	if err != nil {
 		// Session refers to a deleted user — middleware should have
@@ -660,22 +693,11 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 // hijacks a session cookie cannot enumerate password-correctness via
 // the reauth endpoint.
 func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	ctx := r.Context()
-	sess, ok := api.SessionFromContext(ctx)
+	sess, ok := h.gateReauthRequest(w, r)
 	if !ok {
-		h.logger.ErrorContext(ctx, "reauth invoked without session on ctx")
-		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	if sess.AuthMethod != "local_password" {
-		h.badRequest(ctx, w, "reauth_not_supported")
-		return
-	}
-	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
-		h.tooMany(ctx, w, "rate_limited")
-		return
-	}
+	ctx := r.Context()
 	cookie, err := r.Cookie(reauthChallengeCookieName)
 	if err != nil {
 		h.badRequest(ctx, w, "challenge_missing")

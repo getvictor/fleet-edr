@@ -773,5 +773,93 @@ func TestHandle_PerIPRateLimit(t *testing.T) {
 	assert.Equal(t, "60", resp2.Header.Get("Retry-After"))
 }
 
+// gateSetupRequest's per-IP rate-limit branch (AllowIP=false). Pinned
+// at the /setup/challenge entry so handleBeginSetup + handleFinishSetup
+// share the same enforcement path through the gate helper.
+func TestHandleSetupChallenge_PerIPRateLimit(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+
+	rec := &recAudit{}
+	wa, err := breakglass.NewWebAuthn(breakglass.WebAuthnOptions{
+		RPID: "localhost", RPDisplayName: "EDR Test",
+		RPOrigins: []string{"http://localhost:8088"},
+	})
+	require.NoError(t, err)
+	svc := breakglass.NewService(breakglass.ServiceOptions{
+		DB: db, Users: users.New(db), Identities: identities.New(db),
+		Tokens: breakglass.NewTokenStore(db), Credentials: breakglass.NewCredentialStore(db),
+		Sessions: sessions.New(db, sessions.Options{}), WebAuthn: wa, Audit: rec,
+	})
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
+	// perIP=1: first call passes, second hits AllowIP=false in gateSetupRequest.
+	rates := breakglass.NewRateLimits(1, 99, 99)
+	h := breakglass.NewHandler(breakglass.HandlerOptions{
+		Service: svc, SigningKey: signingKey, RateLimits: rates,
+	})
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp1, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token=ignored",
+		"application/json", nil)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+	resp2, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token=ignored",
+		"application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	assert.Equal(t, http.StatusTooManyRequests, resp2.StatusCode)
+	assert.Equal(t, "rate_limited", resp2.Header.Get("X-Edr-Auth-Reason"))
+}
+
+// gateSetupRequest's per-setup-bucket branch (AllowSetup=false).
+// Distinct from AllowIP because perIP=large keeps the IP fresh; the
+// global Setup bucket is what trips.
+func TestHandleSetupChallenge_PerSetupRateLimit(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+
+	rec := &recAudit{}
+	wa, err := breakglass.NewWebAuthn(breakglass.WebAuthnOptions{
+		RPID: "localhost", RPDisplayName: "EDR Test",
+		RPOrigins: []string{"http://localhost:8088"},
+	})
+	require.NoError(t, err)
+	svc := breakglass.NewService(breakglass.ServiceOptions{
+		DB: db, Users: users.New(db), Identities: identities.New(db),
+		Tokens: breakglass.NewTokenStore(db), Credentials: breakglass.NewCredentialStore(db),
+		Sessions: sessions.New(db, sessions.Options{}), WebAuthn: wa, Audit: rec,
+	})
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
+	// perIP=99 so IP bucket never trips; setup=1 so second hit trips Setup.
+	rates := breakglass.NewRateLimits(99, 99, 1)
+	h := breakglass.NewHandler(breakglass.HandlerOptions{
+		Service: svc, SigningKey: signingKey, RateLimits: rates,
+	})
+	mux := http.NewServeMux()
+	h.RegisterPublicRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp1, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token=ignored",
+		"application/json", nil)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+	resp2, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token=ignored",
+		"application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	assert.Equal(t, http.StatusTooManyRequests, resp2.StatusCode)
+	assert.Equal(t, "setup_rate_limited", resp2.Header.Get("X-Edr-Auth-Reason"))
+}
+
 // Recorder shared with credentials_test / handler_test / service_test.
 var _ = func() context.Context { return context.Background() }

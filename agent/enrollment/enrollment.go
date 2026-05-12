@@ -52,6 +52,11 @@ const (
 	// we read into a returned error string. The server is trusted; the cap is
 	// belt-and-braces against an unexpectedly large 5xx body.
 	enrollErrorBodyLimit = 2048
+
+	// logAttrHostID is the structured-log attribute key for the agent's
+	// persisted host_id. Centralised so a key rename propagates uniformly
+	// to operator log dashboards.
+	logAttrHostID = "edr.host_id"
 )
 
 // Persisted is the on-disk representation of a successful enrollment.
@@ -114,7 +119,7 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 		}
 		p.state.Store(&persistedState{p: existing})
 		opts.Logger.InfoContext(ctx, "loaded persisted token",
-			"edr.host_id", existing.HostID, "edr.token_file", opts.TokenFile)
+			logAttrHostID, existing.HostID, "edr.token_file", opts.TokenFile)
 		return p, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard
@@ -203,7 +208,7 @@ func (p *provider) Rotate(ctx context.Context, newToken string) error {
 		return fmt.Errorf("persist rotated token: %w", err)
 	}
 	p.state.Store(&persistedState{p: &next})
-	p.logger.InfoContext(ctx, "agent token rotated", "edr.host_id", next.HostID)
+	p.logger.InfoContext(ctx, "agent token rotated", logAttrHostID, next.HostID)
 	return nil
 }
 
@@ -301,7 +306,7 @@ func (p *provider) enroll(ctx context.Context) error {
 
 	p.logger.InfoContext(ctx, "agent enrolled",
 		"edr.enroll.result", "success",
-		"edr.host_id", persisted.HostID,
+		logAttrHostID, persisted.HostID,
 	)
 	return nil
 }

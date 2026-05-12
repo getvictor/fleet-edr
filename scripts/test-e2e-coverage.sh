@@ -33,6 +33,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# GitHub Actions log group markers.
+readonly END_GROUP="::endgroup::"
+
 COVDATA_DIR="$REPO_ROOT/tmp/covdata-e2e"
 LOG_DIR="$REPO_ROOT/tmp/e2e-server-logs"
 BINARY="$REPO_ROOT/tmp/edr-server-e2e"
@@ -60,7 +63,7 @@ COMMON_ENV=(
 # Drain any lingering server, wait for :8088 to free, then idle.
 SERVER_PID=""
 stop_server() {
-  if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
     kill -TERM "$SERVER_PID" 2>/dev/null || true
     # Give the cover runtime up to 10s to flush covcounters.* files.
     for _ in $(seq 1 10); do
@@ -108,8 +111,8 @@ start_server() {
     # invalidate the coverage profile (no covcounters file from this
     # PID) and pass the readiness check against the wrong server.
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      echo "::error::server PID $SERVER_PID died during boot for phase=$phase"
-      cat "$log"
+      echo "::error::server PID $SERVER_PID died during boot for phase=$phase" >&2
+      cat "$log" >&2
       SERVER_PID=""
       exit 1
     fi
@@ -119,8 +122,8 @@ start_server() {
     fi
     sleep 1
   done
-  echo "::error::server failed to boot for phase=$phase"
-  cat "$log"
+  echo "::error::server failed to boot for phase=$phase" >&2
+  cat "$log" >&2
   stop_server
   exit 1
 }
@@ -134,7 +137,7 @@ mkdir -p "$COVDATA_DIR" "$LOG_DIR"
 
 echo "::group::Build covered server binary"
 go build -cover -coverpkg=./server/...,./internal/... -o "$BINARY" ./server/cmd/fleet-edr-server
-echo "::endgroup::"
+echo "$END_GROUP"
 
 # --- phase 1: auth suite (default env) -----------------------------------
 echo "::group::Phase 1 — auth specs (A.1-A.4, B.1-B.2)"
@@ -145,7 +148,7 @@ start_server "default-env-auth" \
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test tests/auth
 )
 stop_server
-echo "::endgroup::"
+echo "$END_GROUP"
 
 # --- phase 2: qa default-env suite ---------------------------------------
 echo "::group::Phase 2 — qa default-env (A.5, C.2-C.6, D.1+D.2+D.4, F.4)"
@@ -158,7 +161,7 @@ start_server "default-env-qa" \
     --workers=1
 )
 stop_server
-echo "::endgroup::"
+echo "$END_GROUP"
 
 # --- phase 3: A.7 brute-force --------------------------------------------
 echo "::group::Phase 3 — qa:a7 brute-force rate limit (default env)"
@@ -170,7 +173,7 @@ start_server "default-env-a7" \
     tests/qa/section-a7-rate-limit.spec.ts --workers=1
 )
 stop_server
-echo "::endgroup::"
+echo "$END_GROUP"
 
 # --- phase 4: env-specific combo (allowlist + JIT off) -------------------
 echo "::group::Phase 4 — qa:a6 + qa:b3 (allowlist + JIT off)"
@@ -185,7 +188,7 @@ start_server "envspec-allowlist-jit-off" \
     --workers=1
 )
 stop_server
-echo "::endgroup::"
+echo "$END_GROUP"
 
 # --- phase 5: short session timeouts -------------------------------------
 echo "::group::Phase 5 — qa:e session lifecycle (short timeouts)"
@@ -207,7 +210,7 @@ start_server "short-session-timeouts" \
     ./node_modules/.bin/playwright test tests/qa/section-e-lifecycle.spec.ts --workers=1
 )
 stop_server
-echo "::endgroup::"
+echo "$END_GROUP"
 
 trap - EXIT  # cleanup already ran via the final stop_server
 
@@ -217,7 +220,7 @@ echo "covdata files:"
 ls -la "$COVDATA_DIR" | head -20
 go tool covdata textfmt -i="$COVDATA_DIR" -o="$COV_OUT"
 echo "wrote $COV_OUT ($(wc -l < "$COV_OUT") lines)"
-echo "::endgroup::"
+echo "$END_GROUP"
 
 # --- convert UI V8 coverage ---------------------------------------------
 echo "::group::Convert UI V8 coverage → lcov-e2e.info"
@@ -225,4 +228,4 @@ echo "::group::Convert UI V8 coverage → lcov-e2e.info"
   cd "$REPO_ROOT/test/e2e"
   node scripts/coverage-to-lcov.mjs
 )
-echo "::endgroup::"
+echo "$END_GROUP"

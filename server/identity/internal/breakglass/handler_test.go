@@ -478,6 +478,53 @@ func TestHandleReauthChallenge_OIDCSessionRejected(t *testing.T) {
 	assert.Equal(t, "reauth_not_supported", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
+// gateReauthRequest's per-IP rate-limit branch (AllowIP=false). Pinned
+// at /api/auth/reauth/challenge so both reauth handlers share the same
+// enforcement contract through the gate helper.
+func TestHandleReauthChallenge_PerIPRateLimit(t *testing.T) {
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+
+	rec := &recAudit{}
+	wa, err := breakglass.NewWebAuthn(breakglass.WebAuthnOptions{
+		RPID: "localhost", RPDisplayName: "EDR Test",
+		RPOrigins: []string{"http://localhost:8088"},
+	})
+	require.NoError(t, err)
+	svc := breakglass.NewService(breakglass.ServiceOptions{
+		DB: db, Users: users.New(db), Identities: identities.New(db),
+		Tokens: breakglass.NewTokenStore(db), Credentials: breakglass.NewCredentialStore(db),
+		Sessions: sessions.New(db, sessions.Options{}), WebAuthn: wa, Audit: rec,
+	})
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
+	// perIP=1: first call passes the gate (and fails later, but that's fine);
+	// second call trips AllowIP=false in gateReauthRequest before the user
+	// lookup runs.
+	rates := breakglass.NewRateLimits(1, 99, 99)
+	h := breakglass.NewHandler(breakglass.HandlerOptions{
+		Service: svc, Identity: &stubIdentity{}, SigningKey: signingKey, RateLimits: rates,
+	})
+	mux := http.NewServeMux()
+	h.RegisterAuthedRoutes(mux)
+	wrapped := withSession(&api.Session{UserID: 1, AuthMethod: "local_password"})(mux)
+	srv := httptest.NewServer(wrapped)
+	t.Cleanup(srv.Close)
+
+	resp1, err := srv.Client().Post(srv.URL+"/api/auth/reauth/challenge",
+		"application/json", nil)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+	resp2, err := srv.Client().Post(srv.URL+"/api/auth/reauth/challenge",
+		"application/json", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	assert.Equal(t, http.StatusTooManyRequests, resp2.StatusCode)
+	assert.Equal(t, "rate_limited", resp2.Header.Get("X-Edr-Auth-Reason"))
+}
+
 // Reauth POST with no challenge cookie returns 400 challenge_missing.
 // Even though the operator is authenticated, the WebAuthn ceremony
 // requires the signed challenge from the begin step; without it the
