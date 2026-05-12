@@ -31,11 +31,11 @@
   every existing read endpoint, assert the rendered SQL never contains `tenant_id` in
   a WHERE clause.
 
-## Phase 2: authorization chokepoint shipped in shadow mode
+## Phase 2: authorization chokepoint
 
 - [ ] **2.1** New package `server/identity/internal/authz/` with the OPA engine wiring
   (compiled `PreparedEvalQuery`, `embed`-baked `*.rego` files at
-  `internal/authz/policy/*.rego`, SIGHUP reload).
+  `internal/authz/policy/*.rego`).
 - [ ] **2.2** Action registry at `server/identity/api/actions.go` (typed `Action`
   constants) and `server/identity/internal/authz/policy/data/actions.json`. Build-time
   parity check that the two lists agree.
@@ -46,13 +46,10 @@
   context.
 - [ ] **2.5** Bench harness at `server/identity/internal/authz/bench_test.go` covering
   allow + deny paths over the seeded roles. Wire into CI; fail at p99 ≥ 1ms.
-- [ ] **2.6** Add `authz.shadow_mode` config flag (default `false` for fresh deployments,
-  `true` for upgrades). Engine returns `{allow:true, reason:"shadow_mode"}` when set;
-  audit row records the would-be decision and notes shadow mode in payload.
-- [ ] **2.7** Convert every privileged handler in detection / rules / response /
+- [ ] **2.6** Convert every privileged handler in detection / rules / response /
   endpoint / identity to call `authz.Allow(ctx, action, resource)`. One PR per context.
   Remove any ad-hoc role checks the call replaces. arch-go must continue to pass.
-- [ ] **2.8** Code-search rule: privileged-route registration that does not call
+- [ ] **2.7** Code-search rule: privileged-route registration that does not call
   `authz.Allow` fails the build. Add to lefthook + CI.
 
 ## Phase 3: audit recorder + dual-emit
@@ -113,45 +110,33 @@
 - [ ] **5.4** Per-context integration tests for each timeout window and the reauth
   challenge.
 
-## Phase 6: shadow-mode flip
+## Phase 6: documentation
 
-- [ ] **6.1** Operator playbook: review the shadow-mode dashboard for one full week of
-  production traffic on the pilot deployment; deny-decision count must read zero on
-  every privileged handler. Resolve any outliers.
-- [ ] **6.2** Single-PR change: flip `authz.shadow_mode` default to `false` for fresh
-  deployments and provide a release note advising upgrade-path operators to flip the
-  same flag once their dashboard is clean.
-- [ ] **6.3** Remove the upgrade-default branch from the config loader once all
-  customer deployments have flipped (tracked separately, not blocking this change).
-
-## Phase 7: documentation
-
-- [x] **7.1** Operator runbook: break-glass redemption + WebAuthn registration,
+- [x] **6.1** Operator runbook: break-glass redemption + WebAuthn registration,
   break-glass credential rotation, lost-credential recovery procedure.
   (`docs/breakglass.md`)
-- [x] **7.2** Okta tenant setup guide: app type (web), redirect URLs, scope set,
+- [x] **6.2** Okta tenant setup guide: app type (web), redirect URLs, scope set,
   group claim posture (group → role mapping deferred to wave 2).
   (`docs/okta-setup.md`)
-- [x] **7.3** Role + permission matrix: machine-readable copy under
+- [x] **6.3** Role + permission matrix: machine-readable copy under
   `server/identity/internal/authz/policy/data/actions.json` plus a human-readable
-  rendering in `docs/`. (Delivered in Phase 6: `policy/data/actions.json` +
-  `policy/data/roles.json` are the machine source; `docs/authz.md` renders the
-  human view.)
-- [x] **7.4** SigNoz dashboard wiring: deny-decision rate by handler, break-glass
+  rendering in `docs/`. `policy/data/actions.json` + `policy/data/roles.json` are
+  the machine source; `docs/authz.md` renders the human view.
+- [x] **6.4** SigNoz dashboard wiring: deny-decision rate by handler, break-glass
   login rate, bootstrap-token issuance count, audit-write-failure count.
   (`config/observability/edr-authz-dashboard.json` + `docs/operations.md`
   Auth + authz dashboard section.)
-- [x] **7.5** Update `docs/threat-model.md` to reflect the new identity boundary,
+- [x] **6.5** Update `docs/threat-model.md` to reflect the new identity boundary,
   the chokepoint, the audit log, and the WebAuthn-mandatory break-glass control.
 
-## Phase 8: validation gates (run continuously, not a separate phase)
+## Phase 7: validation gates (run continuously, not a separate phase)
 
-- [ ] **8.1** arch-go (`arch-go.yml` + `test/arch/arch_test.go`) passes at every PR
+- [ ] **7.1** arch-go (`arch-go.yml` + `test/arch/arch_test.go`) passes at every PR
   boundary.
-- [ ] **8.2** Coverage on new code remains ≥ 80% on the SonarCloud gate (per
+- [ ] **7.2** Coverage on new code remains ≥ 80% on the SonarCloud gate (per
   CLAUDE.md).
-- [ ] **8.3** Cross-context integration tests at `test/integration/` cover at least
+- [ ] **7.3** Cross-context integration tests at `test/integration/` cover at least
   one end-to-end scenario per phase: SSO login → host.isolate (denied for analyst,
   allowed for senior_analyst) → audit row visible to auditor.
-- [ ] **8.4** Property-based tests where the shape fits: scope-resolution invariants,
+- [ ] **7.4** Property-based tests where the shape fits: scope-resolution invariants,
   role-binding expiry behavior, action-registry parity.

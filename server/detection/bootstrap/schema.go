@@ -4,10 +4,11 @@ package bootstrap
 // processes, alerts, alert_events, hosts. CREATE TABLE IF NOT EXISTS
 // so re-running ApplySchema is idempotent.
 //
-// Note: alerts.updated_by has NO FK to users(id) here. An earlier
-// schema carried that FK as a transitional cross-context guard;
-// MigrateSchema drops it on existing-DB upgrades and the alert-update
-// service layer enforces user existence via UserExists instead.
+// Note: alerts.updated_by has NO FK to users(id). The alert-update
+// service layer enforces user existence via the UserExists closure
+// the response context wires in at bootstrap time, so the chokepoint
+// catches an orphan user_id without taking a cross-context FK
+// dependency in the schema.
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS events (
 		event_id        VARCHAR(255) PRIMARY KEY,
@@ -87,20 +88,4 @@ var schemaStatements = []string{
 		updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		INDEX idx_hosts_tenant_id (tenant_id)
 	)`,
-}
-
-// postSchemaStatements run after CREATE TABLE + ALTERs. INSERT IGNORE
-// / ON DUPLICATE KEY UPDATE so they're safe to re-run.
-var postSchemaStatements = []string{
-	// Backfill the hosts summary table from existing events. Idempotent
-	// via ON DUPLICATE KEY UPDATE.
-	`INSERT INTO hosts (host_id, event_count, last_seen_ns)
-	 SELECT host_id, COUNT(*), MAX(timestamp_ns) FROM events GROUP BY host_id
-	 ON DUPLICATE KEY UPDATE
-	   event_count = VALUES(event_count),
-	   last_seen_ns = GREATEST(hosts.last_seen_ns, VALUES(last_seen_ns))`,
-	// Backfill ingested_at_ns for pre-migration rows (issue #7).
-	`UPDATE events SET ingested_at_ns = timestamp_ns WHERE ingested_at_ns = 0`,
-	// Mirror backfill on processes.
-	`UPDATE processes SET fork_ingested_at_ns = fork_time_ns WHERE fork_ingested_at_ns IS NULL`,
 }

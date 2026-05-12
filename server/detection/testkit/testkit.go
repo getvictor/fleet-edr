@@ -8,9 +8,8 @@
 //
 // Three things live here today:
 //
-//  1. ApplySchema / MigrateSchema — thin wrappers over the same
-//     functions on bootstrap so tests get the same DDL behaviour
-//     production gets.
+//  1. ApplySchema — thin wrapper over bootstrap.ApplySchema so tests
+//     get the same DDL production gets.
 //  2. Scenario — a per-test fixture that pairs detection's *mysql.Store
 //     and *graph.Builder so callers can insert events and materialise
 //     the process graph the rule under test will read.
@@ -42,10 +41,4 @@ import (
 // importable separately from the production wiring surface.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return bootstrap.ApplySchema(ctx, db)
-}
-
-// MigrateSchema runs detection's idempotent ALTERs against db. Thin
-// wrapper over bootstrap.MigrateSchema for the same reason.
-func MigrateSchema(ctx context.Context, db *sqlx.DB) error {
-	return bootstrap.MigrateSchema(ctx, db)
 }

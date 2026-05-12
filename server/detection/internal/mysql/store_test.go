@@ -14,11 +14,11 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTestStore wraps testdb.Open with detection's ApplySchema +
-// MigrateSchema and returns a fresh mysql.Store. Lives in
-// package mysql_test so the testdb import (which transitively pulls
-// in detection/bootstrap) doesn't create a cycle with the production
-// detection/internal/mysql package.
+// newTestStore wraps testdb.Open with detection's ApplySchema and
+// returns a fresh mysql.Store. Lives in package mysql_test so the
+// testdb import (which transitively pulls in detection/bootstrap)
+// doesn't create a cycle with the production detection/internal/mysql
+// package.
 //
 // Accepts testing.TB so the same fixture works for benchmarks (see
 // perf_test.go); *testing.T and *testing.B both satisfy the
@@ -28,7 +28,6 @@ func newTestStore(tb testing.TB) *mysql.Store {
 	db := testdb.Open(tb)
 	ctx := tb.Context()
 	require.NoError(tb, testkit.ApplySchema(ctx, db))
-	require.NoError(tb, testkit.MigrateSchema(ctx, db))
 	s, err := mysql.New(db)
 	require.NoError(tb, err)
 	return s

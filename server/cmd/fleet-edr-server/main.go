@@ -93,25 +93,6 @@ func run() error {
 		"tls", cfg.TLSEnabled(),
 		"tls12_allowed", cfg.AllowTLS12,
 	)
-	// AuthZ posture is announced on its own line so a typo on
-	// EDR_AUTHZ_SHADOW_MODE surfaces at boot rather than via a
-	// confused 403 — or worse, a silently-allowed request — hours
-	// later. Log it as a separate event so the deny dashboard /
-	// SigNoz query that pivots on `posture` doesn't have to parse it
-	// out of the noisier "starting" event. `posture` is a stable
-	// enum (ENABLED | SHADOW) for log filters / dashboard groupings;
-	// `mode_description` carries the operator-facing prose.
-	authzPosture := "ENABLED"
-	authzDescription := "enforcing"
-	if cfg.AuthzShadowMode {
-		authzPosture = "SHADOW"
-		authzDescription = "denies audited but allowed"
-	}
-	logger.InfoContext(ctx, "authz enforcement",
-		"posture", authzPosture,
-		"mode_description", authzDescription,
-		"env_var", "EDR_AUTHZ_SHADOW_MODE",
-	)
 	if !cfg.TLSEnabled() {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
 	}
@@ -216,7 +197,6 @@ func openIdentity(
 		DB:                 db,
 		Logger:             logger,
 		CookieSecure:       cfg.TLSEnabled(),
-		AuthzShadowMode:    cfg.AuthzShadowMode,
 		AuditReadSampling:  cfg.AuditReadSampling,
 		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
 		SessionSigningKey:  cfg.SessionSigningKey,
@@ -285,10 +265,6 @@ func openDetection(
 	}
 	if err := detectionCtx.ApplySchema(ctx); err != nil {
 		logger.ErrorContext(ctx, "detection schema", "err", err)
-		return nil, err
-	}
-	if err := detectionCtx.MigrateSchema(ctx); err != nil {
-		logger.ErrorContext(ctx, "detection migrate", "err", err)
 		return nil, err
 	}
 	return detectionCtx, nil
@@ -495,15 +471,6 @@ func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, l
 		logger.ErrorContext(ctx, "identity run", "err", err)
 	}
 }
-
-// (Removed: watchSIGHUPForAuthzShadowMode reloaded the rollout flag
-// from EDR_AUTHZ_SHADOW_MODE on SIGHUP, but a running process's
-// environment cannot be modified externally in most deployment
-// shapes — the reload would be a no-op except in test harnesses
-// that call os.Setenv before signaling. The flag is set at boot;
-// flipping it in production is a restart in wave 1. A future admin
-// endpoint or file-watch can call Identity.SetAuthzShadowMode
-// atomically; the in-memory flag is already hot-swap-safe.)
 
 func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, clientIPResolver *httpserver.ClientIPResolver) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{

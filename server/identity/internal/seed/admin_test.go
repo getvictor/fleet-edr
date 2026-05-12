@@ -98,21 +98,23 @@ func TestAdmin_SelfHealsMissingRoleBinding(t *testing.T) {
 	assert.Equal(t, seed.DefaultAdminRole, bindings[0].RoleID)
 }
 
-// PreExistingNonAdminTable: when an unrelated user is in the table
-// AND no canonical admin exists, Admin returns (nil, "", nil) so the
-// operator runbook handles the wave-0 migration explicitly. Pinned
-// to prevent a regression that destructively rewrites a wave-0 row.
-func TestAdmin_PreExistingTableSkippedWhenNoCanonicalAdmin(t *testing.T) {
+// Pre-existing unrelated users in the table do NOT block the seed:
+// the canonical break-glass admin is created alongside them. Pinned
+// to prevent a regression that returns the table-non-empty short
+// circuit (the wave-0 carve-out, removed pre-pilot because there is
+// no wave-0 deployment to migrate from).
+func TestAdmin_SeedsAlongsideUnrelatedUsers(t *testing.T) {
 	us, rb, _ := newSeedFixture(t)
 	_, err := us.Create(t.Context(), users.CreateRequest{
 		Email: "first@example.com", Password: "this-is-a-long-pw",
 	})
 	require.NoError(t, err)
 
-	u, pw, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
+	u, _, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
 	require.NoError(t, err)
-	assert.Nil(t, u)
-	assert.Empty(t, pw)
+	require.NotNil(t, u)
+	assert.Equal(t, seed.DefaultAdminEmail, u.Email)
+	assert.True(t, u.IsBreakglass)
 }
 
 func TestAdmin_NilStoreErrors(t *testing.T) {
@@ -126,22 +128,35 @@ func TestAdmin_NilRBACErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Wave-0 migration guard: when the canonical admin email already
-// exists but is_breakglass=0 (a pre-Phase-4b row), Admin refuses to
-// silently flip the flag and returns (nil, "", nil). Pinned because
-// silently rewriting that row would destroy operator data and bypass
-// the runbook's explicit migration step.
-func TestAdmin_CanonicalEmailNonBreakglassSkipped(t *testing.T) {
+// Defensive guard: a non-breakglass row at the canonical admin email
+// is an unexpected state (no pre-pilot deployment produces it). Admin
+// SHOULD fail loud rather than silently rewrite the row.
+func TestAdmin_CanonicalEmailNonBreakglassErrors(t *testing.T) {
 	us, rb, _ := newSeedFixture(t)
 	_, err := us.Create(t.Context(), users.CreateRequest{
 		Email: seed.DefaultAdminEmail, Password: "this-is-a-long-pw",
 	})
 	require.NoError(t, err)
 
-	u, pw, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
-	require.NoError(t, err, "wave-0 row at canonical email is not an error")
-	assert.Nil(t, u, "Admin returns nil so the operator runbook handles migration")
-	assert.Empty(t, pw)
+	_, _, err = seed.Admin(t.Context(), us, rb, slog.Default(), nil)
+	require.Error(t, err, "non-breakglass row at canonical email must error, not silently skip")
+	assert.Contains(t, err.Error(), "is_breakglass=0")
+}
+
+// DB-error path: when GetByEmail returns a non-NotFound error
+// (here: the underlying *sqlx.DB is closed before the call), Admin
+// surfaces the error wrapped under "look up existing admin" instead
+// of treating it as "user does not exist" and falling through to
+// CreateBreakglass. Pinned because the silent-fall-through was the
+// pre-cleanup behaviour; a regression would mean a DB outage gets
+// papered over as "fresh DB, seed away".
+func TestAdmin_GetByEmailErrorPropagates(t *testing.T) {
+	us, rb, db := newSeedFixture(t)
+	require.NoError(t, db.Close(), "force GetByEmail into a real error path")
+
+	_, _, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "look up existing admin")
 }
 
 // Nil logger falls back to slog.Default(). Pinned so a caller that

@@ -25,7 +25,6 @@ func openCatalogStore(t *testing.T) *catalogStore {
 	db := testdb.Open(t)
 	ctx := t.Context()
 	require.NoError(t, detectiontestkit.ApplySchema(ctx, db))
-	require.NoError(t, detectiontestkit.MigrateSchema(ctx, db))
 	return &catalogStore{scenario: detectiontestkit.NewScenario(t, db)}
 }
 

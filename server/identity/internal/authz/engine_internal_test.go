@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"context"
 	"testing"
 
 	"github.com/open-policy-agent/opa/v1/rego"
@@ -130,50 +131,68 @@ func TestDecisionFromResultSet(t *testing.T) {
 }
 
 // TestAuditPayload locks the dual-emit shape every audit consumer
-// will pivot on. shadow=true must surface an explicit
-// `shadow_mode: true` key so the Phase 6 dashboard can split shadow
-// denies from real denies; shadow=false must NOT add the key (so
-// queries don't have to filter on a tri-state field).
+// pivots on: every audit row carries exactly `allow` + `reason` so
+// the SigNoz dashboard's grouping queries don't have to handle
+// optional / tri-state fields.
 func TestAuditPayload(t *testing.T) {
 	cases := []struct {
 		name      string
 		decision  api.Decision
-		shadow    bool
-		wantKeys  []string
 		wantAllow any
 	}{
 		{
-			name:      "deny + shadow off",
+			name:      "deny",
 			decision:  api.Decision{Allow: false, Reason: "no_matching_rule"},
-			shadow:    false,
-			wantKeys:  []string{"allow", "reason"},
 			wantAllow: false,
 		},
 		{
-			name:      "deny + shadow on adds shadow_mode key",
-			decision:  api.Decision{Allow: false, Reason: "no_matching_rule"},
-			shadow:    true,
-			wantKeys:  []string{"allow", "reason", "shadow_mode"},
-			wantAllow: false,
-		},
-		{
-			name:      "allow + shadow off omits shadow_mode key",
+			name:      "allow",
 			decision:  api.Decision{Allow: true, Reason: "granted"},
-			shadow:    false,
-			wantKeys:  []string{"allow", "reason"},
 			wantAllow: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := auditPayload(tc.decision, tc.shadow)
+			p := auditPayload(tc.decision)
 			gotKeys := make([]string, 0, len(p))
 			for k := range p {
 				gotKeys = append(gotKeys, k)
 			}
-			assert.ElementsMatch(t, tc.wantKeys, gotKeys)
+			assert.ElementsMatch(t, []string{"allow", "reason"}, gotKeys)
 			assert.Equal(t, tc.wantAllow, p["allow"])
 			assert.Equal(t, tc.decision.Reason, p["reason"])
 		})
 	}
+}
+
+// internalAudit is a minimal AuditRecorder used by tests in this
+// package (package authz). The recordingAudit in engine_test.go
+// lives in package authz_test and can't be reached from here.
+type internalAudit struct{ events []api.AuditEvent }
+
+func (r *internalAudit) Record(_ context.Context, e api.AuditEvent) error {
+	r.events = append(r.events, e)
+	return nil
+}
+
+// TestEngineErrorDecision covers the engine_error helper that both
+// Allow's Eval-failure and decode-failure branches funnel through.
+// The two production call sites are otherwise only reachable when
+// OPA itself misbehaves (a paniced PreparedEvalQuery or a malformed
+// embedded policy bundle), which is not directly fault-injectable
+// from a test against the real embedded policy. Driving the helper
+// directly pins the "deny + reason=engine_error + audit row emitted"
+// invariant the production paths rely on.
+func TestEngineErrorDecision(t *testing.T) {
+	rec := &internalAudit{}
+	e, err := New(t.Context(), rec, nil, Options{})
+	require.NoError(t, err)
+	actor := &api.Actor{UserID: 1}
+	d := e.engineErrorDecision(t.Context(), actor, api.ActionHostIsolate,
+		api.Resource{TenantID: "default", Type: "host", ID: "h1"})
+	assert.False(t, d.Allow, "engine_error must deny")
+	assert.Equal(t, "engine_error", d.Reason)
+	require.Len(t, rec.events, 1, "engine_error must emit exactly one audit row")
+	assert.Equal(t, "engine_error", rec.events[0].Payload["reason"])
+	assert.Equal(t, false, rec.events[0].Payload["allow"])
 }

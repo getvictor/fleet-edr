@@ -46,7 +46,7 @@ func newAsyncEngine(t *testing.T, rate float64) (*authz.Engine, *recordingAudit,
 	t.Helper()
 	syncRec := &recordingAudit{}
 	asyncW := &recordingAsync{}
-	e, err := authz.New(t.Context(), syncRec, nil, false, authz.Options{
+	e, err := authz.New(t.Context(), syncRec, nil, authz.Options{
 		AsyncRead:        asyncW,
 		ReadSamplingRate: rate,
 	})
@@ -148,7 +148,7 @@ func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
 func TestAllow_ReadAllow_AsyncDrop_FallsBackToSync(t *testing.T) {
 	syncRec := &recordingAudit{}
 	asyncRec := &recordingAsync{dropAt: 1}
-	e, err := authz.New(t.Context(), syncRec, nil, false, authz.Options{
+	e, err := authz.New(t.Context(), syncRec, nil, authz.Options{
 		AsyncRead:        asyncRec,
 		ReadSamplingRate: 1.0,
 	})

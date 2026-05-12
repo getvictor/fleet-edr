@@ -141,13 +141,10 @@ type Resource struct {
 //     authenticated actor on ctx; the handler should already have
 //     returned 401 before this. Audited so a regression that stops
 //     pinning the actor is visible.
-//   - "shadow_mode": the policy decision was deny but the engine is
-//     in shadow mode; Allow is forced to true and the audit row
-//     records the would-be deny in its payload.
 //   - "reauth_required": the actor has the role to perform the
-//     action but session_fresh is false (Phase 5). HTTPGate maps
-//     this to 403 + body { error, challenge } that the UI converts
-//     into an inline reauth prompt + retry.
+//     action but session_fresh is false. HTTPGate maps this to 403 +
+//     body { error, challenge } that the UI converts into an inline
+//     reauth prompt + retry.
 type Decision struct {
 	Allow  bool   `json:"allow"`
 	Reason string `json:"reason"`
@@ -164,7 +161,6 @@ const (
 	ReasonActionNotRegistered   = "action_not_registered"
 	ReasonNoActor               = "no_actor"
 	ReasonResourceTenantMissing = "resource_tenant_missing"
-	ReasonShadowMode            = "shadow_mode"
 	ReasonReauthRequired        = "reauth_required"
 )
 

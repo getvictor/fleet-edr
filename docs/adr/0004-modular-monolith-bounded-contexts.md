@@ -111,7 +111,7 @@ context's own `testkit/`, and integration tests.
 
 Each context also exposes a peer of `api/` / `bootstrap/` / `internal/`
 called `testkit/`: a coordinated test-fixture surface. testkit owns
-the schema-applier wrappers (`ApplySchema`, `MigrateSchema`),
+the schema-applier wrapper (`ApplySchema`),
 context-specific fakes/seeders, and (in detection's case) the
 rule-replay harness used by cross-context catalog tests. The split
 rule is:

@@ -145,19 +145,6 @@ type Config struct {
 	// out everyone behind the proxy.
 	TrustedProxies []string
 
-	// AuthzShadowMode is the audit-only knob for the authorization
-	// chokepoint. When true, every Allow call evaluates the policy and
-	// audits the would-be decision but ALWAYS returns Allow=true. The
-	// default is false: a fresh deployment enforces from boot. Set
-	// EDR_AUTHZ_SHADOW_MODE=1 to flip the chokepoint into audit-only
-	// mode while verifying role-binding coverage against the audit
-	// log; never leave it on for routine operation. The flag is read
-	// at boot only — a restart picks up the change. The in-memory
-	// engine flag is already hot-swap-safe via atomic.Bool, so a
-	// future admin endpoint or file-watch can call
-	// Identity.SetAuthzShadowMode atomically without a restart.
-	AuthzShadowMode bool
-
 	// AuditReadSampling is the inclusion probability (0.0-1.0) the
 	// chokepoint applies to read-action allow events before submitting
 	// them to the async writer. Default 0.0 (audit zero non-carve-out
@@ -366,7 +353,6 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 
 	c.AllowInsecureHTTP = getenv("EDR_ALLOW_INSECURE_HTTP") == "1"
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
-	c.AuthzShadowMode = getenv("EDR_AUTHZ_SHADOW_MODE") == "1"
 	envparse.UnitFraction(getenv, "EDR_AUDIT_READ_SAMPLING", &c.AuditReadSampling, errs)
 	envparse.NonNegativeInt(getenv, "EDR_AUDIT_ASYNC_QUEUE_CAP", &c.AuditAsyncQueueCap, errs)
 

@@ -143,11 +143,7 @@ func (e *Endpoint) ApplySchema(ctx context.Context) error {
 // against the given DB without requiring a fully constructed
 // *Endpoint. Used by server/testdb so tests can apply every context's
 // schema without faking out each bootstrap's service dependencies.
-//
-// Two passes: schemaStatements first (CREATE TABLE IF NOT EXISTS),
-// then schemaMigrations (idempotent ALTERs for upgrade paths).
-// Migration errors that signal "already applied" are swallowed so
-// re-running on a populated DB is a no-op.
+// CREATE TABLE IF NOT EXISTS makes the call safe to re-run.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("endpoint ApplySchema: db must not be nil")
@@ -155,11 +151,6 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("endpoint schema create: %w", err)
-		}
-	}
-	for _, stmt := range schemaMigrations {
-		if _, err := db.ExecContext(ctx, stmt); err != nil && !isAlreadyAppliedMigration(err) {
-			return fmt.Errorf("endpoint schema migration: %w", err)
 		}
 	}
 	return nil

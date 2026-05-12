@@ -95,10 +95,6 @@ func run() error {
 		logger.ErrorContext(ctx, "detection schema", "err", err)
 		return err
 	}
-	if err := detectionCtx.MigrateSchema(ctx); err != nil {
-		logger.ErrorContext(ctx, "detection migrate", "err", err)
-		return err
-	}
 
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,

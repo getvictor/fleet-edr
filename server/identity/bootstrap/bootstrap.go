@@ -44,15 +44,6 @@ type Deps struct {
 	// CleanupInterval overrides how often Run sweeps expired sessions. Zero
 	// means use the package default (5 min).
 	CleanupInterval time.Duration
-	// AuthzShadowMode is the wave-1 rollout flag for the authorization
-	// chokepoint. true = evaluate + audit but never deny; false =
-	// enforce. The flag is set at boot from EDR_AUTHZ_SHADOW_MODE;
-	// flipping it in a running deployment requires a restart in wave
-	// 1. A future admin endpoint (or a file-watch) can call
-	// Identity.SetAuthzShadowMode atomically; the in-memory flag is
-	// already hot-swap-safe via atomic.Bool.
-	AuthzShadowMode bool
-
 	// AuditReadSampling is the inclusion probability (0.0-1.0) the
 	// chokepoint applies to read-action allow events before submitting
 	// them to the async writer. See server/config/config.go for the
@@ -172,7 +163,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		Logger:   logger,
 	})
 
-	authzEngine, err := authz.New(ctx, auditStore, logger, deps.AuthzShadowMode, authz.Options{
+	authzEngine, err := authz.New(ctx, auditStore, logger, authz.Options{
 		AsyncRead:        auditAsync,
 		ReadSamplingRate: deps.AuditReadSampling,
 	})
@@ -496,17 +487,6 @@ func (i *Identity) AuditRecorder() api.AuditRecorder { return i.auditStore }
 // rules / response / endpoint; today the only consumer is the
 // per-context tests that exercise the public api.AuthZ surface.
 func (i *Identity) AuthZ() api.AuthZ { return i.authzEngine }
-
-// SetAuthzShadowMode flips the chokepoint's enforcement gate at runtime.
-// cmd/main calls this on SIGHUP so an operator can swap shadow mode
-// without a restart; tests call it directly. The change is visible to
-// the next Allow call (atomic).
-func (i *Identity) SetAuthzShadowMode(on bool) { i.authzEngine.SetShadowMode(on) }
-
-// AuthzShadowMode reports the current value of the rollout flag. The
-// rollout dashboard reads this via a status endpoint to render
-// "shadow / enforcing" on the deny-decision panel.
-func (i *Identity) AuthzShadowMode() bool { return i.authzEngine.ShadowMode() }
 
 // Run owns the identity context's background goroutines. Two loops:
 // (1) the session-cleanup ticker that sweeps expired session rows,

@@ -122,7 +122,6 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	db := testdb.Open(t)
 	ctx := t.Context()
 	require.NoError(t, ApplySchema(ctx, db), "apply detection schema")
-	require.NoError(t, MigrateSchema(ctx, db), "apply detection migrations")
 	mysqlStore, err := mysql.New(db)
 	require.NoError(t, err, "wrap test store")
 	require.NoError(t, mysqlStore.InsertEvents(ctx, c.Events), "insert events")

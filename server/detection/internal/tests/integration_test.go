@@ -1,7 +1,7 @@
 //go:build integration
 
 // Per-context integration tests for the detection bounded context.
-// Exercise the full bootstrap.New -> ApplySchema + MigrateSchema ->
+// Exercise the full bootstrap.New -> ApplySchema ->
 // Service stack against a real MySQL. Skips when EDR_TEST_DSN isn't
 // set, matching the project's other DB-using test files.
 //
@@ -177,7 +177,6 @@ func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 	d, err := bootstrap.New(deps)
 	require.NoError(t, err)
 	require.NoError(t, d.ApplySchema(t.Context()))
-	require.NoError(t, d.MigrateSchema(t.Context()))
 
 	if opts.mode == bootstrap.ModeFull {
 		runCtx, cancel := context.WithCancel(context.Background())
@@ -564,12 +563,11 @@ func TestBootstrap_MissingDB(t *testing.T) {
 func TestBootstrap_SchemaIdempotent(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
-	// ApplySchema + MigrateSchema MUST be re-runnable without error
-	// (existing-DB upgrades go through the same path).
+	// ApplySchema MUST be re-runnable without error (boot does it
+	// unconditionally; a partial restart must not fail on the second
+	// pass).
 	require.NoError(t, d.ApplySchema(ctx))
-	require.NoError(t, d.MigrateSchema(ctx))
 	require.NoError(t, d.ApplySchema(ctx))
-	require.NoError(t, d.MigrateSchema(ctx))
 }
 
 // ---- Metrics propagation ---------------------------------------------------
