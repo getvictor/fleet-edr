@@ -21,6 +21,7 @@ import {
   type PublicKeyCredentialCreationOptionsJSON,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
+import { getCsrfToken } from "./api";
 
 // HTTP status threshold above which the response is an error.
 const HTTP_BAD_REQUEST = 400;
@@ -28,6 +29,11 @@ const HTTP_BAD_REQUEST = 400;
 // HTTP_NO_CONTENT is the empty-body 2xx that the requestJSON guard
 // returns as `undefined` instead of feeding to res.json().
 const HTTP_NO_CONTENT = 204;
+
+// Methods that mutate state — server's CSRF middleware requires a
+// matching X-Csrf-Token header on these even for already-authenticated
+// callers. GET/HEAD/OPTIONS skip the check.
+const UNSAFE_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 // Maximum size of a 'next' query parameter we'll forward to the
 // IdP-redirect endpoint. The server already sanitises (off-site URLs
@@ -82,6 +88,15 @@ async function requestJSON<T>(
     Accept: "application/json",
     ...(init.headers as Record<string, string> | undefined),
   };
+  // Phase 5 reauth POSTs (/api/auth/reauth/challenge + /api/auth/reauth)
+  // ride the session-protected mux, so the server's CSRF middleware
+  // requires X-Csrf-Token on unsafe methods. The PRE-auth break-glass
+  // endpoints (/admin/break-glass/*) are public + don't require CSRF;
+  // an empty header on a missing-token call there is harmless.
+  if (UNSAFE_METHODS.has(String(init.method ?? "").toUpperCase())) {
+    const csrf = getCsrfToken();
+    if (csrf) headers["X-Csrf-Token"] = csrf;
+  }
   const res = await fetch(target, {
     ...init,
     headers,

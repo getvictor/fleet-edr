@@ -266,9 +266,10 @@ jobs:
   # the covered binary between phases so each phase starts with a
   # clean in-memory rate-limit bucket (no `npm test:all`-style 90s
   # sleep needed). All phases share GOCOVERDIR; covdata textfmt
-  # merges the per-PID profiles at the end. Phase 5 (qa:e) overrides
-  # EDR_SESSION_*_TIMEOUT to 5s/3s so the idle-eviction waits land in
-  # seconds rather than the local 18s+11s defaults.
+  # merges the per-PID profiles at the end. Phase 5 (session
+  # lifecycle) overrides EDR_SESSION_*_TIMEOUT to 5s/3s so the
+  # idle-eviction waits land in seconds rather than the local 18s+11s
+  # defaults.
   e2e-test:
     name: E2E tests with coverage
     needs: changes

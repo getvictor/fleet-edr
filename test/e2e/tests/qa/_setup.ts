@@ -28,16 +28,29 @@ export async function signInViaDex(page: Page, email: string): Promise<void> {
   );
 }
 
-// QA helper: rebuild the user-management state the manual sections
-// assume. Drops every operator-side row except the seeded admin,
-// re-registers the admin's break-glass credential, JIT-provisions the
-// three dex users (analyst/senior/auditor), then promotes them via
-// SQL so the role matrix runs as documented.
+// Rebuild the operator-side state the qa specs assume. Drops every
+// operator-side row except the seeded admin, optionally re-registers
+// the admin's break-glass credential, JIT-provisions the three dex
+// users (analyst/senior/auditor), then promotes them via SQL so the
+// role matrix runs as expected.
 //
-// Operators reading the QA plan can call `npm run qa` and trust this
-// helper to set up state from any prior state. Without it, the QA
-// specs depend on an exact sequence of prior tests, which is brittle.
-export async function rebuildQAState(page: Page): Promise<void> {
+// Callers can trust this helper to reach the documented state from
+// any prior state. Without it the qa specs would depend on an exact
+// sequence of prior tests, which is brittle.
+//
+// `withBreakglass` controls whether the seeded admin's break-glass
+// credential is re-registered as part of the rebuild. Each ceremony
+// burns 2 tokens out of the global DefaultSetupRatePerMin = 5/min
+// bucket (challenge + finish), so callers that don't actually need a
+// signed-in admin (e.g. authz-and-audit-flows, which only exercises
+// the dex users) should leave it at the default (false) so the rate
+// bucket has room for the other default-env specs that DO need a
+// break-glass ceremony.
+export async function rebuildQAState(
+  page: Page,
+  opts: { withBreakglass?: boolean } = {},
+): Promise<void> {
+  const withBreakglass = opts.withBreakglass ?? false;
   const db = await openDB();
   try {
     await resetDB(db);
@@ -45,40 +58,42 @@ export async function rebuildQAState(page: Page): Promise<void> {
     await db.end();
   }
 
-  // Re-register the seeded admin's break-glass credential. The QA
-  // pass needs at least one working webauthn credential for the
-  // admin so audit + recovery flows have a row to read.
-  let va: VirtualAuthenticator | undefined;
-  try {
-    va = await installVirtualAuthenticator(page);
-    const tokenDB = await openDB();
-    let plaintext: string;
+  if (withBreakglass) {
+    // Re-register the seeded admin's break-glass credential. The QA
+    // pass needs at least one working webauthn credential for the
+    // admin so audit + recovery flows have a row to read.
+    let va: VirtualAuthenticator | undefined;
     try {
-      plaintext = await mintBootstrapToken(tokenDB);
+      va = await installVirtualAuthenticator(page);
+      const tokenDB = await openDB();
+      let plaintext: string;
+      try {
+        plaintext = await mintBootstrapToken(tokenDB);
+      } finally {
+        await tokenDB.end();
+      }
+      await page.goto(`/admin/break-glass/setup?token=${plaintext}`);
+      await page.getByLabel(/password/i).fill("qa-redeem-password-12-chars");
+      await page.getByRole("button", { name: /register security key/i }).click();
+      // Assert the page lands at the signed-in dashboard. A redirect
+      // to /ui/ (or /ui/hosts via the router) means the ceremony fully
+      // succeeded; checking for absence of /break-glass/setup alone is
+      // too weak — an error page might also leave that path while
+      // failing the user-visible flow.
+      await page.waitForURL(
+        (url) =>
+          url.host === "localhost:8088" &&
+          !url.pathname.includes("break-glass") &&
+          !url.pathname.includes("login"),
+        { timeout: 15_000 },
+      );
+      expect(page.url()).toMatch(/\/ui(\/|$|\?)/);
     } finally {
-      await tokenDB.end();
+      if (va) await uninstallVirtualAuthenticator(va);
     }
-    await page.goto(`/admin/break-glass/setup?token=${plaintext}`);
-    await page.getByLabel(/password/i).fill("qa-redeem-password-12-chars");
-    await page.getByRole("button", { name: /register security key/i }).click();
-    // Assert the page lands at the signed-in dashboard. A redirect
-    // to /ui/ (or /ui/hosts via the router) means the ceremony fully
-    // succeeded; checking for absence of /break-glass/setup alone is
-    // too weak — an error page might also leave that path while
-    // failing the user-visible flow.
-    await page.waitForURL(
-      (url) =>
-        url.host === "localhost:8088" &&
-        !url.pathname.includes("break-glass") &&
-        !url.pathname.includes("login"),
-      { timeout: 15_000 },
-    );
-    expect(page.url()).toMatch(/\/ui(\/|$|\?)/);
-  } finally {
-    if (va) await uninstallVirtualAuthenticator(va);
-  }
 
-  await page.request.delete("/api/session");
+    await page.request.delete("/api/session");
+  }
 
   // JIT-provision the three dex users by signing them in once.
   for (const email of ["analyst@qa.local", "senior@qa.local", "auditor@qa.local"]) {
