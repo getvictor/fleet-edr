@@ -250,9 +250,129 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # End-to-end Playwright coverage. Boots an instrumented (`go build
+  # -cover`) server binary against mysql + dex, runs the full
+  # Playwright suite across five phases (each with its own env so
+  # the env-specific QA sections — A.6 allowlist, A.7 rate limit,
+  # B.3 JIT off, E.1+E.4+E.5 session lifecycle — actually exercise
+  # their server-side gates), drains GOCOVERDIR via `go tool covdata
+  # textfmt` into coverage-server-e2e.out, and merges per-test V8
+  # coverage payloads into test/e2e/coverage/lcov-e2e.info via
+  # monocart-coverage-reports. Both artifacts feed Sonar + Codecov
+  # below as extra report paths, so a line touched only by an E2E
+  # run still counts toward the "Coverage on New Code" gate.
+  #
+  # The orchestration script (scripts/test-e2e-coverage.sh) restarts
+  # the covered binary between phases so each phase starts with a
+  # clean in-memory rate-limit bucket (no `npm test:all`-style 90s
+  # sleep needed). All phases share GOCOVERDIR; covdata textfmt
+  # merges the per-PID profiles at the end. Phase 5 (qa:e) overrides
+  # EDR_SESSION_*_TIMEOUT to 5s/3s so the idle-eviction waits land in
+  # seconds rather than the local 18s+11s defaults.
+  e2e-test:
+    name: E2E tests with coverage
+    needs: changes
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.any == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # No top-level env block — scripts/test-e2e-coverage.sh sets the
+    # full EDR_* env explicitly per phase (COMMON_ENV array + phase
+    # overrides) so each server boot exercises exactly the env that
+    # phase's specs assert against. Anything declared here would
+    # leak across all phases and break the env-specific assertions.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            ui/package-lock.json
+            test/e2e/package-lock.json
+
+      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
+        with:
+          version: 3.50.0
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Boot mysql + dex
+        run: task qa:up
+
+      - name: Build UI bundle with source maps
+        # UI_BUILD_SOURCEMAP=1 (via task build:ui:e2e) emits the
+        # production-shape minified bundle alongside the .map files
+        # monocart-coverage-reports needs to remap V8 coverage back
+        # to ui/src/**. Regular `task build:ui` strips source maps
+        # for production lean-ness; the e2e job's bundle is throw-
+        # away so the extra .map files are fine.
+        run: task build:ui:e2e
+
+      - name: Install Playwright + Chromium
+        working-directory: test/e2e
+        # `npm ci --ignore-scripts` matches the UI install step; the
+        # second line invokes the LOCALLY installed playwright via
+        # node_modules/.bin (not `npx`, which Sonar flags because the
+        # implicit registry-fetch surface is a SAST concern even when
+        # the binary already exists locally).
+        run: |
+          npm ci --ignore-scripts
+          ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Run E2E coverage pipeline (5 phases)
+        # task test:e2e:coverage delegates to scripts/test-e2e-coverage.sh,
+        # which builds the `-cover` binary once, then walks five phases:
+        #   1. default-env-auth        (auth specs)
+        #   2. default-env-qa          (A.5 + C/D/F.4)
+        #   3. default-env-a7          (A.7 rate-limit; isolated so its
+        #                               per-IP bucket burn doesn't bleed)
+        #   4. envspec-allowlist-jit-off (A.6 + B.3 in one server boot)
+        #   5. short-session-timeouts  (E.1+E.4+E.5 with idle=5s/3s)
+        # All phases share GOCOVERDIR; covdata textfmt merges + the
+        # monocart converter aggregates V8 payloads from coverage-raw/.
+        run: task test:e2e:coverage
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-server-e2e
+          path: coverage-server-e2e.out
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-ui-e2e
+          path: test/e2e/coverage/lcov-e2e.info
+          # Empty lcov tolerated: a future code path that exercises no
+          # UI (pure server tests) would produce an empty file. Sonar
+          # and Codecov both accept empty LCOV.
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Upload per-phase server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-server-logs
+          # The orchestration script writes one log file per phase
+          # under tmp/e2e-server-logs/ so a failing phase points at
+          # exactly the server instance whose env it was driving.
+          path: tmp/e2e-server-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   sonarcloud:
     name: SonarCloud scan
-    needs: [changes, agent-test, server-test, ui-test]
+    needs: [changes, agent-test, server-test, ui-test, e2e-test]
     # `!cancelled()` overrides the default `success()` precondition so this
     # job still runs when one of the upstream test jobs was *skipped* (e.g.
     # a Go-only PR that skipped ui-test). The explicit `!= 'failure'` checks
@@ -270,6 +390,7 @@ jobs:
       && needs.agent-test.result != 'failure'
       && needs.server-test.result != 'failure'
       && needs.ui-test.result != 'failure'
+      && needs.e2e-test.result != 'failure'
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     environment: sonarcloud
@@ -311,6 +432,25 @@ jobs:
           name: coverage-ui
           path: ui/coverage
 
+      # e2e-test job uploads coverage-server-e2e (Go) and
+      # coverage-ui-e2e (LCOV). sonar.go.coverage.reportPaths +
+      # sonar.javascript.lcov.reportPaths in sonar-project.properties
+      # point at coverage-server-e2e.out (repo root) and
+      # test/e2e/coverage/lcov-e2e.info respectively, so re-create
+      # those exact paths in the download targets.
+      - name: Download server E2E coverage
+        if: needs.e2e-test.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-server-e2e
+
+      - name: Download UI E2E coverage
+        if: needs.e2e-test.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-ui-e2e
+          path: test/e2e/coverage
+
       - uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v8.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -318,7 +458,7 @@ jobs:
 
   codecov:
     name: Codecov upload
-    needs: [changes, agent-test, server-test]
+    needs: [changes, agent-test, server-test, e2e-test]
     # Codecov only consumes the agent + server flags (codecov.yml ignores
     # ui/src/** globally — see comment further down), so this job is
     # Go-relevant only: a UI-only PR skips it. Same `!cancelled()` +
@@ -330,9 +470,10 @@ jobs:
     # meaningful way, so skipping the upload loses no signal.
     if: >-
       !cancelled()
-      && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
+      && (needs.changes.result != 'success' || needs.changes.outputs.any == 'true')
       && needs.agent-test.result != 'failure'
       && needs.server-test.result != 'failure'
+      && needs.e2e-test.result != 'failure'
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # CODECOV_TOKEN lives in the `codecov` environment so branch-protection
@@ -350,27 +491,44 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Each download gated on its producing job actually running.
+      # The job's `if:` widened from `outputs.go == true` to
+      # `outputs.any == true` (so a UI-only PR's E2E coverage still
+      # uploads), which means agent/server downloads can no longer
+      # assume their producers ran. download-artifact 404s on missing
+      # artifacts; gating prevents that breakage on non-Go PRs.
       - name: Download agent coverage
+        if: needs.agent-test.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-agent
 
       - name: Download server coverage
+        if: needs.server-test.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-server
 
-      # No UI coverage upload here: codecov.yml ignores ui/src/**
-      # globally (no UI tests yet), so a `ui`-flagged upload would be a
-      # no-op. Sonarcloud still downloads coverage-ui because Sonar reads
-      # the lcov per sonar-project.properties even when empty. Re-add the
-      # download + upload steps when UI tests land.
+      - name: Download server E2E coverage
+        if: needs.e2e-test.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-server-e2e
+
+      - name: Download UI E2E coverage
+        if: needs.e2e-test.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-ui-e2e
+          path: test/e2e/coverage
+
       # disable_search: true -- codecov-action otherwise auto-searches
       # the workspace for *.out / lcov.info files in addition to the
       # explicit `files:` argument, so a stray coverage file landing in
       # the repo would silently get double-counted under whichever flag
       # was uploaded next. Be explicit; don't trust auto-discovery.
       - name: Upload agent coverage
+        if: needs.agent-test.result == 'success'
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           files: coverage-agent.out
@@ -381,10 +539,38 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload server coverage
+        if: needs.server-test.result == 'success'
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           files: coverage-server.out
           flags: server
+          disable_search: true
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      # E2E coverage uploads: same `server` flag merges this profile
+      # with the unit-test server coverage (Codecov takes the union
+      # per flag). The UI E2E LCOV uploads under a separate `ui` flag
+      # because no vitest tests exist yet — when they land they'll
+      # upload to the same flag and the union still holds.
+      - name: Upload server E2E coverage
+        if: needs.e2e-test.result == 'success'
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: coverage-server-e2e.out
+          flags: server
+          disable_search: true
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload UI E2E coverage
+        if: needs.e2e-test.result == 'success'
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: test/e2e/coverage/lcov-e2e.info
+          flags: ui
           disable_search: true
           fail_ci_if_error: false
         env:

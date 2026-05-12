@@ -1,0 +1,219 @@
+# CodeRabbit configuration. Reviewed quarterly per
+# docs/maintenance/tasks/ai-review-bot-config-audit.md.
+# Schema reference: https://docs.coderabbit.ai/reference/configuration
+#
+# Philosophy: only specify what deviates from CodeRabbit's defaults.
+# CodeRabbit ships with sensible global defaults + per-file-type tool
+# auto-detection, so exhaustively pinning every option (especially
+# disabling tools for languages this repo doesn't contain) is noise
+# that has to be re-evaluated every audit cycle. Keep the file small;
+# the docs/maintenance audit catches drift.
+
+# ---------------------------------------------------------------------------
+# Voice + intent
+# ---------------------------------------------------------------------------
+
+tone_instructions: >-
+  Multi-platform EDR. Bias toward bugs that silently undermine
+  security: bypassed authz, TOCTOU races, leaked credentials, weak
+  crypto, audit-log tampering, secrets in logs. Style nits belong
+  to linters; prefer high-signal findings.
+
+# ---------------------------------------------------------------------------
+# reviews
+# ---------------------------------------------------------------------------
+
+reviews:
+  # Default is `chill`. We pick `assertive` so security-critical code
+  # gets the harder push CodeRabbit otherwise saves for senior teams.
+  profile: assertive
+
+  # Cosmetic noise off — saves walkthrough lines on every PR.
+  poem: false
+  in_progress_fortune: false
+
+  # Keep generated assets, vendor trees, coverage outputs, and the
+  # gitignored claude/ scratch tree out of review. Everything else
+  # (incl. test/**) stays in scope. CodeRabbit handles binary file
+  # types itself so we don't enumerate .png/.zip/etc.
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/vendor/**"
+    - "!**/dist/**"
+    - "!server/ui/dist/**"
+    - "!ui/coverage/**"
+    - "!test/e2e/coverage/**"
+    - "!test/e2e/coverage-raw/**"
+    - "!test/e2e/test-results/**"
+    - "!test/e2e/playwright-report/**"
+    - "!**/package-lock.json"
+    - "!**/*.min.js"
+    - "!**/*.map"
+    - "!extension/**/build/**"
+    - "!extension/**/DerivedData/**"
+    - "!extension/**/*.xcodeproj/**"
+    - "!tmp/**"
+    - "!claude/**"
+    - "!.task/**"
+
+  # Path-scoped review focus. Globs use `**/...` style so they match
+  # both the current macOS-only layout AND future platform splits
+  # (e.g. agent/internal/platform/{macos,windows,linux}/, or sibling
+  # extension/edr-windows/). Update the audit task whenever a new
+  # platform tree lands that needs its own threat-model framing.
+  path_instructions:
+    - path: "server/identity/internal/breakglass/**"
+      instructions: |
+        Break-glass recovery surface. Apply maximum scrutiny:
+        WebAuthn ceremony state (challenge signing, origin
+        validation, RP ID + origins alignment), sign-count
+        regression detection per WebAuthn §6.1.1, backup-state
+        flag monotonicity (0→1 only), rate-limit buckets (per-IP,
+        per-email-failed, global setup), bootstrap-token single-use
+        + supersession + same-tx redemption, and that every
+        failure path emits auth.breakglass.failure with a
+        payload.reason. A bug here unbricks attackers, not
+        operators.
+
+    - path: "server/identity/internal/{audit,sessions,authz,oidc,seed,rbac}/**"
+      instructions: |
+        Identity-context security surface. Required checks:
+          - audit: append-only invariant (no UPDATE/DELETE against
+            audit_events in production code); dual-emit must fire
+            even when INSERT fails; slog level dispatch
+            (deny/error/break-glass → WARN, allow → INFO).
+          - sessions: idle + absolute timeout interaction with the
+            60s touchThrottle; last_auth_at refresh on reauth;
+            explicit logout deletes the row.
+          - authz: HTTPGate called BEFORE the side effect;
+            reauth-required deny surfaces via X-Edr-Authz-Reason;
+            no fall-through that skips the gate.
+          - oidc: HMAC-signed state cookie verified before
+            accepting the code; PKCE code_verifier round-trip;
+            EDR_OIDC_ALLOW_JIT_PROVISIONING gate honoured.
+          - seed: idempotent on re-seed (no duplicate users /
+            identities / role bindings); rely on unique-key
+            constraints, not pre-check-then-insert.
+
+    - path: "**/*.rego"
+      instructions: |
+        OPA Rego policy. The chokepoint evaluates these. Require:
+        default-deny posture preserved, every rule has a
+        corresponding test in *_test.rego, new actions appear in
+        BOTH actions.json AND roles.json. CI's "Policy correctness
+        + p99 latency" check gates merge; reviewer just needs to
+        eyeball intent.
+
+    - path: "{agent,extension}/**"
+      instructions: |
+        Host-side capture surface. Today macOS only (ESF + NE in
+        extension/edr/, Go agent in agent/). Windows + Linux are
+        planned. Cross-platform invariants worth flagging
+        regardless of OS:
+          - Peer-validation on every IPC channel against the
+            expected sysext/service identity + signing requirement
+            (macOS: audit_token + code-signing requirement.
+            Windows: ALPC PID + code-signing chain. Linux: SO_PEERCRED +
+            namespace check).
+          - All event payloads bound by the platform's authoritative
+            field (audit_token-derived PID on macOS, not
+            user-controllable es_process_t fields; same idea on
+            other platforms — trust the kernel-vouched value,
+            not the userspace claim).
+          - No PII in log statements; event payloads can include
+            file paths + command lines + URLs.
+          - Enroll-token at-rest perms restrictive (macOS/Linux 0600,
+            Windows ACL'd to LocalSystem + Administrators).
+          - Kernel-side handlers must bound CPU + memory; a slow
+            handler stalls the syscall.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        GitHub Actions. Zizmor + actionlint gate this in CI; on
+        review verify: top-level `permissions: {}` with per-job
+        grants, third-party actions pinned by SHA, secrets
+        referenced never expanded, no untrusted input in `run:`
+        without quoting.
+
+    - path: "scripts/**"
+      instructions: |
+        Shell glue. Verify `set -euo pipefail`, quoted variable
+        expansions, and that process orchestration (PID files,
+        trap, kill -TERM) handles failure paths.
+
+    - path: "test/**"
+      instructions: |
+        Test code. Review for correctness + assertion strength,
+        not docstring depth. Watch for permissive assertions
+        (`expect(x).not.toBe(403)` should list the allowed set
+        explicitly), missing try/finally around browser contexts
+        in Playwright, and mocks where an integration test should
+        hit the real component.
+
+  # ---- pre-merge checks ----------------------------------------------------
+  # All advisory (mode: warning) — branch protection + the CI workflow
+  # checks own the actual merge decision.
+  pre_merge_checks:
+    docstrings:
+      # 80% default lowered to 50% because the repo's test/e2e/** +
+      # scripts/** carry many small, self-documenting helpers
+      # (coverageEnabled, startCoverage, etc.) that don't rate a
+      # formal docstring. Source-tree Go follows "exported types +
+      # non-obvious functions" — not every helper warrants a doc.
+      mode: warning
+      threshold: 50
+    title:
+      mode: warning
+      requirements: |
+        Lowercase + topic prefix matching repo convention (e.g.
+        `breakglass:`, `ci:`, `test/e2e:`, `ui:`, `agent:`,
+        `review fixes:`). Keep under 70 chars; detail in the body.
+    description:
+      mode: warning
+    # We don't use Linear/Jira IDs consistently; turning this off
+    # avoids spurious "issue not addressed" warnings.
+    issue_assessment:
+      mode: off
+
+  # ---- auto-review ---------------------------------------------------------
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    # Default is 5 commits between auto-reviews; bumped because PRs
+    # in this repo iterate often (review-fix cycles).
+    auto_pause_after_reviewed_commits: 10
+    drafts: false
+    ignore_title_keywords:
+      - "[skip review]"
+      - "[wip]"
+
+  # ---- tools ---------------------------------------------------------------
+  # CodeRabbit auto-detects file types — there's no need to disable
+  # tools whose target language isn't in the repo (they simply don't
+  # fire). Only specify deviations:
+  #   1. Disable tools whose findings already flow through CI (so
+  #      CodeRabbit doesn't double-report).
+  #   2. Enable tools (default-on, listed for visibility) whose
+  #      findings would NOT otherwise reach a reviewer.
+  tools:
+    # Disabled — duplicated by CI workflows that already block merge.
+    golangci-lint: { enabled: false }   # .github/workflows/go-lint.yml
+    eslint:        { enabled: false }   # .github/workflows/ts-lint.yml
+    swiftlint:     { enabled: false }   # .github/workflows/swift-lint.yml
+    actionlint:    { enabled: false }   # .github/workflows/actionlint.yml
+    osvScanner:    { enabled: false }   # .github/workflows/osv-scanner.yml
+
+    # Security/secrets — explicitly named for visibility. These are
+    # NOT in CI today and provide the highest signal for an EDR.
+    gitleaks:    { enabled: true }
+    trufflehog:  { enabled: true }
+    semgrep:     { enabled: true }
+    opengrep:    { enabled: true }
+    presidio:    { enabled: true }      # PII in logs / event payloads
+    dotenvLint:  { enabled: true }
+
+# ---------------------------------------------------------------------------
+# Top-level
+# ---------------------------------------------------------------------------
+language: en-US
+early_access: false

@@ -60,7 +60,7 @@ automation absorbs more of it.
 | Cadence | Tasks |
 |---|---|
 | **Monthly** | [`doc-accuracy-sweep`](tasks/doc-accuracy-sweep.md), [`stale-implementation-references`](tasks/stale-implementation-references.md), [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md), [`todo-fixme-sweep`](tasks/todo-fixme-sweep.md), [`observability-review`](tasks/observability-review.md) |
-| **Quarterly** | [`adr-audit`](tasks/adr-audit.md), [`best-practices-refresh`](tasks/best-practices-refresh.md), [`architecture-drift`](tasks/architecture-drift.md), [`dead-code-sweep`](tasks/dead-code-sweep.md), [`test-suite-health`](tasks/test-suite-health.md), [`claude-config-audit`](tasks/claude-config-audit.md), [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md) |
+| **Quarterly** | [`adr-audit`](tasks/adr-audit.md), [`best-practices-refresh`](tasks/best-practices-refresh.md), [`architecture-drift`](tasks/architecture-drift.md), [`dead-code-sweep`](tasks/dead-code-sweep.md), [`test-suite-health`](tasks/test-suite-health.md), [`claude-config-audit`](tasks/claude-config-audit.md), [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md), [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md) |
 
 Suggested anchor: run monthly tasks on the first Monday, quarterly tasks on the first Monday of the quarter (Jan / Apr / Jul / Oct).
 A "kick the can" of one week is fine; skipping a quarter twice in a row is not.
@@ -104,6 +104,7 @@ Use any existing task file as a template. Update the cadence calendar above and 
 ### AI tooling hygiene (new domain)
 - [`claude-config-audit`](tasks/claude-config-audit.md) - `.claude/settings*.json`, hooks, slash commands, skills
 - [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md) - `~/.claude/projects/.../MEMORY.md` + `CLAUDE.md` accuracy
+- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md) - `.coderabbit.yaml` + future Copilot/Gemini/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
 
 ### Product / cross-cutting
 - [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md) - threat model + security boundaries vs current

@@ -27,10 +27,14 @@ build/
 # Regenerated on every `packaging/pkg/build.sh` run; never committed.
 /dist/
 
-# Coverage artifacts written by the `task test:go:*:coverage` tasks and
-# the CI Sonar scan job. Regenerated on every run; never committed.
+# Coverage artifacts written by the `task test:go:*:coverage` tasks,
+# `task test:e2e:coverage`, and the CI Sonar scan job. Regenerated on
+# every run; never committed.
 /coverage-agent.out
 /coverage-server.out
+/coverage-server-e2e.out
 /ui/coverage/
+/test/e2e/coverage/
+/test/e2e/coverage-raw/
 # Taskfile.dev temp cache
 .task/

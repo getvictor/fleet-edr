@@ -74,6 +74,22 @@ tasks:
     cmds:
       - npm run build
 
+  build:ui:e2e:
+    desc: |
+      Build the UI with production minification but source maps
+      ENABLED so the E2E coverage job (monocart-coverage-reports)
+      can walk the .map files and remap V8 coverage of the minified
+      bundle back to ui/src/**. Output lands at server/ui/dist/ same
+      as build:ui — replaces the production-shape bundle in-place,
+      so re-run plain build:ui afterwards if you need a clean prod
+      build. CI calls this from the e2e-test job.
+    dir: ui
+    deps: [ui:setup]
+    env:
+      UI_BUILD_SOURCEMAP: "1"
+    cmds:
+      - npm run build
+
   build:extension:
     desc: Build the macOS system + network extensions via xcodebuild
     dir: extension/edr
@@ -206,6 +222,37 @@ tasks:
     dir: test/e2e
     cmds:
       - npm test
+
+  test:e2e:coverage:
+    desc: |
+      Run the Playwright default-env suite (auth + qa: C/D/F.4 + A.5)
+      against an instrumented Go server binary so the lines exercised
+      by the browser-driven flows land in coverage-server-e2e.out and
+      the running React bundle's V8 coverage lands in
+      test/e2e/coverage/lcov-e2e.info. Sonar + Codecov configs already
+      point at both files. Wall clock ~3 min.
+
+      Mechanics:
+        1. `go build -cover` the server into tmp/edr-server-e2e.
+        2. Start it with GOCOVERDIR=tmp/covdata-e2e so the instrumented
+           binary writes per-package coverage profiles on graceful exit.
+        3. Run the Playwright suites with E2E_COVERAGE=1 + E2E_REUSE_SERVER=1
+           so per-test V8 coverage drops to test/e2e/coverage-raw/.
+        4. SIGTERM the server so the cover runtime flushes profiles.
+        5. `go tool covdata textfmt` merges the per-package profiles
+           into coverage-server-e2e.out.
+        6. `npm run coverage:lcov` aggregates the V8 payloads into
+           test/e2e/coverage/lcov-e2e.info via monocart-coverage-reports
+           (which walks the embedded Vite source maps so paths map back
+           to ui/src/**).
+
+      Pre-req: `task qa:up` (mysql + dex). The orchestration script
+      lives at scripts/test-e2e-coverage.sh so the shell-glue logic
+      stays in bash (Taskfile's default mvdan/sh interpreter chokes
+      on the `VAR=value ./binary &` background pattern).
+    deps: [test:e2e:install, build:ui:e2e]
+    cmds:
+      - bash scripts/test-e2e-coverage.sh
 
   test:short:
     desc: Fast Go tests only (no -race, no DB-dependent suites)

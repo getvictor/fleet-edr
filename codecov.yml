@@ -42,11 +42,14 @@ flag_management:
     - name: server
       paths:
         - server/
-    # No `ui` flag yet: ui/src/** is in the global `ignore` list below
-    # because there are zero UI tests today. A flag scoped to an
-    # ignored path is a no-op. Re-add this entry (and remove ui/src/**
-    # from `ignore`, plus the matching sonar.coverage.exclusions entry)
-    # when UI tests land.
+    # The `ui` flag covers ui/src/**. Vitest doesn't ship UI tests
+    # today, but the Playwright E2E run captures V8 coverage of the
+    # running React bundle and emits an LCOV via monocart-coverage-
+    # reports. The same flag accumulates that LCOV; when vitest tests
+    # land they upload to the same flag and Codecov takes the union.
+    - name: ui
+      paths:
+        - ui/src/
 
 comment:
   layout: "header, diff, flags, components, files"
@@ -55,10 +58,14 @@ comment:
 
 # Mirror sonar.coverage.exclusions so the two services agree. Generated code,
 # main entrypoints, test harnesses, the Swift extensions (no Go coverage),
-# the JSON-Schema sources, and the UI src tree (no UI tests yet) all stay
-# off the coverage surface until they have tests.
+# the JSON-Schema sources, and the test/ directory all stay off the
+# coverage surface. ui/src/** is NO LONGER in the ignore list — the
+# Playwright E2E run captures UI coverage via V8 + source maps, so we
+# want those lines to count. Keep sonar-project.properties'
+# sonar.coverage.exclusions in sync.
 ignore:
   - "**/cmd/**/main.go"
+  - "ui/vite.config.ts"
   - "server/detection/testharness/**"
   - "schema/**"
   - "extension/edr/**"
@@ -68,4 +75,3 @@ ignore:
   - "server/httpserver/**"
   - "test/**"
   - "tools/**"
-  - "ui/src/**"

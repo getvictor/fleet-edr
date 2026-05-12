@@ -2,6 +2,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// Minimal typed shim for the one Node `process.env` lookup below. The
+// UI tsconfig doesn't pull in @types/node (this is the only Node-side
+// surface in the bundle's source tree), so without the shim ESLint
+// flags `process.env.*` as an unsafe member access on an unresolved
+// type. Declaring the slice we use keeps the typing local + auditable.
+declare const process: { env: { UI_BUILD_SOURCEMAP?: string } };
+
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
   base: "/ui/",
@@ -9,7 +16,13 @@ export default defineConfig(({ mode }) => ({
     outDir: "../server/ui/dist",
     emptyOutDir: true,
     minify: mode === "production",
-    sourcemap: mode !== "production",
+    // Source maps in dev/test mode by default; in production, opt in
+    // via UI_BUILD_SOURCEMAP=1 so the E2E coverage job can ship the
+    // production-shape bundle (minified) WITH the .map files
+    // monocart-coverage-reports needs to remap V8 coverage back to
+    // ui/src/**. Regular `task build:ui` keeps emitting no maps so
+    // production bundles stay lean.
+    sourcemap: mode !== "production" || process.env.UI_BUILD_SOURCEMAP === "1",
   },
   server: {
     proxy: {
