@@ -161,9 +161,8 @@ preserve that decision verbatim. Engine wiring:
 
 - Policies live at `server/identity/internal/authz/policy/*.rego`, baked via `embed`.
 - The compiled `rego.PreparedEvalQuery` is constructed once in
-  `identity/internal/authz/engine.go` at boot.
-- Reload on `SIGHUP` is wired through the existing process-supervisor signal handler;
-  no new daemon goroutine.
+  `identity/internal/authz/engine.go` at boot. Policy changes ship as a new binary
+  rather than a runtime reload, so there is no in-process refresh path to maintain.
 - Per-decision latency budget is <1ms p99 measured in `identity/internal/authz/bench_test.go`;
   arch-go and golangci-lint allow the test target. A budget regression in CI is a
   release blocker, not a warning.

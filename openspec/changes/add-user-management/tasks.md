@@ -35,7 +35,7 @@
 
 - [ ] **2.1** New package `server/identity/internal/authz/` with the OPA engine wiring
   (compiled `PreparedEvalQuery`, `embed`-baked `*.rego` files at
-  `internal/authz/policy/*.rego`, SIGHUP reload).
+  `internal/authz/policy/*.rego`).
 - [ ] **2.2** Action registry at `server/identity/api/actions.go` (typed `Action`
   constants) and `server/identity/internal/authz/policy/data/actions.json`. Build-time
   parity check that the two lists agree.

@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"context"
 	"testing"
 
 	"github.com/open-policy-agent/opa/v1/rego"
@@ -162,4 +163,36 @@ func TestAuditPayload(t *testing.T) {
 			assert.Equal(t, tc.decision.Reason, p["reason"])
 		})
 	}
+}
+
+// internalAudit is a minimal AuditRecorder used by tests in this
+// package (package authz). The recordingAudit in engine_test.go
+// lives in package authz_test and can't be reached from here.
+type internalAudit struct{ events []api.AuditEvent }
+
+func (r *internalAudit) Record(_ context.Context, e api.AuditEvent) error {
+	r.events = append(r.events, e)
+	return nil
+}
+
+// TestEngineErrorDecision covers the engine_error helper that both
+// Allow's Eval-failure and decode-failure branches funnel through.
+// The two production call sites are otherwise only reachable when
+// OPA itself misbehaves (a paniced PreparedEvalQuery or a malformed
+// embedded policy bundle), which is not directly fault-injectable
+// from a test against the real embedded policy. Driving the helper
+// directly pins the "deny + reason=engine_error + audit row emitted"
+// invariant the production paths rely on.
+func TestEngineErrorDecision(t *testing.T) {
+	rec := &internalAudit{}
+	e, err := New(t.Context(), rec, nil, Options{})
+	require.NoError(t, err)
+	actor := &api.Actor{UserID: 1}
+	d := e.engineErrorDecision(t.Context(), actor, api.ActionHostIsolate,
+		api.Resource{TenantID: "default", Type: "host", ID: "h1"})
+	assert.False(t, d.Allow, "engine_error must deny")
+	assert.Equal(t, "engine_error", d.Reason)
+	require.Len(t, rec.events, 1, "engine_error must emit exactly one audit row")
+	assert.Equal(t, "engine_error", rec.events[0].Payload["reason"])
+	assert.Equal(t, false, rec.events[0].Payload["allow"])
 }

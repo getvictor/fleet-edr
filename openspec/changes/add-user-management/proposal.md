@@ -44,8 +44,8 @@ against the requirements pinned by this change).
   wave 1.
 - Add a single authorization chokepoint that every UI/API handler calls before performing a
   privileged action. The engine is embedded OPA / Rego with policies baked into the binary
-  and reloadable on SIGHUP. Wave-1 has no existing deployments to migrate, so the chokepoint
-  enforces from boot in the PR that converts the last privileged handler.
+  at build time. Wave-1 has no existing deployments to migrate, so the chokepoint enforces
+  from boot in the PR that converts the last privileged handler.
 - Add an append-only audit log written on every authn outcome and every authz decision on a
   state-changing action. Dual-emit: durable row in MySQL + structured slog/OTel record on
   the active request span so existing SigNoz dashboards can alert on patterns. Reads of the

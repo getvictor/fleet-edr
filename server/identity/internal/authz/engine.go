@@ -178,9 +178,7 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 			"err", err,
 			actionAttrKey, string(action),
 			"edr.authz.resource_type", resource.Type)
-		errDecision := api.Decision{Allow: false, Reason: "engine_error"}
-		e.recordDecision(ctx, actor, action, resource, errDecision)
-		return errDecision, fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
+		return e.engineErrorDecision(ctx, actor, action, resource), fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
 	}
 
 	policyDecision, err := decisionFromResultSet(rs)
@@ -188,13 +186,22 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 		e.logger.ErrorContext(ctx, "authz decode decision",
 			"err", err,
 			actionAttrKey, string(action))
-		errDecision := api.Decision{Allow: false, Reason: "engine_error"}
-		e.recordDecision(ctx, actor, action, resource, errDecision)
-		return errDecision, fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
+		return e.engineErrorDecision(ctx, actor, action, resource), fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
 	}
 
 	e.recordDecision(ctx, actor, action, resource, policyDecision)
 	return policyDecision, nil
+}
+
+// engineErrorDecision builds the canonical engine_error deny, writes
+// the audit row, and returns the decision. Shared by the Eval-failure
+// and decode-failure branches in Allow so a single line of code
+// represents both engine-internal-bug paths; the caller still wraps
+// the underlying error into the returned error value.
+func (e *Engine) engineErrorDecision(ctx context.Context, actor *api.Actor, action api.Action, resource api.Resource) api.Decision {
+	d := api.Decision{Allow: false, Reason: "engine_error"}
+	e.recordDecision(ctx, actor, action, resource, d)
+	return d
 }
 
 // recordDecision writes the audit row for this Allow call. Failures

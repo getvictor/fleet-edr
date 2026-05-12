@@ -143,6 +143,22 @@ func TestAdmin_CanonicalEmailNonBreakglassErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "is_breakglass=0")
 }
 
+// DB-error path: when GetByEmail returns a non-NotFound error
+// (here: the underlying *sqlx.DB is closed before the call), Admin
+// surfaces the error wrapped under "look up existing admin" instead
+// of treating it as "user does not exist" and falling through to
+// CreateBreakglass. Pinned because the silent-fall-through was the
+// pre-cleanup behaviour; a regression would mean a DB outage gets
+// papered over as "fresh DB, seed away".
+func TestAdmin_GetByEmailErrorPropagates(t *testing.T) {
+	us, rb, db := newSeedFixture(t)
+	require.NoError(t, db.Close(), "force GetByEmail into a real error path")
+
+	_, _, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "look up existing admin")
+}
+
 // Nil logger falls back to slog.Default(). Pinned so a caller that
 // forgets to pass a logger does not nil-deref the WarnContext /
 // InfoContext calls inside the seed flow.
