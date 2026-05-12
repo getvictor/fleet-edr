@@ -1,11 +1,5 @@
 package bootstrap
 
-import (
-	"errors"
-
-	"github.com/go-sql-driver/mysql"
-)
-
 // schemaStatements are the CREATE TABLE statements endpoint owns.
 // Idempotent (IF NOT EXISTS); safe to re-run on a populated DB.
 var schemaStatements = []string{
@@ -50,55 +44,4 @@ var schemaStatements = []string{
 		INDEX idx_enrollments_prev_token (previous_host_token_id),
 		INDEX idx_enrollments_tenant_id (tenant_id)
 	)`,
-}
-
-// schemaMigrations are idempotent ALTERs applied after the CREATE TABLEs
-// for upgrading databases that were created before the rotation columns
-// existed. Errors that mean "already applied" (duplicate column,
-// duplicate key) are swallowed by isAlreadyAppliedMigration so re-running
-// on a populated DB is a no-op.
-//
-// On a fresh DB the CREATE TABLE above already includes every column +
-// index this list adds, so every statement here returns "already applied"
-// and the loop is a no-op. The list exists for the upgrade path: an
-// operator running an older binary against the same MySQL gets the
-// rotation columns added in place.
-var schemaMigrations = []string{
-	`ALTER TABLE enrollments ADD COLUMN host_token_issued_at TIMESTAMP(6) NULL`,
-	// Backfill existing rows from enrolled_at so any host older than the
-	// rotation interval is flagged "rotation due" on its next verify, per
-	// #86's deploy contract. Idempotent: WHERE host_token_issued_at IS NULL
-	// excludes rows that already ran through this migration, and excludes
-	// rows born after the column went NOT NULL.
-	`UPDATE enrollments SET host_token_issued_at = enrolled_at WHERE host_token_issued_at IS NULL`,
-	`ALTER TABLE enrollments MODIFY COLUMN host_token_issued_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)`,
-	`ALTER TABLE enrollments ADD COLUMN previous_host_token_id    VARBINARY(32)  NULL`,
-	`ALTER TABLE enrollments ADD COLUMN previous_host_token_hash  VARBINARY(255) NULL`,
-	`ALTER TABLE enrollments ADD COLUMN previous_host_token_salt  VARBINARY(32)  NULL`,
-	`ALTER TABLE enrollments ADD COLUMN previous_token_expires_at TIMESTAMP(6)   NULL`,
-	`ALTER TABLE enrollments ADD INDEX idx_enrollments_prev_token (previous_host_token_id)`,
-}
-
-// MySQL error numbers we treat as "already applied" for ALTER migrations.
-// See https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
-const (
-	mysqlErrDupFieldName = 1060 // duplicate column name
-	mysqlErrDupKeyName   = 1061 // duplicate key name
-	mysqlErrDupKey       = 1022 // duplicate key on add (older MySQL FK clash)
-	mysqlErrFKDupName    = 1826 // duplicate FK constraint name
-)
-
-// isAlreadyAppliedMigration returns true when err is one of the MySQL
-// "this ALTER is already applied" codes, so we can treat the re-run as a
-// no-op. Mirrors identity/bootstrap's helper.
-func isAlreadyAppliedMigration(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) {
-		return false
-	}
-	switch mysqlErr.Number {
-	case mysqlErrDupFieldName, mysqlErrDupKeyName, mysqlErrFKDupName, mysqlErrDupKey:
-		return true
-	}
-	return false
 }

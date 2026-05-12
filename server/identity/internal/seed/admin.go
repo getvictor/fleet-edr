@@ -3,13 +3,12 @@
 // main.go right after the store is open but before the HTTP server starts accepting
 // traffic.
 //
-// Phase 4b note: prior to phase 4 this seeded the admin row with a randomly
-// generated password printed to stderr. That flow is replaced by the bootstrap
-// token flow (server/identity/internal/breakglass): the seed only creates the
-// admin row with NULL password + is_breakglass=1, and cmd/main calls
-// breakglass.IssueSetupToken to mint the redemption URL banner separately. The
-// second return value of Admin is now always empty; it is preserved so the
-// service.SeedAdmin signature does not break every caller in one PR.
+// The seed creates the admin row with NULL password + is_breakglass=1, and
+// cmd/main calls breakglass.IssueSetupToken to mint the redemption URL banner
+// separately so the operator's first login is a WebAuthn registration ceremony
+// rather than a printed-password handoff. The Admin function's second return
+// value is always empty; it is preserved so service.SeedAdmin's signature does
+// not break every caller in one PR.
 package seed
 
 import (
@@ -48,11 +47,10 @@ const mysqlErrDupEntry = 1062
 
 // Admin idempotently seeds the break-glass admin user AND its
 // super_admin role binding. Returns the inserted (or pre-existing)
-// row + an empty password string + nil when the row was just created;
-// (nil, "", nil) when the users table already had a non-break-glass
-// row (a wave-0 deployment that the operator has not migrated yet -
-// Admin does not destructively rewrite that row in case it carries
-// operator data).
+// row + an empty password string + nil on success. Surfaces a hard
+// error if the canonical email is occupied by a non-break-glass row;
+// pre-pilot there is no deployment in that state, and refusing to
+// silently rewrite the row is the safer default.
 //
 // The role binding is inserted on every call so a deployment that
 // somehow lost the binding (manual SQL surgery, partially-restored
@@ -60,9 +58,9 @@ const mysqlErrDupEntry = 1062
 // (user_id, role_id, tenant_id, scope_type, scope_id) makes the
 // insert a no-op when the binding already exists.
 //
-// The stderr writer is no longer used: the Phase 4b token banner is
-// emitted by cmd/main via breakglass.Service.IssueSetupToken so the
-// banner can include the operator-friendly redemption URL.
+// The stderr writer is no longer used: the redemption-token banner
+// is emitted by cmd/main via breakglass.Service.IssueSetupToken so
+// the banner can include the operator-friendly redemption URL.
 func Admin(ctx context.Context, us *users.Store, rb *rbac.Store, logger *slog.Logger, _ io.Writer) (*users.User, string, error) {
 	if us == nil {
 		return nil, "", errors.New("seed.Admin: users store required")
@@ -85,56 +83,28 @@ func Admin(ctx context.Context, us *users.Store, rb *rbac.Store, logger *slog.Lo
 }
 
 // resolveOrCreateAdmin finds the canonical break-glass admin row,
-// creating it if the users table is empty. Returns (nil, nil) when
-// the table has rows but none belong to the canonical admin OR when
-// the canonical email exists but is_breakglass=0 (the wave-0
-// migration path). The caller treats both nil-row outcomes as "seed
-// skipped, no role binding to write."
+// creating it if it doesn't exist yet. Idempotent: on a restart the
+// existing row is returned unchanged so the caller can re-issue a
+// fresh redemption token + re-bind super_admin without rewriting the
+// user record. Returns a hard error on any inconsistency (e.g. a
+// non-breakglass row at the canonical email) — there is no
+// pre-release deployment to migrate from, so an unexpected state is
+// always a bug, not a known migration path.
 func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Logger) (*users.User, error) {
-	n, err := us.Count(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("count users: %w", err)
-	}
-	if n > 0 {
-		// Existing row(s) present. Look up the canonical break-glass
-		// admin specifically: if it already exists AND is_breakglass=1,
-		// return it so the caller can decide whether to issue a fresh
-		// redemption token + bind super_admin. If a wave-0 row exists
-		// at the same email without is_breakglass=1, refuse to silently
-		// flip the flag - the operator runbook covers that migration
-		// path explicitly.
-		existing, err := us.GetByEmail(ctx, DefaultAdminEmail)
-		if errors.Is(err, users.ErrNotFound) {
-			logger.DebugContext(ctx, "admin seed skipped - users table non-empty without canonical admin")
-			return nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("look up existing admin: %w", err)
-		}
+	existing, err := us.GetByEmail(ctx, DefaultAdminEmail)
+	if err == nil {
 		if !existing.IsBreakglass {
-			logger.WarnContext(ctx,
-				"admin seed skipped - canonical email exists but is_breakglass=0; run wave-0 migration",
-				attrkeys.UserID, existing.ID,
-				attrkeys.UserEmail, existing.Email,
-			)
-			return nil, nil
+			return nil, fmt.Errorf("seed.Admin: canonical email %q exists with is_breakglass=0; refusing to silently rewrite", DefaultAdminEmail)
 		}
 		return existing, nil
+	}
+	if !errors.Is(err, users.ErrNotFound) {
+		return nil, fmt.Errorf("look up existing admin: %w", err)
 	}
 
 	u, err := us.CreateBreakglass(ctx, users.CreateBreakglassRequest{
 		Email: DefaultAdminEmail,
 	})
-	if errors.Is(err, users.ErrExistingNonBreakglass) {
-		// Race: someone created a non-breakglass row at the email
-		// between our Count and our Insert. Same handling as the
-		// above branch.
-		logger.WarnContext(ctx,
-			"admin seed skipped - canonical email exists but is_breakglass=0; run wave-0 migration",
-			attrkeys.UserEmail, DefaultAdminEmail,
-		)
-		return nil, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("create breakglass admin: %w", err)
 	}

@@ -44,8 +44,8 @@ against the requirements pinned by this change).
   wave 1.
 - Add a single authorization chokepoint that every UI/API handler calls before performing a
   privileged action. The engine is embedded OPA / Rego with policies baked into the binary
-  and reloadable on SIGHUP. Roll out via a "shadow mode" config flag that always allows but
-  logs the would-be decision; flip off once every privileged handler is converted.
+  and reloadable on SIGHUP. Wave-1 has no existing deployments to migrate, so the chokepoint
+  enforces from boot in the PR that converts the last privileged handler.
 - Add an append-only audit log written on every authn outcome and every authz decision on a
   state-changing action. Dual-emit: durable row in MySQL + structured slog/OTel record on
   the active request span so existing SigNoz dashboards can alert on patterns. Reads of the
@@ -78,9 +78,9 @@ against the requirements pinned by this change).
   `ui-authentication-session`.
 - `server-identity-authorization`: The RBAC engine plus the chokepoint every privileged
   handler funnels through. Owns the action registry, the role / role-binding / scope
-  model, the seeded roles, the OPA-evaluated decision shape (`allow`, `reason`), the
-  shadow-mode rollout knob, and the tenant scaffolding (`tenants` table, `tenant_id`
-  discipline) that future MSSP work builds on.
+  model, the seeded roles, the OPA-evaluated decision shape (`allow`, `reason`), and
+  the tenant scaffolding (`tenants` table, `tenant_id` discipline) that future MSSP
+  work builds on.
 - `server-identity-audit-log`: The append-only audit-event store, the `audit.Record(...)`
   surface every other capability calls into, the dual-emit to MySQL + slog / OTel, the
   decision-driven sampling (writes / destructive at 100%, reads tunable at 0% in MVP,

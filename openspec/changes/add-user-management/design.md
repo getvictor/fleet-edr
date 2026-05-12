@@ -38,9 +38,9 @@ The current state, as of this proposal:
   ADR-0004 import rules, no new "shared internal" package.
 - Keep the agent ↔ server protocol, the events schema, and the host-token middleware
   unchanged. None of this work touches the agent.
-- Make the rollout safe via shadow mode: ship the chokepoint everywhere first with the
-  engine in "always allow but log the would-be decision" mode, then flip to enforcement
-  once every privileged handler has been converted and the deny dashboard is clean.
+- Ship the chokepoint enforcing from boot. Wave-1 has zero existing deployments to
+  migrate, so the audit-only "shadow" rollout used by retrofits doesn't apply here:
+  the deny dashboard's value is the same once enforcement is on from day one.
 
 **Non-Goals:**
 
@@ -225,13 +225,11 @@ documented in the existing session spec.
 
 ## Risks / Trade-offs
 
-- **Shadow-mode → enforcement flip is a single-PR risk.** The plan's wave-1 phasing
-  converts handlers slice-by-slice with shadow mode active. Flipping `authz.shadow_mode`
-  to `false` is the moment ungated handlers stop being silently logged and start
-  returning 403. → Mitigation: shadow-mode dashboard (deny-decision count by handler)
-  must read zero deny decisions for the period covering the conversion before flipping;
-  tests gate on the absence of any handler that does not call `AuthZ.Allow` (a code-search
-  rule plus a fixture-handler audit).
+- **Chokepoint enforces from boot.** With no upgrade path to retrofit, the chokepoint
+  goes live in enforcing mode in the same PR that converts the last privileged handler.
+  → Mitigation: tests gate on the absence of any handler that does not call
+  `AuthZ.Allow` (a code-search rule plus a fixture-handler audit); the deny dashboard
+  catches role-binding gaps within minutes of cutover.
 - **OPA dependency footprint.** `opa/rego` brings in a sizable transitive tree; binary
   size and compile time grow noticeably. → Mitigation: documented in the plan;
   dependency-review CI flags unexpected bumps; budget set against a baseline measured at
@@ -259,7 +257,7 @@ documented in the existing session spec.
 
 ## Migration Plan
 
-The plan lists seven phases inside the wave-1 PR sequence. We preserve those, retargeted
+The plan lists six phases inside the wave-1 PR sequence. We preserve those, retargeted
 to the bounded-context layout. Each phase is one PR; arch-go and golangci-lint pass at
 every phase boundary.
 
@@ -267,11 +265,10 @@ every phase boundary.
    `users` / `sessions`, the role-seeder loop, the rewritten `seed.Admin` →
    `seed.BreakGlassBootstrap`, and the cross-context `tenant_id` columns. Each context
    ships its own additive migration in this PR; no behavior change yet.
-2. **Authz package shipped in shadow mode.** `server/identity/internal/authz` lands
+2. **Authz package enforcing from boot.** `server/identity/internal/authz` lands
    compiled. `identity/api` exports `AuthZ`, `Audit`, `Actor`. Every existing
    privileged handler is converted to call `AuthZ.Allow(...)` with the appropriate
-   action constant. Engine returns `{allow: true, reason: "shadow_mode"}` regardless of
-   the policy's verdict; the would-be decision is recorded in the audit log.
+   action constant. Deny decisions return 403 from cutover.
 3. **Audit recorder + dual-emit live.** `audit_events` writes start happening; the slog
    / OTel emit path is wired through observability-instrumentation. Read endpoint
    shipped behind `audit.read` with audit-of-audit on its own access.
@@ -281,19 +278,15 @@ every phase boundary.
    (`auth.oidc.enabled = false`).
 5. **Session middleware updates.** Idle / absolute / reauth timeouts; break-glass
    tighter caps. Reauth-window enforcement on destructive actions.
-6. **Shadow-mode flip.** `authz.shadow_mode = false`. From this PR onward, deny
-   decisions return 403. Pilot-customer Okta wiring happens as a config push, not a
-   code change.
-7. **Documentation.** Operator runbook for break-glass redemption + WebAuthn registration.
+6. **Documentation.** Operator runbook for break-glass redemption + WebAuthn registration.
    Okta tenant setup guide. Role + permission matrix. SigNoz dashboard wiring for the
    audit-decision stream.
 
-**Rollback strategy:** Every PR in this sequence is independently reversible. Phase 1
-through 5 are no-ops at the user level (shadow mode allows everything). Phase 6 (the
-flip) is the only PR where rollback might affect end-users; it is a one-line config
-revert, not a migration. The new identity tables remain in place across rollback —
-`bootstrap_tokens` and `webauthn_credentials` rows are harmless if the seed flow is
-reverted to printing a password.
+**Rollback strategy:** Every PR in this sequence is independently reversible.
+Phase 2 is the cutover (deny decisions start returning 403); rollback to the prior
+binary restores pre-chokepoint behavior. The new identity tables remain in place
+across rollback — `bootstrap_tokens` and `webauthn_credentials` rows are harmless if
+the seed flow is reverted.
 
 ## Open Questions
 

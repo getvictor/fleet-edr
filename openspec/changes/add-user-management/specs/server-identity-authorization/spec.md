@@ -148,21 +148,3 @@ the seeded roles plus a representative role-binding fan-out.
 - **THEN** the build fails and the PR cannot be merged until the regression is
   addressed
 
-### Requirement: Shadow mode rolls authorization out without enforcing
-
-The system SHALL expose a configuration flag (`authz.shadow_mode`) that, when enabled,
-makes the chokepoint always return `{allow: true, reason: "shadow_mode"}` while still
-recording the would-be decision in the audit log. The flag MUST exist for the duration
-of the wave-1 rollout and MUST be removable in a follow-up change once enforcement is
-the steady state. The default for a fresh deployment SHALL be `shadow_mode=false`; an
-upgrade path MAY default it to `true` for a deployment whose policy verdict has not yet
-been validated against its handler set.
-
-#### Scenario: Shadow mode allows but logs the would-be decision
-
-- **GIVEN** `authz.shadow_mode=true` and a request whose policy decision would be deny
-- **WHEN** the chokepoint evaluates the request
-- **THEN** the response to the handler is `{allow: true, reason: "shadow_mode"}`
-- **AND** an audit row is recorded with decision `deny` and the policy-supplied reason
-- **AND** the audit row's payload notes that shadow mode was in effect so dashboards
-  can distinguish would-be denies from real denies

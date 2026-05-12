@@ -160,16 +160,15 @@ func TestSchema_RoleBindingsScopeShape(t *testing.T) {
 	assert.Equal(t, "*", *scopeID.Default)
 }
 
-// TestSchema_Idempotent verifies ApplySchema is safe to re-run against a
-// populated database. Re-running is the production upgrade path: an
-// operator deploying a new server binary calls ApplySchema and gets a
-// no-op when nothing changed. A regression here (e.g. forgetting to
-// guard a new ALTER with isAlreadyAppliedMigration) is silent until the
-// second deploy.
+// TestSchema_Idempotent verifies ApplySchema is safe to re-run
+// against a populated database. CREATE TABLE IF NOT EXISTS makes the
+// boot path's unconditional call a no-op on the second deploy; a
+// regression that turns it into a hard error would surface here
+// rather than in production.
 func TestSchema_Idempotent(t *testing.T) {
 	db := openIdentitySchema(t)
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db),
-		"second ApplySchema must succeed -- migrations are not idempotent")
+		"second ApplySchema must succeed against a populated DB")
 }
 
 // TestSeed_DefaultTenant locks in the wave-1 tenant-scaffolding seed:
@@ -236,10 +235,11 @@ func TestSeed_Idempotent(t *testing.T) {
 // openIdentitySchema returns a fresh test DB with every bounded
 // context's schema applied (via testdb/full.Open) plus a second
 // identity ApplySchema call so the assertions exercise the full
-// integration-test path the project's per-context tests use. Calling
-// identity ApplySchema twice is itself an idempotency check: a
-// regression in either schemaMigrations or the seed inserts would
-// surface here before the dedicated TestSchema_Idempotent runs.
+// integration-test path the project's per-context tests use.
+// Calling identity ApplySchema twice is itself an idempotency
+// check: a regression that turns the boot-time re-apply into a
+// hard error would surface here before the dedicated
+// TestSchema_Idempotent runs.
 func openIdentitySchema(t *testing.T) *sqlx.DB {
 	t.Helper()
 	db := full.Open(t)

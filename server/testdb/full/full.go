@@ -57,8 +57,5 @@ func Open(t *testing.T) *sqlx.DB {
 	if err := detectiontestkit.ApplySchema(ctx, db); err != nil {
 		t.Fatalf("apply detection schema: %v", err)
 	}
-	if err := detectiontestkit.MigrateSchema(ctx, db); err != nil {
-		t.Fatalf("apply detection migrations: %v", err)
-	}
 	return db
 }

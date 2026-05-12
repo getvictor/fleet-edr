@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
-	"sync/atomic"
 
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/open-policy-agent/opa/v1/storage/inmem"
@@ -41,26 +40,24 @@ const actionAttrKey = "edr.authz.action"
 
 // Engine is the AuthZ-interface implementation. Holds the prepared
 // Rego query (compiled at construction time so per-request evaluation
-// is the warm path), the audit recorder every decision flows through,
-// and a hot-swappable shadow-mode flag. SIGHUP reloads the flag
-// without rebuilding the query.
+// is the warm path) and the audit recorder every decision flows
+// through.
 type Engine struct {
 	query rego.PreparedEvalQuery
 	audit api.AuditRecorder
-	// asyncRead is the optional Phase 3 path for read-action allow
-	// events: the chokepoint Submits to it instead of calling
-	// audit.Record synchronously when (a) the action is a read action,
-	// (b) the decision is Allow, (c) the actor is non-break-glass, and
-	// (d) the action is not audit.read (which keeps the audit-of-audit
-	// row regardless of sampling). Nil-safe: a missing async writer
+	// asyncRead is the optional read-action allow-event path: the
+	// chokepoint Submits to it instead of calling audit.Record
+	// synchronously when (a) the action is a read action, (b) the
+	// decision is Allow, (c) the actor is non-break-glass, and (d) the
+	// action is not audit.read (which keeps the audit-of-audit row
+	// regardless of sampling). Nil-safe: a missing async writer
 	// degrades silently to the synchronous Record path.
 	asyncRead api.AsyncAuditWriter
 	// readSamplingRate is the inclusion probability (0.0-1.0) for
 	// non-carve-out read-allow events. 0.0 (default) emits zero such
-	// rows; 1.0 emits every row (the wave-1 historical behavior).
+	// rows; 1.0 emits every row.
 	readSamplingRate float64
 	logger           *slog.Logger
-	shadow           atomic.Bool
 
 	// registered is the action allowlist the chokepoint validates
 	// against before invoking Rego. A request that names an
@@ -86,14 +83,12 @@ type Options struct {
 // lands in audit_events.
 //
 // ctx is used for the OPA PrepareForEval call only; the engine's
-// later Allow calls take their own ctx. shadowMode is the initial
-// value of the hot-swap flag; SetShadowMode changes it later
-// (cmd/main's SIGHUP handler is the production caller).
+// later Allow calls take their own ctx.
 //
-// opts carries the Phase 3 async + sampling configuration. Zero
+// opts carries the async-audit + read-sampling configuration. Zero
 // value is valid (no async writer, 0.0 read sampling); production
 // wires identityCtx's AsyncWriter and cfg.AuditReadSampling.
-func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, shadowMode bool, opts Options) (*Engine, error) {
+func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, opts Options) (*Engine, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -133,7 +128,6 @@ func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, shad
 		logger:           logger,
 		registered:       registered,
 	}
-	e.shadow.Store(shadowMode)
 	return e, nil
 }
 
@@ -146,19 +140,18 @@ func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, shad
 //     actions with `action_not_registered` (defense in depth).
 //  2. Pull the actor from ctx; reject anonymous calls with `no_actor`.
 //  3. Evaluate the Rego query.
-//  4. Apply the shadow-mode override AFTER auditing so the audit row
-//     records the would-be deny verbatim.
+//  4. Record the decision via the audit recorder.
 func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Resource) (api.Decision, error) {
 	if _, ok := e.registered[action]; !ok {
 		d := api.Decision{Allow: false, Reason: "action_not_registered"}
-		e.recordDecision(ctx, nil, action, resource, d, false)
+		e.recordDecision(ctx, nil, action, resource, d)
 		return d, nil
 	}
 
 	actor, ok := api.ActorFromContext(ctx)
 	if !ok {
 		d := api.Decision{Allow: false, Reason: "no_actor"}
-		e.recordDecision(ctx, nil, action, resource, d, false)
+		e.recordDecision(ctx, nil, action, resource, d)
 		return d, nil
 	}
 
@@ -170,7 +163,7 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 	// Audit + a distinct reason makes the bug visible at the call site.
 	if resource.TenantID == "" {
 		d := api.Decision{Allow: false, Reason: "resource_tenant_missing"}
-		e.recordDecision(ctx, actor, action, resource, d, false)
+		e.recordDecision(ctx, actor, action, resource, d)
 		return d, nil
 	}
 
@@ -186,7 +179,7 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 			actionAttrKey, string(action),
 			"edr.authz.resource_type", resource.Type)
 		errDecision := api.Decision{Allow: false, Reason: "engine_error"}
-		e.recordDecision(ctx, actor, action, resource, errDecision, false)
+		e.recordDecision(ctx, actor, action, resource, errDecision)
 		return errDecision, fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
 	}
 
@@ -196,30 +189,13 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 			"err", err,
 			actionAttrKey, string(action))
 		errDecision := api.Decision{Allow: false, Reason: "engine_error"}
-		e.recordDecision(ctx, actor, action, resource, errDecision, false)
+		e.recordDecision(ctx, actor, action, resource, errDecision)
 		return errDecision, fmt.Errorf("%w: %w", api.ErrAuthZUnavailable, err)
 	}
 
-	shadow := e.shadow.Load()
-	e.recordDecision(ctx, actor, action, resource, policyDecision, shadow)
-
-	if shadow && !policyDecision.Allow {
-		return api.Decision{Allow: true, Reason: "shadow_mode"}, nil
-	}
+	e.recordDecision(ctx, actor, action, resource, policyDecision)
 	return policyDecision, nil
 }
-
-// SetShadowMode flips the engine's enforcement gate. Production:
-// cmd/main's SIGHUP handler reads EDR_AUTHZ_SHADOW_MODE on signal and
-// calls this; tests call it directly. The change is visible to the
-// next Allow call (atomic).
-func (e *Engine) SetShadowMode(on bool) {
-	e.shadow.Store(on)
-}
-
-// ShadowMode reports the current value of the hot-swap flag. Useful
-// for status endpoints + the Phase 6 dashboard.
-func (e *Engine) ShadowMode() bool { return e.shadow.Load() }
 
 // recordDecision writes the audit row for this Allow call. Failures
 // are logged at WARN, never propagated: an audit-write failure must
@@ -240,7 +216,6 @@ func (e *Engine) recordDecision(
 	action api.Action,
 	resource api.Resource,
 	d api.Decision,
-	shadow bool,
 ) {
 	if e.audit == nil {
 		return
@@ -249,7 +224,7 @@ func (e *Engine) recordDecision(
 		Action:     api.AuditAction("authz." + string(action)),
 		TargetType: resource.Type,
 		TargetID:   resource.ID,
-		Payload:    auditPayload(d, shadow),
+		Payload:    auditPayload(d),
 		// Capture trace_id at decision time. The async path runs the
 		// eventual INSERT under a background ctx (so a request-scope
 		// cancellation doesn't break in-flight audits); without an
@@ -318,15 +293,11 @@ func traceIDFromContext(ctx context.Context) string {
 	return sc.TraceID().String()
 }
 
-func auditPayload(d api.Decision, shadow bool) map[string]any {
-	p := map[string]any{
+func auditPayload(d api.Decision) map[string]any {
+	return map[string]any{
 		"allow":  d.Allow,
 		"reason": d.Reason,
 	}
-	if shadow {
-		p["shadow_mode"] = true
-	}
-	return p
 }
 
 // loadDataBundle reads the embedded JSON bundles and returns the

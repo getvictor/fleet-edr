@@ -18,10 +18,9 @@ import (
 // dropped when the test completes.
 //
 // Schemas are NOT applied. The caller is responsible for invoking
-// each context's ApplySchema (and detection's MigrateSchema). For
-// tests that need every bounded context's schema, use
-// server/testdb/full.Open(t) instead, which is the canonical fixture
-// for cross-context integration tests.
+// each context's ApplySchema. For tests that need every bounded
+// context's schema, use server/testdb/full.Open(t) instead, which
+// is the canonical fixture for cross-context integration tests.
 //
 // Requires EDR_TEST_DSN to be set (e.g.
 // "root:@tcp(127.0.0.1:3316)/edr_test?parseTime=true"). The database

@@ -39,8 +39,7 @@ type Handler struct {
 
 // New builds an operator handler. Panics if svc or authz is nil.
 // Authorization is enforced before each privileged route's side
-// effect; a nil authz would bypass the role matrix once shadow mode
-// flips off.
+// effect; a nil authz would bypass the role matrix entirely.
 func New(svc Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("rules operator.New: Service must not be nil")

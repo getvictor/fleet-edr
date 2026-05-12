@@ -8,23 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// TestSchema_TenantIDOnHostsAndAlerts locks in the wave-1
-// tenant-scaffolding migration: detection's `hosts` and `alerts`
-// tables both gain a tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'
-// column. Wave-1 reads do not query on it; the column is structural
-// scaffolding for wave-2 MSSP scoping.
+// TestSchema_TenantIDOnHostsAndAlerts pins the tenant-scaffolding
+// columns on detection's `hosts` and `alerts` tables:
+// tenant_id VARCHAR(64) NOT NULL DEFAULT 'default' on each. Wave-1
+// reads do not query on it; the column is structural scaffolding
+// for wave-2 MSSP scoping.
 //
 // Uses testdb/full.Open so the test exercises the same full-schema
-// integration path the rest of the per-context test pyramid uses;
-// then re-runs the detection migrations on top of full's already-
-// applied schema as the idempotency assertion.
+// integration path the rest of the per-context test pyramid uses.
 func TestSchema_TenantIDOnHostsAndAlerts(t *testing.T) {
 	db := full.Open(t)
-	require.NoError(t, bootstrap.MigrateSchema(t.Context(), db))
 
 	for _, table := range []string{"hosts", "alerts"} {
 		t.Run(table, func(t *testing.T) {
@@ -42,10 +38,4 @@ func TestSchema_TenantIDOnHostsAndAlerts(t *testing.T) {
 			assert.Equal(t, "default", *defaultValue)
 		})
 	}
-
-	// Idempotency: re-running migrations is safe (an upgrade flow never
-	// calls ApplySchema once on a fresh DB plus a stop-the-world freeze;
-	// it calls both ApplySchema and MigrateSchema unconditionally).
-	require.NoError(t, bootstrap.MigrateSchema(t.Context(), db),
-		"MigrateSchema must be idempotent on a populated DB")
 }

@@ -130,48 +130,34 @@ func TestDecisionFromResultSet(t *testing.T) {
 }
 
 // TestAuditPayload locks the dual-emit shape every audit consumer
-// will pivot on. shadow=true must surface an explicit
-// `shadow_mode: true` key so the Phase 6 dashboard can split shadow
-// denies from real denies; shadow=false must NOT add the key (so
-// queries don't have to filter on a tri-state field).
+// pivots on: every audit row carries exactly `allow` + `reason` so
+// the SigNoz dashboard's grouping queries don't have to handle
+// optional / tri-state fields.
 func TestAuditPayload(t *testing.T) {
 	cases := []struct {
 		name      string
 		decision  api.Decision
-		shadow    bool
-		wantKeys  []string
 		wantAllow any
 	}{
 		{
-			name:      "deny + shadow off",
+			name:      "deny",
 			decision:  api.Decision{Allow: false, Reason: "no_matching_rule"},
-			shadow:    false,
-			wantKeys:  []string{"allow", "reason"},
 			wantAllow: false,
 		},
 		{
-			name:      "deny + shadow on adds shadow_mode key",
-			decision:  api.Decision{Allow: false, Reason: "no_matching_rule"},
-			shadow:    true,
-			wantKeys:  []string{"allow", "reason", "shadow_mode"},
-			wantAllow: false,
-		},
-		{
-			name:      "allow + shadow off omits shadow_mode key",
+			name:      "allow",
 			decision:  api.Decision{Allow: true, Reason: "granted"},
-			shadow:    false,
-			wantKeys:  []string{"allow", "reason"},
 			wantAllow: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := auditPayload(tc.decision, tc.shadow)
+			p := auditPayload(tc.decision)
 			gotKeys := make([]string, 0, len(p))
 			for k := range p {
 				gotKeys = append(gotKeys, k)
 			}
-			assert.ElementsMatch(t, tc.wantKeys, gotKeys)
+			assert.ElementsMatch(t, []string{"allow", "reason"}, gotKeys)
 			assert.Equal(t, tc.wantAllow, p["allow"])
 			assert.Equal(t, tc.decision.Reason, p["reason"])
 		})

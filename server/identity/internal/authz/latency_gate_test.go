@@ -40,7 +40,7 @@ func TestAllow_P99Latency(t *testing.T) {
 	const samples = 1000
 	const p99Target = 1 * time.Millisecond
 
-	e, err := authz.New(t.Context(), nil, nil, false, authz.Options{})
+	e, err := authz.New(t.Context(), nil, nil, authz.Options{})
 	require.NoError(t, err)
 
 	actor := &api.Actor{

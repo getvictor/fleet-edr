@@ -37,10 +37,10 @@ func (r *recordingAudit) snapshot() []api.AuditEvent {
 	return out
 }
 
-func newEngine(t *testing.T, shadowMode bool) (*authz.Engine, *recordingAudit) {
+func newEngine(t *testing.T) (*authz.Engine, *recordingAudit) {
 	t.Helper()
 	rec := &recordingAudit{}
-	e, err := authz.New(t.Context(), rec, nil, shadowMode, authz.Options{})
+	e, err := authz.New(t.Context(), rec, nil, authz.Options{})
 	require.NoError(t, err, "construct engine")
 	return e, rec
 }
@@ -112,10 +112,10 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 		{"auditor host.isolate", "auditor", api.ActionHostIsolate, false},
 	}
 	// One engine for the whole matrix. The Rego compile is the
-	// expensive part (~30ms) and the engine is read-only here (no
-	// SetShadowMode calls), so 21 reuses of the same prepared query
-	// keep `go test` snappy without changing any assertion.
-	e, _ := newEngine(t, false)
+	// expensive part (~30ms) and the engine is read-only here, so
+	// 21 reuses of the same prepared query keep `go test` snappy
+	// without changing any assertion.
+	e, _ := newEngine(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := actorWithRoles(1, "default", tenantBinding(tc.roleID, "default"))
@@ -150,7 +150,7 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 // picks it up automatically (and the test keeps holding the line
 // "every action must reach a non-wildcard role").
 func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
-	e, _ := newEngine(t, false)
+	e, _ := newEngine(t)
 	var roles []string
 	for _, r := range seed.BuiltinRoles {
 		if r.ID == "super_admin" {
@@ -188,7 +188,7 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 // gate: a caller passing an action string outside RegisteredActions
 // is denied with reason action_not_registered before Rego sees it.
 func TestAllow_UnregisteredAction_Denied(t *testing.T) {
-	e, rec := newEngine(t, false)
+	e, rec := newEngine(t)
 	actor := actorWithRoles(1, "default", tenantBinding("super_admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)
 	d, err := e.Allow(ctx, api.Action("not.a.real.action"), api.Resource{TenantID: "default"})
@@ -204,7 +204,7 @@ func TestAllow_UnregisteredAction_Denied(t *testing.T) {
 // regression. A handler should have rejected the request earlier;
 // reaching the chokepoint without an actor is itself a signal.
 func TestAllow_NoActor_Denied(t *testing.T) {
-	e, rec := newEngine(t, false)
+	e, rec := newEngine(t)
 	d, err := e.Allow(t.Context(), api.ActionHostRead, api.Resource{})
 	require.NoError(t, err)
 	assert.False(t, d.Allow)
@@ -218,7 +218,7 @@ func TestAllow_NoActor_Denied(t *testing.T) {
 // shipped). Without this assertion a wave-2 author could add the
 // resolver and not realise wave-1 deployments expected the deny.
 func TestAllow_HostScope_NotYetSupported(t *testing.T) {
-	e, _ := newEngine(t, false)
+	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default", api.RoleBinding{
 		RoleID: "admin", TenantID: "default",
 		ScopeType: api.RoleBindingScopeHost, ScopeID: "abc",
@@ -236,7 +236,7 @@ func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 // win. Otherwise the scope_not_yet_supported branch shadows real
 // authorisations once wave-2 host scopes are mixed in.
 func TestAllow_TenantGrantWinsOverHostScopeDeny(t *testing.T) {
-	e, _ := newEngine(t, false)
+	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default",
 		tenantBinding("admin", "default"),
 		api.RoleBinding{RoleID: "admin", TenantID: "default", ScopeType: api.RoleBindingScopeHost, ScopeID: "abc"},
@@ -252,7 +252,7 @@ func TestAllow_TenantGrantWinsOverHostScopeDeny(t *testing.T) {
 // actor in tenant A is denied actions on a resource in tenant B even
 // when the role would normally grant the action.
 func TestAllow_CrossTenantDeny(t *testing.T) {
-	e, _ := newEngine(t, false)
+	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "tenant_a", tenantBinding("admin", "tenant_a"))
 	ctx := api.WithActor(t.Context(), actor)
 	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "tenant_b", Type: "host", ID: "abc"})
@@ -261,48 +261,11 @@ func TestAllow_CrossTenantDeny(t *testing.T) {
 	assert.Equal(t, "no_matching_rule", d.Reason)
 }
 
-// TestAllow_ShadowMode forces Allow=true on a would-be deny and
-// records the would-be decision in the audit row. The handler sees
-// the override; the operator sees the underlying intent.
-func TestAllow_ShadowMode(t *testing.T) {
-	e, rec := newEngine(t, true)
-	actor := actorWithRoles(1, "default", tenantBinding("analyst", "default"))
-	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
-	require.NoError(t, err)
-	assert.True(t, d.Allow, "shadow mode forces allow")
-	assert.Equal(t, "shadow_mode", d.Reason)
-
-	require.Len(t, rec.snapshot(), 1)
-	row := rec.snapshot()[0]
-	assert.Equal(t, "no_matching_rule", row.Payload["reason"], "audit row records the would-be deny reason")
-	assert.Equal(t, true, row.Payload["shadow_mode"])
-}
-
-// TestSetShadowMode_Atomic confirms the hot-swap flag is atomic:
-// flipping shadow mode mid-traffic is the production rollout pattern
-// (cmd/main's SIGHUP handler reads the env var and calls
-// SetShadowMode), so the swap must be visible to the next Allow call
-// without a restart.
-func TestSetShadowMode_Atomic(t *testing.T) {
-	e, _ := newEngine(t, false)
-	assert.False(t, e.ShadowMode())
-	e.SetShadowMode(true)
-	assert.True(t, e.ShadowMode())
-
-	actor := actorWithRoles(1, "default", tenantBinding("analyst", "default"))
-	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
-	require.NoError(t, err)
-	assert.True(t, d.Allow, "shadow mode flip should be visible to the next Allow")
-	assert.Equal(t, "shadow_mode", d.Reason)
-}
-
 // TestAllow_NilAuditDoesNotPanic guards the test-only path where a
 // caller passes nil for the AuditRecorder. Production callers must
 // supply one; tests sometimes don't.
 func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
-	e, err := authz.New(t.Context(), nil, nil, false, authz.Options{})
+	e, err := authz.New(t.Context(), nil, nil, authz.Options{})
 	require.NoError(t, err)
 	actor := actorWithRoles(1, "default", tenantBinding("super_admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)

@@ -7,23 +7,9 @@ becomes a `403` on the wire with an `X-Edr-Authz-Reason` header
 naming the policy's verdict; the same row lands in the audit log
 with the actor + the resource attached.
 
-The chokepoint enforces by default. The
-`EDR_AUTHZ_SHADOW_MODE=1` environment variable flips it into
-audit-only mode (the policy still evaluates and the audit row is
-still written, but the wire response is always allow); use that knob
-when verifying role bindings against the audit log without flipping
-enforcement on.
-
-The boot log announces the posture explicitly:
-
-```text
-INFO authz enforcement posture=ENABLED mode_description=enforcing env_var=EDR_AUTHZ_SHADOW_MODE
-```
-
-(or `posture=SHADOW mode_description="denies audited but allowed"`
-when the env var is set). The `posture` field is a stable enum —
-filter on `posture=ENABLED` in your log shipper to confirm
-production deployments are enforcing.
+The chokepoint enforces unconditionally: every privileged action is
+evaluated against the calling actor's role bindings, and a policy
+deny becomes a `403` on the wire.
 
 ## Seeded role matrix
 
@@ -95,16 +81,8 @@ diagnosis flow.
 | `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug — the session middleware is misconfigured for the route. Check the route's middleware chain. |
 | `resource_tenant_missing` | The handler built a `Resource` with an empty `TenantID`. | Server bug. The handler should call `api.ActorTenantID(ctx)` to populate the field. |
 
-`shadow_mode` is NOT a wire-shape reason — when the deployment runs
-with `EDR_AUTHZ_SHADOW_MODE=1`, the engine forces `Allow=true` and
-HTTPGate emits no 403 / no reason header. The audit-only mode shows
-up in the audit log as `payload.shadow_mode=true` on the row that
-records the would-be-deny verdict. To find masked denies, query
-`audit_events WHERE payload->'$.shadow_mode' IS NOT NULL`.
-
-The audit-log row's `payload` carries `reason` matching the header
-plus `shadow_mode=true` when audit-only mode is on. The granting
-role is not on the payload today — derive it by joining
+The audit-log row's `payload` carries `reason` matching the header.
+The granting role is not on the payload today — derive it by joining
 `role_bindings` for the actor's `user_id` if needed.
 
 ## Binding a role to a user (wave 1)
@@ -133,32 +111,6 @@ To revoke: `DELETE FROM role_bindings WHERE user_id = <user_id>
 AND role_id = 'admin'`. Sessions don't get bounced automatically;
 the next chokepoint call reads fresh bindings via
 `Service.LoadActor`, so the change takes effect on the next request.
-
-## `EDR_AUTHZ_SHADOW_MODE=1` (audit-only mode)
-
-Set `EDR_AUTHZ_SHADOW_MODE=1` and restart to flip the chokepoint
-into audit-only mode. Every `Allow` call still:
-
-- evaluates the policy,
-- writes the audit row with `payload.reason` set to what the verdict
-  WOULD have been, and
-- adds `payload.shadow_mode=true` to the row.
-
-The wire response is always allow. Use this knob to verify role
-bindings against the audit log without flipping enforcement on —
-e.g. when standing up a fresh deployment and confirming the seeded
-matrix matches the operators-and-roles you expect.
-
-The boot log line for shadow mode reads:
-
-```text
-INFO authz enforcement posture=SHADOW mode_description="denies audited but allowed" env_var=EDR_AUTHZ_SHADOW_MODE
-```
-
-This is the canonical signal that audit-only mode is active. A
-production log shipper should alert on `posture=SHADOW` — if
-audit-only mode landed in production accidentally, you want to know
-within minutes, not by the time the next deploy runs.
 
 ## Behind the chokepoint
 

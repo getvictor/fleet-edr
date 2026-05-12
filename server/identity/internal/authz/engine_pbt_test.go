@@ -256,7 +256,6 @@ var canonicalReasons = []string{
 	api.ReasonActionNotRegistered,
 	api.ReasonNoActor,
 	api.ReasonResourceTenantMissing,
-	api.ReasonShadowMode,
 	api.ReasonReauthRequired,
 }
 
@@ -287,11 +286,11 @@ func requiresFreshAuth(action api.Action, resource api.Resource) bool {
 
 // newEnginePBT builds a real Engine over the embedded policy bundle.
 // audit recorder is nil (per Engine.New's doc: "Audit may be nil only
-// in tests"); shadow mode off; no async writer.
+// in tests"); no async writer.
 func newEnginePBT(t *testing.T) *authz.Engine {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(testLogWriter{t}, &slog.HandlerOptions{Level: slog.LevelError}))
-	e, err := authz.New(context.Background(), nil, logger, false, authz.Options{})
+	e, err := authz.New(context.Background(), nil, logger, authz.Options{})
 	require.NoError(t, err)
 	return e
 }

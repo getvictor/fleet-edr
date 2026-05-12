@@ -4,8 +4,8 @@
 // Bounded contexts are a code-organization construct, not a storage
 // one: identity, endpoint, rules, response, and detection share one
 // MySQL database. testdb composes each context's package-level
-// ApplySchema (and detection's MigrateSchema) so any cross-context
-// integration test gets every table it needs from a single fixture.
+// ApplySchema so any cross-context integration test gets every table
+// it needs from a single fixture.
 //
 // This package is test-only and arch-go denies non-test packages from
 // importing it. Production wiring goes through cmd/main, which calls

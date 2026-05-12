@@ -192,35 +192,6 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return nil
 }
 
-// MigrateSchema runs the idempotent ALTER statements that have
-// accumulated across phases. Includes the phase-5 fk_alerts_updated_by
-// drop. Safe to re-run on already-migrated DBs.
-func (d *Detection) MigrateSchema(ctx context.Context) error {
-	return MigrateSchema(ctx, d.db)
-}
-
-// MigrateSchema is the package-level form: applies detection's
-// idempotent ALTERs against the given DB.
-func MigrateSchema(ctx context.Context, db *sqlx.DB) error {
-	if db == nil {
-		return errors.New("detection MigrateSchema: db must not be nil")
-	}
-	for _, m := range migrations {
-		if _, err := db.ExecContext(ctx, m.SQL); err != nil {
-			if m.shouldIgnore(err) {
-				continue
-			}
-			return fmt.Errorf("detection migration %q: %w", m.Name, err)
-		}
-	}
-	for _, stmt := range postSchemaStatements {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("detection post-schema: %w", err)
-		}
-	}
-	return nil
-}
-
 // Service exposes the operator-facing api.Service. RecordHostSeen is
 // the hot path response consumes via its Heartbeat closure.
 func (d *Detection) Service() api.Service { return d.svc }
