@@ -86,3 +86,33 @@ export async function promote(
     [role, email],
   );
 }
+
+// seedCriticalAlert inserts the minimum schema rows for the AlertList
+// page to render a critical-severity alert (the only alert state that
+// trips the chokepoint's reauth-required gate per
+// server/identity/internal/authz/policy/edr.rego). Returns the alert
+// id so the test can assert state transitions on it later. Used by
+// the reauth-modal-retry spec; not part of rebuildQAState because
+// most qa specs don't need detection-context fixtures.
+//
+// Schema dependency: alerts.process_id is FK-constrained to
+// processes(id), so we seed a minimal process row first. processes
+// itself has no FK constraints, so any host_id + pid + fork_time_ns
+// combination is fine.
+export async function seedCriticalAlert(
+  db: Connection,
+  opts: { hostId: string; ruleId: string; title: string },
+): Promise<number> {
+  const procResult = await db.query(
+    `INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns)
+     VALUES (?, 4242, 1, '/usr/bin/qa-test-process', ?)`,
+    [opts.hostId, Date.now() * 1_000_000],
+  );
+  const processId = (procResult[0] as { insertId: number }).insertId;
+  const alertResult = await db.query(
+    `INSERT INTO alerts (host_id, rule_id, severity, title, description, process_id)
+     VALUES (?, ?, 'critical', ?, 'Seeded by Playwright reauth-modal spec', ?)`,
+    [opts.hostId, opts.ruleId, opts.title, processId],
+  );
+  return (alertResult[0] as { insertId: number }).insertId;
+}

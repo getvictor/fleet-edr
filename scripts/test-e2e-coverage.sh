@@ -9,24 +9,30 @@
 # single coverage-server-e2e.out report at the end.
 #
 # Phases (in order):
-#   1. default-env-auth   : auth specs (A.1, A.2, A.3, A.4, B.1, B.2)
-#   2. default-env-qa     : qa default specs (A.5 + C/D/F.4)
-#   3. default-env-a7     : A.7 brute-force last on default env (burns
-#                           per-IP bucket, but a server restart between
-#                           phases means subsequent phases start fresh)
-#   4. envspec-allowlist-jit-off : qa:a6 + qa:b3 in one server boot
-#                                  (their envs are orthogonal: allowlist
-#                                  blocks /admin/break-glass/* and JIT=0
-#                                  rejects unknown OIDC subjects, neither
-#                                  affects the other)
-#   5. short-session-timeouts : qa:e against tight idle windows so
-#                               wall-clock waits are seconds, not minutes
+#   1. default-env-auth   : auth specs (break-glass setup, break-glass
+#                           login, OIDC sign-in)
+#   2. default-env-qa     : default-env qa specs (RBAC + reauth +
+#                           audit + reauth-modal + break-glass login
+#                           failure-reason)
+#   3. default-env-rate-limit : break-glass challenge rate limit on
+#                               default env. Burns the per-IP bucket,
+#                               but a server restart between phases
+#                               means subsequent phases start fresh
+#   4. envspec-allowlist-jit-off : break-glass IP allowlist + OIDC
+#                                  JIT-off in one server boot. Their
+#                                  envs are orthogonal: allowlist
+#                                  blocks /admin/break-glass/* and
+#                                  JIT=0 rejects unknown OIDC
+#                                  subjects, neither affects the other
+#   5. short-session-timeouts : session lifecycle specs against tight
+#                               idle windows so wall-clock waits are
+#                               seconds, not minutes
 #
-# Tighter timeouts in CI than the QA-doc-recommended local defaults:
-# the script sets idle=5s / break-glass-idle=3s so E.1 + E.4 sit for
-# 7s + 5s respectively rather than 18s + 11s. The spec reads
-# E2E_OIDC_IDLE_WAIT_MS + E2E_BREAKGLASS_IDLE_WAIT_MS from env;
-# defaults match the local QA-doc envs.
+# Tighter timeouts in CI than the recommended local defaults: the
+# script sets idle=5s / break-glass-idle=3s so the two idle-eviction
+# tests sit for 7s + 5s respectively rather than 18s + 11s. The spec
+# reads E2E_OIDC_IDLE_WAIT_MS + E2E_BREAKGLASS_IDLE_WAIT_MS from env;
+# defaults match the local-dev envs.
 
 set -euo pipefail
 
@@ -140,7 +146,7 @@ go build -cover -coverpkg=./server/...,./internal/... -o "$BINARY" ./server/cmd/
 echo "$END_GROUP"
 
 # --- phase 1: auth suite (default env) -----------------------------------
-echo "::group::Phase 1 — auth specs (A.1-A.4, B.1-B.2)"
+echo "::group::Phase 1 — auth specs (break-glass setup, break-glass login, OIDC sign-in)"
 start_server "default-env-auth" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
@@ -151,47 +157,49 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 2: qa default-env suite ---------------------------------------
-echo "::group::Phase 2 — qa default-env (A.5, C.2-C.6, D.1+D.2+D.4, F.4)"
+echo "::group::Phase 2 — qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures)"
 start_server "default-env-qa" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
-    tests/qa/sections-c-d-f.spec.ts tests/qa/sections-a5-a7.spec.ts \
+    tests/qa/authz-and-audit-flows.spec.ts \
+    tests/qa/breakglass-login-failure-reason.spec.ts \
+    tests/qa/reauth-modal-retry.spec.ts \
     --workers=1
 )
 stop_server
 echo "$END_GROUP"
 
-# --- phase 3: A.7 brute-force --------------------------------------------
-echo "::group::Phase 3 — qa:a7 brute-force rate limit (default env)"
-start_server "default-env-a7" \
+# --- phase 3: brute-force rate limit -------------------------------------
+echo "::group::Phase 3 — break-glass challenge rate limit (default env)"
+start_server "default-env-rate-limit" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
-    tests/qa/section-a7-rate-limit.spec.ts --workers=1
+    tests/qa/breakglass-challenge-rate-limit.spec.ts --workers=1
 )
 stop_server
 echo "$END_GROUP"
 
 # --- phase 4: env-specific combo (allowlist + JIT off) -------------------
-echo "::group::Phase 4 — qa:a6 + qa:b3 (allowlist + JIT off)"
+echo "::group::Phase 4 — break-glass IP allowlist + OIDC JIT off"
 start_server "envspec-allowlist-jit-off" \
   EDR_BREAKGLASS_IP_ALLOWLIST=10.99.99.0/24 \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=0
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
-    tests/qa/section-a6-allowlist.spec.ts \
-    tests/qa/section-b3-jit-off.spec.ts \
+    tests/qa/breakglass-ip-allowlist.spec.ts \
+    tests/qa/oidc-jit-disabled.spec.ts \
     --workers=1
 )
 stop_server
 echo "$END_GROUP"
 
 # --- phase 5: short session timeouts -------------------------------------
-echo "::group::Phase 5 — qa:e session lifecycle (short timeouts)"
+echo "::group::Phase 5 — session lifecycle (short timeouts env)"
 start_server "short-session-timeouts" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1 \
   EDR_SESSION_IDLE_TIMEOUT=5s \
@@ -202,12 +210,12 @@ start_server "short-session-timeouts" \
   cd "$REPO_ROOT/test/e2e"
   # Match the server-side idle windows: sleep 7s past OIDC idle (5s
   # → 7s), 5s past break-glass idle (3s → 5s). The spec defaults to
-  # 18s/11s for the local QA-doc env (idle=15s/8s); the env var
-  # overrides drop CI wall clock by ~17s.
+  # 18s/11s for the local-dev env (idle=15s/8s); the env var overrides
+  # drop CI wall clock by ~17s.
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 \
     E2E_OIDC_IDLE_WAIT_MS=7000 \
     E2E_BREAKGLASS_IDLE_WAIT_MS=5000 \
-    ./node_modules/.bin/playwright test tests/qa/section-e-lifecycle.spec.ts --workers=1
+    ./node_modules/.bin/playwright test tests/qa/session-lifecycle.spec.ts --workers=1
 )
 stop_server
 echo "$END_GROUP"

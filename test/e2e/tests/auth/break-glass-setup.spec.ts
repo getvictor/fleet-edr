@@ -6,15 +6,17 @@ import {
 } from "../../fixtures/webauthn";
 import { openDB, resetDB, mintBootstrapToken } from "../../fixtures/db";
 
-// The Phase 4b break-glass redemption ceremony walked from the UI
-// instead of curl + audit log. Drives the full flow: open the
-// redemption URL with a freshly-minted token, fill in the password,
-// register a security key (virtual authenticator), land at /ui/ as
-// the signed-in admin.
+// Break-glass redemption ceremony driven through the UI. Walks the
+// full flow: open the redemption URL with a freshly-minted token,
+// fill in the password, register a security key (virtual
+// authenticator), land at /ui/ as the signed-in admin. Also pins
+// the wire shape an expired/missing/already-redeemed token produces
+// (410 Gone with a bootstrap.* reason header).
 //
 // Without this test the redemption page can ONLY be exercised by a
 // human operator with a physical authenticator (Touch ID / YubiKey),
-// which means QA pre-release is gated on someone being at a Mac.
+// which means pre-release verification is gated on someone being at a
+// Mac.
 test.describe("break-glass redemption ceremony", () => {
   let va: VirtualAuthenticator;
 
@@ -37,7 +39,8 @@ test.describe("break-glass redemption ceremony", () => {
   }) => {
     // The seeded admin row + role binding were created at server
     // boot (the first /livez warmed the seed path). Mint a fresh
-    // bootstrap token bound to that admin.
+    // bootstrap token bound to that admin so the redemption page has
+    // a valid plaintext to validate against.
     const db = await openDB();
     let plaintext: string;
     try {

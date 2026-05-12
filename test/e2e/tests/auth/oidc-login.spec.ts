@@ -1,12 +1,12 @@
 import { test, expect } from "../../fixtures/test";
 import { openDB, resetDB } from "../../fixtures/db";
 
-// Section B of the manual QA plan: SSO sign-in via the local dex
-// (started by `task qa:up`). The four pre-provisioned dex users
-// (analyst@qa.local, senior@qa.local, auditor@qa.local,
-// admin@qa.local) all share password `qa-password-123`. First
-// sign-in JIT-provisions the user as `analyst` per docs/authz.md;
-// promote via SQL to test the role matrix.
+// SSO sign-in via the local dex IdP (started by `task qa:up`). The
+// four pre-provisioned dex users (analyst@qa.local, senior@qa.local,
+// auditor@qa.local, admin@qa.local) all share password
+// `qa-password-123`. First sign-in JIT-provisions the user as
+// `analyst` per docs/authz.md; the role-matrix specs promote via SQL
+// to exercise the other tiers.
 test.describe("oidc sign-in via local dex", () => {
   const password = "qa-password-123";
 

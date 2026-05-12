@@ -577,6 +577,13 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/rules",
 		"GET /api/audit-events",
 		"GET /api/session",
+		// Break-glass reauth ceremony. The handlers are mounted on
+		// apiMux via identityCtx.RegisterAuthedRoutes, but the outer
+		// router needs each path enumerated here so the session-
+		// protected wrapper actually serves them — otherwise requests
+		// fall through to the `/` catchall and 302 → /ui/, silently
+		// breaking the destructive-action reauth path.
+		"POST /api/auth/reauth/challenge", "POST /api/auth/reauth",
 	} {
 		mux.Handle(p, sessionProtected)
 	}

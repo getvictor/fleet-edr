@@ -1,16 +1,18 @@
 import { test, expect } from "../../fixtures/test";
 import { openDB, resetDB } from "../../fixtures/db";
 
-// Section B.3: with EDR_OIDC_ALLOW_JIT_PROVISIONING=0 the OIDC
-// callback refuses to create a new users row for a sub it doesn't
-// already know. Run ONLY when the dev server is started with that
-// env set; otherwise admin@qa.local will JIT-provision as analyst
-// and the test will pass for the wrong reason. The package.json
-// `qa:b3` script orchestrates the restart.
+// With EDR_OIDC_ALLOW_JIT_PROVISIONING=0 the OIDC callback refuses
+// to create a new users row for a `sub` it doesn't already know,
+// emits an oidc.unknown_subject audit row, and bounces the operator
+// to /login?error=unknown_subject. Run ONLY against a dev server
+// started with that env set; otherwise admin@qa.local will
+// JIT-provision as analyst and the test will pass for the wrong
+// reason. The package.json `qa:jit-off` script orchestrates the
+// restart.
 
 const dexPassword = "qa-password-123";
 
-test.describe("qa: Section B.3 — JIT off rejects unknown subject", () => {
+test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
   test("sign in with admin@qa.local (never seen) returns oidc.unknown_subject", async ({
     page,
   }) => {
@@ -31,11 +33,10 @@ test.describe("qa: Section B.3 — JIT off rejects unknown subject", () => {
     await page.locator('input[name="password"]').fill(dexPassword);
     await page.getByRole("button", { name: /login/i }).click();
 
-    // The handler 302s the user back to /login?error=unknown_subject
-    // (Phase 3 contract). The server's `/` catchall redirects /login
-    // to /ui/ and drops the query, so the visible URL after
-    // navigation may not show the error fragment — but the audit row
-    // is authoritative.
+    // The handler 302s the user back to /login?error=unknown_subject.
+    // The server's `/` catchall redirects /login to /ui/ and drops
+    // the query, so the visible URL after navigation may not show
+    // the error fragment — but the audit row is authoritative.
     await page.waitForURL((url) => url.host === "localhost:8088", {
       timeout: 30_000,
     });

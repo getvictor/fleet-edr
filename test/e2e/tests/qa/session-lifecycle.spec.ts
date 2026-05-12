@@ -7,48 +7,49 @@ import {
 } from "../../fixtures/webauthn";
 import { signInViaDex } from "./_setup";
 
-// Section E: session lifecycle. Requires the dev server started
-// with short timeouts so wall-clock test time stays manageable:
+// Session lifecycle: idle-timeout eviction (OIDC + break-glass
+// separately) and explicit-logout symmetry. Requires the dev server
+// started with short timeouts so wall-clock test time stays
+// manageable:
 //
 //   EDR_SESSION_IDLE_TIMEOUT=15s
 //   EDR_SESSION_ABSOLUTE_TIMEOUT=30s
 //   EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT=8s
 //   EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT=20s
 //
-// The package.json `qa:e` script orchestrates the restart. Running
-// against the default `task dev:server:qa-oidc` (8h idle / 24h
-// absolute for OIDC) would make these tests time out trying to
+// The package.json `qa:lifecycle` script orchestrates the restart.
+// Running against the default `task dev:server:qa-oidc` (8h idle /
+// 24h absolute for OIDC) would make these tests time out trying to
 // observe idle expiry.
 //
-// E.2 (sliding window keeps an active session alive) and E.3
-// (absolute timeout overrides active sliding) are DEFERRED here:
-// both require the per-request last_seen_at update to fire, but
-// sessions.touchThrottle is hardcoded to 1 minute (see
-// server/identity/internal/sessions/sessions.go:46), so any idle
-// timeout smaller than 60s renders sliding inert (the throttle
-// no-ops every touch within the first 60s after sign-in, and the
-// session evicts under the small idle cap before the throttle
-// clears). To exercise E.2/E.3 properly an operator needs to run
-// the dev server with EDR_SESSION_IDLE_TIMEOUT > touchThrottle
-// (e.g. 90s) and EDR_SESSION_ABSOLUTE_TIMEOUT comparably bumped —
-// at which point the spec's wall clock approaches 3-5 minutes per
-// test. Tracked as a follow-up.
+// Sliding-window-keeps-alive and absolute-timeout-overrides-sliding
+// are DEFERRED here: both require the per-request last_seen_at
+// update to fire, but sessions.touchThrottle is hardcoded to 1
+// minute (see server/identity/internal/sessions/sessions.go:46), so
+// any idle timeout smaller than 60s renders sliding inert (the
+// throttle no-ops every touch within the first 60s after sign-in,
+// and the session evicts under the small idle cap before the
+// throttle clears). To exercise those flows properly an operator
+// needs to run the dev server with EDR_SESSION_IDLE_TIMEOUT >
+// touchThrottle (e.g. 90s) and EDR_SESSION_ABSOLUTE_TIMEOUT
+// comparably bumped — at which point each test's wall clock
+// approaches 3-5 minutes. Tracked as a follow-up.
 
-const BREAKGLASS_PASSWORD = "qa-section-e-password";
+const BREAKGLASS_PASSWORD = "qa-session-lifecycle-password";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Sleep durations are driven by the server's actual idle-timeout
 // envs so a CI job that runs with idle=5s doesn't sit for the
-// 18-second local-dev sleep. Defaults match the original
-// section-E env (idle=15s / break-glass-idle=8s) so the local
-// `npm run qa:e` flow still works without any extra env wrangling.
+// 18-second local-dev sleep. Defaults match the local QA-doc env
+// (idle=15s / break-glass-idle=8s) so a local `npm run qa:lifecycle`
+// flow still works without any extra env wrangling.
 const OIDC_IDLE_WAIT_MS = Number(process.env.E2E_OIDC_IDLE_WAIT_MS ?? 18_000);
 const BREAKGLASS_IDLE_WAIT_MS = Number(
   process.env.E2E_BREAKGLASS_IDLE_WAIT_MS ?? 11_000,
 );
 
-test.describe.serial("qa: Section E — session lifecycle", () => {
-  test("E.1 OIDC idle timeout evicts session past the configured window", async ({
+test.describe.serial("session lifecycle", () => {
+  test("OIDC idle timeout evicts session past the configured window", async ({
     browser,
   }) => {
     const ctx = await browser.newContext();
@@ -74,7 +75,7 @@ test.describe.serial("qa: Section E — session lifecycle", () => {
     }
   });
 
-  test("E.4 break-glass timeouts are tighter than OIDC", async ({ browser }) => {
+  test("break-glass timeouts are tighter than OIDC", async ({ browser }) => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     let va: VirtualAuthenticator | undefined;
@@ -109,7 +110,7 @@ test.describe.serial("qa: Section E — session lifecycle", () => {
     }
   });
 
-  test("E.5 explicit logout via DELETE /api/session is symmetric with login", async ({
+  test("explicit logout via DELETE /api/session is symmetric with login", async ({
     browser,
   }) => {
     const ctx = await browser.newContext();

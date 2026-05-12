@@ -2,11 +2,21 @@ import { test, expect, APIRequestContext } from "@playwright/test";
 import { openDB, promote } from "../../fixtures/db";
 import { rebuildQAState, signInViaDex } from "./_setup";
 
-// Manual QA plan sections C (role matrix), D (reauth window), and
-// F.4 (audit-events API filters), folded into one spec so the global
-// break-glass setup rate-limit only fires once per `npm run qa`.
-// Each section is a separate `test()` inside one describe.serial so
-// failures show with their section number.
+// Post-auth chokepoint + audit flows on the default dev server,
+// folded into one spec so the dex JIT-provisioning + role promotions
+// only run once. Covers: the role matrix (analyst / senior_analyst /
+// auditor / super_admin / anonymous against host.isolate +
+// audit-events read), the reauth-window gate (fresh allows / stale
+// denies destructive / stale still serves reads), an OIDC state-
+// cookie tampering wire check, and the /api/audit-events query
+// filters.
+//
+// None of these flows actually exercise the break-glass admin — they
+// all run as dex-provisioned users — so rebuildQAState is called
+// WITHOUT withBreakglass, conserving the global break-glass setup
+// rate limit (DefaultSetupRatePerMin = 5/min, 2 tokens per ceremony)
+// for the other default-env specs that DO need it
+// (breakglass-login-failure-reason + reauth-modal-retry).
 
 async function fetchCSRF(req: APIRequestContext): Promise<string> {
   const resp = await req.get("/api/session");
@@ -30,7 +40,7 @@ async function tryIsolate(req: APIRequestContext, csrf: string) {
 // 401, 403 — is a regression the test must catch.
 const CHOKEPOINT_ALLOWED_STATUSES = new Set([201, 400]);
 
-test.describe.serial("qa: Sections C + D + F.4", () => {
+test.describe.serial("RBAC, reauth, and audit flows", () => {
   test.beforeAll(async ({ browser }) => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
@@ -41,7 +51,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("C.2 analyst is denied host.isolate", async ({ browser }) => {
+  test("analyst is denied host.isolate", async ({ browser }) => {
     const ctx = await browser.newContext();
     try {
       const page = await ctx.newPage();
@@ -55,7 +65,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("C.3 senior_analyst is allowed by the chokepoint on host.isolate", async ({
+  test("senior_analyst is allowed by the chokepoint on host.isolate", async ({
     browser,
   }) => {
     const ctx = await browser.newContext();
@@ -71,7 +81,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("C.4 auditor cannot isolate but can read audit", async ({ browser }) => {
+  test("auditor cannot isolate but can read audit", async ({ browser }) => {
     const ctx = await browser.newContext();
     try {
       const page = await ctx.newPage();
@@ -91,7 +101,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("C.5 super_admin can do everything", async ({ browser }) => {
+  test("super_admin can do everything", async ({ browser }) => {
     // Promote analyst@qa.local to super_admin for this test, then
     // roll back so subsequent tests see the user with its baseline
     // analyst role only. Without the rollback the leaked binding
@@ -126,7 +136,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("C.6 anonymous request to /api/audit-events is denied", async ({ browser }) => {
+  test("anonymous request to /api/audit-events is denied", async ({ browser }) => {
     const ctx = await browser.newContext();
     try {
       const resp = await ctx.request.get("/api/audit-events");
@@ -136,7 +146,85 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("D.1+D.2+D.4 reauth gate switches on staleness, host.read ignores it", async ({
+  test("tampered OIDC state cookie returns 302 invalid_state + audit row", async ({
+    browser,
+  }) => {
+    // Drive the OIDC handler past the state-validation guard with a
+    // tampered edr_oidc_state cookie. Wire contract: 302 with
+    // Location containing error=invalid_state, X-Edr-Auth-Reason:
+    // invalid_state, audit row auth.oidc.callback.error with
+    // payload.reason="oidc.invalid_state".
+    //
+    // We assert on the 302 location header directly (maxRedirects: 0)
+    // rather than following the redirect chain to the SPA, because
+    // the server's `/` catchall currently redirects `/login` → `/ui/`
+    // and drops the ?error= query string — separate UX defect to file
+    // (oidc/handler.go:325 should redirect to /ui/login?error=...).
+    // The OIDC handler's own behaviour, which is what this test
+    // pins, is correct at the 302.
+    const ctx = await browser.newContext();
+    try {
+      // Step 1: initiate OIDC login to seed the state cookie + grab
+      // the state param dex would echo back.
+      const loginResp = await ctx.request.get("/api/auth/login", {
+        maxRedirects: 0,
+      });
+      expect(loginResp.status()).toBe(302);
+      const dexLocation = loginResp.headers()["location"];
+      // Defensive assertion: if a future server bug ever returns a 302
+      // with no Location header, .match() would throw "Cannot read
+      // properties of undefined" — useless. Surface the actual cause.
+      expect(dexLocation).toBeTruthy();
+      const stateMatch = dexLocation.match(/[?&]state=([^&]+)/);
+      expect(stateMatch).not.toBeNull();
+      const originalState = stateMatch![1];
+
+      // The state cookie's Path is "/api/auth/" (see oidc handler.go),
+      // so ctx.cookies("http://localhost:8088") with bare "/" filters
+      // it out. Pass the cookie's actual scope path so the URL-filter
+      // matches; omitting the URL would also work but is less specific.
+      const cookies = await ctx.cookies("http://localhost:8088/api/auth/");
+      const stateCookie = cookies.find((c) => c.name === "edr_oidc_state");
+      expect(stateCookie).toBeDefined();
+
+      // Step 2: tamper the cookie. Replacing the last 4 chars breaks
+      // the HMAC signature without disturbing the JSON envelope, so
+      // the server reads it, fails signature verification, and emits
+      // the directed invalid_state reason.
+      const tampered = stateCookie!.value.slice(0, -4) + "XXXX";
+      await ctx.clearCookies();
+      await ctx.addCookies([{ ...stateCookie!, value: tampered }]);
+
+      // Step 3: hit the callback with the ORIGINAL state param dex
+      // would have echoed back, plus the tampered cookie.
+      const callbackResp = await ctx.request.get(
+        `/api/auth/callback?code=fake-code&state=${originalState}`,
+        { maxRedirects: 0 },
+      );
+      expect(callbackResp.status()).toBe(302);
+      expect(callbackResp.headers()["location"]).toContain("error=invalid_state");
+      expect(callbackResp.headers()["x-edr-auth-reason"]).toBe("invalid_state");
+
+      // Step 4: audit row.
+      const db = await openDB();
+      try {
+        const [rows] = (await db.query(
+          `SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason
+             FROM audit_events
+            WHERE action = 'auth.oidc.callback.error'
+            ORDER BY id DESC LIMIT 1`,
+        )) as [Array<{ reason: string }>, unknown];
+        expect(rows).toHaveLength(1);
+        expect(rows[0].reason).toBe("oidc.invalid_state");
+      } finally {
+        await db.end();
+      }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("reauth gate: fresh allows, stale denies destructive, stale still serves reads", async ({
     browser,
   }) => {
     const ctx = await browser.newContext();
@@ -145,7 +233,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
       await signInViaDex(page, "senior@qa.local");
       const csrf = await fetchCSRF(ctx.request);
 
-      // D.1: fresh.
+      // Fresh session: the chokepoint allows host.isolate.
       const freshResp = await tryIsolate(ctx.request, csrf);
       expect(CHOKEPOINT_ALLOWED_STATUSES.has(freshResp.status())).toBe(true);
 
@@ -166,12 +254,12 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
         await db.end();
       }
 
-      // D.2: stale denies destructive.
+      // Stale session: destructive action denied with reauth_required.
       const staleResp = await tryIsolate(ctx.request, csrf);
       expect(staleResp.status()).toBe(403);
       expect(staleResp.headers()["x-edr-authz-reason"]).toBe("reauth_required");
 
-      // D.4: stale still serves reads.
+      // Stale session: non-destructive reads still succeed.
       const readResp = await ctx.request.get("/api/hosts");
       expect(readResp.status()).toBe(200);
     } finally {
@@ -179,7 +267,7 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
     }
   });
 
-  test("F.4 /api/audit-events filters (action, limit, bad param)", async ({
+  test("/api/audit-events filters (action, limit, bad param)", async ({
     browser,
   }) => {
     const ctx = await browser.newContext();
@@ -196,8 +284,9 @@ test.describe.serial("qa: Sections C + D + F.4", () => {
       };
       expect(Array.isArray(filteredBody.items)).toBe(true);
       // Without rows the for-loop body never runs, which would mask
-      // a regression that returns an empty list. Earlier sections
-      // (C.2/C.3/C.4) generate authz.host.isolate audit rows, so an
+      // a regression that returns an empty list. The earlier role-
+      // matrix tests (analyst/senior_analyst/auditor against
+      // host.isolate) generate authz.host.isolate audit rows, so an
       // empty result here is itself a failure.
       expect(filteredBody.items.length).toBeGreaterThan(0);
       for (const ev of filteredBody.items) {
