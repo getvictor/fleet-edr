@@ -19,7 +19,7 @@
 // back to ui/src via monocart-coverage-reports). Sonar reads that
 // path via sonar.javascript.lcov.reportPaths.
 
-import { test as base, expect, BrowserContext, Page } from "@playwright/test";
+import { test as base, BrowserContext, Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -82,4 +82,4 @@ export async function createCoveredPage(
   };
 }
 
-export { expect };
+export { expect } from "@playwright/test";

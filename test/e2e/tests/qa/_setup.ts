@@ -6,7 +6,9 @@ import {
   VirtualAuthenticator,
 } from "../../fixtures/webauthn";
 
-export const dexPassword = "qa-password-123";
+// Shared dev-only credential for the local dex IdP — matches the bcrypt
+// hashes baked into config/dex/dev-config.yaml. Not a real secret.
+export const dexPassword = "qa-password-123"; // NOSONAR(typescript:S2068)
 
 // signInViaDex drives the OIDC ceremony through the local dex IdP.
 // Shared between rebuildQAState (which JIT-provisions every dex user

@@ -48,6 +48,15 @@ const reauthChallengeCookieName = "edr_reauth_challenge"
 // Matches the WebAuthn challenge timeout the browser enforces.
 const challengeCookieMaxAge = 300
 
+// Cache-Control header semantics applied uniformly to break-glass auth
+// responses. Success paths set signed challenge / session cookies;
+// error paths are throwaway. Either way the response should not land
+// in any shared cache.
+const (
+	headerCacheControl  = "Cache-Control"
+	cacheControlNoStore = "no-store"
+)
+
 // loginBodyMaxBytes caps the JSON body the login handler reads.
 // 64 KiB comfortably accommodates a CredentialAssertionResponse
 // (with attestationObject) without inviting OOM via a hostile
@@ -186,7 +195,7 @@ func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
 // token-bearing Location header out of browser history / proxy
 // caches: the redemption URL is sensitive bearer state.
 func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	dest := "/ui/admin/break-glass/setup"
 	if q := r.URL.RawQuery; q != "" {
 		dest += "?" + q
@@ -198,7 +207,7 @@ func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
 // posture as handleSetupRedirect for consistency, even though this
 // path carries no token.
 func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	http.Redirect(w, r, "/ui/admin/break-glass", http.StatusFound)
 }
 
@@ -215,7 +224,7 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 	// no-store on every break-glass auth response: success paths set
 	// signed challenge / session cookies; error paths are throwaway.
 	// Either way the response should not land in a shared cache.
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -254,7 +263,7 @@ func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 //	POST /admin/break-glass/setup
 //	  body: {"password": "...", "credential_name": "yk1", "attestation": <CredentialCreationResponse JSON>}
 func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -341,7 +350,7 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 // handleBeginLogin issues the WebAuthn assertion challenge for the
 // presented email. JSON body: {"email": "..."}.
 func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -380,7 +389,7 @@ func (h *Handler) handleBeginLogin(w http.ResponseWriter, r *http.Request) {
 // handleFinishLogin verifies password + assertion and mints a
 // session. JSON body: {"email": "...", "password": "...", "assertion": <CredentialAssertionResponse JSON>}.
 func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	if !h.rates.AllowIP(httpserver.ClientIP(r)) {
 		h.tooMany(r.Context(), w, "rate_limited")
 		return
@@ -600,7 +609,7 @@ func reasonForSetupErr(err error) string {
 // is not "local_password" get 400 reauth_not_supported; the UI is
 // expected to dispatch OIDC reauth via /api/auth/login?reauth=1.
 func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	ctx := r.Context()
 	sess, ok := api.SessionFromContext(ctx)
 	if !ok {
@@ -660,7 +669,7 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 // hijacks a session cookie cannot enumerate password-correctness via
 // the reauth endpoint.
 func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	ctx := r.Context()
 	sess, ok := api.SessionFromContext(ctx)
 	if !ok {

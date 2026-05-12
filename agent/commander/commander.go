@@ -18,6 +18,11 @@ import (
 // Mirrored as commanderPollInterval in agent/cmd/fleet-edr-agent.
 const defaultPollInterval = 5 * time.Second
 
+// invalidPayloadPrefix is the reason prefix every command handler emits
+// when json.Unmarshal of cmd.Payload fails. Centralised so the wire
+// shape stays stable across handlers.
+const invalidPayloadPrefix = "invalid payload: "
+
 // PolicySender forwards a raw policy JSON payload to the ESF extension over XPC. The
 // commander stays decoupled from the concrete receiver so tests can supply a recording
 // double. Nil is allowed (policy commands are then reported as `failed` with a clear
@@ -197,7 +202,7 @@ func (c *Commander) dispatch(ctx context.Context, cmd command) {
 func (c *Commander) executeRotateToken(ctx context.Context, cmd command) {
 	var payload rotateTokenPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid payload: "+err.Error()))
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult(invalidPayloadPrefix+err.Error()))
 		return
 	}
 	if payload.NewToken == "" {
@@ -224,7 +229,7 @@ func (c *Commander) executeRotateToken(ctx context.Context, cmd command) {
 func (c *Commander) executeSetBlocklist(ctx context.Context, cmd command) {
 	var payload setBlocklistPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid payload: "+err.Error()))
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult(invalidPayloadPrefix+err.Error()))
 		return
 	}
 	if payload.Name == "" {
@@ -275,7 +280,7 @@ func (c *Commander) executeSetBlocklist(ctx context.Context, cmd command) {
 func (c *Commander) executeKill(ctx context.Context, cmd command) {
 	var payload killPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid payload: "+err.Error()))
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult(invalidPayloadPrefix+err.Error()))
 		return
 	}
 

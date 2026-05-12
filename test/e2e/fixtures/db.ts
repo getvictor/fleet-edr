@@ -1,4 +1,4 @@
-import * as crypto from "crypto";
+import * as crypto from "node:crypto";
 import mysql, { Connection } from "mysql2/promise";
 
 // Dev DB matches Taskfile's dev:server* env block: root user, empty
