@@ -65,6 +65,7 @@ comment:
 # sonar.coverage.exclusions in sync.
 ignore:
   - "**/cmd/**/main.go"
+  - "ui/vite.config.ts"
   - "server/detection/testharness/**"
   - "schema/**"
   - "extension/edr/**"
