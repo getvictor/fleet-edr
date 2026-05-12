@@ -171,6 +171,10 @@ test.describe.serial("RBAC, reauth, and audit flows", () => {
       });
       expect(loginResp.status()).toBe(302);
       const dexLocation = loginResp.headers()["location"];
+      // Defensive assertion: if a future server bug ever returns a 302
+      // with no Location header, .match() would throw "Cannot read
+      // properties of undefined" — useless. Surface the actual cause.
+      expect(dexLocation).toBeTruthy();
       const stateMatch = dexLocation.match(/[?&]state=([^&]+)/);
       expect(stateMatch).not.toBeNull();
       const originalState = stateMatch![1];

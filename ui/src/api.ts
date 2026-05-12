@@ -117,6 +117,22 @@ function unsafeMethod(method?: string): boolean {
   return m === "POST" || m === "PUT" || m === "PATCH" || m === "DELETE";
 }
 
+// attachCsrfHeader writes the CSRF token onto `headers` when the request
+// method is unsafe (POST/PUT/PATCH/DELETE) AND a token is present in
+// session storage. Shared with the break-glass + reauth surface in
+// auth.ts so both fetch primitives match the server's CSRF middleware
+// contract exactly (one canonical header name, one canonical method set).
+// Wrapping function returns void rather than the mutated map to make the
+// side-effect-only intent visible at the call site.
+export function attachCsrfHeader(
+  headers: Record<string, string>,
+  method?: string,
+): void {
+  if (!unsafeMethod(method)) return;
+  const csrf = getCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+}
+
 // assertSafeAPIPath rejects anything that does not look like a same-origin API
 // path. fetchJSON concatenates its path argument with API_BASE and hands the
 // result to fetch(); without this check a caller that accidentally forwards
@@ -140,10 +156,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   };
   // Attach CSRF on unsafe methods only — GET/HEAD never need it, and sending an
   // expired token on those is harmless but wasted bytes.
-  if (unsafeMethod(init?.method)) {
-    const csrf = getCsrfToken();
-    if (csrf) headers["X-CSRF-Token"] = csrf;
-  }
+  attachCsrfHeader(headers, init?.method);
 
   // Build the URL through the URL constructor rather than string concatenation.
   // The constructor parses + normalises the path against our same-origin base,

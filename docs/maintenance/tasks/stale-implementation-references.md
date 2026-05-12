@@ -55,6 +55,7 @@ documented work that landed and was renamed), that is in scope.
 1. Run grep patterns across the scope. The first runs over every tracked file (prose + code + committed `.claude/`); the
    second is markdown-scoped because "will be" is too noisy in Go/TS/Swift; the third catches any path-style `claude/` link
    that leaks into committed prose or code comments; the fourth catches testplan section IDs baked into committed code.
+
    ```bash
    git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!claude/' ':!tmp/' ':!openspec/changes/'
    git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!claude/' ':!tmp/' ':!openspec/changes/' '*.md'
@@ -64,6 +65,7 @@ documented work that landed and was renamed), that is in scope.
    git ls-files | grep -E 'section-[a-g][0-9]|sections-[a-g]' || true
    grep -nE '"qa:[a-g][0-9]?":' package.json test/e2e/package.json 2>/dev/null || true
    ```
+
    The third grep excludes the committed `.claude/` tree because OpenSpec slash commands legitimately reference
    `.claude/` paths in their own bodies; sweep that tree manually instead. All four greps exclude `openspec/changes/`
    because OpenSpec change proposals use phase numbering as in-flight planning structure; sweep `openspec/archive/`

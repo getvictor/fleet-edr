@@ -92,9 +92,10 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
       }
 
       await page.goto("/ui/alerts");
-      await expect(page.getByText("OIDC reauth modal — critical alert")).toBeVisible({
-        timeout: 15_000,
+      const oidcAlertRow = page.locator("tr", {
+        hasText: "OIDC reauth modal — critical alert",
       });
+      await expect(oidcAlertRow).toBeVisible({ timeout: 15_000 });
 
       // Age the session past DefaultReauthWindow (30 min). 1 hour
       // gives a 2x safety margin.
@@ -109,9 +110,12 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
         await ageDB.end();
       }
 
-      // Click Resolve — chokepoint should fire reauth_required, hook
+      // Click Resolve scoped to the seeded row so a parallel test that
+      // seeded its own alert into the same view (or an unrelated row
+      // from earlier setup) can't intercept the click and flake this
+      // spec. Chokepoint should fire reauth_required and the hook
       // should pop the modal.
-      await page.getByRole("button", { name: /^resolve$/i }).first().click();
+      await oidcAlertRow.getByRole("button", { name: /^resolve$/i }).click();
 
       const dialog = page.locator("dialog.reauth-dialog");
       await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -140,11 +144,11 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
 
       // The OIDC reauth path does NOT auto-retry (page navigated away
       // mid-promise; React state is gone). Operator re-clicks Resolve
-      // — chokepoint sees fresh last_auth_at, allows.
-      await expect(page.getByText("OIDC reauth modal — critical alert")).toBeVisible({
-        timeout: 15_000,
-      });
-      await page.getByRole("button", { name: /^resolve$/i }).first().click();
+      // — chokepoint sees fresh last_auth_at, allows. Same row-scoped
+      // locator pattern as the first click so the retry can't land on
+      // the wrong row.
+      await expect(oidcAlertRow).toBeVisible({ timeout: 15_000 });
+      await oidcAlertRow.getByRole("button", { name: /^resolve$/i }).click();
 
       // Wait for the row to disappear. AlertList's statusFilter
       // defaults to "open"; its applyStatus helper filters resolved
@@ -230,9 +234,10 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
       }
 
       await page.goto("/ui/alerts");
-      await expect(
-        page.getByText("break-glass reauth modal — critical alert"),
-      ).toBeVisible({ timeout: 15_000 });
+      const breakglassAlertRow = page.locator("tr", {
+        hasText: "break-glass reauth modal — critical alert",
+      });
+      await expect(breakglassAlertRow).toBeVisible({ timeout: 15_000 });
 
       // Age the break-glass session.
       const ageDB = await openDB();
@@ -246,8 +251,11 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
         await ageDB.end();
       }
 
-      // First click — modal opens.
-      await page.getByRole("button", { name: /^resolve$/i }).first().click();
+      // First click scoped to the seeded row so a parallel test or
+      // unrelated row can't intercept it. Modal opens.
+      await breakglassAlertRow
+        .getByRole("button", { name: /^resolve$/i })
+        .click();
       const dialog = page.locator("dialog.reauth-dialog");
       await expect(dialog).toBeVisible({ timeout: 10_000 });
       // Break-glass flow shows the password input, not the SSO

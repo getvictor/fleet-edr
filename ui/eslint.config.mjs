@@ -76,4 +76,28 @@ export default defineConfig([
       "@typescript-eslint/no-magic-numbers": "off",
     },
   },
+  {
+    // Force every fetch primitive that adds CSRF protection to go
+    // through attachCsrfHeader() in api.ts. Hardcoding "X-CSRF-Token"
+    // (or any case variant) anywhere else risks (a) drifting the
+    // header casing — JS object keys are case-sensitive, so a stray
+    // "X-Csrf-Token" would silently send TWO headers after a merge —
+    // and (b) duplicating the unsafe-method + getCsrfToken() guard
+    // logic, which is exactly the path that put a CSRF regression
+    // into auth.ts's break-glass surface. api.ts itself is the
+    // single canonical site, so it's the only file allowed to
+    // mention the literal.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/api.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "Literal[value=/^X-CSRF-Token$/i]",
+          message:
+            "Don't hardcode the CSRF header. Import attachCsrfHeader from './api' and call attachCsrfHeader(headers, method).",
+        },
+      ],
+    },
+  },
 ]);
