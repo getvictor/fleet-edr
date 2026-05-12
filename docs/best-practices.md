@@ -27,13 +27,24 @@ testable, and mapped to a public taxonomy.
 - [x] Server-driven blocklist policy with versioning (`policies` table, agent diffs by
   version)
 - [x] Response action: command queue (kill, block) with ack/complete lifecycle
-- [x] **MITRE ATT&CK mapping** on every rule. Each detection rule implements
+- [~] **MITRE ATT&CK mapping** on every rule. Each detection rule implements
   `Techniques()` returning the ATT&CK technique IDs it maps to
   (`server/detection/rule.go`); the engine threads them onto every alert so
   they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`,
   `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export
-  (`server/admin/admin.go` `navigatorTechnique`).
-- [ ] **Sigma rule support** (import community rules; transpile to native rule format)
+  (`server/admin/admin.go` `navigatorTechnique`). **Demoted to `[~]`**:
+  ATT&CK v19 (April 2026) split Defense Evasion into the new Stealth and
+  Defense Impairment tactics and revoked ~13 technique IDs into new parents
+  (e.g. "Clear Windows Event Logs" → T1685/005). Current rule mappings have
+  not yet been re-validated against v19; track as a follow-up task.
+- [ ] **ATT&CK Detection Strategies / Analytics** alignment (v18+ taxonomy).
+  v18 (Oct 2025) retired traditional Detections + Data Sources in favour of
+  Detection Strategies and Analytics per technique; rules should surface the
+  strategy ID alongside the technique so coverage gaps map to MITRE's
+  published analytics, not just techniques
+- [ ] **Sigma rule support** (import community rules; transpile to native rule
+  format). SigmaHQ now ships bi-weekly versioned rule packages, so adoption
+  can be packaged rather than per-rule scraped from `main`
 - [ ] **YARA scanning** for file-based detections (signature + heuristic)
 - [ ] **IOC management**: bulk import of hashes / domains / IPs from STIX/TAXII feeds
 - [ ] **Threat-intel enrichment**: VirusTotal, AlienVault OTX, GreyNoise lookups on alert
@@ -64,9 +75,12 @@ testable, and mapped to a public taxonomy.
 - [ ] **SOAR / playbook integration** (webhook out, structured response API)
 - [ ] **SIEM export**: Splunk HEC, Elastic, Syslog/CEF/LEEF formats
 - [ ] **Slack / Teams / PagerDuty alert sinks**
-- [ ] **OCSF (Open Cybersecurity Schema Framework)** event export. Splunk-led standard
-  adopted by AWS Security Hub, Cloudflare, Sumo Logic, IBM QRadar; becoming the lingua
-  franca for cross-vendor security telemetry exchange
+- [ ] **OCSF (Open Cybersecurity Schema Framework)** event export. Splunk-led
+  standard (now under the Linux Foundation) adopted by AWS Security Hub,
+  Cloudflare, Sumo Logic, IBM QRadar; becoming the lingua franca for
+  cross-vendor security telemetry exchange. OCSF 1.6.0 (Aug 2025) added an
+  `ai_operation` profile to `process_activity` and Vector / Knowledge Graph
+  DB types, which become relevant once we ship LLM features (§15)
 - [ ] **OpenC2** action verbs for the response API (OASIS standard for `kill`, `isolate`,
   `quarantine`, etc.) so SOAR platforms can drive responses without custom adapters
 - [ ] **LOLBAS / GTFOBins** reference data baked into rules so each detection cites the
@@ -80,6 +94,12 @@ testable, and mapped to a public taxonomy.
   EDR / ITDR convergence is a 2024-2026 industry trend
 - [ ] **Deception primitives** -- canary tokens, honeyfiles, honey credentials. Cheap,
   high signal-to-noise, and a differentiator for an open-source EDR
+- [ ] **AI-agent / shadow-AI activity telemetry** -- CrowdStrike's Spring 2026
+  platform release and SentinelOne's 2026 AI security updates both shipped
+  AI-agent discovery, shadow-AI governance, and runtime control as
+  first-class EDR features. For us this means capturing LLM tool-use, MCP
+  server invocations, and agent-process behaviour as distinct event types,
+  not just generic exec / network
 
 ## 2. Cross-platform reach
 
@@ -158,7 +178,9 @@ floor for any project that wants enterprise adoption.
 - [x] Major-version updates ignored for code deps (security overrides bypass)
 - [x] **Sigstore / cosign** signed release artifacts via keyless OIDC: every pkg,
   mobileconfig, SHA256SUMS, SBOM, AND the GHCR server image gets a `.sig` + `.pem`
-  on each release tag (`.github/workflows/release.yml`)
+  on each release tag (`.github/workflows/release.yml`). Cosign v3 (bundle
+  format + OCI 1.1 referring-artifact storage on by default) is tracked as a
+  drop-in pin upgrade once downstream verifiers in our pipeline consume bundles
 - [~] **SLSA Build Level 3** provenance attestations on releases via
   `actions/attest-build-provenance`. We claim **build level 2** in practice — Apple
   notarization breaks SLSA L3's hermeticity requirement (notarytool reaches Apple's
@@ -313,8 +335,9 @@ floor for any project that wants enterprise adoption.
 The observability stack is unusually strong here for an early-stage project; this is a
 genuine differentiator versus most competitors.
 
-- [x] OpenTelemetry SDK wired for traces, metrics, and logs (`server/observability/`,
-  `agent/observability/`)
+- [x] OpenTelemetry SDK wired for traces, metrics, and logs. Shared SDK setup
+  at `internal/observability/`; per-process meters at `server/metrics/` and
+  `agent/metrics/`
 - [x] OTLP/gRPC export with no-op fallback when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset
 - [x] W3C `traceparent` + `baggage` propagators installed unconditionally
 - [x] `otelhttp` auto-instrumentation on the HTTP server
@@ -558,6 +581,12 @@ these get asked.
   out-of-scope list, revision policy.
 - [ ] **OWASP ASVS** (Application Security Verification Standard) self-assessment at
   Level 2 for the server, Level 3 for auth-handling code paths
+- [ ] **OWASP Top 10:2025 (web)** self-assessment for the server. v2025 (Dec
+  2025) reshuffled the list: A03 became "Software Supply Chain Failures"
+  (broader than the 2021 "Vulnerable Components"), A10 is the new
+  "Mishandling of Exceptional Conditions". The supply-chain row overlaps §4;
+  the exceptional-conditions row is genuinely new and worth mapping our
+  panic-recovery + error-path coverage to
 - [ ] **NIST SSDF** (Secure Software Development Framework, SP 800-218) practice mapping
   -- the SBOM / SLSA / Scorecard checklist most enterprise procurement now demands
 - [ ] **CISA Secure by Design Pledge** signed; the pledge ships a public roadmap with
@@ -651,7 +680,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 
 | Area                              | Adopted | Total | %    |
 |-----------------------------------|---------|-------|------|
-| Detection content + response      | 7       | 36    | 19%  |
+| Detection content + response      | 6.5     | 38    | 17%  |
 | Cross-platform reach              | 1       | 8     | 12%  |
 | AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
 | Supply-chain security             | 15.5    | 27    | 57%  |
@@ -663,7 +692,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | Data layer                        | 9       | 17    | 53%  |
 | Build / release / packaging       | 5       | 10    | 50%  |
 | Community signals                 | 13      | 24    | 54%  |
-| Compliance + privacy              | 1       | 13    | 8%   |
+| Compliance + privacy              | 1       | 14    | 7%   |
 | macOS platform hygiene            | 6       | 12    | 50%  |
 | AI-assisted engineering           | 2       | 17    | 12%  |
 

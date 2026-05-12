@@ -17,4 +17,5 @@ or change the cadence - running tasks with no record is the same as not running 
 <!-- entries below, newest at the bottom -->
 
 2026-05-03  doc-accuracy-sweep  partial  scope: root-level READMEs + `docs/*.md` (subdirs deferred to next rotation)
+2026-05-12  best-practices-refresh  done  1 demotion (ATT&CK mapping → [~] pending v19 re-validation), 1 path fix (observability), 4 new unchecked items, 1 ADR-gap issue filed
 
