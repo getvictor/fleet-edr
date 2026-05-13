@@ -25,6 +25,12 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// FileHandle so a multi-gigabyte binary doesn't have to fit in memory.
 /// CryptoKit.SHA256's update/finalize API supports incremental hashing.
 final class FileHashCache {
+    /// 64 KiB chunks balance memory pressure against syscall count for streaming
+    /// SHA-256 over Mach-O binaries: large enough that hashing a typical
+    /// multi-MB executable does only ~tens of reads, small enough that a
+    /// concurrent run on a gigabyte-class binary doesn't bloat resident set.
+    private static let hashReadChunkBytes = 65_536
+
     static let shared = FileHashCache()
 
     private struct Key: Hashable {
@@ -140,10 +146,9 @@ final class FileHashCache {
             return nil
         }
         var hasher = SHA256()
-        let chunkSize = 64 * 1024
         while true {
             do {
-                guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                guard let chunk = try handle.read(upToCount: Self.hashReadChunkBytes), !chunk.isEmpty else {
                     break
                 }
                 hasher.update(data: chunk)

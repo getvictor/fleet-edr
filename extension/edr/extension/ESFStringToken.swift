@@ -8,12 +8,20 @@ import Foundation
 /// overread into adjacent memory in the worst case and produce garbage
 /// in the typical case. Use this helper everywhere a Swift String is
 /// derived from an es_string_token_t — paths, team IDs, signing IDs.
+///
 /// Returns the empty string when the token has no payload (data is
-/// nil or length is zero).
+/// nil or length is zero) OR when the bytes are not valid UTF-8. The
+/// failable `String(bytes:encoding:)` initializer is preferred over
+/// `String(decoding:as:)` per SwiftLint's optional_data_string_conversion
+/// rule: an invalid-UTF-8 byte run should surface as "unknown" (empty
+/// string) rather than as a path with U+FFFD replacement characters,
+/// which a downstream rule comparison might miscompare against the
+/// admin-provided canonical form.
 @inline(__always)
 func esTokenString(_ token: es_string_token_t) -> String {
     guard let buf = token.data, token.length > 0 else {
         return ""
     }
-    return String(decoding: UnsafeRawBufferPointer(start: buf, count: token.length), as: UTF8.self)
+    let bytes = UnsafeBufferPointer(start: buf, count: token.length)
+    return String(bytes: bytes, encoding: .utf8) ?? ""
 }
