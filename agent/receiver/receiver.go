@@ -130,6 +130,36 @@ func (r *Receiver) Connect() error {
 	return nil
 }
 
+// SendApplicationControl delivers an `application_control.update` XPC message
+// to the peer. Returns an error if the connection is not established or the
+// send call rejected the payload. The send is asynchronous; a nil error means
+// the message was handed off to XPC, not that the peer has acknowledged it —
+// an ack is not part of the current wire protocol.
+//
+// We hold r.mu across the C bridge call so a concurrent Disconnect() cannot
+// tear the slot down while C is still using the handle. Without the extended
+// lock, the small integer handle could be reused by another Receiver's
+// Connect between our snapshot and the xpc_bridge_send_application_control
+// call, and we'd end up sending this host's payload on a different peer's
+// connection.
+func (r *Receiver) SendApplicationControl(payload []byte) error {
+	if len(payload) == 0 {
+		return errors.New("empty application_control payload")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.connected || r.handle < 0 {
+		return errors.New("receiver not connected")
+	}
+	rc := int(C.xpc_bridge_send_application_control(C.int(r.handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
+	if rc != 0 {
+		return fmt.Errorf("xpc_bridge_send_application_control returned %d", rc)
+	}
+	return nil
+}
+
 // Disconnect tears down the XPC connection.
 func (r *Receiver) Disconnect() {
 	r.mu.Lock()

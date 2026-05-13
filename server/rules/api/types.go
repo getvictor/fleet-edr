@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -366,4 +367,76 @@ type ApplicationControlStore interface {
 	ListPolicies(ctx context.Context, tenantID string) ([]ApplicationControlPolicy, error)
 	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
 	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
+}
+
+// CommandTypeSetApplicationControl is the well-known command type the
+// agent reads on every poll and routes to its application-control
+// snapshot dispatcher. Stable wire-shape string; renaming is a
+// contract break for every deployed agent.
+const CommandTypeSetApplicationControl = "set_application_control"
+
+// SetApplicationControlPayload is the wire shape the server writes
+// into a `set_application_control` command and the agent + extension
+// decode end-to-end. Field tags are load-bearing: the extension
+// (Swift) Decodable derives the JSON keys from these tags. A change
+// here MUST land in lockstep with the matching change in
+// ApplicationControlStore.swift.
+//
+// Lives in api/ so cmd/main and the REST handler can construct it
+// without importing rules internals; the agent commander decodes the
+// same shape with its own private struct to avoid pulling
+// server/rules/api into the agent module graph.
+type SetApplicationControlPayload struct {
+	PolicyID      int64                       `json:"policy_id"`
+	PolicyVersion int64                       `json:"policy_version"`
+	Rules         []SetApplicationControlRule `json:"rules"`
+}
+
+// SetApplicationControlRule is one row in the payload's rules array.
+// Every field that the extension's decision walker (Step 3), block
+// notification (Step 4), or block event (Step 4) needs lands here so
+// the wire shape is stable across the demo cut and the rest of
+// Phase A. Disabled and expired rules are NOT included in the
+// payload — the fan-out filters them so the agent never sees them.
+type SetApplicationControlRule struct {
+	RuleType    RuleType    `json:"rule_type"`
+	Identifier  string      `json:"identifier"`
+	Action      Action      `json:"action"`
+	Enforcement Enforcement `json:"enforcement"`
+	Severity    Severity    `json:"severity"`
+	CustomMsg   *string     `json:"custom_msg,omitempty"`
+	CustomURL   *string     `json:"custom_url,omitempty"`
+}
+
+// MarshalSetApplicationControlPayload returns the JSON bytes the
+// agent's commander forwards to the extension. Filters disabled rules
+// and rules whose expires_at is in the past so the agent + extension
+// never see them. now is provided by the caller (cmd/main passes
+// time.Now()) so tests can pin a deterministic clock; passing the
+// zero value disables the expires_at filter (treat every rule as
+// non-expired).
+func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []ApplicationControlRule, now time.Time) (json.RawMessage, error) {
+	entries := make([]SetApplicationControlRule, 0, len(rules))
+	for _, r := range rules {
+		if !r.Enabled {
+			continue
+		}
+		if !now.IsZero() && r.ExpiresAt != nil && !r.ExpiresAt.After(now) {
+			continue
+		}
+		entries = append(entries, SetApplicationControlRule{
+			RuleType:    r.RuleType,
+			Identifier:  r.Identifier,
+			Action:      r.Action,
+			Enforcement: r.Enforcement,
+			Severity:    r.Severity,
+			CustomMsg:   r.CustomMsg,
+			CustomURL:   r.CustomURL,
+		})
+	}
+	return json.Marshal(SetApplicationControlPayload{
+		PolicyID:      p.ID,
+		PolicyVersion: p.Version,
+		Rules:         entries,
+	})
 }
