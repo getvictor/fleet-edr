@@ -52,33 +52,27 @@ final class XPCServer {
     /// handlePeerMessage dispatches an inbound XPC dictionary from a connected peer (the
     /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
     ///
-    ///   - "hello"         : the handshake the agent uses to trigger the Mach port bind.
-    ///   - "policy.update" : blocklist push. The "data" key holds raw JSON bytes
-    ///                       that PolicyStore decodes + persists.
+    ///   - "hello" : the handshake the agent uses to trigger the Mach port bind.
     ///
     /// Unknown types are logged and ignored — future protocol evolutions should be
     /// additive, and a forward-compat agent must still work against this server.
+    /// The application-control message type is added back in phase 4 of the
+    /// add-application-control change once the new decision engine lands.
     private func handlePeerMessage(_ event: xpc_object_t) {
         guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
             return
         }
         let type = String(cString: typeCStr)
-        switch type {
-        case "hello":
-            // No-op. The mere receipt of this message triggered the lazy Mach port
-            // connection; there's nothing to do server-side.
-            break
-        case "policy.update":
-            var dataLen: Int = 0
-            guard let rawPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 else {
-                logger.error("policy.update missing 'data'")
-                return
-            }
-            let data = Data(bytes: rawPtr, count: dataLen)
-            PolicyStore.shared.apply(rawJSON: data)
-        default:
-            logger.info("unknown XPC message type: \(type, privacy: .public)")
+        // "hello" is a no-op: the mere receipt of the message triggered the lazy Mach
+        // port connection; there's nothing to do server-side. Switched to an if/else
+        // chain so adding the phase-4 application-control inbound message type is a
+        // single new branch rather than a switch reshape.
+        if type == "hello" {
+            return
         }
+        // type is peer-supplied; redact in the unified log so a compromised peer
+        // cannot inject arbitrary strings into log readers.
+        logger.info("unknown XPC message type: \(type, privacy: .private)")
     }
 
     private func handleListenerEvent(_ event: xpc_object_t) {

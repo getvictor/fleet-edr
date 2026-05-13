@@ -6,7 +6,7 @@
 
 # Local scratch + logs.
 tmp/
-claude/
+ai/
 .DS_Store
 
 # Test caches.

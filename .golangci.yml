@@ -193,6 +193,15 @@ linters:
 
   exclusions:
     generated: strict
+    # paths excludes whole directories from analysis. tmp/ holds local
+    # scratch programs (queue-stuffers, manual db pokers) that are
+    # already in .gitignore but still on disk; ui/node_modules/ contains
+    # vendored JS-tooling-side Go sources (e.g. flatted's Go reference
+    # implementation) that we neither ship nor maintain. Linting either
+    # path produces noise across every PR with no actionable signal.
+    paths:
+      - tmp
+      - ui/node_modules
     rules:
       # test/loadtest.go generates synthetic event payloads for throughput
       # benchmarks; crypto/rand-grade randomness is wrong here (slower and

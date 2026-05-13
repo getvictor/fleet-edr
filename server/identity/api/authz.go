@@ -51,12 +51,6 @@ const (
 	ActionAlertResolve     Action = "alert.resolve"
 	ActionAlertReopen      Action = "alert.reopen"
 
-	// Policy CRUD.
-	ActionPolicyRead   Action = "policy.read"
-	ActionPolicyCreate Action = "policy.create"
-	ActionPolicyUpdate Action = "policy.update"
-	ActionPolicyDelete Action = "policy.delete"
-
 	// Enrollment management.
 	ActionEnrollmentRead        Action = "enrollment.read"
 	ActionEnrollmentRevoke      Action = "enrollment.revoke"
@@ -86,7 +80,6 @@ func RegisteredActions() []Action {
 		ActionHostIsolate, ActionHostKillProcess, ActionHostRunScript,
 		ActionAlertRead, ActionAlertComment, ActionAlertAcknowledge,
 		ActionAlertResolve, ActionAlertReopen,
-		ActionPolicyRead, ActionPolicyCreate, ActionPolicyUpdate, ActionPolicyDelete,
 		ActionEnrollmentRead, ActionEnrollmentRevoke, ActionEnrollmentRotateToken,
 		ActionUserRead, ActionUserInvite,
 		ActionAuditRead,

@@ -76,10 +76,12 @@ func TestTenantScaffolding_SchemaAndSeeds(t *testing.T) {
 	// user_id -> users.tenant_id). Linked-to-user tables (identities,
 	// bootstrap_tokens, webauthn_credentials) inherit similarly. roles
 	// is global per the authorization spec's built-in-role rationale.
+	// The rules context owns no tables in this phase; phase 2 of the
+	// add-application-control change introduces app_control_* tables
+	// that will be added back here.
 	for _, table := range []string{
 		"users", "role_bindings", // identity-context tenant-scoped tables
 		"hosts", "alerts", // detection
-		"policies",    // rules
 		"commands",    // response
 		"enrollments", // endpoint
 	} {

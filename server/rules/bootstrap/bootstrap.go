@@ -13,21 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
-	"github.com/fleetdm/edr/server/rules/internal/policy"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 )
-
-// ActiveHostsLister enumerates host_ids the policy fan-out should
-// target. cmd/main supplies a closure that resolves
-// endpoint.Service().ActiveHostIDs at call time so the bidirectional
-// dependency between rules and endpoint resolves without a stateful
-// setter.
-type ActiveHostsLister = service.ActiveHostsLister
-
-// CommandInserter inserts a single command row keyed on host_id.
-// Today cmd/main passes response/api.Service.Insert as a method
-// value satisfying this closure shape.
-type CommandInserter = service.CommandInserter
 
 // Deps bundles what New needs to wire the rules context. cmd/main
 // owns the *sqlx.DB handle and shares it across every context's
@@ -40,15 +27,10 @@ type Deps struct {
 	// rule constructors.
 	RegistryOptions api.RegistryOptions
 
-	// ActiveHostsLister + CommandInserter are paired: both nil disables
-	// the fan-out path (use case: docs generator, fleet-edr-ingest);
-	// both non-nil enables it. An asymmetric pair is a config error.
-	ActiveHostsLister ActiveHostsLister
-	CommandInserter   CommandInserter
-
-	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for policy updates. cmd/main wires
-	// identityCtx.AuditRecorder().
+	// Audit is the operator-action recorder. Optional: today no route
+	// inside the rules context emits audit rows; the field is wired so
+	// the follow-on application-control change can plug into it without
+	// touching the wiring layer.
 	Audit identityapi.AuditRecorder
 	// AuthZ is the authorization chokepoint every privileged operator
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
@@ -69,9 +51,6 @@ func New(deps Deps) (*Rules, error) {
 	if deps.DB == nil {
 		return nil, errors.New("rules bootstrap: DB is required")
 	}
-	if (deps.ActiveHostsLister == nil) != (deps.CommandInserter == nil) {
-		return nil, errors.New("rules bootstrap: ActiveHostsLister and CommandInserter must be set together (or both nil)")
-	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -81,9 +60,8 @@ func New(deps Deps) (*Rules, error) {
 		return nil, errors.New("rules bootstrap: AuthZ is required")
 	}
 
-	policyStore := policy.NewStore(deps.DB)
 	rules := catalog.New(deps.RegistryOptions)
-	svc := service.New(policyStore, rules, deps.ActiveHostsLister, deps.CommandInserter, logger)
+	svc := service.New(rules, logger)
 
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
@@ -96,9 +74,8 @@ func New(deps Deps) (*Rules, error) {
 }
 
 // ApplySchema runs the DDL statements rules owns. Idempotent
-// (CREATE TABLE IF NOT EXISTS + INSERT IGNORE for the seed row). No
-// cross-context FKs; ordering with other contexts' ApplySchema is
-// not load-bearing.
+// (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
+// other contexts' ApplySchema is not load-bearing.
 func (r *Rules) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, r.db)
 }
@@ -119,11 +96,6 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return nil
 }
 
-// PolicyService exposes the public api.PolicyService for cross-context
-// callers. cmd/main passes this into endpoint/bootstrap.Deps so the
-// post-enroll fan-out goroutine can call ActiveCommandPayload.
-func (r *Rules) PolicyService() api.PolicyService { return r.svc }
-
 // ContentService exposes the public api.RuleProvider. detection.Engine
 // (still living at server/detection/) consumes this to load its rule
 // set at start.
@@ -136,8 +108,6 @@ func (r *Rules) Catalog() api.Lister { return r.svc }
 
 // RegisterAuthedRoutes wires the operator-facing routes:
 //
-//	GET  /api/policy
-//	PUT  /api/policy
 //	GET  /api/rules
 //	GET  /api/attack-coverage
 //
@@ -148,20 +118,18 @@ func (r *Rules) RegisterAuthedRoutes(mux *http.ServeMux) {
 	r.operatorH.RegisterRoutes(mux)
 }
 
-// CatalogOnly returns just the rule catalog, without wiring the policy
-// store or operator routes. Exposed for tooling that doesn't have a
-// DB handle (notably tools/gen-rule-docs which builds the markdown
-// page from rule documentation at compile time).
+// CatalogOnly returns just the rule catalog, without wiring the
+// operator routes. Exposed for tooling that doesn't have a DB handle
+// (notably tools/gen-rule-docs which builds the markdown page from
+// rule documentation at compile time).
 func CatalogOnly(opts api.RegistryOptions) api.Lister {
 	rules := catalog.New(opts)
-	// service.New panics without a policy store; catalog-only callers
-	// don't go through service.New. Return a thin api.Lister whose
-	// List walks the rule slice directly.
 	return catalogList(rules)
 }
 
 // catalogList satisfies api.Lister by reading from a captured rule
-// slice. Avoids dragging the policy store into the gen-rule-docs path.
+// slice. Avoids dragging the service constructor into the
+// gen-rule-docs path.
 type catalogList []api.Rule
 
 func (c catalogList) List() []api.RuleMetadata {

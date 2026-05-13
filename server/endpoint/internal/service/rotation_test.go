@@ -90,7 +90,6 @@ func newServiceForTest(t *testing.T, lifetime, grace time.Duration) (svc api.Ser
 		Secret:   testSecret,
 		Audit:    audit,
 		Commands: cmds.Insert,
-		Policy:   nil, // not exercised in these tests; paired-nil with Commands is OK because the enroll fan-out is the only consumer of the pair.
 		Lifetime: lifetime,
 		Grace:    grace,
 		Logger:   slog.Default(),

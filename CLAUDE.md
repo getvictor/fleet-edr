@@ -85,3 +85,9 @@ Layered on the global guide. Project-specific:
 - Sentence case for headings.
 - No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-` with surrounding spaces).
 - Don't run `task db:reset` without explicit user permission.
+- When you delete a symbol (function, type, command name, XPC message kind, config field),
+  scrub every doc comment that still references it before committing. Stale comments
+  in IPC-adjacent code are a recurring class of footgun in review (see PR #151 where
+  both Copilot and CodeRabbit caught a dispatcher reference on a function whose
+  dispatcher argument no longer existed). Treat the comment delta as part of the
+  deletion, not a follow-up.

@@ -2,12 +2,6 @@
 tmp
 .claude/scheduled_tasks.lock
 
-# Per-topic scratch plans (e.g. claude/mvp/plan.md). The .dockerignore,
-# sonar-project.properties, and the maintenance task docs all assume
-# this tree stays out of the committed repo; this rule keeps the
-# project state aligned with that convention.
-claude/
-
 # Xcode
 xcuserdata/
 *.xcuserstate

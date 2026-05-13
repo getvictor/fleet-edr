@@ -4,10 +4,9 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFSubscriber")
 
-// The blocklist is a runtime set owned by PolicyStore.shared. The server pushes
-// updates over the agent's XPC connection; the extension persists them to
-// /var/db/com.fleetdm.edr/policy.json and swaps the in-memory set atomically.
-// Operators configure entries via `PUT /api/policy` on the server.
+// Application Control phase 1 removes the legacy blocklist; AUTH_EXEC currently
+// allows every exec. The decision engine and rule snapshot land in phase 4 of
+// the add-application-control change.
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
@@ -48,6 +47,11 @@ final class ESFSubscriber: Sendable {
         }
 
         logger.info("Subscribed to \(events.count) event types (including AUTH_EXEC)")
+        // Phase 1 of add-application-control deletes the legacy blocklist and leaves
+        // AUTH_EXEC as an unconditional allow. Surface this loudly at startup so
+        // operators monitoring logs during rollout are never confused about why
+        // nothing is being blocked. The decision engine lands in phase 4.
+        logger.warning("Application Control disabled (phase 1 temporary state) — AUTH_EXEC returns ES_AUTH_RESULT_ALLOW")
     }
 
     func stop() {
@@ -74,24 +78,12 @@ final class ESFSubscriber: Sendable {
         }
     }
 
-    /// AUTH_EXEC handler: check the target binary against the runtime blocklist and
-    /// respond with DENY or ALLOW. The lookup is O(1) expected (Swift `Set` is hash-
-    /// backed) and the PolicyStore read is a lock-free snapshot load — no queue.sync,
-    /// no disk I/O on the hot path — so it comfortably fits inside the kernel's AUTH
-    /// deadline. For denied execs the kernel returns EPERM to the caller and the
-    /// binary never runs. The blocklist is owned by PolicyStore; server-driven policy
-    /// pushes swap the snapshot atomically and persist on a separate queue.
+    /// AUTH_EXEC handler: phase-1 demolition leaves this as an unconditional allow.
+    /// The application-control decision engine (target identifier tuple, precedence
+    /// walk over the rule snapshot, lazy signing-info cache) lands in phase 4 of the
+    /// add-application-control change.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
-        let msg = message.pointee
-        let target = msg.event.exec.target.pointee
-        let path = String(cString: target.executable.pointee.path.data)
-
-        if PolicyStore.shared.currentBlockedPaths().contains(path) {
-            logger.warning("AUTH_EXEC DENIED: \(path, privacy: .public)")
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
-        } else {
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
-        }
+        es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
     }
 
     private func handleExec(_ msg: es_message_t) {

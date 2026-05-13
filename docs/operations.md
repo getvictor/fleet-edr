@@ -298,12 +298,6 @@ Core metrics to chart:
 | `edr.db.query.duration` | histogram | p99 creeping up = DB overloaded or a slow query regressed |
 | `edr.agent.queue.dropped` | counter | Non-zero = agent's local SQLite queue hit its cap. Investigate connectivity |
 
-Policy fan-out failures are emitted as the span attribute
-`edr.policy.fanout_failed` on the `policy_update` admin span (and the
-matching slog key on the audit log line), not as a counter — filter
-spans on the attribute `edr.policy.fanout_failed > 0` in your trace
-UI when rolling out a blocklist change.
-
 Recommended alerts (SigNoz, Grafana, wherever your OTel backend lives):
 
 - `edr.offline.hosts > 10% of edr.enrolled.hosts for 15m` — fleet-wide
@@ -382,27 +376,14 @@ permanently gone (retired laptop), revoke the enrollment from the UI
 (`Hosts > <host> > Revoke enrollment`) so its host-token can no longer
 be used.
 
-## Managing the blocklist (policy)
+## Application control
 
-The blocklist is a server-driven policy pushed to every enrolled host
-via the command queue. One policy per server; all hosts see the same
-list.
-
-```sh
-# View current policy.
-curl -s -b cookies.txt https://<server>/api/policy | jq .
-
-# Update policy (requires login + CSRF token).
-# Easier via the admin UI: Settings > Policy > Blocklist.
-```
-
-The policy has two fields:
-
-- `blocklist.paths` — absolute paths. Any exec() with an `argv[0]` or
-  resolved executable path matching the list triggers an alert and
-  (for the sysext) kills the process before it executes.
-- `blocklist.hashes` — SHA-256 of the binary. Same behavior, matched
-  on digest.
+Application Control (the replacement for the singleton blocklist) is
+introduced in the `add-application-control` OpenSpec change. Phase 1
+deletes the legacy `/api/policy` endpoints and the `set_blocklist`
+command; the new REST surface, agent command, and decision engine land
+in later phases of that change. Until then there is no in-product
+allow/block surface.
 
 The `EDR_LAUNCHAGENT_ALLOWLIST` env var is different: it tells the
 server's `persistence_launchagent` detection rule which LaunchAgent

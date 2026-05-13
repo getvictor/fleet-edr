@@ -39,11 +39,6 @@ const (
 	AuditAlertResolve     AuditAction = "alert.resolve"
 	AuditAlertReopen      AuditAction = "alert.reopen"
 
-	// Policy CRUD (rules context).
-	AuditPolicyCreate AuditAction = "policy.create"
-	AuditPolicyUpdate AuditAction = "policy.update"
-	AuditPolicyDelete AuditAction = "policy.delete"
-
 	// Command issuance (response context).
 	AuditCommandIssue AuditAction = "command.issue"
 
@@ -180,7 +175,6 @@ func IsReadAction(a Action) bool {
 	switch a {
 	case ActionHostRead, ActionProcessRead,
 		ActionAlertRead,
-		ActionPolicyRead,
 		ActionEnrollmentRead,
 		ActionUserRead,
 		ActionAuditRead:

@@ -3,8 +3,6 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -118,29 +116,6 @@ var (
 	// enrollment row.
 	ErrNotFound = errors.New("endpoint: enrollment not found")
 )
-
-// PolicyProvider is the narrow read interface endpoint's enroll handler
-// needs to bootstrap each new agent with the current blocklist policy.
-// Today's implementation is rules.api.PolicyService.
-//
-// Returning a pre-marshaled command payload + version + hasContent flag
-// keeps endpoint from ever importing the policy / rules packages: the
-// implementation does the empty-check and the marshalling.
-type PolicyProvider interface {
-	// ActiveCommandPayload returns:
-	//   - payload: pre-marshaled set_blocklist command body for the
-	//     current default policy, OR nil if the blocklist is empty.
-	//   - version: policy version for audit logs.
-	//   - hasContent: false when the blocklist has zero paths and zero
-	//     hashes; the enroll handler skips the fan-out in that case
-	//     because pushing an empty blocklist accomplishes nothing.
-	//   - err: provider failures (DB unavailable, marshal error, etc.)
-	//
-	// The shape lets rules/api.PolicyService satisfy this interface
-	// structurally without rules taking a hard dependency on
-	// endpoint/api.
-	ActiveCommandPayload(ctx context.Context) (payload json.RawMessage, version int64, hasContent bool, err error)
-}
 
 // CommandInserter is a closure type defined in endpoint/bootstrap
 // (consumed by endpoint/internal/service via the call site

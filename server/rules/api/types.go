@@ -2,9 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"time"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 )
@@ -147,107 +144,8 @@ type RegistryOptions struct {
 	SudoersWriterAllowlist        map[string]struct{}
 }
 
-// --- Policy types --------------------------------------------------------------
-
-// DefaultPolicyName is the singleton policy row name. v1.1 will add
-// targeted policies (per team / per host group); for MVP this is the
-// only name production code uses.
-const DefaultPolicyName = "default"
-
-// BlocklistPolicy mirrors a row in the policies table. Field tags
-// preserve today's policy.Policy wire shape so /api/policy is
-// byte-identical with main.
-type BlocklistPolicy struct {
-	Name      string    `json:"name"`
-	Version   int64     `json:"version"`
-	Blocklist Blocklist `json:"blocklist"`
-	UpdatedAt time.Time `json:"updated_at"`
-	UpdatedBy string    `json:"updated_by"`
-}
-
-// Blocklist is the subject of policy pushes. Paths is a sorted,
-// deduplicated list of absolute filesystem paths the extension should
-// DENY under AUTH_EXEC. Hashes is a sorted, deduplicated list of
-// lowercase hex SHA-256 strings (extension-side hashing is still a
-// v1.1 feature, but the wire contract is future-proof).
-type Blocklist struct {
-	Paths  []string `json:"paths"`
-	Hashes []string `json:"hashes"`
-}
-
-// UpdateRequest carries the new blocklist plus the actor performing
-// the change. The actor ends up in updated_by and in the audit log;
-// it must be non-empty.
-type UpdateRequest struct {
-	Name   string
-	Paths  []string
-	Hashes []string
-	Actor  string
-}
-
-// SetBlocklistPayload is the wire shape the agent's commander decodes
-// for set_blocklist commands. Field names mirror what
-// extension/PolicyStore expects; this is part of the agent contract
-// and is byte-identical with today's admin.policyCommandPayload.
-// Lives in api/ so endpoint can receive it pre-marshaled at enroll
-// time without importing rules internals.
-type SetBlocklistPayload struct {
-	Name    string   `json:"name"`
-	Version int64    `json:"version"`
-	Paths   []string `json:"paths"`
-	Hashes  []string `json:"hashes"`
-}
-
-// CommandTypeSetBlocklist is the well-known command type the agent
-// reads on every poll. Exposed here (not buried in internal) because
-// endpoint, response, and rules all reference it; the constant is the
-// boundary between rules's domain and the response queue.
-const CommandTypeSetBlocklist = "set_blocklist"
-
-// --- Errors --------------------------------------------------------------------
-
-var (
-	// ErrPolicyNotFound is returned when the requested policy row is
-	// missing. Operationally treat as a fresh-database anomaly:
-	// schema.go seeds the default row.
-	ErrPolicyNotFound = errors.New("rules: policy not found")
-
-	// ErrInvalidPath is returned by Update when a path entry is not an
-	// absolute filesystem path. Mapped to 400 by the operator handler.
-	ErrInvalidPath = errors.New("rules: invalid blocklist path")
-
-	// ErrInvalidHash is returned by Update when a hash entry is not a
-	// 64-char lowercase hex string. Mapped to 400 by the operator
-	// handler.
-	ErrInvalidHash = errors.New("rules: invalid blocklist hash")
-
-	// ErrInvalidUpdateRequest is returned for body-shape problems:
-	// missing name or actor. Distinct from ErrInvalidPath /
-	// ErrInvalidHash which describe blocklist content errors. Mapped
-	// to 400.
-	ErrInvalidUpdateRequest = errors.New("rules: invalid update request")
-)
-
-// IsValidationError reports whether err is one of the public 4xx-mapped
-// validation errors (path / hash / update-request shape). Useful to
-// callers that don't want to wire a triple errors.Is in their handler.
-func IsValidationError(err error) bool {
-	return errors.Is(err, ErrInvalidPath) ||
-		errors.Is(err, ErrInvalidHash) ||
-		errors.Is(err, ErrInvalidUpdateRequest)
-}
-
-// MarshalSetBlocklistPayload returns the JSON bytes the agent's
-// commander expects for a set_blocklist command. Hoisted to a public
-// helper so endpoint can build the same payload at enroll time
-// without re-deriving the field shape. Returns an error only if the
-// json package fails to marshal a struct of plain types -- in
-// practice a "this never happens" path that callers still propagate.
-func MarshalSetBlocklistPayload(p BlocklistPolicy) (json.RawMessage, error) {
-	return json.Marshal(SetBlocklistPayload{
-		Name:    p.Name,
-		Version: p.Version,
-		Paths:   p.Blocklist.Paths,
-		Hashes:  p.Blocklist.Hashes,
-	})
-}
+// Application control policy types and the wire shape for the
+// `set_application_control` agent command are introduced in a follow-on
+// phase of the add-application-control change. Phase 1 deletes the
+// singleton blocklist scaffolding outright; the typed replacement
+// arrives with the new tables and decision engine.

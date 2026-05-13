@@ -16,11 +16,12 @@ import (
 func TestOpen_AllContextsSchemaPresent(t *testing.T) {
 	db := full.Open(t)
 
+	// The rules context owns zero tables until phase 2 of the
+	// add-application-control change lands the four app_control_* tables.
 	tables := map[string]string{
 		"users":        "identity",
 		"sessions":     "identity",
 		"enrollments":  "endpoint",
-		"policies":     "rules",
 		"commands":     "response",
 		"events":       "detection",
 		"processes":    "detection",
