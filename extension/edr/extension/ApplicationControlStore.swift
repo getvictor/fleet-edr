@@ -1,4 +1,5 @@
 import Foundation
+import os
 import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ApplicationControlStore")
@@ -87,10 +88,13 @@ enum ApplicationControlRuleType {
 /// come in via XPC and route through `apply(rawJSON:)`.
 ///
 /// Concurrency:
-///  - Reads of `currentSnapshot()` are lock-free via OSAllocatedUnfairLock.
-///  - Writes (apply, persist) happen on a serial queue.
-///  - The disk write uses write-temp-then-rename so a crash mid-write cannot
-///    leave the file partially written.
+///  - Reads of `currentSnapshot()` take the OSAllocatedUnfairLock for a
+///    constant-time critical section. This is not literally lock-free; the
+///    OS-level primitive is an inline-storage unfair lock optimised for
+///    uncontended fast paths.
+///  - Writes (apply, persist) happen on a serial dispatch queue.
+///  - The disk write uses Data.write(to:options:.atomic), which writes a
+///    temporary file and renames it atomically.
 final class ApplicationControlStore {
     static let shared = ApplicationControlStore()
 
@@ -98,9 +102,11 @@ final class ApplicationControlStore {
     private let persistQueue = DispatchQueue(label: "com.fleetdm.edr.appcontrol.persist", qos: .utility)
     private let storagePath = "/var/db/com.fleetdm.edr/application-control.json"
 
-    /// currentSnapshot returns the active snapshot. Lock-free fast path: the
-    /// AUTH_EXEC handler will call this on every exec, so it must be O(1)
-    /// and never block.
+    /// currentSnapshot returns the active snapshot. The AUTH_EXEC handler
+    /// calls this on every exec, so the critical section is constant time
+    /// (a copy of the small ApplicationControlSnapshot struct) and the
+    /// underlying lock is an OSAllocatedUnfairLock tuned for uncontended
+    /// fast paths.
     func currentSnapshot() -> ApplicationControlSnapshot {
         return lock.withLock { $0 }
     }
@@ -204,36 +210,19 @@ final class ApplicationControlStore {
         )
     }
 
-    /// persist writes the raw payload to disk via write-temp-then-rename so a
-    /// crash mid-write cannot leave the file partially written. Creates the
-    /// parent directory if missing.
+    /// persist writes the raw payload to disk atomically. Data.write(to:options:.atomic)
+    /// is implemented as write-temp-then-rename internally — Foundation manages
+    /// the temp file and the rename in a single atomic swap that handles the
+    /// destination-already-exists case correctly. No manual mv dance and no
+    /// non-atomic window where the destination is missing.
     private func persist(rawJSON data: Data) {
-        let directory = (storagePath as NSString).deletingLastPathComponent
+        let url = URL(fileURLWithPath: storagePath)
+        let directory = url.deletingLastPathComponent()
         do {
-            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: nil)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+            try data.write(to: url, options: .atomic)
         } catch {
-            logger.error("application control persist mkdir failed: \(error.localizedDescription, privacy: .public)")
-            return
-        }
-        let tmpPath = storagePath + ".tmp"
-        do {
-            try data.write(to: URL(fileURLWithPath: tmpPath), options: .atomic)
-        } catch {
-            logger.error("application control persist write failed: \(error.localizedDescription, privacy: .public)")
-            return
-        }
-        do {
-            try FileManager.default.moveItem(atPath: tmpPath, toPath: storagePath)
-        } catch {
-            // moveItem fails if the destination exists. Remove and retry.
-            do {
-                try FileManager.default.removeItem(atPath: storagePath)
-                try FileManager.default.moveItem(atPath: tmpPath, toPath: storagePath)
-            } catch {
-                logger.error("application control persist rename failed: \(error.localizedDescription, privacy: .public)")
-                try? FileManager.default.removeItem(atPath: tmpPath)
-                return
-            }
+            logger.error("application control persist failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

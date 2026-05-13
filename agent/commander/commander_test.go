@@ -224,6 +224,70 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	assert.Empty(t, sender.sent)
 }
 
+// TestExecuteSetApplicationControl_RulesMissingOrInvalid covers the
+// envelope check on `rules`. Without this gate, a payload with missing
+// or null rules slips past json.Unmarshal-into-json.RawMessage and only
+// fails on the extension's typed decode — but by then the commander has
+// already reported `completed`, so the server is wrong about per-host
+// convergence. The commander must reject those shapes BEFORE forwarding.
+func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{"missing rules", `{"policy_id":7,"policy_version":1}`},
+		{"null rules", `{"policy_id":7,"policy_version":1,"rules":null}`},
+		{"rules is object", `{"policy_id":7,"policy_version":1,"rules":{}}`},
+		{"rules is string", `{"policy_id":7,"policy_version":1,"rules":"oops"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotStatus, gotErr string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body statusUpdate
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				gotStatus = body.Status
+				var result map[string]string
+				_ = json.Unmarshal(body.Result, &result)
+				gotErr = result["error"]
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer srv.Close()
+
+			sender := &recordingApplicationControlSender{}
+			c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+			c.executeSetApplicationControl(t.Context(), command{
+				ID:          16,
+				CommandType: "set_application_control",
+				Payload:     json.RawMessage(tc.payload),
+			})
+			assert.Equal(t, "failed", gotStatus)
+			assert.Contains(t, gotErr, "rules")
+			assert.Empty(t, sender.sent, "non-array rules payload must not reach the extension")
+		})
+	}
+}
+
+// TestExecuteSetApplicationControl_EmptyRulesAccepted covers the
+// converse: an empty rules array is a legal state (just-after-policy
+// creation, or after every rule is deleted) and the commander must
+// forward it cleanly.
+func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	sender := &recordingApplicationControlSender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	c.executeSetApplicationControl(t.Context(), command{
+		ID:          17,
+		CommandType: "set_application_control",
+		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`),
+	})
+	require.Len(t, sender.sent, 1, "empty rules array is a valid snapshot push")
+}
+
 // TestExecuteSetApplicationControl_NoSenderConfigured covers the agent
 // startup case where the XPC bridge has not been wired yet (or has
 // disconnected). The command must fail with a clear reason so the

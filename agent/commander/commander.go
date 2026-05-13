@@ -97,10 +97,12 @@ type killPayload struct {
 // setApplicationControlPayload mirrors server/rules/api.SetApplicationControlPayload.
 // Field names + json tags are load-bearing: the extension parses the same
 // JSON bytes and the byte-shape must match across all three sides. The
-// commander's only job is to verify the envelope (policy_id present, version
-// positive) before handing the raw bytes off to the extension; the per-rule
-// decode happens on the extension side, which is the only consumer that
-// actually walks the rules list.
+// commander's job is envelope validation (policy_id present, version
+// positive, rules is a JSON array) before handing the raw bytes off to the
+// extension; the per-rule decode happens on the extension side, which is the
+// only consumer that actually walks the rules list. Gating on the rules-is-an-
+// array check here prevents reporting `completed` for a payload the extension
+// will silently fail to decode.
 type setApplicationControlPayload struct {
 	PolicyID      int64 `json:"policy_id"`
 	PolicyVersion int64 `json:"policy_version"`
@@ -230,6 +232,16 @@ func (c *Commander) executeSetApplicationControl(ctx context.Context, cmd comman
 		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid policy_version"))
 		return
 	}
+	// Validate that rules is present AND a JSON array (empty array allowed).
+	// Without this gate, payloads with missing/null/non-array rules slip past
+	// the envelope check because the json.RawMessage decode accepts any
+	// well-formed JSON value, the extension then fails to decode silently,
+	// and the server sees `completed` for a snapshot the extension never
+	// applied.
+	if !isJSONArray(payload.Rules) {
+		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("payload missing or invalid rules array"))
+		return
+	}
 	if c.cfg.ApplicationControlSender == nil {
 		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("application control sender not configured"))
 		return
@@ -325,6 +337,25 @@ func (c *Commander) executeKill(ctx context.Context, cmd command) {
 func marshalResult(errMsg string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"error": errMsg})
 	return b
+}
+
+// isJSONArray reports whether raw is a JSON array (including the empty
+// array). Used by the set_application_control envelope check to reject
+// payloads with missing or null `rules` fields, which would otherwise slip
+// through json.Unmarshal-into-json.RawMessage and only fail at extension
+// decode time after the server has already seen `completed`.
+func isJSONArray(raw json.RawMessage) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string, result json.RawMessage) error {
