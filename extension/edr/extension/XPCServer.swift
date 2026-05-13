@@ -53,21 +53,30 @@ final class XPCServer {
     /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
     ///
     ///   - "hello" : the handshake the agent uses to trigger the Mach port bind.
+    ///   - "application_control.update" : a typed snapshot push from the
+    ///     server's fan-out. The "data" key holds raw JSON bytes that
+    ///     ApplicationControlStore decodes + persists.
     ///
     /// Unknown types are logged and ignored — future protocol evolutions should be
     /// additive, and a forward-compat agent must still work against this server.
-    /// The application-control message type is added back in phase 4 of the
-    /// add-application-control change once the new decision engine lands.
     private func handlePeerMessage(_ event: xpc_object_t) {
         guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
             return
         }
         let type = String(cString: typeCStr)
         // "hello" is a no-op: the mere receipt of the message triggered the lazy Mach
-        // port connection; there's nothing to do server-side. Switched to an if/else
-        // chain so adding the phase-4 application-control inbound message type is a
-        // single new branch rather than a switch reshape.
+        // port connection; there's nothing to do server-side.
         if type == "hello" {
+            return
+        }
+        if type == "application_control.update" {
+            var dataLen: Int = 0
+            guard let rawPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 else {
+                logger.error("application_control.update missing 'data'")
+                return
+            }
+            let data = Data(bytes: rawPtr, count: dataLen)
+            ApplicationControlStore.shared.apply(rawJSON: data)
             return
         }
         // type is peer-supplied; redact in the unified log so a compromised peer

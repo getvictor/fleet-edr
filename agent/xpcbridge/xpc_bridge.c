@@ -108,10 +108,49 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     xpc_connection_send_message(conn, hello);
     xpc_release(hello);
 
+    // Publish the conn + queue under the slots mutex so a concurrent
+    // xpc_bridge_send_application_control cannot observe (in_use=1, connection=NULL).
+    // The earlier reservation marked in_use=1 outside this critical section
+    // for liveness; this second critical section commits the actual handles
+    // atomically with respect to send/disconnect.
+    pthread_mutex_lock(&g_slots_mutex);
     g_slots[handle].connection = conn;
     g_slots[handle].queue = queue;
+    pthread_mutex_unlock(&g_slots_mutex);
 
     return handle;
+}
+
+int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t len) {
+    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS || data == NULL || len == 0) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_slots_mutex);
+    if (!g_slots[handle].in_use) {
+        pthread_mutex_unlock(&g_slots_mutex);
+        return -1;
+    }
+    xpc_connection_t conn = g_slots[handle].connection;
+    if (conn == NULL) {
+        // Slot is reserved (in_use=1) but xpc_bridge_connect has not yet
+        // committed the connection handle. Treat as "not yet ready" and let
+        // the caller retry on the next poll cycle.
+        pthread_mutex_unlock(&g_slots_mutex);
+        return -1;
+    }
+    // Retain so the connection survives even if the caller tears the slot down between
+    // our unlock and the async send. XPC itself refcounts the object; we mirror that.
+    xpc_retain(conn);
+    pthread_mutex_unlock(&g_slots_mutex);
+
+    xpc_object_t msg = xpc_dictionary_create_empty();
+    xpc_dictionary_set_string(msg, "type", "application_control.update");
+    xpc_dictionary_set_data(msg, "data", data, len);
+    xpc_connection_send_message(conn, msg);
+    xpc_release(msg);
+    xpc_release(conn);
+    return 0;
 }
 
 void xpc_bridge_disconnect(int handle) {

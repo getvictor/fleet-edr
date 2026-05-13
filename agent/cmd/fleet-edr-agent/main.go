@@ -7,10 +7,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -144,14 +146,21 @@ func run() error {
 		MaxRetries: uploaderMaxRetries,
 	}, httpClient, logger)
 
+	// appControlDispatcher bridges the commander (which wants a stable
+	// ApplicationControlSender across receiver reconnects) and runReceiverLoop
+	// (which creates a new *receiver.Receiver on every connect). The ESF
+	// receiver loop publishes into this dispatcher on connect and clears it on
+	// disconnect.
+	esfAppControlDispatcher := &appControlDispatcher{}
+
 	pidTable := proctable.New()
-	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true)
+	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true, esfAppControlDispatcher)
 	if cfg.NetXPCService != "" {
-		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false)
+		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false, nil)
 	}
 	go runUploader(ctx, up, logger)
 
-	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, agentTransport, logger)
+	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfAppControlDispatcher, agentTransport, logger)
 	go pruneLoop(ctx, q, cfg.PruneAge, logger)
 	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
@@ -272,6 +281,7 @@ func startCommander(
 	ctx context.Context,
 	hostID, serverURL string,
 	tokenProvider enrollment.TokenProvider,
+	appControlSender commander.ApplicationControlSender,
 	transport http.RoundTripper,
 	logger *slog.Logger,
 ) {
@@ -280,12 +290,13 @@ func startCommander(
 		return
 	}
 	cmdr := commander.New(commander.Config{
-		ServerURL:     serverURL,
-		TokenFn:       tokenProvider.Token,
-		OnAuthFail:    tokenProvider.OnUnauthorized,
-		RotateTokenFn: tokenProvider.Rotate,
-		HostID:        hostID,
-		Interval:      commanderPollInterval,
+		ServerURL:                serverURL,
+		TokenFn:                  tokenProvider.Token,
+		OnAuthFail:               tokenProvider.OnUnauthorized,
+		RotateTokenFn:            tokenProvider.Rotate,
+		HostID:                   hostID,
+		Interval:                 commanderPollInterval,
+		ApplicationControlSender: appControlSender,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -340,7 +351,10 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 }
 
 // runReceiverLoop connects to an XPC service and reconnects with exponential backoff,
-// piping every event the receiver yields into the agent's queue.
+// piping every event the receiver yields into the agent's queue. When dispatcher is
+// non-nil, every successful connection publishes the current *Receiver into it so
+// outbound callers (commander set_application_control) can send messages to the
+// peer; disconnects clear the dispatcher to prevent sending on a dead handle.
 func runReceiverLoop(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -348,6 +362,7 @@ func runReceiverLoop(
 	q *queue.Queue,
 	pt *proctable.Table,
 	updateTable bool,
+	dispatcher *appControlDispatcher,
 ) {
 	const (
 		initialBackoff = time.Second
@@ -356,7 +371,7 @@ func runReceiverLoop(
 
 	backoff := initialBackoff
 	for ctx.Err() == nil {
-		reconnect, connected := runReceiverOnce(ctx, logger, xpcService, q, pt, updateTable)
+		reconnect, connected := runReceiverOnce(ctx, logger, xpcService, q, pt, updateTable, dispatcher)
 		if connected {
 			// Successful session; reset the backoff so the next reconnect is fast.
 			backoff = initialBackoff
@@ -390,6 +405,7 @@ func runReceiverOnce(
 	q *queue.Queue,
 	pt *proctable.Table,
 	updateTable bool,
+	dispatcher *appControlDispatcher,
 ) (reconnect, connected bool) {
 	recv := receiver.New(xpcService, receiverEventBuffer)
 	if err := recv.Connect(); err != nil {
@@ -398,7 +414,13 @@ func runReceiverOnce(
 	}
 	logger.InfoContext(ctx, "receiver connected", "service", xpcService)
 
+	if dispatcher != nil {
+		dispatcher.set(recv)
+	}
 	reconnect = pipeEvents(ctx, logger, recv, q, pt, updateTable)
+	if dispatcher != nil {
+		dispatcher.clear()
+	}
 	recv.Disconnect()
 	return reconnect, true
 }
@@ -481,4 +503,41 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// appControlDispatcher satisfies commander.ApplicationControlSender across the
+// lifecycle of the ESF receiver: runReceiverLoop publishes the current
+// *Receiver on connect and clears it on disconnect. Between clear() and the
+// next set(), SendApplicationControl returns an error so the command gets
+// reported as `failed` and the server's next policy fan-out re-queues the
+// update. Using atomic.Pointer keeps the hot path
+// (SendApplicationControl from commander) lock-free.
+type appControlDispatcher struct {
+	cur atomic.Pointer[receiver.Receiver]
+}
+
+func (d *appControlDispatcher) set(r *receiver.Receiver) { d.cur.Store(r) }
+
+// clear unconditionally clears the published receiver pointer. This is safe
+// under the current runReceiverLoop lifecycle, which serialises set/clear for
+// a single service — there is only one goroutine calling set() and clear() in
+// sequence per connect cycle, so there is no window where a later set() can
+// be wiped by an earlier clear(). If this dispatcher is ever extended to
+// handle overlapping receiver lifecycles (multiple services or concurrent
+// reconnects), clear() would need receiver-aware CompareAndSwap semantics to
+// avoid nulling out a freshly-published pointer from a later set().
+func (d *appControlDispatcher) clear() {
+	d.cur.Store(nil)
+}
+
+// SendApplicationControl satisfies commander.ApplicationControlSender. Returns
+// an error when no receiver is published (between disconnect and the next
+// successful reconnect) so the commander treats the command as failed and the
+// server's next push reconverges the agent.
+func (d *appControlDispatcher) SendApplicationControl(payload []byte) error {
+	r := d.cur.Load()
+	if r == nil {
+		return errors.New("app control dispatcher: no receiver connected")
+	}
+	return r.SendApplicationControl(payload)
 }
