@@ -496,8 +496,8 @@ tasks:
     desc: |
       Bring up the full QA stack: dev mysql, test mysql, and a local
       dex (https://dexidp.io) OIDC provider on 127.0.0.1:5556. Used by
-      operators walking section B of claude/qa/user-management.md
-      against a local IdP instead of a real Okta tenant. The dex
+      operators walking the local QA notes under ai/qa/ against a
+      local IdP instead of a real Okta tenant. The dex
       static-passwords config lives at config/dex/dev-config.yaml; the
       compose overlay is docker-compose.qa.yml. See `task
       dev:server:qa-oidc` for the matching EDR-side env wiring.

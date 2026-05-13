@@ -33,7 +33,7 @@ reviews:
   in_progress_fortune: false
 
   # Keep generated assets, vendor trees, coverage outputs, and the
-  # gitignored claude/ scratch tree out of review. Everything else
+  # gitignored ai/ scratch tree out of review. Everything else
   # (incl. test/**) stays in scope. CodeRabbit handles binary file
   # types itself so we don't enumerate .png/.zip/etc.
   path_filters:
@@ -53,7 +53,7 @@ reviews:
     - "!extension/**/DerivedData/**"
     - "!extension/**/*.xcodeproj/**"
     - "!tmp/**"
-    - "!claude/**"
+    - "!ai/**"
     - "!.task/**"
 
   # Path-scoped review focus. Globs use `**/...` style so they match
