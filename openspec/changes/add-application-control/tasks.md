@@ -95,10 +95,21 @@
   `application_control.`.
 - [ ] 6.4 Audit-event emission per the `server-application-control` capability spec, including the
   single-event-per-bulk-upsert rule.
-- [ ] 6.5 Fan-out path: on mutation, enqueue `set_application_control` commands for hosts that belong
-  to assigned groups; record `fanout_hosts` and `fanout_failed` on the audit event. Use the existing
-  command-enqueue path.
-- [ ] 6.6 Cross-context integration test at `test/integration/app_control_test.go`: create a rule via
+- [ ] 6.5 Fan-out path: on mutation, gather hosts from every assigned host group, dedup by host id, and
+  enqueue exactly one `set_application_control` command per unique host. Record `fanout_hosts` and
+  `fanout_failed` as unique-host counts on the audit event. Use the existing command-enqueue path.
+- [ ] 6.6 Integration test for unique-host fan-out: a host that belongs to two assigned host groups
+  receives exactly one command, and the audit event's `fanout_hosts` counts that host once. Failing this
+  test guards against regression into the duplicate-enqueue shape that CodeRabbit flagged on the spec.
+- [ ] 6.7 Ingest handler for `application_control_block` events binds the event to the host_id resolved
+  by the existing host-token middleware. The handler MUST reject (with 4xx) any event whose envelope
+  `host_id` does not match the authenticated host, and MUST resolve the event's tenant from the
+  enrollment row rather than trusting any tenant value supplied by the agent.
+- [ ] 6.8 Integration test for ingest authenticity binding: an authenticated agent posting an event
+  with a forged envelope `host_id` (someone else's host) is rejected; an event whose envelope omits
+  `host_id` is accepted and stamped with the authenticated host id; an event whose envelope claims a
+  different tenant than the enrollment's tenant is overridden by the enrollment row's tenant.
+- [ ] 6.9 Cross-context integration test at `test/integration/app_control_test.go`: create a rule via
   the REST API, observe the audit event, observe the enqueued command for the test host, observe the
   extension applies the snapshot and denies the matching exec, observe the resulting alert appears via
   the alerts list endpoint with `source='application_control'`.
@@ -109,13 +120,16 @@
   ingest event and map it to an alert per the `server-detection-rules-engine` delta spec.
 - [ ] 7.2 Extend the persisted alert schema with a `source` column constrained to
   `('detection','application_control')`. Existing catalog-rule findings backfill to `'detection'`.
-- [ ] 7.3 Extend the alert dedup key to honor `(host_id, rule_id, process_id)` across sources without
-  collision. The existing column-level unique key already covers this; verify with an integration
-  test.
-- [ ] 7.4 Update the alerts read API (`server-rest-api` `Filterable alerts list`) so the `source`
+- [ ] 7.3 Promote the alert dedup unique key from `(host_id, rule_id, process_id)` to
+  `(source, host_id, rule_id, process_id)`. This is the schema half of the spec contract: a catalog rule
+  and an application-control rule that happen to share an identifier never collapse into one row.
+- [ ] 7.4 Integration test for cross-source id collision: insert a `source='detection'` alert and a
+  `source='application_control'` alert that share `(host_id, rule_id, process_id)` and assert two rows
+  persist. Then re-fire each source against the same triple and assert dedup-within-source holds.
+- [ ] 7.5 Update the alerts read API (`server-rest-api` `Filterable alerts list`) so the `source`
   filter parameter accepts `application_control`. This is a no-op for the requirement text in the
   REST capability since the list is already filterable; verify the handler accepts the new value.
-- [ ] 7.5 Integration test: post an `application_control_block` event, observe the persisted alert,
+- [ ] 7.6 Integration test: post an `application_control_block` event, observe the persisted alert,
   re-post the same event, observe dedup, fetch via `GET /api/v1/alerts?source=application_control`.
 
 ## 8. Web UI
