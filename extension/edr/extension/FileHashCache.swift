@@ -28,6 +28,7 @@ final class FileHashCache {
     static let shared = FileHashCache()
 
     private struct Key: Hashable {
+        let device: Int32
         let inode: UInt64
         let mtimeSec: Int64
         let mtimeNsec: Int64
@@ -65,7 +66,7 @@ final class FileHashCache {
         if let cached = lock.withLock({ $0[key] }) {
             return cached
         }
-        guard let hash = Self.computeSHA256(path: path) else {
+        guard let hash = Self.computeSHA256(path: path, expected: fileStat) else {
             return nil
         }
         lock.withLock { $0[key] = hash }
@@ -84,6 +85,7 @@ final class FileHashCache {
             return
         }
         let capturedPath = path
+        let capturedStat = fileStat
         computeQueue.async {
             // Recheck under the lock after the queue resumes so we don't
             // race against a synchronous lookupOrCompute that may have
@@ -93,7 +95,7 @@ final class FileHashCache {
             if !stillEmpty {
                 return
             }
-            guard let hash = Self.computeSHA256(path: capturedPath) else {
+            guard let hash = Self.computeSHA256(path: capturedPath, expected: capturedStat) else {
                 return
             }
             self.lock.withLock { $0[key] = hash }
@@ -102,19 +104,41 @@ final class FileHashCache {
 
     private static func makeKey(from fileStat: stat) -> Key {
         Key(
+            device: fileStat.st_dev,
             inode: UInt64(fileStat.st_ino),
             mtimeSec: Int64(fileStat.st_mtimespec.tv_sec),
             mtimeNsec: Int64(fileStat.st_mtimespec.tv_nsec)
         )
     }
 
-    private static func computeSHA256(path: String) -> String? {
+    /// computeSHA256 hashes the file at path, but only after re-stating
+    /// the open file handle and confirming its (dev, inode, mtime) tuple
+    /// still matches the expected stat from the originating ES event.
+    /// Without this TOCTOU guard a replace-between-AUTH-and-read can
+    /// associate a different file's hash with the original cache key,
+    /// poisoning future decisions. Mismatch → nil; the caller's cache
+    /// entry stays empty and the next exec re-stats.
+    private static func computeSHA256(path: String, expected: stat) -> String? {
         let url = URL(fileURLWithPath: path)
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             logger.warning("could not open file for hashing: \(path, privacy: .public)")
             return nil
         }
         defer { try? handle.close() }
+        // Verify the opened handle still points at the file the ES event
+        // told us about. If the file was atomically replaced between AUTH
+        // and our read, the underlying inode (or device, or mtime) will
+        // differ; abort and let the caller fall back to "no hash yet".
+        var openedStat = stat()
+        let fd = handle.fileDescriptor
+        guard fstat(fd, &openedStat) == 0 else {
+            logger.warning("fstat failed on \(path, privacy: .public)")
+            return nil
+        }
+        if !Self.statMatches(expected: expected, actual: openedStat) {
+            logger.warning("file replaced between AUTH and hash read: \(path, privacy: .public)")
+            return nil
+        }
         var hasher = SHA256()
         let chunkSize = 64 * 1024
         while true {
@@ -130,5 +154,12 @@ final class FileHashCache {
         }
         let digest = hasher.finalize()
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func statMatches(expected: stat, actual: stat) -> Bool {
+        expected.st_dev == actual.st_dev
+            && expected.st_ino == actual.st_ino
+            && expected.st_mtimespec.tv_sec == actual.st_mtimespec.tv_sec
+            && expected.st_mtimespec.tv_nsec == actual.st_mtimespec.tv_nsec
     }
 }

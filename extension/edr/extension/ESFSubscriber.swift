@@ -92,7 +92,7 @@ final class ESFSubscriber: Sendable {
     ///      will widen this to include platform binaries (`launchd`,
     ///      `systemextensionsd`, etc.) and additional admin-defined
     ///      carve-outs.
-    ///   2. Lazy file SHA-256 cache lookup by `(inode, mtime)`. Cache
+    ///   2. Lazy file SHA-256 cache lookup by `(dev, inode, mtime)`. Cache
     ///      misses do NOT block the AUTH callback — the BINARY rule type
     ///      silently misses for this exec, the cache fills off-thread,
     ///      and the next exec of the same binary catches. This is the
@@ -108,8 +108,10 @@ final class ESFSubscriber: Sendable {
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
         let target = msg.event.exec.target.pointee
-        let path = String(cString: target.executable.pointee.path.data)
-        let teamID = target.team_id.data.map { String(cString: $0) } ?? ""
+        // esTokenString uses the token's explicit length; es_string_token_t
+        // is NOT NUL-guaranteed and String(cString:) can overread.
+        let path = esTokenString(target.executable.pointee.path)
+        let teamID = esTokenString(target.team_id)
         let fileStat = target.executable.pointee.stat
 
         // Failsafe carve-out.
@@ -121,8 +123,8 @@ final class ESFSubscriber: Sendable {
         let snapshot = ApplicationControlStore.shared.currentSnapshot()
         if let sha256 = FileHashCache.shared.lookup(stat: fileStat) {
             if let rule = snapshot.binaryRules[sha256],
-               rule.action == "BLOCK",
-               rule.enforcement == "PROTECT" {
+               rule.action == ApplicationControlAction.block,
+               rule.enforcement == ApplicationControlEnforcement.protect {
                 logger.warning("AUTH_EXEC DENIED by application control: \(path, privacy: .public) sha256=\(sha256, privacy: .public)")
                 es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
                 return
