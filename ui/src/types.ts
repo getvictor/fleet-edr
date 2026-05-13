@@ -102,6 +102,11 @@ export interface Alert {
   id: number;
   host_id: string;
   rule_id: string;
+  // source is "detection" for catalog-rule findings and
+  // "application_control" for blocks emitted by the extension's
+  // AUTH_EXEC decision walker. Surfaced so the UI can chip / filter
+  // alerts by origin without re-parsing rule_id.
+  source: string;
   severity: string;
   title: string;
   description: string;

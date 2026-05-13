@@ -102,13 +102,22 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 // line + metric only when the insert wasn't deduped away. Extracted
 // from Evaluate so that method stays under the project
 // cognitive-complexity cap.
+//
+// Finding.Source defaults to AlertSourceDetection when blank so
+// catalog rules don't need to set it; the application-control block
+// rule overrides it explicitly.
 func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) error {
 	if f.Techniques == nil {
 		f.Techniques = techniques
 	}
+	source := f.Source
+	if source == "" {
+		source = api.AlertSourceDetection
+	}
 	_, created, err := e.store.InsertAlert(ctx, api.Alert{
 		HostID:      f.HostID,
 		RuleID:      f.RuleID,
+		Source:      source,
 		Severity:    f.Severity,
 		Title:       f.Title,
 		Description: f.Description,

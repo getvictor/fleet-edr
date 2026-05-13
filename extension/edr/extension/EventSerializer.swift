@@ -68,6 +68,37 @@ struct OpenPayload: Codable, Sendable {
     }
 }
 
+/// ApplicationControlBlockPayload is the wire shape of the event the
+/// extension emits when AUTH_EXEC denies an exec. The server's
+/// `application_control_block` catalog rule decodes this payload and
+/// maps it to an alert with `source='application_control'`. Field
+/// names match the Go decode struct in
+/// `server/rules/internal/catalog/application_control_block.go`.
+struct ApplicationControlBlockPayload: Codable, Sendable {
+    let pid: pid_t
+    let path: String
+    let ruleID: String
+    let ruleType: String
+    let identifier: String
+    let severity: String
+    let customMsg: String?
+    let customURL: String?
+    let policyID: Int64
+    let policyVersion: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case pid, path
+        case ruleID = "rule_id"
+        case ruleType = "rule_type"
+        case identifier
+        case severity
+        case customMsg = "custom_msg"
+        case customURL = "custom_url"
+        case policyID = "policy_id"
+        case policyVersion = "policy_version"
+    }
+}
+
 // MARK: - Event envelope
 
 struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {

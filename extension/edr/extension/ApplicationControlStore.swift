@@ -36,7 +36,12 @@ struct ApplicationControlSnapshot {
 /// server's `server/rules/api.SetApplicationControlRule` JSON tags — a
 /// rename on either side is a contract break and the round-trip test on the
 /// server side is the gate.
+///
+/// ruleID is the stable string identifier (e.g. "app_control:42") the
+/// AUTH_EXEC handler echoes back in the `application_control_block` event
+/// so the server's alert mapping lands the alert under the same rule_id.
 struct ApplicationControlRule: Codable {
+    let ruleID: String
     let ruleType: String
     let identifier: String
     let action: String
@@ -46,6 +51,7 @@ struct ApplicationControlRule: Codable {
     let customURL: String?
 
     enum CodingKeys: String, CodingKey {
+        case ruleID = "rule_id"
         case ruleType = "rule_type"
         case identifier
         case action

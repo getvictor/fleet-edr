@@ -32,6 +32,7 @@ func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
 		},
 	}
 	policy := api.ApplicationControlPolicy{ID: 7, Version: 42}
+	rules[0].ID = 99
 
 	raw, err := api.MarshalSetApplicationControlPayload(policy, rules, time.Time{})
 	require.NoError(t, err)
@@ -43,6 +44,7 @@ func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
 	assert.Equal(t, int64(42), decoded.PolicyVersion)
 	require.Len(t, decoded.Rules, 1)
 	got := decoded.Rules[0]
+	assert.Equal(t, "app_control:99", got.RuleID)
 	assert.Equal(t, api.RuleTypeBinary, got.RuleType)
 	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", got.Identifier)
 	assert.Equal(t, api.ActionBlock, got.Action)
@@ -134,7 +136,7 @@ func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 	rulesAny, _ := got["rules"].([]any)
 	require.Len(t, rulesAny, 1)
 	rule, _ := rulesAny[0].(map[string]any)
-	for _, key := range []string{"rule_type", "identifier", "action", "enforcement", "severity", "custom_msg"} {
+	for _, key := range []string{"rule_id", "rule_type", "identifier", "action", "enforcement", "severity", "custom_msg"} {
 		assert.Contains(t, rule, key, "rule key %q missing", key)
 	}
 }
@@ -257,6 +259,7 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 				continue
 			}
 			expected = append(expected, api.SetApplicationControlRule{
+				RuleID:      api.ApplicationControlRuleID(r.ID),
 				RuleType:    r.RuleType,
 				Identifier:  r.Identifier,
 				Action:      r.Action,
@@ -269,6 +272,7 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		require.Len(t, decoded.Rules, len(expected), "filtered rule count must match")
 		for i := range expected {
 			got := decoded.Rules[i]
+			assert.Equal(t, expected[i].RuleID, got.RuleID)
 			assert.Equal(t, expected[i].RuleType, got.RuleType)
 			assert.Equal(t, expected[i].Identifier, got.Identifier)
 			assert.Equal(t, expected[i].Action, got.Action)

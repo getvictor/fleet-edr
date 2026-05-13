@@ -55,6 +55,7 @@ var schemaStatements = []string{
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
 		host_id      VARCHAR(255) NOT NULL,
 		rule_id      VARCHAR(64)  NOT NULL,
+		source       ENUM('detection', 'application_control') NOT NULL DEFAULT 'detection',
 		severity     ENUM('low', 'medium', 'high', 'critical') NOT NULL,
 		title        VARCHAR(512) NOT NULL,
 		description  TEXT         NOT NULL,
@@ -66,11 +67,12 @@ var schemaStatements = []string{
 		created_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		updated_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 		resolved_at  TIMESTAMP(6) NULL,
-		UNIQUE KEY uk_alerts_dedup (host_id, rule_id, process_id),
+		UNIQUE KEY uk_alerts_dedup (source, host_id, rule_id, process_id),
 		INDEX idx_alerts_host (host_id),
 		INDEX idx_alerts_status_created (status, created_at),
 		INDEX idx_alerts_updated_by (updated_by),
 		INDEX idx_alerts_tenant_id (tenant_id),
+		INDEX idx_alerts_source_created (source, created_at),
 		CONSTRAINT fk_alerts_process FOREIGN KEY (process_id) REFERENCES processes(id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS alert_events (

@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block"],
       "description": "Type of endpoint security event"
     },
     "payload": {
@@ -29,7 +29,8 @@
         { "$ref": "#/definitions/exit_payload" },
         { "$ref": "#/definitions/open_payload" },
         { "$ref": "#/definitions/network_connect_payload" },
-        { "$ref": "#/definitions/dns_query_payload" }
+        { "$ref": "#/definitions/dns_query_payload" },
+        { "$ref": "#/definitions/application_control_block_payload" }
       ]
     }
   },
@@ -126,6 +127,22 @@
           "items": { "type": "string" }
         },
         "protocol": { "type": "string", "enum": ["udp", "tcp"] }
+      }
+    },
+    "application_control_block_payload": {
+      "type": "object",
+      "required": ["pid", "path", "rule_id", "rule_type", "identifier", "severity", "policy_id", "policy_version"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": { "type": "string" },
+        "rule_id": { "type": "string", "description": "Stable string identifier of the matched application-control rule (e.g. \"app_control:42\"). Echoed by the server as the alert's rule_id." },
+        "rule_type": { "type": "string", "enum": ["CDHASH", "BINARY", "SIGNINGID", "CERTIFICATE", "TEAMID", "PATH"] },
+        "identifier": { "type": "string", "description": "The matched identifier value (e.g. the SHA-256 the BINARY rule matched against)." },
+        "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "custom_msg": { "type": "string" },
+        "custom_url": { "type": "string" },
+        "policy_id": { "type": "integer" },
+        "policy_version": { "type": "integer" }
       }
     }
   }

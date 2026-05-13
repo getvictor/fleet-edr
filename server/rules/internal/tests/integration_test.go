@@ -56,7 +56,6 @@ func newRules(t *testing.T) *rulesbootstrap.Rules {
 func TestCatalog_ListShape(t *testing.T) {
 	r := newRules(t)
 	catalog := r.Catalog().List()
-	require.Len(t, catalog, 8)
 	wantIDs := []string{
 		"suspicious_exec",
 		"persistence_launchagent",
@@ -66,7 +65,9 @@ func TestCatalog_ListShape(t *testing.T) {
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
+		"application_control_block",
 	}
+	require.Len(t, catalog, len(wantIDs))
 	for i, want := range wantIDs {
 		assert.Equal(t, want, catalog[i].ID, "rule at index %d", i)
 		assert.NotEmpty(t, catalog[i].Doc.Title, "rule %s missing Doc.Title", catalog[i].ID)
@@ -74,12 +75,14 @@ func TestCatalog_ListShape(t *testing.T) {
 	}
 }
 
-// TestContentService_ActiveRules surfaces the same eight rules through
-// the engine-facing interface.
+// TestContentService_ActiveRules surfaces every shipped rule through
+// the engine-facing interface. The exact roster lives in
+// TestCatalog_ListShape; this test just confirms the count is in
+// lockstep and every rule has a non-empty descriptor.
 func TestContentService_ActiveRules(t *testing.T) {
 	r := newRules(t)
 	rules := r.ContentService().ActiveRules()
-	require.Len(t, rules, 8)
+	require.Len(t, rules, len(r.Catalog().List()))
 	for _, rule := range rules {
 		assert.NotEmpty(t, rule.ID())
 		assert.NotEmpty(t, rule.Doc().Title)
@@ -112,7 +115,7 @@ func TestOperator_GetRules(t *testing.T) {
 		} `json:"rules"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	require.Len(t, body.Rules, 8)
+	require.Len(t, body.Rules, len(r.Catalog().List()))
 	assert.Equal(t, "suspicious_exec", body.Rules[0].ID)
 	assert.NotEmpty(t, body.Rules[0].Doc.Title)
 }

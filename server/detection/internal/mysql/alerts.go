@@ -21,11 +21,21 @@ import (
 const alertEventsBatchSize = 500
 
 // InsertAlert creates an alert and links it to the given event IDs.
-// If a duplicate alert exists (same host_id, rule_id, process_id),
-// the insert is skipped and the existing alert ID is returned.
-// Returns the alert ID and whether it was newly created.
+// If a duplicate alert exists (same source, host_id, rule_id,
+// process_id), the insert is skipped and the existing alert ID is
+// returned. Returns the alert ID and whether it was newly created.
+//
+// Callers MUST set a.Source. The engine defaults blank to
+// AlertSourceDetection before this method sees the alert so existing
+// catalog rules keep working unchanged.
 func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error) {
 	eventIDs = deduplicateStrings(eventIDs)
+	// Defense in depth: callers that forget to stamp Source land in
+	// the catalog-rule bucket. The ENUM column would otherwise reject
+	// an empty string with Error 1265 (Data truncated).
+	if a.Source == "" {
+		a.Source = api.AlertSourceDetection
+	}
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -34,9 +44,9 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	defer tx.Rollback() //nolint:errcheck
 
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO alerts (host_id, rule_id, severity, title, description, process_id, techniques)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		a.HostID, a.RuleID, a.Severity, a.Title, a.Description, a.ProcessID, a.Techniques,
+		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, process_id, techniques)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.ProcessID, a.Techniques,
 	)
 	if err != nil {
 		if isDuplicateKeyErr(err) {
@@ -102,14 +112,14 @@ func isDuplicateKeyErr(err error) bool {
 }
 
 // attachEventsToExistingAlert handles the dedup branch when
-// (host_id, rule_id, process_id) already has an alert row. Extracted
-// from InsertAlert to keep the main path under the cognitive
-// complexity limit.
+// (source, host_id, rule_id, process_id) already has an alert row.
+// Extracted from InsertAlert to keep the main path under the
+// cognitive complexity limit.
 func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, bool, error) {
 	var existingID int64
 	if err := tx.GetContext(ctx, &existingID,
-		"SELECT id FROM alerts WHERE host_id = ? AND rule_id = ? AND process_id = ?",
-		a.HostID, a.RuleID, a.ProcessID,
+		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND process_id = ?",
+		a.Source, a.HostID, a.RuleID, a.ProcessID,
 	); err != nil {
 		return 0, false, fmt.Errorf("lookup duplicate alert: %w", err)
 	}
@@ -130,7 +140,7 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 		limit = 100
 	}
 
-	query := `SELECT id, host_id, rule_id, severity, title, description, process_id,
+	query := `SELECT id, host_id, rule_id, source, severity, title, description, process_id,
 	          techniques, status, created_at, updated_at, resolved_at, updated_by
 	          FROM alerts WHERE 1=1`
 	var args []any
@@ -146,6 +156,10 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 	if f.Severity != "" {
 		query += " AND severity = ?"
 		args = append(args, f.Severity)
+	}
+	if f.Source != "" {
+		query += " AND source = ?"
+		args = append(args, f.Source)
 	}
 	if f.ProcessID != 0 {
 		query += " AND process_id = ?"
@@ -167,7 +181,7 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 func (s *Store) GetAlert(ctx context.Context, id int64) (api.Alert, error) {
 	var a api.Alert
 	err := s.db.GetContext(ctx, &a,
-		`SELECT id, host_id, rule_id, severity, title, description, process_id,
+		`SELECT id, host_id, rule_id, source, severity, title, description, process_id,
 		        techniques, status, created_at, updated_at, resolved_at, updated_by
 		 FROM alerts WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -254,6 +268,10 @@ func (s *Store) CountAlerts(ctx context.Context, f api.AlertFilter) (int64, erro
 	if f.Severity != "" {
 		query += " AND severity = ?"
 		args = append(args, f.Severity)
+	}
+	if f.Source != "" {
+		query += " AND source = ?"
+		args = append(args, f.Source)
 	}
 	if f.ProcessID != 0 {
 		query += " AND process_id = ?"
