@@ -125,11 +125,15 @@ final class ApplicationControlStore {
         }
         let snapshot = makeSnapshot(from: document)
         lock.withLock { $0 = snapshot }
-        logger.info(
-            "loaded application control snapshot: policy=\(snapshot.policyID, privacy: .public) "
-            + "version=\(snapshot.policyVersion, privacy: .public) "
-            + "rules=\(document.rules.count, privacy: .public)"
-        )
+        // Build the summary as a plain Swift String first, then interpolate it
+        // as a single OSLogMessage placeholder. Going via String avoids the
+        // SwiftLint line_length cap (the full interpolated form is >200 chars)
+        // AND keeps the log statement a single Logger call, which is what
+        // os.log's OSLogMessage type accepts (it has no `+` operator across
+        // interpolation segments).
+        let summary = "loaded app control snapshot: " +
+            "policy=\(snapshot.policyID) version=\(snapshot.policyVersion) rules=\(document.rules.count)"
+        logger.info("\(summary, privacy: .public)")
     }
 
     /// apply decodes the raw JSON from an `application_control.update` XPC
@@ -161,11 +165,11 @@ final class ApplicationControlStore {
             logger.info("application_control.update version \(snapshot.policyVersion, privacy: .public) <= current; ignoring")
             return
         }
-        logger.info(
-            "applied application control snapshot: policy=\(snapshot.policyID, privacy: .public) "
-            + "version=\(snapshot.policyVersion, privacy: .public) "
-            + "rules=\(document.rules.count, privacy: .public)"
-        )
+        // Same OSLogMessage / line_length pattern as in loadFromDisk above:
+        // build the message as a plain String, then interpolate once.
+        let summary = "applied app control snapshot: " +
+            "policy=\(snapshot.policyID) version=\(snapshot.policyVersion) rules=\(document.rules.count)"
+        logger.info("\(summary, privacy: .public)")
         persistQueue.async { [data] in
             self.persist(rawJSON: data)
         }
