@@ -1,6 +1,5 @@
 import Foundation
 import os
-import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ApplicationControlStore")
 
@@ -126,7 +125,11 @@ final class ApplicationControlStore {
         }
         let snapshot = makeSnapshot(from: document)
         lock.withLock { $0 = snapshot }
-        logger.info("loaded application control snapshot: policy=\(snapshot.policyID, privacy: .public) version=\(snapshot.policyVersion, privacy: .public) rules=\(document.rules.count, privacy: .public)")
+        logger.info(
+            "loaded application control snapshot: policy=\(snapshot.policyID, privacy: .public) "
+            + "version=\(snapshot.policyVersion, privacy: .public) "
+            + "rules=\(document.rules.count, privacy: .public)"
+        )
     }
 
     /// apply decodes the raw JSON from an `application_control.update` XPC
@@ -158,7 +161,11 @@ final class ApplicationControlStore {
             logger.info("application_control.update version \(snapshot.policyVersion, privacy: .public) <= current; ignoring")
             return
         }
-        logger.info("applied application control snapshot: policy=\(snapshot.policyID, privacy: .public) version=\(snapshot.policyVersion, privacy: .public) rules=\(document.rules.count, privacy: .public)")
+        logger.info(
+            "applied application control snapshot: policy=\(snapshot.policyID, privacy: .public) "
+            + "version=\(snapshot.policyVersion, privacy: .public) "
+            + "rules=\(document.rules.count, privacy: .public)"
+        )
         persistQueue.async { [data] in
             self.persist(rawJSON: data)
         }
