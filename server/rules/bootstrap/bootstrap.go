@@ -122,10 +122,13 @@ func (r *Rules) Catalog() api.Lister { return r.svc }
 
 // ApplicationControlStore exposes the appcontrol store handle so the
 // REST handler (and tests) can reach it without re-importing the
-// internal/appcontrol package directly. Returned as the concrete
-// *appcontrol.Store so the handler has the full surface; the type
-// itself lives under rules/internal/ per the bounded-context rule.
-func (r *Rules) ApplicationControlStore() *appcontrol.Store { return r.appControlSt }
+// internal/appcontrol package directly. Returns the api-level
+// interface rather than the concrete *appcontrol.Store so the
+// internal type does not leak across bounded-context boundaries
+// (ADR-0004). The concrete implementation also satisfies the
+// interface, so existing tests inside rules/ still get the same
+// values back.
+func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r.appControlSt }
 
 // RegisterAuthedRoutes wires the operator-facing routes:
 //

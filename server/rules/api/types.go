@@ -355,3 +355,15 @@ func IsApplicationControlValidationError(err error) bool {
 		errors.Is(err, ErrAppControlInvalidSeverity) ||
 		errors.Is(err, ErrAppControlInvalidRequest)
 }
+
+// ApplicationControlStore is the read+write surface the rules-context
+// REST handler (and tests) consume. The concrete implementation lives
+// at server/rules/internal/appcontrol; this interface lets callers
+// outside the rules tree depend on the contract without pulling in
+// the internal package (ADR-0004's bounded-context import rule).
+type ApplicationControlStore interface {
+	GetPolicyByName(ctx context.Context, tenantID, name string) (ApplicationControlPolicy, error)
+	ListPolicies(ctx context.Context, tenantID string) ([]ApplicationControlPolicy, error)
+	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
+	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
+}

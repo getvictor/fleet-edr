@@ -129,8 +129,12 @@ func TestCanonicalizePath(t *testing.T) {
 		{"/etc rewritten", "/etc/sudoers", "/private/etc/sudoers", true},
 		{"/etc bare rewritten", "/etc", "/private/etc", true},
 		{"/tmpfoo NOT rewritten", "/tmpfoo/bar", "/tmpfoo/bar", true},
+		{"redundant slashes collapsed", "/usr//bin///ls", "/usr/bin/ls", true},
+		{"trailing slash collapsed", "/usr/bin/", "/usr/bin", true},
 		{"empty rejected", "", "", false},
 		{"relative rejected", "tmp/foo", "", false},
+		{".. segment rejected", "/var/foo/../../etc/sudoers", "", false},
+		{".. as final segment rejected", "/usr/bin/..", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

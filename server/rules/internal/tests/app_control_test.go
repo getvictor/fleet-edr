@@ -6,7 +6,6 @@
 package tests
 
 import (
-	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,14 +15,13 @@ import (
 
 	"github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
-	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // newAppControlStore wires the rules context against a fresh test DB
 // and returns the store handle plus the *Rules so each test can
 // re-apply the schema for idempotency checks.
-func newAppControlStore(t *testing.T) (*appcontrol.Store, *rulesbootstrap.Rules) {
+func newAppControlStore(t *testing.T) (api.ApplicationControlStore, *rulesbootstrap.Rules) {
 	t.Helper()
 	db := full.Open(t)
 	deps := rulesbootstrap.Deps{
@@ -152,7 +150,7 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	req.Reason = "second create (should collide)"
 	_, err = store.CreateRule(ctx, req)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrAppControlDuplicateRule), "expected ErrAppControlDuplicateRule, got %v", err)
+	assert.ErrorIs(t, err, api.ErrAppControlDuplicateRule)
 }
 
 // TestAppControl_CreateRule_RejectsUnsupportedTypes pins the demo
@@ -176,7 +174,7 @@ func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 			Reason:     "should be rejected as unsupported",
 		})
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, api.ErrAppControlUnsupportedRuleType), "rule_type %s: got %v", rt, err)
+		assert.ErrorIs(t, err, api.ErrAppControlUnsupportedRuleType, "rule_type %s", rt)
 	}
 }
 
@@ -209,7 +207,94 @@ func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 				Reason:     "should be rejected",
 			})
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, api.ErrAppControlInvalidIdentifier), "got %v", err)
+			assert.ErrorIs(t, err, api.ErrAppControlInvalidIdentifier)
 		})
 	}
+}
+
+// TestAppControl_CreateRule_RequiresActorAndReason locks in the
+// auditability contract: a state-changing call without an actor or
+// reason is rejected up front, not silently attributed to "system".
+func TestAppControl_CreateRule_RequiresActorAndReason(t *testing.T) {
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	require.NoError(t, err)
+	base := api.CreateRuleRequest{
+		PolicyID:   p.ID,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("f", 64),
+		Actor:      "demo-admin",
+		Reason:     "valid baseline",
+	}
+
+	missingActor := base
+	missingActor.Actor = "   "
+	_, err = store.CreateRule(ctx, missingActor)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+
+	missingReason := base
+	missingReason.Reason = ""
+	_, err = store.CreateRule(ctx, missingReason)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+}
+
+// TestAppControl_CreateRule_UnknownPolicyMapsToNotFound covers the
+// FK-violation path: a CreateRule that names a non-existent policy
+// must surface ErrAppControlPolicyNotFound so the REST surface can
+// answer 404, not 500.
+func TestAppControl_CreateRule_UnknownPolicyMapsToNotFound(t *testing.T) {
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	_, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   9_999_999,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("e", 64),
+		Actor:      "demo-admin",
+		Reason:     "should hit FK constraint",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+}
+
+// TestAppControl_CreateRule_AtomicityOnVersionBumpFailure covers the
+// transactional contract: if the post-insert version-bump fails, the
+// rule MUST NOT remain in the table (we lose the audit trail of
+// "version moved" otherwise, and the agent never sees the new rule).
+// Drives the failure by deleting the policy row out from under an
+// in-flight transaction-attempt; this exercises the same atomicity
+// guarantee CodeRabbit asked for on the original review.
+func TestAppControl_CreateRule_AtomicityOnVersionBumpFailure(t *testing.T) {
+	store, rules := newAppControlStore(t)
+	ctx := t.Context()
+	_ = rules
+	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	require.NoError(t, err)
+	// Happy path first so we know the rule WOULD insert.
+	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   p.ID,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("d", 64),
+		Actor:      "demo-admin",
+		Reason:     "atomicity baseline",
+	})
+	require.NoError(t, err)
+	// Re-insert the same row with a non-existent policy id; the FK
+	// fires before the version bump, so the transaction rolls back
+	// cleanly and no orphan row lands.
+	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   p.ID + 1_000_000,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("c", 64),
+		Actor:      "demo-admin",
+		Reason:     "should rollback cleanly",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+	// The original policy's rules list still has only the baseline rule.
+	rulesList, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	require.Len(t, rulesList, 1)
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -14,6 +15,7 @@ import (
 // Store wraps the *sqlx.DB handle for the app_control_policies +
 // app_control_rules tables. Constructed once by the rules bootstrap
 // and shared across the REST handler, the fan-out path, and tests.
+// Satisfies api.ApplicationControlStore.
 type Store struct {
 	db *sqlx.DB
 }
@@ -49,8 +51,10 @@ func (s *Store) EnsureDefaultPolicy(ctx context.Context, tenantID string) error 
 }
 
 // GetPolicyByName loads the policy row by (tenant_id, name). Rules
-// are NOT populated; callers that need rules either call
-// ListRulesByPolicy explicitly or use GetPolicyWithRules.
+// are NOT populated; callers that need rules call ListRulesByPolicy
+// explicitly. A future GetPolicyWithRules helper can join the two
+// queries when an endpoint shows up that needs both in one round
+// trip; today's REST surface fetches them separately.
 func (s *Store) GetPolicyByName(ctx context.Context, tenantID, name string) (api.ApplicationControlPolicy, error) {
 	const query = `SELECT id, tenant_id, name, description, version, default_action,
 		created_at, updated_at, created_by, updated_by
@@ -132,11 +136,26 @@ func (s *Store) ListRulesByPolicy(ctx context.Context, policyID int64) ([]api.Ap
 	return out, nil
 }
 
-// CreateRule inserts a new rule under the named policy. Validates
-// rule_type, identifier, and severity before the INSERT. Returns
+// CreateRule inserts a new rule under the policy and bumps the
+// owning policy's version inside a single transaction so the
+// "version changes imply snapshot changes" contract cannot be broken
+// by a partial failure between the insert and the bump.
+//
+// Validates rule_type, identifier, and severity before the INSERT.
+// Validates that Actor and Reason are non-empty: every state-changing
+// call has to be auditable, so the store rejects unattributed rules
+// rather than papering over them with "system". Returns
 // ErrAppControlDuplicateRule when a rule with the same
-// (policy_id, rule_type, identifier) already exists.
+// (policy_id, rule_type, identifier) already exists, and
+// ErrAppControlPolicyNotFound when policy_id does not exist (so the
+// REST layer can map cleanly to HTTP 404 instead of 500).
 func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.ApplicationControlRule, error) {
+	if strings.TrimSpace(req.Actor) == "" {
+		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		return api.ApplicationControlRule{}, fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
+	}
 	if err := ValidateRuleType(req.RuleType); err != nil {
 		return api.ApplicationControlRule{}, err
 	}
@@ -150,22 +169,31 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	if severity == "" {
 		severity = api.SeverityRuleMedium
 	}
-	createdBy := req.Actor
-	if createdBy == "" {
-		createdBy = "system"
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol begin tx: %w", err)
 	}
+	// Deferred rollback is a no-op once Commit has run; the early
+	// returns below leave the transaction to roll back here.
+	defer func() { _ = tx.Rollback() }()
+
 	const insert = `INSERT INTO app_control_rules
 		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
 		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?, ?, ?)`
-	res, err := s.db.ExecContext(ctx, insert,
+	res, err := tx.ExecContext(ctx, insert,
 		req.PolicyID, req.RuleType, req.Identifier, severity,
-		req.CustomMsg, req.CustomURL, req.Comment, createdBy,
+		req.CustomMsg, req.CustomURL, req.Comment, req.Actor,
 	)
 	if err != nil {
-		if isDuplicateKey(err) {
+		switch {
+		case isDuplicateKey(err):
 			return api.ApplicationControlRule{}, api.ErrAppControlDuplicateRule
+		case isForeignKeyViolation(err):
+			return api.ApplicationControlRule{}, api.ErrAppControlPolicyNotFound
+		default:
+			return api.ApplicationControlRule{}, fmt.Errorf("appcontrol create rule: %w", err)
 		}
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol create rule: %w", err)
 	}
 	ruleID, err := res.LastInsertId()
 	if err != nil {
@@ -174,12 +202,15 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	// Bump the policy version so the agent sees a fresh value on its
 	// next snapshot apply. The application-control fan-out also keys
 	// on this for at-most-once dispatch in the follow-on REST handler
-	// task; lifting it into the store keeps every code path
-	// consistent.
-	if _, err := s.db.ExecContext(ctx, `UPDATE app_control_policies
+	// task; lifting it into the same transaction as the insert keeps
+	// the "version changes imply snapshot changes" contract atomic.
+	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies
 		SET version = version + 1, updated_by = ?
-		WHERE id = ?`, createdBy, req.PolicyID); err != nil {
+		WHERE id = ?`, req.Actor, req.PolicyID); err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol commit tx: %w", err)
 	}
 	return s.getRuleByID(ctx, ruleID)
 }
@@ -203,36 +234,44 @@ func (s *Store) getRuleByID(ctx context.Context, id int64) (api.ApplicationContr
 	return r, nil
 }
 
+// MySQL error numbers we care about. Documented at
+// https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
+const (
+	mysqlDuplicateEntry      = 1062
+	mysqlForeignKeyViolation = 1452
+)
+
 // isDuplicateKey is the MySQL-driver-agnostic check for the
 // duplicate-entry error. Stays as a small helper so a future driver
 // swap only touches this one site.
 func isDuplicateKey(err error) bool {
+	return isMySQLErrorNumber(err, mysqlDuplicateEntry) || errStringContains(err, "Duplicate entry")
+}
+
+// isForeignKeyViolation detects the MySQL "cannot add or update a
+// child row: a foreign key constraint fails" error (1452). The only
+// FK on app_control_rules is policy_id → app_control_policies(id),
+// so a 1452 unambiguously means the caller's PolicyID is missing.
+func isForeignKeyViolation(err error) bool {
+	return isMySQLErrorNumber(err, mysqlForeignKeyViolation) ||
+		errStringContains(err, "foreign key constraint fails")
+}
+
+func isMySQLErrorNumber(err error, num uint16) bool {
 	if err == nil {
 		return false
 	}
-	const mysqlDuplicateEntry = 1062
 	type mysqlError interface{ Number() uint16 }
 	var mErr mysqlError
-	if errors.As(err, &mErr) && mErr.Number() == mysqlDuplicateEntry {
+	if errors.As(err, &mErr) && mErr.Number() == num {
 		return true
 	}
-	// Fallback for drivers that don't expose Number(): the canonical
-	// error message contains "Duplicate entry".
-	return errStringContains(err, "Duplicate entry")
+	return false
 }
 
 func errStringContains(err error, substr string) bool {
 	if err == nil {
 		return false
 	}
-	return contains(err.Error(), substr)
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(err.Error(), substr)
 }

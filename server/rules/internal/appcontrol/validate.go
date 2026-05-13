@@ -5,10 +5,16 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
+
+// wrapFmt is the standard `error_sentinel: hint` format used by every
+// validator below. Extracted to a constant per Sonar go:S1192 so a
+// future rename to a structured-error shape is a one-line change.
+const wrapFmt = "%w: %s"
 
 // ValidateRuleType reports whether rt is a recognized rule type. The
 // demo cut enforces only BINARY; the other five types are recognized
@@ -20,9 +26,9 @@ func ValidateRuleType(rt api.RuleType) error {
 	case api.RuleTypeBinary:
 		return nil
 	case api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeCertificate, api.RuleTypeTeamID, api.RuleTypePath:
-		return fmt.Errorf("%w: %s", api.ErrAppControlUnsupportedRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	default:
-		return fmt.Errorf("%w: %s", api.ErrAppControlInvalidRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidRuleType, rt)
 	}
 }
 
@@ -43,54 +49,56 @@ var teamID = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 var signingID = regexp.MustCompile(`^(?:[A-Z0-9]{10}|platform):[a-zA-Z0-9._-]+$`)
 
 // ValidateIdentifier checks that the identifier value matches the
-// format required by the rule type. Returns ErrAppControlInvalidIdentifier
-// wrapped with the offending value so audit logs can record what was
-// rejected. Returns ErrAppControlUnsupportedRuleType if the type is on
-// the enum but not yet wired through validation.
+// format required by the rule type. Returns
+// ErrAppControlInvalidIdentifier with the expected-shape hint string
+// (the raw identifier value is NOT included so this validator does
+// not turn unbounded admin input into log lines). Returns
+// ErrAppControlUnsupportedRuleType if the type is on the enum but
+// not yet wired through validation.
 func ValidateIdentifier(rt api.RuleType, identifier string) error {
 	switch rt {
 	case api.RuleTypeBinary:
 		if !hex64.MatchString(identifier) {
-			return fmt.Errorf("%w: BINARY rule identifier must be 64 lowercase hex characters", api.ErrAppControlInvalidIdentifier)
+			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "BINARY rule identifier must be 64 lowercase hex characters")
 		}
 		return nil
 	case api.RuleTypeCDHash:
 		if !hex40.MatchString(identifier) {
-			return fmt.Errorf("%w: CDHASH rule identifier must be 40 lowercase hex characters", api.ErrAppControlInvalidIdentifier)
+			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "CDHASH rule identifier must be 40 lowercase hex characters")
 		}
-		return fmt.Errorf("%w: %s", api.ErrAppControlUnsupportedRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	case api.RuleTypeCertificate:
 		if !hex64.MatchString(identifier) {
-			return fmt.Errorf("%w: CERTIFICATE rule identifier must be 64 lowercase hex characters", api.ErrAppControlInvalidIdentifier)
+			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "CERTIFICATE rule identifier must be 64 lowercase hex characters")
 		}
-		return fmt.Errorf("%w: %s", api.ErrAppControlUnsupportedRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	case api.RuleTypeTeamID:
 		if !teamID.MatchString(identifier) {
-			return fmt.Errorf("%w: TEAMID rule identifier must be 10 uppercase alphanumeric characters", api.ErrAppControlInvalidIdentifier)
+			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "TEAMID rule identifier must be 10 uppercase alphanumeric characters")
 		}
-		return fmt.Errorf("%w: %s", api.ErrAppControlUnsupportedRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	case api.RuleTypeSigningID:
 		if !signingID.MatchString(identifier) {
-			return fmt.Errorf("%w: SIGNINGID rule identifier must be <TeamID>:<bundle.id> or platform:<bundle.id>", api.ErrAppControlInvalidIdentifier)
+			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "SIGNINGID rule identifier must be <TeamID>:<bundle.id> or platform:<bundle.id>")
 		}
-		return fmt.Errorf("%w: %s", api.ErrAppControlUnsupportedRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	case api.RuleTypePath:
-		canon, err := canonicalizePath(identifier)
-		if err != nil {
-			return fmt.Errorf("%w: %s", api.ErrAppControlInvalidIdentifier, err.Error())
+		if _, err := canonicalizePath(identifier); err != nil {
+			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, err.Error())
 		}
-		_ = canon
-		return fmt.Errorf("%w: %s", api.ErrAppControlUnsupportedRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	default:
-		return fmt.Errorf("%w: %s", api.ErrAppControlInvalidRuleType, rt)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidRuleType, rt)
 	}
 }
 
 // CanonicalizePath returns the macOS-canonical form of an absolute
-// path: rejects relative or empty paths, then rewrites /tmp, /var,
-// /etc to their /private/... forms. Exported for the eventual PATH
-// validator and the extension's path-match comparison; the demo cut
-// doesn't call it.
+// path: rejects relative, empty, or `..`-containing paths, runs the
+// input through filepath.Clean to collapse redundant slashes, then
+// rewrites the /tmp, /var, /etc symlinks into their /private/...
+// forms. Exported for the eventual PATH validator and the
+// extension's path-match comparison; the demo cut doesn't call it on
+// the hot path.
 func CanonicalizePath(p string) (string, error) { return canonicalizePath(p) }
 
 func canonicalizePath(p string) (string, error) {
@@ -100,13 +108,21 @@ func canonicalizePath(p string) (string, error) {
 	if !filepath.IsAbs(p) {
 		return "", errors.New("path must be absolute")
 	}
+	// Reject `..` segments before Clean would collapse them. An admin
+	// who writes `/var/foo/../../etc/sudoers` is either confused or
+	// trying to bypass an audit trail; either way the canonical form
+	// should be what they wrote, not what filepath.Clean computed.
+	if slices.Contains(strings.Split(p, "/"), "..") {
+		return "", errors.New("path must not contain `..` segments")
+	}
+	cleaned := filepath.Clean(p)
 	// macOS canonicalization: /tmp, /var, /etc are symlinks into /private.
 	for _, prefix := range []string{"/tmp", "/var", "/etc"} {
-		if p == prefix || strings.HasPrefix(p, prefix+"/") {
-			return "/private" + p, nil
+		if cleaned == prefix || strings.HasPrefix(cleaned, prefix+"/") {
+			return "/private" + cleaned, nil
 		}
 	}
-	return p, nil
+	return cleaned, nil
 }
 
 // ValidateSeverity returns nil for a recognized severity and an
@@ -120,6 +136,6 @@ func ValidateSeverity(s api.Severity) error {
 	case api.SeverityRuleLow, api.SeverityRuleMedium, api.SeverityRuleHigh, api.SeverityRuleCritical:
 		return nil
 	default:
-		return fmt.Errorf("%w: %s", api.ErrAppControlInvalidSeverity, s)
+		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidSeverity, s)
 	}
 }
