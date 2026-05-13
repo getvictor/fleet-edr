@@ -16,18 +16,22 @@ import (
 func TestOpen_AllContextsSchemaPresent(t *testing.T) {
 	db := full.Open(t)
 
-	// The rules context owns zero tables until phase 2 of the
-	// add-application-control change lands the four app_control_* tables.
+	// The rules context owns app_control_policies + app_control_rules
+	// (demo cut). The remaining two spec'd tables (host_groups +
+	// app_control_assignments) land with the full Phase A; for the
+	// demo every policy implicitly targets every host of the tenant.
 	tables := map[string]string{
-		"users":        "identity",
-		"sessions":     "identity",
-		"enrollments":  "endpoint",
-		"commands":     "response",
-		"events":       "detection",
-		"processes":    "detection",
-		"alerts":       "detection",
-		"alert_events": "detection",
-		"hosts":        "detection",
+		"users":                "identity",
+		"sessions":             "identity",
+		"enrollments":          "endpoint",
+		"commands":             "response",
+		"events":               "detection",
+		"processes":            "detection",
+		"alerts":               "detection",
+		"alert_events":         "detection",
+		"hosts":                "detection",
+		"app_control_policies": "rules",
+		"app_control_rules":    "rules",
 	}
 
 	for table, owner := range tables {

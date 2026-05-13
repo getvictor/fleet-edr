@@ -11,6 +11,7 @@ import (
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
 	"github.com/fleetdm/edr/server/rules/internal/service"
@@ -39,10 +40,11 @@ type Deps struct {
 
 // Rules is the handle cmd/main holds for the rules bounded context.
 type Rules struct {
-	svc       *service.Service
-	operatorH *operator.Handler
-	db        *sqlx.DB
-	logger    *slog.Logger
+	svc          *service.Service
+	operatorH    *operator.Handler
+	appControlSt *appcontrol.Store
+	db           *sqlx.DB
+	logger       *slog.Logger
 }
 
 // New wires the rules context. Does NOT apply the schema (call
@@ -66,18 +68,30 @@ func New(deps Deps) (*Rules, error) {
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
 	return &Rules{
-		svc:       svc,
-		operatorH: opH,
-		db:        deps.DB,
-		logger:    logger,
+		svc:          svc,
+		operatorH:    opH,
+		appControlSt: appcontrol.NewStore(deps.DB),
+		db:           deps.DB,
+		logger:       logger,
 	}, nil
 }
 
-// ApplySchema runs the DDL statements rules owns. Idempotent
-// (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
-// other contexts' ApplySchema is not load-bearing.
+// ApplySchema runs the DDL statements rules owns and seeds the
+// per-tenant `Default` application control policy. Idempotent
+// (CREATE TABLE IF NOT EXISTS + INSERT IGNORE on the seed). No
+// cross-context FKs; ordering with other contexts' ApplySchema is
+// not load-bearing.
 func (r *Rules) ApplySchema(ctx context.Context) error {
-	return ApplySchema(ctx, r.db)
+	if err := ApplySchema(ctx, r.db); err != nil {
+		return err
+	}
+	// Seed the per-tenant Default policy after the table exists. The
+	// "default" tenant id is the wave-1 scaffolding value; wave-2
+	// MSSP work will iterate over real tenants here.
+	if err := r.appControlSt.EnsureDefaultPolicy(ctx, "default"); err != nil {
+		return fmt.Errorf("rules seed default app control policy: %w", err)
+	}
+	return nil
 }
 
 // ApplySchema is the package-level form: applies rules' DDL against
@@ -105,6 +119,16 @@ func (r *Rules) ContentService() api.RuleProvider { return r.svc }
 // rules consumes this internally; nothing outside rules calls it
 // today.
 func (r *Rules) Catalog() api.Lister { return r.svc }
+
+// ApplicationControlStore exposes the appcontrol store handle so the
+// REST handler (and tests) can reach it without re-importing the
+// internal/appcontrol package directly. Returns the api-level
+// interface rather than the concrete *appcontrol.Store so the
+// internal type does not leak across bounded-context boundaries
+// (ADR-0004). The concrete implementation also satisfies the
+// interface, so existing tests inside rules/ still get the same
+// values back.
+func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r.appControlSt }
 
 // RegisterAuthedRoutes wires the operator-facing routes:
 //

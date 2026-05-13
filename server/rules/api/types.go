@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 )
@@ -144,8 +146,224 @@ type RegistryOptions struct {
 	SudoersWriterAllowlist        map[string]struct{}
 }
 
-// Application control policy types and the wire shape for the
-// `set_application_control` agent command are introduced in a follow-on
-// phase of the add-application-control change. Phase 1 deletes the
-// singleton blocklist scaffolding outright; the typed replacement
-// arrives with the new tables and decision engine.
+// --- Application Control types -----------------------------------------------
+//
+// The application control subsystem replaces the legacy singleton
+// blocklist. These types live on the public surface of rules/api so
+// the server-side REST handlers, the agent command codec, and the
+// extension snapshot loader can all reference one canonical shape
+// without importing each other.
+
+// DefaultPolicyName is the name of the per-tenant policy seeded at
+// bootstrap. Created empty; admins add rules to it via the REST
+// surface. Multi-policy support is on the post-demo backlog; for
+// the demo cut every tenant has exactly one policy with this name.
+const DefaultPolicyName = "Default"
+
+// RuleType is the wire-shape identifier of an application-control
+// rule's matching dimension. The schema's `rule_type` ENUM mirrors
+// this set. In the demo cut only BINARY is enforced; the other five
+// values exist on the type so the column accepts them when their
+// validators come online.
+type RuleType string
+
+const (
+	// RuleTypeCDHash matches against the signed Code Directory hash.
+	// 40 lowercase hex characters; only honored for hardened-runtime
+	// processes per the spec.
+	RuleTypeCDHash RuleType = "CDHASH"
+	// RuleTypeBinary matches against the SHA-256 of the executable
+	// file. 64 lowercase hex characters. The only type the demo cut
+	// enforces.
+	RuleTypeBinary RuleType = "BINARY"
+	// RuleTypeSigningID matches against `<TeamID>:<bundle.id>` or
+	// `platform:<bundle.id>` for Apple platform binaries.
+	RuleTypeSigningID RuleType = "SIGNINGID"
+	// RuleTypeCertificate matches against the SHA-256 of the leaf
+	// X.509 signing certificate. 64 lowercase hex characters.
+	RuleTypeCertificate RuleType = "CERTIFICATE"
+	// RuleTypeTeamID matches against the 10-character Apple Developer
+	// Team ID, e.g. `EQHXZ8M8AV`.
+	RuleTypeTeamID RuleType = "TEAMID"
+	// RuleTypePath matches against the canonical absolute filesystem
+	// path of the exec target.
+	RuleTypePath RuleType = "PATH"
+)
+
+// Action is the verb a matched rule applies. The demo cut and the
+// rest of Phase A constrain this to BLOCK; ALLOW and SILENT_BLOCK
+// arrive with the Lockdown change. Stable wire-shape string; renaming
+// is a contract break.
+type Action string
+
+const (
+	ActionBlock Action = "BLOCK"
+)
+
+// Enforcement is the rule's audit-vs-enforce switch. The column is
+// reserved in this phase: every rule runs as PROTECT. The DETECT
+// semantic (log the would-be decision but allow the exec) arrives
+// with the Lockdown change.
+type Enforcement string
+
+const (
+	EnforcementProtect Enforcement = "PROTECT"
+	EnforcementDetect  Enforcement = "DETECT"
+)
+
+// Severity classifies the alert that a triggered rule produces.
+// Aligned with the existing alert severities (Severity* constants
+// above) so a Sonar / Codecov / SIEM operator sees a unified scale
+// across detection rules and application-control rules.
+type Severity string
+
+const (
+	SeverityRuleLow      Severity = "low"
+	SeverityRuleMedium   Severity = "medium"
+	SeverityRuleHigh     Severity = "high"
+	SeverityRuleCritical Severity = "critical"
+)
+
+// Source records where a rule came from. `admin` is the human-edited
+// case the demo exercises; `imported` is a Santa StaticRules import
+// (post-demo); `intel` is a threat-intel feed entry (post-demo).
+type Source string
+
+const (
+	SourceAdmin    Source = "admin"
+	SourceImported Source = "imported"
+	SourceIntel    Source = "intel"
+)
+
+// PolicyDefaultAction is the policy-level fallback verdict when no
+// rule matches. Constrained to NONE in this phase (default-allow);
+// the Lockdown change extends the enum with BLOCK so admins can flip
+// a policy to default-deny.
+type PolicyDefaultAction string
+
+const (
+	PolicyDefaultActionNone PolicyDefaultAction = "NONE"
+)
+
+// ApplicationControlPolicy mirrors a row in app_control_policies.
+// Used by the REST surface for list/get responses and by the
+// fan-out code when constructing the `set_application_control`
+// agent command. Rules is populated by GetWithRules and the rule
+// listing endpoints; bare Get omits it.
+type ApplicationControlPolicy struct {
+	ID            int64                    `json:"id"`
+	TenantID      string                   `json:"tenant_id"`
+	Name          string                   `json:"name"`
+	Description   string                   `json:"description"`
+	Version       int64                    `json:"version"`
+	DefaultAction PolicyDefaultAction      `json:"default_action"`
+	CreatedAt     time.Time                `json:"created_at"`
+	UpdatedAt     time.Time                `json:"updated_at"`
+	CreatedBy     string                   `json:"created_by"`
+	UpdatedBy     string                   `json:"updated_by"`
+	Rules         []ApplicationControlRule `json:"rules,omitempty"`
+}
+
+// ApplicationControlRule mirrors a row in app_control_rules.
+type ApplicationControlRule struct {
+	ID          int64       `json:"id"`
+	PolicyID    int64       `json:"policy_id"`
+	RuleType    RuleType    `json:"rule_type"`
+	Identifier  string      `json:"identifier"`
+	Action      Action      `json:"action"`
+	Enforcement Enforcement `json:"enforcement"`
+	Enabled     bool        `json:"enabled"`
+	Severity    Severity    `json:"severity"`
+	Source      Source      `json:"source"`
+	SourceRef   string      `json:"source_ref,omitempty"`
+	CustomMsg   *string     `json:"custom_msg,omitempty"`
+	CustomURL   *string     `json:"custom_url,omitempty"`
+	Comment     string      `json:"comment,omitempty"`
+	ExpiresAt   *time.Time  `json:"expires_at,omitempty"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	CreatedBy   string      `json:"created_by"`
+}
+
+// CreateRuleRequest carries the operator-supplied fields for a new
+// rule. The server fills in `Enabled=true`, `Action=BLOCK`,
+// `Enforcement=PROTECT`, `Source=admin`, `CreatedBy=<session user>`
+// and timestamps. Severity defaults to medium when blank.
+type CreateRuleRequest struct {
+	PolicyID   int64
+	RuleType   RuleType
+	Identifier string
+	CustomMsg  *string
+	CustomURL  *string
+	Comment    string
+	Severity   Severity
+	Actor      string
+	Reason     string
+}
+
+// Application Control validation errors. Mapped to HTTP 400 by the
+// REST handlers via IsApplicationControlValidationError.
+var (
+	// ErrAppControlPolicyNotFound is returned when the named policy
+	// row does not exist for the tenant.
+	ErrAppControlPolicyNotFound = errors.New("rules: application control policy not found")
+
+	// ErrAppControlInvalidRuleType is returned when the rule_type is
+	// not one of the documented enum values. Distinct from
+	// ErrAppControlUnsupportedRuleType (which is the demo-cut signal
+	// that the type is on the enum but not yet wired through
+	// validation and decisioning).
+	ErrAppControlInvalidRuleType = errors.New("rules: invalid application control rule type")
+
+	// ErrAppControlUnsupportedRuleType is returned when the rule_type
+	// is on the enum but the demo cut hasn't wired its validator and
+	// decision-engine branch yet. Lifts as the remaining types come
+	// online; the constant stays as the named error so callers can
+	// errors.Is on it without breaking when the message changes.
+	ErrAppControlUnsupportedRuleType = errors.New("rules: rule type not yet supported")
+
+	// ErrAppControlInvalidIdentifier is returned when the identifier
+	// does not match the format required by its rule_type (e.g. a
+	// BINARY identifier that isn't 64 lowercase hex characters).
+	ErrAppControlInvalidIdentifier = errors.New("rules: invalid application control rule identifier")
+
+	// ErrAppControlInvalidSeverity is returned when the severity is
+	// not one of low/medium/high/critical.
+	ErrAppControlInvalidSeverity = errors.New("rules: invalid application control rule severity")
+
+	// ErrAppControlInvalidRequest is returned when a request is
+	// missing required fields (e.g. empty actor or reason on a
+	// state-changing call). Distinct from the identifier-shape
+	// errors above so audit logs can tell them apart.
+	ErrAppControlInvalidRequest = errors.New("rules: invalid application control request")
+
+	// ErrAppControlDuplicateRule is returned when a rule with the
+	// same (policy_id, rule_type, identifier) already exists. Mapped
+	// to HTTP 409 by the REST handlers so the client can dedup
+	// idempotent retries cleanly.
+	ErrAppControlDuplicateRule = errors.New("rules: application control rule already exists")
+)
+
+// IsApplicationControlValidationError reports whether err is one of
+// the validation errors that the REST handlers map to HTTP 400. The
+// duplicate-rule and not-found errors are NOT in this set because
+// they map to different HTTP codes; callers handle those explicitly.
+func IsApplicationControlValidationError(err error) bool {
+	return errors.Is(err, ErrAppControlInvalidRuleType) ||
+		errors.Is(err, ErrAppControlUnsupportedRuleType) ||
+		errors.Is(err, ErrAppControlInvalidIdentifier) ||
+		errors.Is(err, ErrAppControlInvalidSeverity) ||
+		errors.Is(err, ErrAppControlInvalidRequest)
+}
+
+// ApplicationControlStore is the read+write surface the rules-context
+// REST handler (and tests) consume. The concrete implementation lives
+// at server/rules/internal/appcontrol; this interface lets callers
+// outside the rules tree depend on the contract without pulling in
+// the internal package (ADR-0004's bounded-context import rule).
+type ApplicationControlStore interface {
+	GetPolicyByName(ctx context.Context, tenantID, name string) (ApplicationControlPolicy, error)
+	ListPolicies(ctx context.Context, tenantID string) ([]ApplicationControlPolicy, error)
+	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
+	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
+}
