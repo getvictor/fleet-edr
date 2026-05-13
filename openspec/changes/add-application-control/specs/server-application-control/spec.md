@@ -13,8 +13,6 @@ In this phase the only action a rule may take is `BLOCK`; allowlists, default-de
 enforcement, simulation against historical telemetry, and per-rule expiry semantics arrive in a follow-on change.
 The schema is shaped so that none of those additions requires a migration.
 
-## Requirements
-
 ## ADDED Requirements
 
 ### Requirement: Policy is a named, versioned ruleset

@@ -5,7 +5,7 @@
 This capability is the extension-side half of application control: the in-process decision engine that the
 Endpoint Security system extension consults on every authorized exec, the snapshot of rules that engine reads
 from, and the contract by which a denial becomes a structured event for the server's alert pipeline. It owns
-how a Mach-O exec target is reduced to the five identifier values used by application control rules, the fixed
+how a Mach-O exec target is reduced to the six identifier values used by application control rules, the fixed
 precedence order in which those identifiers are matched against the snapshot, the durability guarantees on the
 snapshot file, and the rule-by-rule behaviors that make the macOS code-signing model meaningful (CDHash is
 only matched under the Hardened Runtime; signing identifiers are prefixed; missing signing-info never blocks
@@ -14,8 +14,6 @@ the AUTH callback).
 In this phase the only enforced action is `BLOCK`. The engine recognizes the columns reserved for follow-on
 phases (`enforcement=DETECT`, `action=ALLOW`, `action=SILENT_BLOCK`, the policy-level `default_action=BLOCK`
 for Lockdown) but does not change behavior on them; that wiring arrives in a follow-on change.
-
-## Requirements
 
 ## ADDED Requirements
 

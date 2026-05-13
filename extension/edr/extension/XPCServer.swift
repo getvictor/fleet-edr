@@ -70,7 +70,9 @@ final class XPCServer {
         if type == "hello" {
             return
         }
-        logger.info("unknown XPC message type: \(type, privacy: .public)")
+        // type is peer-supplied; redact in the unified log so a compromised peer
+        // cannot inject arbitrary strings into log readers.
+        logger.info("unknown XPC message type: \(type, privacy: .private)")
     }
 
     private func handleListenerEvent(_ event: xpc_object_t) {
