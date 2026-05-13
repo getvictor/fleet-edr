@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
@@ -41,35 +40,15 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
 }
 
-// fanoutWaitFor and fanoutWaitTick cap the post-enroll goroutine wait.
-// The fan-out is local in-memory work (no network), so 2s is generous.
-const (
-	fanoutWaitFor  = 2 * time.Second
-	fanoutWaitTick = 10 * time.Millisecond
-)
-
 const (
 	testEnrollSecret = "endpoint-integration-secret"
 	testHardwareUUID = "12345678-1234-1234-1234-123456789012"
 )
 
-// fakePolicyProvider returns a single canned set_blocklist payload. Used
-// by tests that exercise the post-enroll fan-out goroutine.
-type fakePolicyProvider struct {
-	payload    json.RawMessage
-	version    int64
-	hasContent bool
-	err        error
-}
-
-func (f *fakePolicyProvider) ActiveCommandPayload(context.Context) (json.RawMessage, int64, bool, error) {
-	return f.payload, f.version, f.hasContent, f.err
-}
-
-// recordingCommandInserter captures every fan-out call so the test
-// can assert on the host_id targeting. CommandInserter is a closure
-// type (endpoint/bootstrap.CommandInserter); the recorder exposes
-// an `Insert` method whose method-value satisfies that closure shape.
+// recordingCommandInserter captures every CommandInserter call so tests
+// can assert on the host_id targeting and the command type. The
+// CommandInserter closure shape (endpoint/bootstrap.CommandInserter) is
+// satisfied by the Insert method's method-value.
 type recordingCommandInserter struct {
 	mu     sync.Mutex
 	calls  []recordedCommand
@@ -394,93 +373,6 @@ func TestRegisterAuthedRoutes_OperatorListAndRevoke(t *testing.T) {
 	require.NoError(t, err)
 	missingResp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, missingResp.StatusCode)
-}
-
-// TestEnroll_PolicyFanoutOnFirstEnroll wires a fake PolicyProvider +
-// recording CommandInserter and proves the post-enroll goroutine fans
-// out exactly one set_blocklist command to the new agent. The fan-out
-// is detached + best-effort, so we wait on a channel rather than
-// time.Sleep.
-func TestEnroll_PolicyFanoutOnFirstEnroll(t *testing.T) {
-	policy := &fakePolicyProvider{
-		payload:    json.RawMessage(`{"paths":["/tmp/x"],"hashes":[],"version":7}`),
-		version:    7,
-		hasContent: true,
-	}
-	commands := &recordingCommandInserter{}
-
-	s := full.Open(t)
-	ep, err := bootstrap.New(bootstrap.Deps{
-		DB:                  s,
-		Logger:              slog.Default(),
-		EnrollSecret:        testEnrollSecret,
-		EnrollRatePerMinute: 600,
-		PolicyProvider:      policy,
-		CommandInserter:     commands.Insert,
-		AuthZ:               allowAllAuthZ{},
-	})
-	require.NoError(t, err)
-	require.NoError(t, ep.ApplySchema(t.Context()))
-
-	ctx := t.Context()
-	res, err := ep.Service().Enroll(ctx, api.EnrollRequest{
-		EnrollSecret: testEnrollSecret,
-		HardwareUUID: testHardwareUUID,
-		Hostname:     "h",
-		OSVersion:    "macOS 13",
-		AgentVersion: "0.1.0",
-	}, "192.0.2.1")
-	require.NoError(t, err)
-	assert.Equal(t, testHardwareUUID, res.HostID)
-
-	// The fan-out runs in a detached goroutine. Poll briefly via the
-	// recording inserter until we see the call. The timeout cap is the
-	// require.Eventually default plus headroom so a slow CI doesn't
-	// flake; the assertion shape ensures we still fail loudly if the
-	// fan-out is broken.
-	require.Eventually(t, func() bool {
-		return len(commands.snapshot()) == 1
-	}, fanoutWaitFor, fanoutWaitTick, "policy fan-out did not run")
-
-	calls := commands.snapshot()
-	require.Len(t, calls, 1)
-	assert.Equal(t, testHardwareUUID, calls[0].HostID)
-	assert.Equal(t, "set_blocklist", calls[0].CommandType)
-	assert.JSONEq(t, string(policy.payload), string(calls[0].Payload))
-}
-
-// TestEnroll_NoFanoutWhenPolicyEmpty exercises the hasContent=false
-// branch: an empty blocklist must NOT enqueue a command.
-func TestEnroll_NoFanoutWhenPolicyEmpty(t *testing.T) {
-	policy := &fakePolicyProvider{hasContent: false}
-	commands := &recordingCommandInserter{}
-
-	s := full.Open(t)
-	ep, err := bootstrap.New(bootstrap.Deps{
-		DB:                  s,
-		Logger:              slog.Default(),
-		EnrollSecret:        testEnrollSecret,
-		EnrollRatePerMinute: 600,
-		PolicyProvider:      policy,
-		CommandInserter:     commands.Insert,
-		AuthZ:               allowAllAuthZ{},
-	})
-	require.NoError(t, err)
-	require.NoError(t, ep.ApplySchema(t.Context()))
-
-	_, err = ep.Service().Enroll(t.Context(), api.EnrollRequest{
-		EnrollSecret: testEnrollSecret,
-		HardwareUUID: testHardwareUUID,
-		Hostname:     "h",
-		OSVersion:    "x",
-		AgentVersion: "0.1.0",
-	}, "192.0.2.1")
-	require.NoError(t, err)
-
-	// Give the detached goroutine a chance to misbehave.
-	require.Never(t, func() bool {
-		return len(commands.snapshot()) > 0
-	}, fanoutWaitFor, fanoutWaitTick, "empty policy must not fan out")
 }
 
 // TestBootstrap_MissingDeps surfaces required-field errors.

@@ -82,20 +82,18 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 	}{
 		// super_admin: always allowed (wildcard).
 		{"super_admin host.isolate", "super_admin", api.ActionHostIsolate, true},
-		{"super_admin policy.delete", "super_admin", api.ActionPolicyDelete, true},
+		{"super_admin host.run_script", "super_admin", api.ActionHostRunScript, true},
 		{"super_admin audit.read", "super_admin", api.ActionAuditRead, true},
 
-		// admin: every host action + policy CRUD + alert lifecycle, but NOT audit.
-		{"admin policy.update", "admin", api.ActionPolicyUpdate, true},
+		// admin: every host action + alert lifecycle + user.invite, but NOT audit.
 		{"admin host.isolate", "admin", api.ActionHostIsolate, true},
 		{"admin alert.resolve", "admin", api.ActionAlertResolve, true},
 		{"admin user.invite", "admin", api.ActionUserInvite, true},
 		{"admin audit.read", "admin", api.ActionAuditRead, false},
 
-		// senior_analyst: destructive actions yes; policy.update no.
+		// senior_analyst: destructive actions yes; audit no.
 		{"senior_analyst host.kill_process", "senior_analyst", api.ActionHostKillProcess, true},
 		{"senior_analyst alert.resolve", "senior_analyst", api.ActionAlertResolve, true},
-		{"senior_analyst policy.update", "senior_analyst", api.ActionPolicyUpdate, false},
 		{"senior_analyst audit.read", "senior_analyst", api.ActionAuditRead, false},
 
 		// analyst: read + comment only.

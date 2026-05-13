@@ -20,8 +20,7 @@ import (
 // Command-type constants for endpoint-emitted commands. Exposed as
 // constants so future renames are mechanical.
 const (
-	commandTypeSetBlocklist = "set_blocklist"
-	commandTypeRotateToken  = "rotate_token"
+	commandTypeRotateToken = "rotate_token"
 )
 
 // Default rotation parameters, applied by the service when bootstrap
@@ -45,23 +44,17 @@ var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-
 // The closure pattern matches what rules uses elsewhere.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
-// Options bundles every dependency the endpoint service needs. Replaces
-// the previous positional-arg constructor: rotation added Audit,
-// Lifetime, and Grace to the dep set, and an 8-arg positional
-// signature reads like a registry rather than a contract.
+// Options bundles every dependency the endpoint service needs.
 type Options struct {
 	// Store, Secret, Logger are required.
 	Store  *mysql.Store
 	Secret string
 	Logger *slog.Logger
 
-	// Policy + Commands are an all-or-nothing pair (handler precondition).
-	// Both nil disables the post-enroll policy fan-out AND the
-	// rotate_token command emission; the rotation will still flip the DB
-	// row, but the agent won't get a command to apply the new token, so
-	// it'll re-enroll once the grace window expires. Acceptable in tests
-	// and the ingest binary; production wires both.
-	Policy   api.PolicyProvider
+	// Commands queues commands the endpoint service emits (today: only
+	// rotate_token). Optional: when nil, rotation will commit the new
+	// bearer in the DB but the agent will not receive a command — it
+	// will re-enroll once the grace window expires.
 	Commands CommandInserter
 
 	// Audit is the operator-action audit recorder. Nil disables audit
@@ -77,14 +70,12 @@ type Options struct {
 }
 
 // service implements api.Service by composing the mysql.Store with
-// the optional PolicyProvider (today: rules.api.PolicyService),
-// CommandInserter closure (today: response.api.Service.Insert), and
+// the CommandInserter closure (today: response.api.Service.Insert) and
 // audit recorder (today: identity.api.AuditRecorder) that cmd/main
 // supplies.
 type service struct {
 	store    *mysql.Store
 	secret   string
-	policy   api.PolicyProvider // nil-safe: handler skips fan-out
 	commands CommandInserter
 	audit    identityapi.AuditRecorder
 	lifetime time.Duration
@@ -92,15 +83,8 @@ type service struct {
 	logger   *slog.Logger
 }
 
-// New constructs a Service. Policy without Commands panics: a
-// PolicyProvider that can't queue any command is a config error (the
-// enroll handler's post-enroll fan-out has nowhere to send the
-// resulting set_blocklist). Commands without Policy is allowed, since
-// rotation queues commands without consulting Policy.
+// New constructs a Service.
 func New(opts Options) api.Service {
-	if opts.Policy != nil && opts.Commands == nil {
-		panic("endpoint service: PolicyProvider set but CommandInserter is nil; policy fan-out has nowhere to go")
-	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -116,7 +100,6 @@ func New(opts Options) api.Service {
 	return &service{
 		store:    opts.Store,
 		secret:   opts.Secret,
-		policy:   opts.Policy,
 		commands: opts.Commands,
 		audit:    opts.Audit,
 		lifetime: lifetime,
@@ -151,51 +134,11 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 		return api.EnrollResponse{}, fmt.Errorf("register enrollment: %w", err)
 	}
 
-	// Best-effort initial policy fan-out, detached from the request ctx
-	// so client cancellation doesn't abort the DB writes. Capped at 10s
-	// to match the outer HTTP server's write timeout + slack. gosec G118
-	// flags the detached context; the nolint marker is intentional —
-	// enrollment already succeeded, the operator is not held up by a
-	// flaky command insert, and the next admin policy push re-converges
-	// any host whose initial command didn't land.
-	if s.policy != nil && s.commands != nil {
-		go func(hostID string) { //nolint:gosec,contextcheck // intentional detached context for best-effort fanout
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			s.enqueueInitialPolicy(bgCtx, hostID)
-		}(res.HostID)
-	}
-
 	return api.EnrollResponse{
 		HostID:     res.HostID,
 		HostToken:  res.HostToken,
 		EnrolledAt: res.EnrolledAt,
 	}, nil
-}
-
-// enqueueInitialPolicy fetches the active policy as a pre-marshaled
-// command payload and queues a set_blocklist command for the newly-
-// enrolled host. Silent on all failures (best-effort). Skips when the
-// policy is empty (no paths AND no hashes): pushing an empty command
-// is wasted work; the next admin policy PUT will fan out via
-// ActiveHostIDs.
-func (s *service) enqueueInitialPolicy(ctx context.Context, hostID string) {
-	payload, version, hasContent, err := s.policy.ActiveCommandPayload(ctx)
-	if err != nil {
-		s.logger.WarnContext(ctx, "initial policy fetch failed", attrkeys.HostID, hostID, "err", err)
-		return
-	}
-	if !hasContent {
-		s.logger.InfoContext(ctx, "initial policy skipped -- blocklist empty",
-			attrkeys.HostID, hostID, "edr.policy.version", version)
-		return
-	}
-	if _, err := s.commands(ctx, hostID, commandTypeSetBlocklist, payload); err != nil {
-		s.logger.WarnContext(ctx, "initial policy enqueue failed", attrkeys.HostID, hostID, "err", err)
-		return
-	}
-	s.logger.InfoContext(ctx, "initial policy queued",
-		attrkeys.HostID, hostID, "edr.policy.version", version)
 }
 
 func (s *service) VerifyToken(ctx context.Context, token string) (string, error) {

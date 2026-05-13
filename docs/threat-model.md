@@ -72,7 +72,7 @@ Trust assumptions:
 | Repudiation | Command lifecycle goes unlogged. | Every command transitions (`pending` → `running` → `success`/`failure`) are persisted both locally (slog) and server-side (`commands` table). Admin actions emit a WARN-level audit log line. |
 | Information disclosure | Sensitive payload data leaks to the agent log. | `os.log` argv redaction; agent's slog handler does not print full event payloads at INFO level; sensitive fields stay at DEBUG (off by default). |
 | Denial of service | SQLite queue grows unbounded, breaks the agent. | `EDR_AGENT_QUEUE_MAX_BYTES` enforces a cap; over-cap rows are dropped + counted in `edr.agent.queue.dropped` (with the `lossy` attribute distinguishing data loss from already-delivered trims). Documented in `docs/operations.md`. |
-| Elevation of privilege | A network attacker uses the root-running agent to execute arbitrary code. | Agent only executes typed commands (`set_blocklist`, `kill_process`, etc.) fetched from the server, authenticated by the per-host bearer token. The command-type → handler mapping is exhaustive; unknown types are rejected. |
+| Elevation of privilege | A network attacker uses the root-running agent to execute arbitrary code. | Agent only executes typed commands (`kill_process`, `rotate_token`) fetched from the server, authenticated by the per-host bearer token. The command-type → handler mapping is exhaustive; unknown types are rejected. |
 
 ### 2. System extension (Swift, ESF)
 
@@ -158,7 +158,7 @@ Trust assumptions:
 | --- | --- |
 | A bad detection rule causes false-positive storm. | Per-rule unit tests in `server/rules/internal/catalog/<rule>_test.go` cover Evaluate against real event fixtures; the rules-context integration test (`server/rules/internal/tests/integration_test.go`) iterates every shipped rule and locks catalog + doc-shape invariants; `tools/gen-rule-docs` ensures every rule has documented severity + false-positive sources. |
 | A missed detection allows attacker activity through. | Documented in `docs/detection-rules.md` as "Limitations" per rule; ATT&CK coverage page surfaces the gaps. Future work: Atomic Red Team / Caldera replays in CI. |
-| Inadvertent denial of service via inline blocking. | `set_blocklist` policy is operator-driven, version-bumped, audited; no automatic blocking based on rule output (alerts emit; blocks require explicit operator action). |
+| Inadvertent denial of service via inline blocking. | The Application Control subsystem (under construction in the `add-application-control` change) is operator-driven, versioned, audited; no automatic blocking based on rule output (alerts emit; blocks require explicit operator action). |
 
 ### Authentication and authorisation
 

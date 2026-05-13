@@ -20,7 +20,6 @@ package integration
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -38,7 +37,6 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	responseapi "github.com/fleetdm/edr/server/response/api"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
-	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
@@ -65,7 +63,6 @@ type Stack struct {
 // queue a command) without going through HTTP.
 func (s *Stack) IdentityService() identityapi.Service   { return s.Identity.Service() }
 func (s *Stack) EndpointService() endpointapi.Service   { return s.Endpoint.Service() }
-func (s *Stack) RulesService() rulesapi.PolicyService   { return s.Rules.PolicyService() }
 func (s *Stack) ResponseService() responseapi.Service   { return s.Response.Service() }
 func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Service() }
 
@@ -125,33 +122,20 @@ func Setup(t *testing.T) *Stack {
 	})
 	require.NoError(t, err, "open response")
 
-	// rules.New takes ActiveHostsLister + CommandInserter together (or
-	// both nil). Endpoint isn't built yet, so use a forward closure that
-	// captures endpointCtx after it's assigned. cmd/main does the same.
-	var endpointCtx *endpointbootstrap.Endpoint
-	activeHostsLister := func(ctx context.Context) ([]string, error) {
-		if endpointCtx == nil {
-			return nil, errors.New("setup: endpoint context not yet initialised")
-		}
-		return endpointCtx.Service().ActiveHostIDs(ctx)
-	}
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:                db,
-		Logger:            logger,
-		ActiveHostsLister: activeHostsLister,
-		CommandInserter:   responseCtx.Service().Insert,
-		AuthZ:             identityCtx.AuthZ(),
+		DB:     db,
+		Logger: logger,
+		AuthZ:  identityCtx.AuthZ(),
 	})
 	require.NoError(t, err, "open rules")
 
 	detectionCtx.LoadActive(rulesCtx.ContentService())
 
-	endpointCtx, err = endpointbootstrap.New(endpointbootstrap.Deps{
+	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
 		Logger:              logger,
 		EnrollSecret:        EnrollSecret,
 		EnrollRatePerMinute: 1000,
-		PolicyProvider:      rulesCtx.PolicyService(),
 		CommandInserter:     responseCtx.Service().Insert,
 		AuthZ:               identityCtx.AuthZ(),
 	})

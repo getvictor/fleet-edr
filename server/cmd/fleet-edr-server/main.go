@@ -119,20 +119,13 @@ func run() error {
 		return err
 	}
 
-	var endpointCtx *endpointbootstrap.Endpoint
-	activeHostsLister := func(ctx context.Context) ([]string, error) {
-		if endpointCtx == nil {
-			return nil, errors.New("rules fanout: endpoint context not yet initialised")
-		}
-		return endpointCtx.Service().ActiveHostIDs(ctx)
-	}
-	rulesCtx, err := openRules(ctx, logger, db, cfg, activeHostsLister, responseCtx.Service().Insert, identityCtx)
+	rulesCtx, err := openRules(ctx, logger, db, cfg, identityCtx)
 	if err != nil {
 		return err
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
 
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, rulesCtx.PolicyService(), responseCtx.Service().Insert, identityCtx)
+	endpointCtx, err := openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx)
 	if err != nil {
 		return err
 	}
@@ -300,8 +293,6 @@ func openRules(
 	logger *slog.Logger,
 	db *sqlx.DB,
 	cfg *config.Config,
-	activeHostsLister rulesbootstrap.ActiveHostsLister,
-	cmdInserter rulesbootstrap.CommandInserter,
 	identityCtx *identitybootstrap.Identity,
 ) (*rulesbootstrap.Rules, error) {
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
@@ -313,10 +304,8 @@ func openRules(
 			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
 			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
 		},
-		ActiveHostsLister: activeHostsLister,
-		CommandInserter:   cmdInserter,
-		Audit:             identityCtx.AuditRecorder(),
-		AuthZ:             identityCtx.AuthZ(),
+		Audit: identityCtx.AuditRecorder(),
+		AuthZ: identityCtx.AuthZ(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
@@ -334,7 +323,6 @@ func openEndpoint(
 	logger *slog.Logger,
 	db *sqlx.DB,
 	cfg *config.Config,
-	policySvc endpointapi.PolicyProvider,
 	cmdInserter endpointbootstrap.CommandInserter,
 	identityCtx *identitybootstrap.Identity,
 ) (*endpointbootstrap.Endpoint, error) {
@@ -343,7 +331,6 @@ func openEndpoint(
 		Logger:              logger,
 		EnrollSecret:        cfg.EnrollSecret,
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
-		PolicyProvider:      policySvc,
 		CommandInserter:     cmdInserter,
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),

@@ -59,7 +59,7 @@ func TestHTTPGate_Deny(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	ok := api.HTTPGate(t.Context(), w, az, slog.Default(),
-		api.ActionPolicyUpdate, api.Resource{TenantID: "default", Type: "policy"})
+		api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host"})
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusForbidden, w.Code)

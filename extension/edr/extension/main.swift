@@ -1,10 +1,9 @@
 import Foundation
 import EndpointSecurity
 
-// Load any persisted blocklist BEFORE ESF starts subscribing. Startup order
-// matters here — if we subscribed first, a racing exec of a blocked path between
-// subscribe and loadFromDisk would be incorrectly allowed.
-PolicyStore.shared.loadFromDisk()
+// Application Control phase 1 removes the legacy blocklist; AUTH_EXEC currently
+// allows every exec. The phase-4 decision engine will reintroduce a persisted
+// snapshot load here.
 
 let server = XPCServer(serviceName: "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc")
 server.start()

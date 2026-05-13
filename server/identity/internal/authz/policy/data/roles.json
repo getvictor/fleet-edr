@@ -7,10 +7,6 @@
       "grants": [
         "user.read",
         "user.invite",
-        "policy.read",
-        "policy.create",
-        "policy.update",
-        "policy.delete",
         "host.read",
         "host.isolate",
         "host.kill_process",

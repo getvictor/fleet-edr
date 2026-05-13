@@ -30,7 +30,6 @@ func TestShouldSampleRead_RateOne(t *testing.T) {
 		api.ActionHostRead,
 		api.ActionProcessRead,
 		api.ActionAlertRead,
-		api.ActionPolicyRead,
 		api.ActionEnrollmentRead,
 		api.ActionUserRead,
 	} {

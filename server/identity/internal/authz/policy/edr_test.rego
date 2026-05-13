@@ -38,13 +38,13 @@ test_super_admin_can_read_audit if {
 	d.allow == true
 }
 
-# --- admin: granted policy + host actions, NOT audit.read. ----------
+# --- admin: granted host + alert + user actions, NOT audit.read. ----
 
-test_admin_can_update_policy if {
+test_admin_can_invite_user if {
 	d := authz.decision with input as {
 		"actor": {"tenant_id": "default", "roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
-		"action": "policy.update",
-		"resource": {"tenant_id": "default", "type": "policy", "id": "default"},
+		"action": "user.invite",
+		"resource": {"tenant_id": "default", "type": "user", "id": "newbie@example.com"},
 	}
 	d.allow == true
 }
@@ -58,7 +58,7 @@ test_admin_cannot_read_audit if {
 	d == {"allow": false, "reason": "no_matching_rule"}
 }
 
-# --- senior_analyst: destructive actions allowed, policy.update denied.
+# --- senior_analyst: destructive actions allowed, audit.read denied. -
 
 test_senior_analyst_can_kill_process if {
 	d := authz.decision with input as {
@@ -73,11 +73,11 @@ test_senior_analyst_can_kill_process if {
 	d.allow == true
 }
 
-test_senior_analyst_cannot_update_policy if {
+test_senior_analyst_cannot_read_audit if {
 	d := authz.decision with input as {
 		"actor": {"tenant_id": "default", "roles": [{"role_id": "senior_analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
-		"action": "policy.update",
-		"resource": {"tenant_id": "default", "type": "policy", "id": "default"},
+		"action": "audit.read",
+		"resource": {"tenant_id": "default", "type": "audit", "id": "*"},
 	}
 	d.allow == false
 }

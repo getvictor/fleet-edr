@@ -24,9 +24,11 @@ testable, and mapped to a public taxonomy.
 - [x] Code-signing capture on every `exec` event (team identifier, signing flags, hash)
 - [x] SHA-256 hashing of executed binaries
 - [x] Network-attribution events (PID -> connection) via `NEFilterDataProvider`
-- [x] Server-driven blocklist policy with versioning (`policies` table, agent diffs by
-  version)
-- [x] Response action: command queue (kill, block) with ack/complete lifecycle
+- [ ] Application Control subsystem (named policies, allow/block by path / SHA-256 /
+  CDHash / TeamID / SigningID / certificate, Detect-vs-Protect, host-group scoping). In
+  flight under the `add-application-control` OpenSpec change; phase 1 removes the
+  legacy singleton blocklist.
+- [x] Response action: command queue (kill, rotate_token) with ack/complete lifecycle
 - [~] **MITRE ATT&CK mapping** on every rule. Each detection rule implements
   `Techniques()` returning the ATT&CK technique IDs it maps to
   (`server/detection/rule.go`); the engine threads them onto every alert so
@@ -298,8 +300,8 @@ floor for any project that wants enterprise adoption.
 - [x] Load-test harness (`test/loadtest.go`)
 - [ ] **End-to-end tests** (Playwright / Cypress) covering login -> alert -> ack -> close
 - [ ] **API contract tests** -- generated from OpenAPI, run against the live server
-- [ ] **Fuzz tests** for the JSON event parser, the policy diff, and any HTTP body that
-  comes from the agent (Go has built-in `go test -fuzz`)
+- [ ] **Fuzz tests** for the JSON event parser and any HTTP body that comes from the
+  agent (Go has built-in `go test -fuzz`)
 - [~] **Property-based tests** via `pgregory.net/rapid` for components with clear
   algebraic invariants. Use when the property holds across an input space larger
   than what a table-driven test reasonably enumerates: serialization round-trips

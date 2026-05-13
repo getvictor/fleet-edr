@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from
 import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
-import { PolicyEditor } from "./components/PolicyEditor";
 import { AttackCoverage } from "./components/AttackCoverage";
 import { RuleDetail } from "./components/RuleDetail";
 import { Login } from "./components/Login";
@@ -110,7 +109,6 @@ function AuthedApp() {
         <Routes>
           <Route path="/" element={<HostList />} />
           <Route path="/alerts" element={<AlertList />} />
-          <Route path="/policy" element={<PolicyEditor actor={auth.user.email} />} />
           <Route path="/coverage" element={<AttackCoverage />} />
           <Route path="/rules/:ruleId" element={<RuleDetail />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />

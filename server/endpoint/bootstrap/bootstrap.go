@@ -19,11 +19,11 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// CommandInserter is the closure cmd/main supplies so the post-enroll
-// fan-out can queue the initial set_blocklist command without
-// endpoint importing response/api directly. Method-value-shaped to
-// match response.Service.Insert exactly: cmd/main passes
-// `responseCtx.Service().Insert` here as a one-liner.
+// CommandInserter is the closure cmd/main supplies so endpoint can
+// queue commands (today: rotate_token) without importing response/api
+// directly. Method-value-shaped to match response.Service.Insert
+// exactly: cmd/main passes `responseCtx.Service().Insert` here as a
+// one-liner.
 type CommandInserter = service.CommandInserter
 
 // Deps bundles what New needs to wire the endpoint context. cmd/main
@@ -34,16 +34,10 @@ type Deps struct {
 	Logger              *slog.Logger
 	EnrollSecret        string
 	EnrollRatePerMinute int
-	// PolicyProvider supplies the active blocklist for new agents at
-	// enroll time. Nil-safe: when nil (or paired with a nil
-	// CommandInserter), the enroll handler skips the post-enroll
-	// fan-out. Satisfied today by rules.api.PolicyService.
-	PolicyProvider api.PolicyProvider
-	// CommandInserter inserts the initial set_blocklist command for
-	// new agents. Must be nil-or-non-nil paired with PolicyProvider.
-	// Satisfied today by response.api.Service.Insert via a method
-	// value; the closure pattern matches what rules uses and avoids
-	// endpoint importing response/api.
+	// CommandInserter inserts commands the endpoint context emits
+	// (today: only rotate_token). Optional: when nil, rotate_token
+	// commits the new bearer to the DB but the agent will not receive
+	// a command — it re-enrolls once the grace window expires.
 	CommandInserter CommandInserter
 
 	// Audit is the operator-action recorder. Optional: nil disables
@@ -89,14 +83,6 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.EnrollSecret == "" {
 		return nil, errors.New("endpoint bootstrap: EnrollSecret is required")
 	}
-	// Policy without Commands is a config error (policy fan-out has nowhere
-	// to send commands); Commands without Policy is allowed since rotation
-	// uses Commands without consulting Policy. Surface this here as a
-	// recoverable error rather than letting it fall through to service.New's
-	// panic at boot.
-	if deps.PolicyProvider != nil && deps.CommandInserter == nil {
-		return nil, errors.New("endpoint bootstrap: PolicyProvider set but CommandInserter is nil; policy fan-out has nowhere to go")
-	}
 	if deps.AuthZ == nil {
 		return nil, errors.New("endpoint bootstrap: AuthZ is required")
 	}
@@ -109,7 +95,6 @@ func New(deps Deps) (*Endpoint, error) {
 	svc := service.New(service.Options{
 		Store:    store,
 		Secret:   deps.EnrollSecret,
-		Policy:   deps.PolicyProvider,
 		Commands: deps.CommandInserter,
 		Audit:    deps.Audit,
 		Lifetime: deps.HostTokenLifetime,

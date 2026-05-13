@@ -425,9 +425,6 @@ func TestAuditAction_StableConstants(t *testing.T) {
 		{api.AuditAlertAcknowledge, "alert.acknowledge"},
 		{api.AuditAlertResolve, "alert.resolve"},
 		{api.AuditAlertReopen, "alert.reopen"},
-		{api.AuditPolicyCreate, "policy.create"},
-		{api.AuditPolicyUpdate, "policy.update"},
-		{api.AuditPolicyDelete, "policy.delete"},
 		{api.AuditCommandIssue, "command.issue"},
 		{api.AuditEnrollmentRevoke, "enrollment.revoke"},
 	}

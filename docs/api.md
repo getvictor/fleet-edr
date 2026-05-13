@@ -88,7 +88,6 @@ Endpoints that require the session cookie:
 - `GET /api/commands/{id}`, `POST /api/commands`
 - `GET /api/enrollments`,
   `POST /api/enrollments/{host_id}/revoke`
-- `GET /api/policy`, `PUT /api/policy`
 - `GET /api/attack-coverage` -- ATT&CK Navigator layer JSON
   describing which techniques the registered rules cover.
 - `GET /api/rules` -- per-rule documentation surfaced by the

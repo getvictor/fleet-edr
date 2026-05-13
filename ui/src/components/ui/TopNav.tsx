@@ -11,7 +11,6 @@ const LINKS: NavLink[] = [
   { to: "/", label: "Hosts" },
   { to: "/alerts", label: "Alerts" },
   { to: "/coverage", label: "Coverage" },
-  { to: "/policy", label: "Policy" },
 ];
 
 interface TopNavProps {

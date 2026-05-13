@@ -50,7 +50,6 @@ func withRotation(t *testing.T, lifetime, grace time.Duration) (*bootstrap.Endpo
 	cmds := &recordingCommandInserter{}
 	audit := &recordingAudit{}
 	ep, db := newEndpointWithDB(t, func(d *bootstrap.Deps) {
-		d.PolicyProvider = nil
 		d.CommandInserter = cmds.Insert
 		d.Audit = audit
 		d.HostTokenLifetime = lifetime
