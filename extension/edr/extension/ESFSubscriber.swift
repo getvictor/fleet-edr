@@ -47,6 +47,11 @@ final class ESFSubscriber: Sendable {
         }
 
         logger.info("Subscribed to \(events.count) event types (including AUTH_EXEC)")
+        // Phase 1 of add-application-control deletes the legacy blocklist and leaves
+        // AUTH_EXEC as an unconditional allow. Surface this loudly at startup so
+        // operators monitoring logs during rollout are never confused about why
+        // nothing is being blocked. The decision engine lands in phase 4.
+        logger.warning("Application Control disabled (phase 1 temporary state) — AUTH_EXEC returns ES_AUTH_RESULT_ALLOW")
     }
 
     func stop() {

@@ -339,10 +339,8 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 	}
 }
 
-// runReceiverLoop connects to an XPC service and reconnects with exponential backoff.
-// If dispatcher is non-nil, every successful connection publishes the current *Receiver
-// into it so outbound callers (commander set_blocklist) can send messages to the peer;
-// disconnects clear the dispatcher to prevent sending on a dead handle.
+// runReceiverLoop connects to an XPC service and reconnects with exponential backoff,
+// piping every event the receiver yields into the agent's queue.
 func runReceiverLoop(
 	ctx context.Context,
 	logger *slog.Logger,

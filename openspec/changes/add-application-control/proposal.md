@@ -1,3 +1,5 @@
+# Application Control: replace the legacy singleton blocklist
+
 ## Why
 
 The EDR competes against CrowdStrike Falcon, SentinelOne Singularity, Microsoft Defender for Endpoint, and VMware

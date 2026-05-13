@@ -38,8 +38,8 @@ const (
 // + regex update.
 var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
-// CommandInserter is the closure shape endpoint's enroll fan-out
-// uses to queue the initial set_blocklist command. cmd/main passes
+// CommandInserter is the closure shape endpoint uses to queue commands
+// it emits (today: only rotate_token). cmd/main passes
 // response.Service.Insert as a method value satisfying this type.
 // The closure pattern matches what rules uses elsewhere.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)

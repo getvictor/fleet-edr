@@ -79,7 +79,7 @@ test_senior_analyst_cannot_read_audit if {
 		"action": "audit.read",
 		"resource": {"tenant_id": "default", "type": "audit", "id": "*"},
 	}
-	d.allow == false
+	d == {"allow": false, "reason": "no_matching_rule"}
 }
 
 # --- analyst: read + comment only, no destructive actions. ----------

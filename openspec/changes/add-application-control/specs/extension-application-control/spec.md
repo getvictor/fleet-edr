@@ -51,8 +51,8 @@ crash mid-write cannot leave the file partially written.
 ### Requirement: Target identifier tuple for every exec
 
 For every authorized exec the extension SHALL build a target identifier tuple consisting of `cdhash`,
-`file_sha256`, `signing_id_prefixed`, `leaf_cert_sha256`, `team_id`. The tuple values SHALL be derived as
-follows:
+`file_sha256`, `signing_id_prefixed`, `leaf_cert_sha256`, `team_id`, and `path`. The tuple values SHALL be
+derived as follows:
 
 - `cdhash`: the value of `process.cdhash` on `es_process_t`, populated only if the process runs under
   Apple's Hardened Runtime. For non-hardened processes this field SHALL be absent.
@@ -65,6 +65,10 @@ follows:
   extension SHALL maintain a cache keyed by `(inode, mtime)` and SHALL NOT block the AUTH callback on the
   fetch. On a cache miss the value MAY be absent for the current exec.
 - `team_id`: the value of `process.team_id`, or absent if the binary is unsigned.
+- `path`: the canonical absolute filesystem path of the authorized exec target. Always present (the AUTH
+  event carries it directly); the macOS canonicalization of `/tmp`, `/var`, and `/etc` into their
+  `/private/...` forms is applied before matching so the precedence walk compares against the same canonical
+  form the server validates and persists rule identifiers in.
 
 #### Scenario: A signed non-Apple binary yields a full tuple after the cache warms
 

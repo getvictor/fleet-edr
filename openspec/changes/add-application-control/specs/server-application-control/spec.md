@@ -169,12 +169,13 @@ the logical operation rather than one event per touched rule.
 
 ### Requirement: Command fan-out on policy mutation
 
-The system SHALL enqueue a `set_application_control` command for every host that belongs to a host group
-assigned to a mutated policy. The command payload SHALL carry `{policy_id, policy_version, rules: [...]}`
-where each rule entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url,
-severity}`. Disabled rules and expired rules SHALL be omitted from the payload. The system SHALL record the
-counts of hosts the command was successfully enqueued for and hosts the enqueue failed for, and SHALL include
-those counts on the audit event for the mutation.
+The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any
+host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate
+commands. The command payload SHALL carry `{policy_id, policy_version, rules: [...]}` where each rule entry
+includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. Disabled rules and
+expired rules SHALL be omitted from the payload. The system SHALL record the count of unique hosts the
+command was successfully enqueued for and the count of unique hosts the enqueue failed for, and SHALL
+include those counts on the audit event for the mutation.
 
 #### Scenario: A new rule fans out only to assigned hosts
 
@@ -182,6 +183,13 @@ those counts on the audit event for the mutation.
 - **WHEN** the operator creates a rule on that policy
 - **THEN** exactly three `set_application_control` commands are enqueued
 - **AND** the audit event records `fanout_hosts=3`, `fanout_failed=0`
+
+#### Scenario: A host that matches multiple assigned groups receives one command
+
+- **GIVEN** a policy assigned to two host groups whose criteria both match the same host
+- **WHEN** the system fans out the policy
+- **THEN** exactly one `set_application_control` command is enqueued for that host
+- **AND** the audit event's `fanout_hosts` counts that host once
 
 #### Scenario: Disabled rules are not pushed
 
@@ -191,12 +199,16 @@ those counts on the audit event for the mutation.
 
 ### Requirement: Application control block event contract
 
-The system SHALL accept ingest events of kind `application_control_block` from agents. Each such event MUST
-carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier`, `matched_identifier`,
-`severity`, `process`, and `ancestry`. The event MAY carry optional `custom_msg` and `custom_url`. The system
-SHALL reject events whose `policy_id` or `rule_id` does not correspond to a known rule with HTTP 200 (so the
-agent does not retry) and SHALL log a server-side warning for operator visibility. The system SHALL accept
-the event when the rule was deleted after the block fired so that an in-flight block is never lost.
+The system SHALL accept ingest events of kind `application_control_block` from agents through the same
+host-token-authenticated `POST /api/events` channel that carries every other agent event. The system MUST
+bind every accepted event to the `host_id` resolved by the existing host-token middleware and MUST reject
+events whose envelope `host_id` does not match the authenticated host. The system MUST resolve the event's
+tenant from the authenticated host's enrollment row rather than trusting any tenant value supplied by the
+agent. Each event MUST carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier`,
+`matched_identifier`, `severity`, `process`, and `ancestry`. The event MAY carry optional `custom_msg` and
+`custom_url`. The system SHALL accept events whose `policy_id` or `rule_id` does not correspond to a known
+rule (so an in-flight block is not lost when a rule is deleted after the block fired) and SHALL log a
+server-side warning for operator visibility on the unknown-rule path.
 
 #### Scenario: A block event for an unknown rule is accepted but warned
 

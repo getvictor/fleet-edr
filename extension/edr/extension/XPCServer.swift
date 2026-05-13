@@ -63,14 +63,14 @@ final class XPCServer {
             return
         }
         let type = String(cString: typeCStr)
-        switch type {
-        case "hello":
-            // No-op. The mere receipt of this message triggered the lazy Mach port
-            // connection; there's nothing to do server-side.
-            break
-        default:
-            logger.info("unknown XPC message type: \(type, privacy: .public)")
+        // "hello" is a no-op: the mere receipt of the message triggered the lazy Mach
+        // port connection; there's nothing to do server-side. Switched to an if/else
+        // chain so adding the phase-4 application-control inbound message type is a
+        // single new branch rather than a switch reshape.
+        if type == "hello" {
+            return
         }
+        logger.info("unknown XPC message type: \(type, privacy: .public)")
     }
 
     private func handleListenerEvent(_ event: xpc_object_t) {

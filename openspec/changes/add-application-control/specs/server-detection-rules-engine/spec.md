@@ -52,22 +52,33 @@ MAY have an empty technique list.
 - **THEN** the resulting alert row carries the host id, rule id, severity, `source='application_control'`,
   title, summary, and linked process id
 
-### Requirement: Alert dedup by (host, rule, process)
+### Requirement: Alert dedup by (source, host, rule, process)
 
-The system SHALL treat the triple (host id, rule id, process id) as the alert dedup key for both catalog
-rule findings and application control blocks. Re-evaluating the same catalog rule against the same process
-on the same host in a later batch MUST NOT create a second alert row; the existing alert remains the single
-record for that finding. A subsequent `application_control_block` event for the same triple MUST NOT create
-a second alert row either; the existing alert remains the single record.
+The system SHALL treat the tuple (source, host id, rule id, process id) as the alert dedup key, where
+`source` is `detection` for catalog-rule findings and `application_control` for application-control blocks.
+Including `source` in the dedup key prevents a collision when a catalog rule and an application-control rule
+happen to share an identifier — two distinct findings on the same process never collapse into one alert row.
+Re-evaluating the same catalog rule against the same process on the same host in a later batch MUST NOT
+create a second alert row; the existing alert remains the single record for that finding. A subsequent
+`application_control_block` event for the same `(source, host, rule, process)` tuple MUST NOT create a
+second alert row either; the existing alert remains the single record.
 
 #### Scenario: A catalog rule re-fires on the same process in a later batch
 
-- **GIVEN** an existing alert for a (host, rule, process) triple with `source='detection'`
+- **GIVEN** an existing alert for a `(source='detection', host, rule, process)` tuple
 - **WHEN** a later batch causes the same rule to find the same process again
 - **THEN** the existing alert row is reused and no new alert row is inserted
 
 #### Scenario: An application control block repeats for the same process
 
-- **GIVEN** an existing alert for a (host, rule, process) triple with `source='application_control'`
-- **WHEN** a later `application_control_block` event arrives for the same triple
+- **GIVEN** an existing alert for a `(source='application_control', host, rule, process)` tuple
+- **WHEN** a later `application_control_block` event arrives for the same tuple
 - **THEN** the existing alert row is reused and no new alert row is inserted
+
+#### Scenario: A catalog rule id and an app-control rule id collide on the same process
+
+- **GIVEN** a catalog rule and an application-control rule that happen to share an identifier value
+- **AND** both have already produced alerts for the same `(host, process)` pair
+- **WHEN** the alerts list is queried
+- **THEN** two distinct alert rows are returned, one with `source='detection'` and one with
+  `source='application_control'`
