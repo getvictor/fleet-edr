@@ -1,0 +1,91 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+
+.app-control__row-secondary {
+  font-size: $xx-small;
+  color: $ui-fleet-black-50;
+  margin-top: $pad-xsmall;
+}
+
+.app-control__description {
+  margin: 0 0 $pad-medium 0;
+  color: $ui-fleet-black-75;
+  max-width: 800px;
+}
+
+.app-control__assignment {
+  font-size: $xx-small;
+  text-transform: uppercase;
+  font-weight: $bold;
+  letter-spacing: 0.5px;
+  color: $ui-fleet-black-75;
+}
+
+.app-control__divider {
+  color: $ui-fleet-black-25;
+}
+
+.app-control__muted {
+  color: $ui-fleet-black-50;
+}
+
+.app-control__identifier {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: $xx-small;
+}
+
+.app-control__row-actions {
+  display: flex;
+  gap: $pad-xsmall;
+}
+
+.app-control-dialog {
+  border: none;
+  border-radius: 8px;
+  padding: $pad-large;
+  width: min(560px, 90vw);
+  background: $core-fleet-white;
+  color: $core-fleet-black;
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.45);
+  }
+}
+
+.app-control-dialog__header {
+  margin-bottom: $pad-medium;
+}
+
+.app-control-dialog__title {
+  margin: 0 0 $pad-xsmall 0;
+  font-size: $large;
+}
+
+.app-control-dialog__subtitle {
+  margin: 0;
+  color: $ui-fleet-black-75;
+  font-size: $xx-small;
+}
+
+.app-control-dialog__error {
+  background: rgba($core-vibrant-red, 0.1);
+  color: $core-vibrant-red;
+  padding: $pad-small;
+  border-radius: 4px;
+  margin-bottom: $pad-medium;
+  font-size: $xx-small;
+}
+
+.app-control-dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: $pad-small;
+}
+
+.app-control-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: $pad-small;
+  margin-top: $pad-medium;
+}

@@ -132,3 +132,47 @@ export interface Command {
   completed_at?: string;
   result?: Record<string, unknown>;
 }
+
+// ApplicationControlPolicy mirrors server/rules/api.ApplicationControlPolicy.
+// The demo cut shows one per-tenant Default policy; multi-policy support is
+// post-demo. Rules is populated by the GET /policies/{id} endpoint and
+// omitted from the list response, so the field is optional.
+export interface ApplicationControlPolicy {
+  id: number;
+  tenant_id: string;
+  name: string;
+  description: string;
+  version: number;
+  default_action: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string;
+  rules?: ApplicationControlRule[];
+}
+
+// ApplicationControlRule mirrors server/rules/api.ApplicationControlRule.
+// `rule_type` is BINARY in the demo cut; the other five values exist on the
+// schema's ENUM but the create handler rejects them until their validators
+// ship. custom_msg / custom_url are operator-authored optional strings; the
+// host-app modal renders custom_msg verbatim and "More info" links for
+// http/https custom_urls.
+export interface ApplicationControlRule {
+  id: number;
+  policy_id: number;
+  rule_type: string;
+  identifier: string;
+  action: string;
+  enforcement: string;
+  enabled: boolean;
+  severity: string;
+  source: string;
+  source_ref?: string;
+  custom_msg?: string | null;
+  custom_url?: string | null;
+  comment?: string;
+  expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
