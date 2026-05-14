@@ -81,6 +81,22 @@ enum ApplicationControlRuleType {
     static let path = "PATH"
 }
 
+/// Rule-action tokens that match the server enum exactly. The demo cut
+/// only emits BLOCK; ALLOW and SILENT_BLOCK arrive with Phase B Lockdown.
+enum ApplicationControlAction {
+    static let block = "BLOCK"
+    static let allow = "ALLOW"
+    static let silentBlock = "SILENT_BLOCK"
+}
+
+/// Rule-enforcement tokens that match the server enum exactly. The demo
+/// cut only enforces PROTECT (deny-on-match); DETECT (log only) arrives
+/// with Phase B.
+enum ApplicationControlEnforcement {
+    static let protect = "PROTECT"
+    static let detect = "DETECT"
+}
+
 /// ApplicationControlStore holds the typed in-memory snapshot consulted by
 /// the AUTH_EXEC decision engine (Step 3). The snapshot also persists to
 /// disk so the extension's policy survives restarts. Updates from the agent
