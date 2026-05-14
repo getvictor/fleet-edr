@@ -72,6 +72,12 @@ final class NotificationListener {
 
     private func handlePeerMessage(_ event: xpc_object_t) {
         guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
+            // Logged at error level so a forensic trail captures any
+            // malformed messages — a missing "type" key would
+            // otherwise vanish silently and a protocol-version drift
+            // between the extension's send and the host app's decode
+            // would be invisible to operators.
+            logger.error("received XPC message missing 'type' key")
             return
         }
         let kind = String(cString: typeCStr)

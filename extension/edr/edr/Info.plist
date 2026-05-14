@@ -14,7 +14,18 @@
 	<string>APPL</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
-	<key>LSBackgroundOnly</key>
+	<!--
+	    LSUIElement (not LSBackgroundOnly): the bundle has to be able
+	    to present an NSAlert modal in `notify` mode, but it should
+	    NOT claim a Dock icon for the other CLI modes (activate /
+	    enable-filter / disable-filter etc.) which run, print, and
+	    exit. LSUIElement gives us both: AppKit can show UI when we
+	    ask it to, and the app stays invisible in the Dock and Cmd-
+	    Tab switcher otherwise. LSBackgroundOnly was the wrong key —
+	    it would have silently suppressed NSAlert presentation on
+	    every block, as Copilot flagged on PR #157.
+	-->
+	<key>LSUIElement</key>
 	<true/>
 	<!--
 	    MachServices declares the XPC service name the host app

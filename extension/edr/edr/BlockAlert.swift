@@ -45,10 +45,12 @@ final class BlockAlertPresenterAppKit: NSObject, BlockAlertPresenter {
     func present(_ notification: BlockNotificationPayload) {
         queue.async { [weak self] in
             guard let self else { return }
-            if self.shouldDedup(notification) {
-                logger.info("suppressed duplicate block alert within dedup window")
-                return
-            }
+            // Dedup is re-checked synchronously on the main queue
+            // right before the modal is shown — see showAlert.
+            // Checking here too would only suppress arrivals while
+            // the queue is idle; a long-open modal can wait minutes,
+            // during which more duplicates accumulate and would
+            // pass an early-stage dedup with a stale timestamp.
             DispatchQueue.main.sync {
                 self.showAlert(notification)
             }
@@ -57,7 +59,11 @@ final class BlockAlertPresenterAppKit: NSObject, BlockAlertPresenter {
 
     /// shouldDedup returns true when we've shown an alert with the
     /// same `(rule_id, binary_path)` tuple within `dedupWindow`.
-    /// Called on `queue`; no lock needed.
+    /// Called from showAlert on the main queue — the synchronous
+    /// hop in present() guarantees we re-check at presentation time
+    /// rather than enqueue time, so a 60s-open modal followed by 10
+    /// queued duplicates produces one new alert (the first that
+    /// arrives past the window), not all 10 in succession.
     private func shouldDedup(_ notification: BlockNotificationPayload) -> Bool {
         let key = notification.ruleID + "|" + notification.binaryPath
         let now = Date()
@@ -71,6 +77,10 @@ final class BlockAlertPresenterAppKit: NSObject, BlockAlertPresenter {
     }
 
     private func showAlert(_ notification: BlockNotificationPayload) {
+        if shouldDedup(notification) {
+            logger.info("suppressed duplicate block alert within dedup window")
+            return
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Application blocked: \(binaryDisplayName(notification.binaryPath))"
@@ -79,22 +89,27 @@ final class BlockAlertPresenterAppKit: NSObject, BlockAlertPresenter {
         let dismissButton = alert.addButton(withTitle: "Dismiss")
         dismissButton.tag = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
 
+        // moreURL is non-nil iff the operator authored a "More info"
+        // link AND it parsed to an http/https URL. Other schemes
+        // (file://, custom URI handlers) are rejected so a hostile
+        // rule author can't trigger arbitrary URL handlers from a
+        // single click on the alert.
+        var moreURL: URL?
         if let urlString = notification.customURL,
            let url = URL(string: urlString),
            url.scheme == "https" || url.scheme == "http" {
             let moreButton = alert.addButton(withTitle: "More info")
             moreButton.tag = NSApplication.ModalResponse.alertSecondButtonReturn.rawValue
-            // Bring the host app forward so the modal lands on top
-            // of whatever window the user was looking at.
-            NSApp.activate(ignoringOtherApps: true)
-            let response = alert.runModal()
-            if response == .alertSecondButtonReturn {
-                NSWorkspace.shared.open(url)
-            }
-            return
+            moreURL = url
         }
+
+        // Bring the host app forward so the modal lands on top of
+        // whatever window the user was looking at.
         NSApp.activate(ignoringOtherApps: true)
-        _ = alert.runModal()
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn, let url = moreURL {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// body picks the alert's informativeText: prefers the

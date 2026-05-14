@@ -25,10 +25,10 @@ final class NotificationClient {
     static let shared = NotificationClient()
 
     private let queue = DispatchQueue(label: "com.fleetdm.edr.securityextension.notification-client")
-    // Encoder is configured once. Sorted keys keeps the wire bytes
-    // byte-identical across runs, which the host-app side relies on
-    // for the existing-alert dedup (two block notifications for the
-    // exact same rule+process collapse into one modal).
+    // Encoder is configured once. Sorted keys makes a captured wire
+    // sample diffable across runs — useful for the unified-log
+    // forensic trail, not for behavior. The host-app side dedups on
+    // (rule_id, binary_path), not on byte-identical JSON.
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = .sortedKeys
@@ -47,7 +47,13 @@ final class NotificationClient {
         queue.async { [weak self] in
             guard let self else { return }
             guard let data = self.encodePayload(payload) else { return }
-            let conn = self.acquireConnection()
+            guard let conn = self.acquireConnection() else {
+                // Code-signing install failed; the connection was
+                // cancelled in acquireConnection. Drop the message —
+                // the call site already returned DENY to the kernel,
+                // so swallowing the alert is the safe direction.
+                return
+            }
             let msg = xpc_dictionary_create_empty()
             xpc_dictionary_set_string(msg, "type", blockNotificationMessageType)
             data.withUnsafeBytes { buf in
@@ -76,7 +82,24 @@ final class NotificationClient {
     /// fresh one. Called only from `queue`, so the assignment
     /// doesn't need locking. The event handler resets `connection`
     /// to nil on invalidation so the next call reopens.
-    private func acquireConnection() -> xpc_connection_t {
+    ///
+    /// Returns nil when the peer code-signing requirement fails to
+    /// install. We fail closed in that case rather than send to an
+    /// unvalidated peer — a spoofed notification surface could
+    /// otherwise present arbitrary modal text to the user.
+    ///
+    /// Bootstrap-domain note (Copilot, PR #157): the extension is a
+    /// LaunchDaemon and its Mach lookups land in the system
+    /// bootstrap namespace, while a per-user LaunchAgent registers
+    /// the notification service in the GUI bootstrap. The demo
+    /// dry-run runs the host app inside the same Terminal session
+    /// the operator opens, so the two namespaces overlap and the
+    /// connect succeeds. Production deployment with the LaunchAgent
+    /// installed at /Library/LaunchAgents needs a session-bridging
+    /// helper or sysext-side `xpc_connection_set_target_uid`
+    /// pinning; tracked as Phase B follow-up alongside the
+    /// notification-center integration work.
+    private func acquireConnection() -> xpc_connection_t? {
         if let existing = connection {
             return existing
         }
@@ -88,7 +111,9 @@ final class NotificationClient {
         // posture as the agent ↔ extension channel.
         let req = xpc_connection_set_peer_code_signing_requirement(conn, blockNotificationPeerRequirement)
         if req != 0 {
-            logger.error("set peer code signing on notification client: \(req, privacy: .public)")
+            logger.error("notification client peer code-signing install failed; failing closed: \(req, privacy: .public)")
+            xpc_connection_cancel(conn)
+            return nil
         }
         xpc_connection_set_event_handler(conn) { [weak self] event in
             self?.handleConnectionEvent(event)
@@ -103,12 +128,15 @@ final class NotificationClient {
     /// reopen on the next notify. The expected error path is the
     /// host app exiting (user logged out, the LaunchAgent stopped);
     /// reopening on the next notify covers re-login automatically.
+    ///
+    /// The event handler is dispatched on `queue` by XPC, so
+    /// `connection = nil` is a direct in-handler write rather than a
+    /// queue.async hop — no concurrent reader can observe a torn
+    /// state and the next queued notify sees the nil and reopens.
     private func handleConnectionEvent(_ event: xpc_object_t) {
         let type = xpc_get_type(event)
         if type == XPC_TYPE_ERROR {
-            queue.async { [weak self] in
-                self?.connection = nil
-            }
+            connection = nil
             logger.info("notification client connection invalidated; will reopen on next notify")
         }
     }

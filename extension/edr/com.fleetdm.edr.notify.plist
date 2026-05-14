@@ -51,9 +51,24 @@
 	<key>ProcessType</key>
 	<string>Interactive</string>
 
-	<key>StandardOutPath</key>
-	<string>/tmp/fleet-edr-notify.log</string>
-	<key>StandardErrorPath</key>
-	<string>/tmp/fleet-edr-notify.log</string>
+	<!--
+	    No StandardOutPath / StandardErrorPath: the host app routes
+	    its output through os_log (Logger(subsystem: "com.fleetdm.edr"))
+	    so anything worth keeping shows up in the unified log and is
+	    queryable via `log show --predicate 'subsystem == "com.fleetdm.edr"'`.
+	    A shared file path under /tmp would race across users on a
+	    multi-user install (the first user's launchd creates the file
+	    with permissions that lock out later sessions) — caught by
+	    Gemini + Copilot on PR #157.
+
+	    Packaging note: the dist/pkg path does NOT yet copy this
+	    plist into /Library/LaunchAgents. The demo dry-run runs the
+	    host app manually in a Terminal session
+	    (`sudo /Applications/Fleet\ EDR.app/Contents/MacOS/edr notify`)
+	    so the daemon's Mach lookup lands in the same bootstrap
+	    namespace as the user's process. Production packaging hooks
+	    are a follow-up tracked alongside the LaunchAgent installer
+	    work.
+	-->
 </dict>
 </plist>

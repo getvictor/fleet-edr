@@ -35,21 +35,26 @@ let blockNotificationPeerRequirement =
 /// future analytics ping without re-querying the server.
 struct BlockNotificationPayload: Codable, Sendable {
     /// Stable rule identifier (e.g. "app_control:42") that the
-    /// server alert mapping uses. The host app surfaces it in the
-    /// alert text only when no custom_msg is set.
+    /// server alert mapping uses. Travels for forensic correlation
+    /// only — today's host-app UI doesn't render it; the operator
+    /// inspects the server alerts view to see which rule fired.
     let ruleID: String
     /// Rule type token (BINARY today; the others come post-demo).
     let ruleType: String
     /// Matched identifier value — the file SHA-256 for a BINARY
-    /// rule. The host app shows the first 12 hex chars so the
-    /// alert text doesn't sprawl across the screen.
+    /// rule. Travels for forensic correlation; the host-app UI
+    /// does not currently render it.
     let identifier: String
     /// Operator-authored custom message. When set, this is the
-    /// alert's main body verbatim.
+    /// alert's body verbatim. When unset / empty, the presenter
+    /// falls back to "<binary> was blocked by your organization's
+    /// security policy."
     let customMsg: String?
-    /// Operator-authored "More info" URL. When set + parsable,
-    /// the alert renders a "More info" button that opens the URL
-    /// in the user's default browser.
+    /// Operator-authored "More info" URL. When set + parsable as
+    /// an http or https URL, the alert renders a "More info"
+    /// button that opens the link in the user's default browser.
+    /// Other schemes are rejected so a hostile rule author can't
+    /// trigger arbitrary URL handlers from a single click.
     let customURL: String?
     /// Absolute path of the binary the extension denied. The host
     /// app shows the binary's basename in the alert headline so a

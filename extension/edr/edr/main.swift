@@ -193,10 +193,14 @@ private func runNotifyMode() {
     let listener = NotificationListener(presenter: presenter)
     listener.start()
     logger.info("Application Control notification surface running on \(blockNotificationServiceName, privacy: .public)")
-    // Hold a strong reference so ARC doesn't tear listener down once
-    // main returns from its enclosing scope.
-    _ = listener
-    app.run()
+    // withExtendedLifetime keeps the listener alive for the duration
+    // of the AppKit run loop. ARC is otherwise free to drop a local
+    // whose only remaining "uses" are inside [weak self] event
+    // handlers, which would silently take the XPC surface offline in
+    // optimised builds — caught by Gemini and Copilot on PR #157.
+    withExtendedLifetime(listener) {
+        app.run()
+    }
 }
 
 let action = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"

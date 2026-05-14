@@ -25,6 +25,13 @@ let blockNotificationPeerRequirement =
 /// BlockNotificationPayload mirrors the host app's Codable shape.
 /// JSON tags are load-bearing — they have to stay in lockstep with
 /// the host-app copy.
+/// See edr/edr/BlockNotification.swift for full field documentation.
+/// In particular:
+///   - ruleID and identifier travel for forensic correlation only.
+///   - customMsg becomes the alert body verbatim when set; the
+///     presenter falls back to a deterministic default otherwise.
+///   - customURL is rendered as a "More info" button only when the
+///     value parses as an http or https URL.
 struct BlockNotificationPayload: Codable, Sendable {
     let ruleID: String
     let ruleType: String
