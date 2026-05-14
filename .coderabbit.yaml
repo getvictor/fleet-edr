@@ -177,15 +177,8 @@ reviews:
 
   # ---- auto-review ---------------------------------------------------------
   auto_review:
-    enabled: true
-    auto_incremental_review: true
-    # Default is 5 commits between auto-reviews; bumped because PRs
-    # in this repo iterate often (review-fix cycles).
-    auto_pause_after_reviewed_commits: 10
-    drafts: false
-    ignore_title_keywords:
-      - "[skip review]"
-      - "[wip]"
+    enabled: false
+    auto_incremental_review: false
 
   # ---- tools ---------------------------------------------------------------
   # CodeRabbit auto-detects file types — there's no need to disable
