@@ -342,6 +342,15 @@ paths:
           schema:
             type: string
             enum: [low, medium, high, critical]
+        - name: source
+          in: query
+          description: |
+            Restrict to alerts emitted by a specific subsystem. Default is no
+            filter (returns all sources). Catalog rules produce "detection";
+            application_control_block events produce "application_control".
+          schema:
+            type: string
+            enum: [detection, application_control]
         - name: process_id
           in: query
           schema: {type: integer, format: int64}

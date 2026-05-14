@@ -17,6 +17,12 @@ build/
 # UI build output (embedded via server/ui/embed.go)
 /server/ui/dist/
 
+# Root-level Go binaries: `go build` from the repo root drops them next
+# to go.mod and they don't belong in version control. The release pipeline
+# writes to /dist/ instead (see below).
+/fleet-edr-server
+/fleet-edr-agent
+
 # Release-build output: signed pkg + signed profiles + checksums.
 # Regenerated on every `packaging/pkg/build.sh` run; never committed.
 /dist/

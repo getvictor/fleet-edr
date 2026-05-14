@@ -269,6 +269,7 @@ export async function listAlerts(params?: {
   host_id?: string;
   status?: string;
   severity?: string;
+  source?: string;
   process_id?: number;
   limit?: number;
 }): Promise<Alert[]> {
@@ -276,6 +277,7 @@ export async function listAlerts(params?: {
   if (params?.host_id) query.set("host_id", params.host_id);
   if (params?.status) query.set("status", params.status);
   if (params?.severity) query.set("severity", params.severity);
+  if (params?.source) query.set("source", params.source);
   if (params?.process_id) query.set("process_id", String(params.process_id));
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();
