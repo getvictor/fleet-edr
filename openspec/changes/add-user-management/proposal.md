@@ -6,15 +6,15 @@ generated password to stderr on first boot — fine for a laptop demo, untenable
 deployments on the MVP roadmap and unworkable against the security-console competitive set
 (CrowdStrike Falcon, SentinelOne Singularity, Microsoft Defender for Endpoint), all of which
 ship SSO + RBAC + audit as table stakes. The product needs an identity boundary that an
-enterprise buyer can sign off on, that a future multi-org fork can grow into, and that a
-SOC team can use to reconstruct who did what to which host.
+enterprise buyer can sign off on, that future host-group / host scoped bindings can grow
+into, and that a SOC team can use to reconstruct who did what to which host.
 
 This change delivers wave 1 of the user-management plan tracked in
 `https://github.com/getvictor/fleet-edr/issues/66`: Okta OIDC SSO as the primary login,
 break-glass local account behind a separate URL with WebAuthn-mandatory bootstrap, embedded
-Rego authorization with five seeded roles, dual-emit audit log, and tenant scaffolding. Wave
-2 (API tokens, host-group scopes, MFA for non-break-glass, SSO group mapping) and wave 3
-(SAML, SCIM, customer-authored Rego) are explicitly deferred to follow-on plans.
+Rego authorization with five seeded roles, and a dual-emit audit log. Wave 2 (API tokens,
+host-group scopes, MFA for non-break-glass, SSO group mapping) and wave 3 (SAML, SCIM,
+customer-authored Rego) are explicitly deferred to follow-on plans.
 
 This OpenSpec change is the **spec-only** artifact: it adds the proposal, design, tasks,
 and delta specs that describe the eventual behavior. The implementation lands in the
@@ -24,8 +24,9 @@ against the requirements pinned by this change).
 ## What Changes
 
 - Add Okta OIDC login at `/api/auth/login` and `/api/auth/callback` with PKCE S256, JIT
-  provisioning to a seeded `analyst` role at the tenant scope, and ID-token verification
-  via discovery. Single global IdP per deployment; multi-IdP support is a follow-on feature.
+  provisioning to a seeded `analyst` role at the deployment-wide scope, and ID-token
+  verification via discovery. Single global IdP per deployment; multi-IdP support is a
+  follow-on feature.
 - **BREAKING** for the bootstrap flow: replace the existing "print a generated password to
   stderr on first boot" seed with a single-use bootstrap token whose redemption URL is
   printed instead. Operator visits `/admin/break-glass/setup?token=…` to set a password
@@ -39,9 +40,9 @@ against the requirements pinned by this change).
   allowlist. Per-IP and per-email rate limits, P1 audit on every successful break-glass
   login.
 - Add five seeded roles (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`)
-  bound to users via a new `role_bindings` table with tenant / host-group / host scopes.
-  Host-group and host scopes ship as schema only; only tenant-wide scope is enforced in
-  wave 1.
+  bound to users via a new `role_bindings` table with deployment-wide / host-group / host
+  scopes. Host-group and host scopes ship as schema only; only the deployment-wide scope
+  is enforced in wave 1.
 - Add a single authorization chokepoint that every UI/API handler calls before performing a
   privileged action. The engine is embedded OPA / Rego with policies baked into the binary
   at build time. Wave-1 has no existing deployments to migrate, so the chokepoint enforces
@@ -50,12 +51,9 @@ against the requirements pinned by this change).
   state-changing action. Dual-emit: durable row in MySQL + structured slog/OTel record on
   the active request span so existing SigNoz dashboards can alert on patterns. Reads of the
   audit log require `audit.read` and themselves write an audit-of-audit row.
-- Add a tenant scaffolding column (`tenant_id`, default `'default'`) to every table that
-  belongs to a tenant in the long run: identity tables (users, sessions, roles,
-  role_bindings, audit_events) plus the per-context tables that already exist
-  (hosts/alerts under detection, policies under rules, commands under response, enrollments
-  under endpoint). Wave 1 does not query on `tenant_id`; the goal is purely future-proofing
-  so a multi-org fork does not require backfill.
+- The product is a single-instance deployment (each customer runs their own server), so no
+  tenant scaffolding column is added. Authorization scope is enforced through the role
+  binding's `scope_type` enum, which today honours only the deployment-wide scope.
 - Tighten session timeouts to security-console norms: 8h idle / 24h absolute for normal
   sessions, 15m idle / 1h absolute for break-glass. Destructive actions (host isolate,
   host kill_process, host run_script, critical-severity alert dismiss) require a fresh auth
@@ -78,9 +76,7 @@ against the requirements pinned by this change).
   `ui-authentication-session`.
 - `server-identity-authorization`: The RBAC engine plus the chokepoint every privileged
   handler funnels through. Owns the action registry, the role / role-binding / scope
-  model, the seeded roles, the OPA-evaluated decision shape (`allow`, `reason`), and
-  the tenant scaffolding (`tenants` table, `tenant_id` discipline) that a future
-  multi-org fork can build on.
+  model, the seeded roles, and the OPA-evaluated decision shape (`allow`, `reason`).
 - `server-identity-audit-log`: The append-only audit-event store, the `audit.Record(...)`
   surface every other capability calls into, the dual-emit to MySQL + slog / OTel, the
   decision-driven sampling (writes / destructive at 100%, reads tunable at 0% in MVP,
@@ -106,16 +102,13 @@ against the requirements pinned by this change).
 
 ## Impact
 
-**Tables added (identity context owns):** `tenants`, `identities`, `roles`, `role_bindings`,
+**Tables added (identity context owns):** `identities`, `roles`, `role_bindings`,
 `audit_events`, `bootstrap_tokens`, `webauthn_credentials`. Plus additive columns on
-`users` (`tenant_id`, `display_name`, `status`, `is_breakglass`; `password_hash`/
-`password_salt` made nullable) and `sessions` (`identity_id`, `auth_method`).
+`users` (`display_name`, `status`, `is_breakglass`; `password_hash`/`password_salt` made
+nullable) and `sessions` (`identity_id`, `auth_method`).
 
-**Tables touched in other contexts (additive only):** `hosts` and `alerts` (detection),
-`policies` (rules), `commands` (response), `enrollments` (endpoint) each gain a
-`tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'` column. Each context's
-`bootstrap.ApplySchema` runs the migration for its own tables; no cross-context FKs are
-introduced, in keeping with ADR-0004.
+**Tables touched in other contexts:** none. The product is a single-instance deployment
+so no tenant-partitioning column is added anywhere.
 
 **New cross-context API surface (`server/identity/api/`):** `AuthZ.Allow(ctx, action,
 resource) (Decision, error)`, `Audit.Record(ctx, event) error`, an `Actor` type populated

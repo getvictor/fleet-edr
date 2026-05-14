@@ -47,7 +47,7 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindings, 1, "seeded admin must have exactly one role binding")
 	assert.Equal(t, seed.DefaultAdminRole, bindings[0].RoleID)
-	assert.Equal(t, "tenant", string(bindings[0].ScopeType))
+	assert.Equal(t, "global", string(bindings[0].ScopeType))
 	assert.Equal(t, "*", bindings[0].ScopeID)
 	_ = db
 }

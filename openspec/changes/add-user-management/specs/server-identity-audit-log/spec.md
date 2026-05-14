@@ -112,9 +112,9 @@ table without code changes.
 
 The system SHALL expose `GET /api/audit-events` returning audit rows in reverse-chronological
 order with paging. The endpoint MUST require an authorization decision of `allow` for
-the action `audit.read` against a tenant resource. Every successful read of the audit
-log MUST itself record an audit row (`action='audit.read'`) so a future reviewer can
-reconstruct who inspected the audit trail and when.
+the action `audit.read`. Every successful read of the audit log MUST itself record an
+audit row (`action='audit.read'`) so a future reviewer can reconstruct who inspected the
+audit trail and when.
 
 #### Scenario: Auditor reads the audit log
 

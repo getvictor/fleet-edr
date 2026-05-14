@@ -84,7 +84,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "unsupported_command_type")
 		return
 	}
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host", ID: body.HostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{Type: "host", ID: body.HostID}) {
 		return
 	}
 
@@ -174,7 +174,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead,
-		identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host", ID: cmd.HostID}) {
+		identityapi.Resource{Type: "host", ID: cmd.HostID}) {
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, cmd)

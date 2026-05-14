@@ -68,7 +68,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 // new fields, don't remove or rename existing ones.
 func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
 		return
 	}
 	type ruleResponse struct {
@@ -96,7 +96,7 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 // list of covering rule IDs is in the technique's `comment`.
 func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
 		return
 	}
 	rules := h.svc.List()

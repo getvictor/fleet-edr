@@ -59,9 +59,9 @@ func newAsyncEngine(t *testing.T, rate float64) (*authz.Engine, *recordingAudit,
 // before it reaches the async writer or the sync recorder.
 func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
-	actor := actorWithRoles(1, "default", tenantBinding("auditor", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionAlertRead, api.Resource{TenantID: "default", Type: "alert"})
+	d, err := e.Allow(ctx, api.ActionAlertRead, api.Resource{Type: "alert"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	assert.Empty(t, syncRec.snapshot(), "rate=0.0 must NOT write to the sync recorder")
@@ -73,9 +73,9 @@ func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
 // to async (not sync) when sampling includes the event.
 func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
-	actor := actorWithRoles(1, "default", tenantBinding("auditor", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionAlertRead, api.Resource{TenantID: "default", Type: "alert"})
+	d, err := e.Allow(ctx, api.ActionAlertRead, api.Resource{Type: "alert"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	assert.Empty(t, syncRec.snapshot(), "rate=1.0 read-allow must NOT write sync; the async writer is the durable sink")
@@ -88,10 +88,10 @@ func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
 // the surface's audit purpose.
 func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
-	actor := actorWithRoles(1, "default", tenantBinding("admin", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
 	actor.IsBreakglass = true
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostRead, api.Resource{TenantID: "default", Type: "host"})
+	d, err := e.Allow(ctx, api.ActionHostRead, api.Resource{Type: "host"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	require.Len(t, syncRec.snapshot(), 1, "break-glass reads MUST write sync")
@@ -103,9 +103,9 @@ func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
 // auditors can always trace who read the audit log.
 func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
-	actor := actorWithRoles(1, "default", tenantBinding("auditor", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionAuditRead, api.Resource{TenantID: "default", Type: "audit"})
+	d, err := e.Allow(ctx, api.ActionAuditRead, api.Resource{Type: "audit"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	require.Len(t, syncRec.snapshot(), 1, "audit.read MUST always emit the audit-of-audit row")
@@ -118,12 +118,13 @@ func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 // would defeat the dashboard.
 func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
-	// analyst can read alerts, but not hosts.
-	actor := actorWithRoles(1, "default", tenantBinding("analyst", "default"))
+	// analyst has host.read but not enrollment.read; exercise a read
+	// deny against a role that is missing the specific grant.
+	actor := actorWithRoles(1, "default", globalBinding("analyst", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostRead, api.Resource{TenantID: "tenant_b", Type: "host"})
+	d, err := e.Allow(ctx, api.ActionEnrollmentRead, api.Resource{Type: "enrollment"})
 	require.NoError(t, err)
-	assert.False(t, d.Allow, "cross-tenant read must deny")
+	assert.False(t, d.Allow, "missing enrollment.read grant must deny")
 	require.Len(t, syncRec.snapshot(), 1, "deny MUST emit sync regardless of read sampling")
 	assert.Empty(t, asyncRec.snapshot())
 }
@@ -133,9 +134,9 @@ func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 // than latency on these emissions.
 func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
-	actor := actorWithRoles(1, "default", tenantBinding("admin", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "h-1"})
+	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	require.Len(t, syncRec.snapshot(), 1, "write actions MUST write sync at every rate")
@@ -154,9 +155,9 @@ func TestAllow_ReadAllow_AsyncDrop_FallsBackToSync(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	actor := actorWithRoles(1, "default", tenantBinding("auditor", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	_, err = e.Allow(ctx, api.ActionAlertRead, api.Resource{TenantID: "default", Type: "alert"})
+	_, err = e.Allow(ctx, api.ActionAlertRead, api.Resource{Type: "alert"})
 	require.NoError(t, err)
 
 	// Async Submit returned false; the row must land in the sync

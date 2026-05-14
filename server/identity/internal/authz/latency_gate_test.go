@@ -44,14 +44,13 @@ func TestAllow_P99Latency(t *testing.T) {
 	require.NoError(t, err)
 
 	actor := &api.Actor{
-		UserID:   1,
-		TenantID: "default",
+		UserID: 1,
 		Roles: []api.RoleBinding{
-			{RoleID: "admin", TenantID: "default", ScopeType: api.RoleBindingScopeTenant, ScopeID: "*"},
+			{RoleID: "admin", ScopeType: api.RoleBindingScopeGlobal, ScopeID: "*"},
 		},
 	}
 	ctx := api.WithActor(t.Context(), actor)
-	resource := api.Resource{TenantID: "default", Type: "host", ID: "abc"}
+	resource := api.Resource{Type: "host", ID: "abc"}
 
 	// Warm-up: a couple of evals so the first run's compile-cache
 	// misses don't pollute the sample.

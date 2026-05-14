@@ -155,18 +155,6 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 		return d, nil
 	}
 
-	// Empty resource.TenantID would JSON-marshal to undefined under the
-	// `omitempty` removal below, but a caller that passes a zero-value
-	// Resource by accident still arrives here. Surface it explicitly:
-	// the deny is real (no tenant binding can match an undefined
-	// tenant) but `no_matching_rule` would hide the misconfiguration.
-	// Audit + a distinct reason makes the bug visible at the call site.
-	if resource.TenantID == "" {
-		d := api.Decision{Allow: false, Reason: "resource_tenant_missing"}
-		e.recordDecision(ctx, actor, action, resource, d)
-		return d, nil
-	}
-
 	input := map[string]any{
 		"actor":    actor,
 		"action":   string(action),

@@ -19,7 +19,7 @@ func TestOpen_AllContextsSchemaPresent(t *testing.T) {
 	// The rules context owns app_control_policies + app_control_rules
 	// (demo cut). The remaining two spec'd tables (host_groups +
 	// app_control_assignments) land with the full Phase A; for the
-	// demo every policy implicitly targets every host of the tenant.
+	// demo every policy implicitly targets every host in the deployment.
 	tables := map[string]string{
 		"users":                "identity",
 		"sessions":             "identity",

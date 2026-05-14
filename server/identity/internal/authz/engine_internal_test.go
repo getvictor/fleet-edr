@@ -189,7 +189,7 @@ func TestEngineErrorDecision(t *testing.T) {
 	require.NoError(t, err)
 	actor := &api.Actor{UserID: 1}
 	d := e.engineErrorDecision(t.Context(), actor, api.ActionHostIsolate,
-		api.Resource{TenantID: "default", Type: "host", ID: "h1"})
+		api.Resource{Type: "host", ID: "h1"})
 	assert.False(t, d.Allow, "engine_error must deny")
 	assert.Equal(t, "engine_error", d.Reason)
 	require.Len(t, rec.events, 1, "engine_error must emit exactly one audit row")

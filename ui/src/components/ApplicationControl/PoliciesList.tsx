@@ -7,7 +7,7 @@ import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
 import "./ApplicationControl.scss";
 
-// PoliciesList renders the per-tenant Application Control policy
+// PoliciesList renders the Application Control policy
 // roster. In the demo cut the seeded `Default` policy is the only
 // row; multi-policy is post-demo, so the "New policy" button renders
 // disabled with a "coming soon" tooltip — honest scaffolding rather

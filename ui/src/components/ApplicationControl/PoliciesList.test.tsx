@@ -7,7 +7,6 @@ import type { ApplicationControlPolicy } from "../../types";
 
 const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationControlPolicy => ({
   id: 1,
-  tenant_id: "default",
   name: "Default",
   description: "",
   version: 3,

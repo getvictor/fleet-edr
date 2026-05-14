@@ -17,8 +17,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/argon2"
-
-	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on
@@ -35,12 +33,11 @@ const (
 // User is the storage row. The password_hash / password_salt columns are intentionally
 // not exposed on the struct so callers that log a User can't accidentally leak them.
 //
-// TenantID and IsBreakglass back the wave-1 user-management surface; the AuthZ
-// chokepoint reads them when building the per-request Actor.
+// IsBreakglass backs the wave-1 user-management surface; the AuthZ
+// chokepoint reads it when building the per-request Actor.
 type User struct {
 	ID           int64     `db:"id" json:"id"`
 	Email        string    `db:"email" json:"email"`
-	TenantID     string    `db:"tenant_id" json:"tenant_id"`
 	IsBreakglass bool      `db:"is_breakglass" json:"is_breakglass"`
 	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
@@ -121,16 +118,13 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 // server-stored credential, only an external identity binding.
 type CreateOIDCRequest struct {
 	Email string
-	// TenantID may be empty; the schema's column DEFAULT 'default'
-	// fills it in. Phase 4a JIT always uses the seeded default tenant.
-	TenantID string
 }
 
 // CreateOIDC inserts a new user without a password and returns a
-// synthesized row carrying the inserted id + normalised email +
-// tenant. Email is normalised the same way Create does. Caller passes
-// an *sqlx.Tx executor so the JIT provisioner can roll the whole flow
-// back if the identity insert or role binding fails downstream.
+// synthesized row carrying the inserted id + normalised email. Email
+// is normalised the same way Create does. Caller passes an *sqlx.Tx
+// executor so the JIT provisioner can roll the whole flow back if the
+// identity insert or role binding fails downstream.
 //
 // The returned User does NOT round-trip through Get because Get reads
 // against s.db (outside the caller's tx) and the in-flight INSERT is
@@ -142,13 +136,9 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 	if email == "" {
 		return nil, errors.New(errEmailRequired)
 	}
-	tenantID := req.TenantID
-	if tenantID == "" {
-		tenantID = api.DefaultTenantID
-	}
 	res, err := ec.ExecContext(ctx,
-		`INSERT INTO users (email, tenant_id) VALUES (?, ?)`,
-		email, tenantID)
+		`INSERT INTO users (email) VALUES (?)`,
+		email)
 	if err != nil {
 		return nil, fmt.Errorf("insert oidc user: %w", err)
 	}
@@ -159,7 +149,6 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 	return &User{
 		ID:           id,
 		Email:        email,
-		TenantID:     tenantID,
 		IsBreakglass: false,
 	}, nil
 }
@@ -178,8 +167,7 @@ type Executor interface {
 // break-glass redemption flow sets them later in the same
 // transaction that consumes the bootstrap token.
 type CreateBreakglassRequest struct {
-	Email    string
-	TenantID string
+	Email string
 }
 
 // CreateBreakglass inserts the wave-1 break-glass admin user with
@@ -191,26 +179,22 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 	if email == "" {
 		return nil, errors.New(errEmailRequired)
 	}
-	tenantID := req.TenantID
-	if tenantID == "" {
-		tenantID = api.DefaultTenantID
-	}
 	// INSERT ... ON DUPLICATE KEY UPDATE id=id is the canonical
 	// MySQL idiom for "INSERT IGNORE that returns the row id".
 	// Plain INSERT IGNORE doesn't populate LastInsertId on
 	// duplicate, which would leave the caller without an id. The
 	// no-op UPDATE keeps the INSERT path cheap on repeated calls.
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (email, tenant_id, is_breakglass)
-		VALUES (?, ?, 1)
+		INSERT INTO users (email, is_breakglass)
+		VALUES (?, 1)
 		ON DUPLICATE KEY UPDATE id = id
-	`, email, tenantID)
+	`, email)
 	if err != nil {
 		return nil, fmt.Errorf("upsert breakglass user: %w", err)
 	}
 	var u User
 	err = s.db.GetContext(ctx, &u, `
-		SELECT id, email, tenant_id, is_breakglass, created_at, updated_at
+		SELECT id, email, is_breakglass, created_at, updated_at
 		FROM users WHERE email = ?
 	`, email)
 	if err != nil {
@@ -292,7 +276,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	var u User
 	err := s.db.GetContext(ctx, &u, `
-		SELECT id, email, tenant_id, is_breakglass, created_at, updated_at
+		SELECT id, email, is_breakglass, created_at, updated_at
 		FROM users WHERE email = ?
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -308,7 +292,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	var u User
 	err := s.db.GetContext(ctx, &u, `
-		SELECT id, email, tenant_id, is_breakglass, created_at, updated_at
+		SELECT id, email, is_breakglass, created_at, updated_at
 		FROM users WHERE id = ?
 	`, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -344,7 +328,6 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 	var row struct {
 		ID           int64     `db:"id"`
 		Email        string    `db:"email"`
-		TenantID     string    `db:"tenant_id"`
 		IsBreakglass bool      `db:"is_breakglass"`
 		PasswordHash []byte    `db:"password_hash"`
 		PasswordSalt []byte    `db:"password_salt"`
@@ -352,7 +335,7 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 		UpdatedAt    time.Time `db:"updated_at"`
 	}
 	err := s.db.GetContext(ctx, &row, `
-		SELECT id, email, tenant_id, is_breakglass, password_hash, password_salt, created_at, updated_at
+		SELECT id, email, is_breakglass, password_hash, password_salt, created_at, updated_at
 		FROM users WHERE email = ?
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -372,8 +355,8 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 	}
 	return &User{
 		ID: row.ID, Email: row.Email,
-		TenantID: row.TenantID, IsBreakglass: row.IsBreakglass,
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		IsBreakglass: row.IsBreakglass,
+		CreatedAt:    row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 

@@ -10,20 +10,11 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 )
 
-// TestTenants_NilDBRejected pins the precondition contract on the
-// tenants seed: a nil sqlx.DB must produce a typed error rather than
-// a nil deref. Tests are external (package seed_test) so the seed
-// package's exported surface is the only path under test, matching
-// how cmd/main calls it through identity bootstrap.
-func TestTenants_NilDBRejected(t *testing.T) {
-	err := seed.Tenants(context.Background(), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "db must not be nil")
-}
-
-// TestRoles_NilDBRejected mirrors TestTenants_NilDBRejected for the
-// roles seed. Together they pin the "every seed function rejects a
-// nil DB up front" invariant the bootstrap path relies on.
+// TestRoles_NilDBRejected pins the precondition contract on the roles
+// seed: a nil sqlx.DB must produce a typed error rather than a nil
+// deref. Tests are external (package seed_test) so the seed package's
+// exported surface is the only path under test, matching how cmd/main
+// calls it through identity bootstrap.
 func TestRoles_NilDBRejected(t *testing.T) {
 	err := seed.Roles(context.Background(), nil)
 	require.Error(t, err)

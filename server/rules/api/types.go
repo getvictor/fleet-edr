@@ -264,7 +264,6 @@ const (
 // listing endpoints; bare Get omits it.
 type ApplicationControlPolicy struct {
 	ID            int64                    `json:"id"`
-	TenantID      string                   `json:"tenant_id"`
 	Name          string                   `json:"name"`
 	Description   string                   `json:"description"`
 	Version       int64                    `json:"version"`
@@ -317,7 +316,7 @@ type CreateRuleRequest struct {
 // REST handlers via IsApplicationControlValidationError.
 var (
 	// ErrAppControlPolicyNotFound is returned when the named policy
-	// row does not exist for the tenant.
+	// row does not exist.
 	ErrAppControlPolicyNotFound = errors.New("rules: application control policy not found")
 
 	// ErrAppControlInvalidRuleType is returned when the rule_type is
@@ -374,8 +373,8 @@ func IsApplicationControlValidationError(err error) bool {
 // outside the rules tree depend on the contract without pulling in
 // the internal package (ADR-0004's bounded-context import rule).
 type ApplicationControlStore interface {
-	GetPolicyByName(ctx context.Context, tenantID, name string) (ApplicationControlPolicy, error)
-	ListPolicies(ctx context.Context, tenantID string) ([]ApplicationControlPolicy, error)
+	GetPolicyByName(ctx context.Context, name string) (ApplicationControlPolicy, error)
+	ListPolicies(ctx context.Context) ([]ApplicationControlPolicy, error)
 	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
 	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
 }

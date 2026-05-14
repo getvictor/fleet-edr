@@ -5,8 +5,9 @@
 // (see server/identity/internal/authz); this file is the public
 // boundary other contexts depend on.
 //
-// Wave-1 honours `scope_type='tenant'` only. Bindings with
-// 'host_group' or 'host' scopes are persisted (the schema column
+// The product is a single-instance deployment, so wave-1 honours
+// `scope_type='tenant'` only (meaning "deployment-wide"). Bindings
+// with 'host_group' or 'host' scopes are persisted (the schema column
 // reserves them) but the chokepoint denies them with reason
 // `scope_not_yet_supported` until the wave-2 resolver ships.
 
@@ -99,26 +100,16 @@ func RegisteredActions() []Action {
 // Resource pins what the action operates on. JSON-marshals into the
 // OPA `input.resource` map. Type and ID are populated only when
 // meaningful for the action; zero-value strings are valid (e.g.
-// unary actions like audit.read against the whole tenant pass an
-// empty Type and ID).
+// unary actions like audit.read against the whole deployment pass
+// an empty Type and ID).
 //
-// TenantID is intentionally NOT tagged `omitempty`: the Rego policy
-// equates `binding.tenant_id == input.resource.tenant_id`, and
-// `omitempty` would erase the field from the OPA input on a
-// zero-value caller, leaving `input.resource.tenant_id` undefined
-// and silently producing `no_matching_rule` deny. The chokepoint
-// also short-circuits empty TenantID with `resource_tenant_missing`
-// so the misconfiguration is visible in the audit log; the JSON tag
-// is the second line of defense.
-//
-// Wave 1: TenantID + Type + ID is enough for tenant-scope evaluation.
+// Wave 1: Type + ID is enough for the deployment-wide scope evaluation.
 // Wave 2 will grow ABAC-shaped fields (labels, source IP, severity)
 // here without breaking existing call sites because OPA's input map
 // is open.
 type Resource struct {
-	TenantID string `json:"tenant_id"`
-	Type     string `json:"type,omitempty"`
-	ID       string `json:"id,omitempty"`
+	Type string `json:"type,omitempty"`
+	ID   string `json:"id,omitempty"`
 	// Severity is set only on alert-typed resources; it conditions
 	// the reauth-required gate. Phase 5: alert.resolve when
 	// severity=="critical" requires actor.session_fresh; lower
@@ -134,10 +125,10 @@ type Resource struct {
 //
 // Standard reason values:
 //
-//   - "granted": the policy matched a tenant binding.
+//   - "granted": the policy matched a deployment-wide binding.
 //   - "no_matching_rule": no role granted the action.
-//   - "scope_not_yet_supported": only non-tenant scopes matched
-//     (wave-1 placeholder for the wave-2 resolver).
+//   - "scope_not_yet_supported": only non-deployment scopes matched
+//     (wave-1 placeholder for the wave-2 host_group + host resolver).
 //   - "action_not_registered": the caller passed an Action not in
 //     RegisteredActions; defense in depth.
 //   - "no_actor": the request reached the chokepoint without an
@@ -158,13 +149,12 @@ type Decision struct {
 // rename or addition is a compile error, not a silent drift between
 // the engine, HTTPGate, and the audit-log dashboard.
 const (
-	ReasonGranted               = "granted"
-	ReasonNoMatchingRule        = "no_matching_rule"
-	ReasonScopeNotYetSupported  = "scope_not_yet_supported"
-	ReasonActionNotRegistered   = "action_not_registered"
-	ReasonNoActor               = "no_actor"
-	ReasonResourceTenantMissing = "resource_tenant_missing"
-	ReasonReauthRequired        = "reauth_required"
+	ReasonGranted              = "granted"
+	ReasonNoMatchingRule       = "no_matching_rule"
+	ReasonScopeNotYetSupported = "scope_not_yet_supported"
+	ReasonActionNotRegistered  = "action_not_registered"
+	ReasonNoActor              = "no_actor"
+	ReasonReauthRequired       = "reauth_required"
 )
 
 // Actor is built once by session middleware and threaded through
@@ -178,7 +168,6 @@ const (
 // direction.
 type Actor struct {
 	UserID       int64         `json:"user_id"`
-	TenantID     string        `json:"tenant_id"`
 	IsBreakglass bool          `json:"is_breakglass"`
 	AuthMethod   string        `json:"auth_method"`
 	Roles        []RoleBinding `json:"roles"`

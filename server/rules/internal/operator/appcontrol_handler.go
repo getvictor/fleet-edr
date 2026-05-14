@@ -73,13 +73,12 @@ func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *AppControlHandler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tenantID := identityapi.ActorTenantID(ctx)
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
 		identityapi.ActionAppControlRead,
-		identityapi.Resource{TenantID: tenantID, Type: "application_control"}) {
+		identityapi.Resource{Type: "application_control"}) {
 		return
 	}
-	policies, err := h.svc.ListPolicies(ctx, tenantID)
+	policies, err := h.svc.ListPolicies(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "appcontrol list policies", "err", err)
 		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
@@ -90,10 +89,9 @@ func (h *AppControlHandler) handleListPolicies(w http.ResponseWriter, r *http.Re
 
 func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tenantID := identityapi.ActorTenantID(ctx)
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
 		identityapi.ActionAppControlRead,
-		identityapi.Resource{TenantID: tenantID, Type: "application_control"}) {
+		identityapi.Resource{Type: "application_control"}) {
 		return
 	}
 	policyID, ok := parsePolicyID(r)
@@ -101,7 +99,7 @@ func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Reque
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
 		return
 	}
-	policy, err := h.svc.GetPolicyWithRules(ctx, tenantID, policyID)
+	policy, err := h.svc.GetPolicyWithRules(ctx, policyID)
 	if err != nil {
 		if errors.Is(err, api.ErrAppControlPolicyNotFound) {
 			writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.policy_not_found", "policy not found")
@@ -132,10 +130,9 @@ type createRuleRequest struct {
 
 func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tenantID := identityapi.ActorTenantID(ctx)
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
 		identityapi.ActionAppControlRuleCreate,
-		identityapi.Resource{TenantID: tenantID, Type: "application_control"}) {
+		identityapi.Resource{Type: "application_control"}) {
 		return
 	}
 	policyID, ok := parsePolicyID(r)
@@ -166,7 +163,7 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	rule, err := h.svc.CreateRule(ctx, tenantID, api.CreateRuleRequest{
+	rule, err := h.svc.CreateRule(ctx, api.CreateRuleRequest{
 		PolicyID:   policyID,
 		RuleType:   req.RuleType,
 		Identifier: req.Identifier,
@@ -220,8 +217,8 @@ func parsePolicyID(r *http.Request) (int64, bool) {
 // actorIdentifierFromContext returns a stable string identifier the
 // store + audit row use as the "who authored this" tag. The actor's
 // email isn't on identityapi.Actor today (Actor carries UserID +
-// TenantID + Roles but not email; the audit recorder fetches the
-// email separately when writing the row), so this helper renders the
+// Roles but not email; the audit recorder fetches the email
+// separately when writing the row), so this helper renders the
 // canonical `user:<id>` shape the store-level "actor is required"
 // gate accepts. Empty when no actor is on ctx, which lets the
 // store-level Actor required check produce a typed 400 rather than

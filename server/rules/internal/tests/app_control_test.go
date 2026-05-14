@@ -36,14 +36,13 @@ func newAppControlStore(t *testing.T) (api.ApplicationControlStore, *rulesbootst
 }
 
 // TestAppControl_SeedDefaultPolicy locks the bootstrap contract: a
-// fresh tenant boots with one Default policy, version 1, zero rules,
-// default_action='NONE'.
+// fresh deployment boots with one Default policy, version 1, zero
+// rules, default_action='NONE'.
 func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 	store, _ := newAppControlStore(t)
 
-	p, err := store.GetPolicyByName(t.Context(), "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
 	require.NoError(t, err)
-	assert.Equal(t, "default", p.TenantID)
 	assert.Equal(t, api.DefaultPolicyName, p.Name)
 	assert.Equal(t, int64(1), p.Version)
 	assert.Equal(t, api.PolicyDefaultActionNone, p.DefaultAction)
@@ -56,16 +55,15 @@ func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 }
 
 // TestAppControl_BootstrapIdempotent re-applies the schema and seed
-// and confirms the policy count stays at one per tenant_id scope.
-// Boot loops (e.g. cmd/main on restart) must not duplicate the seed
-// row.
+// and confirms the policy count stays at one. Boot loops (e.g.
+// cmd/main on restart) must not duplicate the seed row.
 func TestAppControl_BootstrapIdempotent(t *testing.T) {
 	store, rules := newAppControlStore(t)
 
 	require.NoError(t, rules.ApplySchema(t.Context()))
 	require.NoError(t, rules.ApplySchema(t.Context()))
 
-	policies, err := store.ListPolicies(t.Context(), "default")
+	policies, err := store.ListPolicies(t.Context())
 	require.NoError(t, err)
 	require.Len(t, policies, 1)
 	assert.Equal(t, api.DefaultPolicyName, policies[0].Name)
@@ -76,7 +74,7 @@ func TestAppControl_BootstrapIdempotent(t *testing.T) {
 func TestAppControl_GetPolicy_NotFound(t *testing.T) {
 	store, _ := newAppControlStore(t)
 
-	_, err := store.GetPolicyByName(t.Context(), "default", "no-such-policy")
+	_, err := store.GetPolicyByName(t.Context(), "no-such-policy")
 	require.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
 }
 
@@ -87,7 +85,7 @@ func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
 
-	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	preVersion := p.Version
 
@@ -117,7 +115,7 @@ func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 
 	// Policy version bumps so the next agent fan-out delivers the new
 	// snapshot.
-	pAfter, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	pAfter, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	assert.Equal(t, preVersion+1, pAfter.Version)
 	assert.Equal(t, "demo-admin", pAfter.UpdatedBy)
@@ -136,7 +134,7 @@ func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
-	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	req := api.CreateRuleRequest{
 		PolicyID:   p.ID,
@@ -162,7 +160,7 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
-	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	for _, rt := range []api.RuleType{
 		api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeCertificate, api.RuleTypeTeamID, api.RuleTypePath,
@@ -186,7 +184,7 @@ func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
-	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	cases := []struct {
 		name string
@@ -219,7 +217,7 @@ func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 func TestAppControl_CreateRule_RequiresActorAndReason(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
-	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	base := api.CreateRuleRequest{
 		PolicyID:   p.ID,
@@ -271,7 +269,7 @@ func TestAppControl_CreateRule_AtomicityOnVersionBumpFailure(t *testing.T) {
 	store, rules := newAppControlStore(t)
 	ctx := t.Context()
 	_ = rules
-	p, err := store.GetPolicyByName(ctx, "default", api.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	// Happy path first so we know the rule WOULD insert.
 	_, err = store.CreateRule(ctx, api.CreateRuleRequest{

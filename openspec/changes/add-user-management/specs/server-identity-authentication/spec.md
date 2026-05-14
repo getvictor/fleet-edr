@@ -44,7 +44,7 @@ and redirect the browser to the application's home view.
 The system SHALL provision a user account on first successful Okta login when
 `auth.oidc.allow_jit_provisioning` is enabled and no identity row exists for the
 incoming `(provider, subject)` pair. The newly-created user SHALL be bound to the
-seeded `analyst` role at the deployment's tenant scope, MUST NOT inherit any other role
+seeded `analyst` role at the deployment-wide scope, MUST NOT inherit any other role
 from claims (group → role mapping is out of scope for wave 1), and the provisioning
 SHALL emit an audit row with action `user.created`. When `allow_jit_provisioning` is
 disabled, an unknown subject SHALL be denied with an audit row whose reason is
@@ -57,7 +57,7 @@ disabled, an unknown subject SHALL be denied with an audit row whose reason is
 - **WHEN** the callback handler processes a verified ID token
 - **THEN** the server inserts a `users` row with `password_hash = NULL` and
   `is_breakglass = 0`, an `identities` row keyed by `(provider, subject)`, and a
-  `role_bindings` row to the seeded `analyst` role at tenant scope
+  `role_bindings` row to the seeded `analyst` role at the deployment-wide scope
 - **AND** the audit log records `action='user.created'` with the actor identity and the
   resulting user id
 

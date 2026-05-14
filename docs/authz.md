@@ -76,10 +76,9 @@ diagnosis flow.
 | `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | — |
 | `no_matching_rule` | The actor's role bindings don't grant the action. | Bind the appropriate role via SQL (see below). |
 | `reauth_required` | The actor's session is past the reauth window (default 30m). The role grants the action; the operator just needs to re-prove possession of credentials. | UI handles this automatically via the reauth modal. If a non-UI client hits it, follow `challenge.reauth_url` and retry. |
-| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. Wave-1 only honours `tenant` scopes. | Persist a `tenant`-scoped binding instead — `host_group`/`host` scopes are wave-2. |
+| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. Wave-1 only honours the deployment-wide `tenant` scope. | Persist a `tenant`-scoped binding instead — `host_group`/`host` scopes are wave-2. |
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
 | `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug — the session middleware is misconfigured for the route. Check the route's middleware chain. |
-| `resource_tenant_missing` | The handler built a `Resource` with an empty `TenantID`. | Server bug. The handler should call `api.ActorTenantID(ctx)` to populate the field. |
 
 The audit-log row's `payload` carries `reason` matching the header.
 The granting role is not on the payload today — derive it by joining
@@ -91,18 +90,17 @@ There is no admin API in wave 1; bindings go in via SQL. The shape
 mirrors `server/identity/bootstrap/schema.go`:
 
 ```sql
-INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id)
+INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
 VALUES (
   <user_id>,           -- users.id
   'admin',             -- one of: super_admin, admin, senior_analyst, analyst, auditor
-  'default',           -- wave-1 deployments use a single tenant
-  'tenant',            -- wave-1 honours only tenant scope
-  '*'                  -- wildcard for the tenant scope
+  'tenant',            -- wave-1 honours only the deployment-wide scope
+  '*'                  -- wildcard for the deployment-wide scope
 );
 ```
 
-The `(user_id, role_id, tenant_id, scope_type, scope_id)` tuple is
-the `uk_role_bindings` UNIQUE key (the row's primary key is an
+The `(user_id, role_id, scope_type, scope_id)` tuple is the
+`uk_role_bindings` UNIQUE key (the row's primary key is an
 auto-increment `id`). Re-running the same INSERT raises a
 duplicate-key error rather than a silent no-op, which is the safer
 direction. To upsert deliberately, add `ON DUPLICATE KEY UPDATE`.

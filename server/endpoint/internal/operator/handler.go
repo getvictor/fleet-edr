@@ -69,7 +69,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "enrollment"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRead, identityapi.Resource{Type: "enrollment"}) {
 		return
 	}
 	rows, err := h.svc.List(ctx)
@@ -96,7 +96,7 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
 		return
 	}
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRevoke, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "enrollment", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRevoke, identityapi.Resource{Type: "enrollment", ID: hostID}) {
 		return
 	}
 
@@ -190,7 +190,7 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing host_id")
 		return
 	}
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRotateToken, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "enrollment", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionEnrollmentRotateToken, identityapi.Resource{Type: "enrollment", ID: hostID}) {
 		return
 	}
 

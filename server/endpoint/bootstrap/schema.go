@@ -34,14 +34,12 @@ var schemaStatements = []string{
 		agent_version              VARCHAR(64)    NOT NULL,
 		os_version                 VARCHAR(128)   NOT NULL,
 		source_ip                  VARCHAR(45)    NOT NULL,
-		tenant_id                  VARCHAR(64)    NOT NULL DEFAULT 'default',
 		enrolled_at                TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		expires_at                 TIMESTAMP(6)   NULL,
 		revoked_at                 TIMESTAMP(6)   NULL,
 		revoke_reason              VARCHAR(128)   NULL,
 		revoked_by                 VARCHAR(255)   NULL,
 		UNIQUE KEY uk_enrollments_token_id (host_token_id),
-		INDEX idx_enrollments_prev_token (previous_host_token_id),
-		INDEX idx_enrollments_tenant_id (tenant_id)
+		INDEX idx_enrollments_prev_token (previous_host_token_id)
 	)`,
 }

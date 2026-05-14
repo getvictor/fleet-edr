@@ -40,8 +40,8 @@ const DefaultAdminRole = "super_admin"
 
 // mysqlErrDupEntry is the SQL state for "row already exists with the
 // unique key you tried to insert." We rely on the role_bindings unique
-// key (user_id, role_id, tenant_id, scope_type, scope_id) to make the
-// seed idempotent across container restarts; a duplicate just means
+// key (user_id, role_id, scope_type, scope_id) to make the seed
+// idempotent across container restarts; a duplicate just means
 // "already seeded, nothing to do."
 const mysqlErrDupEntry = 1062
 
@@ -55,8 +55,8 @@ const mysqlErrDupEntry = 1062
 // The role binding is inserted on every call so a deployment that
 // somehow lost the binding (manual SQL surgery, partially-restored
 // backup) self-heals on the next restart. The rbac unique key
-// (user_id, role_id, tenant_id, scope_type, scope_id) makes the
-// insert a no-op when the binding already exists.
+// (user_id, role_id, scope_type, scope_id) makes the insert a no-op
+// when the binding already exists.
 //
 // The stderr writer is no longer used: the redemption-token banner
 // is emitted by cmd/main via breakglass.Service.IssueSetupToken so
@@ -123,8 +123,7 @@ func bindSuperAdmin(ctx context.Context, rb *rbac.Store, u *users.User, logger *
 	err := rb.BindRole(ctx, rb.DB(), rbac.BindRoleRequest{
 		UserID:    u.ID,
 		RoleID:    DefaultAdminRole,
-		TenantID:  api.DefaultTenantID,
-		ScopeType: string(api.RoleBindingScopeTenant),
+		ScopeType: string(api.RoleBindingScopeGlobal),
 		ScopeID:   "*",
 	})
 	var mysqlErr *mysql.MySQLError

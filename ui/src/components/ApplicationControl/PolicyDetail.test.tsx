@@ -24,7 +24,6 @@ const makeRule = (over: Partial<ApplicationControlRule> = {}): ApplicationContro
 
 const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationControlPolicy => ({
   id: 7,
-  tenant_id: "default",
   name: "Default",
   description: "Default app-control policy fixture",
   version: 5,

@@ -45,10 +45,9 @@ func newEngine(t *testing.T) (*authz.Engine, *recordingAudit) {
 	return e, rec
 }
 
-func actorWithRoles(uid int64, tenant string, roles ...api.RoleBinding) *api.Actor {
+func actorWithRoles(uid int64, _ string, roles ...api.RoleBinding) *api.Actor {
 	return &api.Actor{
 		UserID:     uid,
-		TenantID:   tenant,
 		AuthMethod: "local_password",
 		Roles:      roles,
 		// Default to fresh so the role/action matrix tests can pin
@@ -60,11 +59,10 @@ func actorWithRoles(uid int64, tenant string, roles ...api.RoleBinding) *api.Act
 	}
 }
 
-func tenantBinding(roleID, tenantID string) api.RoleBinding {
+func globalBinding(roleID, _ string) api.RoleBinding {
 	return api.RoleBinding{
 		RoleID:    roleID,
-		TenantID:  tenantID,
-		ScopeType: api.RoleBindingScopeTenant,
+		ScopeType: api.RoleBindingScopeGlobal,
 		ScopeID:   api.RoleBindingScopeWildcard,
 	}
 }
@@ -125,9 +123,9 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 	e, _ := newEngine(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			actor := actorWithRoles(1, "default", tenantBinding(tc.roleID, "default"))
+			actor := actorWithRoles(1, "default", globalBinding(tc.roleID, "default"))
 			ctx := api.WithActor(t.Context(), actor)
-			d, err := e.Allow(ctx, tc.action, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
+			d, err := e.Allow(ctx, tc.action, api.Resource{Type: "host", ID: "abc"})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantAllow, d.Allow, "decision %+v", d)
 		})
@@ -172,9 +170,9 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 		t.Run(string(action), func(t *testing.T) {
 			granted := false
 			for _, role := range roles {
-				actor := actorWithRoles(1, "default", tenantBinding(role, "default"))
+				actor := actorWithRoles(1, "default", globalBinding(role, "default"))
 				ctx := api.WithActor(t.Context(), actor)
-				d, err := e.Allow(ctx, action, api.Resource{TenantID: "default"})
+				d, err := e.Allow(ctx, action, api.Resource{})
 				require.NoError(t, err)
 				if d.Allow {
 					granted = true
@@ -196,9 +194,9 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 // is denied with reason action_not_registered before Rego sees it.
 func TestAllow_UnregisteredAction_Denied(t *testing.T) {
 	e, rec := newEngine(t)
-	actor := actorWithRoles(1, "default", tenantBinding("super_admin", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("super_admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.Action("not.a.real.action"), api.Resource{TenantID: "default"})
+	d, err := e.Allow(ctx, api.Action("not.a.real.action"), api.Resource{})
 	require.NoError(t, err)
 	assert.False(t, d.Allow)
 	assert.Equal(t, "action_not_registered", d.Reason)
@@ -227,11 +225,11 @@ func TestAllow_NoActor_Denied(t *testing.T) {
 func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default", api.RoleBinding{
-		RoleID: "admin", TenantID: "default",
+		RoleID:    "admin",
 		ScopeType: api.RoleBindingScopeHost, ScopeID: "abc",
 	})
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
+	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "abc"})
 	require.NoError(t, err)
 	assert.False(t, d.Allow)
 	assert.Equal(t, "scope_not_yet_supported", d.Reason)
@@ -245,27 +243,14 @@ func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 func TestAllow_TenantGrantWinsOverHostScopeDeny(t *testing.T) {
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default",
-		tenantBinding("admin", "default"),
-		api.RoleBinding{RoleID: "admin", TenantID: "default", ScopeType: api.RoleBindingScopeHost, ScopeID: "abc"},
+		globalBinding("admin", "default"),
+		api.RoleBinding{RoleID: "admin", ScopeType: api.RoleBindingScopeHost, ScopeID: "abc"},
 	)
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
+	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "abc"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	assert.Equal(t, "granted", d.Reason)
-}
-
-// TestAllow_CrossTenantDeny enforces wave-1 tenant isolation: an
-// actor in tenant A is denied actions on a resource in tenant B even
-// when the role would normally grant the action.
-func TestAllow_CrossTenantDeny(t *testing.T) {
-	e, _ := newEngine(t)
-	actor := actorWithRoles(1, "tenant_a", tenantBinding("admin", "tenant_a"))
-	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "tenant_b", Type: "host", ID: "abc"})
-	require.NoError(t, err)
-	assert.False(t, d.Allow)
-	assert.Equal(t, "no_matching_rule", d.Reason)
 }
 
 // TestAllow_NilAuditDoesNotPanic guards the test-only path where a
@@ -274,9 +259,9 @@ func TestAllow_CrossTenantDeny(t *testing.T) {
 func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
 	e, err := authz.New(t.Context(), nil, nil, authz.Options{})
 	require.NoError(t, err)
-	actor := actorWithRoles(1, "default", tenantBinding("super_admin", "default"))
+	actor := actorWithRoles(1, "default", globalBinding("super_admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)
-	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "abc"})
+	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "abc"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 }

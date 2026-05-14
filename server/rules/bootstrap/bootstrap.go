@@ -41,13 +41,13 @@ type Deps struct {
 
 	// CommandInserter is the closure that enqueues a response.Command
 	// to a host. The application-control fan-out path consults it on
-	// every rule-create so every enrolled host in the tenant receives
-	// one `set_application_control` command per mutation. Optional:
-	// when nil, the application-control REST routes are not mounted
-	// (the rules context still constructs cleanly so non-REST consumers
-	// like tools/gen-rule-docs keep working).
+	// every rule-create so every enrolled host in the deployment
+	// receives one `set_application_control` command per mutation.
+	// Optional: when nil, the application-control REST routes are not
+	// mounted (the rules context still constructs cleanly so non-REST
+	// consumers like tools/gen-rule-docs keep working).
 	CommandInserter appcontrol.CommandInserter
-	// HostLister enumerates the tenant's enrolled hosts for the
+	// HostLister enumerates the deployment's enrolled hosts for the
 	// fan-out. cmd/main passes a wrapper over
 	// detection.api.Service.ListHosts that projects each HostSummary
 	// down to its host_id. Same optional-when-nil contract as
@@ -119,10 +119,8 @@ func (r *Rules) ApplySchema(ctx context.Context) error {
 	if err := ApplySchema(ctx, r.db); err != nil {
 		return err
 	}
-	// Seed the Default policy after the table exists. The "default"
-	// tenant id is the single-tenant value every deployment uses; a
-	// future multi-org fork would iterate over real tenants here.
-	if err := r.appControlSt.EnsureDefaultPolicy(ctx, "default"); err != nil {
+	// Seed the Default policy after the table exists.
+	if err := r.appControlSt.EnsureDefaultPolicy(ctx); err != nil {
 		return fmt.Errorf("rules seed default app control policy: %w", err)
 	}
 	return nil

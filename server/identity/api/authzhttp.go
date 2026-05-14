@@ -108,16 +108,3 @@ func writeReauthRequired(ctx context.Context, logger *slog.Logger, w http.Respon
 		"challenge": ch,
 	})
 }
-
-// ActorTenantID returns the actor's tenant_id from ctx, or "" if no
-// actor is present. The chokepoint short-circuits empty TenantID with
-// reason resource_tenant_missing AND records the regression in the
-// audit log; callers therefore prefer this helper over an explicit
-// ActorFromContext check at the handler level (no 401 short-circuit
-// needed; the missing-actor case is itself an audit signal).
-func ActorTenantID(ctx context.Context) string {
-	if a, ok := ActorFromContext(ctx); ok {
-		return a.TenantID
-	}
-	return ""
-}

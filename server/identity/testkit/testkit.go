@@ -86,9 +86,9 @@ type SeededUser struct {
 // SeedJITUser inserts the rows an OIDC JIT-provisioned operator would
 // land in: users + identities (provider='oidc', subject="oidc:<email>"
 // to mimic an IdP-stable subject distinct from the email column) +
-// role_bindings (tenant scope, no expiry) + a fresh session. Returns
-// the user id + the cookie/CSRF pair the test plugs into HTTP requests
-// against the protected mux.
+// role_bindings (deployment-wide scope, no expiry) + a fresh session.
+// Returns the user id + the cookie/CSRF pair the test plugs into HTTP
+// requests against the protected mux.
 //
 // Cross-context tests use this to skip the full OIDC dance — the OIDC
 // callback flow is exhaustively covered in the oidc package's own
@@ -114,8 +114,8 @@ func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
 	ctx := t.Context()
 
 	userRes, err := db.ExecContext(ctx,
-		`INSERT INTO users (email, tenant_id, status) VALUES (?, ?, 'active')`,
-		email, api.DefaultTenantID)
+		`INSERT INTO users (email, status) VALUES (?, 'active')`,
+		email)
 	require.NoErrorf(t, err, "seed user %q", email)
 	userID, err := userRes.LastInsertId()
 	require.NoError(t, err)
@@ -129,9 +129,9 @@ func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id)
-		 VALUES (?, ?, ?, 'tenant', '*')`,
-		userID, role, api.DefaultTenantID)
+		`INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
+		 VALUES (?, ?, 'global', '*')`,
+		userID, role)
 	require.NoErrorf(t, err, "seed role binding %s for user %d", role, userID)
 
 	sessionStore := sessions.New(db, sessions.Options{})

@@ -54,9 +54,9 @@ type Service interface {
 	CleanupExpiredSessions(ctx context.Context) (int64, error)
 
 	// LoadActor builds the per-request actor for the AuthZ chokepoint.
-	// Composes the user row (tenant_id, is_breakglass) with the
-	// caller's live role bindings; both queries are indexed and run
-	// well under the chokepoint's p99 latency budget.
+	// Composes the user row (is_breakglass) with the caller's live
+	// role bindings; both queries are indexed and run well under the
+	// chokepoint's p99 latency budget.
 	//
 	// authMethod records how the session was authenticated
 	// ('local_password' for break-glass, 'oidc' for SSO).

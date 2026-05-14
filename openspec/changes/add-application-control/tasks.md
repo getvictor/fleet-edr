@@ -24,9 +24,9 @@
   `app_control_rules`, `host_groups`, and `app_control_assignments` with the columns described in the
   `server-application-control` capability spec. Include the reserved columns (`default_action`,
   `enforcement`, `source`, `source_ref`, `severity`, `expires_at`) and the
-  `(tenant_id, rule_type, identifier)` unique key.
-- [ ] 2.2 Add per-tenant idempotent bootstrap that seeds the built-in `all-hosts` host group, the
-  `Default` policy with zero rules and `default_action='NONE'`, and the assignment connecting them.
+  `(policy_id, rule_type, identifier)` unique key.
+- [ ] 2.2 Add idempotent bootstrap that seeds the built-in `all-hosts` host group, the `Default`
+  policy with zero rules and `default_action='NONE'`, and the assignment connecting them.
 - [ ] 2.3 Per-context integration tests at `server/rules/internal/tests/` covering the seed shape, the
   unique-key dedup, the bootstrap idempotency, and the typed-enum constraints.
 
@@ -103,12 +103,10 @@
   test guards against regression into the duplicate-enqueue shape that CodeRabbit flagged on the spec.
 - [ ] 6.7 Ingest handler for `application_control_block` events binds the event to the host_id resolved
   by the existing host-token middleware. The handler MUST reject (with 4xx) any event whose envelope
-  `host_id` does not match the authenticated host, and MUST resolve the event's tenant from the
-  enrollment row rather than trusting any tenant value supplied by the agent.
+  `host_id` does not match the authenticated host.
 - [ ] 6.8 Integration test for ingest authenticity binding: an authenticated agent posting an event
   with a forged envelope `host_id` (someone else's host) is rejected; an event whose envelope omits
-  `host_id` is accepted and stamped with the authenticated host id; an event whose envelope claims a
-  different tenant than the enrollment's tenant is overridden by the enrollment row's tenant.
+  `host_id` is accepted and stamped with the authenticated host id.
 - [ ] 6.9 Cross-context integration test at `test/integration/app_control_test.go`: create a rule via
   the REST API, observe the audit event, observe the enqueued command for the test host, observe the
   extension applies the snapshot and denies the matching exec, observe the resulting alert appears via

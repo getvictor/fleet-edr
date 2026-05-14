@@ -81,8 +81,8 @@ export async function promote(
   role: "admin" | "senior_analyst" | "auditor" | "super_admin",
 ): Promise<void> {
   await db.query(
-    `INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id)
-     SELECT id, ?, tenant_id, 'tenant', '*' FROM users WHERE email = ?`,
+    `INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
+     SELECT id, ?, 'tenant', '*' FROM users WHERE email = ?`,
     [role, email],
   );
 }

@@ -77,7 +77,7 @@ func TestProvisionOrFind_JITNewUser(t *testing.T) {
 		`SELECT role_id, scope_type FROM role_bindings WHERE user_id = ?`, uid).
 		Scan(&roleID, &scopeType))
 	assert.Equal(t, oidc.DefaultJITRole, roleID)
-	assert.Equal(t, "tenant", scopeType)
+	assert.Equal(t, "global", scopeType)
 
 	// One audit row emitted with the right action + payload. Spec
 	// pins the JIT-creation action as "user.created" (the OIDC flow is

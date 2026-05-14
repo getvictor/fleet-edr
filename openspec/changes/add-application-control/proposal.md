@@ -28,9 +28,9 @@ preserving a compatibility window. No data migrations, no agent capability negot
   this is in customer hands; the singleton model is the wrong shape for the EDR-grade subsystem this change
   introduces.
 - Add the **Application Control** subsystem under the existing `rules` bounded context. Four tables:
-  `app_control_policies` (named, versioned ruleset per tenant), `app_control_rules` (one row per rule),
+  `app_control_policies` (named, versioned ruleset per deployment), `app_control_rules` (one row per rule),
   `host_groups` (membership criteria), `app_control_assignments` (policy → host group, with priority for future
-  conflict resolution). Built-in `all-hosts` group and a `Default` policy are seeded per tenant.
+  conflict resolution). A built-in `all-hosts` group and a `Default` policy are seeded on first boot.
 - Add six rule identifier types with fixed precedence walked CDHASH → BINARY → SIGNINGID → CERTIFICATE → TEAMID
   → PATH:
   - `CDHASH` — 40 hex characters, matched only against processes that run under Apple's Hardened Runtime.

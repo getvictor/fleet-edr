@@ -130,44 +130,13 @@ func WithSessionForTest(ctx context.Context, s *Session) context.Context {
 
 // ----- User-management wave-1 read shapes -------------------------------------------
 //
-// The next three types describe the wave-1 user-management surface
-// (tenants, roles, role-bindings) at the public boundary. This change
-// ships the schema + seeds; the AuthZ interface that consumes
-// RoleBinding (along with its Action constants) and the user-management
-// writers are intentionally absent and land in follow-up changes.
-// Keeping the read shapes here means the follow-up that introduces the
-// chokepoint can wire it up without churning api/.
-
-// TenantStatus is the lifecycle status of a tenant row. Wave 1 uses
-// only `active`; `suspended` is reserved for the wave-2 admin surface
-// that allows freezing a tenant without deleting its data.
-type TenantStatus string
-
-const (
-	// TenantStatusActive is a tenant accepting reads and writes.
-	TenantStatusActive TenantStatus = "active"
-	// TenantStatusSuspended is a tenant whose actor sessions are
-	// rejected at the chokepoint. Reserved for wave 2.
-	TenantStatusSuspended TenantStatus = "suspended"
-)
-
-// DefaultTenantID is the wave-1 scaffolding tenant's id. Every long-
-// lived table defaults its tenant_id to this string. Wave-1 reads do
-// not filter on tenant_id; the constant lives here because the future
-// Actor type carries TenantID and the chokepoint will need a sentinel
-// for "no explicit tenant header".
-const DefaultTenantID = "default"
-
-// Tenant is the operator-visible tenant record. Wave 1 has exactly one
-// row (id=DefaultTenantID); the type exists so the eventual admin API
-// (wave 2) can consume the same wire shape without a rename.
-type Tenant struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Status    TenantStatus `json:"status"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
-}
+// The next two types describe the wave-1 user-management surface
+// (roles, role-bindings) at the public boundary. This change ships the
+// schema + seeds; the AuthZ interface that consumes RoleBinding (along
+// with its Action constants) and the user-management writers are
+// intentionally absent and land in follow-up changes. Keeping the read
+// shapes here means the follow-up that introduces the chokepoint can
+// wire it up without churning api/.
 
 // Role is the operator-visible RBAC role. Five rows are seeded as
 // builtin (super_admin, admin, senior_analyst, analyst, auditor); the
@@ -185,15 +154,18 @@ type Role struct {
 }
 
 // RoleBindingScopeType enumerates the scope a role binding applies at.
-// Wave 1 enforces only `tenant`; bindings with other scope types MAY
-// be persisted (the column is wave-2-ready) but the future chokepoint
-// will deny them with reason `scope_not_yet_supported` until the
-// host_group + host resolver ships.
+// The product is a single-instance deployment, so wave 1 honours only
+// `global`, which means "deployment-wide". Bindings with other scope
+// types MAY be persisted (the column is wave-2-ready) but the future
+// chokepoint will deny them with reason `scope_not_yet_supported`
+// until the host_group + host resolver ships.
 type RoleBindingScopeType string
 
 const (
-	// RoleBindingScopeTenant grants the role across the binding's tenant.
-	RoleBindingScopeTenant RoleBindingScopeType = "tenant"
+	// RoleBindingScopeGlobal grants the role deployment-wide. The
+	// column reserves the enum values so adding host_group + host
+	// scopes later does not require a schema migration.
+	RoleBindingScopeGlobal RoleBindingScopeType = "global"
 	// RoleBindingScopeHostGroup grants the role only against hosts in
 	// the binding's host group. Reserved for wave 2.
 	RoleBindingScopeHostGroup RoleBindingScopeType = "host_group"
@@ -202,21 +174,20 @@ const (
 	RoleBindingScopeHost RoleBindingScopeType = "host"
 )
 
-// RoleBindingScopeWildcard is the canonical scope_id for a tenant-wide
-// binding. The `tenant` scope type ignores the literal value; we
-// persist `*` so a `(scope_type, scope_id)` query always returns a
-// well-formed pair.
+// RoleBindingScopeWildcard is the canonical scope_id for a
+// deployment-wide binding. The `global` scope type ignores the literal
+// value; we persist `*` so a `(scope_type, scope_id)` query always
+// returns a well-formed pair.
 const RoleBindingScopeWildcard = "*"
 
-// RoleBinding binds a user to a role at a tenant + scope. The future
-// AuthZ engine will read these to evaluate Allow(actor, action,
-// resource). ExpiresAt is nullable; the evaluator treats an expired
-// binding as if it did not exist on the request path.
+// RoleBinding binds a user to a role at a scope. The future AuthZ
+// engine will read these to evaluate Allow(actor, action, resource).
+// ExpiresAt is nullable; the evaluator treats an expired binding as
+// if it did not exist on the request path.
 type RoleBinding struct {
 	ID        int64                `json:"id"`
 	UserID    int64                `json:"user_id"`
 	RoleID    string               `json:"role_id"`
-	TenantID  string               `json:"tenant_id"`
 	ScopeType RoleBindingScopeType `json:"scope_type"`
 	ScopeID   string               `json:"scope_id"`
 	ExpiresAt *time.Time           `json:"expires_at,omitempty"`

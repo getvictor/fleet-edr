@@ -41,7 +41,7 @@ func TestHTTPGate_Allow(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	ok := api.HTTPGate(t.Context(), w, az, slog.Default(),
-		api.ActionAuditRead, api.Resource{TenantID: "default", Type: "audit"})
+		api.ActionAuditRead, api.Resource{Type: "audit"})
 
 	assert.True(t, ok)
 	assert.Equal(t, 1, az.called)
@@ -59,7 +59,7 @@ func TestHTTPGate_Deny(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	ok := api.HTTPGate(t.Context(), w, az, slog.Default(),
-		api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host"})
+		api.ActionHostIsolate, api.Resource{Type: "host"})
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusForbidden, w.Code)
@@ -80,7 +80,7 @@ func TestHTTPGate_EngineError(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	ok := api.HTTPGate(t.Context(), w, az, slog.Default(),
-		api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "h-1"})
+		api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
@@ -92,23 +92,6 @@ func TestHTTPGate_EngineError(t *testing.T) {
 		"engine error is infrastructure failure, not a policy decision; reason header would be misleading")
 }
 
-// ActorTenantID returns the actor's tenant_id when one is on ctx —
-// the standard middleware-pinned shape every privileged handler reads
-// before building a Resource.
-func TestActorTenantID_PresentActor(t *testing.T) {
-	ctx := api.WithActor(context.Background(), &api.Actor{
-		UserID: 1, TenantID: "tenant-a", AuthMethod: "local_password",
-	})
-	assert.Equal(t, "tenant-a", api.ActorTenantID(ctx))
-}
-
-// Without an actor on ctx the helper returns "" so the chokepoint can
-// short-circuit on resource_tenant_missing AND audit the regression;
-// returning a non-empty default would mask the missing-actor case.
-func TestActorTenantID_NoActor(t *testing.T) {
-	assert.Empty(t, api.ActorTenantID(context.Background()))
-}
-
 // HTTPGate translates a reauth_required deny into 403 + the structured
 // reauth-challenge body the UI's useReauthRetry wrapper consumes. The
 // auth_method-derived reauth_url discriminates the per-flow recovery
@@ -118,11 +101,11 @@ func TestHTTPGate_ReauthRequired_BreakglassActor(t *testing.T) {
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: api.ReasonReauthRequired}}
 	w := httptest.NewRecorder()
 	ctx := api.WithActor(t.Context(), &api.Actor{
-		UserID: 1, TenantID: "default", AuthMethod: "local_password",
+		UserID: 1, AuthMethod: "local_password",
 	})
 
 	ok := api.HTTPGate(ctx, w, az, slog.Default(),
-		api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "h-1"})
+		api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusForbidden, w.Code)
@@ -145,11 +128,11 @@ func TestHTTPGate_ReauthRequired_OIDCActor(t *testing.T) {
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: api.ReasonReauthRequired}}
 	w := httptest.NewRecorder()
 	ctx := api.WithActor(t.Context(), &api.Actor{
-		UserID: 1, TenantID: "default", AuthMethod: "oidc",
+		UserID: 1, AuthMethod: "oidc",
 	})
 
 	ok := api.HTTPGate(ctx, w, az, slog.Default(),
-		api.ActionHostIsolate, api.Resource{TenantID: "default", Type: "host", ID: "h-1"})
+		api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusForbidden, w.Code)

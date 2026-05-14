@@ -5,16 +5,16 @@
 ### Requirement: Application Control screen
 
 The UI SHALL provide an Application Control section accessible from the primary navigation. The section
-SHALL list every policy in the tenant with its name, rule count, assigned host-group count, and last
+SHALL list every policy in the deployment with its name, rule count, assigned host-group count, and last
 modified time, and SHALL allow the operator to open a policy detail view. The policy detail view SHALL show
 the policy's rules in a table that can be filtered by `rule_type`, `enabled`, `source`, and free-text
 search over `identifier` and `comment`, and that supports per-row enable/disable, edit, and delete actions
 through the operator-session-authenticated REST surface. The view SHALL show which host group(s) the
 policy is assigned to.
 
-#### Scenario: Operator views the Default policy on a fresh tenant
+#### Scenario: Operator views the Default policy on a fresh deployment
 
-- **GIVEN** a tenant with no admin-authored rules
+- **GIVEN** a fresh deployment with no admin-authored rules
 - **WHEN** the operator navigates to Application Control
 - **THEN** the policies list contains exactly the seed `Default` policy with zero rules
 - **AND** opening the policy detail view shows an empty rules table and the `all-hosts` group as the only

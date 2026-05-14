@@ -139,7 +139,6 @@ export interface Command {
 // omitted from the list response, so the field is optional.
 export interface ApplicationControlPolicy {
   id: number;
-  tenant_id: string;
   name: string;
   description: string;
   version: number;
