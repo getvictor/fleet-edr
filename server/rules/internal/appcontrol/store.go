@@ -43,7 +43,7 @@ func (s *Store) EnsureDefaultPolicy(ctx context.Context, tenantID string) error 
 		VALUES (?, ?, ?, 1, 'NONE', 'system', 'system')`
 	if _, err := s.db.ExecContext(ctx, query,
 		tenantID, api.DefaultPolicyName,
-		"Per-tenant default application control policy. Add rules to block executables by SHA-256 hash.",
+		"Default application control policy. Add rules to block executables by SHA-256 hash.",
 	); err != nil {
 		return fmt.Errorf("appcontrol seed default policy: %w", err)
 	}

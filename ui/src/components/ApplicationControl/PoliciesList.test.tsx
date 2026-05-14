@@ -30,7 +30,7 @@ describe("PoliciesList", () => {
 
   it("renders a loading state, then the seeded Default policy row", async () => {
     (api.listAppControlPolicies as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePolicy({ description: "Per-tenant default policy" }),
+      makePolicy({ description: "Default app-control policy fixture" }),
     ]);
     render(
       <MemoryRouter>
@@ -41,7 +41,7 @@ describe("PoliciesList", () => {
     await waitFor(() => {
       expect(screen.getByText("Default")).toBeInTheDocument();
     });
-    expect(screen.getByText(/per-tenant default policy/i)).toBeInTheDocument();
+    expect(screen.getByText(/default app-control policy fixture/i)).toBeInTheDocument();
     // The "New policy" button renders disabled with the coming-soon
     // tooltip per the demo plan's section F.
     const newPolicy = screen.getByRole("button", { name: /new policy/i });
@@ -49,7 +49,7 @@ describe("PoliciesList", () => {
     expect(newPolicy).toHaveAttribute("title", expect.stringMatching(/coming/i));
   });
 
-  it("renders an empty state when the tenant has no policies yet", async () => {
+  it("renders an empty state when there are no policies yet", async () => {
     (api.listAppControlPolicies as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     render(
       <MemoryRouter>

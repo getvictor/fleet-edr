@@ -57,7 +57,7 @@ export function PoliciesList() {
     <>
       <PageHeader
         title="Application control"
-        subtitle="Per-tenant rules that the host extension consults on every exec"
+        subtitle="Rules the host extension consults on every exec"
         actions={newPolicyAction}
       />
       {loading && <EmptyState>Loading policies...</EmptyState>}
