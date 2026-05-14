@@ -46,8 +46,8 @@ project and do not need to be reported privately:
 - Reports that the agent is detected by EDR/AV products on managed hosts —
   the agent does not attempt to evade detection.
 - Denial of service from a single authorised host against its own server
-  (e.g. flooding `/api/events` with valid tokens). DoS that crosses
-  tenant boundaries or affects other hosts is in scope.
+  (e.g. flooding `/api/events` with valid tokens). DoS that affects other
+  hosts in the same deployment is in scope.
 - Findings against `claude/`, scratch, or `tmp/` directories — these are
   developer aids, not shipped artifacts.
 

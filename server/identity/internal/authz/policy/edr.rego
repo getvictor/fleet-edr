@@ -12,8 +12,9 @@
 #                              are filtered out by the Go side, so
 #                              every entry here is a live binding
 #       .role_id     "super_admin" | "admin" | ...
-#       .tenant_id   string (matches actor.tenant_id today; wave-2 MSSP
-#                    work introduces cross-tenant bindings)
+#       .tenant_id   string (matches actor.tenant_id today; a future
+#                    multi-org fork would introduce cross-tenant
+#                    bindings here)
 #       .scope_type  "tenant" | "host_group" | "host"
 #       .scope_id    string ("*" for tenant scope)
 #   input.actor.session_fresh  bool (Phase 5 reauth-window flag; wave-1

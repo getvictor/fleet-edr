@@ -47,7 +47,7 @@ preserving a compatibility window. No data migrations, no agent capability negot
   - `enabled BOOL`, `custom_msg`, `custom_url`, `comment`, `severity ENUM('low','medium','high','critical')`,
     `source ENUM('admin','imported','intel') DEFAULT 'admin'`, `source_ref`, `expires_at NULLABLE`.
 - Per-policy `default_action ENUM('NONE')` column, constrained to `NONE` in Phase A. Lockdown change unlocks
-  `BLOCK`, enabling per-policy default-deny within a single tenant.
+  `BLOCK`, enabling per-policy default-deny within a deployment.
 - Replace the `set_blocklist` agent command with `set_application_control`, carrying
   `{policy_id, policy_version, rules: [{rule_type, identifier, action, enforcement, custom_msg, custom_url}]}`.
 - ESF `AUTH_EXEC` handler builds a five-tuple `(cdhash, file_sha256, signing_id_prefixed, leaf_cert_sha256,

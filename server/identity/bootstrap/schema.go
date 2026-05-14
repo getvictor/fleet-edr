@@ -24,10 +24,11 @@ package bootstrap
 // in a new file (or as a recreate-DB note in the change proposal); we do
 // NOT accumulate ALTER deltas during the pre-release iteration.
 var schemaStatements = []string{
-	// tenants is the wave-1 scaffolding for MSSP-style multi-tenancy. A
-	// fresh deployment seeds exactly one row (id='default') and wave-1
-	// reads do NOT filter on tenant_id; the column exists everywhere so
-	// wave 2's scope work does not require a backfill migration. status
+	// tenants is the wave-1 scaffolding that lets a future multi-org
+	// fork partition the data plane without a schema migration. Every
+	// deployment seeds exactly one row (id='default') and wave-1 reads
+	// do NOT filter on tenant_id; the column exists everywhere so a
+	// fork's scope work does not require a backfill migration. status
 	// is an ENUM rather than a free-form string so an audit-log query
 	// for "suspended tenant activity" stays a constant-time index hit.
 	`CREATE TABLE IF NOT EXISTS tenants (

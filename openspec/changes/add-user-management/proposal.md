@@ -6,8 +6,8 @@ generated password to stderr on first boot — fine for a laptop demo, untenable
 deployments on the MVP roadmap and unworkable against the security-console competitive set
 (CrowdStrike Falcon, SentinelOne Singularity, Microsoft Defender for Endpoint), all of which
 ship SSO + RBAC + audit as table stakes. The product needs an identity boundary that an
-enterprise buyer can sign off on, that an MSSP can grow into, and that a SOC team can use to
-reconstruct who did what to which host.
+enterprise buyer can sign off on, that a future multi-org fork can grow into, and that a
+SOC team can use to reconstruct who did what to which host.
 
 This change delivers wave 1 of the user-management plan tracked in
 `https://github.com/getvictor/fleet-edr/issues/66`: Okta OIDC SSO as the primary login,
@@ -25,7 +25,7 @@ against the requirements pinned by this change).
 
 - Add Okta OIDC login at `/api/auth/login` and `/api/auth/callback` with PKCE S256, JIT
   provisioning to a seeded `analyst` role at the tenant scope, and ID-token verification
-  via discovery. Single global IdP per deployment; per-tenant IdP is a wave-2 feature.
+  via discovery. Single global IdP per deployment; multi-IdP support is a follow-on feature.
 - **BREAKING** for the bootstrap flow: replace the existing "print a generated password to
   stderr on first boot" seed with a single-use bootstrap token whose redemption URL is
   printed instead. Operator visits `/admin/break-glass/setup?token=…` to set a password
@@ -55,7 +55,7 @@ against the requirements pinned by this change).
   role_bindings, audit_events) plus the per-context tables that already exist
   (hosts/alerts under detection, policies under rules, commands under response, enrollments
   under endpoint). Wave 1 does not query on `tenant_id`; the goal is purely future-proofing
-  so MSSP work in wave 2 does not require backfill.
+  so a multi-org fork does not require backfill.
 - Tighten session timeouts to security-console norms: 8h idle / 24h absolute for normal
   sessions, 15m idle / 1h absolute for break-glass. Destructive actions (host isolate,
   host kill_process, host run_script, critical-severity alert dismiss) require a fresh auth
@@ -79,8 +79,8 @@ against the requirements pinned by this change).
 - `server-identity-authorization`: The RBAC engine plus the chokepoint every privileged
   handler funnels through. Owns the action registry, the role / role-binding / scope
   model, the seeded roles, the OPA-evaluated decision shape (`allow`, `reason`), and
-  the tenant scaffolding (`tenants` table, `tenant_id` discipline) that future MSSP
-  work builds on.
+  the tenant scaffolding (`tenants` table, `tenant_id` discipline) that a future
+  multi-org fork can build on.
 - `server-identity-audit-log`: The append-only audit-event store, the `audit.Record(...)`
   surface every other capability calls into, the dual-emit to MySQL + slog / OTel, the
   decision-driven sampling (writes / destructive at 100%, reads tunable at 0% in MVP,

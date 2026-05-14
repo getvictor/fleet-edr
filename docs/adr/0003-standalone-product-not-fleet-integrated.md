@@ -108,7 +108,7 @@ privileged over the others in the EDR's design.
   Cross-linking (for lookups, not for data-plane merging) is a future
   consideration.
 - The EDR must reimplement things Fleet already solves (auth, RBAC, audit
-  logging, multi-tenant isolation) rather than reusing Fleet's
+  logging, per-customer isolation) rather than reusing Fleet's
   implementations. Accepted cost for the decoupling it buys.
 
 ## Alternatives considered

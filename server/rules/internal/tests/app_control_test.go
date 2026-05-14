@@ -56,8 +56,9 @@ func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 }
 
 // TestAppControl_BootstrapIdempotent re-applies the schema and seed
-// and confirms the policy count stays at one per tenant. Boot loops
-// (e.g. cmd/main on restart) must not duplicate the seed row.
+// and confirms the policy count stays at one per tenant_id scope.
+// Boot loops (e.g. cmd/main on restart) must not duplicate the seed
+// row.
 func TestAppControl_BootstrapIdempotent(t *testing.T) {
 	store, rules := newAppControlStore(t)
 

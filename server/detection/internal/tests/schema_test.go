@@ -14,8 +14,8 @@ import (
 // TestSchema_TenantIDOnHostsAndAlerts pins the tenant-scaffolding
 // columns on detection's `hosts` and `alerts` tables:
 // tenant_id VARCHAR(64) NOT NULL DEFAULT 'default' on each. Wave-1
-// reads do not query on it; the column is structural scaffolding
-// for wave-2 MSSP scoping.
+// reads do not query on it; the column is structural scaffolding so a
+// future multi-org fork can scope without a schema migration.
 //
 // Uses testdb/full.Open so the test exercises the same full-schema
 // integration path the rest of the per-context test pyramid uses.

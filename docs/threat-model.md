@@ -104,7 +104,7 @@ Trust assumptions:
 | Tampering | Attacker modifies events or admin actions in flight. | TLS 1.3 by default; TLS 1.2 only with explicit opt-in for legacy pilots, with restricted AEAD cipher suites. |
 | Repudiation | Admin action goes unaudited. | Every admin endpoint emits a WARN-level slog line plus span attributes (`edr.admin.action`, `edr.admin.actor`, `edr.admin.reason`). Logs flow via OTLP to an external sink, so an in-server tamper cannot retroactively erase the trace export. |
 | Information disclosure | Database or backup leak exposes credentials. | Passwords + host tokens Argon2id-hashed; DSN + enroll secret loaded via `_FILE` paths (Docker-secrets style) so they are never in env-listing output; TLS 1.3 over the wire; `subtle.ConstantTimeCompare` for CSRF token comparison. **GAP, medium**: encryption at rest for the events table is documented as a deployment requirement, not enforced in code. |
-| Denial of service | Login or enroll endpoint flooded. | Per-IP rate limiting on the break-glass surface (per-IP and per-email caps return `429 Too Many Requests` with `Retry-After`); per-IP rate limiting on enroll (`EDR_ENROLL_RATE_PER_MIN` default 30). The OIDC login path is gated by the IdP's own brute-force defences. Event ingestion is per-token, gated by enrollment. **GAP, low**: no per-tenant or per-host rate limit beyond the per-route caps. |
+| Denial of service | Login or enroll endpoint flooded. | Per-IP rate limiting on the break-glass surface (per-IP and per-email caps return `429 Too Many Requests` with `Retry-After`); per-IP rate limiting on enroll (`EDR_ENROLL_RATE_PER_MIN` default 30). The OIDC login path is gated by the IdP's own brute-force defences. Event ingestion is per-token, gated by enrollment. **GAP, low**: no per-host rate limit beyond the per-route caps. |
 | Elevation of privilege | Browser-based attacker uses an admin session. | HttpOnly + Secure + SameSite=Lax session cookies; per-session CSRF token on every unsafe method; HSTS with `includeSubDomains`, two-year max-age; session secret is sanitized to a 256-char base64url charset on read/write. Day-to-day login goes through OIDC, so MFA is delegated to the IdP (Okta, etc.) and is enforced upstream of the EDR. The break-glass surface at `/admin/break-glass` requires WebAuthn (no password-only fallback): see `docs/breakglass.md`. Authorisation is enforced at the OPA-backed chokepoint (`api.HTTPGate`) with role tiers (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); the chokepoint also requires a fresh re-auth (default 30m, `EDR_REAUTH_WINDOW`) for destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical). |
 
 ### 5. UI (React, embedded in server)
@@ -114,7 +114,7 @@ Trust assumptions:
 | Spoofing | Phished credentials. | Day-to-day login is OIDC, so MFA is delegated to the IdP and enforced upstream of the EDR. Break-glass (`/admin/break-glass`) is WebAuthn-mandatory (no password-only fallback), phishing-resistant by design. See `docs/okta-setup.md` and `docs/breakglass.md`. |
 | Tampering | Cross-site scripting. | React's default JSX escaping; no `dangerouslySetInnerHTML` in the codebase; ESLint's `no-unsanitized` plugin gates PRs; CodeQL TypeScript SAST is wired. **GAP, medium**: no Content-Security-Policy header. |
 | Repudiation | UI action not auditable. | Every state-changing action goes through a server endpoint with audit logging; the UI is a thin client. The audit log enforces an append-only invariant (a build-time test scans production source for any UPDATE / DELETE against `audit_events` and fails the build if it finds one). Each successful row is dual-emitted to slog at INFO with a stable attribute shape (`action`, `target_type`, `target_id`, `actor_email`, `edr.user.id`, optional `trace_id`, optional `payload`); the async writer also emits structured slog WARNs when it cannot enqueue or persist a row (queue_full, drain_deadline_exceeded, INSERT failure). Both flow through OTLP to the configured collector, so an in-server compromise that drops MySQL writes still leaves the OTel-side record. |
-| Information disclosure | Wrong analyst sees the wrong alert. | The OPA-backed chokepoint (`api.HTTPGate`) gates every privileged endpoint by the actor's role binding (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); requests outside the binding return `403` with a typed deny reason. Wave-1 ships with a single tenant; multi-tenant scoping (per-team alerts) is wave-2 work. |
+| Information disclosure | Wrong analyst sees the wrong alert. | The OPA-backed chokepoint (`api.HTTPGate`) gates every privileged endpoint by the actor's role binding (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); requests outside the binding return `403` with a typed deny reason. Each deployment is single-tenant; per-team alert scoping is a follow-on for any future multi-org fork. |
 | Denial of service | UI hammers the read API. | Read endpoints are session-cookie authenticated; clients are admin-controlled. **GAP, low**: no pagination contract on list endpoints. |
 | Elevation of privilege | UI bug runs commands without authorisation. | Every privileged endpoint requires the session cookie (HttpOnly, JS-invisible) plus the CSRF header (JS-readable); CSRF tokens never live in cookies; React Router does not synthesize cross-origin requests. |
 
@@ -184,11 +184,11 @@ Trust assumptions:
 Copied from the per-component tables for at-a-glance triage. Severity reflects
 pilot-deployment impact, not theoretical worst case.
 
-**High** — block multi-tenant or multi-seat pilots:
+**High** — block multi-seat pilots:
 
 - (None remaining for v0.1 ship. The wave-1 OIDC + WebAuthn break-glass +
-  chokepoint roles closed the prior MFA and RBAC gaps; multi-tenant scoping
-  is a wave-2 feature, not a v0.1 gap.)
+  chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping
+  inside a single deployment is a follow-on feature, not a v0.1 gap.)
 
 **Medium** — block a security-mature pilot's procurement:
 
@@ -200,7 +200,7 @@ pilot-deployment impact, not theoretical worst case.
 
 **Low** — operational hygiene:
 
-- Per-tenant / per-host rate limits beyond per-route caps (component 4).
+- Per-host rate limits beyond per-route caps (component 4).
 - Pagination contract on list endpoints (component 5).
 - `edr.network.events.dropped` counter (component 3).
 
@@ -227,7 +227,7 @@ Update this document when:
 - A new component is added to the architecture (a new daemon, a new service,
   a new API surface).
 - A new trust boundary is crossed (a webhook out, a SIEM export endpoint,
-  multi-tenant routing).
+  cross-deployment routing).
 - A gap above is closed — move the bullet from "gap" to a citation in the
   per-component table.
 - A new STRIDE category becomes relevant for an existing component (e.g.,

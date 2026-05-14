@@ -101,7 +101,7 @@ column whose default value is the literal string `'default'`. Wave 1 MUST seed e
 one tenant (`id='default'`, `status='active'`) and MUST NOT use the column as a query
 filter. The column SHALL be present at minimum on every identity-context table
 (`users`, `sessions`, `roles`, `role_bindings`, `audit_events`) and on every
-non-identity table whose rows logically belong to a tenant in wave 2's MSSP shape:
+non-identity table whose rows logically belong to a tenant under a future multi-org fork:
 `hosts`, `alerts`, `policies`, `commands`, `enrollments`. The system MUST NOT enforce
 foreign keys between `tenants` and any non-identity table.
 

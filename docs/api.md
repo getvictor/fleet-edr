@@ -156,8 +156,9 @@ openapi-python-client generate --path docs/api/openapi.yaml
 - Webhook / SIEM push. The server doesn't POST alerts outward;
   integrators poll `GET /api/alerts`. Outbound integrations ship in
   v1.1+.
-- Multi-tenant routing. All endpoints operate on a single customer
-  boundary per server instance.
+- Cross-deployment routing. All endpoints operate on a single customer
+  boundary per server instance, since each customer runs a dedicated
+  instance.
 - Bulk enrollment / import. Agents enroll one at a time on first boot.
 - Query language for events. Process tree + host list is what the UI
   exposes today; a flexible event query API is on the roadmap.

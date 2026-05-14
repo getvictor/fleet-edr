@@ -44,7 +44,7 @@ The current state, as of this proposal:
 
 **Non-Goals:**
 
-- Per-tenant SSO configuration; multi-IdP-per-deployment; SCIM; SAML. Wave 2 / wave 3.
+- Multi-IdP per deployment; per-deployment SSO mixing; SCIM; SAML. Wave 2 / wave 3.
 - Customer-authored Rego bundles. Engine supports it; not exposed.
 - Group → role mapping driven by Okta `groups` claim. Wave 2.
 - Forgot-password / self-service password reset for break-glass. Recovery is the
@@ -150,7 +150,7 @@ row exists before per-context tables that default `tenant_id` to `'default'` are
 No cross-context FKs. The `role_bindings.user_id → users.id` FK lives entirely inside
 identity. The plan's original `tenant_id` constraints are not enforced via FK across
 contexts; the contract is "every context defaults the column to `'default'` and never
-queries on it in wave 1." A future MSSP wave will introduce a tenant resolver in
+queries on it in wave 1." A future multi-org fork will introduce a tenant resolver in
 `identity/api` that other contexts call to translate session → tenant; arch-go already
 covers that path.
 
@@ -251,8 +251,8 @@ documented in the existing session spec.
   redeploy of the prior binary, with the new tables / columns left harmlessly in place.
 - **`tenant_id` index churn on hot tables.** Adding the column to `hosts`, `alerts`,
   `commands`, etc. creates an index in the plan as written. → Mitigation: ship without
-  the index in wave 1 (column only); add the index when MSSP wave 2 actually queries on
-  it. This deviates from the original plan, which over-specified on this point.
+  the index in wave 1 (column only); add the index when a multi-org fork actually queries
+  on it. This deviates from the original plan, which over-specified on this point.
 
 ## Migration Plan
 

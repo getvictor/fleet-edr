@@ -230,8 +230,8 @@ func (s *Service) buildSnapshotPayload(ctx context.Context, tenantID string, pol
 
 // findPolicyByID is the tenant-scoped policy lookup the snapshot
 // composer needs. Store doesn't expose a GetPolicyByID (intentionally:
-// the demo cut indexes policies by tenant + name), so we walk the
-// tenant list. Cheap for the demo's one-policy-per-tenant shape.
+// the demo cut indexes policies by tenant_id + name), so we walk the
+// list. Cheap for the demo's single-policy shape.
 func (s *Service) findPolicyByID(ctx context.Context, tenantID string, policyID int64) (api.ApplicationControlPolicy, error) {
 	policies, err := s.store.ListPolicies(ctx, tenantID)
 	if err != nil {

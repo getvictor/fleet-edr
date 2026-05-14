@@ -184,8 +184,8 @@ func (r *appControlRig) do(t *testing.T, method, path string, body any) *http.Re
 }
 
 // TestAppControl_ListPolicies_ReturnsSeededDefault: the seed bootstrap
-// creates one `Default` policy per tenant. The list endpoint must
-// surface it so the UI's "open policy detail" link has a target.
+// creates one `Default` policy. The list endpoint must surface it so
+// the UI's "open policy detail" link has a target.
 func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a", "host-b"})
 	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies", nil)

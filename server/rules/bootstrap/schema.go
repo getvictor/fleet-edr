@@ -7,18 +7,18 @@ package bootstrap
 // Phase 1 of the add-application-control change dropped the legacy
 // `policies` singleton table. The demo cut introduces the two
 // authoritative tables of the new subsystem — `app_control_policies`
-// and `app_control_rules` — plus the per-tenant `Default` policy seed.
+// and `app_control_rules` — plus the `Default` policy seed.
 // `host_groups` and `app_control_assignments` (the other two tables in
 // the full spec) are deferred to follow-on work; for the demo every
-// policy implicitly targets every host of the tenant.
+// policy implicitly targets every host in the deployment.
 var schemaStatements = []string{
-	// app_control_policies holds a named ruleset per tenant. Wave-1
-	// tenant scaffolding: tenant_id is `default` everywhere; the
-	// per-tenant unique key on `name` lets a future MSSP build add
-	// per-tenant policies without a schema migration. `default_action`
-	// is constrained to `NONE` in this phase; the Lockdown change
-	// extends the enum to `('NONE','BLOCK')` so a per-policy
-	// default-deny stance can be set on real fleets.
+	// app_control_policies holds a named ruleset scoped by tenant_id.
+	// Wave-1 tenant scaffolding: tenant_id is `default` everywhere;
+	// the unique key on `(tenant_id, name)` lets a future multi-org
+	// fork add additional policies without a schema migration.
+	// `default_action` is constrained to `NONE` in this phase; the
+	// Lockdown change extends the enum to `('NONE','BLOCK')` so a
+	// per-policy default-deny stance can be set on real fleets.
 	`CREATE TABLE IF NOT EXISTS app_control_policies (
 		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
 		tenant_id      VARCHAR(64)  NOT NULL DEFAULT 'default',

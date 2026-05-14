@@ -166,10 +166,10 @@ type RegistryOptions struct {
 // extension snapshot loader can all reference one canonical shape
 // without importing each other.
 
-// DefaultPolicyName is the name of the per-tenant policy seeded at
-// bootstrap. Created empty; admins add rules to it via the REST
-// surface. Multi-policy support is on the post-demo backlog; for
-// the demo cut every tenant has exactly one policy with this name.
+// DefaultPolicyName is the name of the policy seeded at bootstrap.
+// Created empty; admins add rules to it via the REST surface.
+// Multi-policy support is on the post-demo backlog; for the demo cut
+// the deployment has exactly one policy with this name.
 const DefaultPolicyName = "Default"
 
 // RuleType is the wire-shape identifier of an application-control

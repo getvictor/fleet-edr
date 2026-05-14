@@ -112,17 +112,16 @@ func New(deps Deps) (*Rules, error) {
 }
 
 // ApplySchema runs the DDL statements rules owns and seeds the
-// per-tenant `Default` application control policy. Idempotent
-// (CREATE TABLE IF NOT EXISTS + INSERT IGNORE on the seed). No
-// cross-context FKs; ordering with other contexts' ApplySchema is
-// not load-bearing.
+// `Default` application control policy. Idempotent (CREATE TABLE IF
+// NOT EXISTS + INSERT IGNORE on the seed). No cross-context FKs;
+// ordering with other contexts' ApplySchema is not load-bearing.
 func (r *Rules) ApplySchema(ctx context.Context) error {
 	if err := ApplySchema(ctx, r.db); err != nil {
 		return err
 	}
-	// Seed the per-tenant Default policy after the table exists. The
-	// "default" tenant id is the wave-1 scaffolding value; wave-2
-	// MSSP work will iterate over real tenants here.
+	// Seed the Default policy after the table exists. The "default"
+	// tenant id is the single-tenant value every deployment uses; a
+	// future multi-org fork would iterate over real tenants here.
 	if err := r.appControlSt.EnsureDefaultPolicy(ctx, "default"); err != nil {
 		return fmt.Errorf("rules seed default app control policy: %w", err)
 	}

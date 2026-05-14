@@ -65,8 +65,8 @@ const (
 	// Audit-log read.
 	ActionAuditRead Action = "audit.read"
 
-	// Application Control. The admin surface manages the per-tenant
-	// policies + rules that the extension consults on every AUTH_EXEC.
+	// Application Control. The admin surface manages the policies
+	// and rules that the extension consults on every AUTH_EXEC.
 	// Read covers the list + detail views; RuleCreate gates the POST
 	// that fans a `set_application_control` command out to every
 	// enrolled host. Other verbs (rule update / delete, bulk upsert)

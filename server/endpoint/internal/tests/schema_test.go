@@ -15,7 +15,8 @@ import (
 // TestSchema_TenantIDOnEnrollments locks in the wave-1
 // tenant-scaffolding migration: endpoint's `enrollments` table gains a
 // tenant_id VARCHAR(64) NOT NULL DEFAULT 'default' column. Wave-1
-// reads do not query on it; the column exists for wave-2 MSSP scoping.
+// reads do not query on it; the column exists so a future multi-org
+// fork can scope without a schema migration.
 func TestSchema_TenantIDOnEnrollments(t *testing.T) {
 	db := full.Open(t)
 

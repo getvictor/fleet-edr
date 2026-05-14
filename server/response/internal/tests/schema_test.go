@@ -15,7 +15,8 @@ import (
 // TestSchema_TenantIDOnCommands locks in the wave-1 tenant-scaffolding
 // migration: response's `commands` table gains a tenant_id VARCHAR(64)
 // NOT NULL DEFAULT 'default' column. Wave-1 reads do not query on it;
-// the column exists for wave-2 MSSP scoping.
+// the column exists so a future multi-org fork can scope without a
+// schema migration.
 func TestSchema_TenantIDOnCommands(t *testing.T) {
 	db := full.Open(t)
 

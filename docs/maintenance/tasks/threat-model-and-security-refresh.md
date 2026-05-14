@@ -15,8 +15,8 @@ CodeQL, OSV-scanner, and Scorecard catch implementation-level CVEs and known pat
 
 - New trust boundaries that nobody documented (e.g. a new XPC sender)
 - Trust boundaries removed but still asserted in the doc
-- Threats that the previous model deliberately scoped out and that have since become in-scope (e.g. multi-tenant if the deploy
-  channel changes)
+- Threats that the previous model deliberately scoped out and that have since become in-scope (e.g. per-team isolation inside a
+  single deployment if the customer's org structure changes)
 - Authn / authz design assumptions that no longer hold (sessions vs API tokens, CSRF on `POST /api/...`, etc.)
 
 ## Scope
@@ -59,7 +59,7 @@ must be added - even if "secure by construction", document the assumption.
 ### 3. Threat-actor list
 
 The model should name the actor classes it considers (unprivileged local user, privileged local user, attacker on the local
-network, attacker who has compromised the agent, attacker who has compromised one tenant in a multi-tenant deploy, etc.). For
+network, attacker who has compromised the agent, etc.). For
 each, ask:
 
 - Is the actor still in scope?

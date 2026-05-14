@@ -9,9 +9,10 @@ package bootstrap
 // CREATE TABLE rather than as ALTER deltas.
 var schemaStatements = []string{
 	// commands holds the agent-bound command queue. tenant_id is wave-1
-	// scaffolding for MSSP-style multi-tenancy; wave-1 reads do NOT
-	// filter on it, the column + index let wave 2 turn on tenant-aware
-	// reads without a backfill.
+	// scaffolding so a future multi-org fork can partition without a
+	// schema migration; wave-1 reads do NOT filter on it, the column
+	// and index let that fork turn on tenant-aware reads without a
+	// backfill.
 	`CREATE TABLE IF NOT EXISTS commands (
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
 		host_id      VARCHAR(255)  NOT NULL,
