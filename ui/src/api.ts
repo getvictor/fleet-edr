@@ -394,25 +394,6 @@ interface AppControlErrorBody {
   message?: string;
 }
 
-// fetchAppControl wraps fetchJSON to surface typed AppControlApiError
-// on the documented 4xx shape from the handler. 5xx responses still
-// throw the plain `API error: ...` from fetchJSON so callers can tell
-// "the operator did something wrong" from "the server is broken."
-async function fetchAppControl<T>(path: string, init?: RequestInit): Promise<T> {
-  try {
-    return await fetchJSON<T>(path, init);
-  } catch (err) {
-    if (!(err instanceof Error)) throw err;
-    // fetchJSON throws `API error: <status> <statusText>` on non-OK
-    // responses. The error body has already been read+discarded
-    // there; re-fetch the same path with a HEAD-style preflight is
-    // wasteful, so we instead read once via a custom path here. To
-    // keep the change minimal, callers that want the typed code use
-    // this wrapper which expects the body shape directly.
-    throw err;
-  }
-}
-
 // AppControlListResponse is the GET /policies wire shape. The
 // underlying handler returns `{policies: [...]}` rather than a bare
 // array so future pagination + filter metadata can land alongside the
@@ -421,13 +402,21 @@ interface AppControlListResponse {
   policies: ApplicationControlPolicy[];
 }
 
+// The read-side endpoints (list + get) route through fetchJSON because
+// they never produce typed application_control.* error codes on the
+// happy paths the UI exercises (4xx on read would be a 404 with the
+// typed code, which the call site already handles via the standard
+// "API error" path mapped to a user-visible error message). Only the
+// state-changing POST goes through the explicit AppControlApiError
+// path below; the typed-error surface only earns its complexity on
+// the write side.
 export async function listAppControlPolicies(): Promise<ApplicationControlPolicy[]> {
-  const body = await fetchAppControl<AppControlListResponse>("/v1/app-control/policies");
+  const body = await fetchJSON<AppControlListResponse>("/v1/app-control/policies");
   return body.policies;
 }
 
 export async function getAppControlPolicy(id: number): Promise<ApplicationControlPolicy> {
-  return fetchAppControl<ApplicationControlPolicy>(`/v1/app-control/policies/${String(id)}`);
+  return fetchJSON<ApplicationControlPolicy>(`/v1/app-control/policies/${String(id)}`);
 }
 
 // CreateAppControlRuleRequest is the JSON body the POST endpoint

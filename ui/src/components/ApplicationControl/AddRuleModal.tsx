@@ -6,6 +6,7 @@ import {
   type CreateAppControlRuleRequest,
 } from "../../api";
 import { useReauthRetry } from "../../hooks/useReauthRetry";
+import { ReauthModal } from "../ReauthModal";
 import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
 import "./ApplicationControl.scss";
@@ -141,6 +142,25 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
         return;
       }
     }
+    // The host-app modal only renders "More info" for http/https
+    // URLs (BlockAlert.swift rejects other schemes so a hostile
+    // rule author can't trigger arbitrary URL handlers from a
+    // single click). Enforce the same posture client-side so the
+    // operator sees the rejection at the form instead of saving
+    // a rule whose link will never appear in the modal.
+    const trimmedURL = customURL.trim();
+    if (trimmedURL.length > 0) {
+      try {
+        const parsed = new URL(trimmedURL);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          setFormError("More info URL must use http or https.");
+          return;
+        }
+      } catch {
+        setFormError("More info URL is not a valid URL.");
+        return;
+      }
+    }
     setFormError(null);
     setBusy(true);
     try {
@@ -254,7 +274,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
 
           <Input
             id="rule-custom-url"
-            label="More info URL (optional, https only)"
+            label="More info URL (optional, http/https only)"
             type="url"
             placeholder="https://help.example.com/blocked"
             value={customURL}
@@ -287,7 +307,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
           </div>
         </form>
       </dialog>
-      {reauthModal}
+      <ReauthModal {...reauthModal} />
     </>
   );
 }

@@ -14,9 +14,17 @@ import { PolicyDetail } from "./PolicyDetail";
 export function ApplicationControlRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<PoliciesList />} />
-      <Route path="/policies/:id" element={<PolicyDetail />} />
-      <Route path="*" element={<Navigate to="." replace />} />
+      <Route index element={<PoliciesList />} />
+      <Route path="policies/:id" element={<PolicyDetail />} />
+      {/*
+          Catch-all falls back to the parent's index route (the
+          policies list). Using an explicit "/app-control" target so
+          a malformed link like /app-control/garbage lands on the
+          list page rather than the home page or the relative
+          fallback's risk of a redirect loop (Copilot flagged the
+          absolute-path-in-nested-Routes shape).
+      */}
+      <Route path="*" element={<Navigate to="/app-control" replace />} />
     </Routes>
   );
 }
