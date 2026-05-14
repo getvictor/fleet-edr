@@ -45,17 +45,23 @@ final class NotificationClient {
     /// the write error is the safe direction. The host app's
     /// NSAlert is post-hoc UX, not authorization.
     ///
-    /// Atomicity is the dance:
-    ///   1. Create the drop directory at mode 1777 (sticky) so any
-    ///      user-session process can read files but only the file
-    ///      owner (root, us) can delete or replace them.
-    ///   2. Write the payload to a tempfile under the drop directory.
-    ///   3. Rename the tempfile to a UUID-named final path. macOS
+    /// Sequence:
+    ///   1. Ensure the drop directory exists with the correct
+    ///      ownership (root) and mode (1777). If a non-root principal
+    ///      created it first, repair via chown + chmod — we run as
+    ///      root and have the authority to do so.
+    ///   2. Encode the payload + write to a tempfile.
+    ///   3. chmod the tempfile to 0644 BEFORE the rename, so the
+    ///      moment the destination path appears it already has the
+    ///      readable mode. If we chmod'd after the move, the host
+    ///      app's FSEvents source could observe the new file before
+    ///      the chmod and fail to read it (permission denied).
+    ///   4. atomically rename tempfile → final UUID.json. macOS
     ///      `rename(2)` is atomic on the same filesystem, so the
     ///      host app's FSEvents source never observes a partial
     ///      JSON.
-    ///   4. chmod the final file to 0644 so the user-session reader
-    ///      can open + read it.
+    ///   5. Purge our own old files (> blockNotificationPurgeWindow)
+    ///      so the directory stays bounded across many denials.
     func notify(_ payload: BlockNotificationPayload) {
         queue.async { [weak self] in
             guard let self else { return }
@@ -65,11 +71,18 @@ final class NotificationClient {
             let tempURL = finalURL.appendingPathExtension("tmp")
             do {
                 try data.write(to: tempURL, options: .atomic)
+                // chmod the tempfile to 0644 BEFORE the rename. After
+                // the rename the host app's FSEvents source can
+                // observe the new path immediately; if the chmod
+                // landed after, there's a window where the file is
+                // visible at 0600 (the umask default) and the user-
+                // session reader gets EACCES.
+                try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tempURL.path)
                 try FileManager.default.moveItem(at: tempURL, to: finalURL)
-                try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: finalURL.path)
             } catch {
                 logger.error("notification drop failed: \(error.localizedDescription, privacy: .public)")
             }
+            self.purgeStaleDrops()
         }
     }
 
@@ -88,26 +101,88 @@ final class NotificationClient {
     }
 
     /// ensureDropDirectory makes the rendezvous directory exist at
-    /// the right permissions. Idempotent — called on every notify
-    /// so a manually-deleted directory doesn't break subsequent
-    /// blocks. Sticky-bit mode (1777) is the standard pattern for
-    /// shared drop directories: anyone can write, only file owners
-    /// can delete their own files.
+    /// the right ownership AND permissions. Idempotent — called on
+    /// every notify so a manually-deleted or maliciously-recreated
+    /// directory doesn't break subsequent blocks.
+    ///
+    /// Sticky-bit mode (1777) is the standard pattern for shared
+    /// drop directories: anyone can write, only file owners can
+    /// delete their own files. But createDirectory(attributes:)
+    /// only applies the requested mode on CREATE; if the directory
+    /// already existed (e.g. a non-root local user pre-created it
+    /// to lower the mode + race the bootstrap), the attributes
+    /// argument is silently ignored. So we force-correct ownership
+    /// AND mode after the createDirectory call, using chown(2) and
+    /// chmod(2) directly so they fire whether the dir is fresh or
+    /// pre-existing. We're root, so both syscalls succeed.
     private func ensureDropDirectory() {
         let url = URL(fileURLWithPath: blockNotificationDropDir)
-        // posixPermissions = 0o1777 (sticky + rwx for everyone).
-        // The Swift FileAttributeKey API takes the bits as an Int
-        // matching `stat.st_mode`'s low bits; the leading 1 is the
-        // sticky bit.
         let attrs: [FileAttributeKey: Any] = [.posixPermissions: 0o1777]
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: attrs)
-            // createDirectory honors `attributes` only on the
-            // leaf when it creates it; if the directory already
-            // existed at the wrong perms, force-correct.
-            try? FileManager.default.setAttributes(attrs, ofItemAtPath: url.path)
         } catch {
             logger.error("notification drop directory init failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        // Force-correct ownership to root:wheel. If a hostile local
+        // user pre-created the dir under their own UID, the previous
+        // createDirectory call was a no-op (the path already existed)
+        // and we'd otherwise keep writing into a user-owned dir.
+        if chown(blockNotificationDropDir, 0, 0) != 0 {
+            let err = String(cString: strerror(errno))
+            logger.error("notification drop directory chown failed: \(err, privacy: .public)")
+        }
+        // Force-correct mode to sticky 1777 in case the dir
+        // pre-existed with looser/tighter perms.
+        if chmod(blockNotificationDropDir, S_ISVTX | S_IRWXU | S_IRWXG | S_IRWXO) != 0 {
+            let err = String(cString: strerror(errno))
+            logger.error("notification drop directory chmod failed: \(err, privacy: .public)")
+        }
+    }
+
+    /// purgeStaleDrops unlinks our own .json files older than
+    /// blockNotificationPurgeWindow. Bounds the directory size so a
+    /// fleet of denied execs doesn't fill /private/tmp indefinitely.
+    /// Only touches root-owned files so we don't unlink anything a
+    /// local user (legitimately or otherwise) left in this sticky
+    /// 1777 dir; the host app's per-file root-uid check already
+    /// rejects those for forensic purposes, so leaving them on disk
+    /// is the safer direction.
+    private func purgeStaleDrops() {
+        let url = URL(fileURLWithPath: blockNotificationDropDir)
+        let entries: [URL]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles],
+            )
+        } catch {
+            // The dir was just (re)created in ensureDropDirectory;
+            // a failure here is unusual. Log + bail so the next
+            // notify retries.
+            logger.error("notification drop purge enumerate failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let cutoff = Date().addingTimeInterval(-blockNotificationPurgeWindow)
+        for entry in entries where entry.pathExtension == "json" {
+            var entrySt = stat()
+            if lstat(entry.path, &entrySt) != 0 { continue }
+            // Skip non-root files; they're someone else's problem
+            // and intentionally preserved for forensics.
+            if entrySt.st_uid != 0 { continue }
+            // st_mtimespec is the most recent content change. Files
+            // older than the cutoff are safe to unlink: the host app
+            // had blockNotificationPurgeWindow (5 min) to pick them
+            // up, and FSEvents converges in under a second under
+            // normal load.
+            let mtime = Date(timeIntervalSince1970: TimeInterval(entrySt.st_mtimespec.tv_sec))
+            if mtime < cutoff {
+                if unlink(entry.path) != 0 {
+                    let err = String(cString: strerror(errno))
+                    logger.error("notification purge unlink \(entry.lastPathComponent, privacy: .public): \(err, privacy: .public)")
+                }
+            }
         }
     }
 }
