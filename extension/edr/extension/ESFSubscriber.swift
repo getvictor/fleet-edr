@@ -136,6 +136,12 @@ final class ESFSubscriber: Sendable {
                     matchedIdentifier: sha256,
                     snapshot: snapshot
                 )
+                emitBlockNotification(
+                    target: target,
+                    rule: rule,
+                    matchedIdentifier: sha256,
+                    snapshot: snapshot
+                )
                 return
             }
         } else {
@@ -175,6 +181,33 @@ final class ESFSubscriber: Sendable {
         if let data = serializer.serialize(eventType: "application_control_block", payload: payload) {
             onEvent?(data)
         }
+    }
+
+    /// emitBlockNotification fires the desktop-notification XPC
+    /// message to the host app's listener. Called after the DENY
+    /// response so the kernel is already unblocked; the alert is
+    /// post-hoc UX. Fire-and-forget — NotificationClient swallows
+    /// errors so a missing host app (the LaunchAgent hasn't
+    /// started yet, or the user logged out) doesn't slow the
+    /// AUTH_EXEC handler down.
+    private func emitBlockNotification(
+        target: es_process_t,
+        rule: ApplicationControlRule,
+        matchedIdentifier: String,
+        snapshot: ApplicationControlSnapshot
+    ) {
+        let path = esTokenString(target.executable.pointee.path)
+        let payload = BlockNotificationPayload(
+            ruleID: rule.ruleID,
+            ruleType: rule.ruleType,
+            identifier: matchedIdentifier,
+            customMsg: rule.customMsg,
+            customURL: rule.customURL,
+            binaryPath: path,
+            policyID: snapshot.policyID,
+            policyVersion: snapshot.policyVersion
+        )
+        NotificationClient.shared.notify(payload)
     }
 
     private func handleExec(_ msg: es_message_t) {

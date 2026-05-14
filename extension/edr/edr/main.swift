@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NetworkExtension
 import os.log
@@ -174,6 +175,34 @@ private func disableDNSProxy() {
     }
 }
 
+/// runNotifyMode keeps the host app alive as a long-running
+/// accessory NSApplication, vending the block-notification XPC
+/// service and presenting NSAlert modals on every accepted
+/// AUTH_EXEC-denied notification. Distinct from the other CLI
+/// modes (one-shot extension activation, filter toggles) which run
+/// dispatchMain and exit on completion — the notify surface has no
+/// terminal state by design.
+///
+/// Runs as `.accessory` so a modal can appear without the app
+/// claiming a Dock icon. `app.run()` (not dispatchMain()) is what
+/// AppKit needs to dispatch input events that NSAlert depends on.
+private func runNotifyMode() {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let presenter = BlockAlertPresenterAppKit()
+    let listener = NotificationListener(presenter: presenter)
+    listener.start()
+    logger.info("Application Control notification surface running on \(blockNotificationServiceName, privacy: .public)")
+    // withExtendedLifetime keeps the listener alive for the duration
+    // of the AppKit run loop. ARC is otherwise free to drop a local
+    // whose only remaining "uses" are inside [weak self] event
+    // handlers, which would silently take the XPC surface offline in
+    // optimised builds — caught by Gemini and Copilot on PR #157.
+    withExtendedLifetime(listener) {
+        app.run()
+    }
+}
+
 let action = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"
 
 switch action {
@@ -193,6 +222,9 @@ case "disable-dns-proxy":
     print("Disabling DNS proxy...")
     disableDNSProxy()
     dispatchMain()
+case "notify":
+    print("Starting Fleet EDR notification surface...")
+    runNotifyMode()
 default:
     let manager = ExtensionManager(action: action)
     manager.run()
