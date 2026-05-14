@@ -16,5 +16,19 @@
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>LSBackgroundOnly</key>
 	<true/>
+	<!--
+	    MachServices declares the XPC service name the host app
+	    vends in `notify` mode. launchd registers the name when the
+	    LaunchAgent (Library/LaunchAgents/com.fleetdm.edr.notify.plist)
+	    starts the host app under a user session, so the system
+	    extension's NotificationClient can connect by name without
+	    bootstrap_check_in plumbing. The team-id prefix matches the
+	    convention the agent ↔ extension XPC channel already uses.
+	-->
+	<key>MachServices</key>
+	<dict>
+		<key>FDG8Q7N4CC.com.fleetdm.edr.notifications</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

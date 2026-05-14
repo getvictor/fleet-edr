@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	    Fleet EDR per-user notification surface (LaunchAgent).
+	    Run by launchd in each user's session, this plist starts
+	    the host app in `notify` mode so the system extension's
+	    NotificationClient can post AUTH_EXEC-denial modals.
+
+	    Install path (per user): ~/Library/LaunchAgents/com.fleetdm.edr.notify.plist
+	    System-wide alternative: /Library/LaunchAgents/com.fleetdm.edr.notify.plist
+	    The system-wide path requires a logout/login cycle on first install.
+	-->
+	<key>Label</key>
+	<string>com.fleetdm.edr.notify</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Applications/Fleet EDR.app/Contents/MacOS/edr</string>
+		<string>notify</string>
+	</array>
+
+	<!--
+	    MachServices binds the XPC name the extension connects to.
+	    launchd routes the first connection to this Mach service to
+	    spawning the host app, so the notify surface is on-demand
+	    rather than always-resident. The name matches the
+	    blockNotificationServiceName constant baked into both
+	    extension/NotificationClient.swift and edr/BlockNotification.swift.
+	-->
+	<key>MachServices</key>
+	<dict>
+		<key>FDG8Q7N4CC.com.fleetdm.edr.notifications</key>
+		<true/>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<false/>
+
+	<!--
+	    KeepAlive=false: the agent re-spawns the process on demand
+	    via the Mach service binding. A crashed host app stays down
+	    until the next AUTH_EXEC denial, which is the desired
+	    behaviour — we don't want a CPU-burning crashloop on the
+	    user's desktop. The next denial spawns a fresh instance.
+	-->
+	<key>KeepAlive</key>
+	<false/>
+
+	<key>ProcessType</key>
+	<string>Interactive</string>
+
+	<key>StandardOutPath</key>
+	<string>/tmp/fleet-edr-notify.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/fleet-edr-notify.log</string>
+</dict>
+</plist>
