@@ -3,119 +3,131 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr", category: "NotificationListener")
 
-/// NotificationListener is the host-app's inbound XPC surface. It
-/// vends the Mach service the extension's NotificationClient
-/// connects to, validates the peer is signed by Fleet, decodes the
-/// block-notification payload, and dispatches each accepted message
-/// to the BlockAlert presenter.
+/// NotificationListener is the host-app's inbound surface for block
+/// notifications the extension drops on AUTH_EXEC denial. The
+/// production-target transport is XPC against the Mach service the
+/// LaunchAgent registers; the demo cut uses a file-system rendezvous
+/// (blockNotificationDropDir) because daemon → user-session XPC
+/// needs session-bridging plumbing out of scope for the demo.
 ///
-/// Mirrors the extension's existing XPCServer shape on purpose: same
-/// listener model, same per-peer event handler, same code-signing
-/// requirement string. Keeping the two surfaces structurally similar
-/// means a fix in one (a CodeRabbit-flagged race, a missing nil
-/// check) is easy to port to the other.
+/// Transport: FSEvents-watch the drop directory. On every change,
+/// list the directory, decode every *.json file we haven't already
+/// processed, and forward the payload to the BlockAlertPresenter.
+/// We track processed UUIDs in memory so a host-app restart re-shows
+/// any pending alerts (the user might have missed them while the
+/// process was down) but a long-running session doesn't re-fire
+/// the same modal.
+///
+/// Cleanup: the extension owns the dropped files (root-owned, mode
+/// 0644). The host app can read but not unlink under sticky-bit
+/// rules. The extension purges its own files older than
+/// blockNotificationPurgeWindow on every notify, so the directory
+/// stays bounded.
 final class NotificationListener {
-    private let serviceName: String
+    private let dropDir: String
     private let presenter: BlockAlertPresenter
     private let queue = DispatchQueue(label: "com.fleetdm.edr.notification-listener")
-    private var listener: xpc_connection_t?
-    private var peers: Set<NotificationPeer> = []
+    private var source: DispatchSourceFileSystemObject?
+    private var fd: Int32 = -1
+    // processed records the UUIDs we've already presented to avoid
+    // double-firing if FSEvents fires repeatedly for the same write
+    // (which the docs say can happen on rename / chmod sequences).
+    private var processed: Set<String> = []
 
-    init(serviceName: String = blockNotificationServiceName, presenter: BlockAlertPresenter) {
-        self.serviceName = serviceName
+    init(dropDir: String = blockNotificationDropDir, presenter: BlockAlertPresenter) {
+        self.dropDir = dropDir
         self.presenter = presenter
     }
 
     func start() {
-        let conn = xpc_connection_create_mach_service(
-            serviceName, queue,
-            UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER)
+        ensureDropDirectory()
+        let descriptor = open(dropDir, O_EVTONLY)
+        if descriptor < 0 {
+            // Errno is set; render it so the operator can tell
+            // "permission denied" from "doesn't exist" without
+            // needing dtruss.
+            let err = String(cString: strerror(errno))
+            logger.error("notification drop dir open failed: \(err, privacy: .public) path=\(self.dropDir, privacy: .public)")
+            return
+        }
+        fd = descriptor
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            // .write fires on every directory mutation (rename in,
+            // unlink, etc.). .attrib catches the chmod the extension
+            // does post-write so even if the rename + chmod look
+            // like two separate events we don't miss the second.
+            eventMask: [.write, .attrib],
+            queue: queue,
         )
-        xpc_connection_set_event_handler(conn) { [weak self] event in
-            self?.handleListenerEvent(event)
+        src.setEventHandler { [weak self] in self?.scan() }
+        src.setCancelHandler { [weak self] in
+            if let descriptor = self?.fd, descriptor >= 0 {
+                close(descriptor)
+                self?.fd = -1
+            }
         }
-        xpc_connection_activate(conn)
-        listener = conn
-        logger.info("notification listener started on \(self.serviceName, privacy: .public)")
+        src.resume()
+        source = src
+        logger.info("notification listener watching \(self.dropDir, privacy: .public)")
+        // Drain anything already in the drop dir at startup so a
+        // host-app restart catches pending notifications the
+        // extension dropped while we were down.
+        queue.async { [weak self] in self?.scan() }
     }
 
-    private func handleListenerEvent(_ event: xpc_object_t) {
-        let type = xpc_get_type(event)
-        if type == XPC_TYPE_CONNECTION {
-            let result = xpc_connection_set_peer_code_signing_requirement(event, blockNotificationPeerRequirement)
-            if result != 0 {
-                logger.error("set peer code signing on notification listener: \(result, privacy: .public)")
-                xpc_connection_cancel(event)
-                return
-            }
-            let peer = NotificationPeer(connection: event)
-            peers.insert(peer)
-            logger.info("notification peer connected (total: \(self.peers.count, privacy: .public))")
-            xpc_connection_set_event_handler(event) { [weak self] peerEvent in
-                let peerType = xpc_get_type(peerEvent)
-                if peerType == XPC_TYPE_ERROR {
-                    self?.queue.async {
-                        self?.peers.remove(peer)
-                        logger.info("notification peer disconnected (total: \(self?.peers.count ?? 0, privacy: .public))")
-                    }
-                    return
-                }
-                if peerType == XPC_TYPE_DICTIONARY {
-                    self?.handlePeerMessage(peerEvent)
-                }
-            }
-            xpc_connection_activate(event)
-        } else if type == XPC_TYPE_ERROR {
-            logger.error("notification listener error")
-        }
+    /// ensureDropDirectory creates the drop directory if absent so
+    /// the FSEvents source has something to open. The extension
+    /// (root) is the canonical creator + sets the sticky 1777 mode;
+    /// this is the user-side fallback when the host app starts
+    /// before any AUTH_EXEC denial has triggered the extension's
+    /// own ensureDropDirectory. createDirectory is idempotent.
+    private func ensureDropDirectory() {
+        try? FileManager.default.createDirectory(
+            atPath: dropDir,
+            withIntermediateDirectories: true,
+            attributes: nil,
+        )
     }
 
-    private func handlePeerMessage(_ event: xpc_object_t) {
-        guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
-            // Logged at error level so a forensic trail captures any
-            // malformed messages — a missing "type" key would
-            // otherwise vanish silently and a protocol-version drift
-            // between the extension's send and the host app's decode
-            // would be invisible to operators.
-            logger.error("received XPC message missing 'type' key")
-            return
-        }
-        let kind = String(cString: typeCStr)
-        guard kind == blockNotificationMessageType else {
-            // type is peer-supplied; redact in the unified log so a
-            // compromised peer cannot inject arbitrary strings.
-            logger.info("ignored XPC message of unknown type: \(kind, privacy: .private)")
-            return
-        }
-        var dataLen = 0
-        guard let rawPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 else {
-            logger.error("block notification missing 'data'")
-            return
-        }
-        let data = Data(bytes: rawPtr, count: dataLen)
-        let decoder = JSONDecoder()
-        let payload: BlockNotificationPayload
+    /// scan walks the drop directory, decodes every *.json file we
+    /// haven't seen, and forwards the payload to the presenter.
+    /// Called on `queue`; FSEvents may coalesce multiple writes so
+    /// the loop is the unit of consistency, not each event.
+    private func scan() {
+        let url = URL(fileURLWithPath: dropDir)
+        let entries: [URL]
         do {
-            payload = try decoder.decode(BlockNotificationPayload.self, from: data)
+            entries = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles],
+            )
         } catch {
-            logger.error("decode block notification: \(error.localizedDescription, privacy: .public)")
+            logger.error("notification scan: \(error.localizedDescription, privacy: .public)")
             return
         }
-        presenter.present(payload)
-    }
-}
-
-/// NotificationPeer wraps an xpc_connection_t so we can store it in
-/// a Set. Same shape as the agent ↔ extension XPCServer's XPCPeer.
-private final class NotificationPeer: Hashable {
-    let connection: xpc_connection_t
-    init(connection: xpc_connection_t) {
-        self.connection = connection
-    }
-    static func == (lhs: NotificationPeer, rhs: NotificationPeer) -> Bool {
-        lhs.connection === rhs.connection
-    }
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(ObjectIdentifier(connection as AnyObject))
+        let decoder = JSONDecoder()
+        for entry in entries where entry.pathExtension == "json" {
+            let uuid = entry.deletingPathExtension().lastPathComponent
+            if processed.contains(uuid) { continue }
+            let data: Data
+            do {
+                data = try Data(contentsOf: entry)
+            } catch {
+                logger.error("notification read \(uuid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                continue
+            }
+            let payload: BlockNotificationPayload
+            do {
+                payload = try decoder.decode(BlockNotificationPayload.self, from: data)
+            } catch {
+                logger.error("notification decode \(uuid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                processed.insert(uuid)
+                continue
+            }
+            processed.insert(uuid)
+            presenter.present(payload)
+        }
     }
 }
