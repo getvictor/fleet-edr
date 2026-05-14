@@ -26,6 +26,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
+		"application_control_block",
 	}
 	require.Len(t, got, len(wantIDs))
 	for i, want := range wantIDs {

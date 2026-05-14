@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
@@ -47,6 +48,16 @@ const (
 	SeverityMedium   = detectionapi.SeverityMedium
 	SeverityHigh     = detectionapi.SeverityHigh
 	SeverityCritical = detectionapi.SeverityCritical
+)
+
+// Alert source constants re-exported from detection/api so catalog
+// rules can stamp Finding.Source without importing detection/api
+// directly. The doc comment on rules/api (see doc.go) makes the
+// no-detection-import rule explicit; mirror constants here whenever a
+// rule needs one. Same values, same types, no behavior drift.
+const (
+	AlertSourceDetection          = detectionapi.AlertSourceDetection
+	AlertSourceApplicationControl = detectionapi.AlertSourceApplicationControl
 )
 
 // --- Catalog types -------------------------------------------------------------
@@ -398,7 +409,14 @@ type SetApplicationControlPayload struct {
 // the wire shape is stable across the demo cut and the rest of
 // Phase A. Disabled and expired rules are NOT included in the
 // payload — the fan-out filters them so the agent never sees them.
+//
+// RuleID is the stable string identifier (e.g. "app_control:42") that
+// the extension echoes back in the `application_control_block` event
+// so the server-side mapping lands the alert under the same rule_id.
+// Built by ApplicationControlRuleID(r.ID); the numeric row id alone
+// would risk collision with catalog rule ids in alert dedup.
 type SetApplicationControlRule struct {
+	RuleID      string      `json:"rule_id"`
 	RuleType    RuleType    `json:"rule_type"`
 	Identifier  string      `json:"identifier"`
 	Action      Action      `json:"action"`
@@ -406,6 +424,20 @@ type SetApplicationControlRule struct {
 	Severity    Severity    `json:"severity"`
 	CustomMsg   *string     `json:"custom_msg,omitempty"`
 	CustomURL   *string     `json:"custom_url,omitempty"`
+}
+
+// ApplicationControlRuleIDPrefix namespaces the rule_id that the
+// extension echoes in `application_control_block` events. Keeps the
+// alert dedup key collision-free against catalog rule ids even when
+// the alerts.source column is unavailable for filtering.
+const ApplicationControlRuleIDPrefix = "app_control:"
+
+// ApplicationControlRuleID renders the stable string rule_id for a
+// row in app_control_rules. The extension treats this value as
+// opaque; the server uses it for alert dedup and for mapping a
+// block-event back to its row.
+func ApplicationControlRuleID(id int64) string {
+	return fmt.Sprintf("%s%d", ApplicationControlRuleIDPrefix, id)
 }
 
 // MarshalSetApplicationControlPayload returns the JSON bytes the
@@ -425,6 +457,7 @@ func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []App
 			continue
 		}
 		entries = append(entries, SetApplicationControlRule{
+			RuleID:      ApplicationControlRuleID(r.ID),
 			RuleType:    r.RuleType,
 			Identifier:  r.Identifier,
 			Action:      r.Action,

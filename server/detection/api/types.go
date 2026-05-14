@@ -140,6 +140,7 @@ type Alert struct {
 	ID          int64           `db:"id" json:"id"`
 	HostID      string          `db:"host_id" json:"host_id"`
 	RuleID      string          `db:"rule_id" json:"rule_id"`
+	Source      string          `db:"source" json:"source"`
 	Severity    string          `db:"severity" json:"severity"`
 	Title       string          `db:"title" json:"title"`
 	Description string          `db:"description" json:"description"`
@@ -151,6 +152,22 @@ type Alert struct {
 	ResolvedAt  *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
 	UpdatedBy   *int64          `db:"updated_by" json:"updated_by,omitempty"`
 }
+
+// AlertSource records what subsystem emitted an alert. The schema's
+// `source` ENUM mirrors this set. Including source in the alert dedup
+// key prevents a catalog rule and an application-control rule that
+// happen to share an identifier value from collapsing into one alert
+// row (see server-detection-rules-engine delta spec).
+const (
+	// AlertSourceDetection is the source for findings produced by
+	// catalog rules. The default for engine.persistFinding when a
+	// Finding leaves the field blank, since every catalog rule was
+	// "detection" before the source column was introduced.
+	AlertSourceDetection = "detection"
+	// AlertSourceApplicationControl is the source for alerts
+	// produced by an application_control_block ingest event.
+	AlertSourceApplicationControl = "application_control"
+)
 
 // AlertStatus enumerates the operator-driven alert lifecycle.
 // Schema-level ENUM('open','acknowledged','resolved'); the UI
@@ -176,9 +193,15 @@ const (
 // it as a type alias so catalog rule files implement
 // rulesapi.Rule.Evaluate without importing detection/api directly
 // (see arch-go.yml §api-purity for the alias rationale).
+//
+// Source is optional: when blank, engine.persistFinding defaults it
+// to AlertSourceDetection so existing catalog rules keep working
+// unchanged. The application-control block rule explicitly sets
+// AlertSourceApplicationControl.
 type Finding struct {
 	HostID      string
 	RuleID      string
+	Source      string
 	Severity    string
 	Title       string
 	Description string
@@ -203,6 +226,7 @@ type AlertFilter struct {
 	HostID    string
 	Status    AlertStatus
 	Severity  string
+	Source    string
 	ProcessID int64
 	Limit     int
 }

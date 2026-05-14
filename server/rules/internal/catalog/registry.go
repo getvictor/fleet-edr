@@ -21,5 +21,6 @@ func New(opts api.RegistryOptions) []api.Rule {
 		&CredentialKeychainDump{},
 		&PrivilegeLaunchdPlistWrite{AllowedTeamIDs: opts.LaunchDaemonTeamIDAllowlist},
 		&SudoersTamper{AllowedWriters: opts.SudoersWriterAllowlist},
+		&ApplicationControlBlock{},
 	}
 }

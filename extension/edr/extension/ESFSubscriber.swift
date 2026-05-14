@@ -126,7 +126,16 @@ final class ESFSubscriber: Sendable {
                rule.action == ApplicationControlAction.block,
                rule.enforcement == ApplicationControlEnforcement.protect {
                 logger.warning("AUTH_EXEC DENIED by application control: \(path, privacy: .public) sha256=\(sha256, privacy: .public)")
+                // Deny FIRST so the kernel is unblocked before any
+                // userspace work. The block-event serialize + upload
+                // happens off the AUTH callback's deadline.
                 es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
+                emitBlockEvent(
+                    target: target,
+                    rule: rule,
+                    matchedIdentifier: sha256,
+                    snapshot: snapshot
+                )
                 return
             }
         } else {
@@ -136,6 +145,36 @@ final class ESFSubscriber: Sendable {
             FileHashCache.shared.startLazyFill(path: path, stat: fileStat)
         }
         es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
+    }
+
+    /// emitBlockEvent serializes an application_control_block event for the
+    /// just-denied AUTH_EXEC and hands it to the upload pipeline via
+    /// onEvent. Called after the DENY response so the kernel is already
+    /// unblocked; the JSON encode + XPC handoff happen off the callback's
+    /// deadline.
+    private func emitBlockEvent(
+        target: es_process_t,
+        rule: ApplicationControlRule,
+        matchedIdentifier: String,
+        snapshot: ApplicationControlSnapshot
+    ) {
+        let pid = audit_token_to_pid(target.audit_token)
+        let path = esTokenString(target.executable.pointee.path)
+        let payload = ApplicationControlBlockPayload(
+            pid: pid,
+            path: path,
+            ruleID: rule.ruleID,
+            ruleType: rule.ruleType,
+            identifier: matchedIdentifier,
+            severity: rule.severity,
+            customMsg: rule.customMsg,
+            customURL: rule.customURL,
+            policyID: snapshot.policyID,
+            policyVersion: snapshot.policyVersion
+        )
+        if let data = serializer.serialize(eventType: "application_control_block", payload: payload) {
+            onEvent?(data)
+        }
     }
 
     private func handleExec(_ msg: es_message_t) {
