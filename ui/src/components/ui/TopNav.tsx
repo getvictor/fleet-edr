@@ -10,6 +10,7 @@ interface NavLink {
 const LINKS: NavLink[] = [
   { to: "/", label: "Hosts" },
   { to: "/alerts", label: "Alerts" },
+  { to: "/app-control", label: "Application control" },
   { to: "/coverage", label: "Coverage" },
 ];
 

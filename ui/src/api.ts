@@ -7,7 +7,16 @@
 // path was retired in Phase 5b. GET /api/session returns the cookie's
 // session JSON shape (including the CSRF token) and is the UI's
 // session-probe endpoint.
-import type { HostSummary, TreeResponse, ProcessDetail, Alert, AlertDetail, Command } from "./types";
+import type {
+  HostSummary,
+  TreeResponse,
+  ProcessDetail,
+  Alert,
+  AlertDetail,
+  Command,
+  ApplicationControlPolicy,
+  ApplicationControlRule,
+} from "./types";
 import {
   HTTP_STATUS_FORBIDDEN,
   HTTP_STATUS_NO_CONTENT,
@@ -351,6 +360,117 @@ export interface RuleDocEntry {
 export async function fetchRuleDocs(): Promise<RuleDocEntry[]> {
   const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/rules");
   return body.rules;
+}
+
+// --- Application Control endpoints ---
+//
+// Mirrors the demo-cut REST surface mounted at /api/v1/app-control/* by
+// server/rules/internal/operator/appcontrol_handler.go. The server emits
+// typed error codes (application_control.invalid_rule, etc.); the UI
+// surfaces those via AppControlApiError so callers can switch on the
+// code rather than match a free-form message.
+
+// AppControlApiError carries the typed `error` code the handler writes
+// on its 4xx responses. Callers use `.code` to switch on the failure
+// (e.g. invalid_rule -> highlight the identifier field;
+// duplicate_rule -> show "this rule already exists" inline).
+export class AppControlApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "AppControlApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+// AppControlErrorBody is the wire shape every typed 4xx response from
+// the app-control handler carries. Narrow on purpose so unrelated 4xxs
+// (a stray HTML error page from a misconfigured proxy, e.g.) fall
+// through to the plain `API error` path.
+interface AppControlErrorBody {
+  error?: string;
+  message?: string;
+}
+
+// AppControlListResponse is the GET /policies wire shape. The
+// underlying handler returns `{policies: [...]}` rather than a bare
+// array so future pagination + filter metadata can land alongside the
+// rows without a wire-shape break.
+interface AppControlListResponse {
+  policies: ApplicationControlPolicy[];
+}
+
+// The read-side endpoints (list + get) route through fetchJSON because
+// they never produce typed application_control.* error codes on the
+// happy paths the UI exercises (4xx on read would be a 404 with the
+// typed code, which the call site already handles via the standard
+// "API error" path mapped to a user-visible error message). Only the
+// state-changing POST goes through the explicit AppControlApiError
+// path below; the typed-error surface only earns its complexity on
+// the write side.
+export async function listAppControlPolicies(): Promise<ApplicationControlPolicy[]> {
+  const body = await fetchJSON<AppControlListResponse>("/v1/app-control/policies");
+  return body.policies;
+}
+
+export async function getAppControlPolicy(id: number): Promise<ApplicationControlPolicy> {
+  return fetchJSON<ApplicationControlPolicy>(`/v1/app-control/policies/${String(id)}`);
+}
+
+// CreateAppControlRuleRequest is the JSON body the POST endpoint
+// accepts. Mirrors createRuleRequest in
+// server/rules/internal/operator/appcontrol_handler.go. The demo cut
+// only honours rule_type=BINARY; the form locks the type selector to
+// that value, but the type is on the wire so post-demo additions
+// don't break the contract.
+export interface CreateAppControlRuleRequest {
+  rule_type: string;
+  identifier: string;
+  custom_msg?: string;
+  custom_url?: string;
+  comment?: string;
+  severity?: string;
+  reason: string;
+}
+
+export async function createAppControlRule(
+  policyID: number,
+  req: CreateAppControlRuleRequest,
+): Promise<ApplicationControlRule> {
+  // The handler writes typed error bodies on 4xx; intercept here so
+  // form components can switch on the code rather than parse a
+  // free-form message.
+  const path = `/v1/app-control/policies/${String(policyID)}/rules`;
+  assertSafeAPIPath(path);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  attachCsrfHeader(headers, "POST");
+  const target = new URL(API_BASE + path, globalThis.location.origin);
+  const res = await fetch(target, {
+    method: "POST",
+    credentials: "include",
+    headers,
+    body: JSON.stringify(req),
+  });
+  if (res.status === HTTP_STATUS_UNAUTHORIZED) {
+    clearCsrfToken();
+    throw new Unauthorized401Error();
+  }
+  if (res.status === HTTP_STATUS_FORBIDDEN) {
+    const reauth = await readReauthChallenge(res);
+    if (reauth) throw new ReauthRequiredError(reauth);
+  }
+  if (!res.ok) {
+    const body = (await res.clone().json().catch((): null => null)) as AppControlErrorBody | null;
+    if (body?.error) {
+      throw new AppControlApiError(body.error, body.message ?? body.error, res.status);
+    }
+    throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
+  }
+  return res.json() as Promise<ApplicationControlRule>;
 }
 
 export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {

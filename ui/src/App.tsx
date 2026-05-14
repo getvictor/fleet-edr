@@ -4,6 +4,7 @@ import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
 import { AttackCoverage } from "./components/AttackCoverage";
+import { ApplicationControlRoutes } from "./components/ApplicationControl/ApplicationControlRoutes";
 import { RuleDetail } from "./components/RuleDetail";
 import { Login } from "./components/Login";
 import { BreakGlassSetup } from "./components/BreakGlassSetup";
@@ -109,6 +110,7 @@ function AuthedApp() {
         <Routes>
           <Route path="/" element={<HostList />} />
           <Route path="/alerts" element={<AlertList />} />
+          <Route path="/app-control/*" element={<ApplicationControlRoutes />} />
           <Route path="/coverage" element={<AttackCoverage />} />
           <Route path="/rules/:ruleId" element={<RuleDetail />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
