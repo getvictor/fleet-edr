@@ -5,13 +5,22 @@ import Foundation
 /// team-id prefix matches the convention the agent ↔ extension XPC
 /// channel already uses (`FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc`).
 ///
-/// Visibility: declared in `edr/edr/Info.plist`'s `MachServices` so
-/// launchd registers the name when the host app is launched via the
-/// LaunchAgent plist shipped alongside this file. For the demo dry-
-/// run on the SIP-disabled VM the host app can also be started
-/// manually with `edr notify`; the listener self-registers the name
-/// in that case too.
+/// This is the production-target transport. The demo cut uses a
+/// file-based fallback (see blockNotificationDropDir) because a
+/// daemon (system bootstrap) → user-session GUI Mach lookup needs
+/// a session-bridging helper that isn't in scope for the demo.
+/// Production deployment with the LaunchAgent installed at
+/// /Library/LaunchAgents will switch back to the XPC path.
 let blockNotificationServiceName = "FDG8Q7N4CC.com.fleetdm.edr.notifications"
+
+/// blockNotificationDropDir is the file-system rendezvous between
+/// the extension (writer, root) and the host app (reader, user).
+/// The extension creates this directory at mode 1777 (sticky-bit
+/// rwx for everyone) so the user-session host app can read root-
+/// written files without a privileged-helper trampoline. Files
+/// land at mode 0644 — host app reads, doesn't delete (only the
+/// file owner can unlink under sticky-bit rules).
+let blockNotificationDropDir = "/private/tmp/fleet-edr-notify-drop"
 
 /// Stable wire-shape identifier for the block-notification message.
 /// Mirrors the `type` key convention the extension's existing XPC

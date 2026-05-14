@@ -169,6 +169,7 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		HostID:    r.URL.Query().Get("host_id"),
 		Status:    api.AlertStatus(r.URL.Query().Get("status")),
 		Severity:  r.URL.Query().Get("severity"),
+		Source:    r.URL.Query().Get("source"),
 		ProcessID: httpserver.ParseInt64Param(r, "process_id", 0),
 		Limit:     httpserver.ParseIntParam(r, "limit", 100),
 	}

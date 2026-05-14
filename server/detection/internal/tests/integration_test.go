@@ -785,6 +785,74 @@ func TestOperatorHTTP_ListAlerts_Empty(t *testing.T) {
 	assert.Empty(t, alerts)
 }
 
+// TestOperatorHTTP_ListAlerts_SourceFilter pins the GET /api/alerts ?source=
+// query-param contract end to end. The UI's alert-list source filter relies on
+// the handler parsing the param and the store applying it to the WHERE clause;
+// dropping either layer would silently regress the "filter by app-control vs
+// detection" demo beat, which is precisely what step 9 exists to land.
+func TestOperatorHTTP_ListAlerts_SourceFilter(t *testing.T) {
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	procID := mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	// One alert per source value so the same row set covers both filter
+	// branches in one HTTP test. Seed via the store rather than the engine
+	// path: insertAlertDirect would default Source to "detection" and we'd
+	// need a separate stubRule that emits an application_control finding
+	// just to seed the second row. Direct InsertAlert keeps the test
+	// focused on the filter wiring, not on engine internals.
+	for _, source := range []string{api.AlertSourceDetection, api.AlertSourceApplicationControl} {
+		_, _, err := d.Store().InsertAlert(ctx, api.Alert{
+			HostID:    "host-a",
+			RuleID:    source + ":seed",
+			Source:    source,
+			Severity:  rulesapi.SeverityMedium,
+			Title:     source + " seed",
+			ProcessID: procID,
+		}, nil)
+		require.NoError(t, err)
+	}
+
+	mux := http.NewServeMux()
+	d.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	listWithSource := func(t *testing.T, source string) []api.Alert {
+		t.Helper()
+		u := srv.URL + "/api/alerts"
+		if source != "" {
+			u += "?source=" + source
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, u, nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var alerts []api.Alert
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&alerts))
+		return alerts
+	}
+
+	t.Run("no filter returns both sources", func(t *testing.T) {
+		assert.Len(t, listWithSource(t, ""), 2)
+	})
+	t.Run("source=detection returns only the detection alert", func(t *testing.T) {
+		got := listWithSource(t, api.AlertSourceDetection)
+		require.Len(t, got, 1)
+		assert.Equal(t, api.AlertSourceDetection, got[0].Source)
+	})
+	t.Run("source=application_control returns only the app-control alert", func(t *testing.T) {
+		got := listWithSource(t, api.AlertSourceApplicationControl)
+		require.Len(t, got, 1)
+		assert.Equal(t, api.AlertSourceApplicationControl, got[0].Source)
+	})
+	t.Run("unknown source returns empty", func(t *testing.T) {
+		assert.Empty(t, listWithSource(t, "no_such_source"))
+	})
+}
+
 func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()

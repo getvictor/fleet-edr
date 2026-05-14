@@ -20,6 +20,26 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
 
 const STATUS_OPTIONS = ["", "open", "acknowledged", "resolved"];
 const SEVERITY_OPTIONS = ["", "low", "medium", "high", "critical"];
+// SOURCE_OPTIONS pairs the wire value with the operator-facing label.
+// "" is the All bucket. The wire values mirror api.AlertSource* constants on
+// the server (server/detection/api/types.go); adding a new source means
+// adding both ends and a SOURCE_LABELS entry below.
+const SOURCE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "", label: "All" },
+  { value: "detection", label: "Detection" },
+  { value: "application_control", label: "App control" },
+];
+// SOURCE_LABELS is a Map (not Record<string,string>) so eslint-plugin-
+// security's detect-object-injection rule doesn't fire on the dynamic
+// key lookup inside formatSource. The other components in this tree
+// (BreakGlassLogin, Login, etc.) follow the same convention.
+const SOURCE_LABELS: Map<string, string> = new Map(
+  SOURCE_OPTIONS.filter((o) => o.value !== "").map((o) => [o.value, o.label]),
+);
+
+function formatSource(source: string): string {
+  return SOURCE_LABELS.get(source) ?? source;
+}
 
 export function AlertList() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -30,6 +50,7 @@ export function AlertList() {
   // one click away via the Status dropdown but don't clutter the default view.
   const [statusFilter, setStatusFilter] = useState("open");
   const [severityFilter, setSeverityFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +59,7 @@ export function AlertList() {
     listAlerts({
       status: statusFilter || undefined,
       severity: severityFilter || undefined,
+      source: sourceFilter || undefined,
     })
       .then((result) => {
         if (!cancelled) setAlerts(result);
@@ -49,7 +71,7 @@ export function AlertList() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [statusFilter, severityFilter]);
+  }, [statusFilter, severityFilter, sourceFilter]);
 
   const applyStatus = (prev: Alert[], alertId: number, newStatus: string): Alert[] => {
     // If the current filter no longer matches, remove the row instead of just patching it.
@@ -108,6 +130,16 @@ export function AlertList() {
           <option key={s} value={s}>{s || "All"}</option>
         ))}
       </Select>
+      <Select
+        id="source-filter"
+        label="Source:"
+        value={sourceFilter}
+        onChange={(e) => { setSourceFilter(e.target.value); }}
+      >
+        {SOURCE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </Select>
     </div>
   );
 
@@ -128,6 +160,7 @@ export function AlertList() {
           <thead>
             <tr>
               <th>Severity</th>
+              <th>Source</th>
               <th>Title</th>
               <th>Host</th>
               <th>Time</th>
@@ -143,6 +176,7 @@ export function AlertList() {
                     {a.severity}
                   </Badge>
                 </td>
+                <td className="alert-source">{formatSource(a.source)}</td>
                 <td>
                   {/* Title is the primary alert pivot — it opens the host's
                       process tree pinned to the moment the alert fired, with
