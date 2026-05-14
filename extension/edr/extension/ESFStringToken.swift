@@ -17,11 +17,17 @@ import Foundation
 /// string) rather than as a path with U+FFFD replacement characters,
 /// which a downstream rule comparison might miscompare against the
 /// admin-provided canonical form.
+///
+/// Implementation note: es_string_token_t.data is UnsafePointer<CChar>
+/// (Int8), but String(bytes:encoding:) requires a sequence of UInt8.
+/// UnsafeRawBufferPointer reinterprets the same memory as raw bytes
+/// without an allocation or a copy; its Element is UInt8, which is
+/// what the failable initializer wants.
 @inline(__always)
 func esTokenString(_ token: es_string_token_t) -> String {
     guard let buf = token.data, token.length > 0 else {
         return ""
     }
-    let bytes = UnsafeBufferPointer(start: buf, count: token.length)
+    let bytes = UnsafeRawBufferPointer(start: buf, count: token.length)
     return String(bytes: bytes, encoding: .utf8) ?? ""
 }
