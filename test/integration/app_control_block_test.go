@@ -74,7 +74,7 @@ func TestAppControlBlock_EventBecomesAlert(t *testing.T) {
 		HostID:      hostID,
 		TimestampNs: now + 2,
 		EventType:   "application_control_block",
-		Payload: blockPayload(blockPayloadInput{
+		Payload: blockPayload(t, blockPayloadInput{
 			PID:           blockPID,
 			Path:          "/System/Applications/Calculator.app/Contents/MacOS/Calculator",
 			RuleID:        ruleID,
@@ -114,7 +114,7 @@ func TestAppControlBlock_EventBecomesAlert(t *testing.T) {
 		HostID:      hostID,
 		TimestampNs: now + 3,
 		EventType:   "application_control_block",
-		Payload: blockPayload(blockPayloadInput{
+		Payload: blockPayload(t, blockPayloadInput{
 			PID:           blockPID,
 			Path:          "/System/Applications/Calculator.app/Contents/MacOS/Calculator",
 			RuleID:        ruleID,
@@ -169,7 +169,7 @@ func TestAppControlBlock_DefaultDescriptionWhenCustomMsgAbsent(t *testing.T) {
 		HostID:      hostID,
 		TimestampNs: now + 2,
 		EventType:   "application_control_block",
-		Payload: blockPayload(blockPayloadInput{
+		Payload: blockPayload(t, blockPayloadInput{
 			PID:           blockPID,
 			Path:          "/bin/ls",
 			RuleID:        "app_control:12",
@@ -214,8 +214,12 @@ type blockPayloadInput struct {
 // blockPayload renders the JSON shape the extension emits for an
 // application_control_block event. Kept as a local helper so the
 // wire-tag contract is exercised by the test rather than imported
-// from production code.
-func blockPayload(in blockPayloadInput) json.RawMessage {
+// from production code. Takes *testing.T so a marshal failure fails
+// the test loudly instead of slipping a corrupt payload into the
+// event post (would surface downstream as an opaque mismatch
+// otherwise).
+func blockPayload(t *testing.T, in blockPayloadInput) json.RawMessage {
+	t.Helper()
 	type wire struct {
 		PID           int     `json:"pid"`
 		Path          string  `json:"path"`
@@ -228,12 +232,13 @@ func blockPayload(in blockPayloadInput) json.RawMessage {
 		PolicyID      int64   `json:"policy_id"`
 		PolicyVersion int64   `json:"policy_version"`
 	}
-	b, _ := json.Marshal(wire{
+	b, err := json.Marshal(wire{
 		PID: in.PID, Path: in.Path,
 		RuleID: in.RuleID, RuleType: in.RuleType, Identifier: in.Identifier,
 		Severity: in.Severity, CustomMsg: in.CustomMsg, CustomURL: in.CustomURL,
 		PolicyID: in.PolicyID, PolicyVersion: in.PolicyVersion,
 	})
+	require.NoError(t, err)
 	return b
 }
 

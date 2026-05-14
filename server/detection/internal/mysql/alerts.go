@@ -25,9 +25,12 @@ const alertEventsBatchSize = 500
 // process_id), the insert is skipped and the existing alert ID is
 // returned. Returns the alert ID and whether it was newly created.
 //
-// Callers MUST set a.Source. The engine defaults blank to
-// AlertSourceDetection before this method sees the alert so existing
-// catalog rules keep working unchanged.
+// Callers SHOULD set a.Source; a blank Source defaults to
+// AlertSourceDetection so existing catalog-rule call sites that
+// predate the Source column keep working unchanged. The engine
+// already defaults blank Finding.Source on the way in, so this
+// fallback is belt-and-braces for any future caller that constructs
+// an Alert by hand.
 func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error) {
 	eventIDs = deduplicateStrings(eventIDs)
 	// Defense in depth: callers that forget to stamp Source land in

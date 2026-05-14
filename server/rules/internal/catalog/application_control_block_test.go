@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -51,7 +50,7 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 			wantSeverity: "high",
 			wantTitle:    "Application blocked: Calculator",
 			wantDesc:     customMsg,
-			wantSource:   detectionapi.AlertSourceApplicationControl,
+			wantSource:   api.AlertSourceApplicationControl,
 			wantRuleID:   "app_control:42",
 		},
 		{
@@ -72,7 +71,7 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 			wantSeverity: "medium",
 			wantTitle:    "Application blocked: ls",
 			wantDesc:     "Blocked BINARY rule for bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			wantSource:   detectionapi.AlertSourceApplicationControl,
+			wantSource:   api.AlertSourceApplicationControl,
 			wantRuleID:   "app_control:7",
 		},
 		{
@@ -177,7 +176,7 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 // of silently dropping the block.
 func TestApplicationControlBlock_GraphReaderError(t *testing.T) {
 	rule := &ApplicationControlBlock{}
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"pid":            100,
 		"path":           "/bin/ls",
 		"rule_id":        "app_control:1",
@@ -187,9 +186,10 @@ func TestApplicationControlBlock_GraphReaderError(t *testing.T) {
 		"policy_id":      1,
 		"policy_version": 1,
 	})
+	require.NoError(t, err)
 	wantErr := errors.New("graph reader unavailable")
 	gr := &stubBlockGraphReader{err: wantErr}
-	_, err := rule.Evaluate(t.Context(), []api.Event{{
+	_, err = rule.Evaluate(t.Context(), []api.Event{{
 		EventID: "evt-1", HostID: "host-a", TimestampNs: 1000,
 		EventType: "application_control_block", Payload: payload,
 	}}, gr)
@@ -208,20 +208,20 @@ type stubBlockGraphReader struct {
 	err    error
 }
 
-func (s *stubBlockGraphReader) GetProcessByPID(_ context.Context, _ string, _ int, _ int64) (*detectionapi.Process, error) {
+func (s *stubBlockGraphReader) GetProcessByPID(_ context.Context, _ string, _ int, _ int64) (*api.Process, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	if !s.exists {
 		return nil, nil
 	}
-	return &detectionapi.Process{ID: s.procID}, nil
+	return &api.Process{ID: s.procID}, nil
 }
 
-func (s *stubBlockGraphReader) GetChildProcesses(_ context.Context, _ string, _ int, _ detectionapi.TimeRange) ([]detectionapi.Process, error) {
+func (s *stubBlockGraphReader) GetChildProcesses(_ context.Context, _ string, _ int, _ api.TimeRange) ([]api.Process, error) {
 	return nil, nil
 }
 
-func (s *stubBlockGraphReader) GetExecChain(_ context.Context, current detectionapi.Process) ([]detectionapi.Process, error) {
-	return []detectionapi.Process{current}, nil
+func (s *stubBlockGraphReader) GetExecChain(_ context.Context, current api.Process) ([]api.Process, error) {
+	return []api.Process{current}, nil
 }

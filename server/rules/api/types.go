@@ -50,6 +50,16 @@ const (
 	SeverityCritical = detectionapi.SeverityCritical
 )
 
+// Alert source constants re-exported from detection/api so catalog
+// rules can stamp Finding.Source without importing detection/api
+// directly. The doc comment on rules/api (see doc.go) makes the
+// no-detection-import rule explicit; mirror constants here whenever a
+// rule needs one. Same values, same types, no behavior drift.
+const (
+	AlertSourceDetection          = detectionapi.AlertSourceDetection
+	AlertSourceApplicationControl = detectionapi.AlertSourceApplicationControl
+)
+
 // --- Catalog types -------------------------------------------------------------
 
 // Rule is a detection that the engine evaluates against a batch of

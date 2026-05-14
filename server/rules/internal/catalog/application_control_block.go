@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
+	"path"
 
-	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -96,7 +95,7 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 		findings = append(findings, api.Finding{
 			HostID:      evt.HostID,
 			RuleID:      p.RuleID,
-			Source:      detectionapi.AlertSourceApplicationControl,
+			Source:      api.AlertSourceApplicationControl,
 			Severity:    p.Severity,
 			Title:       blockAlertTitle(p),
 			Description: blockAlertDescription(p),
@@ -111,8 +110,15 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 // list. Prefers the binary basename so a row like
 // "Application blocked: Calculator" beats one that drowns the
 // column in a full path.
+//
+// Uses `path.Base` (Unix-only, forward-slash) rather than
+// `path/filepath.Base` (host-OS dependent). Agent paths are always
+// macOS Unix-style; if the server ever ran on Windows, filepath would
+// keep the full string under host=Windows because backslash is the
+// separator there. path.Base is the correct semantic for the
+// known-Unix input here, not just a cross-platform optimization.
 func blockAlertTitle(p applicationControlBlockPayload) string {
-	name := filepath.Base(p.Path)
+	name := path.Base(p.Path)
 	if name == "" || name == "." || name == "/" {
 		name = p.Path
 	}
