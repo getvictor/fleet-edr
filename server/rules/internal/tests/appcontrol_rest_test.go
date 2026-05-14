@@ -376,6 +376,178 @@ func TestAppControlREST_GetPolicy_NotFound(t *testing.T) {
 	assert.Equal(t, "application_control.policy_not_found", body["error"])
 }
 
+// TestAppControlREST_GetPolicy_InvalidPolicyID: anything that isn't a
+// positive integer in {id} maps to 400 with the typed code; the
+// handler must not leak strconv error strings.
+func TestAppControlREST_GetPolicy_InvalidPolicyID(t *testing.T) {
+	r := newAppControlRig(t, []string{"host-a"})
+	for _, raw := range []string{"abc", "-5", "0"} {
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+raw, nil)
+		var body map[string]string
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "raw=%q", raw)
+		assert.Equal(t, "application_control.invalid_policy_id", body["error"], "raw=%q", raw)
+	}
+}
+
+// TestAppControlREST_CreateRule_InvalidJSON: a malformed body lands
+// 400 with application_control.invalid_json. No fan-out, no audit.
+func TestAppControlREST_CreateRule_InvalidJSON(t *testing.T) {
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		r.srv.URL+"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		strings.NewReader("{not json"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.invalid_json", body["error"])
+	assert.Empty(t, r.inserter.snapshot())
+	assert.Empty(t, r.audit.snapshot())
+}
+
+// TestAppControlREST_CreateRule_InvalidPolicyID: same shape as the GET
+// path — a non-numeric or zero/negative id maps to 400 with the typed
+// code before any DB work.
+func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPost, "/api/v1/app-control/policies/abc/rules",
+		map[string]any{"rule_type": rulesapi.RuleTypeBinary, "identifier": "x", "reason": "y"})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.invalid_policy_id", body["error"])
+}
+
+// TestAppControlREST_CreateRule_NoActorOnContextIs500: the session
+// middleware is supposed to put an Actor on ctx; bypassing it is a
+// wiring bug, not user error, so the handler returns 500 instead of
+// silently letting the service-layer guard handle it.
+func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
+	// Re-wire the rig without the actor-injecting middleware so the
+	// handler sees a bare ctx.
+	db := full.Open(t)
+	inserter := newRecordingInserter()
+	audit := &recordingAudit{}
+	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
+		DB:              db,
+		Logger:          slog.Default(),
+		AuthZ:           allowAllAuthZ{},
+		Audit:           audit,
+		CommandInserter: inserter.Insert,
+		HostLister: func(_ context.Context) ([]string, error) {
+			return []string{"host-a"}, nil
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, rules.ApplySchema(t.Context()))
+	mux := http.NewServeMux()
+	rules.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	store := rules.ApplicationControlStore()
+	policy, err := store.GetPolicyByName(t.Context(), "default", rulesapi.DefaultPolicyName)
+	require.NoError(t, err)
+	body, err := json.Marshal(map[string]any{
+		"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("a", 64),
+		"reason": "no actor on ctx", "severity": rulesapi.SeverityRuleMedium,
+	})
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		srv.URL+"/api/v1/app-control/policies/"+i64(policy.ID)+"/rules",
+		strings.NewReader(string(body)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	// HTTPGate sees an empty tenant_id (no actor on ctx) and returns
+	// 403 with reason resource_tenant_missing — that's the correct
+	// happy-path posture for a request with no actor reaching the
+	// authz gate. The explicit "no actor → 500" branch fires only
+	// when HTTPGate happens to allow (e.g. an AuthZ stub that says
+	// yes without checking the actor); allowAllAuthZ in this rig
+	// satisfies that, so this path is exercised.
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	var errBody map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+	assert.Equal(t, "internal", errBody["error"])
+	assert.Empty(t, inserter.snapshot(), "no actor → must not enqueue commands")
+	assert.Empty(t, audit.snapshot(), "no actor → must not emit audit row")
+}
+
+// TestAppControlREST_CreateRule_HostListerFailureRecorded: when the
+// host enumerator fails the audit row carries fanout_skipped_reason
+// so SIEM can distinguish "lister broke" from "no hosts enrolled."
+// The HTTP response is still 201 (rule landed + the next mutation
+// will re-fan); only the audit signal differs.
+func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
+	db := full.Open(t)
+	inserter := newRecordingInserter()
+	audit := &recordingAudit{}
+	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
+		DB:              db,
+		Logger:          slog.Default(),
+		AuthZ:           allowAllAuthZ{},
+		Audit:           audit,
+		CommandInserter: inserter.Insert,
+		HostLister: func(_ context.Context) ([]string, error) {
+			return nil, errors.New("synthetic host lister failure")
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, rules.ApplySchema(t.Context()))
+	mux := http.NewServeMux()
+	rules.RegisterAuthedRoutes(mux)
+	actor := &identityapi.Actor{
+		UserID: 99, TenantID: "default",
+		Roles: []identityapi.RoleBinding{{
+			RoleID: "admin", TenantID: "default",
+			ScopeType: identityapi.RoleBindingScopeTenant,
+			ScopeID:   identityapi.RoleBindingScopeWildcard,
+		}},
+	}
+	withActor := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(identityapi.WithActor(r.Context(), actor))
+		mux.ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(withActor)
+	t.Cleanup(srv.Close)
+
+	store := rules.ApplicationControlStore()
+	policy, err := store.GetPolicyByName(t.Context(), "default", rulesapi.DefaultPolicyName)
+	require.NoError(t, err)
+	body, _ := json.Marshal(map[string]any{
+		"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("e", 64),
+		"reason": "lister fails", "severity": rulesapi.SeverityRuleHigh,
+	})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		srv.URL+"/api/v1/app-control/policies/"+i64(policy.ID)+"/rules",
+		strings.NewReader(string(body)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode,
+		"lister failure must not fail the create; the rule landed and the next mutation will re-fan")
+	events := audit.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, 0, events[0].Payload["fanout_hosts"])
+	assert.Equal(t, 0, events[0].Payload["fanout_failed"])
+	assert.Equal(t, "host_lister_error", events[0].Payload["fanout_skipped_reason"],
+		"audit row must distinguish lister-broke from no-hosts-enrolled")
+	assert.Empty(t, inserter.snapshot(), "no commands enqueued when lister failed")
+}
+
 // i64 stringifies a numeric id for URL composition. Tiny helper so
 // the call sites read cleanly without strconv import sprinkled
 // everywhere.

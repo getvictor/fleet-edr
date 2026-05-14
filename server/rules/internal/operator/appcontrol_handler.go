@@ -20,6 +20,12 @@ import (
 // stops a hostile client from streaming megabytes through the handler.
 const applicationControlReadBodyLimit = 16 * 1024
 
+// internalErrorMessage is the human-readable body the handler writes
+// on every 5xx response that isn't otherwise typed. Extracted to one
+// constant so the wire shape stays stable and Sonar's duplicate-
+// literal rule (go:S1192) doesn't fire on the four call sites.
+const internalErrorMessage = "internal error"
+
 // AppControlHandler serves the rules-context /api/v1/app-control/*
 // admin routes. Separate from the catalog Handler because the surface,
 // the dependencies (audit + commands + hosts), and the auth gates
@@ -76,7 +82,7 @@ func (h *AppControlHandler) handleListPolicies(w http.ResponseWriter, r *http.Re
 	policies, err := h.svc.ListPolicies(ctx, tenantID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "appcontrol list policies", "err", err)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", "internal error")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"policies": policies})
@@ -102,7 +108,7 @@ func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		h.logger.ErrorContext(ctx, "appcontrol get policy", "err", err, "policy_id", policyID)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", "internal error")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, policy)
@@ -148,10 +154,19 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
 		return
 	}
-	actor, _ := identityapi.ActorFromContext(ctx)
-	actorEmail := actorEmailFromContext(ctx)
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		// Session middleware guarantees an actor on every request that
+		// reaches HTTPGate's allow path; an absent actor here is a
+		// wiring bug, not a user error. Surface a 500 so the
+		// regression is loud rather than silently let CreateRule fall
+		// through to a service-layer guard.
+		h.logger.ErrorContext(ctx, "appcontrol create rule: no actor on ctx despite session middleware")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		return
+	}
 
-	rule, err := h.svc.CreateRule(ctx, api.CreateRuleRequest{
+	rule, err := h.svc.CreateRule(ctx, tenantID, api.CreateRuleRequest{
 		PolicyID:   policyID,
 		RuleType:   req.RuleType,
 		Identifier: req.Identifier,
@@ -159,7 +174,7 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		CustomURL:  req.CustomURL,
 		Comment:    req.Comment,
 		Severity:   req.Severity,
-		Actor:      actorEmail,
+		Actor:      actorIdentifierFromContext(ctx),
 		Reason:     req.Reason,
 	}, actor)
 	if err != nil {
@@ -182,7 +197,7 @@ func (h *AppControlHandler) writeCreateRuleError(ctx context.Context, w http.Res
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule", err.Error())
 	default:
 		h.logger.ErrorContext(ctx, "appcontrol create rule", "err", err, "policy_id", policyID)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", "internal error")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
 	}
 }
 
@@ -202,13 +217,16 @@ func parsePolicyID(r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// actorEmailFromContext is the audit-actor identifier. Lifted from
-// the actor on ctx so the audit row records who authored a rule.
-// Falls back to the user_id when no email is available (the
-// break-glass actor sometimes has no email-shaped identifier per the
-// identity bootstrap docs). Empty when no actor is on ctx, which
-// the store-level Actor required check turns into a 400.
-func actorEmailFromContext(ctx context.Context) string {
+// actorIdentifierFromContext returns a stable string identifier the
+// store + audit row use as the "who authored this" tag. The actor's
+// email isn't on identityapi.Actor today (Actor carries UserID +
+// TenantID + Roles but not email; the audit recorder fetches the
+// email separately when writing the row), so this helper renders the
+// canonical `user:<id>` shape the store-level "actor is required"
+// gate accepts. Empty when no actor is on ctx, which lets the
+// store-level Actor required check produce a typed 400 rather than
+// the handler having to short-circuit there too.
+func actorIdentifierFromContext(ctx context.Context) string {
 	a, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
 		return ""

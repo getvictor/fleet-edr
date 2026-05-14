@@ -48,7 +48,7 @@ type Service struct {
 // ServiceDeps bundles the constructor inputs. Keeps the call site at
 // cmd/main from drifting on argument order when the dep set grows
 // (PATCH/DELETE/bulkUpsert will add a couple of audit-action variants
-// post-demo and naming arguments through a struct keeps the wiring
+// post-demo and passing arguments through a struct keeps the wiring
 // readable).
 type ServiceDeps struct {
 	Store    *Store
@@ -130,27 +130,58 @@ func (s *Service) GetPolicyWithRules(ctx context.Context, tenantID string, polic
 
 // CreateRule is the state-changing entry point. Sequence:
 //
-//  1. Persist the rule + bump the policy version atomically via
+//  1. Validate tenantID + actor: empty tenant is a wiring bug that
+//     would otherwise silently mutate the wrong tenant's policy; we
+//     fail closed rather than guess.
+//  2. Persist the rule + bump the policy version atomically via
 //     store.CreateRule.
-//  2. Load the post-bump policy + the full rule list so the snapshot
+//  3. Load the post-bump policy + the full rule list so the snapshot
 //     payload reflects current state (the agent sees an INSERT, not a
-//     diff).
-//  3. Marshal a `set_application_control` payload via
+//     diff). If this step fails, the rule is persisted but unenforced
+//     — we emit an audit row marking the compose failure AND return
+//     an error so the HTTP layer responds 5xx. The next mutation
+//     re-composes from scratch and the rule reaches every host then.
+//  4. Marshal a `set_application_control` payload via
 //     api.MarshalSetApplicationControlPayload — filters disabled +
 //     expired rules per the wire contract.
-//  4. Fan out: enqueue one command per enrolled host in the tenant.
-//     Failures are accumulated, not aborted; the audit row records
-//     fanout_failed for the human triage path.
-//  5. Emit an audit event with fanout_hosts / fanout_failed in the
-//     payload. The audit row goes out AFTER the fanout so the counts
-//     are accurate, and uses sync Record so a crashed audit emit is
-//     visible in the response (this is a state-changing call and
-//     spec 6.4 makes audit emission part of the contract).
+//  5. Fan out: enqueue one command per enrolled host in the tenant.
+//     Per-host failures are accumulated, not aborted; the audit row
+//     records fanout_failed for the human triage path. A
+//     host-lister failure is distinguished from "no hosts enrolled"
+//     by a fanout_skipped_reason key on the audit payload.
+//  6. Emit an audit event with fanout_hosts / fanout_failed /
+//     fanout_skipped_reason in the payload. The audit row goes out
+//     AFTER the fanout so the counts are accurate, and uses sync
+//     Record so a crashed audit emit is visible in the response
+//     (this is a state-changing call and spec 6.4 makes audit
+//     emission part of the contract).
+//
+// tenantID is the resolved tenant the handler already gated the
+// authorization decision against (identityapi.ActorTenantID). Passing
+// it explicitly keeps one source of truth per request so the authz
+// check and the mutation can't drift onto different tenants.
 //
 // Returns the created rule on success. Validation errors propagate
 // untouched so the handler can errors.Is against the
 // IsApplicationControlValidationError set.
-func (s *Service) CreateRule(ctx context.Context, req api.CreateRuleRequest, actor *identityapi.Actor) (api.ApplicationControlRule, error) {
+func (s *Service) CreateRule(
+	ctx context.Context,
+	tenantID string,
+	req api.CreateRuleRequest,
+	actor *identityapi.Actor,
+) (api.ApplicationControlRule, error) {
+	// Defense in depth: the handler already requires the actor (HTTPGate
+	// short-circuits on an empty tenantID with resource_tenant_missing),
+	// but failing closed at the service layer means a future caller
+	// that bypasses the handler (a CLI tool, a background job) can't
+	// silently mutate the wrong tenant.
+	if tenantID == "" {
+		return api.ApplicationControlRule{}, fmt.Errorf("%w: tenant_id is required", api.ErrAppControlInvalidRequest)
+	}
+	if actor == nil {
+		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+
 	rule, err := s.store.CreateRule(ctx, req)
 	if err != nil {
 		return api.ApplicationControlRule{}, err
@@ -159,18 +190,21 @@ func (s *Service) CreateRule(ctx context.Context, req api.CreateRuleRequest, act
 	// Compose the post-bump snapshot the agents will receive. Find
 	// the parent policy (already in the tenant view) and its full
 	// rule list including the just-inserted row.
-	policy, payload, err := s.buildSnapshotPayload(ctx, actorTenantID(actor), req.PolicyID)
+	policy, payload, err := s.buildSnapshotPayload(ctx, tenantID, req.PolicyID)
 	if err != nil {
-		// Rule landed; the snapshot compose failed. Surface a WARN
-		// and skip the fan-out + audit fields that depend on the
-		// payload. The next mutation will recompute and re-fan.
-		s.logger.WarnContext(ctx, "appcontrol: snapshot compose after CreateRule failed; rule is persisted but fan-out skipped",
+		// Rule landed but the snapshot compose failed. Persist the
+		// audit signal so the SIEM dashboard can distinguish this
+		// state from "rule landed and reached every host", then
+		// bubble the error so the HTTP layer returns 5xx. The next
+		// mutation re-composes and the rule reaches the hosts then.
+		s.emitAudit(ctx, actor, req, rule, 0, 0, 0, "snapshot_compose_failed")
+		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after CreateRule failed; rule is persisted but unenforced until next mutation",
 			"err", err, "policy_id", req.PolicyID, "rule_id", rule.ID)
-		return rule, nil
+		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol snapshot compose: %w", err)
 	}
 
-	fanoutHosts, fanoutFailed := s.fanout(ctx, payload)
-	s.emitAudit(ctx, actor, req, rule, policy, fanoutHosts, fanoutFailed)
+	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, payload)
+	s.emitAudit(ctx, actor, req, rule, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
 	return rule, nil
 }
 
@@ -211,17 +245,29 @@ func (s *Service) findPolicyByID(ctx context.Context, tenantID string, policyID 
 	return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
 }
 
+// fanoutSkipReason values land verbatim on the audit row when the
+// fan-out couldn't run end-to-end. The empty string means "no skip;
+// the loop ran" and is the happy path.
+const (
+	fanoutSkipReasonHostLister = "host_lister_error"
+)
+
 // fanout enqueues exactly one set_application_control command per
-// enrolled host in the tenant. Returns (hosts_attempted, hosts_failed)
-// for the audit payload. Per-host failures are logged but do NOT
-// abort the loop; the policy is already on disk and a missed host
-// will catch up on its next agent poll (the version-monotonic apply
-// in the extension is idempotent).
-func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, failed int) {
+// enrolled host in the tenant. Returns (hosts_attempted, hosts_failed,
+// skip_reason). Per-host failures are logged but do NOT abort the
+// loop; the policy is already on disk and a missed host will catch
+// up on its next agent poll (the version-monotonic apply in the
+// extension is idempotent).
+//
+// A non-empty skip_reason distinguishes "host enumeration itself
+// failed" from "the tenant has zero enrolled hosts" — both would
+// otherwise audit as fanout_hosts=0 and an operator looking at the
+// dashboard could not tell them apart.
+func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, failed int, skipReason string) {
 	hosts, err := s.hosts(ctx)
 	if err != nil {
 		s.logger.WarnContext(ctx, "appcontrol: host list failed; fan-out skipped", "err", err)
-		return 0, 0
+		return 0, 0, fanoutSkipReasonHostLister
 	}
 	seen := make(map[string]struct{}, len(hosts))
 	for _, h := range hosts {
@@ -235,7 +281,7 @@ func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, fa
 			s.logger.WarnContext(ctx, "appcontrol: command insert failed", "host_id", h, "err", err)
 		}
 	}
-	return attempted, failed
+	return attempted, failed, ""
 }
 
 // emitAudit records the rule-create event with fanout counts on the
@@ -244,32 +290,47 @@ func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, fa
 // design. Audit failure is logged but does not bubble up: the rule
 // is committed and the fan-out happened; a missing audit row is a
 // dashboard gap to investigate, not a 500 for the operator.
+//
+// policyVersion is the post-bump value when the snapshot composed
+// successfully; pass 0 when the compose failed and the version
+// isn't reliably knowable. fanoutSkipReason is the empty string on
+// the happy path and one of the fanoutSkipReason* constants when
+// the audit row needs to record why fanout_hosts is zero. Splitting
+// the version + skip-reason out so the failure paths can call this
+// with explicit defaults rather than fabricating a fake policy
+// struct.
 func (s *Service) emitAudit(
 	ctx context.Context,
 	actor *identityapi.Actor,
 	req api.CreateRuleRequest,
 	rule api.ApplicationControlRule,
-	policy api.ApplicationControlPolicy,
+	policyVersion int64,
 	fanoutHosts int,
 	fanoutFailed int,
+	fanoutSkipReason string,
 ) {
 	if s.audit == nil {
 		return
+	}
+	payload := map[string]any{
+		"policy_id":      rule.PolicyID,
+		"policy_version": policyVersion,
+		"rule_type":      string(rule.RuleType),
+		"identifier":     rule.Identifier,
+		"severity":       string(rule.Severity),
+		"reason":         req.Reason,
+		"fanout_hosts":   fanoutHosts,
+		"fanout_failed":  fanoutFailed,
+	}
+	if fanoutSkipReason != "" {
+		payload["fanout_skipped_reason"] = fanoutSkipReason
 	}
 	event := identityapi.AuditEvent{
 		Action:     identityapi.AuditAppControlRuleCreate,
 		TargetType: "application_control_rule",
 		TargetID:   strconv.FormatInt(rule.ID, 10),
-		Payload: map[string]any{
-			"policy_id":      policy.ID,
-			"policy_version": policy.Version,
-			"rule_type":      string(rule.RuleType),
-			"identifier":     rule.Identifier,
-			"severity":       string(rule.Severity),
-			"reason":         req.Reason,
-			"fanout_hosts":   fanoutHosts,
-			"fanout_failed":  fanoutFailed,
-		},
+		ActorEmail: req.Actor,
+		Payload:    payload,
 	}
 	if actor != nil {
 		userID := actor.UserID
@@ -278,16 +339,4 @@ func (s *Service) emitAudit(
 	if err := s.audit.Record(ctx, event); err != nil {
 		s.logger.WarnContext(ctx, "appcontrol: audit record failed", "err", err, "rule_id", rule.ID)
 	}
-}
-
-// actorTenantID returns the tenant the actor is acting on behalf of,
-// or "default" if no actor is on the context. Tests that pin actors
-// always populate TenantID; the fallback exists so a transient
-// middleware regression doesn't make the demo write to the wrong
-// tenant's policy.
-func actorTenantID(a *identityapi.Actor) string {
-	if a == nil || a.TenantID == "" {
-		return "default"
-	}
-	return a.TenantID
 }
