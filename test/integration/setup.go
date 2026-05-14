@@ -123,11 +123,32 @@ func Setup(t *testing.T) *Stack {
 	require.NoError(t, err, "open response")
 
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:     db,
-		Logger: logger,
-		AuthZ:  identityCtx.AuthZ(),
+		DB:              db,
+		Logger:          logger,
+		AuthZ:           identityCtx.AuthZ(),
+		Audit:           identityCtx.AuditRecorder(),
+		CommandInserter: responseCtx.Service().Insert,
+		HostLister: func(ctx context.Context) ([]string, error) {
+			hosts, err := detectionCtx.Service().ListHosts(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]string, 0, len(hosts))
+			for _, h := range hosts {
+				out = append(out, h.HostID)
+			}
+			return out, nil
+		},
 	})
 	require.NoError(t, err, "open rules")
+	// rules-context ApplySchema seeds the per-tenant Default
+	// application_control policy on top of testdb/full's DDL pass.
+	// full.Open only applies the DDL (testkit.ApplySchema is a thin
+	// wrapper over bootstrap.ApplySchema's package form which doesn't
+	// know about the seed); calling rulesCtx.ApplySchema here brings
+	// the seed online so the cross-context REST tests have a Default
+	// policy to POST against.
+	require.NoError(t, rulesCtx.ApplySchema(ctx), "seed rules default policy")
 
 	detectionCtx.LoadActive(rulesCtx.ContentService())
 
@@ -231,6 +252,9 @@ func buildMux(
 	for _, p := range []string{
 		"POST /api/commands",
 		"GET /api/audit-events",
+		"GET /api/v1/app-control/policies",
+		"GET /api/v1/app-control/policies/{id}",
+		"POST /api/v1/app-control/policies/{id}/rules",
 	} {
 		mux.Handle(p, sessionProtected)
 	}

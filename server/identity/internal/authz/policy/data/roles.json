@@ -19,7 +19,9 @@
         "process.read",
         "enrollment.read",
         "enrollment.revoke",
-        "enrollment.rotate_token"
+        "enrollment.rotate_token",
+        "application_control.read",
+        "application_control.rule_create"
       ]
     },
     "senior_analyst": {
@@ -33,7 +35,8 @@
         "alert.acknowledge",
         "alert.resolve",
         "alert.reopen",
-        "process.read"
+        "process.read",
+        "application_control.read"
       ]
     },
     "analyst": {
