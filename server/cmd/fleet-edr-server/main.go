@@ -119,7 +119,7 @@ func run() error {
 		return err
 	}
 
-	rulesCtx, err := openRules(ctx, logger, db, cfg, identityCtx)
+	rulesCtx, err := openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx)
 	if err != nil {
 		return err
 	}
@@ -294,6 +294,8 @@ func openRules(
 	db *sqlx.DB,
 	cfg *config.Config,
 	identityCtx *identitybootstrap.Identity,
+	detectionCtx *detectionbootstrap.Detection,
+	responseCtx *responsebootstrap.Response,
 ) (*rulesbootstrap.Rules, error) {
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
 		DB:     db,
@@ -304,8 +306,10 @@ func openRules(
 			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
 			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
 		},
-		Audit: identityCtx.AuditRecorder(),
-		AuthZ: identityCtx.AuthZ(),
+		Audit:           identityCtx.AuditRecorder(),
+		AuthZ:           identityCtx.AuthZ(),
+		CommandInserter: responseCtx.Service().Insert,
+		HostLister:      hostListerFromDetection(detectionCtx.Service()),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
@@ -316,6 +320,26 @@ func openRules(
 		return nil, err
 	}
 	return rulesCtx, nil
+}
+
+// hostListerFromDetection projects detection's ListHosts (returns the
+// richer HostSummary shape) down to the appcontrol.HostLister closure
+// shape ([]string of host_ids). Lives in cmd/main because the
+// projection is part of the rules-context dep wiring, not rules
+// itself: rules can't import detection/bootstrap without breaking
+// the bounded-context import rule (ADR-0004).
+func hostListerFromDetection(svc detectionapi.Service) func(context.Context) ([]string, error) {
+	return func(ctx context.Context) ([]string, error) {
+		hosts, err := svc.ListHosts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, 0, len(hosts))
+		for _, h := range hosts {
+			out = append(out, h.HostID)
+		}
+		return out, nil
+	}
 }
 
 func openEndpoint(

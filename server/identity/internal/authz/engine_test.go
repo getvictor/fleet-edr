@@ -108,6 +108,15 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 		{"auditor alert.read", "auditor", api.ActionAlertRead, true},
 		{"auditor alert.comment", "auditor", api.ActionAlertComment, false},
 		{"auditor host.isolate", "auditor", api.ActionHostIsolate, false},
+
+		// Application Control: admin manages rules; senior_analyst can
+		// read but not author; analyst + auditor see neither.
+		{"admin application_control.read", "admin", api.ActionAppControlRead, true},
+		{"admin application_control.rule_create", "admin", api.ActionAppControlRuleCreate, true},
+		{"senior_analyst application_control.read", "senior_analyst", api.ActionAppControlRead, true},
+		{"senior_analyst application_control.rule_create", "senior_analyst", api.ActionAppControlRuleCreate, false},
+		{"analyst application_control.read", "analyst", api.ActionAppControlRead, false},
+		{"auditor application_control.rule_create", "auditor", api.ActionAppControlRuleCreate, false},
 	}
 	// One engine for the whole matrix. The Rego compile is the
 	// expensive part (~30ms) and the engine is read-only here, so

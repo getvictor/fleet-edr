@@ -28,23 +28,42 @@ type Deps struct {
 	// rule constructors.
 	RegistryOptions api.RegistryOptions
 
-	// Audit is the operator-action recorder. Optional: today no route
-	// inside the rules context emits audit rows; the field is wired so
-	// the follow-on application-control change can plug into it without
-	// touching the wiring layer.
+	// Audit is the operator-action recorder. The application-control
+	// REST handler records a `application_control.rule_create` row on
+	// every POST so SIEM dashboards can trace which rules an admin
+	// authored and which hosts the fan-out reached. Optional: when
+	// nil, the service skips the Record call with a WARN log line
+	// (same posture identity uses on the async-audit fallback).
 	Audit identityapi.AuditRecorder
 	// AuthZ is the authorization chokepoint every privileged operator
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
+
+	// CommandInserter is the closure that enqueues a response.Command
+	// to a host. The application-control fan-out path consults it on
+	// every rule-create so every enrolled host in the tenant receives
+	// one `set_application_control` command per mutation. Optional:
+	// when nil, the application-control REST routes are not mounted
+	// (the rules context still constructs cleanly so non-REST consumers
+	// like tools/gen-rule-docs keep working).
+	CommandInserter appcontrol.CommandInserter
+	// HostLister enumerates the tenant's enrolled hosts for the
+	// fan-out. cmd/main passes a wrapper over
+	// detection.api.Service.ListHosts that projects each HostSummary
+	// down to its host_id. Same optional-when-nil contract as
+	// CommandInserter; nil disables the REST surface.
+	HostLister appcontrol.HostLister
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
 type Rules struct {
-	svc          *service.Service
-	operatorH    *operator.Handler
-	appControlSt *appcontrol.Store
-	db           *sqlx.DB
-	logger       *slog.Logger
+	svc           *service.Service
+	operatorH     *operator.Handler
+	appControlH   *operator.AppControlHandler
+	appControlSt  *appcontrol.Store
+	appControlSvc *appcontrol.Service
+	db            *sqlx.DB
+	logger        *slog.Logger
 }
 
 // New wires the rules context. Does NOT apply the schema (call
@@ -67,12 +86,28 @@ func New(deps Deps) (*Rules, error) {
 
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
+
+	appControlStore := appcontrol.NewStore(deps.DB)
+	var appControlSvc *appcontrol.Service
+	var appControlH *operator.AppControlHandler
+	if deps.CommandInserter != nil && deps.HostLister != nil {
+		appControlSvc = appcontrol.NewService(appcontrol.ServiceDeps{
+			Store:    appControlStore,
+			Commands: deps.CommandInserter,
+			Hosts:    deps.HostLister,
+			Audit:    deps.Audit,
+			Logger:   logger,
+		})
+		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
+	}
 	return &Rules{
-		svc:          svc,
-		operatorH:    opH,
-		appControlSt: appcontrol.NewStore(deps.DB),
-		db:           deps.DB,
-		logger:       logger,
+		svc:           svc,
+		operatorH:     opH,
+		appControlH:   appControlH,
+		appControlSt:  appControlStore,
+		appControlSvc: appControlSvc,
+		db:            deps.DB,
+		logger:        logger,
 	}, nil
 }
 
@@ -134,12 +169,18 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 //
 //	GET  /api/rules
 //	GET  /api/attack-coverage
+//	GET  /api/v1/app-control/policies                    (when CommandInserter + HostLister are wired)
+//	GET  /api/v1/app-control/policies/{id}               (when CommandInserter + HostLister are wired)
+//	POST /api/v1/app-control/policies/{id}/rules         (when CommandInserter + HostLister are wired)
 //
 // Caller wraps in identity Session + CSRF middleware before mounting.
 // rules has no public agent-facing routes, so RegisterPublicRoutes
 // does not exist.
 func (r *Rules) RegisterAuthedRoutes(mux *http.ServeMux) {
 	r.operatorH.RegisterRoutes(mux)
+	if r.appControlH != nil {
+		r.appControlH.RegisterRoutes(mux)
+	}
 }
 
 // CatalogOnly returns just the rule catalog, without wiring the

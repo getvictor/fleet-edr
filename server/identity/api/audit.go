@@ -58,6 +58,13 @@ const (
 	AuditAuthBreakglassBootstrap AuditAction = "auth.breakglass.bootstrap"
 	AuditAuthBreakglassSuccess   AuditAction = "auth.breakglass.success"
 	AuditAuthBreakglassFailure   AuditAction = "auth.breakglass.failure"
+
+	// Application Control mutations (rules context). The payload
+	// records actor reason, rule type / identifier, policy version
+	// post-bump, and fan-out counts (fanout_hosts / fanout_failed) so
+	// SIEM dashboards can trace which hosts received the rule. Stable
+	// wire string mirrored by AuthZ Action of the same name.
+	AuditAppControlRuleCreate AuditAction = "application_control.rule_create"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller
