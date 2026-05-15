@@ -24,13 +24,13 @@ type BuiltinRole struct {
 // in the OPA policy bundle the future AuthZ engine evaluates; this
 // list only names the roles and flags them as non-deletable.
 //
-// super_admin: the highest tier. Owns tenant + SSO config plus every
-// permission below; the break-glass account binds to this role at
-// tenant scope.
+// super_admin: the highest tier. Owns deployment + SSO config plus
+// every permission below; the break-glass account binds to this role
+// at the deployment-wide (global) scope.
 //
 // admin: day-to-day administration -- user invitations, policy
 // authoring, every host action, every alert action. Cannot reach
-// tenant / SSO config.
+// deployment / SSO config.
 //
 // senior_analyst: investigate and take destructive action --
 // host.isolate, host.kill_process, host.run_script, the full alert
@@ -47,14 +47,14 @@ var BuiltinRoles = []BuiltinRole{
 	{
 		ID:          "super_admin",
 		DisplayName: "Super Admin",
-		Description: "Tenant + SSO configuration plus every other role's permissions. " +
-			"The break-glass account binds here at tenant scope.",
+		Description: "Deployment + SSO configuration plus every other role's permissions. " +
+			"The break-glass account binds here at the deployment-wide scope.",
 	},
 	{
 		ID:          "admin",
 		DisplayName: "Admin",
 		Description: "Day-to-day administration: user invitations, policy authoring, " +
-			"every host action, every alert action. No tenant / SSO config.",
+			"every host action, every alert action. No deployment / SSO config.",
 	},
 	{
 		ID:          "senior_analyst",

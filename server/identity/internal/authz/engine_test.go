@@ -235,12 +235,12 @@ func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 	assert.Equal(t, "scope_not_yet_supported", d.Reason)
 }
 
-// TestAllow_TenantGrantWinsOverHostScopeDeny guards against a Rego
-// rule-ordering mistake: if an actor has BOTH a tenant binding AND a
-// host-scope binding for the same role+action, the tenant grant must
+// TestAllow_GlobalGrantWinsOverHostScopeDeny guards against a Rego
+// rule-ordering mistake: if an actor has BOTH a global binding AND a
+// host-scope binding for the same role+action, the global grant must
 // win. Otherwise the scope_not_yet_supported branch shadows real
 // authorisations once wave-2 host scopes are mixed in.
-func TestAllow_TenantGrantWinsOverHostScopeDeny(t *testing.T) {
+func TestAllow_GlobalGrantWinsOverHostScopeDeny(t *testing.T) {
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default",
 		globalBinding("admin", "default"),

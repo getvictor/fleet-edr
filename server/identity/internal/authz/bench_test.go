@@ -7,11 +7,11 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/authz"
 )
 
-// BenchmarkAllow_TenantScopeAllow is the bench harness the spec
+// BenchmarkAllow_GlobalScopeAllow is the bench harness the spec
 // names. Reports ns/op for the warm allow path against a
-// deployment-wide binding. Useful for tracking long-term trends; the
-// CI gate above is the per-PR safety net.
-func BenchmarkAllow_TenantScopeAllow(b *testing.B) {
+// deployment-wide (scope_type='global') binding. Useful for tracking
+// long-term trends; the CI gate above is the per-PR safety net.
+func BenchmarkAllow_GlobalScopeAllow(b *testing.B) {
 	e, err := authz.New(b.Context(), nil, nil, authz.Options{})
 	if err != nil {
 		b.Fatalf("construct engine: %v", err)

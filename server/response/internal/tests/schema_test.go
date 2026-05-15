@@ -27,7 +27,7 @@ func TestSchema_NoTenantIDOnCommands(t *testing.T) {
 		FROM INFORMATION_SCHEMA.COLUMNS
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'commands' AND COLUMN_NAME = 'tenant_id'
 	`).Scan(&n)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Zero(t, n, "tenant_id must not be re-introduced on commands; the product is single-instance")
 
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db),

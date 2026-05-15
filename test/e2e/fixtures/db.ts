@@ -82,7 +82,7 @@ export async function promote(
 ): Promise<void> {
   await db.query(
     `INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
-     SELECT id, ?, 'tenant', '*' FROM users WHERE email = ?`,
+     SELECT id, ?, 'global', '*' FROM users WHERE email = ?`,
     [role, email],
   );
 }

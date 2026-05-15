@@ -249,7 +249,7 @@ const (
 // in the extension is idempotent).
 //
 // A non-empty skip_reason distinguishes "host enumeration itself
-// failed" from "the deployment has zero enrolled hosts" — both would
+// failed" from "the deployment has zero enrolled hosts" - both would
 // otherwise audit as fanout_hosts=0 and an operator looking at the
 // dashboard could not tell them apart.
 func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, failed int, skipReason string) {

@@ -123,20 +123,20 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 	})
 }
 
-// TestEngine_NonTenantScope_PBT covers the scope_not_yet_supported
+// TestEngine_NonGlobalScope_PBT covers the scope_not_yet_supported
 // branch in the Rego policy. The wave-1 resolver only honors
-// scope_type=='tenant'; bindings with 'host_group' or 'host' scope
+// scope_type=='global'; bindings with 'host_group' or 'host' scope
 // MAY land in the table (the column is forward-compatible with
 // wave-2) but the chokepoint denies them with the distinguishable
 // reason so dashboards can chart "would have been allowed under
 // wave-2" as its own dimension.
 //
 // Property: for any role whose grants list contains the action AND
-// any non-tenant scope_type, Engine.Allow denies with reason
+// any non-global scope_type, Engine.Allow denies with reason
 // scope_not_yet_supported. For non-granting roles, the policy's
 // no_matching_rule deny still wins (the scope branch only fires
 // when the role would otherwise have granted).
-func TestEngine_NonTenantScope_PBT(t *testing.T) {
+func TestEngine_NonGlobalScope_PBT(t *testing.T) {
 	engine := newEnginePBT(t)
 	roleSet := loadRolesFromBundle(t)
 	actionSet := api.RegisteredActions()
@@ -174,7 +174,7 @@ func TestEngine_NonTenantScope_PBT(t *testing.T) {
 		got, err := engine.Allow(ctx, action, resource)
 		require.NoError(rt, err)
 		require.Falsef(rt, got.Allow,
-			"non-tenant scope must never allow role=%s action=%s scope=%s decision=%+v",
+			"non-global scope must never allow role=%s action=%s scope=%s decision=%+v",
 			role, action, scope, got)
 
 		grants := roleSet[role]

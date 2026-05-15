@@ -24,11 +24,14 @@ pre-commit:
       run: |
         go_files=$(printf '%s\n' {staged_files} | grep -E '\.go$' || true)
         if [ -z "$go_files" ]; then exit 0; fi
-        unformatted=$(printf '%s\n' "$go_files" | xargs gofmt -s -l)
+        # tr '\n' '\0' + xargs -0 reads filenames null-delimited so a
+        # filename containing a space (rare but legal) does not get
+        # split into two arguments. Portable across BSD + GNU xargs.
+        unformatted=$(printf '%s\n' "$go_files" | tr '\n' '\0' | xargs -0 gofmt -s -l)
         if [ -n "$unformatted" ]; then
           echo "gofmt -s would rewrite the following files. Running it now; re-stage and recommit:"
           echo "$unformatted"
-          printf '%s\n' "$go_files" | xargs gofmt -s -w
+          printf '%s\n' "$go_files" | tr '\n' '\0' | xargs -0 gofmt -s -w
           exit 1
         fi
       stage_fixed: true

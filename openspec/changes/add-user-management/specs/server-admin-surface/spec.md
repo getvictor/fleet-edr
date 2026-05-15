@@ -101,7 +101,7 @@ The system SHALL expose `POST /api/users/{id}/role-bindings` to bind a role to a
 and `DELETE /api/users/{id}/role-bindings/{binding_id}` to remove a binding. Both
 endpoints MUST require the `role.bind` action. The bind endpoint's request body MUST
 identify the role and MAY identify a `scope_type` and `scope_id`; in wave 1 the only
-honored `scope_type` is `tenant` (meaning deployment-wide), and a request specifying a
+honored `scope_type` is `global` (meaning deployment-wide), and a request specifying a
 non-deployment scope MUST be persisted (per the authorization spec) but MUST emit a
 warning in the response payload so the operator knows the binding will not yet take
 effect. Both bind and unbind MUST emit an audit row.
@@ -110,7 +110,7 @@ effect. Both bind and unbind MUST emit an audit row.
 
 - **GIVEN** an operator with `role.bind`
 - **WHEN** the operator POSTs `/api/users/{id}/role-bindings` with `role='analyst'`
-  and `scope_type='tenant'`
+  and `scope_type='global'`
 - **THEN** the server returns `201 Created` with the new binding's id
 - **AND** an audit row is recorded with action `role.bound`
 

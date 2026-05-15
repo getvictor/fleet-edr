@@ -6,7 +6,7 @@
 // boundary other contexts depend on.
 //
 // The product is a single-instance deployment, so wave-1 honours
-// `scope_type='tenant'` only (meaning "deployment-wide"). Bindings
+// `scope_type='global'` only (meaning "deployment-wide"). Bindings
 // with 'host_group' or 'host' scopes are persisted (the schema column
 // reserves them) but the chokepoint denies them with reason
 // `scope_not_yet_supported` until the wave-2 resolver ships.

@@ -124,7 +124,7 @@ func bindSuperAdmin(ctx context.Context, rb *rbac.Store, u *users.User, logger *
 		UserID:    u.ID,
 		RoleID:    DefaultAdminRole,
 		ScopeType: string(api.RoleBindingScopeGlobal),
-		ScopeID:   "*",
+		ScopeID:   api.RoleBindingScopeWildcard,
 	})
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDupEntry {

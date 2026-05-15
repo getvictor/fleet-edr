@@ -65,16 +65,16 @@ system MUST NOT auto-elevate any role from a SSO claim.
 ### Requirement: Role bindings carry a scope so future scoping is non-breaking
 
 Every role binding SHALL carry a `scope_type` from the set
-`{'tenant', 'host_group', 'host'}` and a `scope_id`. The product is a single-instance
-deployment, so wave 1 SHALL enforce only `scope_type='tenant'` (with `scope_id='*'`),
-which means "deployment-wide". A binding with a non-`tenant` `scope_type` MUST be
+`{'global', 'host_group', 'host'}` and a `scope_id`. The product is a single-instance
+deployment, so wave 1 SHALL enforce only `scope_type='global'` (with `scope_id='*'`),
+which means "deployment-wide". A binding with a non-`global` `scope_type` MUST be
 persisted but MUST NOT be honored by the chokepoint until the corresponding scope
 resolver ships. A binding MAY carry an `expires_at`; an expired binding MUST be
 treated as if it did not exist when the chokepoint evaluates a request.
 
 #### Scenario: Deployment-wide binding grants the action
 
-- **GIVEN** a role binding with `scope_type='tenant'`, `scope_id='*'`, and the role
+- **GIVEN** a role binding with `scope_type='global'`, `scope_id='*'`, and the role
   granting the requested action
 - **WHEN** the chokepoint evaluates a request for that action
 - **THEN** the decision is `{allow: true, reason: "granted"}`
