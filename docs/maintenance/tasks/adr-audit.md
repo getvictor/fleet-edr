@@ -44,7 +44,7 @@ Go through these candidate decision domains and ask: is there an ADR for it? If 
 | Standalone product (not Fleet) | ADR-0003 | yes |
 | Modular monolith / bounded contexts | ADR-0004 | yes |
 | Test layering (unit / per-context / cross-context) | maybe | check |
-| OTel-only metrics (no Prometheus /metrics) | not yet | likely yes |
+| OTel-only metrics (no Prometheus /metrics) | ADR-0006 | yes |
 | Embedded UI (`server/ui/dist/` via embed.go) | not yet | check |
 | `server/testdb/full.Open` as the integration-test seam | not yet | likely yes |
 | Co-Authored-By trailers policy | not yet | possibly (it's in MEMORY/CLAUDE.md only) |
