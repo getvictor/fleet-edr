@@ -21,8 +21,8 @@ func TestScanComments(t *testing.T) {
 	}{
 		{
 			name: "block with at least one line near target does not fire",
-			// The first line clears 100 chars, so the block's longest line is well past the (width - 20) threshold. The other
-			// lines being shorter is fine: humans wrap mid-paragraph for grammar, not for the wrap target.
+			// The first line clears 100 columns, so the block's longest line is at or above the min-line-len floor. The
+			// other lines being shorter is fine: humans wrap mid-paragraph for grammar, not for the wrap target.
 			source: `package x
 
 // This is a comment line filling up to roughly one hundred and fifteen characters before naturally wrapping here
@@ -30,7 +30,7 @@ func TestScanComments(t *testing.T) {
 // and another short one rounding out the block
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 0,
 		},
 		{
@@ -42,7 +42,7 @@ var X = 1
 // Mauris ut imperdiet diam
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 1,
 			wantOut:  "comment block of 3 lines wrapped narrowly",
 		},
@@ -54,7 +54,7 @@ var X = 1
 // short two
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 0,
 		},
 		{
@@ -66,7 +66,7 @@ var X = 1
 //go:embed dist/*
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 0,
 		},
 		{
@@ -78,7 +78,7 @@ var X = 1
 // some other note
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 0,
 		},
 		{
@@ -92,7 +92,7 @@ short three
 */
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 0,
 		},
 		{
@@ -106,7 +106,7 @@ var X = 1
 // It also does Y in a manner consistent with established practice.
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 3},
+			cfg:      config{minLineLen: 100, minBlock: 3},
 			wantHits: 0,
 		},
 		{
@@ -117,13 +117,11 @@ var X = 1
 // consectetur adipiscing elit
 var X = 1
 `,
-			cfg:      config{width: 120, minBlock: 2},
+			cfg:      config{minLineLen: 100, minBlock: 2},
 			wantHits: 1,
 		},
 		{
-			name: "narrower width threshold suppresses hits that the default flagged",
-			// Same content as the narrow-block case, but with width=40 the (width - 20) threshold drops to 20, which the
-			// 28-30 char lines already clear. Confirms width configurability scales as expected.
+			name: "lower min-line-len suppresses hits that the default flagged",
 			source: `package x
 
 // Lorem ipsum dolor sit amet
@@ -131,8 +129,36 @@ var X = 1
 // Mauris ut imperdiet diam
 var X = 1
 `,
-			cfg:      config{width: 40, minBlock: 3},
+			cfg:      config{minLineLen: 20, minBlock: 3},
 			wantHits: 0,
+		},
+		{
+			name: "tabbed indentation counts tabs at 8 columns each",
+			// Inside a function body, two-tab indent expands to 16 visual columns. A 90-char byte-length comment line
+			// then renders at ~106 visual columns -- above the default minLineLen of 100, so the block does NOT fire
+			// even though each line's byte length sits below 100. Without tab expansion this case would falsely
+			// report.
+			source: `package x
+
+func F() {
+	{
+		// xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+		// yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+		// zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+		_ = 1
+	}
+}
+`,
+			cfg:      config{minLineLen: 100, minBlock: 3},
+			wantHits: 0,
+		},
+		{
+			name: "trailing CR (CRLF) is not counted toward visual width",
+			// Force CRLF line endings: each `\r` would otherwise add 1 to the byte length and let a 99-col line look
+			// like 100. With the trailing-CR strip in visualWidth the line still measures 99 and the block fires.
+			source:   "package x\r\n\r\n// xxxxxxxxxxxxxxx\r\n// yyyyyyyyyyyyyyy\r\n// zzzzzzzzzzzzzzz\r\nvar X = 1\r\n",
+			cfg:      config{minLineLen: 100, minBlock: 3},
+			wantHits: 1,
 		},
 	}
 
@@ -154,14 +180,27 @@ var X = 1
 	}
 }
 
-func TestConfigMinLineLen(t *testing.T) {
-	require.Equal(t, 100, config{width: 120}.minLineLen())
-	require.Equal(t, 120, config{width: 140}.minLineLen())
-	require.Equal(t, 60, config{width: 80}.minLineLen())
-	// Floor at 1 when width is impossibly small, so the threshold never goes non-positive (which would make every
-	// block "narrow").
-	require.Equal(t, 1, config{width: 10}.minLineLen())
-	require.Equal(t, 1, config{width: 0}.minLineLen())
+func TestVisualWidth(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{name: "empty", in: "", want: 0},
+		{name: "ascii only", in: "hello world", want: 11},
+		{name: "trailing space stripped", in: "hello   ", want: 5},
+		{name: "trailing tab stripped", in: "hello\t\t", want: 5},
+		{name: "trailing CR stripped (CRLF)", in: "hello\r", want: 5},
+		{name: "leading tab counts 8 columns", in: "\thello", want: 13},
+		{name: "two leading tabs count 16 columns", in: "\t\thello", want: 21},
+		{name: "tab in middle advances to next 8-multiple", in: "abc\tdef", want: 11},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Helper()
+			require.Equal(t, tc.want, visualWidth(tc.in))
+		})
+	}
 }
 
 func TestSkipDir(t *testing.T) {
@@ -192,7 +231,7 @@ var X = 1
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendor", "skip.go"), []byte(narrow), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	hits := walk(&stdout, &stderr, []string{dir}, config{width: 120, minBlock: 3})
+	hits := walk(&stdout, &stderr, []string{dir}, config{minLineLen: 100, minBlock: 3})
 	require.Equal(t, 3, hits, "three offender files, one entry per file/block; vendor must be skipped\n%s", stdout.String())
 	require.NotContains(t, stdout.String(), "vendor/skip.go")
 }
@@ -209,7 +248,7 @@ var X = 1
 `), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	_ = walk(&stdout, &stderr, []string{dir}, config{width: 120, minBlock: 3})
+	_ = walk(&stdout, &stderr, []string{dir}, config{minLineLen: 100, minBlock: 3})
 	require.Contains(t, stdout.String(), path, "offender lines must cite the file path")
 	require.Empty(t, stderr.String(), "no errors expected for a clean walk")
 }
