@@ -71,20 +71,17 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 
 		actor := api.Actor{
 			UserID:       1,
-			TenantID:     api.DefaultTenantID,
 			AuthMethod:   "oidc",
 			SessionFresh: fresh,
 			Roles: []api.RoleBinding{{
 				UserID:    1,
 				RoleID:    role,
-				TenantID:  api.DefaultTenantID,
-				ScopeType: api.RoleBindingScopeTenant,
+				ScopeType: api.RoleBindingScopeGlobal,
 				ScopeID:   "*",
 			}},
 		}
 		ctx := api.WithActor(context.Background(), &actor)
 		resource := api.Resource{
-			TenantID: api.DefaultTenantID,
 			Type:     resourceType,
 			ID:       "resource-1",
 			Severity: severity,
@@ -126,20 +123,20 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 	})
 }
 
-// TestEngine_NonTenantScope_PBT covers the scope_not_yet_supported
+// TestEngine_NonGlobalScope_PBT covers the scope_not_yet_supported
 // branch in the Rego policy. The wave-1 resolver only honors
-// scope_type=='tenant'; bindings with 'host_group' or 'host' scope
+// scope_type=='global'; bindings with 'host_group' or 'host' scope
 // MAY land in the table (the column is forward-compatible with
 // wave-2) but the chokepoint denies them with the distinguishable
 // reason so dashboards can chart "would have been allowed under
 // wave-2" as its own dimension.
 //
 // Property: for any role whose grants list contains the action AND
-// any non-tenant scope_type, Engine.Allow denies with reason
+// any non-global scope_type, Engine.Allow denies with reason
 // scope_not_yet_supported. For non-granting roles, the policy's
 // no_matching_rule deny still wins (the scope branch only fires
 // when the role would otherwise have granted).
-func TestEngine_NonTenantScope_PBT(t *testing.T) {
+func TestEngine_NonGlobalScope_PBT(t *testing.T) {
 	engine := newEnginePBT(t)
 	roleSet := loadRolesFromBundle(t)
 	actionSet := api.RegisteredActions()
@@ -159,28 +156,25 @@ func TestEngine_NonTenantScope_PBT(t *testing.T) {
 
 		actor := api.Actor{
 			UserID:       1,
-			TenantID:     api.DefaultTenantID,
 			AuthMethod:   "oidc",
 			SessionFresh: true,
 			Roles: []api.RoleBinding{{
 				UserID:    1,
 				RoleID:    role,
-				TenantID:  api.DefaultTenantID,
 				ScopeType: scope,
 				ScopeID:   "scope-1",
 			}},
 		}
 		ctx := api.WithActor(context.Background(), &actor)
 		resource := api.Resource{
-			TenantID: api.DefaultTenantID,
-			Type:     "host",
-			ID:       "host-1",
+			Type: "host",
+			ID:   "host-1",
 		}
 
 		got, err := engine.Allow(ctx, action, resource)
 		require.NoError(rt, err)
 		require.Falsef(rt, got.Allow,
-			"non-tenant scope must never allow role=%s action=%s scope=%s decision=%+v",
+			"non-global scope must never allow role=%s action=%s scope=%s decision=%+v",
 			role, action, scope, got)
 
 		grants := roleSet[role]
@@ -195,55 +189,6 @@ func TestEngine_NonTenantScope_PBT(t *testing.T) {
 	})
 }
 
-// TestEngine_MissingResourceTenant_PBT covers the
-// resource_tenant_missing defense-in-depth path. The chokepoint
-// short-circuits before invoking Rego when resource.TenantID is
-// empty so a misconfigured caller surfaces a distinct deny reason
-// instead of a silent no_matching_rule.
-//
-// Property: empty resource.TenantID always yields a deny with reason
-// resource_tenant_missing, regardless of role / action / scope.
-func TestEngine_MissingResourceTenant_PBT(t *testing.T) {
-	engine := newEnginePBT(t)
-	roleSet := loadRolesFromBundle(t)
-	actionSet := api.RegisteredActions()
-	roleNames := make([]string, 0, len(roleSet))
-	for name := range roleSet {
-		roleNames = append(roleNames, name)
-	}
-	slices.Sort(roleNames)
-
-	rapid.Check(t, func(rt *rapid.T) {
-		role := rapid.SampledFrom(roleNames).Draw(rt, "role")
-		action := rapid.SampledFrom(actionSet).Draw(rt, "action")
-
-		actor := api.Actor{
-			UserID:       1,
-			TenantID:     api.DefaultTenantID,
-			AuthMethod:   "oidc",
-			SessionFresh: true,
-			Roles: []api.RoleBinding{{
-				UserID:    1,
-				RoleID:    role,
-				TenantID:  api.DefaultTenantID,
-				ScopeType: api.RoleBindingScopeTenant,
-				ScopeID:   "*",
-			}},
-		}
-		ctx := api.WithActor(context.Background(), &actor)
-		resource := api.Resource{TenantID: "", Type: "host", ID: "host-1"}
-
-		got, err := engine.Allow(ctx, action, resource)
-		require.NoError(rt, err)
-		require.Falsef(rt, got.Allow,
-			"empty resource tenant must always deny role=%s action=%s decision=%+v",
-			role, action, got)
-		require.Equalf(rt, api.ReasonResourceTenantMissing, got.Reason,
-			"empty resource tenant must surface resource_tenant_missing role=%s action=%s",
-			role, action)
-	})
-}
-
 // canonicalReasons is the closed set of strings api.ReasonReauthRequired
 // and friends declare. The PBT asserts every decision lands in this
 // set; a regression that introduces a freeform reason string fails
@@ -255,7 +200,6 @@ var canonicalReasons = []string{
 	api.ReasonScopeNotYetSupported,
 	api.ReasonActionNotRegistered,
 	api.ReasonNoActor,
-	api.ReasonResourceTenantMissing,
 	api.ReasonReauthRequired,
 }
 

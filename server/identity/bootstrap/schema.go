@@ -6,11 +6,10 @@ package bootstrap
 // Order is load-bearing: every FK target is created before the referencing
 // table. The dependency tree:
 //
-//	tenants (no deps)
-//	users (-> tenants)
+//	users (no deps)
 //	roles (no deps)
 //	identities (-> users)
-//	role_bindings (-> users, roles, tenants)
+//	role_bindings (-> users, roles)
 //	bootstrap_tokens (-> users)
 //	webauthn_credentials (-> users)
 //	sessions (-> users, identities)
@@ -24,34 +23,16 @@ package bootstrap
 // in a new file (or as a recreate-DB note in the change proposal); we do
 // NOT accumulate ALTER deltas during the pre-release iteration.
 var schemaStatements = []string{
-	// tenants is the wave-1 scaffolding for MSSP-style multi-tenancy. A
-	// fresh deployment seeds exactly one row (id='default') and wave-1
-	// reads do NOT filter on tenant_id; the column exists everywhere so
-	// wave 2's scope work does not require a backfill migration. status
-	// is an ENUM rather than a free-form string so an audit-log query
-	// for "suspended tenant activity" stays a constant-time index hit.
-	`CREATE TABLE IF NOT EXISTS tenants (
-		id          VARCHAR(64)  PRIMARY KEY,
-		name        VARCHAR(255) NOT NULL,
-		status      ENUM('active', 'suspended') NOT NULL DEFAULT 'active',
-		created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		updated_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-		                         ON UPDATE CURRENT_TIMESTAMP(6)
-	)`,
 	// users is the operator-account row. password_hash + password_salt
 	// are NULLABLE because an SSO-only user has no local credential; the
 	// argon2id parameter set still mirrors the enrollment host-token
 	// hash so a future passcrypto consolidation is mechanical. status
 	// lets the admin API disable an account without deleting it (audit
 	// rows + role-binding history stay intact). is_breakglass marks the
-	// single account the break-glass surface gates on. tenant_id
-	// references the seeded tenant; the FK uses ON DELETE RESTRICT so
-	// the admin path is forced to migrate users off a tenant before
-	// retiring it.
+	// single account the break-glass surface gates on.
 	`CREATE TABLE IF NOT EXISTS users (
 		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
 		email          VARCHAR(255)   NOT NULL,
-		tenant_id      VARCHAR(64)    NOT NULL DEFAULT 'default',
 		display_name   VARCHAR(255)   NULL,
 		status         ENUM('active', 'disabled') NOT NULL DEFAULT 'active',
 		is_breakglass  TINYINT(1)     NOT NULL DEFAULT 0,
@@ -60,10 +41,7 @@ var schemaStatements = []string{
 		created_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		updated_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 		                              ON UPDATE CURRENT_TIMESTAMP(6),
-		UNIQUE KEY uk_users_email (email),
-		INDEX idx_users_tenant_id (tenant_id),
-		CONSTRAINT fk_users_tenant FOREIGN KEY (tenant_id)
-			REFERENCES tenants(id) ON DELETE RESTRICT
+		UNIQUE KEY uk_users_email (email)
 	)`,
 	// roles names the deployment's RBAC roles. id is a stable string
 	// because OPA / Rego policy bundles reference roles by name; an
@@ -98,34 +76,31 @@ var schemaStatements = []string{
 		CONSTRAINT fk_identities_user FOREIGN KEY (user_id)
 			REFERENCES users(id) ON DELETE CASCADE
 	)`,
-	// role_bindings binds a user to a role at a tenant + scope. wave 1
-	// honours scope_type='tenant' only; bindings with 'host_group' or
-	// 'host' MAY be persisted (the column is here for non-breaking wave
-	// 2 evolution) but the chokepoint denies them with reason
-	// scope_not_yet_supported until the resolver ships. expires_at is
-	// nullable; the chokepoint treats expired bindings as if they did
-	// not exist. user_id CASCADE on user delete; role_id RESTRICT so
-	// the admin path cannot retire a role that still has bindings;
-	// tenant_id RESTRICT mirrors that property at the tenant level.
+	// role_bindings binds a user to a role at a given scope. The product
+	// is a single-instance deployment, so the only scope wave 1 honours
+	// is 'global' (meaning "deployment-wide"); other scope_type values
+	// ('host_group', 'host') MAY be persisted (the column is here for
+	// non-breaking wave 2 evolution) but the chokepoint denies them with
+	// reason scope_not_yet_supported until the resolver ships.
+	// expires_at is nullable; the chokepoint treats expired bindings as
+	// if they did not exist. user_id CASCADE on user delete; role_id
+	// RESTRICT so the admin path cannot retire a role that still has
+	// bindings.
 	`CREATE TABLE IF NOT EXISTS role_bindings (
 		id          BIGINT       AUTO_INCREMENT PRIMARY KEY,
 		user_id     BIGINT       NOT NULL,
 		role_id     VARCHAR(64)  NOT NULL,
-		tenant_id   VARCHAR(64)  NOT NULL DEFAULT 'default',
-		scope_type  ENUM('tenant', 'host_group', 'host') NOT NULL DEFAULT 'tenant',
+		scope_type  ENUM('global', 'host_group', 'host') NOT NULL DEFAULT 'global',
 		scope_id    VARCHAR(255) NOT NULL DEFAULT '*',
 		expires_at  TIMESTAMP(6) NULL,
 		created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-		UNIQUE KEY uk_role_bindings (user_id, role_id, tenant_id, scope_type, scope_id),
+		UNIQUE KEY uk_role_bindings (user_id, role_id, scope_type, scope_id),
 		INDEX idx_role_bindings_user (user_id, expires_at),
 		INDEX idx_role_bindings_role (role_id),
-		INDEX idx_role_bindings_tenant (tenant_id),
 		CONSTRAINT fk_role_bindings_user FOREIGN KEY (user_id)
 			REFERENCES users(id) ON DELETE CASCADE,
 		CONSTRAINT fk_role_bindings_role FOREIGN KEY (role_id)
-			REFERENCES roles(id) ON DELETE RESTRICT,
-		CONSTRAINT fk_role_bindings_tenant FOREIGN KEY (tenant_id)
-			REFERENCES tenants(id) ON DELETE RESTRICT
+			REFERENCES roles(id) ON DELETE RESTRICT
 	)`,
 	// bootstrap_tokens backs the single-use redemption flow that
 	// replaces "print a generated password to stderr" for break-glass

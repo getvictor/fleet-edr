@@ -9,7 +9,7 @@ The user-management plan tracked at
 exist in that shape. This design re-targets every load-bearing decision in the plan to
 the bounded-context layout while keeping the plan's product choices intact (Okta OIDC as
 the single SSO library, OPA / Rego as the authz engine, WebAuthn-mandatory break-glass,
-dual-emit audit log, single-default-tenant scaffolding).
+dual-emit audit log, single-instance deployment).
 
 The current state, as of this proposal:
 
@@ -30,7 +30,7 @@ The current state, as of this proposal:
 
 **Goals:**
 
-- Land wave 1 of the plan (Okta OIDC + break-glass + RBAC + audit + tenant scaffolding) as
+- Land wave 1 of the plan (Okta OIDC + break-glass + RBAC + audit) as
   one cohesive change inside the existing bounded-context architecture, with arch-go
   passing at every PR boundary.
 - Expose the authz chokepoint and the audit recorder through `server/identity/api/` so that
@@ -44,7 +44,7 @@ The current state, as of this proposal:
 
 **Non-Goals:**
 
-- Per-tenant SSO configuration; multi-IdP-per-deployment; SCIM; SAML. Wave 2 / wave 3.
+- Multi-IdP per deployment; per-deployment SSO mixing; SCIM; SAML. Wave 2 / wave 3.
 - Customer-authored Rego bundles. Engine supports it; not exposed.
 - Group → role mapping driven by Okta `groups` claim. Wave 2.
 - Forgot-password / self-service password reset for break-glass. Recovery is the
@@ -52,7 +52,7 @@ The current state, as of this proposal:
 - API tokens (`identity.kind = 'api_token'`). Reserved schema slot; wave 2 deliverable.
 - Host-group / host-scoped read filtering ("show me only the alerts I can see"). The data
   model is ready (`role_bindings.scope_type`, `scope_id`); MVP punts on the SQL filter
-  side and relies on tenant-scope `alert.read`.
+  side and relies on the deployment-wide `alert.read` grant.
 
 ## Decisions
 
@@ -93,7 +93,6 @@ package api
 // Other contexts read it via api.ActorFromContext(ctx).
 type Actor struct {
     UserID       int64
-    TenantID     string
     IsBreakglass bool
     AuthMethod   string                 // "oidc" | "local_password"
     Roles        []RoleBinding
@@ -131,28 +130,20 @@ to that surface, no rule edits needed.
 
 ### Schema ownership across contexts
 
-Identity owns the new identity-side tables and their migrations. Every other context owns
-its own `tenant_id` column addition through its own `bootstrap.ApplySchema`. Concretely:
+Identity owns the new identity-side tables. The product is a single-instance deployment
+(each customer runs their own server), so no `tenant_id` partitioning column is added to
+any context's tables.
 
-- `server/identity/internal/store/schema.sql` — adds `tenants`, `identities`, `roles`,
+- `server/identity/internal/store/schema.sql` — adds `identities`, `roles`,
   `role_bindings`, `audit_events`, `bootstrap_tokens`, `webauthn_credentials`, plus the
   additive columns on `users` and `sessions`. Existing migrations remain untouched;
   follow the additive-only pattern documented for ADR-0004 phase 5.
-- `server/detection/internal/store/schema.sql` — adds `tenant_id` to `hosts` and `alerts`.
-- `server/rules/internal/store/schema.sql` — adds `tenant_id` to `policies`.
-- `server/response/internal/store/schema.sql` — adds `tenant_id` to `commands`.
-- `server/endpoint/internal/store/schema.sql` — adds `tenant_id` to `enrollments`.
 
 Apply order in `cmd/fleet-edr-server/main.go` is unchanged
-(`identity → endpoint → rules → response → detection`), which guarantees the `tenants`
-row exists before per-context tables that default `tenant_id` to `'default'` are created.
+(`identity → endpoint → rules → response → detection`).
 
 No cross-context FKs. The `role_bindings.user_id → users.id` FK lives entirely inside
-identity. The plan's original `tenant_id` constraints are not enforced via FK across
-contexts; the contract is "every context defaults the column to `'default'` and never
-queries on it in wave 1." A future MSSP wave will introduce a tenant resolver in
-`identity/api` that other contexts call to translate session → tenant; arch-go already
-covers that path.
+identity.
 
 ### Authorization engine: embedded OPA / Rego
 
@@ -246,13 +237,9 @@ documented in the existing session spec.
   customer is expected to flip it to `false` and rely on an explicit allowlist. →
   Mitigation: documented in the operator runbook; the audit row on JIT creation is at
   WARN so a SigNoz alert can fire on unexpected tenants.
-- **Schema migration surface.** Five contexts run additive migrations in this change.
-  → Mitigation: each context's migration is independent and additive; rollback is a
-  redeploy of the prior binary, with the new tables / columns left harmlessly in place.
-- **`tenant_id` index churn on hot tables.** Adding the column to `hosts`, `alerts`,
-  `commands`, etc. creates an index in the plan as written. → Mitigation: ship without
-  the index in wave 1 (column only); add the index when MSSP wave 2 actually queries on
-  it. This deviates from the original plan, which over-specified on this point.
+- **Schema migration surface.** Identity runs additive migrations in this change.
+  → Mitigation: the migration is additive; rollback is a redeploy of the prior binary,
+  with the new tables / columns left harmlessly in place.
 
 ## Migration Plan
 
@@ -262,8 +249,7 @@ every phase boundary.
 
 1. **Schema + seeding (identity-only).** New identity tables, additive columns on
    `users` / `sessions`, the role-seeder loop, the rewritten `seed.Admin` →
-   `seed.BreakGlassBootstrap`, and the cross-context `tenant_id` columns. Each context
-   ships its own additive migration in this PR; no behavior change yet.
+   `seed.BreakGlassBootstrap`. No behavior change yet.
 2. **Authz package enforcing from boot.** `server/identity/internal/authz` lands
    compiled. `identity/api` exports `AuthZ`, `Audit`, `Actor`. Every existing
    privileged handler is converted to call `AuthZ.Allow(...)` with the appropriate

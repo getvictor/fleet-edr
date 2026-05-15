@@ -367,9 +367,8 @@ func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, e
 }
 
 // ApplySchema runs the DDL statements identity owns and seeds the
-// default tenant + built-in roles. Idempotent: re-running against a
-// populated DB is safe (CREATE TABLE IF NOT EXISTS + INSERT IGNORE
-// for the seeds).
+// built-in roles. Idempotent: re-running against a populated DB is
+// safe (CREATE TABLE IF NOT EXISTS + INSERT IGNORE for the seed).
 //
 // The cross-context FK fk_alerts_updated_by that used to require
 // identity ApplySchema run before detection's was dropped in favour
@@ -380,16 +379,12 @@ func (i *Identity) ApplySchema(ctx context.Context) error {
 }
 
 // ApplySchema is the package-level form: applies identity's DDL
-// against the given DB, then seeds the default tenant and the five
-// built-in roles. Used by server/testdb so tests can apply every
-// context's schema without faking out each bootstrap's service
-// dependencies.
+// against the given DB, then seeds the five built-in roles. Used by
+// server/testdb so tests can apply every context's schema without
+// faking out each bootstrap's service dependencies.
 //
-// Seed steps run after DDL because they require the tables they
-// populate. Both seeds are INSERT IGNORE so re-running on a populated
-// DB is a no-op. Tenant seed runs first so that any later code that
-// inserts a user (cmd/main's SeedAdmin, the Phase-4 break-glass
-// redemption flow) does not trip the users.tenant_id FK.
+// The roles seed runs after DDL because it requires the tables it
+// populates. INSERT IGNORE so re-running on a populated DB is a no-op.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("identity ApplySchema: db must not be nil")
@@ -398,9 +393,6 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("identity schema create: %w", err)
 		}
-	}
-	if err := seed.Tenants(ctx, db); err != nil {
-		return fmt.Errorf("identity seed tenants: %w", err)
 	}
 	if err := seed.Roles(ctx, db); err != nil {
 		return fmt.Errorf("identity seed roles: %w", err)

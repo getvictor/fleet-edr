@@ -204,8 +204,7 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, iden
 	if err := p.rbac.BindRole(ctx, tx, rbac.BindRoleRequest{
 		UserID:    user.ID,
 		RoleID:    p.defaultRole,
-		TenantID:  api.DefaultTenantID,
-		ScopeType: string(api.RoleBindingScopeTenant),
+		ScopeType: string(api.RoleBindingScopeGlobal),
 		ScopeID:   api.RoleBindingScopeWildcard,
 	}); err != nil {
 		return 0, 0, fmt.Errorf("oidc jit: bind role: %w", err)
@@ -251,7 +250,6 @@ func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subje
 		Payload: map[string]any{
 			"subject": subject,
 			"role":    p.defaultRole,
-			"tenant":  api.DefaultTenantID,
 			"source":  "oidc.jit",
 		},
 	}); err != nil && p.logger != nil {

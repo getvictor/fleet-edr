@@ -2,27 +2,28 @@
 # every privileged action against the calling actor's role bindings
 # and the action / resource pair the handler passed.
 #
+# The product is a single-instance deployment, so the only scope wave 1
+# honours is `global`, which means "deployment-wide". Non-deployment
+# scopes (host_group, host) are persisted but denied with reason
+# scope_not_yet_supported until the wave-2 resolver ships.
+#
 # Inputs (assembled by server/identity/internal/authz.Engine):
 #
 #   input.actor.user_id        int64
-#   input.actor.tenant_id      string
 #   input.actor.is_breakglass  bool
 #   input.actor.auth_method    "local_password" | "oidc"
 #   input.actor.roles[]        list of role bindings; expired bindings
 #                              are filtered out by the Go side, so
 #                              every entry here is a live binding
 #       .role_id     "super_admin" | "admin" | ...
-#       .tenant_id   string (matches actor.tenant_id today; wave-2 MSSP
-#                    work introduces cross-tenant bindings)
-#       .scope_type  "tenant" | "host_group" | "host"
-#       .scope_id    string ("*" for tenant scope)
+#       .scope_type  "global" | "host_group" | "host"
+#       .scope_id    string ("*" for deployment-wide; concrete id otherwise)
 #   input.actor.session_fresh  bool (Phase 5 reauth-window flag; wave-1
 #                              default is false, so policies that gate
 #                              on it default to deny — the safe side)
 #   input.action               string from server/identity/api.RegisteredActions
-#   input.resource.tenant_id   string
 #   input.resource.type        "host" | "alert" | "policy" | ...
-#   input.resource.id          string ("*" for tenant-wide; concrete id otherwise)
+#   input.resource.id          string ("*" for deployment-wide; concrete id otherwise)
 #
 # Data:
 #
@@ -39,32 +40,30 @@ import rego.v1
 # deny rather than ever falling through to allow.
 default decision := {"allow": false, "reason": "no_matching_rule"}
 
-# Tenant-scope binding grants the action when:
-#   - actor has a binding with scope_type == "tenant"
-#   - binding.tenant_id matches resource.tenant_id (wave-1 has one
-#     tenant; wave-2 cross-tenant bindings will need their own rule)
+# Deployment-wide binding grants the action when:
+#   - actor has a binding with scope_type == "global"
 #   - role's grant list contains the action OR the wildcard "*"
 #   - the action does NOT require a fresh auth event, OR the actor's
 #     session_fresh is true (Phase 5 reauth window)
 decision := {"allow": true, "reason": "granted"} if {
-	granted_via_tenant
+	granted_via_global
 	not requires_fresh_auth(input.action, input.resource)
 }
 
 decision := {"allow": true, "reason": "granted"} if {
-	granted_via_tenant
+	granted_via_global
 	requires_fresh_auth(input.action, input.resource)
 	input.actor.session_fresh
 }
 
 # Phase 5 reauth-required deny: only fires when the role WOULD have
-# granted the action via a tenant binding but the actor's session is
-# stale. Layered on top of granted_via_tenant so an actor without the
-# role sees no_matching_rule (the actually-correct reason) rather than
-# reauth_required, which would leak role information to a probing
-# attacker. Tested in edr_test.rego.
+# granted the action via a deployment-wide binding but the actor's
+# session is stale. Layered on top of granted_via_global so an actor
+# without the role sees no_matching_rule (the actually-correct reason)
+# rather than reauth_required, which would leak role information to a
+# probing attacker. Tested in edr_test.rego.
 decision := {"allow": false, "reason": "reauth_required"} if {
-	granted_via_tenant
+	granted_via_global
 	requires_fresh_auth(input.action, input.resource)
 	not input.actor.session_fresh
 }
@@ -82,25 +81,24 @@ requires_fresh_auth("alert.resolve", resource) if {
 	resource.severity == "critical"
 }
 
-# Non-tenant scopes (host_group, host) are persisted in role_bindings
+# Non-deployment scopes (host_group, host) are persisted in role_bindings
 # but the resolver isn't shipped yet. Deny with a distinguishable
 # reason so the Phase 6 dashboard can show "this would have been
 # allowed under wave-2 host-scope work" as a separate dimension.
-# Only fires when no tenant-scope binding granted the action.
+# Only fires when no deployment-wide binding granted the action.
 decision := {"allow": false, "reason": "scope_not_yet_supported"} if {
-	not granted_via_tenant
+	not granted_via_global
 	some binding in input.actor.roles
-	binding.scope_type != "tenant"
+	binding.scope_type != "global"
 	role_grants_action(binding.role_id, input.action)
 }
 
-# True if some tenant-scope binding granted the action. Used by the
+# True if some deployment-wide binding granted the action. Used by the
 # scope_not_yet_supported branch to suppress its deny when the actor
-# also has a valid tenant binding.
-granted_via_tenant if {
+# also has a valid deployment-wide binding.
+granted_via_global if {
 	some binding in input.actor.roles
-	binding.scope_type == "tenant"
-	binding.tenant_id == input.resource.tenant_id
+	binding.scope_type == "global"
 	role_grants_action(binding.role_id, input.action)
 }
 

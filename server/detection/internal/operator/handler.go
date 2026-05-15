@@ -83,7 +83,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "host"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead, identityapi.Resource{Type: "host"}) {
 		return
 	}
 	hosts, err := h.svc.ListHosts(ctx)
@@ -106,7 +106,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "process", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{Type: "process", ID: hostID}) {
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "process", ID: hostID}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{Type: "process", ID: hostID}) {
 		return
 	}
 
@@ -162,7 +162,7 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
 		return
 	}
 	f := api.AlertFilter{
@@ -194,7 +194,7 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{TenantID: identityapi.ActorTenantID(ctx), Type: "alert", ID: strconv.FormatInt(id, 10)}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert", ID: strconv.FormatInt(id, 10)}) {
 		return
 	}
 	alert, eventIDs, err := h.svc.GetAlert(ctx, id)
@@ -264,7 +264,6 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{
-		TenantID: identityapi.ActorTenantID(ctx),
 		Type:     "alert",
 		ID:       strconv.FormatInt(id, 10),
 		Severity: preGate.Severity,

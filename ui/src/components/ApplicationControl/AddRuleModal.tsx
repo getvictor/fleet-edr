@@ -222,6 +222,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
           <Select
             id="rule-type"
             label="Type"
+            inline={false}
             value={ruleType}
             onChange={(e) => { setRuleType(e.target.value); }}
             disabled={busy}
@@ -253,6 +254,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
           <Select
             id="rule-severity"
             label="Severity"
+            inline={false}
             value={severity}
             onChange={(e) => { setSeverity(e.target.value); }}
             disabled={busy}

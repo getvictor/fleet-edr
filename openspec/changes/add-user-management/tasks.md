@@ -1,20 +1,10 @@
 ## Phase 1: schema + seeding (one PR per context, additive only)
 
 - [ ] **1.1** Add identity-context tables to `server/identity/internal/store/schema.sql`:
-  `tenants`, `identities`, `roles`, `role_bindings`, `audit_events`, `bootstrap_tokens`,
-  `webauthn_credentials`. Plus additive columns on `users`
-  (`tenant_id`, `display_name`, `status`, `is_breakglass`; nullable `password_hash`,
-  `password_salt`) and `sessions` (`identity_id`, `auth_method`).
-- [ ] **1.2** Add `tenant_id VARCHAR(64) NOT NULL DEFAULT 'default'` to detection's
-  `hosts` and `alerts` via `server/detection/internal/store/schema.sql`.
-- [ ] **1.3** Add `tenant_id` to rules' `policies` via
-  `server/rules/internal/store/schema.sql`.
-- [ ] **1.4** Add `tenant_id` to response's `commands` via
-  `server/response/internal/store/schema.sql`.
-- [ ] **1.5** Add `tenant_id` to endpoint's `enrollments` via
-  `server/endpoint/internal/store/schema.sql`.
-- [ ] **1.6** Seed `tenants` with one row (`id='default'`, `status='active'`) on identity
-  bootstrap; idempotent.
+  `identities`, `roles`, `role_bindings`, `audit_events`, `bootstrap_tokens`,
+  `webauthn_credentials`. Plus additive columns on `users` (`display_name`, `status`,
+  `is_breakglass`; nullable `password_hash`, `password_salt`) and `sessions`
+  (`identity_id`, `auth_method`).
 - [ ] **1.7** Seed the five built-in roles (`super_admin`, `admin`, `senior_analyst`,
   `analyst`, `auditor`) via `server/identity/internal/seed/roles.go`; idempotent.
 - [ ] **1.8** Rewrite `server/identity/internal/seed/admin.go` →
@@ -22,14 +12,9 @@
   `bootstrap_tokens` row whose redemption URL is printed once on stderr. Migrate any
   existing `admin@fleet-edr.local` row to `is_breakglass=1` with NULL password fields
   and auto-issue a token.
-- [ ] **1.9** Per-context integration tests at
-  `server/identity/internal/tests/schema_test.go` and the parallel test file in each
-  other context that touched its `tenant_id` column. Verify defaults, NULL allowance,
-  and that wave-1 reads do not query on `tenant_id`.
-- [ ] **1.10** Cross-context integration test at
-  `test/integration/tenant_scaffolding_test.go` — boot the full server, exercise
-  every existing read endpoint, assert the rendered SQL never contains `tenant_id` in
-  a WHERE clause.
+- [ ] **1.9** Per-context integration test at
+  `server/identity/internal/tests/schema_test.go`. Verify table presence, additive
+  column defaults, and NULL allowance.
 
 ## Phase 2: authorization chokepoint
 
@@ -42,8 +27,7 @@
 - [ ] **2.3** Public surface exports on `server/identity/api/`: `Actor`,
   `RoleBinding`, `Resource`, `Decision`, `AuthZ` interface, `ActorFromContext(ctx)`.
 - [ ] **2.4** Session middleware in `server/identity/internal/sessions/` builds the
-  `Actor` from the session row + role bindings + tenant id; threads it into request
-  context.
+  `Actor` from the session row + role bindings; threads it into request context.
 - [ ] **2.5** Bench harness at `server/identity/internal/authz/bench_test.go` covering
   allow + deny paths over the seeded roles. Wire into CI; fail at p99 ≥ 1ms.
 - [ ] **2.6** Convert every privileged handler in detection / rules / response /
@@ -78,8 +62,8 @@
   `GET /api/auth/callback`. State stored in a short-lived signed cookie reusing
   `EDR_SESSION_SIGNING_KEY`.
 - [ ] **4.3** JIT provisioning: insert `users` (NULL password) + `identities`
-  (provider, subject), bind to `analyst` at tenant scope, audit `user.created`. Honors
-  `auth.oidc.allow_jit_provisioning`.
+  (provider, subject), bind to `analyst` at the deployment-wide scope, audit
+  `user.created`. Honors `auth.oidc.allow_jit_provisioning`.
 - [ ] **4.4** New package `server/identity/internal/breakglass/` covering bootstrap
   token issuance + redemption, password length validation (≥ 12 characters), WebAuthn
   registration via `github.com/go-webauthn/webauthn`. Atomic redemption + user

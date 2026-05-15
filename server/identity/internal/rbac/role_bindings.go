@@ -45,7 +45,6 @@ type roleBindingRow struct {
 	ID        int64        `db:"id"`
 	UserID    int64        `db:"user_id"`
 	RoleID    string       `db:"role_id"`
-	TenantID  string       `db:"tenant_id"`
 	ScopeType string       `db:"scope_type"`
 	ScopeID   string       `db:"scope_id"`
 	ExpiresAt sql.NullTime `db:"expires_at"`
@@ -63,11 +62,10 @@ type Executor interface {
 // BindRoleRequest is the input to BindRole. Pulled out of the
 // function signature so the call site reads as named fields and stays
 // under the linter's per-call parameter budget. Wave-1 defaults:
-// ExpiresAt nil (non-expiring), ScopeType "tenant", ScopeID "*".
+// ExpiresAt nil (non-expiring), ScopeType "global", ScopeID "*".
 type BindRoleRequest struct {
 	UserID    int64
 	RoleID    string
-	TenantID  string
 	ScopeType string
 	ScopeID   string
 	ExpiresAt *time.Time
@@ -75,12 +73,12 @@ type BindRoleRequest struct {
 
 // BindRole inserts a role_bindings row. Used by Phase-4 JIT
 // provisioning to bind a freshly-provisioned OIDC user to the
-// default role at the seeded tenant.
+// default role for the deployment.
 func (s *Store) BindRole(ctx context.Context, ec Executor, req BindRoleRequest) error {
 	_, err := ec.ExecContext(ctx, `
-		INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, req.UserID, req.RoleID, req.TenantID, req.ScopeType, req.ScopeID, req.ExpiresAt)
+		INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id, expires_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, req.UserID, req.RoleID, req.ScopeType, req.ScopeID, req.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("bind role %q to user %d: %w", req.RoleID, req.UserID, err)
 	}
@@ -101,7 +99,7 @@ func (s *Store) ListLiveBindings(ctx context.Context, userID int64) ([]api.RoleB
 	}
 	rows := []roleBindingRow{}
 	err := s.db.SelectContext(ctx, &rows, `
-		SELECT id, user_id, role_id, tenant_id, scope_type, scope_id, expires_at, created_at
+		SELECT id, user_id, role_id, scope_type, scope_id, expires_at, created_at
 		FROM role_bindings
 		WHERE user_id = ?
 		  AND (expires_at IS NULL OR expires_at > NOW(6))
@@ -115,7 +113,6 @@ func (s *Store) ListLiveBindings(ctx context.Context, userID int64) ([]api.RoleB
 			ID:        r.ID,
 			UserID:    r.UserID,
 			RoleID:    r.RoleID,
-			TenantID:  r.TenantID,
 			ScopeType: api.RoleBindingScopeType(r.ScopeType),
 			ScopeID:   r.ScopeID,
 			CreatedAt: r.CreatedAt,

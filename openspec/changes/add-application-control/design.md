@@ -8,7 +8,7 @@ as separate OpenSpec changes.
 
 **Current state:**
 
-- `server/rules/internal/policy/store.go` exposes one `BlocklistPolicy` per tenant with `Paths []string` and
+- `server/rules/internal/policy/store.go` exposes one `BlocklistPolicy` per deployment with `Paths []string` and
   `Hashes []string` arrays. `server/rules/bootstrap/schema.go` carries the singleton `policies` table. The wire
   command is `set_blocklist`; the extension's `PolicyStore.swift` keeps a `Set<String>` of paths and applies
   AUTH_EXEC denial inline.
@@ -143,7 +143,7 @@ format; the importer in the Phase C change will accept Santa's wire form unchang
 two reasons: every decision-engine evaluator and every validator would still need a per-type branch; and the
 indexable column for fast lookup needs to be of fixed shape per type (CDHash is 40 hex, BINARY/CERTIFICATE
 are 64 hex, TeamID is 10 chars, SigningID is TeamID-prefixed dotted-id, PATH is an absolute path). A typed
-`rule_type` column with a flat `identifier` column lets MySQL index `(tenant_id, rule_type, identifier)` for
+`rule_type` column with a flat `identifier` column lets MySQL index `(policy_id, rule_type, identifier)` for
 the dedup unique-key without ambiguity.
 
 ### Decision engine on the extension hot path
@@ -282,7 +282,7 @@ No customer-facing migration. The product has not shipped.
 **Deploy:**
 
 1. Apply the bootstrap schema change (drop `policies`; create the four new tables; seed `Default` policy and
-   `all-hosts` group per tenant).
+   `all-hosts` group).
 2. Land the server packages, REST handlers, agent command type, extension snapshot rewrite, and UI in the PR
    order listed in `tasks.md`.
 3. Existing test databases re-bootstrap from `seed/db.sql`.

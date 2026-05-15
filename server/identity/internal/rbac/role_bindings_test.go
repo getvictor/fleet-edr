@@ -51,12 +51,12 @@ func TestListLiveBindings_RoundTrip(t *testing.T) {
 	db := openSchema(t)
 	uid := insertUser(t, db, "active-bindings@test")
 	insertBinding(t, db, bindingFixture{
-		UserID: uid, RoleID: "admin", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: api.RoleBindingScopeWildcard,
+		UserID: uid, RoleID: "admin",
+		ScopeType: "global", ScopeID: api.RoleBindingScopeWildcard,
 	})
 	insertBinding(t, db, bindingFixture{
-		UserID: uid, RoleID: "auditor", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: api.RoleBindingScopeWildcard,
+		UserID: uid, RoleID: "auditor",
+		ScopeType: "global", ScopeID: api.RoleBindingScopeWildcard,
 	})
 
 	s := rbac.New(db)
@@ -68,8 +68,7 @@ func TestListLiveBindings_RoundTrip(t *testing.T) {
 	assert.ElementsMatch(t, []string{"admin", "auditor"}, roleIDs)
 	for _, b := range got {
 		assert.Equal(t, uid, b.UserID)
-		assert.Equal(t, api.DefaultTenantID, b.TenantID)
-		assert.Equal(t, api.RoleBindingScopeTenant, b.ScopeType)
+		assert.Equal(t, api.RoleBindingScopeGlobal, b.ScopeType)
 		assert.Equal(t, api.RoleBindingScopeWildcard, b.ScopeID)
 		assert.Nil(t, b.ExpiresAt, "non-expiring binding must round-trip as nil ExpiresAt")
 	}
@@ -86,16 +85,16 @@ func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
 	pastExp := time.Now().Add(-1 * time.Hour)
 	futureExp := time.Now().Add(1 * time.Hour)
 	insertBinding(t, db, bindingFixture{
-		UserID: uid, RoleID: "analyst", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: "*", ExpiresAt: &pastExp,
+		UserID: uid, RoleID: "analyst",
+		ScopeType: "global", ScopeID: "*", ExpiresAt: &pastExp,
 	})
 	insertBinding(t, db, bindingFixture{
-		UserID: uid, RoleID: "auditor", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: "*", ExpiresAt: &futureExp,
+		UserID: uid, RoleID: "auditor",
+		ScopeType: "global", ScopeID: "*", ExpiresAt: &futureExp,
 	})
 	insertBinding(t, db, bindingFixture{
-		UserID: uid, RoleID: "admin", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: "*",
+		UserID: uid, RoleID: "admin",
+		ScopeType: "global", ScopeID: "*",
 	})
 
 	s := rbac.New(db)
@@ -118,12 +117,12 @@ func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
 	uidA := insertUser(t, db, "user-a@test")
 	uidB := insertUser(t, db, "user-b@test")
 	insertBinding(t, db, bindingFixture{
-		UserID: uidA, RoleID: "admin", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: "*",
+		UserID: uidA, RoleID: "admin",
+		ScopeType: "global", ScopeID: "*",
 	})
 	insertBinding(t, db, bindingFixture{
-		UserID: uidB, RoleID: "auditor", TenantID: api.DefaultTenantID,
-		ScopeType: "tenant", ScopeID: "*",
+		UserID: uidB, RoleID: "auditor",
+		ScopeType: "global", ScopeID: "*",
 	})
 
 	s := rbac.New(db)
@@ -139,9 +138,9 @@ func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
 }
 
 // openSchema returns a fresh test DB with identity's full schema +
-// seeds applied. tenants + roles are seeded by ApplySchema so the
-// FK-bound role_bindings inserts in these tests don't trip
-// fk_role_bindings_role / fk_role_bindings_tenant.
+// seeds applied. roles are seeded by ApplySchema so the FK-bound
+// role_bindings inserts in these tests don't trip
+// fk_role_bindings_role.
 func openSchema(t *testing.T) *sqlx.DB {
 	t.Helper()
 	db := testdb.Open(t)
@@ -150,14 +149,12 @@ func openSchema(t *testing.T) *sqlx.DB {
 }
 
 // insertUser bypasses the users.Store CRUD path; this test focuses
-// on rbac, and a stub user with NULL password is sufficient (the
-// users.tenant_id FK to tenants is satisfied by the seeded default
-// tenant).
+// on rbac, and a stub user with NULL password is sufficient.
 func insertUser(t *testing.T, db *sqlx.DB, email string) int64 {
 	t.Helper()
 	res, err := db.ExecContext(t.Context(),
-		`INSERT INTO users (email, tenant_id, status) VALUES (?, ?, 'active')`,
-		email, api.DefaultTenantID)
+		`INSERT INTO users (email, status) VALUES (?, 'active')`,
+		email)
 	require.NoError(t, err, "insert user %q", email)
 	id, err := res.LastInsertId()
 	require.NoError(t, err)
@@ -172,7 +169,6 @@ func insertUser(t *testing.T, db *sqlx.DB, email string) int64 {
 type bindingFixture struct {
 	UserID    int64
 	RoleID    string
-	TenantID  string
 	ScopeType string
 	ScopeID   string
 	ExpiresAt *time.Time
@@ -181,8 +177,8 @@ type bindingFixture struct {
 func insertBinding(t *testing.T, db *sqlx.DB, b bindingFixture) {
 	t.Helper()
 	_, err := db.ExecContext(t.Context(),
-		`INSERT INTO role_bindings (user_id, role_id, tenant_id, scope_type, scope_id, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		b.UserID, b.RoleID, b.TenantID, b.ScopeType, b.ScopeID, b.ExpiresAt)
+		`INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id, expires_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		b.UserID, b.RoleID, b.ScopeType, b.ScopeID, b.ExpiresAt)
 	require.NoError(t, err, "insert binding role=%s for user=%d", b.RoleID, b.UserID)
 }

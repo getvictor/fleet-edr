@@ -62,7 +62,7 @@ type listResponse struct {
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionAuditRead,
-		api.Resource{TenantID: api.ActorTenantID(ctx), Type: "audit"}) {
+		api.Resource{Type: "audit"}) {
 		return
 	}
 	filter, errCode, ok := parseAuditFilter(r.URL.Query())

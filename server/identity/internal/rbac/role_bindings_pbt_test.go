@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
-	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/rbac"
 )
 
@@ -52,8 +51,7 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 		insertBinding(t, db, bindingFixture{
 			UserID:    uid,
 			RoleID:    "analyst",
-			TenantID:  api.DefaultTenantID,
-			ScopeType: "tenant",
+			ScopeType: "global",
 			ScopeID:   "*",
 			ExpiresAt: expires,
 		})
@@ -96,15 +94,15 @@ func TestListLiveBindings_RoleSelectivity_PBT(t *testing.T) {
 		for _, role := range liveRoles {
 			future := time.Now().Add(1 * time.Hour)
 			insertBinding(t, db, bindingFixture{
-				UserID: uid, RoleID: role, TenantID: api.DefaultTenantID,
-				ScopeType: "tenant", ScopeID: "*", ExpiresAt: &future,
+				UserID: uid, RoleID: role,
+				ScopeType: "global", ScopeID: "*", ExpiresAt: &future,
 			})
 		}
 		for _, role := range expiredRoles {
 			past := time.Now().Add(-1 * time.Hour)
 			insertBinding(t, db, bindingFixture{
-				UserID: uid, RoleID: role, TenantID: api.DefaultTenantID,
-				ScopeType: "tenant", ScopeID: "*", ExpiresAt: &past,
+				UserID: uid, RoleID: role,
+				ScopeType: "global", ScopeID: "*", ExpiresAt: &past,
 			})
 		}
 
@@ -121,9 +119,9 @@ func TestListLiveBindings_RoleSelectivity_PBT(t *testing.T) {
 
 // uniqueEmail returns a per-property-iteration email so each PBT
 // iteration's user is isolated. The role_bindings unique key is
-// (user_id, role_id, tenant_id, scope_type, scope_id) so reusing a
-// user across iterations would risk duplicate-key errors when the
-// same role appears in two iterations' liveRoles draws.
+// (user_id, role_id, scope_type, scope_id) so reusing a user across
+// iterations would risk duplicate-key errors when the same role
+// appears in two iterations' liveRoles draws.
 func uniqueEmail(rt *rapid.T) string {
 	return rapid.StringMatching(`pbt-[a-z0-9]{8}@test`).Draw(rt, "email")
 }

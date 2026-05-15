@@ -19,7 +19,7 @@ import (
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
 // HostLister returns the set of host_ids to fan a rule mutation out
-// to. In the demo cut this is every enrolled host in the tenant
+// to. In the demo cut this is every enrolled host in the deployment
 // (host-groups + assignments are post-demo); cmd/main passes a thin
 // wrapper over detection.api.Service.ListHosts that projects each
 // HostSummary down to its host_id. Distinct closure type rather than
@@ -31,7 +31,7 @@ type HostLister func(ctx context.Context) ([]string, error)
 // drives. Wraps the persistence layer with the cross-cutting concerns
 // every state-changing call has to perform: audit-log emission, and
 // fan-out of `set_application_control` commands to every enrolled
-// host in the tenant.
+// host in the deployment.
 //
 // Concurrency: every method is goroutine-safe because Store's
 // underlying *sqlx.DB is, and the audit/command closures the
@@ -100,18 +100,16 @@ func NewService(deps ServiceDeps) *Service {
 // straight through to the store; the orchestrator layer exists so
 // future read-side decorators (rule-count aggregation, assignment
 // summary) land in one place without changing the handler.
-func (s *Service) ListPolicies(ctx context.Context, tenantID string) ([]api.ApplicationControlPolicy, error) {
-	return s.store.ListPolicies(ctx, tenantID)
+func (s *Service) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolicy, error) {
+	return s.store.ListPolicies(ctx)
 }
 
 // GetPolicyWithRules returns the policy row plus its rules in one
 // call so the policy-detail page can render without an extra round
 // trip. Returns ErrAppControlPolicyNotFound when the policy is
-// absent or owned by a different tenant; the handler maps that to
-// HTTP 404. Tenant ownership is enforced here rather than in the
-// store so the store stays a thin persistence layer.
-func (s *Service) GetPolicyWithRules(ctx context.Context, tenantID string, policyID int64) (api.ApplicationControlPolicy, error) {
-	policies, err := s.store.ListPolicies(ctx, tenantID)
+// absent; the handler maps that to HTTP 404.
+func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
+	policies, err := s.store.ListPolicies(ctx)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, err
 	}
@@ -130,9 +128,9 @@ func (s *Service) GetPolicyWithRules(ctx context.Context, tenantID string, polic
 
 // CreateRule is the state-changing entry point. Sequence:
 //
-//  1. Validate tenantID + actor: empty tenant is a wiring bug that
-//     would otherwise silently mutate the wrong tenant's policy; we
-//     fail closed rather than guess.
+//  1. Validate actor: a nil actor is a wiring bug that would otherwise
+//     silently produce an unattributed audit row; we fail closed
+//     rather than guess.
 //  2. Persist the rule + bump the policy version atomically via
 //     store.CreateRule.
 //  3. Load the post-bump policy + the full rule list so the snapshot
@@ -144,7 +142,7 @@ func (s *Service) GetPolicyWithRules(ctx context.Context, tenantID string, polic
 //  4. Marshal a `set_application_control` payload via
 //     api.MarshalSetApplicationControlPayload — filters disabled +
 //     expired rules per the wire contract.
-//  5. Fan out: enqueue one command per enrolled host in the tenant.
+//  5. Fan out: enqueue one command per enrolled host in the deployment.
 //     Per-host failures are accumulated, not aborted; the audit row
 //     records fanout_failed for the human triage path. A
 //     host-lister failure is distinguished from "no hosts enrolled"
@@ -156,28 +154,19 @@ func (s *Service) GetPolicyWithRules(ctx context.Context, tenantID string, polic
 //     (this is a state-changing call and spec 6.4 makes audit
 //     emission part of the contract).
 //
-// tenantID is the resolved tenant the handler already gated the
-// authorization decision against (identityapi.ActorTenantID). Passing
-// it explicitly keeps one source of truth per request so the authz
-// check and the mutation can't drift onto different tenants.
-//
 // Returns the created rule on success. Validation errors propagate
 // untouched so the handler can errors.Is against the
 // IsApplicationControlValidationError set.
 func (s *Service) CreateRule(
 	ctx context.Context,
-	tenantID string,
 	req api.CreateRuleRequest,
 	actor *identityapi.Actor,
 ) (api.ApplicationControlRule, error) {
-	// Defense in depth: the handler already requires the actor (HTTPGate
-	// short-circuits on an empty tenantID with resource_tenant_missing),
-	// but failing closed at the service layer means a future caller
-	// that bypasses the handler (a CLI tool, a background job) can't
-	// silently mutate the wrong tenant.
-	if tenantID == "" {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: tenant_id is required", api.ErrAppControlInvalidRequest)
-	}
+	// Defense in depth: the handler already requires the actor (session
+	// middleware pins it before reaching the chokepoint), but failing
+	// closed at the service layer means a future caller that bypasses
+	// the handler (a CLI tool, a background job) can't silently produce
+	// an unattributed audit row.
 	if actor == nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
 	}
@@ -188,9 +177,9 @@ func (s *Service) CreateRule(
 	}
 
 	// Compose the post-bump snapshot the agents will receive. Find
-	// the parent policy (already in the tenant view) and its full
-	// rule list including the just-inserted row.
-	policy, payload, err := s.buildSnapshotPayload(ctx, tenantID, req.PolicyID)
+	// the parent policy and its full rule list including the
+	// just-inserted row.
+	policy, payload, err := s.buildSnapshotPayload(ctx, req.PolicyID)
 	if err != nil {
 		// Rule landed but the snapshot compose failed. Persist the
 		// audit signal so the SIEM dashboard can distinguish this
@@ -212,8 +201,8 @@ func (s *Service) CreateRule(
 // and renders the wire shape the agent's command codec consumes.
 // Separated so the CreateRule path stays linear and the lookup +
 // marshal failure cases have one place to fail.
-func (s *Service) buildSnapshotPayload(ctx context.Context, tenantID string, policyID int64) (api.ApplicationControlPolicy, []byte, error) {
-	policy, err := s.findPolicyByID(ctx, tenantID, policyID)
+func (s *Service) buildSnapshotPayload(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, []byte, error) {
+	policy, err := s.findPolicyByID(ctx, policyID)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, nil, err
 	}
@@ -228,12 +217,12 @@ func (s *Service) buildSnapshotPayload(ctx context.Context, tenantID string, pol
 	return policy, raw, nil
 }
 
-// findPolicyByID is the tenant-scoped policy lookup the snapshot
-// composer needs. Store doesn't expose a GetPolicyByID (intentionally:
-// the demo cut indexes policies by tenant + name), so we walk the
-// tenant list. Cheap for the demo's one-policy-per-tenant shape.
-func (s *Service) findPolicyByID(ctx context.Context, tenantID string, policyID int64) (api.ApplicationControlPolicy, error) {
-	policies, err := s.store.ListPolicies(ctx, tenantID)
+// findPolicyByID is the policy lookup the snapshot composer needs.
+// Store doesn't expose a GetPolicyByID (intentionally: the demo cut
+// indexes policies by name), so we walk the list. Cheap for the
+// demo's single-policy shape.
+func (s *Service) findPolicyByID(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
+	policies, err := s.store.ListPolicies(ctx)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, err
 	}
@@ -253,14 +242,14 @@ const (
 )
 
 // fanout enqueues exactly one set_application_control command per
-// enrolled host in the tenant. Returns (hosts_attempted, hosts_failed,
-// skip_reason). Per-host failures are logged but do NOT abort the
-// loop; the policy is already on disk and a missed host will catch
-// up on its next agent poll (the version-monotonic apply in the
-// extension is idempotent).
+// enrolled host in the deployment. Returns (hosts_attempted,
+// hosts_failed, skip_reason). Per-host failures are logged but do NOT
+// abort the loop; the policy is already on disk and a missed host
+// will catch up on its next agent poll (the version-monotonic apply
+// in the extension is idempotent).
 //
 // A non-empty skip_reason distinguishes "host enumeration itself
-// failed" from "the tenant has zero enrolled hosts" — both would
+// failed" from "the deployment has zero enrolled hosts" - both would
 // otherwise audit as fanout_hosts=0 and an operator looking at the
 // dashboard could not tell them apart.
 func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, failed int, skipReason string) {

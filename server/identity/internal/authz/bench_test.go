@@ -7,24 +7,23 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/authz"
 )
 
-// BenchmarkAllow_TenantScopeAllow is the bench harness the spec
-// names. Reports ns/op for the warm allow path against a tenant
-// binding. Useful for tracking long-term trends; the CI gate above
-// is the per-PR safety net.
-func BenchmarkAllow_TenantScopeAllow(b *testing.B) {
+// BenchmarkAllow_GlobalScopeAllow is the bench harness the spec
+// names. Reports ns/op for the warm allow path against a
+// deployment-wide (scope_type='global') binding. Useful for tracking
+// long-term trends; the CI gate above is the per-PR safety net.
+func BenchmarkAllow_GlobalScopeAllow(b *testing.B) {
 	e, err := authz.New(b.Context(), nil, nil, authz.Options{})
 	if err != nil {
 		b.Fatalf("construct engine: %v", err)
 	}
 	actor := &api.Actor{
-		UserID:   1,
-		TenantID: "default",
+		UserID: 1,
 		Roles: []api.RoleBinding{
-			{RoleID: "admin", TenantID: "default", ScopeType: api.RoleBindingScopeTenant, ScopeID: "*"},
+			{RoleID: "admin", ScopeType: api.RoleBindingScopeGlobal, ScopeID: "*"},
 		},
 	}
 	ctx := api.WithActor(b.Context(), actor)
-	resource := api.Resource{TenantID: "default", Type: "host", ID: "abc"}
+	resource := api.Resource{Type: "host", ID: "abc"}
 
 	b.ResetTimer()
 	for range b.N {
@@ -42,14 +41,13 @@ func BenchmarkAllow_Deny(b *testing.B) {
 		b.Fatalf("construct engine: %v", err)
 	}
 	actor := &api.Actor{
-		UserID:   1,
-		TenantID: "default",
+		UserID: 1,
 		Roles: []api.RoleBinding{
-			{RoleID: "analyst", TenantID: "default", ScopeType: api.RoleBindingScopeTenant, ScopeID: "*"},
+			{RoleID: "analyst", ScopeType: api.RoleBindingScopeGlobal, ScopeID: "*"},
 		},
 	}
 	ctx := api.WithActor(b.Context(), actor)
-	resource := api.Resource{TenantID: "default", Type: "host", ID: "abc"}
+	resource := api.Resource{Type: "host", ID: "abc"}
 
 	b.ResetTimer()
 	for range b.N {

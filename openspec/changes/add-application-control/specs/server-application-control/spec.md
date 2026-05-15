@@ -17,15 +17,15 @@ The schema is shaped so that none of those additions requires a migration.
 
 ### Requirement: Policy is a named, versioned ruleset
 
-The system SHALL represent application control as a collection of named policies per tenant. Each policy SHALL
-carry an immutable identifier, a tenant-unique name, a description, a monotonically increasing version that
-SHALL be incremented on every mutation of the policy or any of its rules, a default action constrained to
-`NONE` in this phase, and timestamps and actor identity for the most recent change.
+The system SHALL represent application control as a collection of named policies per deployment. Each policy
+SHALL carry an immutable identifier, a deployment-unique name, a description, a monotonically increasing
+version that SHALL be incremented on every mutation of the policy or any of its rules, a default action
+constrained to `NONE` in this phase, and timestamps and actor identity for the most recent change.
 
-#### Scenario: A new tenant boots and the seed policy is present
+#### Scenario: A fresh deployment boots and the seed policy is present
 
-- **GIVEN** a tenant has just been created
-- **WHEN** the operator lists application control policies for that tenant
+- **GIVEN** a fresh deployment has just been created
+- **WHEN** the operator lists application control policies
 - **THEN** the response includes a built-in policy named `Default` with zero rules and `default_action='NONE'`
 
 #### Scenario: Creating a rule increments the policy version
@@ -35,10 +35,10 @@ SHALL be incremented on every mutation of the policy or any of its rules, a defa
 - **THEN** the policy version is `N+1`
 - **AND** the policy `updated_at` and `updated_by` reflect the change
 
-#### Scenario: Two policies in the same tenant cannot share a name
+#### Scenario: Two policies cannot share a name
 
-- **GIVEN** a tenant already has a policy named `Engineering`
-- **WHEN** the operator attempts to create a second policy named `Engineering` in the same tenant
+- **GIVEN** a deployment already has a policy named `Engineering`
+- **WHEN** the operator attempts to create a second policy named `Engineering`
 - **THEN** the system rejects the request with a typed error indicating the name is already in use
 
 ### Requirement: Rule identifies one binary, signing identity, or path
@@ -100,15 +100,15 @@ required format. The validation rules are:
 
 ### Requirement: Host groups and policy assignments
 
-The system SHALL represent host groups as named, tenant-scoped objects that describe membership through a
-criteria document. The system SHALL seed a built-in group named `all-hosts` per tenant whose criteria match
-every host. The system SHALL allow a policy to be assigned to one or more host groups via a join table
-carrying `(policy_id, host_group_id, priority)`. In this phase only the built-in `all-hosts` group is editable
-by the system itself; user-authored host groups arrive in a follow-on change.
+The system SHALL represent host groups as named, deployment-wide objects that describe membership through a
+criteria document. The system SHALL seed a built-in group named `all-hosts` whose criteria match every host.
+The system SHALL allow a policy to be assigned to one or more host groups via a join table carrying
+`(policy_id, host_group_id, priority)`. In this phase only the built-in `all-hosts` group is editable by the
+system itself; user-authored host groups arrive in a follow-on change.
 
-#### Scenario: A new tenant has an all-hosts group and the Default policy is assigned to it
+#### Scenario: A fresh deployment has an all-hosts group and the Default policy is assigned to it
 
-- **GIVEN** a tenant has just been created
+- **GIVEN** a fresh deployment has just been created
 - **WHEN** the operator inspects the assignments of the `Default` policy
 - **THEN** the assignment list contains exactly the built-in `all-hosts` group
 
@@ -177,7 +177,7 @@ include those counts on the audit event for the mutation.
 
 #### Scenario: A new rule fans out only to assigned hosts
 
-- **GIVEN** a policy assigned to a host group whose criteria matches three of the tenant's five hosts
+- **GIVEN** a policy assigned to a host group whose criteria matches three of the deployment's five hosts
 - **WHEN** the operator creates a rule on that policy
 - **THEN** exactly three `set_application_control` commands are enqueued
 - **AND** the audit event records `fanout_hosts=3`, `fanout_failed=0`
@@ -200,9 +200,8 @@ include those counts on the audit event for the mutation.
 The system SHALL accept ingest events of kind `application_control_block` from agents through the same
 host-token-authenticated `POST /api/events` channel that carries every other agent event. The system MUST
 bind every accepted event to the `host_id` resolved by the existing host-token middleware and MUST reject
-events whose envelope `host_id` does not match the authenticated host. The system MUST resolve the event's
-tenant from the authenticated host's enrollment row rather than trusting any tenant value supplied by the
-agent. Each event MUST carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier`,
+events whose envelope `host_id` does not match the authenticated host. Each event MUST carry `policy_id`,
+`policy_version`, `rule_id`, `rule_type`, `rule_identifier`,
 `matched_identifier`, `severity`, `process`, and `ancestry`. The event MAY carry optional `custom_msg` and
 `custom_url`. The system SHALL accept events whose `policy_id` or `rule_id` does not correspond to a known
 rule (so an in-flight block is not lost when a rule is deleted after the block fired) and SHALL log a
@@ -222,22 +221,22 @@ server-side warning for operator visibility on the unknown-rule path.
 - **WHEN** the agent posts the `application_control_block` event
 - **THEN** the server accepts and persists the event so the historical decision is not lost
 
-### Requirement: Bootstrap seeds Default policy and all-hosts group per tenant
+### Requirement: Bootstrap seeds Default policy and all-hosts group
 
-The system SHALL ensure that, for every existing and newly-created tenant, the application control bootstrap
-produces exactly one host group named `all-hosts` whose criteria match every host of that tenant, and exactly
-one policy named `Default` with zero rules and `default_action='NONE'`, with the `Default` policy assigned to
-the `all-hosts` group. The bootstrap MUST be idempotent across repeated server starts.
+The system SHALL ensure that, on first server boot, the application control bootstrap produces exactly one
+host group named `all-hosts` whose criteria match every host, exactly one policy named `Default` with zero
+rules and `default_action='NONE'`, with the `Default` policy assigned to the `all-hosts` group. The bootstrap
+MUST be idempotent across repeated server starts.
 
 #### Scenario: A fresh database boots into a usable state
 
-- **GIVEN** a fresh database with one tenant
+- **GIVEN** a fresh database
 - **WHEN** the server completes its bootstrap
-- **THEN** the tenant has exactly one host group named `all-hosts`, exactly one policy named `Default`, and
-  exactly one assignment connecting them
+- **THEN** the deployment has exactly one host group named `all-hosts`, exactly one policy named `Default`,
+  and exactly one assignment connecting them
 
 #### Scenario: Bootstrap is idempotent
 
 - **GIVEN** a database that has already been bootstrapped
 - **WHEN** the server starts again
-- **THEN** the host group, policy, and assignment counts remain at one each per tenant
+- **THEN** the host group, policy, and assignment counts remain at one each

@@ -13,13 +13,25 @@ pre-commit:
       # Lefthook globs match the whole path (not just basename), so "*.go"
       # would only catch Go files at the repo root. Use a recursive glob to
       # cover server/, agent/, internal/, test/, and anything else.
+      #
+      # The `glob` directive gates whether the hook RUNS, but `{staged_files}`
+      # expands to every staged file in the commit, not just files matching
+      # the glob. Pass `{staged_files}` through a Go-suffix filter before
+      # handing it to gofmt so a mixed-language commit (e.g. Go + .rego +
+      # .md) does not trip gofmt on the non-Go files with `illegal character`
+      # errors that abort the hook before it can pass.
       glob: "**/*.go"
       run: |
-        unformatted=$(gofmt -s -l {staged_files})
+        go_files=$(printf '%s\n' {staged_files} | grep -E '\.go$' || true)
+        if [ -z "$go_files" ]; then exit 0; fi
+        # tr '\n' '\0' + xargs -0 reads filenames null-delimited so a
+        # filename containing a space (rare but legal) does not get
+        # split into two arguments. Portable across BSD + GNU xargs.
+        unformatted=$(printf '%s\n' "$go_files" | tr '\n' '\0' | xargs -0 gofmt -s -l)
         if [ -n "$unformatted" ]; then
           echo "gofmt -s would rewrite the following files. Running it now; re-stage and recommit:"
           echo "$unformatted"
-          gofmt -s -w {staged_files}
+          printf '%s\n' "$go_files" | tr '\n' '\0' | xargs -0 gofmt -s -w
           exit 1
         fi
       stage_fixed: true

@@ -39,21 +39,22 @@ reason `action_not_registered` (defense-in-depth against typos and ghost permiss
 ### Requirement: Five seeded roles bundle permissions for the deployment
 
 The system SHALL seed five roles at startup and SHALL keep their `is_builtin` flag set
-so they cannot be deleted via the admin API: `super_admin` (tenant + SSO config + every
+so they cannot be deleted via the admin API: `super_admin` (SSO config + every
 permission below), `admin` (day-to-day administration: user.read, user.invite, policy.*,
 host.*, alert.*), `senior_analyst` (investigate + take destructive action: host.read,
 host.isolate, host.kill_process, host.run_script, alert.*), `analyst` (investigate + comment + escalate:
 host.read, process.read, alert.read, alert.comment), and `auditor` (read-only including
-audit.read). The break-glass user MUST be bound to `super_admin` at tenant scope.
-SSO-provisioned users MUST default to `analyst` at tenant scope; the system MUST NOT
-auto-elevate any role from a SSO claim.
+audit.read). The break-glass user MUST be bound to `super_admin` at the deployment-wide
+scope. SSO-provisioned users MUST default to `analyst` at the deployment-wide scope; the
+system MUST NOT auto-elevate any role from a SSO claim.
 
 #### Scenario: Roles are seeded on first boot
 
 - **GIVEN** an empty `roles` table
 - **WHEN** the server boots
 - **THEN** exactly the five seeded roles exist with `is_builtin=1`
-- **AND** the break-glass user (when present) is bound to `super_admin` at tenant scope
+- **AND** the break-glass user (when present) is bound to `super_admin` at the
+  deployment-wide scope
 
 #### Scenario: Built-in role cannot be deleted
 
@@ -61,20 +62,21 @@ auto-elevate any role from a SSO claim.
 - **WHEN** the operator attempts to delete a role with `is_builtin=1`
 - **THEN** the server returns a typed error and does not modify the role
 
-### Requirement: Role bindings carry a tenant + scope so future scoping is non-breaking
+### Requirement: Role bindings carry a scope so future scoping is non-breaking
 
-Every role binding SHALL carry a `tenant_id`, a `scope_type` from the set
-`{'tenant', 'host_group', 'host'}`, and a `scope_id`. Wave 1 SHALL enforce only
-`scope_type='tenant'` (with `scope_id='*'`); a binding with a non-tenant scope_type
-MUST be persisted but MUST NOT be honored by the chokepoint until the corresponding
-scope resolver ships. A binding MAY carry an `expires_at`; an expired binding MUST be
+Every role binding SHALL carry a `scope_type` from the set
+`{'global', 'host_group', 'host'}` and a `scope_id`. The product is a single-instance
+deployment, so wave 1 SHALL enforce only `scope_type='global'` (with `scope_id='*'`),
+which means "deployment-wide". A binding with a non-`global` `scope_type` MUST be
+persisted but MUST NOT be honored by the chokepoint until the corresponding scope
+resolver ships. A binding MAY carry an `expires_at`; an expired binding MUST be
 treated as if it did not exist when the chokepoint evaluates a request.
 
-#### Scenario: Tenant-scoped binding grants the action
+#### Scenario: Deployment-wide binding grants the action
 
-- **GIVEN** a role binding with `scope_type='tenant'`, `scope_id='*'`, and the role
+- **GIVEN** a role binding with `scope_type='global'`, `scope_id='*'`, and the role
   granting the requested action
-- **WHEN** the chokepoint evaluates a request whose resource lives in the same tenant
+- **WHEN** the chokepoint evaluates a request for that action
 - **THEN** the decision is `{allow: true, reason: "granted"}`
 
 #### Scenario: Host-scoped binding does not grant the action in wave 1
@@ -93,37 +95,6 @@ treated as if it did not exist when the chokepoint evaluates a request.
 - **WHEN** the chokepoint loads the actor's bindings
 - **THEN** the expired binding is not part of the evaluation input
 - **AND** if no other binding grants the action, the decision is deny
-
-### Requirement: Tenant scaffolding column on every long-lived table
-
-Every table that belongs to a tenant in the long run SHALL carry a `tenant_id`
-column whose default value is the literal string `'default'`. Wave 1 MUST seed exactly
-one tenant (`id='default'`, `status='active'`) and MUST NOT use the column as a query
-filter. The column SHALL be present at minimum on every identity-context table
-(`users`, `sessions`, `roles`, `role_bindings`, `audit_events`) and on every
-non-identity table whose rows logically belong to a tenant in wave 2's MSSP shape:
-`hosts`, `alerts`, `policies`, `commands`, `enrollments`. The system MUST NOT enforce
-foreign keys between `tenants` and any non-identity table.
-
-#### Scenario: Default tenant exists at first boot
-
-- **GIVEN** a fresh deployment
-- **WHEN** the server boots
-- **THEN** the `tenants` table contains exactly one row with `id='default'` and
-  `status='active'`
-
-#### Scenario: New row inherits the default tenant
-
-- **GIVEN** a write to any tenant-scoped table that does not specify `tenant_id`
-- **WHEN** the row is inserted
-- **THEN** the row's `tenant_id` is `'default'`
-
-#### Scenario: Wave 1 does not query on tenant_id
-
-- **GIVEN** any read endpoint defined by an existing capability
-- **WHEN** the server processes the read
-- **THEN** the SQL filter does not include `tenant_id` (verified by query-builder
-  inspection in tests; the column is purely scaffolding)
 
 ### Requirement: Authorization decisions sub-millisecond at p99
 

@@ -134,12 +134,11 @@ export interface Command {
 }
 
 // ApplicationControlPolicy mirrors server/rules/api.ApplicationControlPolicy.
-// The demo cut shows one per-tenant Default policy; multi-policy support is
+// The demo cut shows a single Default policy; multi-policy support is
 // post-demo. Rules is populated by the GET /policies/{id} endpoint and
 // omitted from the list response, so the field is optional.
 export interface ApplicationControlPolicy {
   id: number;
-  tenant_id: string;
   name: string;
   description: string;
   version: number;

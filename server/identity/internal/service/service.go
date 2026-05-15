@@ -122,7 +122,6 @@ func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string
 	}
 	return &api.Actor{
 		UserID:       u.ID,
-		TenantID:     u.TenantID,
 		IsBreakglass: u.IsBreakglass,
 		AuthMethod:   authMethod,
 		Roles:        bindings,

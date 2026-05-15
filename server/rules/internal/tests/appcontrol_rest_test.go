@@ -138,12 +138,10 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 	mux := http.NewServeMux()
 	rules.RegisterAuthedRoutes(mux)
 	actor := &identityapi.Actor{
-		UserID:   42,
-		TenantID: "default",
+		UserID: 42,
 		Roles: []identityapi.RoleBinding{{
 			RoleID:    "admin",
-			TenantID:  "default",
-			ScopeType: identityapi.RoleBindingScopeTenant,
+			ScopeType: identityapi.RoleBindingScopeGlobal,
 			ScopeID:   identityapi.RoleBindingScopeWildcard,
 		}},
 	}
@@ -160,7 +158,7 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 func (r *appControlRig) defaultPolicyID(t *testing.T) int64 {
 	t.Helper()
 	store := r.rules.ApplicationControlStore()
-	p, err := store.GetPolicyByName(t.Context(), "default", rulesapi.DefaultPolicyName)
+	p, err := store.GetPolicyByName(t.Context(), rulesapi.DefaultPolicyName)
 	require.NoError(t, err)
 	return p.ID
 }
@@ -184,8 +182,8 @@ func (r *appControlRig) do(t *testing.T, method, path string, body any) *http.Re
 }
 
 // TestAppControl_ListPolicies_ReturnsSeededDefault: the seed bootstrap
-// creates one `Default` policy per tenant. The list endpoint must
-// surface it so the UI's "open policy detail" link has a target.
+// creates one `Default` policy. The list endpoint must surface it so
+// the UI's "open policy detail" link has a target.
 func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a", "host-b"})
 	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies", nil)
@@ -197,7 +195,6 @@ func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	require.Len(t, body.Policies, 1)
 	assert.Equal(t, rulesapi.DefaultPolicyName, body.Policies[0].Name)
-	assert.Equal(t, "default", body.Policies[0].TenantID)
 }
 
 // TestAppControl_GetPolicy_IncludesRules: a freshly-seeded policy
@@ -454,7 +451,7 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	store := rules.ApplicationControlStore()
-	policy, err := store.GetPolicyByName(t.Context(), "default", rulesapi.DefaultPolicyName)
+	policy, err := store.GetPolicyByName(t.Context(), rulesapi.DefaultPolicyName)
 	require.NoError(t, err)
 	body, err := json.Marshal(map[string]any{
 		"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("a", 64),
@@ -508,10 +505,10 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	mux := http.NewServeMux()
 	rules.RegisterAuthedRoutes(mux)
 	actor := &identityapi.Actor{
-		UserID: 99, TenantID: "default",
+		UserID: 99,
 		Roles: []identityapi.RoleBinding{{
-			RoleID: "admin", TenantID: "default",
-			ScopeType: identityapi.RoleBindingScopeTenant,
+			RoleID:    "admin",
+			ScopeType: identityapi.RoleBindingScopeGlobal,
 			ScopeID:   identityapi.RoleBindingScopeWildcard,
 		}},
 	}
@@ -523,7 +520,7 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	store := rules.ApplicationControlStore()
-	policy, err := store.GetPolicyByName(t.Context(), "default", rulesapi.DefaultPolicyName)
+	policy, err := store.GetPolicyByName(t.Context(), rulesapi.DefaultPolicyName)
 	require.NoError(t, err)
 	body, _ := json.Marshal(map[string]any{
 		"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("e", 64),

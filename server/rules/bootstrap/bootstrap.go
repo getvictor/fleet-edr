@@ -41,13 +41,13 @@ type Deps struct {
 
 	// CommandInserter is the closure that enqueues a response.Command
 	// to a host. The application-control fan-out path consults it on
-	// every rule-create so every enrolled host in the tenant receives
-	// one `set_application_control` command per mutation. Optional:
-	// when nil, the application-control REST routes are not mounted
-	// (the rules context still constructs cleanly so non-REST consumers
-	// like tools/gen-rule-docs keep working).
+	// every rule-create so every enrolled host in the deployment
+	// receives one `set_application_control` command per mutation.
+	// Optional: when nil, the application-control REST routes are not
+	// mounted (the rules context still constructs cleanly so non-REST
+	// consumers like tools/gen-rule-docs keep working).
 	CommandInserter appcontrol.CommandInserter
-	// HostLister enumerates the tenant's enrolled hosts for the
+	// HostLister enumerates the deployment's enrolled hosts for the
 	// fan-out. cmd/main passes a wrapper over
 	// detection.api.Service.ListHosts that projects each HostSummary
 	// down to its host_id. Same optional-when-nil contract as
@@ -112,18 +112,15 @@ func New(deps Deps) (*Rules, error) {
 }
 
 // ApplySchema runs the DDL statements rules owns and seeds the
-// per-tenant `Default` application control policy. Idempotent
-// (CREATE TABLE IF NOT EXISTS + INSERT IGNORE on the seed). No
-// cross-context FKs; ordering with other contexts' ApplySchema is
-// not load-bearing.
+// `Default` application control policy. Idempotent (CREATE TABLE IF
+// NOT EXISTS + INSERT IGNORE on the seed). No cross-context FKs;
+// ordering with other contexts' ApplySchema is not load-bearing.
 func (r *Rules) ApplySchema(ctx context.Context) error {
 	if err := ApplySchema(ctx, r.db); err != nil {
 		return err
 	}
-	// Seed the per-tenant Default policy after the table exists. The
-	// "default" tenant id is the wave-1 scaffolding value; wave-2
-	// MSSP work will iterate over real tenants here.
-	if err := r.appControlSt.EnsureDefaultPolicy(ctx, "default"); err != nil {
+	// Seed the Default policy after the table exists.
+	if err := r.appControlSt.EnsureDefaultPolicy(ctx); err != nil {
 		return fmt.Errorf("rules seed default app control policy: %w", err)
 	}
 	return nil

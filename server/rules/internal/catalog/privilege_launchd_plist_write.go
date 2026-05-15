@@ -40,7 +40,7 @@ import (
 type PrivilegeLaunchdPlistWrite struct {
 	// AllowedTeamIDs is the set of code-signing team IDs whose writes
 	// to /Library/LaunchDaemons should be silently accepted. Keep it
-	// small — every entry is a tenant-trusted vendor.
+	// small — every entry is a deployment-trusted vendor.
 	AllowedTeamIDs map[string]struct{}
 }
 

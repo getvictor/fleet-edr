@@ -394,7 +394,7 @@ genuine differentiator versus most competitors.
   list endpoints
 - [ ] **Idempotency keys** on the event upload endpoint so retries are safe end-to-end
   (today dedup is by `event_id`; explicit header keeps semantics first-class)
-- [ ] **Per-tenant / per-host rate limiting** beyond the per-route limits today
+- [ ] **Per-host rate limiting** beyond the per-route limits today
 - [ ] **gRPC + Protobuf event upload** as an alternative to JSON for high-volume hosts
 - [ ] **Webhook out** for alerts (with retry, signed payload, replay protection)
 - [ ] **API deprecation policy** documented (deprecation header + sunset header per RFC

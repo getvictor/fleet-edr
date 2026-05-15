@@ -141,8 +141,8 @@ func Setup(t *testing.T) *Stack {
 		},
 	})
 	require.NoError(t, err, "open rules")
-	// rules-context ApplySchema seeds the per-tenant Default
-	// application_control policy on top of testdb/full's DDL pass.
+	// rules-context ApplySchema seeds the Default application_control
+	// policy on top of testdb/full's DDL pass.
 	// full.Open only applies the DDL (testkit.ApplySchema is a thin
 	// wrapper over bootstrap.ApplySchema's package form which doesn't
 	// know about the seed); calling rulesCtx.ApplySchema here brings

@@ -28,9 +28,9 @@ preserving a compatibility window. No data migrations, no agent capability negot
   this is in customer hands; the singleton model is the wrong shape for the EDR-grade subsystem this change
   introduces.
 - Add the **Application Control** subsystem under the existing `rules` bounded context. Four tables:
-  `app_control_policies` (named, versioned ruleset per tenant), `app_control_rules` (one row per rule),
+  `app_control_policies` (named, versioned ruleset per deployment), `app_control_rules` (one row per rule),
   `host_groups` (membership criteria), `app_control_assignments` (policy → host group, with priority for future
-  conflict resolution). Built-in `all-hosts` group and a `Default` policy are seeded per tenant.
+  conflict resolution). A built-in `all-hosts` group and a `Default` policy are seeded on first boot.
 - Add six rule identifier types with fixed precedence walked CDHASH → BINARY → SIGNINGID → CERTIFICATE → TEAMID
   → PATH:
   - `CDHASH` — 40 hex characters, matched only against processes that run under Apple's Hardened Runtime.
@@ -47,7 +47,7 @@ preserving a compatibility window. No data migrations, no agent capability negot
   - `enabled BOOL`, `custom_msg`, `custom_url`, `comment`, `severity ENUM('low','medium','high','critical')`,
     `source ENUM('admin','imported','intel') DEFAULT 'admin'`, `source_ref`, `expires_at NULLABLE`.
 - Per-policy `default_action ENUM('NONE')` column, constrained to `NONE` in Phase A. Lockdown change unlocks
-  `BLOCK`, enabling per-policy default-deny within a single tenant.
+  `BLOCK`, enabling per-policy default-deny within a deployment.
 - Replace the `set_blocklist` agent command with `set_application_control`, carrying
   `{policy_id, policy_version, rules: [{rule_type, identifier, action, enforcement, custom_msg, custom_url}]}`.
 - ESF `AUTH_EXEC` handler builds a five-tuple `(cdhash, file_sha256, signing_id_prefixed, leaf_cert_sha256,

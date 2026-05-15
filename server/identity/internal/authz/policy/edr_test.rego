@@ -19,21 +19,20 @@ import rego.v1
 test_super_admin_can_isolate_host if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "super_admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "super_admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": true,
 		},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": true, "reason": "granted"}
 }
 
 test_super_admin_can_read_audit if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "super_admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "super_admin", "scope_type": "global", "scope_id": "*"}]},
 		"action": "audit.read",
-		"resource": {"tenant_id": "default", "type": "audit", "id": "*"},
+		"resource": {"type": "audit", "id": "*"},
 	}
 	d.allow == true
 }
@@ -42,18 +41,18 @@ test_super_admin_can_read_audit if {
 
 test_admin_can_invite_user if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}]},
 		"action": "user.invite",
-		"resource": {"tenant_id": "default", "type": "user", "id": "newbie@example.com"},
+		"resource": {"type": "user", "id": "newbie@example.com"},
 	}
 	d.allow == true
 }
 
 test_admin_cannot_read_audit if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}]},
 		"action": "audit.read",
-		"resource": {"tenant_id": "default", "type": "audit", "id": "*"},
+		"resource": {"type": "audit", "id": "*"},
 	}
 	d == {"allow": false, "reason": "no_matching_rule"}
 }
@@ -63,21 +62,20 @@ test_admin_cannot_read_audit if {
 test_senior_analyst_can_kill_process if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "senior_analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "senior_analyst", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": true,
 		},
 		"action": "host.kill_process",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d.allow == true
 }
 
 test_senior_analyst_cannot_read_audit if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "senior_analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "senior_analyst", "scope_type": "global", "scope_id": "*"}]},
 		"action": "audit.read",
-		"resource": {"tenant_id": "default", "type": "audit", "id": "*"},
+		"resource": {"type": "audit", "id": "*"},
 	}
 	d == {"allow": false, "reason": "no_matching_rule"}
 }
@@ -86,18 +84,18 @@ test_senior_analyst_cannot_read_audit if {
 
 test_analyst_can_comment_alert if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "analyst", "scope_type": "global", "scope_id": "*"}]},
 		"action": "alert.comment",
-		"resource": {"tenant_id": "default", "type": "alert", "id": "12"},
+		"resource": {"type": "alert", "id": "12"},
 	}
 	d.allow == true
 }
 
 test_analyst_cannot_isolate_host if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "analyst", "scope_type": "global", "scope_id": "*"}]},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d.allow == false
 }
@@ -106,65 +104,52 @@ test_analyst_cannot_isolate_host if {
 
 test_auditor_can_read_audit if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "auditor", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "auditor", "scope_type": "global", "scope_id": "*"}]},
 		"action": "audit.read",
-		"resource": {"tenant_id": "default", "type": "audit", "id": "*"},
+		"resource": {"type": "audit", "id": "*"},
 	}
 	d.allow == true
 }
 
 test_auditor_cannot_acknowledge_alert if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": [{"role_id": "auditor", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}]},
+		"actor": {"roles": [{"role_id": "auditor", "scope_type": "global", "scope_id": "*"}]},
 		"action": "alert.acknowledge",
-		"resource": {"tenant_id": "default", "type": "alert", "id": "12"},
+		"resource": {"type": "alert", "id": "12"},
 	}
 	d.allow == false
 }
 
-# --- Cross-tenant deny: actor in tenant A can't act on resource in tenant B.
-
-test_actor_in_tenant_a_denied_for_tenant_b_resource if {
-	d := authz.decision with input as {
-		"actor": {"tenant_id": "tenant_a", "roles": [{"role_id": "admin", "tenant_id": "tenant_a", "scope_type": "tenant", "scope_id": "*"}]},
-		"action": "host.isolate",
-		"resource": {"tenant_id": "tenant_b", "type": "host", "id": "abc"},
-	}
-	d == {"allow": false, "reason": "no_matching_rule"}
-}
-
 # --- Wave-1 scope behaviour: host-scope binding is persisted but
-#     denied with scope_not_yet_supported when no tenant binding
-#     would have granted it.
+#     denied with scope_not_yet_supported when no deployment-wide
+#     binding would have granted it.
 
 test_host_scope_only_denied_with_distinct_reason if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "host", "scope_id": "abc"}],
+			"roles": [{"role_id": "admin", "scope_type": "host", "scope_id": "abc"}],
 		},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": false, "reason": "scope_not_yet_supported"}
 }
 
-# When BOTH a tenant binding AND a host-scope binding exist and the
-# tenant one would grant, the tenant grant wins — the
-# scope_not_yet_supported branch must NOT fire and shadow it.
+# When BOTH a deployment-wide binding AND a host-scope binding exist
+# and the deployment-wide one would grant, the deployment grant wins
+# — the scope_not_yet_supported branch must NOT fire and shadow it.
 
-test_tenant_grant_wins_over_host_scope_deny if {
+test_global_grant_wins_over_host_scope_deny if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
 			"roles": [
-				{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"},
-				{"role_id": "admin", "tenant_id": "default", "scope_type": "host", "scope_id": "abc"},
+				{"role_id": "admin", "scope_type": "global", "scope_id": "*"},
+				{"role_id": "admin", "scope_type": "host", "scope_id": "abc"},
 			],
 			"session_fresh": true,
 		},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": true, "reason": "granted"}
 }
@@ -176,12 +161,11 @@ test_tenant_grant_wins_over_host_scope_deny if {
 test_admin_can_isolate_host_when_session_fresh if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": true,
 		},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": true, "reason": "granted"}
 }
@@ -189,12 +173,11 @@ test_admin_can_isolate_host_when_session_fresh if {
 test_admin_isolate_host_denied_when_stale if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": false, "reason": "reauth_required"}
 }
@@ -202,12 +185,11 @@ test_admin_isolate_host_denied_when_stale if {
 test_admin_kill_process_denied_when_stale if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "host.kill_process",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": false, "reason": "reauth_required"}
 }
@@ -215,12 +197,11 @@ test_admin_kill_process_denied_when_stale if {
 test_admin_run_script_denied_when_stale if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "host.run_script",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": false, "reason": "reauth_required"}
 }
@@ -232,12 +213,11 @@ test_admin_run_script_denied_when_stale if {
 test_admin_resolve_critical_alert_denied_when_stale if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "alert.resolve",
-		"resource": {"tenant_id": "default", "type": "alert", "id": "12", "severity": "critical"},
+		"resource": {"type": "alert", "id": "12", "severity": "critical"},
 	}
 	d == {"allow": false, "reason": "reauth_required"}
 }
@@ -245,12 +225,11 @@ test_admin_resolve_critical_alert_denied_when_stale if {
 test_admin_resolve_high_alert_allowed_when_stale if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "alert.resolve",
-		"resource": {"tenant_id": "default", "type": "alert", "id": "12", "severity": "high"},
+		"resource": {"type": "alert", "id": "12", "severity": "high"},
 	}
 	d == {"allow": true, "reason": "granted"}
 }
@@ -263,12 +242,11 @@ test_admin_resolve_high_alert_allowed_when_stale if {
 test_analyst_isolate_host_says_no_matching_rule_not_reauth if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "analyst", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "analyst", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "host.isolate",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": false, "reason": "no_matching_rule"}
 }
@@ -280,12 +258,11 @@ test_analyst_isolate_host_says_no_matching_rule_not_reauth if {
 test_admin_read_host_unaffected_by_stale_session if {
 	d := authz.decision with input as {
 		"actor": {
-			"tenant_id": "default",
-			"roles": [{"role_id": "admin", "tenant_id": "default", "scope_type": "tenant", "scope_id": "*"}],
+			"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}],
 			"session_fresh": false,
 		},
 		"action": "host.read",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": true, "reason": "granted"}
 }
@@ -294,9 +271,9 @@ test_admin_read_host_unaffected_by_stale_session if {
 
 test_actor_with_no_bindings_denied if {
 	d := authz.decision with input as {
-		"actor": {"tenant_id": "default", "roles": []},
+		"actor": {"roles": []},
 		"action": "host.read",
-		"resource": {"tenant_id": "default", "type": "host", "id": "abc"},
+		"resource": {"type": "host", "id": "abc"},
 	}
 	d == {"allow": false, "reason": "no_matching_rule"}
 }

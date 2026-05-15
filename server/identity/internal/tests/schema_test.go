@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/testdb/full"
@@ -71,11 +70,20 @@ func TestSchema_NewTablesPresent(t *testing.T) {
 		// Pre-existing identity tables.
 		"users", "sessions", "audit_events",
 		// New in wave 1.
-		"tenants", "identities", "roles", "role_bindings",
+		"identities", "roles", "role_bindings",
 		"bootstrap_tokens", "webauthn_credentials",
 	} {
 		assert.Truef(t, tableExists(t, db, table), "table %q must exist after ApplySchema", table)
 	}
+}
+
+// TestSchema_TenantsTableAbsent pins the inverse: the legacy `tenants`
+// scaffolding table was removed when the product was finalised as a
+// single-instance deployment. A regression that re-introduces it
+// silently is caught here.
+func TestSchema_TenantsTableAbsent(t *testing.T) {
+	db := openIdentitySchema(t)
+	assert.Falsef(t, tableExists(t, db, "tenants"), "tenants table must not be re-introduced; the product is single-instance")
 }
 
 // TestSchema_UsersColumnsAdded verifies the users-table additive columns
@@ -91,7 +99,6 @@ func TestSchema_UsersColumnsAdded(t *testing.T) {
 		wantNullable string
 		wantDefault  *string
 	}{
-		{"tenant_id", "NO", strPtr("default")},
 		{"display_name", "YES", nil},
 		{"status", "NO", strPtr("active")},
 		{"is_breakglass", "NO", strPtr("0")},
@@ -111,6 +118,16 @@ func TestSchema_UsersColumnsAdded(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSchema_UsersTenantIDAbsent pins the removal: users no longer
+// carries tenant_id now that the product is a single-instance
+// deployment. Regression-guards against re-introducing it.
+func TestSchema_UsersTenantIDAbsent(t *testing.T) {
+	db := openIdentitySchema(t)
+	cols := readColumns(t, db, "users")
+	_, present := cols["tenant_id"]
+	assert.False(t, present, "users.tenant_id must not be re-introduced")
 }
 
 // TestSchema_SessionsColumnsAdded verifies sessions gained identity_id
@@ -135,7 +152,7 @@ func TestSchema_SessionsColumnsAdded(t *testing.T) {
 // TestSchema_RoleBindingsScopeShape checks the wave-1 scope columns on
 // role_bindings: an ENUM scope_type with the three values the spec
 // names plus the wildcard scope_id default. The chokepoint will lean
-// on this shape to deny non-tenant scopes with reason
+// on this shape to deny non-deployment scopes with reason
 // `scope_not_yet_supported` until the wave-2 resolver ships.
 func TestSchema_RoleBindingsScopeShape(t *testing.T) {
 	db := openIdentitySchema(t)
@@ -148,16 +165,26 @@ func TestSchema_RoleBindingsScopeShape(t *testing.T) {
 	// set; lowercase the column type because MySQL renders ENUM as
 	// `enum(...)` in INFORMATION_SCHEMA.COLUMNS.
 	assert.Equal(t,
-		"enum('tenant','host_group','host')",
+		"enum('global','host_group','host')",
 		strings.ToLower(scopeType.ColumnType),
 		"role_bindings.scope_type enum contract must not drift")
 	require.NotNil(t, scopeType.Default)
-	assert.Equal(t, "tenant", *scopeType.Default)
+	assert.Equal(t, "global", *scopeType.Default)
 
 	scopeID, ok := cols["scope_id"]
 	require.True(t, ok, "role_bindings.scope_id missing")
 	require.NotNil(t, scopeID.Default)
 	assert.Equal(t, "*", *scopeID.Default)
+}
+
+// TestSchema_RoleBindingsTenantIDAbsent pins the removal: role_bindings
+// no longer carries tenant_id now that the product is a single-instance
+// deployment. Regression-guards against re-introducing it.
+func TestSchema_RoleBindingsTenantIDAbsent(t *testing.T) {
+	db := openIdentitySchema(t)
+	cols := readColumns(t, db, "role_bindings")
+	_, present := cols["tenant_id"]
+	assert.False(t, present, "role_bindings.tenant_id must not be re-introduced")
 }
 
 // TestSchema_Idempotent verifies ApplySchema is safe to re-run
@@ -169,24 +196,6 @@ func TestSchema_Idempotent(t *testing.T) {
 	db := openIdentitySchema(t)
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db),
 		"second ApplySchema must succeed against a populated DB")
-}
-
-// TestSeed_DefaultTenant locks in the wave-1 tenant-scaffolding seed:
-// exactly one tenant row exists after first boot, with id=DefaultTenantID
-// and status='active'. The seed runs as part of ApplySchema; this test
-// is the single source of truth that the chokepoint's "actor's tenant
-// exists" precondition is satisfied at boot.
-func TestSeed_DefaultTenant(t *testing.T) {
-	db := openIdentitySchema(t)
-
-	var rows []struct {
-		ID     string `db:"id"`
-		Status string `db:"status"`
-	}
-	require.NoError(t, db.SelectContext(t.Context(), &rows, `SELECT id, status FROM tenants`))
-	require.Len(t, rows, 1, "exactly one tenant must be seeded on first boot")
-	assert.Equal(t, api.DefaultTenantID, rows[0].ID)
-	assert.Equal(t, string(api.TenantStatusActive), rows[0].Status)
 }
 
 // TestSeed_BuiltinRoles verifies the five built-in roles seed exactly
@@ -217,15 +226,11 @@ func TestSeed_BuiltinRoles(t *testing.T) {
 
 // TestSeed_Idempotent locks in the same upgrade-path invariant as the
 // schema test, but for the seed step: re-running ApplySchema does not
-// duplicate the tenant or role rows. The seeds use INSERT IGNORE; this
-// test catches a regression that swaps it for INSERT or REPLACE.
+// duplicate the role rows. The seed uses INSERT IGNORE; this test
+// catches a regression that swaps it for INSERT or REPLACE.
 func TestSeed_Idempotent(t *testing.T) {
 	db := openIdentitySchema(t)
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
-
-	var tenants int
-	require.NoError(t, db.GetContext(t.Context(), &tenants, `SELECT COUNT(*) FROM tenants`))
-	assert.Equal(t, 1, tenants, "tenants seed must not duplicate on re-run")
 
 	var roles int
 	require.NoError(t, db.GetContext(t.Context(), &roles, `SELECT COUNT(*) FROM roles`))

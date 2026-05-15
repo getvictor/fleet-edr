@@ -30,39 +30,36 @@ func NewStore(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// EnsureDefaultPolicy idempotently seeds the per-tenant Default
-// policy. Safe to call on every server boot (Bootstrap does so). Uses
-// INSERT IGNORE so a manual edit of the row's description or version
-// is not clobbered on subsequent restarts.
-func (s *Store) EnsureDefaultPolicy(ctx context.Context, tenantID string) error {
-	if tenantID == "" {
-		tenantID = "default"
-	}
+// EnsureDefaultPolicy idempotently seeds the Default policy. Safe to
+// call on every server boot (Bootstrap does so). Uses INSERT IGNORE so
+// a manual edit of the row's description or version is not clobbered
+// on subsequent restarts.
+func (s *Store) EnsureDefaultPolicy(ctx context.Context) error {
 	const query = `INSERT IGNORE INTO app_control_policies
-		(tenant_id, name, description, version, default_action, created_by, updated_by)
-		VALUES (?, ?, ?, 1, 'NONE', 'system', 'system')`
+		(name, description, version, default_action, created_by, updated_by)
+		VALUES (?, ?, 1, 'NONE', 'system', 'system')`
 	if _, err := s.db.ExecContext(ctx, query,
-		tenantID, api.DefaultPolicyName,
-		"Per-tenant default application control policy. Add rules to block executables by SHA-256 hash.",
+		api.DefaultPolicyName,
+		"Default application control policy. Add rules to block executables by SHA-256 hash.",
 	); err != nil {
 		return fmt.Errorf("appcontrol seed default policy: %w", err)
 	}
 	return nil
 }
 
-// GetPolicyByName loads the policy row by (tenant_id, name). Rules
-// are NOT populated; callers that need rules call ListRulesByPolicy
+// GetPolicyByName loads the policy row by name. Rules are NOT
+// populated; callers that need rules call ListRulesByPolicy
 // explicitly. A future GetPolicyWithRules helper can join the two
 // queries when an endpoint shows up that needs both in one round
 // trip; today's REST surface fetches them separately.
-func (s *Store) GetPolicyByName(ctx context.Context, tenantID, name string) (api.ApplicationControlPolicy, error) {
-	const query = `SELECT id, tenant_id, name, description, version, default_action,
+func (s *Store) GetPolicyByName(ctx context.Context, name string) (api.ApplicationControlPolicy, error) {
+	const query = `SELECT id, name, description, version, default_action,
 		created_at, updated_at, created_by, updated_by
-		FROM app_control_policies WHERE tenant_id = ? AND name = ?`
-	row := s.db.QueryRowxContext(ctx, query, tenantID, name)
+		FROM app_control_policies WHERE name = ?`
+	row := s.db.QueryRowxContext(ctx, query, name)
 	var p api.ApplicationControlPolicy
 	if err := row.Scan(
-		&p.ID, &p.TenantID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
+		&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
 		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -73,15 +70,14 @@ func (s *Store) GetPolicyByName(ctx context.Context, tenantID, name string) (api
 	return p, nil
 }
 
-// ListPolicies returns every policy for the tenant in name order.
-// Rules are NOT populated; the list view shows the rule count only,
-// which the REST handler computes via a separate aggregate query
-// when it needs it.
-func (s *Store) ListPolicies(ctx context.Context, tenantID string) ([]api.ApplicationControlPolicy, error) {
-	const query = `SELECT id, tenant_id, name, description, version, default_action,
+// ListPolicies returns every policy in name order. Rules are NOT
+// populated; the list view shows the rule count only, which the REST
+// handler computes via a separate aggregate query when it needs it.
+func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolicy, error) {
+	const query = `SELECT id, name, description, version, default_action,
 		created_at, updated_at, created_by, updated_by
-		FROM app_control_policies WHERE tenant_id = ? ORDER BY name ASC`
-	rows, err := s.db.QueryxContext(ctx, query, tenantID)
+		FROM app_control_policies ORDER BY name ASC`
+	rows, err := s.db.QueryxContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol list policies: %w", err)
 	}
@@ -90,7 +86,7 @@ func (s *Store) ListPolicies(ctx context.Context, tenantID string) ([]api.Applic
 	for rows.Next() {
 		var p api.ApplicationControlPolicy
 		if err := rows.Scan(
-			&p.ID, &p.TenantID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
+			&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
 			&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy,
 		); err != nil {
 			return nil, fmt.Errorf("appcontrol list policies scan: %w", err)

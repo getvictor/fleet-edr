@@ -157,13 +157,13 @@ func TestAppControlREST_CreateRule_AnalystForbidden(t *testing.T) {
 	assert.Equal(t, identityapi.ReasonNoMatchingRule, resp.Header.Get(identityapi.AuthzReasonHeader))
 }
 
-// lookupDefaultPolicy returns the seeded `default` tenant's Default
-// policy via the rules-context store. Tests rely on it to grab the
-// id without re-running the seed query themselves.
+// lookupDefaultPolicy returns the seeded Default policy via the
+// rules-context store. Tests rely on it to grab the id without
+// re-running the seed query themselves.
 func lookupDefaultPolicy(t *testing.T, ctx context.Context, stack *Stack) rulesapi.ApplicationControlPolicy {
 	t.Helper()
 	store := stack.Rules.ApplicationControlStore()
-	p, err := store.GetPolicyByName(ctx, "default", rulesapi.DefaultPolicyName)
+	p, err := store.GetPolicyByName(ctx, rulesapi.DefaultPolicyName)
 	require.NoError(t, err)
 	require.NotZero(t, p.ID, "Default policy must be seeded on bootstrap")
 	return p

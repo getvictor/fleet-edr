@@ -24,9 +24,8 @@ const makeRule = (over: Partial<ApplicationControlRule> = {}): ApplicationContro
 
 const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationControlPolicy => ({
   id: 7,
-  tenant_id: "default",
   name: "Default",
-  description: "Per-tenant default policy",
+  description: "Default app-control policy fixture",
   version: 5,
   default_action: "NONE",
   created_at: "2026-05-14T00:00:00Z",
@@ -76,7 +75,7 @@ describe("PolicyDetail", () => {
       expect(screen.getByRole("heading", { name: "Default" })).toBeInTheDocument();
     });
     expect(screen.getByText(/version 5/i)).toBeInTheDocument();
-    expect(screen.getByText(/per-tenant default policy/i)).toBeInTheDocument();
+    expect(screen.getByText(/default app-control policy fixture/i)).toBeInTheDocument();
     // Identifier is truncated to 16 chars + ellipsis in the table.
     expect(screen.getByText("aaaaaaaaaaaaaaaa…")).toBeInTheDocument();
     expect(screen.getByText(/blocked by corp policy/i)).toBeInTheDocument();
