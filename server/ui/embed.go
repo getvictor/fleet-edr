@@ -3,6 +3,7 @@ package ui
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"os"
 )
@@ -22,10 +23,20 @@ const LiveDirEnv = "EDR_UI_LIVE_DIR"
 //     binary, identical for every request.
 //   - Dev: when EDR_UI_LIVE_DIR is set, reads from that directory on disk so
 //     `task build:ui` refreshes the bundle on the next request without a
-//     `task dev:server` restart. Vite writes new files atomically, so a request
-//     in flight when the rebuild lands sees a coherent old-or-new snapshot.
+//     `task dev:server` restart. Vite's `emptyOutDir: true` clears the dist
+//     directory before writing the new bundle, so a request that arrives mid-
+//     rebuild (sub-second window on this codebase) can see missing files; the
+//     SPA-fallback path in registerUIRoutes treats those as 404 and the next
+//     request after the rebuild settles serves the new bundle.
+//
+// Returns an error if EDR_UI_LIVE_DIR points at a non-existent or unreadable
+// path so a misconfigured dev server fails at boot with a clear message
+// instead of 500ing every request.
 func FS() (fs.FS, error) {
 	if dir := os.Getenv(LiveDirEnv); dir != "" {
+		if _, err := os.Stat(dir); err != nil { //nolint:gosec // dev-only env var, operator-supplied path is intentional
+			return nil, fmt.Errorf("%s=%q: %w", LiveDirEnv, dir, err)
+		}
 		return os.DirFS(dir), nil
 	}
 	return fs.Sub(embeddedDist, "dist")
