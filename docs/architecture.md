@@ -230,6 +230,12 @@ Read endpoints for the UI:
 React 19 + TypeScript + Vite + D3.js. Embedded in the Go server binary via
 `//go:embed`. Served at `/ui/`.
 
+In dev, `task dev:server` sets `EDR_UI_LIVE_DIR=server/ui/dist` so the server
+reads the bundle from disk instead of the compile-time embedded copy. A
+`task build:ui` in another terminal is picked up on the next request without a
+server restart. Production builds leave `EDR_UI_LIVE_DIR` unset and serve the
+embedded bundle.
+
 Pages:
 - **Login** -- API key entry (stored in sessionStorage)
 - **Host list** -- table of enrolled hosts with event counts

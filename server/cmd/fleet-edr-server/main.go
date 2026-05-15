@@ -582,7 +582,7 @@ func registerUIRoutes(
 	breakglassUIGate func(http.Handler) http.Handler,
 	logger *slog.Logger,
 ) {
-	uiDist, err := fs.Sub(ui.DistFS, "dist")
+	uiDist, err := ui.FS()
 	if err != nil {
 		logger.ErrorContext(context.Background(), "embed ui", "err", err)
 		mux.HandleFunc("/ui/", func(w http.ResponseWriter, _ *http.Request) {
