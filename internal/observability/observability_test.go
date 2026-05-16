@@ -30,8 +30,7 @@ func restoreGlobals(t *testing.T) {
 
 func TestInit_Disabled(t *testing.T) {
 	restoreGlobals(t)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc"})
+	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
 	require.NoError(t, err)
 	require.NotNil(t, shutdown)
 
@@ -47,15 +46,15 @@ func TestInit_Disabled(t *testing.T) {
 
 func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 	restoreGlobals(t)
-	// Dial a port we are confident nothing is listening on. gRPC dialing is lazy and the BatchProcessor export happens asynchronously,
-	// so Init must still return quickly and Shutdown must not block on the dead endpoint for longer than the deadline we pass.
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
-	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
-
+	// Pass a URL pointing at a port we are confident nothing is listening on. The http:// scheme tells the SDK's
+	// WithEndpointURL option to use insecure transport so the connection refused is observed at the TCP layer rather than
+	// after a slow TLS handshake. gRPC dialing is lazy and the BatchProcessor export happens asynchronously, so Init must
+	// still return quickly and Shutdown must not block on the dead endpoint for longer than the deadline we pass.
 	start := time.Now()
 	shutdown, err := Init(t.Context(), Options{
 		ServiceName: "test-svc",
 		InitTimeout: 2 * time.Second,
+		Endpoint:    "http://127.0.0.1:1",
 	})
 	// Init itself may or may not return an error depending on how aggressively the exporter
 	// validates; what we care about is that it returns quickly.
@@ -75,8 +74,7 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 
 func TestInit_PropagatorInstalled(t *testing.T) {
 	restoreGlobals(t)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc"})
+	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = shutdown(t.Context()) })
 
