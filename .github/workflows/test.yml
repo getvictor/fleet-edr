@@ -149,7 +149,7 @@ jobs:
     # matches the local docker-compose dev/test posture (see CLAUDE.md).
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
         env:
           MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
           MYSQL_DATABASE: edr_test
