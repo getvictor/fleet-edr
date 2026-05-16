@@ -421,27 +421,31 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 // allowlist, the rule must stay silent. Without the allowlist, the same chain still fires (the second sub-test).
 func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	t.Parallel()
-	// sshd-session -> /bin/sh -> /tmp/payload — the "admin SSH and run
-	// a script from /tmp/" shape, observed live during edr-qa.
-	events := []api.Event{
-		{EventID: "fork-sshd", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
-			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
-		{EventID: "exec-sshd", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
-			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/libexec/sshd-session","args":["sshd-session"],"uid":0,"gid":0}`)},
-		{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
-			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
-		{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
-			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh"],"uid":501,"gid":20}`)},
-		{EventID: "fork-payload", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
-			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
-		{EventID: "exec-payload", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
-			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+	// sshd-session -> /bin/sh -> /tmp/payload — the "admin SSH and run a script from /tmp/" shape, observed live during edr-qa.
+	// Built fresh per subtest because Store.InsertEvents mutates events[i].IngestedAtNs in place; sharing one slice across
+	// parallel subtests would race the writes.
+	makeEvents := func() []api.Event {
+		return []api.Event{
+			{EventID: "fork-sshd", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+			{EventID: "exec-sshd", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/libexec/sshd-session","args":["sshd-session"],"uid":0,"gid":0}`)},
+			{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+			{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh"],"uid":501,"gid":20}`)},
+			{EventID: "fork-payload", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+			{EventID: "exec-payload", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+		}
 	}
 
 	t.Run("with sshd-session in allowlist — suppressed", func(t *testing.T) {
 		t.Parallel()
 		s := openCatalogStore(t)
 		ctx := t.Context()
+		events := makeEvents()
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
 
@@ -459,6 +463,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 		t.Parallel()
 		s := openCatalogStore(t)
 		ctx := t.Context()
+		events := makeEvents()
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
 
