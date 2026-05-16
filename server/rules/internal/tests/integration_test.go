@@ -52,6 +52,7 @@ func newRules(t *testing.T) *rulesbootstrap.Rules {
 // TestCatalog_ListShape locks in registration order + documentation
 // completeness for every shipped rule.
 func TestCatalog_ListShape(t *testing.T) {
+	t.Parallel()
 	r := newRules(t)
 	catalog := r.Catalog().List()
 	wantIDs := []string{
@@ -76,6 +77,7 @@ func TestCatalog_ListShape(t *testing.T) {
 // TestContentService_ActiveRules surfaces every shipped rule through the engine-facing interface. The exact roster lives in
 // TestCatalog_ListShape; this test just confirms the count is in lockstep and every rule has a non-empty descriptor.
 func TestContentService_ActiveRules(t *testing.T) {
+	t.Parallel()
 	r := newRules(t)
 	rules := r.ContentService().ActiveRules()
 	require.Len(t, rules, len(r.Catalog().List()))
@@ -88,6 +90,7 @@ func TestContentService_ActiveRules(t *testing.T) {
 // TestOperator_GetRules locks the JSON shape of GET /api/rules so
 // the UI's RuleDetail.tsx + tools/gen-rule-docs both keep working.
 func TestOperator_GetRules(t *testing.T) {
+	t.Parallel()
 	r := newRules(t)
 	mux := http.NewServeMux()
 	r.RegisterAuthedRoutes(mux)
@@ -119,6 +122,7 @@ func TestOperator_GetRules(t *testing.T) {
 // TestOperator_GetAttackCoverage asserts navigator-layer JSON is
 // byte-identical across requests (snapshot-friendly).
 func TestOperator_GetAttackCoverage(t *testing.T) {
+	t.Parallel()
 	r := newRules(t)
 	mux := http.NewServeMux()
 	r.RegisterAuthedRoutes(mux)
@@ -147,6 +151,7 @@ func TestOperator_GetAttackCoverage(t *testing.T) {
 
 // TestBootstrap_MissingDeps surfaces required-field errors.
 func TestBootstrap_MissingDeps(t *testing.T) {
+	t.Parallel()
 	t.Run("nil DB", func(t *testing.T) {
 		_, err := rulesbootstrap.New(rulesbootstrap.Deps{})
 		require.Error(t, err)

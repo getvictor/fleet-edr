@@ -10,6 +10,7 @@ import (
 // TestHashRoundTrip is a white-box test for the package-private token helpers (generateToken / hashToken / verifyToken). The DB-using
 // tests are in store_test.go (package mysql_test) to avoid the testdb -> endpoint/bootstrap -> endpoint/internal/mysql cycle.
 func TestHashRoundTrip(t *testing.T) {
+	t.Parallel()
 	tok, err := generateToken()
 	require.NoError(t, err)
 	require.Len(t, tok, 43)

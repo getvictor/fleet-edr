@@ -19,6 +19,7 @@ func materialize(t *testing.T, s *catalogStore, events []api.Event) {
 }
 
 func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -61,6 +62,7 @@ func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
 // shell's pid instead of fork+exec'ing a child. The exec event stream shows two exec events for the same pid (first /bin/sh, then the
 // payload), and the processes table ends up with the pid's path as the payload. The rule must still fire.
 func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -99,6 +101,7 @@ func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
 }
 
 func TestSuspiciousExecSkipsShellToShell(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -124,6 +127,7 @@ func TestSuspiciousExecSkipsShellToShell(t *testing.T) {
 }
 
 func TestSuspiciousExecSkipsNonSuspiciousPath(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -153,6 +157,7 @@ func TestSuspiciousExecSkipsNonSuspiciousPath(t *testing.T) {
 }
 
 func TestSuspiciousExecDetectsVarTmp(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -183,6 +188,7 @@ func TestSuspiciousExecDetectsVarTmp(t *testing.T) {
 }
 
 func TestSuspiciousExecSkipsChildOutsideWindow(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -215,6 +221,7 @@ func TestSuspiciousExecSkipsChildOutsideWindow(t *testing.T) {
 }
 
 func TestSuspiciousExecPathTraversal(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -245,6 +252,7 @@ func TestSuspiciousExecPathTraversal(t *testing.T) {
 }
 
 func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -285,6 +293,7 @@ func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
 }
 
 func TestSuspiciousExecPrefersSuspiciousPathOverNetwork(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -320,6 +329,7 @@ func TestSuspiciousExecPrefersSuspiciousPathOverNetwork(t *testing.T) {
 }
 
 func TestIsSuspiciousPath(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		path       string
@@ -336,6 +346,7 @@ func TestIsSuspiciousPath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.suspicious, isSuspiciousPath(tc.path))
 		})
 	}
@@ -347,6 +358,7 @@ func TestIsSuspiciousPath(t *testing.T) {
 // the rule silently misses the attack. This test pins the shebang detection AND its negative twin (`sh -c <command>` argv[1] = "-c",
 // not a path).
 func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -378,6 +390,7 @@ func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 // as a path would false-positive on any command containing `..` (e.g. an IPv4 octet sequence in a curl URL). The shebang detector must
 // bail the moment it sees `-c`.
 func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -407,6 +420,7 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 // EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST. This test pins the suppression behaviour: when the non-shell ancestor's path is on the
 // allowlist, the rule must stay silent. Without the allowlist, the same chain still fires (the second sub-test).
 func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
+	t.Parallel()
 	// sshd-session -> /bin/sh -> /tmp/payload — the "admin SSH and run
 	// a script from /tmp/" shape, observed live during edr-qa.
 	events := []api.Event{
@@ -425,6 +439,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	}
 
 	t.Run("with sshd-session in allowlist — suppressed", func(t *testing.T) {
+		t.Parallel()
 		s := openCatalogStore(t)
 		ctx := t.Context()
 		require.NoError(t, s.InsertEvents(ctx, events))
@@ -441,6 +456,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	})
 
 	t.Run("without allowlist — fires", func(t *testing.T) {
+		t.Parallel()
 		s := openCatalogStore(t)
 		ctx := t.Context()
 		require.NoError(t, s.InsertEvents(ctx, events))
@@ -460,6 +476,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 // Reverse-direction matching is race-immune: by the time the temp-binary exec event lands in batch N+1, the shell ancestor is already
 // in the store from batch N's ProcessBatch. This test exercises that path explicitly.
 func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 

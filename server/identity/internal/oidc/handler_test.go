@@ -56,6 +56,7 @@ func (w testWriter) Write(p []byte) (int, error) {
 // safeRedirect must drop off-site, scheme-laden, or protocol-relative values and fall back to the default UI landing. Pinned here
 // because a regression that lets `next=https://evil.example.com` pass through is a phishing vector.
 func TestSafeRedirect(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -78,6 +79,7 @@ func TestSafeRedirect(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, safeRedirect(tc.in))
 		})
 	}
@@ -86,6 +88,7 @@ func TestSafeRedirect(t *testing.T) {
 // pathStartsWithSingleSlash distinguishes "/foo" from "//foo" and "/\foo". The double-slash + backslash forms are both protocol-
 // relative (some browsers normalise "\" to "/"); rejecting both is the safeRedirect contract.
 func TestPathStartsWithSingleSlash(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want bool
@@ -101,6 +104,7 @@ func TestPathStartsWithSingleSlash(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, pathStartsWithSingleSlash(tc.in))
 		})
 	}
@@ -109,6 +113,7 @@ func TestPathStartsWithSingleSlash(t *testing.T) {
 // failureAudit emits an auth.oidc.failure row with the spec reason and payload populated; pinned because it's the unknown-subject +
 // email-conflict path the operator dashboards key on.
 func TestFailureAudit(t *testing.T) {
+	t.Parallel()
 	h, rec := newTestHandler(t)
 	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/auth/callback?state=x", nil)
 	r.Header.Set("User-Agent", "test/1.0")
@@ -132,6 +137,7 @@ func TestFailureAudit(t *testing.T) {
 // handler. Pinned because the cookie helpers consolidate three previous inline construction sites; a regression that stripped HttpOnly
 // would silently expose state to JS-level XSS.
 func TestWriteStateCookie(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandler(t)
 	w := httptest.NewRecorder()
 	h.writeStateCookie(w, "VALUE", 60)
@@ -157,6 +163,7 @@ func TestWriteStateCookie(t *testing.T) {
 // regression vector: a refactor that bypasses the audit/redirect
 // helper for a particular branch and leaks plaintext to the operator.
 func TestHandleCallback_FailurePaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name           string
 		buildRequest   func(t *testing.T, h *Handler) *http.Request
@@ -214,6 +221,7 @@ func TestHandleCallback_FailurePaths(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			h, rec := newTestHandler(t)
 			r := tc.buildRequest(t, h)
 			w := httptest.NewRecorder()

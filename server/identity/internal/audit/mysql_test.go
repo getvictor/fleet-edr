@@ -49,6 +49,7 @@ func seedUser(t *testing.T, db *sqlx.DB, id int64, email string) {
 }
 
 func TestRecord_RoundTrip(t *testing.T) {
+	t.Parallel()
 	store, db := newStore(t)
 	const userID = int64(1)
 	seedUser(t, db, userID, "admin@fleet-edr.local")
@@ -79,6 +80,7 @@ func TestRecord_RoundTrip(t *testing.T) {
 // row so the audit row stays attributable after the user is later deleted. This is the key durability promise behind the cross-context
 // recordX helpers, which only have user_id from ctx (no email).
 func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
+	t.Parallel()
 	store, db := newStore(t)
 	const userID = int64(99)
 	seedUser(t, db, userID, "operator-99@test")
@@ -109,6 +111,7 @@ func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
 // login_failed rows have no user_id (the email may be unknown). The retrieval endpoint must surface them with the attempted email so a
 // brute-force pattern is observable in retention.
 func TestRecord_LoginFailedKeepsEmailWithoutUser(t *testing.T) {
+	t.Parallel()
 	store, _ := newStore(t)
 
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
@@ -130,6 +133,7 @@ func TestRecord_LoginFailedKeepsEmailWithoutUser(t *testing.T) {
 // trace_id is pulled from the OTel span on ctx so handler code does not have to thread it explicitly. The span's trace-id ends up in
 // the audit row, which lets a reviewer correlate an audit row with the corresponding SigNoz traces / logs by trace-id alone.
 func TestRecord_TraceIDFromContext(t *testing.T) {
+	t.Parallel()
 	store, _ := newStore(t)
 
 	tp := trace.NewTracerProvider()
@@ -152,6 +156,7 @@ func TestRecord_TraceIDFromContext(t *testing.T) {
 // List filters by action so the admin UI can scope to "all logins" or
 // "all alert acks" etc.
 func TestList_FilterByAction(t *testing.T) {
+	t.Parallel()
 	store, db := newStore(t)
 	seedUser(t, db, 1, "u1@test")
 
@@ -171,6 +176,7 @@ func TestList_FilterByAction(t *testing.T) {
 // List paginates via the (Limit, BeforeID) cursor: passing the smallest id from page N returns page N+1. We verify the boundary
 // condition (cursor row is excluded, not duplicated).
 func TestList_Paginates(t *testing.T) {
+	t.Parallel()
 	store, db := newStore(t)
 	seedUser(t, db, 1, "u1@test")
 
@@ -202,6 +208,7 @@ func TestList_Paginates(t *testing.T) {
 // Record requires a non-empty Action; an empty action is a programming
 // error caught at the boundary so it does not produce mystery rows.
 func TestRecord_RejectsEmptyAction(t *testing.T) {
+	t.Parallel()
 	store, _ := newStore(t)
 	err := store.Record(t.Context(), api.AuditEvent{})
 	require.Error(t, err)
@@ -211,6 +218,7 @@ func TestRecord_RejectsEmptyAction(t *testing.T) {
 // New panics on nil db: a Store with a nil db is a programming error that would only surface at request time (when the user's audit
 // row disappears into a nil-pointer panic).
 func TestNew_PanicsOnNilDB(t *testing.T) {
+	t.Parallel()
 	assert.Panics(t, func() { _ = audit.New(nil, nil) })
 }
 
@@ -219,6 +227,7 @@ func TestNew_PanicsOnNilDB(t *testing.T) {
 // query can match success, drop, and failure states uniformly. This test captures the slog handler output and pins the wire shape:
 // renaming a key here is renaming a dashboard contract.
 func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store, db := newStoreWithLogger(t, logger)
@@ -255,6 +264,7 @@ func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 // The audit row itself stays attributable via the actor_email column. Per server-identity-audit-log spec, failure suffix actions land
 // at WARN so a SigNoz alert on severity_text=WARN catches them without a separate filter.
 func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store, _ := newStoreWithLogger(t, logger)
@@ -278,6 +288,7 @@ func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 // chokepoint denies without a separate severity filter per decision type. server-identity-audit-log spec §"Audit rows are
 // dual-emitted": "WARN when the decision is `deny`, the action is a break-glass action, or the decision is `error`."
 func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store, db := newStoreWithLogger(t, logger)
@@ -304,6 +315,7 @@ func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 // high-privilege path and every interaction is operationally noteworthy. server-identity-audit-log spec: "WARN when ... the action is
 // a break-glass action."
 func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
+	t.Parallel()
 	cases := []api.AuditAction{
 		api.AuditAuthBreakglassBootstrap,
 		api.AuditAuthBreakglassSuccess,
@@ -311,6 +323,7 @@ func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
 	}
 	for _, action := range cases {
 		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			store, _ := newStoreWithLogger(t, logger)
@@ -332,6 +345,7 @@ func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
 // erases the audit row's content from the OTel log stream. server-identity-audit-log spec: "The dual emit MUST happen even when the
 // database insert fails so the observability pipeline sees a record."
 func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store, db := newStoreWithLogger(t, logger)
@@ -387,6 +401,7 @@ func parseJSONLogs(t *testing.T, raw []byte) []map[string]any {
 // Sanity: the action constants are stable strings — anyone changing them is renaming wire-shape contracts, and this test fails loudly
 // so the rename gets caught at code-review time.
 func TestAuditAction_StableConstants(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		got  api.AuditAction
 		want string

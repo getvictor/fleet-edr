@@ -203,6 +203,7 @@ func withHostID(next http.Handler, hostID string) http.Handler {
 // ---- Ingest tests -----------------------------------------------------------
 
 func TestIngest_PersistsEvents(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -226,6 +227,7 @@ func TestIngest_PersistsEvents(t *testing.T) {
 }
 
 func TestIngest_HostIDMismatchRejected(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 
 	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
@@ -243,6 +245,7 @@ func TestIngest_HostIDMismatchRejected(t *testing.T) {
 }
 
 func TestIngest_RequiresHostContext(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 
 	// No middleware wraps the handler: the host_id pin is absent.
@@ -261,6 +264,7 @@ func TestIngest_RequiresHostContext(t *testing.T) {
 // ---- Engine + processor tests ----------------------------------------------
 
 func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -291,6 +295,7 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 }
 
 func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -320,6 +325,7 @@ func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 // ---- Operator alert lifecycle tests ----------------------------------------
 
 func TestOperator_UpdateAlertStatus_HappyPath(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{
 		mode:       bootstrap.ModeFull,
 		userExists: stubUserExists(42),
@@ -356,6 +362,7 @@ func TestOperator_UpdateAlertStatus_HappyPath(t *testing.T) {
 }
 
 func TestOperator_UpdateAlertStatus_RejectsUnknownUser(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{
 		mode:       bootstrap.ModeFull,
 		userExists: stubUserExists(42), // userID 99 is NOT known
@@ -377,6 +384,7 @@ func TestOperator_UpdateAlertStatus_RejectsUnknownUser(t *testing.T) {
 }
 
 func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{
 		mode:       bootstrap.ModeFull,
 		userExists: stubUserExists(42),
@@ -398,6 +406,7 @@ func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
 }
 
 func TestOperator_GetAlert_ReturnsCorrelatedEventIDs(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -410,6 +419,7 @@ func TestOperator_GetAlert_ReturnsCorrelatedEventIDs(t *testing.T) {
 }
 
 func TestOperator_GetAlert_NotFound(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -419,6 +429,7 @@ func TestOperator_GetAlert_NotFound(t *testing.T) {
 }
 
 func TestOperator_ListAlerts_FiltersByHostAndStatus(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -444,6 +455,7 @@ func TestOperator_ListAlerts_FiltersByHostAndStatus(t *testing.T) {
 // ---- Heartbeat / metrics gauges --------------------------------------------
 
 func TestRecordHostSeen_AdvancesLastSeen(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -468,6 +480,7 @@ func TestRecordHostSeen_AdvancesLastSeen(t *testing.T) {
 }
 
 func TestService_CountOfflineHosts(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -481,6 +494,7 @@ func TestService_CountOfflineHosts(t *testing.T) {
 }
 
 func TestService_CountUnprocessed(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -498,6 +512,7 @@ func TestService_CountUnprocessed(t *testing.T) {
 // ---- Bootstrap mode tests --------------------------------------------------
 
 func TestBootstrap_FullModeRunsAllGoroutines(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{
 		mode:          bootstrap.ModeFull,
 		processTTL:    1 * time.Hour, // enabled but won't fire during the test
@@ -521,6 +536,7 @@ func TestBootstrap_FullModeRunsAllGoroutines(t *testing.T) {
 }
 
 func TestBootstrap_IntakeModeIsNoOp(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeIntake})
 
 	// Intake mode skips the operator surface, so the service has no engine wired and LoadActive is a no-op (the intake binary doesn't
@@ -544,12 +560,14 @@ func TestBootstrap_IntakeModeIsNoOp(t *testing.T) {
 }
 
 func TestBootstrap_MissingDB(t *testing.T) {
+	t.Parallel()
 	_, err := bootstrap.New(bootstrap.Deps{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DB")
 }
 
 func TestBootstrap_SchemaIdempotent(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	// ApplySchema MUST be re-runnable without error (boot does it unconditionally; a partial restart must not fail on the second pass).
@@ -560,6 +578,7 @@ func TestBootstrap_SchemaIdempotent(t *testing.T) {
 // ---- Metrics propagation ---------------------------------------------------
 
 func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -587,6 +606,7 @@ func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 // ---- Graph builder exec/exit paths -----------------------------------------
 
 func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -641,6 +661,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 }
 
 func TestGraph_HandlesExitEvent(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -667,6 +688,7 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 }
 
 func TestGraph_ExecWithoutFork(t *testing.T) {
+	t.Parallel()
 	// Issue #7 / boot sequence: agent restart can deliver an exec without the originating fork (we missed it). The builder synthesizes a
 	// root row with fork_time_ns == exec time.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -688,6 +710,7 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 }
 
 func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
+	t.Parallel()
 	// Issue #11 review (Copilot): the extension's startup snapshot pass enumerates
 	// the live process table after es_subscribe completes. Any process that exec'd
 	// in the small window between subscribe and snapshot emission shows up TWICE:
@@ -732,6 +755,7 @@ func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 }
 
 func TestGraph_SamePIDReExec(t *testing.T) {
+	t.Parallel()
 	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
 	// close the prior generation and link the new one via previous_exec_id.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -767,6 +791,7 @@ func TestGraph_SamePIDReExec(t *testing.T) {
 // ---- Operator HTTP handler -------------------------------------------------
 
 func TestOperatorHTTP_ListHosts(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -787,6 +812,7 @@ func TestOperatorHTTP_ListHosts(t *testing.T) {
 }
 
 func TestOperatorHTTP_ListAlerts_Empty(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -809,6 +835,7 @@ func TestOperatorHTTP_ListAlerts_Empty(t *testing.T) {
 // source filter relies on the handler parsing the param and the store applying it to the WHERE clause; dropping either layer would
 // silently regress the "filter by app-control vs detection" demo beat, which is precisely what step 9 exists to land.
 func TestOperatorHTTP_ListAlerts_SourceFilter(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	procID := mustInsertProcess(t, ctx, d, "host-a", 100)
@@ -870,6 +897,7 @@ func TestOperatorHTTP_ListAlerts_SourceFilter(t *testing.T) {
 }
 
 func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -885,6 +913,7 @@ func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
 }
 
 func TestOperatorHTTP_GetAlert_BadID(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -900,6 +929,7 @@ func TestOperatorHTTP_GetAlert_BadID(t *testing.T) {
 }
 
 func TestOperatorHTTP_UpdateAlertStatus_HappyPath(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{
 		mode:       bootstrap.ModeFull,
 		userExists: stubUserExists(0), // 0 means UserExists check skipped
@@ -923,6 +953,7 @@ func TestOperatorHTTP_UpdateAlertStatus_HappyPath(t *testing.T) {
 }
 
 func TestOperatorHTTP_UpdateAlertStatus_BadBody(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -940,6 +971,7 @@ func TestOperatorHTTP_UpdateAlertStatus_BadBody(t *testing.T) {
 }
 
 func TestOperatorHTTP_UpdateAlertStatus_InvalidStatus(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -957,6 +989,7 @@ func TestOperatorHTTP_UpdateAlertStatus_InvalidStatus(t *testing.T) {
 }
 
 func TestOperatorHTTP_ProcessTree_RequiresHostID(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -974,6 +1007,7 @@ func TestOperatorHTTP_ProcessTree_RequiresHostID(t *testing.T) {
 }
 
 func TestOperatorHTTP_ProcessDetail_BadPID(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -989,6 +1023,7 @@ func TestOperatorHTTP_ProcessDetail_BadPID(t *testing.T) {
 }
 
 func TestOperatorHTTP_ProcessDetail_NotFound(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -1004,6 +1039,7 @@ func TestOperatorHTTP_ProcessDetail_NotFound(t *testing.T) {
 }
 
 func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -1030,6 +1066,7 @@ func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
 // 200 status: the clamp happens before the underlying query runs, so the observable contract is "every limit value -- absent, zero,
 // negative, oversized -- yields a successful response".
 func TestOperatorHTTP_ProcessTree_LimitClamping(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
@@ -1062,6 +1099,7 @@ func TestOperatorHTTP_ProcessTree_LimitClamping(t *testing.T) {
 // ---- Health probes ---------------------------------------------------------
 
 func TestHealthRoutes_LivezReadyz(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterHealthRoutes(mux)
@@ -1081,6 +1119,7 @@ func TestHealthRoutes_LivezReadyz(t *testing.T) {
 // ---- Ingest routes wiring --------------------------------------------------
 
 func TestRegisterIngestRoutes_MountsPostEvents(t *testing.T) {
+	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
 	d.RegisterIngestRoutes(mux)
@@ -1106,6 +1145,7 @@ func TestRegisterIngestRoutes_MountsPostEvents(t *testing.T) {
 // ---- Cross-context heartbeat (response -> detection) ----------------------
 
 func TestRecordHostSeen_SatisfiesResponseHeartbeatShape(t *testing.T) {
+	t.Parallel()
 	// The response context wires its Heartbeat closure to detectionCtx.Service().RecordHostSeen. This test pins the signature
 	// compatibility so a future signature drift breaks the build via the type alias check below rather than at runtime.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})

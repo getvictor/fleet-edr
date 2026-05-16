@@ -42,6 +42,7 @@ import (
 // Each subtest is a self-contained fixture so a regression on any
 // one pinpoints the broken path.
 func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
+	t.Parallel()
 	stack := Setup(t)
 
 	t.Run("analyst_denied_isolate", func(t *testing.T) {

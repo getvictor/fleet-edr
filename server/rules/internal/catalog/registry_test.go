@@ -14,6 +14,7 @@ import (
 // docs generator (tools/gen-rule-docs); a silent drift between the two would mean operators see a different surface than the ATT&CK
 // coverage promises.
 func TestAll_RegisterEveryShippedRule(t *testing.T) {
+	t.Parallel()
 	got := New(api.RegistryOptions{})
 	wantIDs := []string{
 		"suspicious_exec",
@@ -37,6 +38,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 // coverage isn't aggregated under the project's current `-coverprofile` setup). Same checks as the gate in tools/gen-rule-docs,
 // repeated here so a future tool can be deleted without losing the contract.
 func TestAll_DocStructIsPopulated(t *testing.T) {
+	t.Parallel()
 	allowedSeverities := map[string]struct{}{
 		api.SeverityLow:      {},
 		api.SeverityMedium:   {},
@@ -45,6 +47,7 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 	}
 	for _, r := range New(api.RegistryOptions{}) {
 		t.Run(r.ID(), func(t *testing.T) {
+			t.Parallel()
 			d := r.Doc()
 			assert.NotEmpty(t, d.Title, "Title must be set for %s", r.ID())
 			assert.NotEmpty(t, d.Summary, "Summary must be set for %s", r.ID())
@@ -66,6 +69,7 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 // struct. Without this, a refactor of `All` could silently drop the maps and every fleet would suddenly see the alerts they thought
 // they'd silenced. We only check the rules that have a configurable allowlist; the others have empty Doc().Config.
 func TestAll_AppliesAllowlists(t *testing.T) {
+	t.Parallel()
 	susParents := map[string]struct{}{"/usr/libexec/sshd-session": {}}
 	plists := map[string]struct{}{"/Library/LaunchAgents/com.example.foo.plist": {}}
 	teamIDs := map[string]struct{}{"8VBZ3948LU": {}}

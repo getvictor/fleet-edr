@@ -175,6 +175,7 @@ func fakeAssertion() *protocol.ParsedCredentialAssertionData {
 // FinishSetup happy path: token redeemed, password set, credential persisted, identity row inserted, session minted, audit row
 // written. The fake WebAuthn engine returns a credential keyed on the user handle so we can verify it lands in webauthn_credentials.
 func TestService_FinishSetup_HappyPath(t *testing.T) {
+	t.Parallel()
 	svc, db, rec, uid, _ := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -229,6 +230,7 @@ func TestService_FinishSetup_HappyPath(t *testing.T) {
 // FinishSetup with a too-short password rejects with ErrPasswordTooShort BEFORE touching the WebAuthn engine — the validator runs
 // first per the implementation contract.
 func TestService_FinishSetup_PasswordTooShort(t *testing.T) {
+	t.Parallel()
 	svc, _, _, uid, _ := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -248,6 +250,7 @@ func TestService_FinishSetup_PasswordTooShort(t *testing.T) {
 // FinishSetup propagates a CreateCredential failure (e.g.
 // attestation didn't verify against the expected challenge).
 func TestService_FinishSetup_CreateCredentialFails(t *testing.T) {
+	t.Parallel()
 	svc, _, _, uid, fake := newFakeService(t)
 	fake.createCredentialErr = errors.New("attestation invalid")
 
@@ -271,6 +274,7 @@ func TestService_FinishSetup_CreateCredentialFails(t *testing.T) {
 // so the full round-trip is exercised, then primes the fake so its ValidateLogin returns the persisted credential id with a
 // strictly-larger sign_count (so RecordAssertion accepts).
 func TestService_FinishLogin_HappyPath(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid, fake := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -314,6 +318,7 @@ func TestService_FinishLogin_HappyPath(t *testing.T) {
 // FinishLogin with a wrong password (correct WebAuthn assertion) surfaces ErrBadPassword. Pinned because the WebAuthn-before-password
 // order matters: we must hit ValidateLogin first, then VerifyPassword.
 func TestService_FinishLogin_WrongPassword(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid, _ := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -343,6 +348,7 @@ func TestService_FinishLogin_WrongPassword(t *testing.T) {
 // FinishLogin with a failing WebAuthn assertion rejects BEFORE the
 // password is checked (WebAuthn-first ordering, see service.go).
 func TestService_FinishLogin_BadAssertion(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid, fake := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -373,6 +379,7 @@ func TestService_FinishLogin_BadAssertion(t *testing.T) {
 // FinishLogin sign_count regression: ValidateLogin succeeds (the authenticator returned a valid assertion) but the new sign_count is
 // <= the stored sign_count. RecordAssertion rejects with ErrCredentialClonedDetected — the central security signal of WebAuthn §6.1.1.
 func TestService_FinishLogin_SignCountRegression(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid, fake := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -435,6 +442,7 @@ func newFakeHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit, int
 // Successful end-to-end via the handler: GET /setup → POST /setup (with a valid challenge cookie + attestation that the fake accepts)
 // → 200 with session cookie set and bootstrap audit row.
 func TestHandle_FullSetup_Success(t *testing.T) {
+	t.Parallel()
 	h, db, rec, uid, _ := newFakeHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -511,6 +519,7 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 // engine that accepts the assertion. Exercises unauthorized, clearChallengeCookie, setSessionCookie, and the reasonForLoginErr success
 // branch.
 func TestHandle_FullLogin_Success(t *testing.T) {
+	t.Parallel()
 	h, db, rec, uid, fake := newFakeHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -604,6 +613,7 @@ func TestHandle_FullLogin_Success(t *testing.T) {
 // a probing attacker cannot enumerate failure modes. Pinned because the WARN branch is the operator's only diagnostic breadcrumb when
 // the failure isn't one of the named cases.
 func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
+	t.Parallel()
 	h, db, rec, uid, fake := newFakeHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -693,6 +703,7 @@ func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 // Per-IP rate-limit exhaustion. Covers the handler's tooMany path
 // + the rate.AllowIP false branch in handleBeginSetup.
 func TestHandle_PerIPRateLimit(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	usersStore := users.New(db)
@@ -743,6 +754,7 @@ func TestHandle_PerIPRateLimit(t *testing.T) {
 // gateSetupRequest's per-IP rate-limit branch (AllowIP=false). Pinned at the /setup/challenge entry so handleBeginSetup +
 // handleFinishSetup share the same enforcement path through the gate helper.
 func TestHandleSetupChallenge_PerIPRateLimit(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 
@@ -786,6 +798,7 @@ func TestHandleSetupChallenge_PerIPRateLimit(t *testing.T) {
 // gateSetupRequest's per-setup-bucket branch (AllowSetup=false). Distinct from AllowIP because perIP=large keeps the IP fresh;
 // the global Setup bucket is what trips.
 func TestHandleSetupChallenge_PerSetupRateLimit(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 

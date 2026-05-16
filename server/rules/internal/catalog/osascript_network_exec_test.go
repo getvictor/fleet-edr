@@ -13,6 +13,7 @@ import (
 // TestOsascriptNetworkExec exercises the download-and-exec chain detection. The rule fires only when a single osascript process's 30s
 // descendant tree contains BOTH a curl/wget exec AND an exec out of a suspicious path — either alone is not enough.
 func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -48,6 +49,7 @@ func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 // Negative: osascript alone with a curl child but no temp-path exec. Download without a
 // following exec is not a droppers pattern — could be a legitimate script fetch.
 func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -73,6 +75,7 @@ func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
 // Multi-hop chain: osascript → sh → curl + /tmp/stage2 exec via a grandchild. Real droppers spawn an intermediate shell; the
 // direct-children-only scan missed this until the BFS fix.
 func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -109,6 +112,7 @@ func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
 // the descendant's payload.path is /bin/sh and the actual script path lives in argv[1]. Without this case the rule missed the
 // runbook's osascript step on edr-qa even though the underlying chain (osascript -> sh -> curl + /tmp/stage2) was identical.
 func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -143,6 +147,7 @@ func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
 // is the script path) is the real signal. This ordering also tickles the iteration: the intermediate sh comes before curl + the
 // shebang sh in BFS order.
 func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -184,6 +189,7 @@ func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
 // descendants weren't yet materialised. Reverse-direction is race-immune: by the time the temp-exec event lands in batch N+1, every
 // ancestor has already been ingested and materialised by batch N. This test exercises that path explicitly.
 func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -229,6 +235,7 @@ func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 // split the chain), the rule must still emit one finding per chain rather than once per descendant. Two temp-exec children are present
 // here; the rule should fire once.
 func TestOsascriptNetworkExec_SameBatchDedupe(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
@@ -262,6 +269,7 @@ func TestOsascriptNetworkExec_SameBatchDedupe(t *testing.T) {
 // Negative: temp-path exec without the download child. The parent suspicious_exec rule
 // covers this case; osascript_network_exec stays silent.
 func TestOsascriptNetworkExec_TempExecWithoutDownloadDoesNotFire(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 

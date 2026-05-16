@@ -15,6 +15,7 @@ var testKey = []byte("0123456789abcdef0123456789abcdef") // 32 bytes
 
 // Round-trip: encode then decode returns identical fields.
 func TestStateCookie_RoundTrip(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	cookie, err := oidc.EncodeStateClaim(testKey, "STATE", "NONCE", "CODEVERIFIER", "/ui/", now)
 	require.NoError(t, err)
@@ -30,6 +31,7 @@ func TestStateCookie_RoundTrip(t *testing.T) {
 // A cookie issued more than ttl ago is rejected as expired even if the signature is valid. Bounds the per-flow window to the
 // configured TTL regardless of how long the browser kept the cookie.
 func TestStateCookie_Expired(t *testing.T) {
+	t.Parallel()
 	issued := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	cookie, err := oidc.EncodeStateClaim(testKey, "S", "N", "V", "/ui/", issued)
 	require.NoError(t, err)
@@ -44,6 +46,7 @@ func TestStateCookie_Expired(t *testing.T) {
 // A cookie with a tampered signature does not decode. The constant-
 // time comparison rejects single-byte tweaks; the test confirms.
 func TestStateCookie_BadSignature(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	cookie, err := oidc.EncodeStateClaim(testKey, "S", "N", "V", "/ui/", now)
 	require.NoError(t, err)
@@ -62,6 +65,7 @@ func TestStateCookie_BadSignature(t *testing.T) {
 // Decoding with the wrong key always fails. Catches a key-rotation bug
 // where the verifier shipped without re-issuing the cookies.
 func TestStateCookie_WrongKey(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	cookie, err := oidc.EncodeStateClaim(testKey, "S", "N", "V", "/ui/", now)
 	require.NoError(t, err)
@@ -77,6 +81,7 @@ func TestStateCookie_WrongKey(t *testing.T) {
 // 400 regardless of root cause, but the test pins the malformed-shape branch so a regression on the parser doesn't fall through
 // silently.
 func TestStateCookie_Malformed(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	_, err := oidc.DecodeStateClaim(testKey, "no-dot-here", now, 5*time.Minute)
 	require.ErrorIs(t, err, oidc.ErrInvalidStateCookie)
@@ -86,6 +91,7 @@ func TestStateCookie_Malformed(t *testing.T) {
 // Empty payload field rejects: the cookie's structure decodes but the
 // claim is missing required values. Pins the second-pass validation.
 func TestStateCookie_MissingClaim(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	cookie, err := oidc.EncodeStateClaim(testKey, "", "N", "V", "/ui/", now)
 	require.NoError(t, err)

@@ -51,6 +51,7 @@ func fakeCredential(id, pubkey string, signCount uint32) webauthn.Credential {
 
 // InsertWith persists the row + returns its id; round-trip via FindByID returns the same shape (transports, public_key, sign_count).
 func TestCredentialStore_InsertAndFind(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("cred-id-1", "pubkey-bytes", 5)
 
@@ -75,6 +76,7 @@ func TestCredentialStore_InsertAndFind(t *testing.T) {
 // FindByID with an unknown id returns ErrCredentialNotFound, not a
 // generic DB error.
 func TestCredentialStore_FindByID_NotFound(t *testing.T) {
+	t.Parallel()
 	s, _, _ := newCredentialStore(t)
 	_, err := s.FindByID(t.Context(), []byte("never-existed"))
 	assert.ErrorIs(t, err, breakglass.ErrCredentialNotFound)
@@ -83,6 +85,7 @@ func TestCredentialStore_FindByID_NotFound(t *testing.T) {
 // ListByUserID returns every credential for the user; an empty user
 // returns an empty slice (not nil-slice-with-error).
 func TestCredentialStore_ListByUserID(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	for i, suffix := range []string{"a", "b", "c"} {
 		_, err := s.InsertWith(t.Context(), db, uid,
@@ -102,6 +105,7 @@ func TestCredentialStore_ListByUserID(t *testing.T) {
 // RecordAssertion bumps sign_count + last_used_at on a forward counter. Pinned because the bump is the storage half of WebAuthn's
 // cloned-credential detection.
 func TestCredentialStore_RecordAssertion_Forward(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("cred-fwd", "pk", 5)
 	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
@@ -117,6 +121,7 @@ func TestCredentialStore_RecordAssertion_Forward(t *testing.T) {
 
 // RecordAssertion rejects a sign_count regression with ErrCredentialClonedDetected — the central security signal of WebAuthn §6.1.1.
 func TestCredentialStore_RecordAssertion_RejectsRegression(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("cred-clone", "pk", 10)
 	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
@@ -134,6 +139,7 @@ func TestCredentialStore_RecordAssertion_RejectsRegression(t *testing.T) {
 // RecordAssertion against a never-registered credential surfaces
 // ErrCredentialNotFound, not the cloned-detection alarm.
 func TestCredentialStore_RecordAssertion_Unknown(t *testing.T) {
+	t.Parallel()
 	s, _, _ := newCredentialStore(t)
 	err := s.RecordAssertion(t.Context(), []byte("ghost-cred"), 1, false)
 	assert.ErrorIs(t, err, breakglass.ErrCredentialNotFound)
@@ -144,6 +150,7 @@ func TestCredentialStore_RecordAssertion_Unknown(t *testing.T) {
 // treat this as a clone signal - the counter check only fires when the stored value is nonzero. Pinned because the previous shape
 // (`WHERE ? > sign_count`) rejected this case incorrectly and broke every Touch ID Passkey login after first use.
 func TestCredentialStore_RecordAssertion_ZeroCounterAccepted(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("cred-touch-id", "pk", 0)
 	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
@@ -161,6 +168,7 @@ func TestCredentialStore_RecordAssertion_ZeroCounterAccepted(t *testing.T) {
 // RecordAssertion persists backup_state flips from 0 to 1 - the "credential just got synced to iCloud Keychain" case. Spec allows BS
 // to transition 0->1 over a credential's lifetime; the library already enforces 1->0 not allowed before this code runs.
 func TestCredentialStore_RecordAssertion_BackupStateFlip(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("cred-passkey", "pk", 1)
 	// Register with BS=false.
@@ -193,6 +201,7 @@ func TestCredentialStore_RecordAssertion_BackupStateFlip(t *testing.T) {
 // BS=true cannot regress the column. The `backup_state OR ?` write
 // is what makes this safe.
 func TestCredentialStore_RecordAssertion_ConcurrentMonotonic(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("cred-concurrent", "pk", 0)
 	cred.Flags.BackupEligible = true
@@ -224,6 +233,7 @@ func TestCredentialStore_RecordAssertion_ConcurrentMonotonic(t *testing.T) {
 // ToWebauthnCredentials converts a slice of stored rows into the shape go-webauthn expects on User.WebAuthnCredentials. Pinned because
 // the conversion preserves transports + sign_count.
 func TestToWebauthnCredentials(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newCredentialStore(t)
 	cred := fakeCredential("conv-cred", "pk", 42)
 	_, err := s.InsertWith(t.Context(), db, uid, cred, "")
