@@ -15,6 +15,7 @@ import (
 // NewAllowlist accepts CIDRs, bare IPs, IPv6, and a mixed list. The "bare IP normalised to /32 (or /128)" carve-out lets operators
 // type "203.0.113.5" without remembering CIDR syntax.
 func TestNewAllowlist_AcceptsValidEntries(t *testing.T) {
+	t.Parallel()
 	cases := [][]string{
 		{"203.0.113.0/24"},
 		{"203.0.113.5"},
@@ -32,6 +33,7 @@ func TestNewAllowlist_AcceptsValidEntries(t *testing.T) {
 
 // Malformed CIDRs / IPs refuse to start. Pinned because a typo at boot must surface immediately, not silently leave the surface open.
 func TestNewAllowlist_RejectsMalformed(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"not-an-ip",
 		"203.0.113.0/33",
@@ -46,6 +48,7 @@ func TestNewAllowlist_RejectsMalformed(t *testing.T) {
 // Allows is the membership check. Empty list returns true; a
 // non-matching IP returns false; a matching IP returns true.
 func TestAllowlist_Allows(t *testing.T) {
+	t.Parallel()
 	a, err := breakglass.NewAllowlist([]string{"203.0.113.0/24", "2001:db8::/32"})
 	require.NoError(t, err)
 
@@ -61,6 +64,7 @@ func TestAllowlist_Allows(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.ip, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.expect, a.Allows(net.ParseIP(tc.ip)))
 		})
 	}
@@ -73,6 +77,7 @@ func TestAllowlist_Allows(t *testing.T) {
 // Off-allowlist requests get a generic 404 — same body as an unrouted path. Pinned because the spec requires the surface's existence
 // to NOT be acknowledged to off-list callers.
 func TestAllowlist_Middleware_404sOffList(t *testing.T) {
+	t.Parallel()
 	a, err := breakglass.NewAllowlist([]string{"203.0.113.0/24"})
 	require.NoError(t, err)
 	called := false
@@ -91,6 +96,7 @@ func TestAllowlist_Middleware_404sOffList(t *testing.T) {
 
 // On-list requests pass through.
 func TestAllowlist_Middleware_PassesThroughOnList(t *testing.T) {
+	t.Parallel()
 	a, err := breakglass.NewAllowlist([]string{"127.0.0.0/8"})
 	require.NoError(t, err)
 	called := false
@@ -111,6 +117,7 @@ func TestAllowlist_Middleware_PassesThroughOnList(t *testing.T) {
 // Empty allowlist is permissive: every request reaches the inner handler. Pinned because the wave-1 default is no allowlist set,
 // and a regression that flipped the default to "deny" would brick every dev deployment.
 func TestAllowlist_Middleware_EmptyPassesAll(t *testing.T) {
+	t.Parallel()
 	a, err := breakglass.NewAllowlist(nil)
 	require.NoError(t, err)
 	called := false

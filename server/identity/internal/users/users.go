@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -19,13 +20,29 @@ import (
 
 // argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on M-series Mac; the hot path (login verify) hashes
 // at most once per login attempt and we rate-limit logins, so CPU-DoS via login-storm is capped.
-const (
+//
+// Package-level vars (not consts) so the init() below can lower them under `go test`. Tests at this package and downstream
+// (identity/internal/breakglass, identity/internal/tests) pay an argon2id hash per case; at production cost they dominated CI wall
+// clock (issue #170). The pattern mirrors bcrypt's MinCost/DefaultCost split; argon2 has no library constant for it, so we follow
+// RFC 9106's minimum (t=1, m=8 MiB, p=1) for the test build only. Production binaries keep the OWASP-2024 cost.
+var (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // 64 MiB
 	argonThreads uint8  = 4
-	argonKeyLen  uint32 = 32
-	argonSaltLen        = 16
 )
+
+const (
+	argonKeyLen  uint32 = 32
+	argonSaltLen int    = 16
+)
+
+func init() {
+	if testing.Testing() {
+		argonTime = 1
+		argonMemory = 8 * 1024 // 8 MiB, RFC 9106 minimum
+		argonThreads = 1
+	}
+}
 
 // User is the storage row. The password_hash / password_salt columns are intentionally
 // not exposed on the struct so callers that log a User can't accidentally leak them.

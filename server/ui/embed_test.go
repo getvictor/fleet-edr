@@ -10,16 +10,16 @@ import (
 )
 
 func TestFS(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		run  func(t *testing.T)
 	}{
 		{
-			name: "defaults to embedded when env unset",
+			name: "defaults to embedded when liveDir is empty",
 			run: func(t *testing.T) {
 				t.Helper()
-				t.Setenv(LiveDirEnv, "")
-				got, err := FS()
+				got, err := FS("")
 				require.NoError(t, err)
 				// Assert the embedded subtree is readable, not the presence of any specific file: CI seeds
 				// server/ui/dist with .gitkeep only before running server tests, so checking for index.html would
@@ -37,8 +37,7 @@ func TestFS(t *testing.T) {
 				want := []byte("<!doctype html><html><body>live</body></html>")
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), want, 0o600))
 
-				t.Setenv(LiveDirEnv, dir)
-				got, err := FS()
+				got, err := FS(dir)
 				require.NoError(t, err)
 				data, err := fs.ReadFile(got, "index.html")
 				require.NoError(t, err)
@@ -54,9 +53,8 @@ func TestFS(t *testing.T) {
 				// rebuilds.
 				dir := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("v1"), 0o600))
-				t.Setenv(LiveDirEnv, dir)
 
-				live, err := FS()
+				live, err := FS(dir)
 				require.NoError(t, err)
 				first, err := fs.ReadFile(live, "index.html")
 				require.NoError(t, err)
@@ -75,9 +73,8 @@ func TestFS(t *testing.T) {
 				// Bad EDR_UI_LIVE_DIR previously surfaced as generic per-request 500s. The os.Stat check in FS() means
 				// the dev server fails to boot with a clear message instead.
 				missing := filepath.Join(t.TempDir(), "does-not-exist")
-				t.Setenv(LiveDirEnv, missing)
 
-				_, err := FS()
+				_, err := FS(missing)
 				require.Error(t, err)
 				require.ErrorIs(t, err, os.ErrNotExist)
 				require.Contains(t, err.Error(), LiveDirEnv)
@@ -87,6 +84,9 @@ func TestFS(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, tc.run)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.run(t)
+		})
 	}
 }

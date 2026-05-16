@@ -22,6 +22,7 @@ const rotationGrace = 30 * time.Second
 // prefix; the new token verifies; the old token still verifies during grace; the rotation is recorded as MatchedPrevious=true on a
 // previous-token verify so the service layer's auto-rotate trigger stays idle.
 func TestRotateHostToken_HappyPath(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -65,6 +66,7 @@ func TestRotateHostToken_HappyPath(t *testing.T) {
 // TestRotateHostToken_OldTokenRejectedAfterGrace validates the grace boundary: as soon as previous_token_expires_at is in the past,
 // the old token must stop verifying. Without this, a leaked token would stay valid forever even after rotation.
 func TestRotateHostToken_OldTokenRejectedAfterGrace(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -92,6 +94,7 @@ func TestRotateHostToken_OldTokenRejectedAfterGrace(t *testing.T) {
 // A commits between caller B's VerifyWithMeta and caller B's RotateHostToken, B's UPDATE matches zero rows and B gets ErrRotateRaced.
 // This is the contract the service layer relies on to keep concurrent verifies from double-rotating.
 func TestRotateHostToken_RaceLoses(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -116,6 +119,7 @@ func TestRotateHostToken_RaceLoses(t *testing.T) {
 // Exactly one must commit; the rest must observe ErrRotateRaced. This is the property the service-level "verify-time auto-rotate"
 // relies on to not produce a flurry of rotations under burst traffic.
 func TestRotateHostToken_ConcurrentVerifiesProduceOneRotation(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -158,6 +162,7 @@ func TestRotateHostToken_ConcurrentVerifiesProduceOneRotation(t *testing.T) {
 // TestRotateHostToken_RejectsRevoked: revoking the enrollment must prevent any further rotation. Otherwise an attacker who has the
 // (revoked) token could nudge the row back into a usable state.
 func TestRotateHostToken_RejectsRevoked(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -178,6 +183,7 @@ func TestRotateHostToken_RejectsRevoked(t *testing.T) {
 // TestRotateHostToken_RejectsBadInputs covers the input-validation contract: empty hostID / empty currentTokenID / non-positive grace
 // are programmer errors, surfaced loudly so they fail at the boundary rather than leaking into the SQL.
 func TestRotateHostToken_RejectsBadInputs(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -195,6 +201,7 @@ func TestRotateHostToken_RejectsBadInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := s.RotateHostToken(ctx, tc.host, tc.curID, tc.grace)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantSub)
@@ -207,6 +214,7 @@ func TestRotateHostToken_RejectsBadInputs(t *testing.T) {
 // enrolled) stops verifying immediately. Acceptable: a host that misses two rotation windows has been offline / unreachable long
 // enough that re-enroll is the right recovery anyway.
 func TestRotateHostToken_OverwritesPriorPrevious(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 

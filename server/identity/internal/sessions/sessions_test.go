@@ -52,6 +52,7 @@ func frozenClock(start time.Time) (now func() time.Time, advance func(time.Durat
 }
 
 func TestCreate_ReturnsNewRow(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
@@ -65,6 +66,7 @@ func TestCreate_ReturnsNewRow(t *testing.T) {
 }
 
 func TestCreate_IDsAreUnique(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
@@ -77,6 +79,7 @@ func TestCreate_IDsAreUnique(t *testing.T) {
 }
 
 func TestGet_ActiveRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
@@ -94,6 +97,7 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 // here would silently strip OIDC sessions of their identity link (breaking later admin queries that pivot on identities) or default
 // every session to local_password (breaking authz rules that branch on auth_method).
 func TestGet_IdentityIDAndAuthMethodRoundTrip(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	for _, uid := range []int64{1, 7} {
@@ -129,18 +133,21 @@ func TestGet_IdentityIDAndAuthMethodRoundTrip(t *testing.T) {
 }
 
 func TestGet_WrongLengthReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	_, err := s.Get(t.Context(), []byte("short"))
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
 func TestGet_UnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	_, err := s.Get(t.Context(), make([]byte, sessions.IDLen))
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
 func TestGet_ExpiredReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	// Drive the clock backwards so the row we just created is already past its expires_at when Get runs. This is more reliable than
 	// time.Sleep(ttl+1) and doesn't tie the test to wall-clock duration.
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
@@ -162,6 +169,7 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 // TestGet_IdleExpiryReturnsNotFound covers the idle-cap branch: created recently (so absolute hasn't elapsed) but last_seen_at hasn't
 // been touched in longer than Idle. Real-world shape: operator opens a tab, walks away without interacting for the idle window.
 func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{
@@ -182,6 +190,7 @@ func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
 // the break-glass pair, not the normal pair. The Idle here would be inside the break-glass cap if normal applied; under break-glass
 // it's past.
 func TestGet_BreakglassUsesStrictTimeouts(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{
@@ -202,6 +211,7 @@ func TestGet_BreakglassUsesStrictTimeouts(t *testing.T) {
 // TestTouch_SlidingExtensionWithinAbsoluteCap proves the user-visible behaviour: a continuously-active session stays alive past the
 // idle window because each Touch advances last_seen_at. The absolute cap still wins.
 func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{
@@ -239,6 +249,7 @@ func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {
 // TestTouch_ThrottleSkipsRecentWrites verifies the per-session write-rate cap: a Touch within the throttle window is a no-op. Without
 // this the middleware would write last_seen_at on every authenticated request, turning a busy session into a high-rate write.
 func TestTouch_ThrottleSkipsRecentWrites(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{Normal: sessions.Timeouts{Idle: time.Hour, Absolute: time.Hour}, Now: nowFn})
@@ -263,6 +274,7 @@ func TestTouch_ThrottleSkipsRecentWrites(t *testing.T) {
 // TestUpdateLastAuthAt_StampsAndBumpsLastSeen pins the contract Phase 5 relies on: a successful reauth resets BOTH freshness and idle
 // timers. IsFresh flips back to true; idle countdown restarts.
 func TestUpdateLastAuthAt_StampsAndBumpsLastSeen(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{
@@ -293,12 +305,14 @@ func TestUpdateLastAuthAt_StampsAndBumpsLastSeen(t *testing.T) {
 // TestUpdateLastAuthAt_UnknownIDReturnsNotFound covers the defensive branch:
 // a stale cookie that no longer matches a row must not silently succeed.
 func TestUpdateLastAuthAt_UnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	err := s.UpdateLastAuthAt(t.Context(), make([]byte, sessions.IDLen))
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
 func TestDelete_IsIdempotent(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, sessions.Options{})
 	ctx := t.Context()
 
@@ -310,6 +324,7 @@ func TestDelete_IsIdempotent(t *testing.T) {
 }
 
 func TestCleanupExpired_RemovesOnlyExpired(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{

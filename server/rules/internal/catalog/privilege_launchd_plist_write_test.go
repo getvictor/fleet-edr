@@ -29,6 +29,7 @@ func (stubGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process
 // TestPrivilegeLaunchdPlistWrite_Fixtures runs every fixture case under fixtures/privilege_launchd_plist_write/ as its own sub-test.
 // Add a new case by dropping a *.json file in that directory — no Go edits needed.
 func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
+	t.Parallel()
 	r := &PrivilegeLaunchdPlistWrite{
 		AllowedTeamIDs: map[string]struct{}{
 			// Synthetic team ID used by the allowlist fixture.
@@ -41,6 +42,7 @@ func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
 // TestPrivilegeLaunchdPlistWrite_TechniquesMapping pins the MITRE ATT&CK
 // mapping the rule reports.
 func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
+	t.Parallel()
 	r := &PrivilegeLaunchdPlistWrite{}
 	assert.Equal(t, []string{"T1543.004"}, r.Techniques())
 }
@@ -50,6 +52,7 @@ func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
 // without having to fabricate a process row whose code_signing column carries malformed bytes — MySQL's JSON column type rejects those
 // at insert.
 func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
+	t.Parallel()
 	r := &PrivilegeLaunchdPlistWrite{
 		AllowedTeamIDs: map[string]struct{}{"VENDORALLOW": {}},
 	}
@@ -80,6 +83,7 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, r.allowed(tc.raw))
 		})
 	}
@@ -97,6 +101,7 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 // event silently. We bypass the fixture harness because MySQL's JSON column rejects malformed payloads at InsertEvents — this branch
 // only fires in-memory if a downstream batcher hands us a partial buffer.
 func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	r := &PrivilegeLaunchdPlistWrite{}
 
@@ -116,6 +121,7 @@ func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
 // negative_open_without_process.json exercises the same branch via Replay (above); this Go-level test uses the stub GraphReader
 // (returning nil for GetProcessByPID) so the rule sees a missing process row without needing the live detection persistence layer.
 func TestPrivilegeLaunchdPlistWrite_OpenRaceWithoutProcess(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	r := &PrivilegeLaunchdPlistWrite{}
 

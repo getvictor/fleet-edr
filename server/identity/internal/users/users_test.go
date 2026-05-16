@@ -21,6 +21,7 @@ func newTestStore(t *testing.T) *users.Store {
 }
 
 func TestCreate_HappyPath(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -32,6 +33,7 @@ func TestCreate_HappyPath(t *testing.T) {
 }
 
 func TestCreate_RejectsEmptyInputs(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	cases := []struct{ email, password, wantSub string }{
 		{"", "x", "email is required"},
@@ -46,6 +48,7 @@ func TestCreate_RejectsEmptyInputs(t *testing.T) {
 }
 
 func TestCreate_DuplicateEmailFails(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -57,6 +60,7 @@ func TestCreate_DuplicateEmailFails(t *testing.T) {
 }
 
 func TestVerifyPassword_HappyPath(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -70,6 +74,7 @@ func TestVerifyPassword_HappyPath(t *testing.T) {
 }
 
 func TestVerifyPassword_WrongPassword(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -81,6 +86,7 @@ func TestVerifyPassword_WrongPassword(t *testing.T) {
 }
 
 func TestVerifyPassword_UnknownEmail(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	_, err := s.VerifyPassword(t.Context(), "nobody@example.com", "anything")
 	require.ErrorIs(t, err, users.ErrNotFound)
@@ -91,6 +97,7 @@ func TestVerifyPassword_UnknownEmail(t *testing.T) {
 // test, but we can assert the fallback dummy-salt path exists — errors.Is still returns ErrNotFound, but the function did not return
 // early before the hash loop.
 func TestVerifyPassword_UnknownEmailStillHashes(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	// Two lookups against an empty table — both must fail with ErrNotFound, neither
 	// with a DB error. Coverage-wise this ensures the dummy-salt branch is exercised.
@@ -101,6 +108,7 @@ func TestVerifyPassword_UnknownEmailStillHashes(t *testing.T) {
 }
 
 func TestCount(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 	n, err := s.Count(ctx)
@@ -118,6 +126,7 @@ func TestCount(t *testing.T) {
 // HashPassword + SetHashedPassword: the Phase 4b split that lets the break-glass redemption flow run argon2id BEFORE BeginTxx, keeping
 // the ~30ms hash off the transaction's lock window.
 func TestHashPassword_AndSetHashedPassword(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	s := users.New(db)
@@ -146,6 +155,7 @@ func TestHashPassword_AndSetHashedPassword(t *testing.T) {
 
 // HashPassword refuses an empty plaintext.
 func TestHashPassword_EmptyRejects(t *testing.T) {
+	t.Parallel()
 	_, _, err := users.HashPassword("")
 	require.Error(t, err)
 }
@@ -153,6 +163,7 @@ func TestHashPassword_EmptyRejects(t *testing.T) {
 // SetHashedPassword refuses empty hash + salt; against unknown user
 // id surfaces ErrNotFound (rows-affected == 0).
 func TestSetHashedPassword_GuardPaths(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	s := users.New(db)
@@ -171,6 +182,7 @@ func TestSetHashedPassword_GuardPaths(t *testing.T) {
 // CreateBreakglass on an empty table inserts the row with
 // is_breakglass=1 and NULL password; idempotent on re-call.
 func TestCreateBreakglass_FreshInsertAndIdempotent(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	u, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{
 		Email: "bg@example.com",
@@ -187,6 +199,7 @@ func TestCreateBreakglass_FreshInsertAndIdempotent(t *testing.T) {
 // CreateBreakglass over a pre-existing non-breakglass row surfaces ErrExistingNonBreakglass + the existing user. The wave-0 migration
 // runbook handles the row-mutation explicitly; the service layer must not silently flip is_breakglass=0 → 1.
 func TestCreateBreakglass_ExistingNonBreakglass(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	pre, err := s.Create(t.Context(), users.CreateRequest{
 		Email: "wave0@example.com", Password: "wave0-password-long",
@@ -203,6 +216,7 @@ func TestCreateBreakglass_ExistingNonBreakglass(t *testing.T) {
 
 // CreateBreakglass refuses an empty email.
 func TestCreateBreakglass_EmptyEmail(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	_, err := s.CreateBreakglass(t.Context(), users.CreateBreakglassRequest{Email: ""})
 	require.Error(t, err)
@@ -210,6 +224,7 @@ func TestCreateBreakglass_EmptyEmail(t *testing.T) {
 
 // GetByEmail returns ErrNotFound for an unknown email.
 func TestGetByEmail_NotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	_, err := s.GetByEmail(t.Context(), "ghost@example.com")
 	assert.ErrorIs(t, err, users.ErrNotFound)
@@ -217,6 +232,7 @@ func TestGetByEmail_NotFound(t *testing.T) {
 
 // GetByEmail normalises whitespace + case.
 func TestGetByEmail_NormalisedLookup(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	created, err := s.Create(t.Context(), users.CreateRequest{
 		Email: "Admin@Example.COM", Password: "long-enough-password",

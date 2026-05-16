@@ -40,6 +40,7 @@ import (
 // puts the demo in a state where rules don't reach the VM agent. The
 // test exists to catch that in CI before the demo dry-run.
 func TestAppControlREST_CreateRule_FansOutAndAudits(t *testing.T) {
+	t.Parallel()
 	stack := Setup(t)
 	ctx := t.Context()
 
@@ -124,6 +125,7 @@ func TestAppControlREST_CreateRule_FansOutAndAudits(t *testing.T) {
 // TestAppControlREST_CreateRule_AnalystForbidden pins the wave-1 role matrix: an analyst is allowed to read alerts but not author
 // application-control rules. The chokepoint must return 403 with reason=no_matching_rule before the handler reaches the store.
 func TestAppControlREST_CreateRule_AnalystForbidden(t *testing.T) {
+	t.Parallel()
 	stack := Setup(t)
 	ctx := t.Context()
 

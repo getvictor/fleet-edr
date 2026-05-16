@@ -3,7 +3,9 @@
 package rbac_test
 
 import (
+	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,12 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/internal/rbac"
 )
+
+// pbtEmailCounter feeds uniqueEmail. rapid.StringMatching's 36^8 keyspace looks vast but
+// collides under heavier iteration counts (the test became flaky when the package was opted
+// into t.Parallel() in issue #172). An atomic counter guarantees uniqueness regardless of
+// how many iterations rapid decides to run.
+var pbtEmailCounter atomic.Uint64
 
 // TestListLiveBindings_ExpiryBoundary_PBT generates random expires_at
 // timestamps and asserts the SQL filter "expires_at IS NULL OR
@@ -31,6 +39,7 @@ import (
 // matches). 250ms is large enough to absorb test runner / DB roundtrip
 // jitter without trivializing the boundary check.
 func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
+	t.Parallel()
 	db := openSchema(t)
 	store := rbac.New(db)
 
@@ -75,6 +84,7 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 // only the live ones come back, in any order. The example test pins a specific 3-binding fixture; this PBT covers the wider space of
 // "n live + m expired" combinations.
 func TestListLiveBindings_RoleSelectivity_PBT(t *testing.T) {
+	t.Parallel()
 	db := openSchema(t)
 	store := rbac.New(db)
 	roles := []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
@@ -118,6 +128,10 @@ func TestListLiveBindings_RoleSelectivity_PBT(t *testing.T) {
 // uniqueEmail returns a per-property-iteration email so each PBT iteration's user is isolated. The role_bindings unique key is
 // (user_id, role_id, scope_type, scope_id) so reusing a user across iterations would risk duplicate-key errors when the same role
 // appears in two iterations' liveRoles draws.
+//
+// An atomic counter is the source of uniqueness; the rapid Draw is kept so each iteration still consumes one entropy slot (lets
+// rapid shrink the test the same way it did before).
 func uniqueEmail(rt *rapid.T) string {
-	return rapid.StringMatching(`pbt-[a-z0-9]{8}@test`).Draw(rt, "email")
+	_ = rapid.StringMatching(`[a-z0-9]{4}`).Draw(rt, "email_entropy")
+	return fmt.Sprintf("pbt-%d@test", pbtEmailCounter.Add(1))
 }

@@ -23,6 +23,10 @@ services:
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: edr_test
+    # Raise max_connections above the 151 default. The parallel integration suite (issue
+    # #172) peaks at 200+ concurrent connections; the matching CI step in test.yml does the
+    # same via `SET GLOBAL` since the GHA service container has no volume mount.
+    command: ["--max-connections=500"]
     ports:
       - "127.0.0.1:3317:3306"
     healthcheck:

@@ -11,6 +11,7 @@ import (
 )
 
 func TestShellFromOffice_TableDriven(t *testing.T) {
+	t.Parallel()
 	type fixture struct {
 		name        string
 		parentPath  string
@@ -70,6 +71,7 @@ func TestShellFromOffice_TableDriven(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			s := openCatalogStore(t)
 			ctx := t.Context()
 

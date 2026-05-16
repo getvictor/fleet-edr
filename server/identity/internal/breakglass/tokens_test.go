@@ -35,6 +35,7 @@ func newTokenStore(t *testing.T) (*breakglass.TokenStore, *sqlx.DB, int64) {
 // plaintext is non-trivial. Pinned because a regression that issued the token but stored a different hash would render the token
 // permanently unusable while looking healthy at issue time.
 func TestIssueSetup_RoundTrip(t *testing.T) {
+	t.Parallel()
 	s, _, uid := newTokenStore(t)
 
 	plaintext, tok, err := s.IssueSetup(t.Context(), uid, time.Hour)
@@ -54,6 +55,7 @@ func TestIssueSetup_RoundTrip(t *testing.T) {
 // FindValid returns ErrTokenInvalid for a plaintext that doesn't match any persisted hash. Includes a syntactically-correct-but-
 // unknown token to verify the lookup hashes the input rather than comparing plaintext directly (which would never match).
 func TestFindValid_Unknown(t *testing.T) {
+	t.Parallel()
 	s, _, _ := newTokenStore(t)
 	_, err := s.FindValid(t.Context(), "this-is-not-a-real-token", time.Now())
 	assert.ErrorIs(t, err, breakglass.ErrTokenInvalid)
@@ -62,6 +64,7 @@ func TestFindValid_Unknown(t *testing.T) {
 // FindValid returns ErrTokenExpired when the row's expires_at is in the past per the now-frozen clock. The MySQL row remains; only the
 // in-Go check rejects.
 func TestFindValid_Expired(t *testing.T) {
+	t.Parallel()
 	s, _, uid := newTokenStore(t)
 	plaintext, tok, err := s.IssueSetup(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -74,6 +77,7 @@ func TestFindValid_Expired(t *testing.T) {
 // MarkRedeemed once flips redeemed_at; second call returns ErrTokenConsumed and FindValid likewise rejects. Pinned because the
 // single-use invariant is the entire security guarantee of the bootstrap flow.
 func TestMarkRedeemed_SingleUse(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newTokenStore(t)
 	plaintext, tok, err := s.IssueSetup(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -92,6 +96,7 @@ func TestMarkRedeemed_SingleUse(t *testing.T) {
 // IssueSetup falls through to DefaultSetupTokenTTL when ttl <= 0. Pinned because callers pass the configured duration verbatim and a
 // config with no TTL would otherwise produce already-expired tokens.
 func TestIssueSetup_DefaultsToWaveOneTTL(t *testing.T) {
+	t.Parallel()
 	s, _, uid := newTokenStore(t)
 	_, tok, err := s.IssueSetup(t.Context(), uid, 0)
 	require.NoError(t, err)
@@ -103,6 +108,7 @@ func TestIssueSetup_DefaultsToWaveOneTTL(t *testing.T) {
 // Plaintext format: base64-url, no padding, no whitespace. Pinned so
 // a stderr banner can include the URL without escaping concerns.
 func TestIssueSetup_PlaintextFormat(t *testing.T) {
+	t.Parallel()
 	s, _, uid := newTokenStore(t)
 	plaintext, _, err := s.IssueSetup(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -119,6 +125,7 @@ func TestIssueSetup_PlaintextFormat(t *testing.T) {
 // bearer credential per restart, each viable until its own TTL elapses. Pinned because regressing this would re-introduce the
 // credential-lifetime bug QA surfaced before v0.1.
 func TestIssueSetup_SupersedesPriorUnredeemed(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newTokenStore(t)
 	ctx := t.Context()
 
@@ -155,6 +162,7 @@ func TestIssueSetup_SupersedesPriorUnredeemed(t *testing.T) {
 // as the canonical "this token was used" marker; deleting redeemed rows would erase the audit trail of which tokens were spent.
 // Pinned so the supersession sweep stays narrow.
 func TestIssueSetup_LeavesRedeemedRowsIntact(t *testing.T) {
+	t.Parallel()
 	s, db, uid := newTokenStore(t)
 	ctx := t.Context()
 

@@ -59,10 +59,10 @@ func Init(opts Options) (context.Context, *Env, error) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	shutdownOTel, err := observability.Init(ctx, observability.Options{
+	shutdownOTel, err := observability.Init(ctx, observability.OptionsFromEnv(observability.Options{
 		ServiceName:    opts.ServiceName,
 		ServiceVersion: opts.ServiceVersion,
-	})
+	}))
 	if err != nil {
 		cancel()
 		return nil, nil, err

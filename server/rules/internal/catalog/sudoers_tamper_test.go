@@ -14,6 +14,7 @@ import (
 // TestSudoersTamper_Fixtures runs every fixture case under
 // fixtures/sudoers_tamper/ as its own sub-test.
 func TestSudoersTamper_Fixtures(t *testing.T) {
+	t.Parallel()
 	r := &SudoersTamper{
 		AllowedWriters: map[string]struct{}{
 			"/usr/local/bin/fixture-allowed-writer": {},
@@ -24,6 +25,7 @@ func TestSudoersTamper_Fixtures(t *testing.T) {
 
 // TestSudoersTamper_TechniquesMapping pins the MITRE ATT&CK mapping.
 func TestSudoersTamper_TechniquesMapping(t *testing.T) {
+	t.Parallel()
 	r := &SudoersTamper{}
 	assert.Equal(t, []string{"T1548.003"}, r.Techniques())
 }
@@ -31,6 +33,7 @@ func TestSudoersTamper_TechniquesMapping(t *testing.T) {
 // TestSudoersTamper_AllowedEdgeCases pins the contract of allowed(): nil allowlist always returns false; populated allowlist hits
 // exact path matches. We don't normalise (no trailing-slash stripping, no case folding) — matching is byte-equal.
 func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
+	t.Parallel()
 	rNoList := &SudoersTamper{}
 	assert.False(t, rNoList.allowed("/usr/sbin/visudo"),
 		"nil allowlist must return false for any path")
@@ -48,6 +51,7 @@ func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
 // TestSudoersTamper_MalformedPayload exercises the unmarshal-failure path: the fast-path bytes.Contains lets it through (the magic
 // substring is present), then unmarshal trips and the rule drops the event silently.
 func TestSudoersTamper_MalformedPayload(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 	r := &SudoersTamper{}
@@ -67,6 +71,7 @@ func TestSudoersTamper_MalformedPayload(t *testing.T) {
 // TestSudoersTamper_OpenRaceWithoutProcess covers the proc==nil race
 // guard. Mirrors the same shape as the other open-keyed rules.
 func TestSudoersTamper_OpenRaceWithoutProcess(t *testing.T) {
+	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
 	r := &SudoersTamper{}

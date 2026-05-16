@@ -1,0 +1,26 @@
+# golangci-lint v2 custom-binary spec. `task lint:install` invokes
+# `golangci-lint custom` against this file to produce a custom binary at
+# `destination/name` that has the repo-internal plugin compiled in.
+#
+# Why a custom binary at all: golangci-lint v2 deprecated .so plugins. The
+# only supported route for shipping an in-repo linter alongside the
+# upstream linter set is to bake it into a custom binary via this spec.
+# The upstream `golangci-lint` from Homebrew / mise / GitHub releases
+# won't run the commentwrap plugin; only `tmp/golangci-lint-custom` will.
+#
+# Version pinning: this MUST agree with the upstream golangci-lint binary
+# the plugin loader's API matches. Bumping the project's golangci-lint
+# version (.tool-versions, go-lint.yml workflow, etc.) requires bumping
+# the `version:` here in lockstep, then rerunning `task lint:install`.
+
+version: v2.11.3
+name: golangci-lint-custom
+destination: ./tmp
+
+plugins:
+  # commentwrap-check, the repo-local linter for issue #149 + #165. Source
+  # lives at tools/comment-wrap-check/lint/. The plugin's init() in
+  # plugin.go registers under the name "commentwrap"; .golangci.yml
+  # enables it under linters.custom.
+  - module: github.com/fleetdm/edr/tools/comment-wrap-check/lint
+    path: ./tools/comment-wrap-check/lint

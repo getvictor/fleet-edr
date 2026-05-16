@@ -176,6 +176,7 @@ func (r *appControlRig) do(t *testing.T, method, path string, body any) *http.Re
 // TestAppControl_ListPolicies_ReturnsSeededDefault: the seed bootstrap creates one `Default` policy. The list endpoint must surface it
 // so the UI's "open policy detail" link has a target.
 func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a", "host-b"})
 	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies", nil)
 	defer resp.Body.Close()
@@ -191,6 +192,7 @@ func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 // TestAppControl_GetPolicy_IncludesRules: a freshly-seeded policy has zero rules; after a POST the GET path should include the new
 // rule in the Rules slice.
 func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	policyID := r.defaultPolicyID(t)
 
@@ -225,6 +227,7 @@ func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 // TestAppControl_CreateRule_FansOutToEveryHost: the headline contract. One rule create → one set_application_control command per host,
 // each carrying the same wire payload. Dedup if HostLister returns duplicates so the audit row's fanout_hosts is the unique count.
 func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
+	t.Parallel()
 	hosts := []string{"host-a", "host-b", "host-c", "host-a"} // dup to assert dedup
 	r := newAppControlRig(t, hosts)
 	policyID := r.defaultPolicyID(t)
@@ -273,6 +276,7 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 // TestAppControl_CreateRule_RecordsFanoutFailures: a per-host CommandInserter failure must not abort the loop AND must surface on the
 // audit row as fanout_failed > 0.
 func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a", "host-bad"})
 	r.inserter.failFor("host-bad", errors.New("synthetic insert failure"))
 	policyID := r.defaultPolicyID(t)
@@ -299,6 +303,7 @@ func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 // error code; the second POST also must NOT fan out a stale duplicate command (the rule didn't change, so the snapshot doesn't need to
 // ship).
 func TestAppControlREST_CreateRule_RejectsDuplicate(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	policyID := r.defaultPolicyID(t)
 	body := map[string]any{
@@ -325,6 +330,7 @@ func TestAppControlREST_CreateRule_RejectsDuplicate(t *testing.T) {
 // TestAppControl_CreateRule_BadIdentifierIs400: BINARY rules require 64 lowercase hex characters; anything else is a typed validation
 // error mapped to 400.
 func TestAppControlREST_CreateRule_BadIdentifierIs400(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	policyID := r.defaultPolicyID(t)
 	resp := r.do(t, http.MethodPost,
@@ -348,6 +354,7 @@ func TestAppControlREST_CreateRule_BadIdentifierIs400(t *testing.T) {
 // TestAppControlREST_GetPolicy_NotFound: an unknown policy id surfaces
 // the typed 404 with the application_control.policy_not_found code.
 func TestAppControlREST_GetPolicy_NotFound(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies/9999999", nil)
 	defer resp.Body.Close()
@@ -360,6 +367,7 @@ func TestAppControlREST_GetPolicy_NotFound(t *testing.T) {
 // TestAppControlREST_GetPolicy_InvalidPolicyID: anything that isn't a positive integer in {id} maps to 400 with the typed code;
 // the handler must not leak strconv error strings.
 func TestAppControlREST_GetPolicy_InvalidPolicyID(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	for _, raw := range []string{"abc", "-5", "0"} {
 		resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+raw, nil)
@@ -374,6 +382,7 @@ func TestAppControlREST_GetPolicy_InvalidPolicyID(t *testing.T) {
 // TestAppControlREST_CreateRule_InvalidJSON: a malformed body lands
 // 400 with application_control.invalid_json. No fan-out, no audit.
 func TestAppControlREST_CreateRule_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	policyID := r.defaultPolicyID(t)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -395,6 +404,7 @@ func TestAppControlREST_CreateRule_InvalidJSON(t *testing.T) {
 // TestAppControlREST_CreateRule_InvalidPolicyID: same shape as the GET path — a non-numeric or zero/negative id maps to 400 with the
 // typed code before any DB work.
 func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
+	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	resp := r.do(t, http.MethodPost, "/api/v1/app-control/policies/abc/rules",
 		map[string]any{"rule_type": rulesapi.RuleTypeBinary, "identifier": "x", "reason": "y"})
@@ -408,6 +418,7 @@ func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
 // TestAppControlREST_CreateRule_NoActorOnContextIs500: the session middleware is supposed to put an Actor on ctx; bypassing it is a
 // wiring bug, not user error, so the handler returns 500 instead of silently letting the service-layer guard handle it.
 func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
+	t.Parallel()
 	// Re-wire the rig without the actor-injecting middleware so the
 	// handler sees a bare ctx.
 	db := full.Open(t)
@@ -462,6 +473,7 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 // so SIEM can distinguish "lister broke" from "no hosts enrolled." The HTTP response is still 201 (rule landed + the next mutation
 // will re-fan); only the audit signal differs.
 func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}

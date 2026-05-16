@@ -39,6 +39,7 @@ import (
 // test exists to catch the regression in CI before the demo dry-run
 // catches it on camera.
 func TestAppControlBlock_EventBecomesAlert(t *testing.T) {
+	t.Parallel()
 	stack := Setup(t)
 
 	const hostID = "BBBB1111-2222-3333-4444-555566667777"
@@ -141,6 +142,7 @@ func TestAppControlBlock_EventBecomesAlert(t *testing.T) {
 // contract: when the operator did not author a custom_msg, the alert description falls back to "Blocked <rule_type> rule for
 // <identifier>".
 func TestAppControlBlock_DefaultDescriptionWhenCustomMsgAbsent(t *testing.T) {
+	t.Parallel()
 	stack := Setup(t)
 
 	const hostID = "CCCC1111-2222-3333-4444-555566667777"

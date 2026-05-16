@@ -20,6 +20,7 @@ import (
 // TestListLiveBindings_NilDBRejected pins the precondition: a Store constructed without a real DB must surface the misconfiguration as
 // a typed error rather than nil-dereferencing inside SelectContext.
 func TestListLiveBindings_NilDBRejected(t *testing.T) {
+	t.Parallel()
 	s := rbac.New(nil)
 	_, err := s.ListLiveBindings(context.Background(), 42)
 	require.Error(t, err)
@@ -30,6 +31,7 @@ func TestListLiveBindings_NilDBRejected(t *testing.T) {
 // A user without any binding (the wave-1 default for SSO-provisioned users until they're admin-bound) must not error; the chokepoint
 // then runs against an actor with an empty Roles slice and the policy returns no_matching_rule.
 func TestListLiveBindings_EmptyTableReturnsEmptySlice(t *testing.T) {
+	t.Parallel()
 	db := openSchema(t)
 	uid := insertUser(t, db, "empty-bindings@test")
 	s := rbac.New(db)
@@ -42,6 +44,7 @@ func TestListLiveBindings_EmptyTableReturnsEmptySlice(t *testing.T) {
 // through SelectContext into the api.RoleBinding shape with the scope_type ENUM, the wildcard scope_id, and a nil ExpiresAt for the
 // never-expiring case.
 func TestListLiveBindings_RoundTrip(t *testing.T) {
+	t.Parallel()
 	db := openSchema(t)
 	uid := insertUser(t, db, "active-bindings@test")
 	insertBinding(t, db, bindingFixture{
@@ -72,6 +75,7 @@ func TestListLiveBindings_RoundTrip(t *testing.T) {
 // part of the actor the chokepoint evaluates against. The Rego policy treats expired bindings as if they did not exist; this is the
 // storage-side enforcement of that contract.
 func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
+	t.Parallel()
 	db := openSchema(t)
 	uid := insertUser(t, db, "expired-bindings@test")
 	pastExp := time.Now().Add(-1 * time.Hour)
@@ -104,6 +108,7 @@ func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
 // TestListLiveBindings_OnlyTargetUser confirms the user_id WHERE clause: a binding for some other user must not bleed into the
 // caller's actor.
 func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
+	t.Parallel()
 	db := openSchema(t)
 	uidA := insertUser(t, db, "user-a@test")
 	uidB := insertUser(t, db, "user-b@test")

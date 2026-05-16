@@ -42,6 +42,7 @@ var forbiddenAuditSQL = regexp.MustCompile(
 // at which point the rule's intent is the discussion the change
 // invites — exactly the code-review signal the spec wanted.
 func TestAuditEventsAppendOnly(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	violations, err := scanForForbiddenSQL(root)
 	require.NoError(t, err)

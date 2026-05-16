@@ -59,6 +59,7 @@ var sealedBody = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 })
 
 func TestSession_MissingCookieReturns401(t *testing.T) {
+	t.Parallel()
 	svc, _ := newService(t)
 	mw := middleware.Session(svc, slog.Default())
 	srv := httptest.NewServer(mw(sealedBody))
@@ -77,6 +78,7 @@ func TestSession_MissingCookieReturns401(t *testing.T) {
 }
 
 func TestSession_UnknownCookieReturns401(t *testing.T) {
+	t.Parallel()
 	svc, _ := newService(t)
 	mw := middleware.Session(svc, slog.Default())
 	srv := httptest.NewServer(mw(sealedBody))
@@ -93,6 +95,7 @@ func TestSession_UnknownCookieReturns401(t *testing.T) {
 }
 
 func TestSession_MalformedCookieReturns401(t *testing.T) {
+	t.Parallel()
 	svc, _ := newService(t)
 	mw := middleware.Session(svc, slog.Default())
 	srv := httptest.NewServer(mw(sealedBody))
@@ -108,6 +111,7 @@ func TestSession_MalformedCookieReturns401(t *testing.T) {
 }
 
 func TestSession_ValidCookieLetsHandlerRun(t *testing.T) {
+	t.Parallel()
 	svc, ss := newService(t)
 	sess, err := ss.Create(t.Context(), 42, sessions.CreateOptions{})
 	require.NoError(t, err)
@@ -139,6 +143,7 @@ func TestSession_ValidCookieLetsHandlerRun(t *testing.T) {
 // A GET never needs a CSRF header even if one of the authenticated admin
 // surfaces ever ends up behind the CSRF middleware.
 func TestCSRF_SafeMethodPassesThrough(t *testing.T) {
+	t.Parallel()
 	mw := middleware.CSRF(slog.Default())
 	srv := httptest.NewServer(mw(sealedBody))
 	t.Cleanup(srv.Close)
@@ -154,6 +159,7 @@ func TestCSRF_SafeMethodPassesThrough(t *testing.T) {
 // CSRF outside Session (no session on ctx for an unsafe method) is a programming error; we surface it as 500 not 401 so the ops team
 // pages on server misconfiguration rather than assuming a bad token.
 func TestCSRF_MisconfiguredReturns500(t *testing.T) {
+	t.Parallel()
 	mw := middleware.CSRF(slog.Default())
 	srv := httptest.NewServer(mw(sealedBody))
 	t.Cleanup(srv.Close)
@@ -168,6 +174,7 @@ func TestCSRF_MisconfiguredReturns500(t *testing.T) {
 
 // CSRF stack: happy path + the two failure modes with a real Session pinned.
 func TestCSRF_Stack(t *testing.T) {
+	t.Parallel()
 	svc, ss := newService(t)
 	sess, err := ss.Create(t.Context(), 7, sessions.CreateOptions{})
 	require.NoError(t, err)
@@ -189,6 +196,7 @@ func TestCSRF_Stack(t *testing.T) {
 	}
 
 	t.Run("unsafe method missing header => 403", func(t *testing.T) {
+		t.Parallel()
 		resp, err := srv.Client().Do(makeReq(t, http.MethodPost))
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -196,6 +204,7 @@ func TestCSRF_Stack(t *testing.T) {
 	})
 
 	t.Run("unsafe method wrong header => 403", func(t *testing.T) {
+		t.Parallel()
 		req := makeReq(t, http.MethodPost)
 		req.Header.Set(api.CSRFHeaderName, api.EncodeToken(make([]byte, sessions.IDLen)))
 		resp, err := srv.Client().Do(req)
@@ -205,6 +214,7 @@ func TestCSRF_Stack(t *testing.T) {
 	})
 
 	t.Run("unsafe method correct header => 200", func(t *testing.T) {
+		t.Parallel()
 		req := makeReq(t, http.MethodPost)
 		req.Header.Set(api.CSRFHeaderName, csrf)
 		resp, err := srv.Client().Do(req)
@@ -215,5 +225,6 @@ func TestCSRF_Stack(t *testing.T) {
 }
 
 func TestSession_PanicsOnNilService(t *testing.T) {
+	t.Parallel()
 	assert.Panics(t, func() { _ = middleware.Session(nil, slog.Default()) })
 }

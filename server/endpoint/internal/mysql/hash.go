@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"testing"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -17,17 +18,33 @@ import (
 // argon2id parameters chosen per OWASP Password Storage Cheat Sheet 2024 for a modern server running interactive hashing. ~30 ms per
 // hash on an M-series Mac. Every other request on the hot path is a constant-time compare against the stored hash, not a fresh hash,
 // so steady-state auth is microseconds.
-const (
+//
+// These are package-level vars (not consts) so the init() below can lower them under `go test`. Tests do many verify/rotate cycles
+// per case and at production cost they dominated CI wall clock (see issue #170). The pattern mirrors what golang.org/x/crypto/bcrypt
+// codifies with MinCost vs DefaultCost; argon2 has no library constant for it, so we follow the convention of RFC 9106's minimum
+// (t=1, m=8 MiB, p=1) for the test build only. Production binaries (anything not built by `go test`) keep the OWASP-2024 cost.
+var (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // 64 MiB
 	argonThreads uint8  = 4
+)
+
+const (
 	argonKeyLen  uint32 = 32
-	argonSaltLen        = 16
+	argonSaltLen int    = 16
 
 	// tokenLen is the size of the random bearer token we issue on successful enroll. 32 bytes
 	// → 43 base64url characters, ample for an HMAC-equivalent entropy budget.
-	tokenLen = 32
+	tokenLen int = 32
 )
+
+func init() {
+	if testing.Testing() {
+		argonTime = 1
+		argonMemory = 8 * 1024 // 8 MiB, RFC 9106 minimum
+		argonThreads = 1
+	}
+}
 
 // generateToken returns a fresh random bearer token, base64url (no padding), 43 chars.
 func generateToken() (string, error) {

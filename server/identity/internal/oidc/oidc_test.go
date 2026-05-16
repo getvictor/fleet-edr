@@ -14,6 +14,7 @@ import (
 // GenerateFlowSecrets returns four distinct, non-empty, URL-safe strings. The PKCE challenge equals base64url(sha256(verifier)) per
 // RFC 7636. Catches a regression that would emit deterministic secrets (e.g. a test fixture leaking into production via a build flag).
 func TestGenerateFlowSecrets(t *testing.T) {
+	t.Parallel()
 	state, nonce, verifier, challenge, err := oidc.GenerateFlowSecrets()
 	require.NoError(t, err)
 	assert.NotEmpty(t, state)
@@ -34,6 +35,7 @@ func TestGenerateFlowSecrets(t *testing.T) {
 // Two consecutive calls produce different secrets — every flow has its own entropy. A repeat would be a critical security bug
 // (replayable state + nonce).
 func TestGenerateFlowSecrets_Unique(t *testing.T) {
+	t.Parallel()
 	s1, n1, v1, _, err := oidc.GenerateFlowSecrets()
 	require.NoError(t, err)
 	s2, n2, v2, _, err := oidc.GenerateFlowSecrets()

@@ -14,6 +14,7 @@ import (
 // nil deref. Tests are external (package seed_test) so the seed package's exported surface is the only path under test, matching how
 // cmd/main calls it through identity bootstrap.
 func TestRoles_NilDBRejected(t *testing.T) {
+	t.Parallel()
 	err := seed.Roles(context.Background(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db must not be nil")
@@ -23,6 +24,7 @@ func TestRoles_NilDBRejected(t *testing.T) {
 // entry in the list represents a built-in role; the seed sets is_builtin=1 for each). A future operator-created role set lives outside
 // this slice; renaming or reordering an entry here is a schema-level break.
 func TestBuiltinRoles_StableShape(t *testing.T) {
+	t.Parallel()
 	wantIDs := []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
 	gotIDs := make([]string, 0, len(seed.BuiltinRoles))
 	for _, r := range seed.BuiltinRoles {

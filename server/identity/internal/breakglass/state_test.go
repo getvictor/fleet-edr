@@ -16,6 +16,7 @@ import (
 // EncodeChallengeState → DecodeChallengeState round-trips the SessionData. The HMAC-signed cookie is the integrity gate; a regression
 // that lost the gob payload or dropped the signature step would either leak SessionData or accept tampered cookies.
 func TestChallengeState_RoundTrip(t *testing.T) {
+	t.Parallel()
 	key := bytes32(0x42)
 	sd := webauthn.SessionData{
 		Challenge:        "AAA-BBB-CCC",
@@ -39,6 +40,7 @@ func TestChallengeState_RoundTrip(t *testing.T) {
 // Empty signing key trips a typed error rather than silently
 // emitting an unsigned cookie.
 func TestEncodeChallengeState_NoKey(t *testing.T) {
+	t.Parallel()
 	_, err := breakglass.EncodeChallengeState(nil, webauthn.SessionData{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "signing key")
@@ -46,6 +48,7 @@ func TestEncodeChallengeState_NoKey(t *testing.T) {
 
 // A malformed cookie (no dot separator) returns ErrChallengeStateInvalid; same for tampered signature, garbled base64, or wrong key.
 func TestDecodeChallengeState_FailureModes(t *testing.T) {
+	t.Parallel()
 	key := bytes32(0x42)
 	good, err := breakglass.EncodeChallengeState(key, webauthn.SessionData{
 		Challenge: "x", RelyingPartyID: "localhost",
@@ -65,6 +68,7 @@ func TestDecodeChallengeState_FailureModes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := breakglass.DecodeChallengeState(tc.key, tc.raw)
 			assert.ErrorIs(t, err, breakglass.ErrChallengeStateInvalid)
 		})
@@ -73,6 +77,7 @@ func TestDecodeChallengeState_FailureModes(t *testing.T) {
 
 // DecodeChallengeState refuses an empty signing key.
 func TestDecodeChallengeState_NoKey(t *testing.T) {
+	t.Parallel()
 	_, err := breakglass.DecodeChallengeState(nil, "anything.anything")
 	require.Error(t, err)
 }

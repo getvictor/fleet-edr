@@ -6,6 +6,7 @@ require (
 	github.com/XSAM/otelsql v0.42.0
 	github.com/arch-go/arch-go v1.7.0
 	github.com/coreos/go-oidc/v3 v3.18.0
+	github.com/fleetdm/edr/tools/comment-wrap-check/lint v0.0.0-00010101000000-000000000000
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/go-webauthn/webauthn v0.17.2
 	github.com/jmoiron/sqlx v1.4.0
@@ -26,6 +27,7 @@ require (
 	golang.org/x/crypto v0.50.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.15.0
+	golang.org/x/tools v0.44.0
 	modernc.org/sqlite v1.49.1
 	pgregory.net/rapid v1.3.0
 )
@@ -49,6 +51,7 @@ require (
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golangci/plugin-module-register v0.1.2 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
@@ -89,7 +92,6 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa // indirect
 	golang.org/x/text v0.36.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
 	golang.org/x/vuln v1.2.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
@@ -106,3 +108,11 @@ tool (
 	go.uber.org/nilaway/cmd/nilaway
 	golang.org/x/vuln/cmd/govulncheck
 )
+
+// commentwrap-check linter lives at tools/comment-wrap-check/lint as a
+// sub-module so golangci-lint's `custom` command can treat it as a plugin
+// (the plugin contract requires each plugin to be its own Go module).
+// The replace keeps the parent's standalone CLI at tools/comment-wrap-
+// check/main.go importing the sub-module's analyzer without going
+// through a remote module fetch.
+replace github.com/fleetdm/edr/tools/comment-wrap-check/lint => ./tools/comment-wrap-check/lint

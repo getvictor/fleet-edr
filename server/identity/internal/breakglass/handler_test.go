@@ -78,6 +78,7 @@ func newHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit) {
 // GET /admin/break-glass/setup with no token returns 410. Pinned because a regression that fell through to a free-form challenge would
 // let an attacker farm setup challenges.
 func TestHandleSetupChallenge_TokenMissing(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -95,6 +96,7 @@ func TestHandleSetupChallenge_TokenMissing(t *testing.T) {
 // POST /admin/break-glass/setup/challenge with an invalid token
 // returns 410 with reason bootstrap.invalid in the audit row.
 func TestHandleSetupChallenge_TokenInvalid(t *testing.T) {
+	t.Parallel()
 	h, _, rec := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -117,6 +119,7 @@ func TestHandleSetupChallenge_TokenInvalid(t *testing.T) {
 // POST /admin/break-glass/setup/challenge with a VALID, freshly issued token returns 200 + a CredentialCreationOptions JSON body + the
 // signed challenge cookie. Pinned to confirm the BeginSetup path round-trips through the new POST endpoint.
 func TestHandleSetupChallenge_ValidTokenIssuesChallenge(t *testing.T) {
+	t.Parallel()
 	h, db, _ := newHandler(t)
 	ctx := t.Context()
 
@@ -164,6 +167,7 @@ func TestHandleSetupChallenge_ValidTokenIssuesChallenge(t *testing.T) {
 // GET /admin/break-glass/setup redirects 302 to /ui/admin/break-glass/setup preserving the token query string. The operator clicks the
 // printed redemption URL → server sends them to the React UI → React page POSTs to /admin/break-glass/setup/challenge.
 func TestHandleSetupRedirect_PreservesToken(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -186,6 +190,7 @@ func TestHandleSetupRedirect_PreservesToken(t *testing.T) {
 // GET /admin/break-glass redirects 302 to /ui/admin/break-glass
 // (no query string to preserve).
 func TestHandleLoginRedirect(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -205,6 +210,7 @@ func TestHandleLoginRedirect(t *testing.T) {
 // POST /admin/break-glass with no challenge cookie returns 400 challenge_missing. The signed challenge cookie is the assertion's
 // integrity gate; a missing cookie cannot be verified.
 func TestHandleLogin_ChallengeMissing(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -222,6 +228,7 @@ func TestHandleLogin_ChallengeMissing(t *testing.T) {
 // POST /admin/break-glass with a malformed challenge cookie returns 400 challenge_invalid (HMAC mismatch). The body never reaches the
 // service.
 func TestHandleLogin_ChallengeTampered(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -246,6 +253,7 @@ func TestHandleLogin_ChallengeTampered(t *testing.T) {
 // POST /admin/break-glass/challenge with an unknown email returns 400 no_credentials. Same wire response as a known email with zero
 // credentials, so an attacker cannot enumerate valid emails.
 func TestHandleBeginLogin_UnknownEmail(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -262,6 +270,7 @@ func TestHandleBeginLogin_UnknownEmail(t *testing.T) {
 
 // POST /admin/break-glass/setup with no token returns 410.
 func TestHandleSetupPost_TokenMissing(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -279,6 +288,7 @@ func TestHandleSetupPost_TokenMissing(t *testing.T) {
 // POST /admin/break-glass/setup without the challenge cookie returns 400 challenge_missing. The cookie is the integrity gate; absence
 // is unrecoverable.
 func TestHandleSetupPost_ChallengeMissing(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -296,6 +306,7 @@ func TestHandleSetupPost_ChallengeMissing(t *testing.T) {
 // POST /admin/break-glass/challenge with malformed JSON returns 400 body_invalid. Pinned because handler must reject before reaching
 // the service layer.
 func TestHandleBeginLogin_BadBody(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
 	h.RegisterPublicRoutes(mux)
@@ -313,6 +324,7 @@ func TestHandleBeginLogin_BadBody(t *testing.T) {
 // POST /admin/break-glass with malformed assertion JSON returns 400
 // assertion_parse_failed.
 func TestHandleFinishLogin_AssertionParseFailed(t *testing.T) {
+	t.Parallel()
 	h, db, _ := newHandler(t)
 	ctx := t.Context()
 	// Seed an admin user + credential so we get past GetByEmail.
@@ -429,6 +441,7 @@ func newHandlerWithIdentity(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAu
 // RegisterAuthedRoutes panics when constructed without Identity. Pinned
 // to fail loud at boot rather than nil-pointer at request time.
 func TestRegisterAuthedRoutes_RequiresIdentity(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newHandler(t) // newHandler builds without Identity
 	mux := http.NewServeMux()
 	defer func() {
@@ -441,6 +454,7 @@ func TestRegisterAuthedRoutes_RequiresIdentity(t *testing.T) {
 // Reauth challenge for an OIDC session returns 400 reauth_not_supported. The UI is expected to dispatch OIDC reauth via
 // /api/auth/login?reauth=1 instead — the break-glass POST flow doesn't apply.
 func TestHandleReauthChallenge_OIDCSessionRejected(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -460,6 +474,7 @@ func TestHandleReauthChallenge_OIDCSessionRejected(t *testing.T) {
 // gateReauthRequest's per-IP rate-limit branch (AllowIP=false). Pinned at /api/auth/reauth/challenge so both reauth handlers share the
 // same enforcement contract through the gate helper.
 func TestHandleReauthChallenge_PerIPRateLimit(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 
@@ -505,6 +520,7 @@ func TestHandleReauthChallenge_PerIPRateLimit(t *testing.T) {
 // Reauth POST with no challenge cookie returns 400 challenge_missing. Even though the operator is authenticated, the WebAuthn ceremony
 // requires the signed challenge from the begin step; without it the assertion can't be verified.
 func TestHandleReauth_ChallengeMissing(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -524,6 +540,7 @@ func TestHandleReauth_ChallengeMissing(t *testing.T) {
 // Reauth POST with a tampered challenge cookie returns 400 challenge_invalid. Pinned because the signed-cookie integrity is the reauth
 // flow's defense against an attacker forging a challenge to bypass the begin step's BeginLogin.
 func TestHandleReauth_ChallengeTampered(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -547,6 +564,7 @@ func TestHandleReauth_ChallengeTampered(t *testing.T) {
 // Reauth POST for an OIDC session is rejected before any cookie or body parsing. Mirrors the challenge endpoint's auth_method gate so
 // the per-flow contract is consistent across both reauth verbs.
 func TestHandleReauth_OIDCSessionRejected(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -567,6 +585,7 @@ func TestHandleReauth_OIDCSessionRejected(t *testing.T) {
 // silently succeed against an account whose credentials were rotated out from under a still-valid session — the operator should see
 // the same error a fresh break-glass login would surface.
 func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
+	t.Parallel()
 	h, db, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -592,6 +611,7 @@ func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
 // Reauth challenge with no session on ctx returns 500. Defense-in-depth against a routing misconfig — the handler must not silently
 // continue without an authenticated session.
 func TestHandleReauthChallenge_NoSession(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -607,6 +627,7 @@ func TestHandleReauthChallenge_NoSession(t *testing.T) {
 
 // Same defense-in-depth for the finish endpoint.
 func TestHandleReauth_NoSession(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -623,6 +644,7 @@ func TestHandleReauth_NoSession(t *testing.T) {
 // Reauth POST with a malformed body (not valid JSON) returns 400 body_invalid. Pinned because the handler must short-circuit before
 // the password / assertion path on a parse failure.
 func TestHandleReauth_BodyInvalid(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
 	h.RegisterAuthedRoutes(mux)
@@ -652,6 +674,7 @@ func TestHandleReauth_BodyInvalid(t *testing.T) {
 // IP allowlist 404 for off-list callers. Pinned because the spec
 // requires the surface's existence to NOT be acknowledged.
 func TestHandle_OffAllowlist404(t *testing.T) {
+	t.Parallel()
 	rec := &recAudit{}
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))

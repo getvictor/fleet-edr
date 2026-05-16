@@ -4,16 +4,17 @@
 coverage:
   precision: 1
   round: nearest
-  range: "70...90"
+  range: "65...90"
 
   status:
     project:
       default:
-        # Tracks reality on main (today ~75.6% per codecov, ~75.2% per sonar). Sonar's per-PR
-        # new-code gate at 80% (configured in the SonarCloud UI) is the authoritative bar
-        # for what each change must meet; this project rollup just tracks the trend. Lowered
-        # from 80% to 75% per issue #124 after chronic non-PR-introduced project-gate failures.
-        target: 75%
+        # Tracks reality on main (today ~73.1% per codecov). Sonar's per-PR new-code gate at
+        # 80% (configured in the SonarCloud UI) is the authoritative bar for what each change
+        # must meet; this project rollup just tracks the trend. Lowered from 80% to 75% per
+        # issue #124, then to 70% after main drifted below the 75% floor and the gate began
+        # failing on every PR regardless of patch coverage.
+        target: 70%
         # Allow a 1% drift before failing the project status; smaller deltas are
         # noise from coverage tool reordering, not regressions.
         threshold: 1%

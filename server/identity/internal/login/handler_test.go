@@ -83,6 +83,7 @@ func sessionCookie(t *testing.T, us *users.Store, ss *sessions.Store) *http.Cook
 }
 
 func TestGet_ReturnsCurrentSession(t *testing.T) {
+	t.Parallel()
 	srv, us, ss := setupServer(t)
 	cookie := sessionCookie(t, us, ss)
 
@@ -101,6 +102,7 @@ func TestGet_ReturnsCurrentSession(t *testing.T) {
 }
 
 func TestGet_MissingCookieReturns401(t *testing.T) {
+	t.Parallel()
 	srv, _, _ := setupServer(t)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/session", nil)
 	require.NoError(t, err)
@@ -111,6 +113,7 @@ func TestGet_MissingCookieReturns401(t *testing.T) {
 }
 
 func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
+	t.Parallel()
 	srv, us, ss := setupServer(t)
 	cookie := sessionCookie(t, us, ss)
 
