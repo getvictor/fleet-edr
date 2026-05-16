@@ -177,6 +177,14 @@ jobs:
           version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Raise MySQL's max_connections above the 151 default. With t.Parallel() across the
+      # integration suite (issue #172) and `go test -p` fanning out one process per package,
+      # peak in-flight connections crosses 200. Setting via SQL avoids needing a custom image
+      # or a mounted my.cnf — the service container has no volume mount in GHA.
+      - name: Raise MySQL max_connections
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -e "SET GLOBAL max_connections = 500"
+
       # test:go:server:coverage reads $EDR_TEST_DSN from the environment (set
       # above) and otherwise falls back to the docker-compose port used locally.
       - name: Run server tests with coverage
