@@ -99,7 +99,11 @@ enum ProcessSnapshotEnumerator {
             }
             let stride = MemoryLayout<kinfo_proc>.stride
             let probeCount = size / stride
-            let capacity = min(maxEnumeratedPIDs, probeCount + kinfoSizeSlackEntries)
+            // Don't cap the BUFFER size — sysctl returns ENOMEM if the buffer is too
+            // small, and retrying with the same kernel-reported size loses every
+            // process on a host with > maxEnumeratedPIDs live. Allocate for what the
+            // kernel reports + slack, then cap the RESULT count below.
+            let capacity = probeCount + kinfoSizeSlackEntries
             var buffer = [kinfo_proc](repeating: kinfo_proc(), count: capacity)
             var filledSize = capacity * stride
             let fillRC = mib.withUnsafeMutableBufferPointer { mibPtr in
@@ -108,7 +112,7 @@ enum ProcessSnapshotEnumerator {
                 }
             }
             if fillRC == 0 {
-                let count = filledSize / stride
+                let count = min(maxEnumeratedPIDs, filledSize / stride)
                 return buffer.prefix(count).map(ProcIdentity.init)
             }
             // ENOMEM means the table grew past our buffer between probe + fill. Retry —
@@ -124,9 +128,8 @@ enum ProcessSnapshotEnumerator {
 
     private static func resolvePath(pid: pid_t) -> String {
         let size = pathBufferMultiplier * Int(MAXPATHLEN)
-        let buf = UnsafeMutablePointer<CChar>.allocate(capacity: size)
-        defer { buf.deallocate() }
-        let result = proc_pidpath(pid, buf, UInt32(size))
+        var buf = [CChar](repeating: 0, count: size)
+        let result = proc_pidpath(pid, &buf, UInt32(size))
         guard result > 0 else { return "" }
         return String(cString: buf)
     }

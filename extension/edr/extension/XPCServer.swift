@@ -35,12 +35,19 @@ final class XPCServer {
     /// the snapshot enumerator runs on a background utility queue specifically to
     /// keep this constraint satisfied.
     func waitForFirstPeer(timeout: DispatchTime) -> Bool {
-        let result = firstPeerSemaphore.wait(timeout: timeout)
+        guard firstPeerSemaphore.wait(timeout: timeout) == .success else {
+            // Timed out without ever observing the first-peer signal. Do NOT
+            // re-signal here — a spurious signal would credit a later waiter
+            // with a peer connection that never happened, violating the
+            // return contract. Snapshot enumerator handles the false return
+            // by skipping the pass for this boot.
+            return false
+        }
         // Re-signal so any subsequent waiter also returns immediately. The
         // semaphore is otherwise consumed by the first wait, leaving later
         // callers to block forever if the connect never happens a second time.
         firstPeerSemaphore.signal()
-        return result == .success
+        return true
     }
 
     func start() {

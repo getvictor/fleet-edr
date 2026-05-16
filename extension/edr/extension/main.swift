@@ -19,11 +19,11 @@ subscriber.start()
 // Issue #11: ESF is a pure event stream — it only delivers events that occur
 // after es_subscribe. Anything already running (Safari, Slack, Finder, user
 // LaunchAgents, every long-lived daemon) is invisible to the tree until it
-// exec's again. Walk proc_listallpids and emit a synthetic exec event per
-// live PID so the server materialises a baseline tree. Dispatched onto a
-// background queue so the per-PID sysctl + proc_pidpath cost doesn't hold
-// up live ESF callback delivery, and so the wait-for-first-peer barrier
-// below doesn't deadlock the main thread that drives dispatchMain().
+// exec's again. Walk the process table via sysctl(KERN_PROC_ALL) and emit a
+// synthetic exec event per live PID so the server materialises a baseline
+// tree. Dispatched onto a background queue so the per-PID proc_pidpath cost
+// doesn't hold up live ESF callback delivery, and so the wait-for-first-peer
+// barrier below doesn't deadlock the main thread that drives dispatchMain().
 //
 // The waitForFirstPeer barrier guards against the post-restart race where
 // the snapshot pass completes faster than the agent's XPC reconnect; without

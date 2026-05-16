@@ -62,6 +62,23 @@ struct ExecPayload: Codable, Sendable {
         self.snapshot = snapshot
     }
 
+    // Custom decoder so a live exec payload (which the encoder OMITS the snapshot
+    // key for, by design) round-trips correctly. Without this, Codable synthesis
+    // would require the key and reject every live-exec payload on decode.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pid = try container.decode(pid_t.self, forKey: .pid)
+        ppid = try container.decode(pid_t.self, forKey: .ppid)
+        path = try container.decode(String.self, forKey: .path)
+        args = try container.decode([String].self, forKey: .args)
+        cwd = try container.decode(String.self, forKey: .cwd)
+        uid = try container.decode(uid_t.self, forKey: .uid)
+        gid = try container.decode(gid_t.self, forKey: .gid)
+        codeSigning = try container.decodeIfPresent(CodeSigning.self, forKey: .codeSigning)
+        sha256 = try container.decodeIfPresent(String.self, forKey: .sha256)
+        snapshot = try container.decodeIfPresent(Bool.self, forKey: .snapshot) ?? false
+    }
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(pid, forKey: .pid)

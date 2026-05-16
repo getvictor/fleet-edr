@@ -107,6 +107,12 @@ type execPayload struct {
 	GID         *int            `json:"gid"`
 	CodeSigning api.NullRawJSON `json:"code_signing"`
 	SHA256      *string         `json:"sha256"`
+	// Snapshot is true for synthetic exec events emitted by the ESF
+	// startup baseline pass (issue #11). The graph builder uses this to
+	// avoid clobbering a richer live-event row with a sparse synthetic
+	// one when the snapshot pass and an early-startup live exec both
+	// arrive for the same PID.
+	Snapshot bool `json:"snapshot"`
 }
 
 func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
@@ -124,6 +130,17 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 	current, err := b.store.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return err
+	}
+
+	// Snapshot dedup: a snapshot exec for a PID that already has a fully-materialised
+	// live row would otherwise hit the re-exec branch below and replace the live
+	// row (real args, code_signing, sha256) with a sparse snapshot row. The race
+	// window is small but real — see issue #11 review: extension's snapshot pass
+	// fires ~ms after es_subscribe, and any process the live stream observed in
+	// that window is in `processes` before the snapshot batch ingests. Drop the
+	// snapshot exec; the live data is the authoritative one.
+	if p.Snapshot && current != nil && current.ExecTimeNs != nil {
+		return nil
 	}
 
 	if current == nil {
