@@ -48,21 +48,25 @@ BINARY="$REPO_ROOT/tmp/edr-server-e2e"
 COV_OUT="$REPO_ROOT/coverage-server-e2e.out"
 
 # Common server env. Phases append/override; see start_server.
+# TLS is mandatory (issue #140): generate the dev cert pair before phases run.
+# The covered binary refuses to boot without EDR_TLS_CERT_FILE + EDR_TLS_KEY_FILE.
+task dev:certs > /dev/null
 COMMON_ENV=(
   EDR_DSN="root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
   EDR_ENROLL_SECRET=dev-enroll-secret
-  EDR_ALLOW_INSECURE_HTTP=1
+  EDR_TLS_CERT_FILE="$REPO_ROOT/tmp/dev.crt"
+  EDR_TLS_KEY_FILE="$REPO_ROOT/tmp/dev.key"
   EDR_LISTEN_ADDR="0.0.0.0:8088"
   EDR_LOG_FORMAT=text
   EDR_HOST_TOKEN_LIFETIME=24h
   EDR_HOST_TOKEN_GRACE=5m
   EDR_SESSION_SIGNING_KEY=dev-only-session-key-do-not-use-in-production-xyz
   EDR_BREAKGLASS_RP_ID=localhost
-  EDR_BREAKGLASS_RP_ORIGINS=http://localhost:8088
+  EDR_BREAKGLASS_RP_ORIGINS=https://localhost:8088
   EDR_OIDC_ISSUER=http://localhost:5556/dex
   EDR_OIDC_CLIENT_ID=edr-qa
   EDR_OIDC_CLIENT_SECRET=edr-qa-client-secret-do-not-use-in-prod
-  EDR_OIDC_REDIRECT_URL=http://localhost:8088/api/auth/callback
+  EDR_OIDC_REDIRECT_URL=https://localhost:8088/api/auth/callback
   GOCOVERDIR="$COVDATA_DIR"
 )
 
@@ -89,7 +93,7 @@ stop_server() {
   # specifically means there's still a working server on the port,
   # which is what we'd care about either way.
   for _ in $(seq 1 10); do
-    if ! curl -fsS http://localhost:8088/readyz > /dev/null 2>&1; then
+    if ! curl -fsSk https://localhost:8088/readyz > /dev/null 2>&1; then
       break
     fi
     sleep 1
@@ -122,7 +126,7 @@ start_server() {
       SERVER_PID=""
       exit 1
     fi
-    if curl -fsS http://localhost:8088/readyz > /dev/null 2>&1; then
+    if curl -fsSk https://localhost:8088/readyz > /dev/null 2>&1; then
       echo "  ready after ${i}s"
       return 0
     fi
