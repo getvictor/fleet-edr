@@ -22,25 +22,13 @@ subscriber.start()
 // exec's again. Walk the process table via sysctl(KERN_PROC_ALL) and emit a
 // synthetic exec event per live PID so the server materialises a baseline
 // tree. Dispatched onto a background queue so the per-PID proc_pidpath cost
-// doesn't hold up live ESF callback delivery, and so the wait-for-first-peer
-// barrier below doesn't deadlock the main thread that drives dispatchMain().
+// doesn't hold up live ESF callback delivery.
 //
-// The waitForFirstPeer barrier guards against the post-restart race where
-// the snapshot pass completes faster than the agent's XPC reconnect; without
-// it, every baseline event is sent into an empty peer set and silently lost.
-// 30s is generous — the agent reconnects within ~1s in practice but the
-// extension can be activated standalone (no agent yet) during installer
-// pre-bake; we'd rather wait the full 30s than fall through with the events
-// dropped.
-private let snapshotPeerWaitSeconds = 30
+// No explicit wait-for-peer barrier is needed: XPCServer buffers sends when
+// no peer is connected and flushes the buffer to the first surviving peer
+// (issue #173 QA discovered a phantom XPC peer that connects+disconnects in
+// ~10ms after extension restart; the buffer makes us robust to that race).
 DispatchQueue.global(qos: .utility).async {
-    let connected = server.waitForFirstPeer(timeout: .now() + .seconds(snapshotPeerWaitSeconds))
-    if !connected {
-        // Proceed anyway — at worst we lose the snapshot for this boot, which
-        // is no worse than the pre-#11 behaviour. The next extension restart
-        // (or agent install) gets another shot.
-        return
-    }
     ProcessSnapshotEnumerator.run { payload in
         guard let data = serializer.serialize(eventType: "exec", payload: payload) else { return }
         server.send(data: data)
