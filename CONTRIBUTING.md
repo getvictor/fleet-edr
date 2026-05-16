@@ -18,6 +18,12 @@ Pinned in [`.tool-versions`](.tool-versions). Install [`mise`](https://mise.jdx.
 match local, CI, and AI-agent sandbox versions. Pre-commit hooks live in [`lefthook.yml`](lefthook.yml); install once with
 `lefthook install`.
 
+After cloning, run `task install` then `task lint:install`. The latter builds a custom golangci-lint binary at
+`tmp/golangci-lint-custom` with the repo's in-tree `commentwrap` plugin baked in (see
+[`tools/comment-wrap-check/lint/`](tools/comment-wrap-check/lint/) and [`.custom-gcl.yml`](.custom-gcl.yml)). `task lint:go`
+prefers that binary when present; running upstream `golangci-lint run` directly returns "unknown linter: commentwrap" because
+the plugin only exists in the custom build.
+
 CI is the backstop, not the floor. If a check fails locally, fix it before pushing; do not push hoping CI will pass.
 
 ## Style and conventions
