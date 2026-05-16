@@ -13,6 +13,7 @@ import (
 // {decision: str}) so the OTel span dual-emit lands a consistent edr.audit.decision / edr.audit.reason on every row. Pinned so a
 // regression doesn't silently break SigNoz's "decision" filter on the audit dashboard.
 func TestAuditDecisionAndReason(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		action   api.AuditAction
@@ -86,6 +87,7 @@ func TestAuditDecisionAndReason(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := api.AuditEvent{Action: tc.action, Payload: tc.payload}
 			assert.Equal(t, tc.wantDec, auditDecision(e), "decision")
 			assert.Equal(t, tc.wantReas, auditReason(e), "reason")
@@ -96,6 +98,7 @@ func TestAuditDecisionAndReason(t *testing.T) {
 // auditLogLevel mirrors the spec table: break-glass actions WARN, failure-suffix actions WARN, payload.allow=false WARN,
 // payload.decision in {deny,error} WARN, everything else INFO.
 func TestAuditLogLevel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		e    api.AuditEvent
@@ -114,6 +117,7 @@ func TestAuditLogLevel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, auditLogLevel(tc.e))
 		})
 	}

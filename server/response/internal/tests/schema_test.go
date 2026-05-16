@@ -16,6 +16,7 @@ import (
 // The product is a single-instance deployment, so the column was dropped; a regression that re-introduces it silently is caught here.
 // The follow-up ApplySchema call verifies the boot-time re-apply remains idempotent.
 func TestSchema_NoTenantIDOnCommands(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 
 	var n int

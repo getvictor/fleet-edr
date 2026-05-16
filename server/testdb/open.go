@@ -2,9 +2,13 @@ package testdb
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -12,6 +16,62 @@ import (
 
 	"github.com/fleetdm/edr/server/bootstrap"
 )
+
+// maxOpenConnsPerTest caps each per-test DB's connection pool. See SetMaxOpenConns call below for rationale.
+const maxOpenConnsPerTest = 4
+
+// maxAdminConns caps the shared admin pool used for CREATE/DROP DATABASE operations across the suite. Small but non-trivial so
+// many tests can DROP+CREATE in flight without queueing on a single connection.
+const maxAdminConns = 8
+
+// adminPool is a process-wide DB handle used for DROP/CREATE DATABASE. Sharing across tests is critical for parallel runs: a per-
+// test admin connection (one per testdb.Open) would balloon the open-connection count past MySQL's max_connections under the
+// t.Parallel() rollout from issue #172. The pool is built once per (DSN-stripped-of-db-name) and reused for the rest of the run.
+var (
+	adminPoolOnce sync.Once
+	adminPool     *sqlx.DB
+	adminPoolDSN  string
+	adminPoolErr  error
+)
+
+// processSalt is a per-process random suffix mixed into every test DB name. Different packages run in separate `go test` processes
+// but share the same MySQL; two tests in different packages with the same name (e.g. TestCountPending in response/internal/mysql
+// and response/internal/tests) would otherwise collide on the derived DB name and race each other's DROP DATABASE. Random salt
+// makes the collision space astronomically small without coordinating between processes.
+var processSalt = func() string {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// rand.Read failing means the OS RNG is unavailable; falling back to a static salt would re-enable the
+		// cross-process collision. Failing loudly here surfaces the (unlikely) environment problem to operators.
+		panic(fmt.Sprintf("testdb: read random salt: %v", err))
+	}
+	return hex.EncodeToString(buf[:])
+}()
+
+func getAdminPool(baseDSN string) (*sqlx.DB, error) {
+	adminPoolOnce.Do(func() {
+		db, err := sqlx.Open("mysql", baseDSN)
+		if err != nil {
+			adminPoolErr = err
+			return
+		}
+		db.SetMaxOpenConns(maxAdminConns)
+		db.SetMaxIdleConns(maxAdminConns)
+		adminPool = db
+		adminPoolDSN = baseDSN
+	})
+	if adminPoolErr != nil {
+		return nil, adminPoolErr
+	}
+	if adminPoolDSN != baseDSN {
+		// The admin pool is one-shot per process and pinned to the first DSN that initialised it. A second caller
+		// asking for a different DSN almost certainly indicates an EDR_TEST_DSN override mid-run, which the suite
+		// is not designed for. Return an error so the inconsistency surfaces at the first call instead of leaking
+		// a second connection pool that would never get closed.
+		return nil, fmt.Errorf("admin pool already initialised with a different DSN (%q vs %q)", adminPoolDSN, baseDSN)
+	}
+	return adminPool, nil
+}
 
 // Open creates an isolated test database with a unique name derived
 // from the test name and returns the open *sqlx.DB. The database is
@@ -42,11 +102,10 @@ func Open(tb testing.TB) *sqlx.DB {
 	if err != nil {
 		tb.Fatalf("parse EDR_TEST_DSN: %v", err)
 	}
-	adminDB, err := sqlx.Open("mysql", baseDSN)
+	adminDB, err := getAdminPool(baseDSN)
 	if err != nil {
 		tb.Fatalf("open admin connection: %v", err)
 	}
-	defer adminDB.Close()
 
 	dbName := sanitizeDBName(tb.Name())
 	ctx := tb.Context()
@@ -58,12 +117,8 @@ func Open(tb testing.TB) *sqlx.DB {
 		tb.Fatalf("create test db: %v", err)
 	}
 	tb.Cleanup(func() {
-		cleanupDB, err := sqlx.Open("mysql", baseDSN)
-		if err != nil {
-			return
-		}
-		defer cleanupDB.Close()
-		_, _ = cleanupDB.ExecContext(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
+		// Use context.Background() because tb.Context() is cancelled by the time cleanup runs.
+		_, _ = adminDB.ExecContext(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
 	})
 
 	perTestDSN, err := replaceDBName(dsn, dbName)
@@ -74,6 +129,11 @@ func Open(tb testing.TB) *sqlx.DB {
 	if err != nil {
 		tb.Fatalf("open test db: %v", err)
 	}
+	// Cap the per-test connection pool. With t.Parallel() enabled across the integration suite (issue #172), uncapped pools quickly
+	// exhaust the dev MySQL's default max_connections=151. 4 connections per test covers the heaviest concurrent-write integration
+	// tests we have and keeps the total well under the (raised) cap.
+	db.SetMaxOpenConns(maxOpenConnsPerTest)
+	db.SetMaxIdleConns(maxOpenConnsPerTest)
 
 	tb.Cleanup(func() { _ = db.Close() })
 	return db
@@ -81,7 +141,7 @@ func Open(tb testing.TB) *sqlx.DB {
 
 func testDSN(tb testing.TB) string {
 	tb.Helper()
-	dsn := os.Getenv("EDR_TEST_DSN")
+	dsn := os.Getenv("EDR_TEST_DSN") //nolint:forbidigo // approved test-DB boundary; see issue #172
 	if dsn == "" {
 		tb.Skip("EDR_TEST_DSN not set; skipping MySQL tests")
 	}
@@ -89,13 +149,27 @@ func testDSN(tb testing.TB) string {
 }
 
 func sanitizeDBName(testName string) string {
-	name := "edr_test_" + testName
-	replacer := strings.NewReplacer("/", "_", " ", "_", "-", "_", ".", "_")
+	const maxLen = 64
+	// Hash the ORIGINAL testName so distinct subtests stay distinct even when character replacement would collapse them
+	// (e.g. t.Run("Test/A") and t.Run("Test.A") both produce "Test_A" after the replacer). 8 hex chars from sha256[:4]
+	// keeps the collision space at 1 in 4 billion per test name.
+	sum := sha256.Sum256([]byte(testName))
+	suffixHex := hex.EncodeToString(sum[:4])
+
+	name := "edr_test_" + processSalt + "_" + testName
+	// Replace characters MySQL rejects in unquoted identifiers + backticks. Backticks specifically would break the DDL
+	// string interpolation in Open() (`CREATE DATABASE \`name\``) if a test name contained one — Go test names allow
+	// arbitrary runes, so the defense is mandatory, not theoretical.
+	replacer := strings.NewReplacer("/", "_", " ", "_", "-", "_", ".", "_", "`", "_")
 	name = replacer.Replace(name)
-	if len(name) > 64 {
-		name = name[:64]
+
+	// Always append the testName-derived hash to disambiguate replacement-collapsed names; truncate the readable prefix
+	// (not the hash) if the combined length crosses MySQL's 64-char identifier ceiling.
+	out := name + "_" + suffixHex
+	if len(out) > maxLen {
+		out = name[:maxLen-1-len(suffixHex)] + "_" + suffixHex
 	}
-	return name
+	return out
 }
 
 // stripDBName clears the DBName field on a parsed DSN so the caller can connect to the MySQL server without selecting a specific

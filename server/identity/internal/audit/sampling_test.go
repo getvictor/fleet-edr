@@ -12,6 +12,7 @@ import (
 // rate=0.0 drops every non-carve-out read; carve-outs (break-glass +
 // audit.read) still emit. This is the wave-1 default's behavior.
 func TestShouldSampleRead_RateZero(t *testing.T) {
+	t.Parallel()
 	for range 100 {
 		assert.False(t, audit.ShouldSampleRead(api.ActionHostRead, false, 0.0))
 		assert.False(t, audit.ShouldSampleRead(api.ActionAlertRead, false, 0.0))
@@ -25,6 +26,7 @@ func TestShouldSampleRead_RateZero(t *testing.T) {
 // rate=1.0 includes every read action. This matches the wave-1 historical behavior (audit-everything) for operators who set the env
 // var explicitly.
 func TestShouldSampleRead_RateOne(t *testing.T) {
+	t.Parallel()
 	for _, a := range []api.Action{
 		api.ActionHostRead,
 		api.ActionProcessRead,
@@ -40,6 +42,7 @@ func TestShouldSampleRead_RateOne(t *testing.T) {
 // is not a security RNG and we don't seed it deterministically) but tight enough to catch a regression that flipped the comparison
 // direction.
 func TestShouldSampleRead_RateHalf_Distribution(t *testing.T) {
+	t.Parallel()
 	const iters = 10_000
 	included := 0
 	for range iters {
@@ -54,6 +57,7 @@ func TestShouldSampleRead_RateHalf_Distribution(t *testing.T) {
 // Out-of-range rates clamp rather than panic or misbehave. Negative rates round to "audit nothing" (other than carve-outs); rates
 // above 1.0 round to "audit everything." Defensive: a misconfigured EDR_AUDIT_READ_SAMPLING shouldn't tip the chokepoint into UB.
 func TestShouldSampleRead_RateOutOfRange(t *testing.T) {
+	t.Parallel()
 	for range 100 {
 		assert.False(t, audit.ShouldSampleRead(api.ActionHostRead, false, -0.5))
 		assert.True(t, audit.ShouldSampleRead(api.ActionHostRead, false, 1.5))
@@ -77,6 +81,7 @@ func TestShouldSampleRead_RateOutOfRange(t *testing.T) {
 // engine_test.go's TestAllow_*_AsyncSampling locks the combined
 // behavior end-to-end.
 func TestShouldSampleRead_NonReadActionPassthrough(t *testing.T) {
+	t.Parallel()
 	// rate=0.0 drops everything but the carve-outs, regardless of
 	// whether the action is a "read" or not.
 	assert.False(t, audit.ShouldSampleRead(api.ActionHostIsolate, false, 0.0))

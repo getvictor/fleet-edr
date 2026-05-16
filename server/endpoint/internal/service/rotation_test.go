@@ -120,6 +120,7 @@ func ageToken(t *testing.T, db *sqlx.DB, hostID string, age time.Duration) {
 // A fresh token does not trigger rotation: the agent's normal poll
 // shouldn't pay an extra UPDATE + INSERT + audit cost on every request.
 func TestVerifyToken_FreshTokenDoesNotRotate(t *testing.T) {
+	t.Parallel()
 	svc, _, _, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
 	tok := enrollOne(t, svc, testHostID)
 
@@ -133,6 +134,7 @@ func TestVerifyToken_FreshTokenDoesNotRotate(t *testing.T) {
 // A token past lifetime triggers rotation on the next verify, queues a rotate_token command for the agent, and emits exactly one audit
 // row tagged with trigger=auto.
 func TestVerifyToken_StaleTokenAutoRotates(t *testing.T) {
+	t.Parallel()
 	svc, _, db, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
 	tok := enrollOne(t, svc, testHostID)
 	ageToken(t, db, testHostID, 2*time.Hour) // well past 1h lifetime
@@ -158,6 +160,7 @@ func TestVerifyToken_StaleTokenAutoRotates(t *testing.T) {
 // A verify against the previous-token grace path must NOT trigger a rotation: rotation is already in flight (the new token has been
 // issued; the agent just hasn't picked it up yet). Triggering another would discard the in-flight rotation prematurely.
 func TestVerifyToken_GraceTokenDoesNotReRotate(t *testing.T) {
+	t.Parallel()
 	svc, _, db, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
 	oldTok := enrollOne(t, svc, testHostID)
 
@@ -179,6 +182,7 @@ func TestVerifyToken_GraceTokenDoesNotReRotate(t *testing.T) {
 // RotateToken (operator path) force-rotates regardless of the token's age and emits an audit row tagged with trigger=operator + the
 // supplied actor + reason fields.
 func TestRotateToken_OperatorPath(t *testing.T) {
+	t.Parallel()
 	svc, _, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
 	enrollOne(t, svc, testHostID) // intentionally fresh; operator override should still rotate
 
@@ -199,6 +203,7 @@ func TestRotateToken_OperatorPath(t *testing.T) {
 
 // Rotate on a missing host returns ErrNotFound (no audit, no command).
 func TestRotateToken_MissingHost(t *testing.T) {
+	t.Parallel()
 	svc, _, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
 
 	_, err := svc.RotateToken(t.Context(), "AAAA1111-2222-3333-4444-555566667777",
@@ -211,6 +216,7 @@ func TestRotateToken_MissingHost(t *testing.T) {
 // Rotate against a revoked enrollment also surfaces as ErrNotFound: the row exists but is no longer eligible for rotation. Otherwise
 // an attacker who has the (revoked) token could nudge the row back into a usable state.
 func TestRotateToken_RevokedHost(t *testing.T) {
+	t.Parallel()
 	svc, store, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
 	enrollOne(t, svc, testHostID)
 	require.NoError(t, store.Revoke(t.Context(), testHostID, "compromised", "operator"))
@@ -224,6 +230,7 @@ func TestRotateToken_RevokedHost(t *testing.T) {
 // RotateToken with both Audit and Commands nil must not panic; the service degrades gracefully (DB rotation still happens, audit +
 // command emission no-op). This is the "tests / ingest binary" mode.
 func TestRotateToken_NilDepsOK(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	svc := service.New(service.Options{
@@ -256,6 +263,7 @@ func (erroringRecorder) Record(_ context.Context, _ identityapi.AuditEvent) erro
 // RotateToken must not surface an audit-record failure to the caller: rotation already committed in the DB and a missed audit row is a
 // follow-up incident, not a reason to fail the HTTP 200. The error is logged + swallowed.
 func TestRotateToken_AuditRecordErrorIsSwallowed(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	cmds := &commandCapture{}
@@ -290,6 +298,7 @@ func erroringInserter(_ context.Context, _, _ string, _ []byte) (int64, error) {
 // RotateToken must not surface a commands-enqueue failure: the agent's previous token still works during grace; once grace expires
 // it'll 401 and re-enroll. Acceptable failure mode for a queue hiccup. CommandID must be nil so the wire shape omits command_id.
 func TestRotateToken_CommandsEnqueueErrorIsSwallowed(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	audit := &fakeRecorder{}

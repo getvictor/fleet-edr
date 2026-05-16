@@ -107,6 +107,7 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 // TestEnrollVerifyListRevoke walks the full operator + agent flow: agent enrolls, the host token verifies, the operator list shows the
 // row, the operator revokes, the same token now fails verification, and the listing reflects the revocation.
 func TestEnrollVerifyListRevoke(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	ctx := t.Context()
 
@@ -160,6 +161,7 @@ func TestEnrollVerifyListRevoke(t *testing.T) {
 // TestEnroll_BadSecretMaps401 covers the secret-mismatch branch through
 // the public Service surface.
 func TestEnroll_BadSecretMaps401(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	_, err := ep.Service().Enroll(t.Context(), api.EnrollRequest{
 		EnrollSecret: "wrong",
@@ -173,6 +175,7 @@ func TestEnroll_BadSecretMaps401(t *testing.T) {
 
 // TestEnroll_InvalidHardwareUUID covers the UUID-validation branch.
 func TestEnroll_InvalidHardwareUUID(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	_, err := ep.Service().Enroll(t.Context(), api.EnrollRequest{
 		EnrollSecret: testEnrollSecret,
@@ -186,6 +189,7 @@ func TestEnroll_InvalidHardwareUUID(t *testing.T) {
 
 // TestRevoke_NotFound returns ErrNotFound for an unknown host_id.
 func TestRevoke_NotFound(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	err := ep.Service().Revoke(t.Context(), "00000000-0000-0000-0000-000000000000", "x", "y")
 	require.ErrorIs(t, err, api.ErrNotFound)
@@ -194,6 +198,7 @@ func TestRevoke_NotFound(t *testing.T) {
 // TestVerifyToken_UnknownToken returns ErrInvalidToken; tokens that do not parse must not be distinguishable from tokens that fail the
 // hash check.
 func TestVerifyToken_UnknownToken(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	for _, token := range []string{"garbage", "00000000000000000000000000000000.00000000000000000000000000000000"} {
 		_, err := ep.Service().VerifyToken(t.Context(), token)
@@ -204,6 +209,7 @@ func TestVerifyToken_UnknownToken(t *testing.T) {
 // TestHostTokenMiddleware_PinsHostID enrolls an agent and verifies the HostToken middleware extracts the bearer token, calls
 // VerifyToken, and pins the host_id on the request context.
 func TestHostTokenMiddleware_PinsHostID(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	ctx := t.Context()
 
@@ -276,6 +282,7 @@ func TestHostTokenMiddleware_PinsHostID(t *testing.T) {
 // TestRegisterPublicRoutes_EnrollEndToEnd hits POST /api/enroll through
 // the registered mux, asserting the wire shape the agent depends on.
 func TestRegisterPublicRoutes_EnrollEndToEnd(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	ctx := t.Context()
 
@@ -310,6 +317,7 @@ func TestRegisterPublicRoutes_EnrollEndToEnd(t *testing.T) {
 // TestRegisterAuthedRoutes_OperatorListAndRevoke hits the operator surface end-to-end through RegisterAuthedRoutes (no session
 // middleware in this slim test, so we're verifying the routes are wired and the handlers respond, not the session gate itself).
 func TestRegisterAuthedRoutes_OperatorListAndRevoke(t *testing.T) {
+	t.Parallel()
 	ep := newEndpoint(t)
 	ctx := t.Context()
 
@@ -364,6 +372,7 @@ func TestRegisterAuthedRoutes_OperatorListAndRevoke(t *testing.T) {
 
 // TestBootstrap_MissingDeps surfaces required-field errors.
 func TestBootstrap_MissingDeps(t *testing.T) {
+	t.Parallel()
 	t.Run("nil DB", func(t *testing.T) {
 		_, err := bootstrap.New(bootstrap.Deps{EnrollSecret: testEnrollSecret})
 		require.Error(t, err)

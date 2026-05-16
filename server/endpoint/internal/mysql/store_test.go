@@ -30,6 +30,7 @@ func newTestStore(t *testing.T) *mysql.Store {
 }
 
 func TestRegister_HappyPath(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -60,6 +61,7 @@ func TestRegister_HappyPath(t *testing.T) {
 // scan would still pass. The stronger O(1) contract is enforced at code-review time by pointing at the `WHERE host_token_id = ?` SQL
 // in Verify.
 func TestVerify_LookupByTokenID(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -88,6 +90,7 @@ func TestVerify_LookupByTokenID(t *testing.T) {
 }
 
 func TestRegister_ReenrollRevokesPrevious(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -113,6 +116,7 @@ func TestRegister_ReenrollRevokesPrevious(t *testing.T) {
 }
 
 func TestList_RedactsTokenColumns(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 	_, err := s.Register(ctx, mysql.RegisterRequest{
@@ -133,6 +137,7 @@ func TestList_RedactsTokenColumns(t *testing.T) {
 }
 
 func TestRevoke_IdempotentAndAfterwardsRejected(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 	reg, err := s.Register(ctx, mysql.RegisterRequest{

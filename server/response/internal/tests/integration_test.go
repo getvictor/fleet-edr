@@ -87,6 +87,7 @@ func newResponse(t *testing.T, hb *recordingHeartbeat) *bootstrap.Response {
 // TestInsert_HappyPath inserts a command and confirms it round-trips
 // through Get with the expected fields populated.
 func TestInsert_HappyPath(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -105,6 +106,7 @@ func TestInsert_HappyPath(t *testing.T) {
 // TestInsert_ValidationErrors covers each branch of the service-level validation. Empty strings + zero-byte payload all wrap
 // api.ErrInvalidInsertRequest.
 func TestInsert_ValidationErrors(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -129,6 +131,7 @@ func TestInsert_ValidationErrors(t *testing.T) {
 
 // TestListForHost_FiltersByStatus locks the (host_id, status) filter.
 func TestListForHost_FiltersByStatus(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -155,6 +158,7 @@ func TestListForHost_FiltersByStatus(t *testing.T) {
 // TestListForHost_TriggersHeartbeat asserts the per-poll last-seen side effect fires for the right host. Skipping this regression
 // would silently break the UI's "Online / Offline" pill on every poll.
 func TestListForHost_TriggersHeartbeat(t *testing.T) {
+	t.Parallel()
 	hb := &recordingHeartbeat{}
 	r := newResponse(t, hb)
 	ctx := t.Context()
@@ -171,6 +175,7 @@ func TestListForHost_TriggersHeartbeat(t *testing.T) {
 // TestListForHost_HeartbeatErrorIsNonFatal uses a closure that always returns an error and confirms ListForHost still returns the
 // (empty) command slice. The poll must NOT fail because the hosts table hiccupped -- the agent already got its commands.
 func TestListForHost_HeartbeatErrorIsNonFatal(t *testing.T) {
+	t.Parallel()
 	r := newResponseWithHeartbeat(t, func(context.Context, string, time.Time) error {
 		return errors.New("hosts table down")
 	})
@@ -197,6 +202,7 @@ func newResponseWithHeartbeat(t *testing.T, hb bootstrap.Heartbeat) *bootstrap.R
 // TestUpdateStatus_LifecycleHappyPath walks pending -> acked ->
 // completed end-to-end through the public Service surface.
 func TestUpdateStatus_LifecycleHappyPath(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -229,6 +235,7 @@ func TestUpdateStatus_LifecycleHappyPath(t *testing.T) {
 // TestUpdateStatus_RejectsForbiddenTransitions covers two key invariants: pending -> completed (must ack first) and a terminal state
 // being immutable.
 func TestUpdateStatus_RejectsForbiddenTransitions(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -262,6 +269,7 @@ func TestUpdateStatus_RejectsForbiddenTransitions(t *testing.T) {
 // TestUpdateStatus_ForeignHostRejected: host-b cannot ack host-a's command. The collapse to ErrCommandNotFound (not a distinct "wrong
 // host" error) defends against probing for other hosts' command_ids.
 func TestUpdateStatus_ForeignHostRejected(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -284,6 +292,7 @@ func TestUpdateStatus_ForeignHostRejected(t *testing.T) {
 // only host-a's commands -- ?host_id=host-b query spoofing is ignored. Inherits the phase-1 TestHostScopedCommandAccess regression
 // coverage.
 func TestAgentRoutes_HostTokenScoped(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -332,6 +341,7 @@ func TestAgentRoutes_HostTokenScoped(t *testing.T) {
 // TestOperatorRoutes_PostAndGet covers the session-gated surface. Tests don't wrap in real session+CSRF middleware -- those are owned
 // by identity and tested there. Here we just confirm the routes are wired and the bodies + audit payloads match.
 func TestOperatorRoutes_PostAndGet(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -395,6 +405,7 @@ func TestOperatorRoutes_PostAndGet(t *testing.T) {
 
 // TestCountPending counts only pending rows (not acked / completed).
 func TestCountPending(t *testing.T) {
+	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
@@ -409,6 +420,7 @@ func TestCountPending(t *testing.T) {
 
 // TestBootstrap_MissingDB surfaces the required-field error.
 func TestBootstrap_MissingDB(t *testing.T) {
+	t.Parallel()
 	_, err := bootstrap.New(bootstrap.Deps{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DB")

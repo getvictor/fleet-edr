@@ -555,7 +555,7 @@ func registerUIRoutes(
 	breakglassUIGate func(http.Handler) http.Handler,
 	logger *slog.Logger,
 ) {
-	uiDist, err := ui.FS()
+	uiDist, err := ui.FS(ui.LiveDirFromEnv())
 	if err != nil {
 		logger.ErrorContext(context.Background(), "embed ui", "err", err)
 		mux.HandleFunc("/ui/", func(w http.ResponseWriter, _ *http.Request) {

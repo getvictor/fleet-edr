@@ -79,6 +79,19 @@ linters:
           msg: "Don't use the default logger. Use a specific *slog.Logger instance."
         - pattern: "slog\\.Logger\\.(Debug|Info|Warn|Error)$"
           msg: "use DebugContext/InfoContext/WarnContext/ErrorContext instead"
+        # Process-env mutation is a parallel-suite footgun: t.Setenv forces the test off the parallel scheduler,
+        # os.Setenv leaks across tests. Construct the dependency directly and pass the resolved value in. See issue #172.
+        - pattern: "^os\\.Setenv$"
+          msg: "do not mutate process env; pass the resolved value as a dependency (issue #172)"
+        - pattern: "Setenv$"
+          msg: "do not mutate process env in tests; pass the resolved value as a dependency (issue #172)"
+        # Lift env reads up to wiring (cmd/main or constructors) so library code does not read process env. The few
+        # approved boundary sites (server/testdb/open.go, server/config/config.go, server/ui/embed.go) annotate with
+        # //nolint:forbidigo pointing at issue #172.
+        - pattern: "^os\\.Getenv$"
+          msg: "lift env reads to wiring; library code must accept the value as a parameter (issue #172)"
+        - pattern: "^os\\.LookupEnv$"
+          msg: "lift env reads to wiring; library code must accept the value as a parameter (issue #172)"
       analyze-types: true
 
     depguard:
@@ -234,3 +247,15 @@ linters:
       - path: test/(loadtest|integration/setup)\.go
         linters:
           - mnd
+      # Issue #172 env-reads rules are scoped to server/ per the issue's acceptance criteria. agent/ and
+      # internal/ have their own env-read sites (agent/config conffile, internal/observability OTel env)
+      # that need to be lifted to wiring before the rule can be adopted there; those are separate followups.
+      # The exclusion matches by message text so existing forbidigo rules (slog, print, etc) still apply.
+      - path: ^agent/
+        linters:
+          - forbidigo
+        text: "issue #172"
+      - path: ^internal/
+        linters:
+          - forbidigo
+        text: "issue #172"

@@ -47,6 +47,7 @@ func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, *sqlx.DB, *
 // JIT path: an unknown subject creates a user + identity + role binding atomically, audits user_created, returns ids the handler uses
 // to mint the session.
 func TestProvisionOrFind_JITNewUser(t *testing.T) {
+	t.Parallel()
 	p, db, rec := newProvisioner(t, true)
 	uid, idID, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-1",
@@ -91,6 +92,7 @@ func TestProvisionOrFind_JITNewUser(t *testing.T) {
 // (not a 500) so the handler can render a directed page; an admin promotes the binding later. Pinned because Gemini flagged this as a
 // graceful-degradation gap.
 func TestProvisionOrFind_EmailCollision(t *testing.T) {
+	t.Parallel()
 	p, db, _ := newProvisioner(t, true)
 
 	// Pre-seed a local-password user with the email the IdP will claim.
@@ -112,6 +114,7 @@ func TestProvisionOrFind_EmailCollision(t *testing.T) {
 // insert hits MySQL 1062 and the provisioner must recover by re-reading the now-existing row. Pinned because Copilot flagged the race
 // window.
 func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
+	t.Parallel()
 	p, db, _ := newProvisioner(t, true)
 
 	// Bootstrap the "winner" via a normal JIT call.
@@ -143,6 +146,7 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 // email_verified=false: the IdP says the address isn't owned by the subject. JIT must NOT bind the unverified email as the user's
 // primary email; fall back to the subject-prefixed sentinel so an admin promotion path can attach the real email later.
 func TestProvisionOrFind_EmailUnverifiedFallsBackToSentinel(t *testing.T) {
+	t.Parallel()
 	p, db, _ := newProvisioner(t, true)
 
 	verified := false
@@ -163,6 +167,7 @@ func TestProvisionOrFind_EmailUnverifiedFallsBackToSentinel(t *testing.T) {
 // email_verified absent (claim omitted) is trusted: spec says when the claim is missing, fall back to out-of-band trust in the IdP.
 // Wave-1 trusts the seeded IdPs (Okta / Auth0) which always emit it.
 func TestProvisionOrFind_EmailUnclaimedIsTrusted(t *testing.T) {
+	t.Parallel()
 	p, db, _ := newProvisioner(t, true)
 
 	uid, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
@@ -181,6 +186,7 @@ func TestProvisionOrFind_EmailUnclaimedIsTrusted(t *testing.T) {
 // Existing identity short-circuits: lookup-by-(provider, subject) hits the existing row, no new user / identity / role binding is
 // inserted, no audit row is emitted (the chokepoint will audit the subsequent privileged-route call separately).
 func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
+	t.Parallel()
 	p, db, rec := newProvisioner(t, true)
 
 	// Pre-seed an existing user + OIDC identity.
@@ -213,6 +219,7 @@ func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
 // "oidc.unknown_subject"; the provisioner itself does not audit (the subject hasn't been bound to a user, so there's nothing
 // actor-shaped to record yet).
 func TestProvisionOrFind_JITDisabledUnknownSubject(t *testing.T) {
+	t.Parallel()
 	p, _, rec := newProvisioner(t, false)
 	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-3",
@@ -226,6 +233,7 @@ func TestProvisionOrFind_JITDisabledUnknownSubject(t *testing.T) {
 // JIT disabled + existing identity still resolves (no JIT needed for pre-provisioned users). Confirms the gate is positioned
 // correctly: only the create branch is conditional on AllowJIT.
 func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
+	t.Parallel()
 	// Bootstrap an existing identity via the JIT-enabled path.
 	pEnabled, db, _ := newProvisioner(t, true)
 	uid, _, err := pEnabled.ProvisionOrFind(t.Context(), &oidc.Claims{
@@ -250,6 +258,7 @@ func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 // Empty subject is rejected with a clear error. Defense-in-depth: if a future IdP somehow produces an empty sub claim (it never should
 // per OIDC spec), the provisioner refuses rather than creating a user keyed on the empty string.
 func TestProvisionOrFind_EmptySubject(t *testing.T) {
+	t.Parallel()
 	p, _, _ := newProvisioner(t, true)
 	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: ""})
 	require.Error(t, err)

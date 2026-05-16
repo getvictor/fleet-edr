@@ -51,6 +51,7 @@ func runAndCancel(t *testing.T, w *audit.AsyncWriter, d time.Duration) {
 // Submit accepts events up to capacity and writes them to the store once Run drains. End-to-end smoke test against the real DB so the
 // store's INSERT shape is exercised, not just the channel plumbing.
 func TestAsyncWriter_SubmitDrainsToStore(t *testing.T) {
+	t.Parallel()
 	uid := int64(1)
 	w, _, db := newWriterWithStore(t, 16, slog.Default())
 
@@ -73,6 +74,7 @@ func TestAsyncWriter_SubmitDrainsToStore(t *testing.T) {
 // Drop policy: queue_full -> Submit returns false, slog WARN captures the dropped event for the dual-emit secondary backend, Dropped()
 // counter increments.
 func TestAsyncWriter_DropOnFull(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
@@ -95,6 +97,7 @@ func TestAsyncWriter_DropOnFull(t *testing.T) {
 // On graceful shutdown the writer must drain queued events before
 // returning. The DB row count proves the events landed.
 func TestAsyncWriter_DrainOnShutdown(t *testing.T) {
+	t.Parallel()
 	uid := int64(2)
 	w, _, db := newWriterWithStore(t, 16, slog.Default())
 
@@ -126,6 +129,7 @@ func TestAsyncWriter_DrainOnShutdown(t *testing.T) {
 // production: queue_full (transient) and writer_stopped (terminal); distinguishing them in the slog line lets a dashboard separate "we
 // burst" from "we shut down with traffic still arriving."
 func TestAsyncWriter_SubmitAfterStopDrops(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	w, _, _ := newWriterWithStore(t, 8, logger)
@@ -142,6 +146,7 @@ func TestAsyncWriter_SubmitAfterStopDrops(t *testing.T) {
 // Concurrent Submit from many goroutines must not panic and the total accepted + dropped count must equal the offered count. This
 // guards against a future race when someone "optimises" the queue full path.
 func TestAsyncWriter_ConcurrentSubmit(t *testing.T) {
+	t.Parallel()
 	w, _, _ := newWriterWithStore(t, 32, slog.Default())
 
 	const goroutines, perGoroutine = 8, 100
@@ -168,6 +173,7 @@ func TestAsyncWriter_ConcurrentSubmit(t *testing.T) {
 // NewAsyncWriter panics on a nil store. A writer that buffers events with nowhere to send them is a programming error; the panic
 // surfaces it at construction time rather than on the first Submit.
 func TestAsyncWriter_NilStorePanics(t *testing.T) {
+	t.Parallel()
 	assert.Panics(t, func() {
 		_ = audit.NewAsyncWriter(nil, audit.AsyncOptions{})
 	})
@@ -176,6 +182,7 @@ func TestAsyncWriter_NilStorePanics(t *testing.T) {
 // Zero values for QueueCap + Logger fall through to the documented defaults; the writer constructs without ceremony for cmd/main's
 // "use the defaults" path.
 func TestAsyncWriter_ZeroOptionsUsesDefaults(t *testing.T) {
+	t.Parallel()
 	store := audit.New(testdb.Open(t), nil)
 	w := audit.NewAsyncWriter(store, audit.AsyncOptions{})
 	assert.NotNil(t, w)
@@ -186,6 +193,7 @@ func TestAsyncWriter_ZeroOptionsUsesDefaults(t *testing.T) {
 // all subsequent Submits return false. This test stresses the boundary by spawning many concurrent Submits while cancelling Run;
 // every returned-true Submit must result in an audit_events row, every returned-false must show a "writer_stopped" slog line.
 func TestAsyncWriter_ShutdownRace_NoLostEvents(t *testing.T) {
+	t.Parallel()
 	w, _, db := newWriterWithStore(t, 32, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,12 +257,14 @@ const intMaxAsUint64 uint64 = 1<<63 - 1
 // drain bounded by the global deadline: when the wall clock runs out before the queue empties, remaining events spill to slog as
 // "drain_deadline_exceeded" rather than blocking shutdown forever.
 func TestAsyncWriter_DrainGlobalDeadline_SpillsToSlog(t *testing.T) {
+	t.Parallel()
 	t.Skip("skipping: the 30s global deadline is slow for a unit test; behavior is exercised by TestAsyncWriter_ShutdownRace_NoLostEvents under a degraded DB")
 }
 
 // Sanity: the dropped slog line carries the payload so post-incident
 // log scraping can reconstruct what didn't land in the DB.
 func TestAsyncWriter_DropPreservesPayload(t *testing.T) {
+	t.Parallel()
 	var buf strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&loggerWriter{&buf}, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	w, _, _ := newWriterWithStore(t, 1, logger)

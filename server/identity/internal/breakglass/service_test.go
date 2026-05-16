@@ -60,6 +60,7 @@ func newService(t *testing.T, allowJIT ...bool) (*breakglass.Service, *sqlx.DB, 
 // IssueSetupToken returns a non-empty plaintext + persisted Token
 // row; FindValid via the underlying TokenStore round-trips.
 func TestService_IssueSetupToken(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid := newService(t)
 	plaintext, tok, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -79,6 +80,7 @@ func TestService_IssueSetupToken(t *testing.T) {
 // HasCredential reports false for a fresh user, true after a
 // credential is inserted.
 func TestService_HasCredential(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid := newService(t)
 	has, err := svc.HasCredential(t.Context(), uid)
 	require.NoError(t, err)
@@ -97,6 +99,7 @@ func TestService_HasCredential(t *testing.T) {
 // BeginSetup happy path: a valid token returns a SetupChallenge + the bound Token + User. The challenge carries a non-empty
 // SessionData (the engine-internal challenge state the cookie rides).
 func TestService_BeginSetup_HappyPath(t *testing.T) {
+	t.Parallel()
 	svc, _, _, uid := newService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -116,6 +119,7 @@ func TestService_BeginSetup_HappyPath(t *testing.T) {
 // BeginSetup with an unknown token returns ErrTokenInvalid; the
 // typed error is what the handler audits as bootstrap.invalid.
 func TestService_BeginSetup_TokenInvalid(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := newService(t)
 	_, _, _, err := svc.BeginSetup(t.Context(), "this-is-not-a-real-token")
 	assert.ErrorIs(t, err, breakglass.ErrTokenInvalid)
@@ -123,6 +127,7 @@ func TestService_BeginSetup_TokenInvalid(t *testing.T) {
 
 // BeginSetup with a consumed token returns ErrTokenConsumed.
 func TestService_BeginSetup_TokenConsumed(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid := newService(t)
 	plaintext, tok, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
@@ -138,6 +143,7 @@ func TestService_BeginSetup_TokenConsumed(t *testing.T) {
 // BeginLogin with an email that has no registered credentials surfaces ErrNoCredentials. The handler collapses this onto the same wire
 // response as "user not found" so attackers cannot enumerate.
 func TestService_BeginLogin_NoCredentials(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := newService(t)
 	_, _, err := svc.BeginLogin(t.Context(), "admin@fleet-edr.local")
 	assert.ErrorIs(t, err, breakglass.ErrNoCredentials)
@@ -145,6 +151,7 @@ func TestService_BeginLogin_NoCredentials(t *testing.T) {
 
 // BeginLogin with a non-existent email also surfaces ErrNoCredentials (collapsed from users.ErrNotFound to prevent enumeration).
 func TestService_BeginLogin_UnknownEmail(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := newService(t)
 	_, _, err := svc.BeginLogin(t.Context(), "ghost@example.com")
 	assert.ErrorIs(t, err, breakglass.ErrNoCredentials)
@@ -153,6 +160,7 @@ func TestService_BeginLogin_UnknownEmail(t *testing.T) {
 // BeginLogin happy path: a user with at least one credential
 // returns a LoginChallenge + the User row.
 func TestService_BeginLogin_HappyPath(t *testing.T) {
+	t.Parallel()
 	svc, db, _, uid := newService(t)
 	creds := breakglass.NewCredentialStore(db)
 	_, err := creds.InsertWith(t.Context(), db, uid,
@@ -170,6 +178,7 @@ func TestService_BeginLogin_HappyPath(t *testing.T) {
 // BeginLogin against a non-break-glass user surfaces ErrNoCredentials. Pinned because non-breakglass users MUST go through OIDC;
 // the wire response collapses to the same shape so an attacker cannot probe for the type.
 func TestService_BeginLogin_NonBreakglass(t *testing.T) {
+	t.Parallel()
 	svc, db, _, _ := newService(t)
 	// Pre-seed a non-breakglass user.
 	_, err := db.ExecContext(t.Context(),
@@ -184,6 +193,7 @@ func TestService_BeginLogin_NonBreakglass(t *testing.T) {
 // AuditSuccess + AuditFailure produce the spec-pinned action names
 // + payload shape the handler relies on.
 func TestService_AuditHelpers(t *testing.T) {
+	t.Parallel()
 	svc, _, rec, uid := newService(t)
 	user := &users.User{ID: uid, Email: "admin@fleet-edr.local"}
 
@@ -205,6 +215,7 @@ func TestService_AuditHelpers(t *testing.T) {
 // NewService panics on any missing dependency. Pinned because the constructor is the only place where the wire-up gets validated;
 // a regression that dropped a panic would let production boot with a half-built service.
 func TestNewService_PanicsOnMissingDeps(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		mut  func(*breakglass.ServiceOptions)
@@ -246,6 +257,7 @@ func TestNewService_PanicsOnMissingDeps(t *testing.T) {
 // Sanity: ProvisionerOptions logger nil falls through to slog.Default().
 // Cover the nil-logger branch of NewService.
 func TestNewService_DefaultLogger(t *testing.T) {
+	t.Parallel()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	wa, err := breakglass.NewWebAuthn(breakglass.WebAuthnOptions{

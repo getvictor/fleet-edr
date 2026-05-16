@@ -16,6 +16,7 @@ import (
 // missing process row, malformed payload, and the custom_msg default. Each case names the property under test rather than the input;
 // a failure here pinpoints the exact mapping invariant that broke.
 func TestApplicationControlBlock_TableDriven(t *testing.T) {
+	t.Parallel()
 	customMsg := "Blocked: Calculator is not allowed"
 	cases := []struct {
 		name         string
@@ -138,6 +139,7 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			rule := &ApplicationControlBlock{}
 			payload, err := json.Marshal(tc.payload)
 			require.NoError(t, err)
@@ -171,6 +173,7 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 // unreachable, query timeout). The rule must propagate that error so the processor can unclaim + retry the batch instead of silently
 // dropping the block.
 func TestApplicationControlBlock_GraphReaderError(t *testing.T) {
+	t.Parallel()
 	rule := &ApplicationControlBlock{}
 	payload, err := json.Marshal(map[string]any{
 		"pid":            100,

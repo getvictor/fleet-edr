@@ -69,6 +69,7 @@ func ageToken(t *testing.T, db *sqlx.DB, hostID string, age time.Duration) {
 // queues with the new bearer in the payload; an audit row records trigger=auto. The new token verifies; the old token still verifies
 // during grace and reports MatchedPrevious-equivalent behaviour by NOT triggering a second rotation.
 func TestRotation_AutoTriggerOnStaleToken(t *testing.T) {
+	t.Parallel()
 	ep, db, cmds, audit := withRotation(t, time.Hour, 5*time.Minute)
 	ctx := t.Context()
 
@@ -110,6 +111,7 @@ func TestRotation_AutoTriggerOnStaleToken(t *testing.T) {
 // TestRotation_OldTokenRejectedAfterGrace: same setup, but a 100ms grace + sleep past it proves the previous-token grace boundary is
 // the actual cutoff. Without this, a leaked token would stay valid forever even after rotation.
 func TestRotation_OldTokenRejectedAfterGrace(t *testing.T) {
+	t.Parallel()
 	ep, db, _, _ := withRotation(t, time.Hour, 100*time.Millisecond)
 	ctx := t.Context()
 
@@ -134,6 +136,7 @@ func TestRotation_OldTokenRejectedAfterGrace(t *testing.T) {
 // TestRotation_OperatorPath: explicit Service.RotateToken bypasses the lifetime check (operator wants a fresh token NOW). Audit row
 // carries trigger=operator + actor + reason. CommandID is non-zero so a UI can wait for the agent to ack via /api/commands/{id}.
 func TestRotation_OperatorPath(t *testing.T) {
+	t.Parallel()
 	ep, _, cmds, audit := withRotation(t, 24*time.Hour, 5*time.Minute)
 	ctx := t.Context()
 
@@ -165,6 +168,7 @@ func TestRotation_OperatorPath(t *testing.T) {
 // TestRotation_RevokedHostNotRotatable: revoke + rotate must surface ErrNotFound rather than silently rehydrating the row. The audit
 // reviewer's mental model is "revoke is terminal"; a back-door rotation would defeat that.
 func TestRotation_RevokedHostNotRotatable(t *testing.T) {
+	t.Parallel()
 	ep, _, cmds, audit := withRotation(t, 24*time.Hour, time.Minute)
 	ctx := t.Context()
 

@@ -26,6 +26,7 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
 // The Phase 4b flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
 func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
+	t.Parallel()
 	us, rb, db := newSeedFixture(t)
 	var stderr bytes.Buffer
 
@@ -51,6 +52,7 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 // Idempotent: a second seed against the same DB returns the existing row instead of attempting another insert AND does not duplicate
 // the role binding (rbac unique key swallows the conflict). Pinned because container restarts re-run the seed step.
 func TestAdmin_IdempotentOnRerun(t *testing.T) {
+	t.Parallel()
 	us, rb, _ := newSeedFixture(t)
 	first, _, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
 	require.NoError(t, err)
@@ -71,6 +73,7 @@ func TestAdmin_IdempotentOnRerun(t *testing.T) {
 // SelfHealsMissingBinding: a deployment that lost the role binding (manual SQL surgery, partially-restored backup) gets the binding
 // back on the next seed call. Pinned because this is the recovery path the bug-fix that introduced bind-on-seed unblocks.
 func TestAdmin_SelfHealsMissingRoleBinding(t *testing.T) {
+	t.Parallel()
 	us, rb, db := newSeedFixture(t)
 	first, _, err := seed.Admin(t.Context(), us, rb, slog.Default(), nil)
 	require.NoError(t, err)
@@ -94,6 +97,7 @@ func TestAdmin_SelfHealsMissingRoleBinding(t *testing.T) {
 // to prevent a regression that returns the table-non-empty short circuit (the wave-0 carve-out, removed pre-pilot because there is no
 // wave-0 deployment to migrate from).
 func TestAdmin_SeedsAlongsideUnrelatedUsers(t *testing.T) {
+	t.Parallel()
 	us, rb, _ := newSeedFixture(t)
 	_, err := us.Create(t.Context(), users.CreateRequest{
 		Email: "first@example.com", Password: "this-is-a-long-pw",
@@ -108,11 +112,13 @@ func TestAdmin_SeedsAlongsideUnrelatedUsers(t *testing.T) {
 }
 
 func TestAdmin_NilStoreErrors(t *testing.T) {
+	t.Parallel()
 	_, _, err := seed.Admin(t.Context(), nil, nil, slog.Default(), nil)
 	require.Error(t, err)
 }
 
 func TestAdmin_NilRBACErrors(t *testing.T) {
+	t.Parallel()
 	us, _, _ := newSeedFixture(t)
 	_, _, err := seed.Admin(t.Context(), us, nil, slog.Default(), nil)
 	require.Error(t, err)
@@ -121,6 +127,7 @@ func TestAdmin_NilRBACErrors(t *testing.T) {
 // Defensive guard: a non-breakglass row at the canonical admin email is an unexpected state (no pre-pilot deployment produces it).
 // Admin SHOULD fail loud rather than silently rewrite the row.
 func TestAdmin_CanonicalEmailNonBreakglassErrors(t *testing.T) {
+	t.Parallel()
 	us, rb, _ := newSeedFixture(t)
 	_, err := us.Create(t.Context(), users.CreateRequest{
 		Email: seed.DefaultAdminEmail, Password: "this-is-a-long-pw",
@@ -137,6 +144,7 @@ func TestAdmin_CanonicalEmailNonBreakglassErrors(t *testing.T) {
 // CreateBreakglass. Pinned because the silent-fall-through was the pre-cleanup behaviour; a regression would mean a DB outage gets
 // papered over as "fresh DB, seed away".
 func TestAdmin_GetByEmailErrorPropagates(t *testing.T) {
+	t.Parallel()
 	us, rb, db := newSeedFixture(t)
 	require.NoError(t, db.Close(), "force GetByEmail into a real error path")
 
@@ -148,6 +156,7 @@ func TestAdmin_GetByEmailErrorPropagates(t *testing.T) {
 // Nil logger falls back to slog.Default(). Pinned so a caller that forgets to pass a logger does not nil-deref the WarnContext /
 // InfoContext calls inside the seed flow.
 func TestAdmin_NilLoggerUsesDefault(t *testing.T) {
+	t.Parallel()
 	us, rb, _ := newSeedFixture(t)
 	u, _, err := seed.Admin(t.Context(), us, rb, nil, nil)
 	require.NoError(t, err)

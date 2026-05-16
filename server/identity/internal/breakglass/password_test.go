@@ -14,6 +14,7 @@ import (
 // satisfy the floor with three 4-byte runes; a regression that dropped the floor entirely would re-open the wave-0 weak-password
 // surface that motivated Phase 4 in the first place.
 func TestValidatePassword(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		input   string
@@ -33,6 +34,7 @@ func TestValidatePassword(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			err := breakglass.ValidatePassword(tc.input)
 			if tc.wantErr == nil {
 				require.NoError(t, err)

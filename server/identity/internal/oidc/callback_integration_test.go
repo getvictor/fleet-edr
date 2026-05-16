@@ -120,6 +120,7 @@ func (e *callbackTestEnv) callbackRequest(t *testing.T, stateOverride string) *h
 // Happy path: state cookie verifies, code exchanges, JIT runs (subject is fresh, JIT enabled), session minted, response is a 302 to
 // the state's pinned redirect with both cookies set. Audits one auth.oidc.success row plus one user.created row from the provisioner.
 func TestHandleCallback_HappyPath_JITNewUser(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, &oidc.Claims{
 		Subject: "okta-happy",
 		Email:   "happy@example.com",
@@ -160,6 +161,7 @@ func TestHandleCallback_HappyPath_JITNewUser(t *testing.T) {
 // JIT disabled + unknown subject: handler emits auth.oidc.failure with
 // reason oidc.unknown_subject and 302s to /login?error=unknown_subject.
 func TestHandleCallback_UnknownSubject_JITDisabled(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, false, &oidc.Claims{
 		Subject: "okta-unknown",
 		Email:   "stranger@example.com",
@@ -185,6 +187,7 @@ func TestHandleCallback_UnknownSubject_JITDisabled(t *testing.T) {
 // Email collision: a local-password user already owns the email the IdP advertises. Handler emits auth.oidc.failure with reason
 // oidc.email_conflict and 302s to /login?error=email_conflict.
 func TestHandleCallback_EmailCollision(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, &oidc.Claims{
 		Subject: "okta-collision",
 		Email:   "taken@example.com",
@@ -212,6 +215,7 @@ func TestHandleCallback_EmailCollision(t *testing.T) {
 // Exchange failure: token-endpoint returned an error. Spec puts this
 // at 502 (upstream IdP failure) with reason oidc.exchange_failed.
 func TestHandleCallback_ExchangeFailureUpstream(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, nil)
 	env.idp.exchange = errors.New("idp 503 service unavailable")
 
@@ -234,6 +238,7 @@ func TestHandleCallback_ExchangeFailureUpstream(t *testing.T) {
 // HandleLogin sets a state cookie and redirects to the IdP. Pinned
 // here to confirm the cookie's flags + the redirect target.
 func TestHandleLogin_SetsCookieAndRedirects(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, nil)
 	r := httptest.NewRequestWithContext(t.Context(), "GET",
 		"/api/auth/login?next=/ui/hosts", nil)
@@ -263,6 +268,7 @@ func TestHandleLogin_SetsCookieAndRedirects(t *testing.T) {
 // an IdP that's mid-session would silently re-issue a token, defeating the Phase 5 freshness model. Pin here so a regression in
 // withPromptLogin or in handleLogin's branch surfaces immediately.
 func TestHandleLogin_ReauthSetsPromptLogin(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, nil)
 	r := httptest.NewRequestWithContext(t.Context(), "GET",
 		"/api/auth/login?reauth=1&next=/ui/hosts", nil)
@@ -280,6 +286,7 @@ func TestHandleLogin_ReauthSetsPromptLogin(t *testing.T) {
 // HandleLogin without reauth=1 must NOT set prompt=login. Guards a regression that always sets it (which would defeat the IdP's own
 // session reuse on every login).
 func TestHandleLogin_NormalLoginOmitsPromptLogin(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, nil)
 	r := httptest.NewRequestWithContext(t.Context(), "GET",
 		"/api/auth/login?next=/ui/hosts", nil)
@@ -297,6 +304,7 @@ func TestHandleLogin_NormalLoginOmitsPromptLogin(t *testing.T) {
 // RegisterPublicRoutes mounts both routes against a mux. Pinned to
 // catch a regression that splits the prefix or mounts only one.
 func TestRegisterPublicRoutes(t *testing.T) {
+	t.Parallel()
 	env := newCallbackEnv(t, true, nil)
 	mux := http.NewServeMux()
 	env.handler.RegisterPublicRoutes(mux)

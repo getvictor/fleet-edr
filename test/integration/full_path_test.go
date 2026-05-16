@@ -35,6 +35,7 @@ import (
 // procedural and readable; the helpers carry the per-step
 // boilerplate.
 func TestFullPath_EnrollIngestCommandAck(t *testing.T) {
+	t.Parallel()
 	stack := Setup(t)
 
 	const hostID = "AAAA1111-2222-3333-4444-555566667777"

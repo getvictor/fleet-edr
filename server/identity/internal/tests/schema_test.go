@@ -60,6 +60,7 @@ func tableExists(t *testing.T, db *sqlx.DB, table string) bool {
 // exist after ApplySchema. The pre-existing tables (users, sessions, audit_events) are checked together with the new arrivals so a
 // regression that drops one of them is also caught here.
 func TestSchema_NewTablesPresent(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 
 	for _, table := range []string{
@@ -76,6 +77,7 @@ func TestSchema_NewTablesPresent(t *testing.T) {
 // TestSchema_TenantsTableAbsent pins the inverse: the legacy `tenants` scaffolding table was removed when the product was finalised as
 // a single-instance deployment. A regression that re-introduces it silently is caught here.
 func TestSchema_TenantsTableAbsent(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	assert.Falsef(t, tableExists(t, db, "tenants"), "tenants table must not be re-introduced; the product is single-instance")
 }
@@ -83,6 +85,7 @@ func TestSchema_TenantsTableAbsent(t *testing.T) {
 // TestSchema_UsersColumnsAdded verifies the users-table additive columns are present with the expected nullability + defaults.
 // password_hash and password_salt MUST be nullable now so an SSO-only user (no local credential) is representable.
 func TestSchema_UsersColumnsAdded(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	cols := readColumns(t, db, "users")
 
@@ -115,6 +118,7 @@ func TestSchema_UsersColumnsAdded(t *testing.T) {
 // TestSchema_UsersTenantIDAbsent pins the removal: users no longer carries tenant_id now that the product is a single-instance
 // deployment. Regression-guards against re-introducing it.
 func TestSchema_UsersTenantIDAbsent(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	cols := readColumns(t, db, "users")
 	_, present := cols["tenant_id"]
@@ -124,6 +128,7 @@ func TestSchema_UsersTenantIDAbsent(t *testing.T) {
 // TestSchema_SessionsColumnsAdded verifies sessions gained identity_id (nullable, populated by future SSO + break-glass flows) and
 // auth_method ('local_password' default so existing sessions stay loginable through the swap).
 func TestSchema_SessionsColumnsAdded(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	cols := readColumns(t, db, "sessions")
 
@@ -142,6 +147,7 @@ func TestSchema_SessionsColumnsAdded(t *testing.T) {
 // spec names plus the wildcard scope_id default. The chokepoint will lean on this shape to deny non-deployment scopes with reason
 // `scope_not_yet_supported` until the wave-2 resolver ships.
 func TestSchema_RoleBindingsScopeShape(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	cols := readColumns(t, db, "role_bindings")
 
@@ -165,6 +171,7 @@ func TestSchema_RoleBindingsScopeShape(t *testing.T) {
 // TestSchema_RoleBindingsTenantIDAbsent pins the removal: role_bindings no longer carries tenant_id now that the product is a
 // single-instance deployment. Regression-guards against re-introducing it.
 func TestSchema_RoleBindingsTenantIDAbsent(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	cols := readColumns(t, db, "role_bindings")
 	_, present := cols["tenant_id"]
@@ -175,6 +182,7 @@ func TestSchema_RoleBindingsTenantIDAbsent(t *testing.T) {
 // path's unconditional call a no-op on the second deploy; a regression that turns it into a hard error would surface here rather than
 // in production.
 func TestSchema_Idempotent(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db),
 		"second ApplySchema must succeed against a populated DB")
@@ -184,6 +192,7 @@ func TestSchema_Idempotent(t *testing.T) {
 // future admin API can refuse to delete them). The ID set is the wire-shape vocabulary OPA / Rego policy bundles will reference;
 // a reorder or rename here is a contract break.
 func TestSeed_BuiltinRoles(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 
 	type roleRow struct {
@@ -207,6 +216,7 @@ func TestSeed_BuiltinRoles(t *testing.T) {
 // TestSeed_Idempotent locks in the same upgrade-path invariant as the schema test, but for the seed step: re-running ApplySchema does
 // not duplicate the role rows. The seed uses INSERT IGNORE; this test catches a regression that swaps it for INSERT or REPLACE.
 func TestSeed_Idempotent(t *testing.T) {
+	t.Parallel()
 	db := openIdentitySchema(t)
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
 
