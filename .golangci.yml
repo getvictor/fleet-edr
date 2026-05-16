@@ -247,15 +247,3 @@ linters:
       - path: test/(loadtest|integration/setup)\.go
         linters:
           - mnd
-      # Issue #172 env-reads rules are scoped to server/ per the issue's acceptance criteria. agent/ and
-      # internal/ have their own env-read sites (agent/config conffile, internal/observability OTel env)
-      # that need to be lifted to wiring before the rule can be adopted there; those are separate followups.
-      # The exclusion matches by message text so existing forbidigo rules (slog, print, etc) still apply.
-      - path: ^agent/
-        linters:
-          - forbidigo
-        text: "issue #172"
-      - path: ^internal/
-        linters:
-          - forbidigo
-        text: "issue #172"
