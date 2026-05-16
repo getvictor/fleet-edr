@@ -90,7 +90,7 @@ type killPayload struct {
 // the extension parses the same JSON bytes and the byte-shape must match across all three sides. The commander's job is envelope
 // validation (policy_id present, version positive, rules is a JSON array) before handing the raw bytes off to the extension;
 // the per-rule decode happens on the extension side, which is the only consumer that actually walks the rules list. Gating on the
-// rules-is-an- array check here prevents reporting `completed` for a payload the extension will silently fail to decode.
+// rules-is-an-array check here prevents reporting `completed` for a payload the extension will silently fail to decode.
 type setApplicationControlPayload struct {
 	PolicyID      int64 `json:"policy_id"`
 	PolicyVersion int64 `json:"policy_version"`

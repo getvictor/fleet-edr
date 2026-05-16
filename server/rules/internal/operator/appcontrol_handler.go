@@ -19,7 +19,7 @@ import (
 const applicationControlReadBodyLimit = 16 * 1024
 
 // internalErrorMessage is the human-readable body the handler writes on every 5xx response that isn't otherwise typed. Extracted to
-// one constant so the wire shape stays stable and Sonar's duplicate- literal rule (go:S1192) doesn't fire on the four call sites.
+// one constant so the wire shape stays stable and Sonar's duplicate-literal rule (go:S1192) doesn't fire on the four call sites.
 const internalErrorMessage = "internal error"
 
 // AppControlHandler serves the rules-context /api/v1/app-control/* admin routes. Separate from the catalog Handler because the

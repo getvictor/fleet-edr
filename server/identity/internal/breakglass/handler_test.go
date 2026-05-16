@@ -589,7 +589,7 @@ func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
 	assert.Equal(t, "no_credentials", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth challenge with no session on ctx returns 500. Defense-in- depth against a routing misconfig — the handler must not silently
+// Reauth challenge with no session on ctx returns 500. Defense-in-depth against a routing misconfig — the handler must not silently
 // continue without an authenticated session.
 func TestHandleReauthChallenge_NoSession(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)

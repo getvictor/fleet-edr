@@ -387,7 +387,7 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Per-email budget: token-bucket Allow() is consume-or-reject; no non-consuming peek is exposed by the IPLimiter primitive. Consume
-	// one token at the START of the attempt so a brute- forcer who exhausted the budget on prior failures cannot trigger another argon2 +
+	// one token at the START of the attempt so a brute-forcer who exhausted the budget on prior failures cannot trigger another argon2 +
 	// WebAuthn round-trip. Successful logins burn one slot too, but break-glass logins are rare by design (incident-only) so the wasted
 	// slot is harmless. Spec nuance: this is the failed-login budget, but practical constraint of consume-only limiters means it gates
 	// EVERY attempt; the documentation in ratelimit.go has been updated to reflect this.
@@ -702,7 +702,7 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 }
 
 // readSessionCookieToken decodes the api.SessionCookieName value back into the raw plaintext token bytes. Mirrors the middleware's
-// cookie- read path so the reauth endpoint stamps last_auth_at on the SAME row the middleware loaded.
+// cookie-read path so the reauth endpoint stamps last_auth_at on the SAME row the middleware loaded.
 func readSessionCookieToken(r *http.Request) ([]byte, error) {
 	cookie, err := r.Cookie(api.SessionCookieName)
 	if err != nil {

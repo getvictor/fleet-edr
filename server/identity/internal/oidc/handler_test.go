@@ -107,7 +107,7 @@ func TestPathStartsWithSingleSlash(t *testing.T) {
 }
 
 // failureAudit emits an auth.oidc.failure row with the spec reason and payload populated; pinned because it's the unknown-subject +
-// email- conflict path the operator dashboards key on.
+// email-conflict path the operator dashboards key on.
 func TestFailureAudit(t *testing.T) {
 	h, rec := newTestHandler(t)
 	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/auth/callback?state=x", nil)

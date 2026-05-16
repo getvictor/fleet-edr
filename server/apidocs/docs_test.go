@@ -38,7 +38,7 @@ func TestRegisterRoutes_IndexServesHTMLReferencingAssets(t *testing.T) {
 		"index must not reference any external CDN")
 }
 
-// TestRedocBundle_NoExternalURLs is the regression test for a previously- shipped external network call. The upstream Redoc standalone
+// TestRedocBundle_NoExternalURLs is the regression test for a previously-shipped external network call. The upstream Redoc standalone
 // bundle references cdn.redoc.ly/redoc/logo-mini.svg for its top-nav brand mark; we patch that URL to /api/docs/logo-mini.svg at
 // vendor time so the page makes zero external requests. If someone re-downloads a fresh Redoc bundle and forgets to re-patch, this
 // test fires.

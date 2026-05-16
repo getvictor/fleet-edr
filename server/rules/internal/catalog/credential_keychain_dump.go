@@ -66,7 +66,7 @@ var securityBinaryPaths = map[string]bool{
 }
 
 // dumpKeychainArgTokens is the subcommand set we flag. `dump-keychain` is the observed hit; `find-internet-password -w`,
-// `find-generic- password -w`, and `unlock-keychain <path>` are adjacent tools that also exfiltrate credentials but we leave them out
+// `find-generic-password -w`, and `unlock-keychain <path>` are adjacent tools that also exfiltrate credentials but we leave them out
 // to keep the rule high-precision. Add them when a pilot customer asks.
 var dumpKeychainArgTokens = map[string]bool{
 	"dump-keychain": true,

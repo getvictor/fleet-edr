@@ -179,7 +179,7 @@ func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*
 	}
 	now := s.now()
 	expires := now.Add(s.timeoutsFor(authMethod).Absolute)
-	// All three timestamps are set explicitly from the store's clock so frozen- clock tests and the production wall-clock path stay
+	// All three timestamps are set explicitly from the store's clock so frozen-clock tests and the production wall-clock path stay
 	// self-consistent. The columns' DB defaults (CURRENT_TIMESTAMP(6) on insert, ON UPDATE for last_seen_at) only apply when the field is
 	// omitted from the INSERT or when an UPDATE doesn't name last_seen_at — which Touch / UpdateLastAuthAt always do.
 	if _, err := s.db.ExecContext(ctx, `

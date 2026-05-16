@@ -311,7 +311,7 @@ func TestService_FinishLogin_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, sess.ID)
 }
 
-// FinishLogin with a wrong password (correct WebAuthn assertion) surfaces ErrBadPassword. Pinned because the WebAuthn-before- password
+// FinishLogin with a wrong password (correct WebAuthn assertion) surfaces ErrBadPassword. Pinned because the WebAuthn-before-password
 // order matters: we must hit ValidateLogin first, then VerifyPassword.
 func TestService_FinishLogin_WrongPassword(t *testing.T) {
 	svc, db, _, uid, _ := newFakeService(t)

@@ -16,7 +16,7 @@ import (
 
 // argon2id parameters chosen per OWASP Password Storage Cheat Sheet 2024 for a modern server running interactive hashing. ~30 ms per
 // hash on an M-series Mac. Every other request on the hot path is a constant-time compare against the stored hash, not a fresh hash,
-// so steady- state auth is microseconds.
+// so steady-state auth is microseconds.
 const (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // 64 MiB

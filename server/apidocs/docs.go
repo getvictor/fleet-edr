@@ -160,7 +160,7 @@ func serveBundle(w http.ResponseWriter, r *http.Request) {
 func serveLogo(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	w.Header().Set(headerContentType, "image/svg+xml")
-	// Logo URL is embedded inside the bundle as a bare path (no cache- buster), so use ETag + revalidation instead of a long max-age.
+	// Logo URL is embedded inside the bundle as a bare path (no cache-buster), so use ETag + revalidation instead of a long max-age.
 	// Customers updating the brand mark don't wait for TTLs to expire.
 	w.Header().Set(headerCacheControl, cacheControlNoCache)
 	w.Header().Set("ETag", logoETag)

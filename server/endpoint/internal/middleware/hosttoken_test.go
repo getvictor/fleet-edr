@@ -157,7 +157,7 @@ func TestHostToken_InvalidToken(t *testing.T) {
 	assert.Equal(t, "invalid_token", parsed["error"])
 }
 
-// TestHostToken_VerifierUnavailable covers the 503 path: any non- ErrInvalidToken error from the service surfaces as
+// TestHostToken_VerifierUnavailable covers the 503 path: any non-ErrInvalidToken error from the service surfaces as
 // verifier_unavailable so the agent doesn't burn its re-enroll throttle on a transient DB blip.
 func TestHostToken_VerifierUnavailable(t *testing.T) {
 	svc := fakeService{

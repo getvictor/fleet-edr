@@ -236,7 +236,7 @@ func (e *Engine) recordDecision(
 
 // routeAsync reports whether this (action, decision, actor) tuple is a candidate for the async + sampling path. Returns true only
 // when every guard holds: an allow decision, a non-audit-read action that IS a read action, a non-break-glass actor, and an asyncRead
-// writer configured. Any miss falls through to the sync path so security- relevant signals are never sampled out.
+// writer configured. Any miss falls through to the sync path so security-relevant signals are never sampled out.
 func (e *Engine) routeAsync(action api.Action, d api.Decision, actor *api.Actor) bool {
 	if e.asyncRead == nil {
 		return false

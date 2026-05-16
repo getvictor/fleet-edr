@@ -150,7 +150,7 @@ func (s *service) VerifyToken(ctx context.Context, token string) (string, error)
 	return res.HostID, nil
 }
 
-// maybeAutoRotate is the verify-time auto-rotation path. Optimistic- locked on currentTokenID so concurrent verifies for the same host
+// maybeAutoRotate is the verify-time auto-rotation path. Optimistic-locked on currentTokenID so concurrent verifies for the same host
 // don't double-rotate: only the verify whose currentTokenID still matches the row's host_token_id commits, the rest race-lose with
 // ErrRotateRaced (silently swallowed -- the other verify already did the work).
 func (s *service) maybeAutoRotate(ctx context.Context, hostID string, currentTokenID []byte) {
