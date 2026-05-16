@@ -31,8 +31,7 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// allowAllAuthZ stubs identityapi.AuthZ for endpoint integration
-// tests. Per-action role coverage is exercised in
+// allowAllAuthZ stubs identityapi.AuthZ for endpoint integration tests. Per-action role coverage is exercised in
 // server/identity/internal/authz/engine_test.go.
 type allowAllAuthZ struct{}
 
@@ -45,10 +44,8 @@ const (
 	testHardwareUUID = "12345678-1234-1234-1234-123456789012"
 )
 
-// recordingCommandInserter captures every CommandInserter call so tests
-// can assert on the host_id targeting and the command type. The
-// CommandInserter closure shape (endpoint/bootstrap.CommandInserter) is
-// satisfied by the Insert method's method-value.
+// recordingCommandInserter captures every CommandInserter call so tests can assert on the host_id targeting and the command type.
+// The CommandInserter closure shape (endpoint/bootstrap.CommandInserter) is satisfied by the Insert method's method-value.
 type recordingCommandInserter struct {
 	mu     sync.Mutex
 	calls  []recordedCommand
@@ -77,20 +74,16 @@ func (r *recordingCommandInserter) snapshot() []recordedCommand {
 	return out
 }
 
-// newEndpoint wires endpoint.bootstrap.New against a fresh test DB.
-// Returns the *Endpoint handle so tests can hit Service() directly or
-// register routes onto a test mux. Tests that need direct DB access
-// (e.g. rotation_test.go's ageToken) reach for newEndpointWithDB.
+// newEndpoint wires endpoint.bootstrap.New against a fresh test DB. Returns the *Endpoint handle so tests can hit Service() directly
+// or register routes onto a test mux. Tests that need direct DB access (e.g. rotation_test.go's ageToken) reach for newEndpointWithDB.
 func newEndpoint(t *testing.T, opts ...func(*bootstrap.Deps)) *bootstrap.Endpoint {
 	t.Helper()
 	ep, _ := newEndpointWithDB(t, opts...)
 	return ep
 }
 
-// newEndpointWithDB exposes the underlying *sqlx.DB alongside the
-// Endpoint so tests that need to manipulate row state directly (e.g.
-// backdating host_token_issued_at to forge a stale token without
-// waiting an hour) can do so without leaking through the public
+// newEndpointWithDB exposes the underlying *sqlx.DB alongside the Endpoint so tests that need to manipulate row state directly (e.g.
+// backdating host_token_issued_at to forge a stale token without waiting an hour) can do so without leaking through the public
 // bootstrap.Endpoint surface.
 func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.Endpoint, *sqlx.DB) {
 	t.Helper()
@@ -111,10 +104,8 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 	return ep, s
 }
 
-// TestEnrollVerifyListRevoke walks the full operator + agent flow:
-// agent enrolls, the host token verifies, the operator list shows the
-// row, the operator revokes, the same token now fails verification, and
-// the listing reflects the revocation.
+// TestEnrollVerifyListRevoke walks the full operator + agent flow: agent enrolls, the host token verifies, the operator list shows the
+// row, the operator revokes, the same token now fails verification, and the listing reflects the revocation.
 func TestEnrollVerifyListRevoke(t *testing.T) {
 	ep := newEndpoint(t)
 	ctx := t.Context()
@@ -200,9 +191,8 @@ func TestRevoke_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrNotFound)
 }
 
-// TestVerifyToken_UnknownToken returns ErrInvalidToken; tokens that do
-// not parse must not be distinguishable from tokens that fail the hash
-// check.
+// TestVerifyToken_UnknownToken returns ErrInvalidToken; tokens that do not parse must not be distinguishable from tokens that fail the
+// hash check.
 func TestVerifyToken_UnknownToken(t *testing.T) {
 	ep := newEndpoint(t)
 	for _, token := range []string{"garbage", "00000000000000000000000000000000.00000000000000000000000000000000"} {
@@ -211,9 +201,8 @@ func TestVerifyToken_UnknownToken(t *testing.T) {
 	}
 }
 
-// TestHostTokenMiddleware_PinsHostID enrolls an agent and verifies the
-// HostToken middleware extracts the bearer token, calls VerifyToken,
-// and pins the host_id on the request context.
+// TestHostTokenMiddleware_PinsHostID enrolls an agent and verifies the HostToken middleware extracts the bearer token, calls
+// VerifyToken, and pins the host_id on the request context.
 func TestHostTokenMiddleware_PinsHostID(t *testing.T) {
 	ep := newEndpoint(t)
 	ctx := t.Context()
@@ -318,10 +307,8 @@ func TestRegisterPublicRoutes_EnrollEndToEnd(t *testing.T) {
 	assert.False(t, got.EnrolledAt.IsZero())
 }
 
-// TestRegisterAuthedRoutes_OperatorListAndRevoke hits the operator
-// surface end-to-end through RegisterAuthedRoutes (no session middleware
-// in this slim test, so we're verifying the routes are wired and the
-// handlers respond, not the session gate itself).
+// TestRegisterAuthedRoutes_OperatorListAndRevoke hits the operator surface end-to-end through RegisterAuthedRoutes (no session
+// middleware in this slim test, so we're verifying the routes are wired and the handlers respond, not the session gate itself).
 func TestRegisterAuthedRoutes_OperatorListAndRevoke(t *testing.T) {
 	ep := newEndpoint(t)
 	ctx := t.Context()

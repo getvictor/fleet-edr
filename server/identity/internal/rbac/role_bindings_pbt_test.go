@@ -71,10 +71,8 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 	})
 }
 
-// TestListLiveBindings_RoleSelectivity_PBT confirms that for any
-// random combination of (live + expired) bindings on the same user,
-// only the live ones come back, in any order. The example test pins
-// a specific 3-binding fixture; this PBT covers the wider space of
+// TestListLiveBindings_RoleSelectivity_PBT confirms that for any random combination of (live + expired) bindings on the same user,
+// only the live ones come back, in any order. The example test pins a specific 3-binding fixture; this PBT covers the wider space of
 // "n live + m expired" combinations.
 func TestListLiveBindings_RoleSelectivity_PBT(t *testing.T) {
 	db := openSchema(t)
@@ -117,10 +115,8 @@ func TestListLiveBindings_RoleSelectivity_PBT(t *testing.T) {
 	})
 }
 
-// uniqueEmail returns a per-property-iteration email so each PBT
-// iteration's user is isolated. The role_bindings unique key is
-// (user_id, role_id, scope_type, scope_id) so reusing a user across
-// iterations would risk duplicate-key errors when the same role
+// uniqueEmail returns a per-property-iteration email so each PBT iteration's user is isolated. The role_bindings unique key is
+// (user_id, role_id, scope_type, scope_id) so reusing a user across iterations would risk duplicate-key errors when the same role
 // appears in two iterations' liveRoles draws.
 func uniqueEmail(rt *rapid.T) string {
 	return rapid.StringMatching(`pbt-[a-z0-9]{8}@test`).Draw(rt, "email")

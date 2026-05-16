@@ -57,18 +57,15 @@ func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
 	assert.Contains(t, f.EventIDs, "exec-sh")
 }
 
-// Covers the "shell exec optimization" case on macOS: `sh -c "<single command>"`
-// re-execs the target binary directly, reusing the shell's pid instead of
-// fork+exec'ing a child. The exec event stream shows two exec events for the
-// same pid (first /bin/sh, then the payload), and the processes table ends up
-// with the pid's path as the payload. The rule must still fire.
+// Covers the "shell exec optimization" case on macOS: `sh -c "<single command>"` re-execs the target binary directly, reusing the
+// shell's pid instead of fork+exec'ing a child. The exec event stream shows two exec events for the same pid (first /bin/sh, then the
+// payload), and the processes table ends up with the pid's path as the payload. The rule must still fire.
 func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	// Simulate: python3 (PID 50) forks child 100, which execs /bin/sh then
-	// immediately re-execs /private/tmp/payload at the same pid. No separate
-	// child process for the payload.
+	// Simulate: python3 (PID 50) forks child 100, which execs /bin/sh then immediately re-execs /private/tmp/payload at the same pid.
+	// No separate child process for the payload.
 	events := []api.Event{
 		{EventID: "fork-python", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
@@ -344,21 +341,17 @@ func TestIsSuspiciousPath(t *testing.T) {
 	}
 }
 
-// Shebang stage-2: the kernel resolves `#!/bin/sh` to /bin/sh, so the
-// temp-binary's exec event lands with payload.path = /bin/sh and the
-// actual script path in argv[1]. The runbook's `python3 -> sh -c
-// "/tmp/edr-attack-runbook/synthetic_payload && true"` chain on edr-qa
-// surfaces this shape because bash interprets the synthetic_payload
-// shebang line, and without argv-aware temp-path detection the rule
-// silently misses the attack. This test pins the shebang detection
-// AND its negative twin (`sh -c <command>` argv[1] = "-c", not a path).
+// Shebang stage-2: the kernel resolves `#!/bin/sh` to /bin/sh, so the temp-binary's exec event lands with payload.path = /bin/sh and
+// the actual script path in argv[1]. The runbook's `python3 -> sh -c "/tmp/edr-attack-runbook/synthetic_payload && true"` chain on
+// edr-qa surfaces this shape because bash interprets the synthetic_payload shebang line, and without argv-aware temp-path detection
+// the rule silently misses the attack. This test pins the shebang detection AND its negative twin (`sh -c <command>` argv[1] = "-c",
+// not a path).
 func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	// python3 (50) -> /bin/sh as shebang interpreter for /tmp/payload.sh (200).
-	// payload.path = /bin/sh, argv[1] = /tmp/payload.sh — the kernel-resolved
-	// shebang shape.
+	// python3 (50) -> /bin/sh as shebang interpreter for /tmp/payload.sh (200). payload.path = /bin/sh, argv[1] = /tmp/payload.sh — the
+	// kernel-resolved shebang shape.
 	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
@@ -381,11 +374,9 @@ func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 	assert.Contains(t, findings[0].Description, "/tmp/payload.sh", "description must surface the argv script path, not just /bin/sh")
 }
 
-// Negative twin of the shebang case: `sh -c <command>` puts the COMMAND
-// STRING in argv[2], not a script path. Treating that argv slot as a
-// path would false-positive on any command containing `..` (e.g. an
-// IPv4 octet sequence in a curl URL). The shebang detector must bail
-// the moment it sees `-c`.
+// Negative twin of the shebang case: `sh -c <command>` puts the COMMAND STRING in argv[2], not a script path. Treating that argv slot
+// as a path would false-positive on any command containing `..` (e.g. an IPv4 octet sequence in a curl URL). The shebang detector must
+// bail the moment it sees `-c`.
 func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -411,13 +402,10 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 	assert.Empty(t, findings, "sh -c <command> argv must NOT be treated as a script path")
 }
 
-// Allowlist suppression: the canonical "non-shell -> shell -> /tmp/binary"
-// shape is also what an admin SSH-ing in and running a script from /tmp/
-// looks like. Operators can opt-in to suppression of that flow per
-// known-good entry-point path via EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST.
-// This test pins the suppression behaviour: when the non-shell ancestor's
-// path is on the allowlist, the rule must stay silent. Without the
-// allowlist, the same chain still fires (the second sub-test).
+// Allowlist suppression: the canonical "non-shell -> shell -> /tmp/binary" shape is also what an admin SSH-ing in and running
+// a script from /tmp/ looks like. Operators can opt-in to suppression of that flow per known-good entry-point path via
+// EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST. This test pins the suppression behaviour: when the non-shell ancestor's path is on the
+// allowlist, the rule must stay silent. Without the allowlist, the same chain still fires (the second sub-test).
 func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	// sshd-session -> /bin/sh -> /tmp/payload — the "admin SSH and run
 	// a script from /tmp/" shape, observed live during edr-qa.
@@ -466,15 +454,11 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	})
 }
 
-// Cross-batch race: in production the agent flushes events ~once per second
-// while a real chain completes in ~150ms, so when the cadence boundary lands
-// mid-chain the shell exec arrives in batch N and the temp-binary exec in
-// batch N+1. Forward-direction matching missed the chain entirely under
-// those conditions because at batch N's Evaluate the temp-binary descendant
-// hadn't been materialised. Reverse-direction matching is race-immune: by
-// the time the temp-binary exec event lands in batch N+1, the shell ancestor
-// is already in the store from batch N's ProcessBatch. This test exercises
-// that path explicitly.
+// Cross-batch race: in production the agent flushes events ~once per second while a real chain completes in ~150ms, so when the
+// cadence boundary lands mid-chain the shell exec arrives in batch N and the temp-binary exec in batch N+1. Forward-direction matching
+// missed the chain entirely under those conditions because at batch N's Evaluate the temp-binary descendant hadn't been materialised.
+// Reverse-direction matching is race-immune: by the time the temp-binary exec event lands in batch N+1, the shell ancestor is already
+// in the store from batch N's ProcessBatch. This test exercises that path explicitly.
 func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -497,9 +481,8 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, findings1, "no temp-binary in batch 1 — rule must not fire")
 
-	// Batch 2: only the temp-binary exec arrives. The python3 + sh ancestors
-	// are already in the store (materialised by batch 1) so the reverse-walk
-	// from temp-exec finds them.
+	// Batch 2: only the temp-binary exec arrives. The python3 + sh ancestors are already in the store (materialised by batch 1) so the
+	// reverse-walk from temp-exec finds them.
 	batch2 := []api.Event{
 		{EventID: "fork-payload", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},

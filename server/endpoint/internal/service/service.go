@@ -23,25 +23,19 @@ const (
 	commandTypeRotateToken = "rotate_token"
 )
 
-// Default rotation parameters, applied by the service when bootstrap
-// passes zero values. Lifetime = 24 hours matches #86's specified
-// default; grace = 5 minutes matches the issue body's "in-flight poll
-// must not 401" target.
+// Default rotation parameters, applied by the service when bootstrap passes zero values. Lifetime = 24 hours matches #86's specified
+// default; grace = 5 minutes matches the issue body's "in-flight poll must not 401" target.
 const (
 	defaultHostTokenLifetime = 24 * time.Hour
 	defaultHostTokenGrace    = 5 * time.Minute
 )
 
-// hardwareUUIDPattern accepts the canonical hyphenated UUID form in
-// either case. macOS IOPlatformUUID is uppercase-hyphenated. Future
-// platforms emitting unhyphenated 32-hex strings need a matching agent
-// + regex update.
+// hardwareUUIDPattern accepts the canonical hyphenated UUID form in either case. macOS IOPlatformUUID is uppercase-hyphenated.
+// Future platforms emitting unhyphenated 32-hex strings need a matching agent + regex update.
 var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
-// CommandInserter is the closure shape endpoint uses to queue commands
-// it emits (today: only rotate_token). cmd/main passes
-// response.Service.Insert as a method value satisfying this type.
-// The closure pattern matches what rules uses elsewhere.
+// CommandInserter is the closure shape endpoint uses to queue commands it emits (today: only rotate_token). cmd/main passes
+// response.Service.Insert as a method value satisfying this type. The closure pattern matches what rules uses elsewhere.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
 // Options bundles every dependency the endpoint service needs.
@@ -51,10 +45,8 @@ type Options struct {
 	Secret string
 	Logger *slog.Logger
 
-	// Commands queues commands the endpoint service emits (today: only
-	// rotate_token). Optional: when nil, rotation will commit the new
-	// bearer in the DB but the agent will not receive a command — it
-	// will re-enroll once the grace window expires.
+	// Commands queues commands the endpoint service emits (today: only rotate_token). Optional: when nil, rotation will commit the new
+	// bearer in the DB but the agent will not receive a command — it will re-enroll once the grace window expires.
 	Commands CommandInserter
 
 	// Audit is the operator-action audit recorder. Nil disables audit
@@ -69,10 +61,8 @@ type Options struct {
 	Grace time.Duration
 }
 
-// service implements api.Service by composing the mysql.Store with
-// the CommandInserter closure (today: response.api.Service.Insert) and
-// audit recorder (today: identity.api.AuditRecorder) that cmd/main
-// supplies.
+// service implements api.Service by composing the mysql.Store with the CommandInserter closure (today: response.api.Service.Insert)
+// and audit recorder (today: identity.api.AuditRecorder) that cmd/main supplies.
 type service struct {
 	store    *mysql.Store
 	secret   string
@@ -111,9 +101,8 @@ func New(opts Options) api.Service {
 func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP string) (api.EnrollResponse, error) {
 	if req.EnrollSecret == "" || req.HardwareUUID == "" || req.Hostname == "" ||
 		req.OSVersion == "" || req.AgentVersion == "" {
-		// The handler maps this to 400/bad_body via the missing-field check
-		// it already does. Service returns ErrInvalidSecret only if secret
-		// is non-empty but wrong; an empty secret is a body-shape error.
+		// The handler maps this to 400/bad_body via the missing-field check it already does. Service returns ErrInvalidSecret
+		// only if secret is non-empty but wrong; an empty secret is a body-shape error.
 		return api.EnrollResponse{}, api.ErrInvalidEnrollRequest
 	}
 	if !hardwareUUIDPattern.MatchString(req.HardwareUUID) {
@@ -150,14 +139,10 @@ func (s *service) VerifyToken(ctx context.Context, token string) (string, error)
 		return "", fmt.Errorf("verify token: %w", err)
 	}
 
-	// Verify-time auto-rotation trigger. Conditions:
-	//   - The verify hit the CURRENT token (not the previous-token
-	//     grace path; if it hit previous, a rotation is already in
-	//     flight and another would be wasteful).
-	//   - The current token is past its lifetime.
-	// Best-effort: failures are warn-logged but do not fail the verify.
-	// The verify already succeeded; the agent's next poll will re-trigger
-	// any rotation we couldn't queue this time.
+	// Verify-time auto-rotation trigger. Conditions: the verify hit the CURRENT token (not the previous-token grace path; if it
+	// hit previous, a rotation is already in flight and another would be wasteful) AND the current token is past its lifetime.
+	// Best-effort: failures are warn-logged but do not fail the verify. The verify already succeeded; the agent's next poll will
+	// re-trigger any rotation we couldn't queue this time.
 	if !res.MatchedPrevious && time.Since(res.TokenIssuedAt) > s.lifetime {
 		s.maybeAutoRotate(ctx, res.HostID, res.CurrentTokenID)
 	}
@@ -165,12 +150,9 @@ func (s *service) VerifyToken(ctx context.Context, token string) (string, error)
 	return res.HostID, nil
 }
 
-// maybeAutoRotate is the verify-time auto-rotation path. Optimistic-
-// locked on currentTokenID so concurrent verifies for the same host
-// don't double-rotate: only the verify whose currentTokenID still
-// matches the row's host_token_id commits, the rest race-lose with
-// ErrRotateRaced (silently swallowed -- the other verify already did
-// the work).
+// maybeAutoRotate is the verify-time auto-rotation path. Optimistic-locked on currentTokenID so concurrent verifies for the same host
+// don't double-rotate: only the verify whose currentTokenID still matches the row's host_token_id commits, the rest race-lose with
+// ErrRotateRaced (silently swallowed -- the other verify already did the work).
 func (s *service) maybeAutoRotate(ctx context.Context, hostID string, currentTokenID []byte) {
 	rot, err := s.store.RotateHostToken(ctx, hostID, currentTokenID, s.grace)
 	if errors.Is(err, mysql.ErrRotateRaced) {
@@ -230,9 +212,8 @@ func (s *service) enqueueRotateCommand(ctx context.Context, hostID, newToken str
 	if s.commands == nil {
 		return nil
 	}
-	// json.Marshal on map[string]string cannot fail (UTF-8 string keys + values
-	// always serialize); the err is intentionally dropped so the call has no
-	// unreachable branch dragging coverage down.
+	// json.Marshal on map[string]string cannot fail (UTF-8 string keys + values always serialize); the err is intentionally dropped so the
+	// call has no unreachable branch dragging coverage down.
 	payload, _ := json.Marshal(map[string]string{"new_token": newToken}) //nolint:errcheck // map[string]string never fails to marshal
 	id, err := s.commands(ctx, hostID, commandTypeRotateToken, payload)
 	if err != nil {
@@ -316,11 +297,9 @@ func (s *service) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	return s.store.ActiveHostIDs(ctx)
 }
 
-// toAPIEnrollment is a struct-to-struct copy. Field shapes match exactly
-// today (the api.Enrollment was lifted from the mysql row), so this is a
-// pure relocation -- but the conversion stays explicit so a future field
-// drift between the storage layer and the public api surface forces a
-// review here rather than slipping through.
+// toAPIEnrollment is a struct-to-struct copy. Field shapes match exactly today (the api.Enrollment was lifted from the mysql row),
+// so this is a pure relocation -- but the conversion stays explicit so a future field drift between the storage layer and the public
+// api surface forces a review here rather than slipping through.
 func toAPIEnrollment(r mysql.Enrollment) api.Enrollment {
 	return api.Enrollment{
 		HostID:       r.HostID,

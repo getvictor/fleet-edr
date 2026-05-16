@@ -20,12 +20,9 @@ import (
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 )
 
-// allRegisteredRules delegates to rules.bootstrap.CatalogOnly so the
-// docs generator and the production server's main.go are guaranteed
-// to walk the same set of rules in the same order. Documentation is
-// not a function of a particular deployment's tuning, so we pass the
-// zero value of RegistryOptions -- allowlists default to empty, which
-// is what the rule structs treat as "no operator tuning yet."
+// allRegisteredRules delegates to rules.bootstrap.CatalogOnly so the docs generator and the production server's main.go are guaranteed
+// to walk the same set of rules in the same order. Documentation is not a function of a particular deployment's tuning, so we pass the
+// zero value of RegistryOptions -- allowlists default to empty, which is what the rule structs treat as "no operator tuning yet."
 func allRegisteredRules() []rulesapi.RuleMetadata {
 	return rulesbootstrap.CatalogOnly(rulesapi.RegistryOptions{}).List()
 }
@@ -39,10 +36,8 @@ func main() {
 	}
 }
 
-// generate is split out so the deferred close runs even on a render error.
-// `main` calling log.Fatalf with a defer in scope leaves the file unclosed
-// (gocritic exitAfterDefer); pulling the body up here makes the close happen
-// before main exits.
+// generate is split out so the deferred close runs even on a render error. `main` calling log.Fatalf with a defer in scope leaves the
+// file unclosed (gocritic exitAfterDefer); pulling the body up here makes the close happen before main exits.
 func generate(out string) error {
 	f, err := os.Create(out) //nolint:gosec // path is operator-controlled
 	if err != nil {
@@ -90,10 +85,9 @@ func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	return err
 }
 
-// writeRule is intentionally a thin sequencer over per-section helpers so
-// each helper stays trivially testable and the whole function stays under
-// the project cognitive-complexity cap (Sonar go:S3776). Adding a new
-// section means adding a new helper + a single Fprintf-style call here.
+// writeRule is intentionally a thin sequencer over per-section helpers so each helper stays trivially testable and the whole function
+// stays under the project cognitive-complexity cap (Sonar go:S3776). Adding a new section means adding a new helper + a single
+// Fprintf-style call here.
 func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	writeRuleHeading(b, r.ID, r.Doc)
 	writeRuleMeta(b, r.ID, r.Doc, r.Techniques)
@@ -161,27 +155,22 @@ func writeRuleBulletSection(b *strings.Builder, heading string, items []string) 
 	b.WriteString("\n")
 }
 
-// mdCell escapes a string for safe insertion into a markdown table cell.
-// Pipes have to be backslash-escaped or they end the column; newlines
-// have to become <br> or they break the row. Today's Doc() values are
-// well-behaved, but a future operator who pastes a paragraph containing
-// either character into a Description should not silently corrupt the
-// generated markdown.
+// mdCell escapes a string for safe insertion into a markdown table cell. Pipes have to be backslash-escaped or they end the column;
+// newlines have to become <br> or they break the row. Today's Doc() values are well-behaved, but a future operator who pastes a
+// paragraph containing either character into a Description should not silently corrupt the generated markdown.
 func mdCell(s string) string {
 	s = strings.ReplaceAll(s, "|", `\|`)
 	s = strings.ReplaceAll(s, "\n", "<br>")
 	return s
 }
 
-// anchor produces the GitHub-flavoured-markdown anchor slug for a heading.
-// Our heading is the bare rule ID, which is already lowercase + underscored
-// + ASCII, so the slug is the ID verbatim. Centralised so a future ID with
-// less-friendly characters has one place to fix.
+// anchor produces the GitHub-flavoured-markdown anchor slug for a heading. Our heading is the bare rule ID, which is already lowercase
+// + underscored + ASCII, so the slug is the ID verbatim. Centralised so a future ID with less-friendly characters has one place to
+// fix.
 func anchor(id string) string { return id }
 
-// joinTechniqueLinks renders each technique ID as a link to its MITRE page.
-// Sub-techniques (e.g. T1574.006) need the dot translated to a slash in the
-// URL path: attack.mitre.org/techniques/T1574/006/.
+// joinTechniqueLinks renders each technique ID as a link to its MITRE page. Sub-techniques (e.g. T1574.006) need the dot translated to
+// a slash in the URL path: attack.mitre.org/techniques/T1574/006/.
 func joinTechniqueLinks(techs []string) string {
 	out := make([]string, len(techs))
 	for i, t := range techs {

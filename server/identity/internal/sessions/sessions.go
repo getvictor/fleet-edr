@@ -1,11 +1,8 @@
-// Package sessions owns the `sessions` table that backs UI cookie auth. A
-// session is a server-side row keyed by the SHA-256 digest of a 32-byte random token.
-// The cookie carries the raw token (base64url-encoded); the DB stores only the digest,
-// mirroring the pattern enrollment tokens use so a database compromise does not
-// immediately yield replayable bearer credentials. CSRF tokens are per-session, also
-// 32 random bytes, returned to the client in the login response body and sent back as
-// `X-CSRF-Token` on unsafe methods — those are stored raw because CSRF comparisons
-// happen via constant-time compare, not indexed lookup.
+// Package sessions owns the `sessions` table that backs UI cookie auth. A session is a server-side row keyed by the SHA-256 digest
+// of a 32-byte random token. The cookie carries the raw token (base64url-encoded); the DB stores only the digest, mirroring the
+// pattern enrollment tokens use so a database compromise does not immediately yield replayable bearer credentials. CSRF tokens are
+// per-session, also 32 random bytes, returned to the client in the login response body and sent back as `X-CSRF-Token` on unsafe
+// methods — those are stored raw because CSRF comparisons happen via constant-time compare, not indexed lookup.
 package sessions
 
 import (
@@ -20,11 +17,9 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// Phase 5 lifetime defaults: idle (inactivity) + absolute (hard cap)
-// per session class. Normal sessions get the lenient pair; break-
-// glass sessions get the strict pair so a stolen recovery cookie
-// expires before the end of an incident shift. The pre-Phase-5
-// flat 12h DefaultTTL is gone — every caller is now class-aware.
+// Phase 5 lifetime defaults: idle (inactivity) + absolute (hard cap) per session class. Normal sessions get the lenient pair; break-
+// glass sessions get the strict pair so a stolen recovery cookie expires before the end of an incident shift. The pre-Phase-5 flat 12h
+// DefaultTTL is gone — every caller is now class-aware.
 const (
 	DefaultIdleTimeout               = 8 * time.Hour
 	DefaultAbsoluteTimeout           = 24 * time.Hour
@@ -32,17 +27,13 @@ const (
 	DefaultBreakglassAbsoluteTimeout = 1 * time.Hour
 )
 
-// DefaultReauthWindow is the freshness window the chokepoint reads
-// via Actor.SessionFresh. last_auth_at within this window means the
-// operator has proven possession of credentials recently enough to
-// run destructive actions without re-prompting.
+// DefaultReauthWindow is the freshness window the chokepoint reads via Actor.SessionFresh. last_auth_at within this window means the
+// operator has proven possession of credentials recently enough to run destructive actions without re-prompting.
 const DefaultReauthWindow = 30 * time.Minute
 
-// touchThrottle is the minimum interval between sliding extensions
-// of one session's last_seen_at column. Middleware skips the UPDATE
-// when the cached value is fresher than this; idle-timeout
-// granularity is therefore 1 minute, invisible at the 8h scale and
-// caps the write rate at 1/min/active session.
+// touchThrottle is the minimum interval between sliding extensions of one session's last_seen_at column. Middleware skips the UPDATE
+// when the cached value is fresher than this; idle-timeout granularity is therefore 1 minute, invisible at the 8h scale and caps the
+// write rate at 1/min/active session.
 const touchThrottle = 1 * time.Minute
 
 // IDLen is the session id + CSRF token length in bytes. 32 bytes ≈ 256 bits of entropy,
@@ -88,10 +79,8 @@ func digest(id []byte) []byte {
 	return h[:]
 }
 
-// Timeouts is the idle/absolute pair that gates one session class's
-// lifetime. Idle is the inactivity cap (last_seen_at + idle); absolute
-// is the hard cap (created_at + absolute). Either elapsing makes the
-// row not-found at lookup time.
+// Timeouts is the idle/absolute pair that gates one session class's lifetime. Idle is the inactivity cap (last_seen_at + idle);
+// absolute is the hard cap (created_at + absolute). Either elapsing makes the row not-found at lookup time.
 type Timeouts struct {
 	Idle     time.Duration
 	Absolute time.Duration
@@ -110,13 +99,10 @@ type Store struct {
 
 // Options customise Store behaviour. Leave unset fields as zero values to use defaults.
 type Options struct {
-	// Normal is the timeout pair for OIDC-minted sessions.
-	// Zero values fall through to DefaultIdleTimeout +
-	// DefaultAbsoluteTimeout.
+	// Normal is the timeout pair for OIDC-minted sessions. Zero values fall through to DefaultIdleTimeout + DefaultAbsoluteTimeout.
 	Normal Timeouts
-	// Breakglass is the strict timeout pair for the recovery
-	// surface. Zero values fall through to
-	// DefaultBreakglassIdleTimeout + DefaultBreakglassAbsoluteTimeout.
+	// Breakglass is the strict timeout pair for the recovery surface. Zero values fall through to DefaultBreakglassIdleTimeout +
+	// DefaultBreakglassAbsoluteTimeout.
 	Breakglass Timeouts
 	// ReauthWindow is the last_auth_at freshness gate. Zero means
 	// DefaultReauthWindow.
@@ -152,10 +138,8 @@ func New(db *sqlx.DB, opts Options) *Store {
 	return &Store{db: db, normal: normal, breakglass: bg, reauthWin: rw, now: now}
 }
 
-// timeoutsFor returns the (idle, absolute) pair appropriate to the
-// session's auth_method. Phase 4 design pins
-// auth_method=='local_password' to the break-glass surface; OIDC
-// sessions get the normal pair.
+// timeoutsFor returns the (idle, absolute) pair appropriate to the session's auth_method. Phase 4 design pins
+// auth_method=='local_password' to the break-glass surface; OIDC sessions get the normal pair.
 func (s *Store) timeoutsFor(authMethod string) Timeouts {
 	if authMethod == "local_password" {
 		return s.breakglass
@@ -163,9 +147,8 @@ func (s *Store) timeoutsFor(authMethod string) Timeouts {
 	return s.normal
 }
 
-// CreateOptions carry the per-session metadata Phase 4 records on the row.
-// Zero AuthMethod defaults to "local_password" for legacy callers; nil
-// IdentityID is valid (legacy + tests).
+// CreateOptions carry the per-session metadata Phase 4 records on the row. Zero AuthMethod defaults to "local_password" for legacy
+// callers; nil IdentityID is valid (legacy + tests).
 type CreateOptions struct {
 	IdentityID *int64
 	AuthMethod string
@@ -196,12 +179,9 @@ func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*
 	}
 	now := s.now()
 	expires := now.Add(s.timeoutsFor(authMethod).Absolute)
-	// All three timestamps are set explicitly from the store's clock so frozen-
-	// clock tests and the production wall-clock path stay self-consistent. The
-	// columns' DB defaults (CURRENT_TIMESTAMP(6) on insert, ON UPDATE for
-	// last_seen_at) only apply when the field is omitted from the INSERT or
-	// when an UPDATE doesn't name last_seen_at — which Touch / UpdateLastAuthAt
-	// always do.
+	// All three timestamps are set explicitly from the store's clock so frozen-clock tests and the production wall-clock path stay
+	// self-consistent. The columns' DB defaults (CURRENT_TIMESTAMP(6) on insert, ON UPDATE for last_seen_at) only apply when the field is
+	// omitted from the INSERT or when an UPDATE doesn't name last_seen_at — which Touch / UpdateLastAuthAt always do.
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token,
 			created_at, last_seen_at, last_auth_at, expires_at)
@@ -216,9 +196,8 @@ func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*
 	}, nil
 }
 
-// nullInt64Ptr converts a *int64 to a sql-nullable input the *sqlx driver
-// passes through to MySQL as NULL for nil and integer for non-nil. Local
-// helper so the Create signature stays clean.
+// nullInt64Ptr converts a *int64 to a sql-nullable input the *sqlx driver passes through to MySQL as NULL for nil and integer for
+// non-nil. Local helper so the Create signature stays clean.
 func nullInt64Ptr(p *int64) any {
 	if p == nil {
 		return nil
@@ -263,11 +242,9 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 		return nil, fmt.Errorf("query session: %w", err)
 	}
 	now := s.now()
-	// Absolute cap: pinned at mint time via expires_at so a config
-	// change to Absolute doesn't retroactively extend or shorten
-	// existing sessions, and Get's verdict matches CleanupExpired's
-	// (which also deletes by expires_at). The auth_method-derived
-	// pair below is only consulted for the idle gate.
+	// Absolute cap: pinned at mint time via expires_at so a config change to Absolute doesn't retroactively extend or shorten existing
+	// sessions, and Get's verdict matches CleanupExpired's (which also deletes by expires_at). The auth_method-derived pair below is only
+	// consulted for the idle gate.
 	if !row.ExpiresAt.After(now) {
 		return nil, ErrNotFound
 	}
@@ -344,9 +321,8 @@ func (s *Store) UpdateLastAuthAt(ctx context.Context, plaintextID []byte) error 
 	return nil
 }
 
-// IsFresh reports whether the session's last_auth_at falls within the
-// configured reauth window. The chokepoint reads it via Actor.SessionFresh
-// to gate destructive actions.
+// IsFresh reports whether the session's last_auth_at falls within the configured reauth window. The chokepoint reads it via
+// Actor.SessionFresh to gate destructive actions.
 func (s *Store) IsFresh(sess *Session) bool {
 	if sess == nil {
 		return false

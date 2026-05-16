@@ -44,9 +44,8 @@ func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, *sqlx.DB, *
 	return p, db, rec
 }
 
-// JIT path: an unknown subject creates a user + identity + role
-// binding atomically, audits user_created, returns ids the handler
-// uses to mint the session.
+// JIT path: an unknown subject creates a user + identity + role binding atomically, audits user_created, returns ids the handler uses
+// to mint the session.
 func TestProvisionOrFind_JITNewUser(t *testing.T) {
 	p, db, rec := newProvisioner(t, true)
 	uid, idID, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
@@ -79,10 +78,8 @@ func TestProvisionOrFind_JITNewUser(t *testing.T) {
 	assert.Equal(t, oidc.DefaultJITRole, roleID)
 	assert.Equal(t, "global", scopeType)
 
-	// One audit row emitted with the right action + payload. Spec
-	// pins the JIT-creation action as "user.created" (the OIDC flow is
-	// the source, recorded in payload.source); a regression here would
-	// drift the wire shape that downstream SIEM filters key on.
+	// One audit row emitted with the right action + payload. Spec pins the JIT-creation action as "user.created" (the OIDC flow is the
+	// source, recorded in payload.source); a regression here would drift the wire shape that downstream SIEM filters key on.
 	require.Len(t, rec.events, 1)
 	assert.Equal(t, api.AuditAction("user.created"), rec.events[0].Action)
 	assert.Equal(t, "okta-sub-1", rec.events[0].Payload["subject"])
@@ -90,11 +87,9 @@ func TestProvisionOrFind_JITNewUser(t *testing.T) {
 	assert.Equal(t, "oidc.jit", rec.events[0].Payload["source"])
 }
 
-// Email collision: an existing local-password user holds the email
-// the OIDC subject's IdP advertises. JIT must surface a typed error
-// (not a 500) so the handler can render a directed page; an admin
-// promotes the binding later. Pinned because Gemini flagged this as
-// a graceful-degradation gap.
+// Email collision: an existing local-password user holds the email the OIDC subject's IdP advertises. JIT must surface a typed error
+// (not a 500) so the handler can render a directed page; an admin promotes the binding later. Pinned because Gemini flagged this as a
+// graceful-degradation gap.
 func TestProvisionOrFind_EmailCollision(t *testing.T) {
 	p, db, _ := newProvisioner(t, true)
 
@@ -113,11 +108,9 @@ func TestProvisionOrFind_EmailCollision(t *testing.T) {
 		"email collision must surface as ErrEmailConflict, not a generic insert error")
 }
 
-// Race-safe: simulate a concurrent callback for the same fresh subject
-// by pre-seeding the identity row. The second JIT path's identity
-// insert hits MySQL 1062 and the provisioner must recover by
-// re-reading the now-existing row. Pinned because Copilot flagged the
-// race window.
+// Race-safe: simulate a concurrent callback for the same fresh subject by pre-seeding the identity row. The second JIT path's identity
+// insert hits MySQL 1062 and the provisioner must recover by re-reading the now-existing row. Pinned because Copilot flagged the race
+// window.
 func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	p, db, _ := newProvisioner(t, true)
 
@@ -128,12 +121,9 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Hand-truncate the identities row's lookup pathway is hard to fake
-	// without driver hooks. Instead, prove the resolution path: a second
-	// call for the same subject hits the existing-identity branch. The
-	// race-recovery code path is exercised by exposing the duplicate
-	// detection helper at the public boundary; here we cover the merge
-	// outcome - same uid + same identity id.
+	// Hand-truncate the identities row's lookup pathway is hard to fake without driver hooks. Instead, prove the resolution path: a second
+	// call for the same subject hits the existing-identity branch. The race-recovery code path is exercised by exposing the duplicate
+	// detection helper at the public boundary; here we cover the merge outcome - same uid + same identity id.
 	uid2, idID2, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-race",
 		Email:   "race@example.com",
@@ -150,10 +140,8 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	assert.Equal(t, 1, n)
 }
 
-// email_verified=false: the IdP says the address isn't owned by the
-// subject. JIT must NOT bind the unverified email as the user's
-// primary email; fall back to the subject-prefixed sentinel so an
-// admin promotion path can attach the real email later.
+// email_verified=false: the IdP says the address isn't owned by the subject. JIT must NOT bind the unverified email as the user's
+// primary email; fall back to the subject-prefixed sentinel so an admin promotion path can attach the real email later.
 func TestProvisionOrFind_EmailUnverifiedFallsBackToSentinel(t *testing.T) {
 	p, db, _ := newProvisioner(t, true)
 
@@ -172,8 +160,7 @@ func TestProvisionOrFind_EmailUnverifiedFallsBackToSentinel(t *testing.T) {
 		"unverified email must not be bound as the user's primary address")
 }
 
-// email_verified absent (claim omitted) is trusted: spec says when
-// the claim is missing, fall back to out-of-band trust in the IdP.
+// email_verified absent (claim omitted) is trusted: spec says when the claim is missing, fall back to out-of-band trust in the IdP.
 // Wave-1 trusts the seeded IdPs (Okta / Auth0) which always emit it.
 func TestProvisionOrFind_EmailUnclaimedIsTrusted(t *testing.T) {
 	p, db, _ := newProvisioner(t, true)
@@ -191,10 +178,8 @@ func TestProvisionOrFind_EmailUnclaimedIsTrusted(t *testing.T) {
 	assert.Equal(t, "trusted@example.com", email)
 }
 
-// Existing identity short-circuits: lookup-by-(provider, subject) hits
-// the existing row, no new user / identity / role binding is inserted,
-// no audit row is emitted (the chokepoint will audit the subsequent
-// privileged-route call separately).
+// Existing identity short-circuits: lookup-by-(provider, subject) hits the existing row, no new user / identity / role binding is
+// inserted, no audit row is emitted (the chokepoint will audit the subsequent privileged-route call separately).
 func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
 	p, db, rec := newProvisioner(t, true)
 
@@ -224,10 +209,8 @@ func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
 	assert.Equal(t, 1, n)
 }
 
-// JIT disabled + unknown subject -> ErrUnknownIdentity. The handler
-// maps this to a 403 + audit auth.oidc.failure with reason
-// "oidc.unknown_subject"; the provisioner itself does not audit (the
-// subject hasn't been bound to a user, so there's nothing
+// JIT disabled + unknown subject -> ErrUnknownIdentity. The handler maps this to a 403 + audit auth.oidc.failure with reason
+// "oidc.unknown_subject"; the provisioner itself does not audit (the subject hasn't been bound to a user, so there's nothing
 // actor-shaped to record yet).
 func TestProvisionOrFind_JITDisabledUnknownSubject(t *testing.T) {
 	p, _, rec := newProvisioner(t, false)
@@ -240,9 +223,8 @@ func TestProvisionOrFind_JITDisabledUnknownSubject(t *testing.T) {
 	assert.Empty(t, rec.events, "no audit on JIT-disabled deny path; handler emits unknown_subject row")
 }
 
-// JIT disabled + existing identity still resolves (no JIT needed for
-// pre-provisioned users). Confirms the gate is positioned correctly:
-// only the create branch is conditional on AllowJIT.
+// JIT disabled + existing identity still resolves (no JIT needed for pre-provisioned users). Confirms the gate is positioned
+// correctly: only the create branch is conditional on AllowJIT.
 func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 	// Bootstrap an existing identity via the JIT-enabled path.
 	pEnabled, db, _ := newProvisioner(t, true)
@@ -252,9 +234,8 @@ func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// New provisioner against the same DB with AllowJIT=false; the
-	// existing identity still resolves because the gate sits on the
-	// create branch only.
+	// New provisioner against the same DB with AllowJIT=false; the existing identity still resolves because the gate sits on the create
+	// branch only.
 	pDisabled := oidc.NewProvisioner(db,
 		users.New(db), identities.New(db), rbac.New(db), &captureAudit{},
 		oidc.ProvisionerOptions{AllowJIT: false})
@@ -266,10 +247,8 @@ func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 	assert.Equal(t, uid, uid2)
 }
 
-// Empty subject is rejected with a clear error. Defense-in-depth: if a
-// future IdP somehow produces an empty sub claim (it never should
-// per OIDC spec), the provisioner refuses rather than creating a user
-// keyed on the empty string.
+// Empty subject is rejected with a clear error. Defense-in-depth: if a future IdP somehow produces an empty sub claim (it never should
+// per OIDC spec), the provisioner refuses rather than creating a user keyed on the empty string.
 func TestProvisionOrFind_EmptySubject(t *testing.T) {
 	p, _, _ := newProvisioner(t, true)
 	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: ""})

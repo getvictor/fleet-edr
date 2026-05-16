@@ -13,14 +13,11 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 )
 
-// UserExists is the closure cmd/main wires from
-// identity.api.Service.UserExists. PUT /api/alerts/{id} calls it
-// before persisting `updated_by` so that orphan user_ids cannot
-// silently land on the row in the absence of a cross-context FK.
+// UserExists is the closure cmd/main wires from identity.api.Service.UserExists. PUT /api/alerts/{id} calls it before persisting
+// `updated_by` so that orphan user_ids cannot silently land on the row in the absence of a cross-context FK.
 type UserExists func(ctx context.Context, userID int64) (bool, error)
 
-// Service is the operator-facing detection orchestrator. Composes
-// graph.Query (reads), mysql.Store (alert reads + writes), and the
+// Service is the operator-facing detection orchestrator. Composes graph.Query (reads), mysql.Store (alert reads + writes), and the
 // UserExists closure (FK-replacement for alerts.updated_by).
 type Service struct {
 	store      *mysql.Store
@@ -108,10 +105,8 @@ func (s *Service) UpdateAlertStatus(ctx context.Context, id int64, status api.Al
 		return api.Alert{}, fmt.Errorf("%w: %s -> %s", api.ErrInvalidAlertTransition, current.Status, status)
 	}
 
-	// Validate updated_by user exists in the identity context.
-	// Replaces the dropped cross-context FK fk_alerts_updated_by.
-	// userID == 0 means "internal backfill, leave updated_by alone" so the
-	// existence check is skipped.
+	// Validate updated_by user exists in the identity context. Replaces the dropped cross-context FK fk_alerts_updated_by. userID == 0
+	// means "internal backfill, leave updated_by alone" so the existence check is skipped.
 	if userID > 0 && s.userExists != nil {
 		exists, err := s.userExists(ctx, userID)
 		if err != nil {

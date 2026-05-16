@@ -19,10 +19,8 @@ type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1566.001
-// (Phishing → Spearphishing Attachment) + T1059.004 (Command and Scripting
-// Interpreter → Unix Shell). The chain "Office app → shell" is a textbook
-// post-phish execution step.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1566.001 (Phishing → Spearphishing Attachment) + T1059.004 (Command and
+// Scripting Interpreter → Unix Shell). The chain "Office app → shell" is a textbook post-phish execution step.
 func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
@@ -49,9 +47,8 @@ func (r *ShellFromOffice) Doc() api.Documentation {
 	}
 }
 
-// officeBinaries is the set of macOS Office executable paths that, as a parent, make a
-// shell exec suspicious. We match full paths, not substrings, so a user-named file
-// like `/tmp/Microsoft Word` cannot accidentally silence or spoof a finding.
+// officeBinaries is the set of macOS Office executable paths that, as a parent, make a shell exec suspicious. We match full paths,
+// not substrings, so a user-named file like `/tmp/Microsoft Word` cannot accidentally silence or spoof a finding.
 var officeBinaries = map[string]bool{
 	"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word":             true,
 	"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel":           true,
@@ -79,9 +76,8 @@ func (r *ShellFromOffice) Evaluate(ctx context.Context, events []api.Event, s ap
 	return findings, nil
 }
 
-// evalEvent returns a finding for a single event, or nil when the event doesn't match.
-// Splitting this out of Evaluate keeps the per-event short-circuits (non-exec, bad JSON,
-// non-shell path, non-Office parent) from stacking cognitive complexity on the caller.
+// evalEvent returns a finding for a single event, or nil when the event doesn't match. Splitting this out of Evaluate keeps the
+// per-event short-circuits (non-exec, bad JSON, non-shell path, non-Office parent) from stacking cognitive complexity on the caller.
 func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*api.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
@@ -98,10 +94,8 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	if err != nil {
 		return nil, fmt.Errorf("get parent pid %d: %w", p.PPID, err)
 	}
-	// Parent not yet materialised, or not an Office binary. The processor marks the
-	// whole batch processed after Evaluate returns, so a re-feed does not happen
-	// automatically — missing-parent cases are accepted today; a deferred retry
-	// queue is a future improvement.
+	// Parent not yet materialised, or not an Office binary. The processor marks the whole batch processed after Evaluate returns, so a
+	// re-feed does not happen automatically — missing-parent cases are accepted today; a deferred retry queue is a future improvement.
 	if parent == nil || !officeBinaries[parent.Path] {
 		return nil, nil
 	}

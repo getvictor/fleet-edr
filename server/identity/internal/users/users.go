@@ -1,8 +1,6 @@
-// Package users owns the `users` table that backs UI login. The store exposes
-// a minimal CRUD surface (Create, GetByEmail) because MVP has exactly one admin account
-// — anything more is v1.1. Password hashing uses argon2id with the same parameter set
-// as the enrollment token hash so a future consolidation into a shared `passcrypto`
-// package is mechanical.
+// Package users owns the `users` table that backs UI login. The store exposes a minimal CRUD surface (Create, GetByEmail) because MVP
+// has exactly one admin account — anything more is v1.1. Password hashing uses argon2id with the same parameter set as the enrollment
+// token hash so a future consolidation into a shared `passcrypto` package is mechanical.
 package users
 
 import (
@@ -19,9 +17,8 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on
-// M-series Mac; the hot path (login verify) hashes at most once per login attempt and
-// we rate-limit logins, so CPU-DoS via login-storm is capped.
+// argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on M-series Mac; the hot path (login verify) hashes
+// at most once per login attempt and we rate-limit logins, so CPU-DoS via login-storm is capped.
 const (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // 64 MiB
@@ -46,22 +43,18 @@ type User struct {
 // ErrNotFound is returned by GetByEmail when no row matches.
 var ErrNotFound = errors.New("users: not found")
 
-// ErrBadPassword is returned by VerifyPassword when the presented password doesn't
-// match the stored hash. Kept separate from ErrNotFound so callers can emit identical
-// 401s to the client (preventing email enumeration) while differentiating reasons in
-// the server-side audit log.
+// ErrBadPassword is returned by VerifyPassword when the presented password doesn't match the stored hash. Kept separate from
+// ErrNotFound so callers can emit identical 401s to the client (preventing email enumeration) while differentiating reasons in the
+// server-side audit log.
 var ErrBadPassword = errors.New("users: password mismatch")
 
-// ErrExistingNonBreakglass is returned by CreateBreakglass when a row
-// for the requested email already exists with is_breakglass=0. Caller
-// (seed.Admin / cmd/main wave-0 migration check) handles the wave-0
-// non-breakglass admin via an operator runbook rather than
+// ErrExistingNonBreakglass is returned by CreateBreakglass when a row for the requested email already exists with is_breakglass=0.
+// Caller (seed.Admin / cmd/main wave-0 migration check) handles the wave-0 non-breakglass admin via an operator runbook rather than
 // destructively rewriting the row.
 var ErrExistingNonBreakglass = errors.New("users: existing non-breakglass user")
 
-// errEmailRequired is the canonical message every "email is required"
-// path emits. Lifted to a const so Sonar's S1192 (duplicated literal)
-// stays satisfied as new helpers land.
+// errEmailRequired is the canonical message every "email is required" path emits. Lifted to a const so Sonar's S1192 (duplicated
+// literal) stays satisfied as new helpers land.
 const errEmailRequired = "users: email is required"
 
 // errPasswordRequired is the password-required twin: same Sonar
@@ -85,9 +78,8 @@ type CreateRequest struct {
 	Password string
 }
 
-// Create inserts a new user and returns the row (without the hash/salt). Email is
-// normalised to lowercase + trimmed before the uniqueness check — customer admins like
-// to type "Admin@Example.COM" and expect it to resolve to the same account.
+// Create inserts a new user and returns the row (without the hash/salt). Email is normalised to lowercase + trimmed before the
+// uniqueness check — customer admins like to type "Admin@Example.COM" and expect it to resolve to the same account.
 func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
@@ -113,8 +105,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	return s.Get(ctx, id)
 }
 
-// CreateOIDCRequest is the shape accepted by CreateOIDC. password_*
-// columns are NULL on the resulting row — OIDC users have no
+// CreateOIDCRequest is the shape accepted by CreateOIDC. password_* columns are NULL on the resulting row — OIDC users have no
 // server-stored credential, only an external identity binding.
 type CreateOIDCRequest struct {
 	Email string
@@ -153,37 +144,29 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 	}, nil
 }
 
-// Executor is the subset of sqlx.Tx / sqlx.DB that CreateOIDC (and
-// any future under-transaction insert) consumes. Lets the JIT
-// provisioner pass a *sqlx.Tx without the users package importing
-// the JIT or transaction-management code. Named per the Go
-// convention (single-method interface ends in -er).
+// Executor is the subset of sqlx.Tx / sqlx.DB that CreateOIDC (and any future under-transaction insert) consumes. Lets the JIT
+// provisioner pass a *sqlx.Tx without the users package importing the JIT or transaction-management code. Named per the Go convention
+// (single-method interface ends in -er).
 type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// CreateBreakglassRequest is the shape accepted by CreateBreakglass.
-// password_* columns are NULL on the resulting row — the
-// break-glass redemption flow sets them later in the same
-// transaction that consumes the bootstrap token.
+// CreateBreakglassRequest is the shape accepted by CreateBreakglass. password_* columns are NULL on the resulting row — the
+// break-glass redemption flow sets them later in the same transaction that consumes the bootstrap token.
 type CreateBreakglassRequest struct {
 	Email string
 }
 
-// CreateBreakglass inserts the wave-1 break-glass admin user with
-// is_breakglass=1 and NULL password. Idempotent on email: returns
-// the existing row when one is present so first-boot seeding is
-// safe to re-run on container restart. Used by seed/admin.go.
+// CreateBreakglass inserts the wave-1 break-glass admin user with is_breakglass=1 and NULL password. Idempotent on email: returns the
+// existing row when one is present so first-boot seeding is safe to re-run on container restart. Used by seed/admin.go.
 func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
 		return nil, errors.New(errEmailRequired)
 	}
-	// INSERT ... ON DUPLICATE KEY UPDATE id=id is the canonical
-	// MySQL idiom for "INSERT IGNORE that returns the row id".
-	// Plain INSERT IGNORE doesn't populate LastInsertId on
-	// duplicate, which would leave the caller without an id. The
-	// no-op UPDATE keeps the INSERT path cheap on repeated calls.
+	// INSERT ... ON DUPLICATE KEY UPDATE id=id is the canonical MySQL idiom for "INSERT IGNORE that returns the row id". Plain INSERT
+	// IGNORE doesn't populate LastInsertId on duplicate, which would leave the caller without an id. The no-op UPDATE keeps the INSERT
+	// path cheap on repeated calls.
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO users (email, is_breakglass)
 		VALUES (?, 1)
@@ -200,24 +183,18 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 	if err != nil {
 		return nil, fmt.Errorf("read breakglass user: %w", err)
 	}
-	// A pre-existing row at the same email that is NOT
-	// is_breakglass came from the wave-0 schema (admin with a
-	// printed password). Surface a typed error so the caller
-	// (seed.Admin / cmd/main wave-0 migration) can handle it
-	// explicitly via the operator runbook rather than silently
-	// flipping the row's flag and stranding the existing password.
+	// A pre-existing row at the same email that is NOT is_breakglass came from the wave-0 schema (admin with a printed password). Surface
+	// a typed error so the caller (seed.Admin / cmd/main wave-0 migration) can handle it explicitly via the operator runbook rather than
+	// silently flipping the row's flag and stranding the existing password.
 	if !u.IsBreakglass {
 		return &u, ErrExistingNonBreakglass
 	}
 	return &u, nil
 }
 
-// HashPassword runs argon2id over the plaintext and returns the
-// resulting (hash, salt) pair. Exported so callers (specifically the
-// break-glass FinishSetup flow) can do the CPU-intensive hash
-// BEFORE opening a database transaction — argon2 holds locks for
-// ~30ms per call on M-series hardware, which is unacceptable inside
-// a multi-statement transaction.
+// HashPassword runs argon2id over the plaintext and returns the resulting (hash, salt) pair. Exported so callers (specifically the
+// break-glass FinishSetup flow) can do the CPU-intensive hash BEFORE opening a database transaction — argon2 holds locks for ~30ms per
+// call on M-series hardware, which is unacceptable inside a multi-statement transaction.
 func HashPassword(password string) (hash, salt []byte, err error) {
 	if password == "" {
 		return nil, nil, errors.New(errPasswordRequired)
@@ -225,11 +202,9 @@ func HashPassword(password string) (hash, salt []byte, err error) {
 	return hashPassword(password)
 }
 
-// SetPassword updates password_hash + password_salt for an existing
-// user. Argon2id-hashed via the same helper Create uses. Runs against
-// a caller-supplied executor (typically *sqlx.Tx) so the break-glass
-// redemption flow can wrap the password set + credential persist +
-// identity insert in one transaction.
+// SetPassword updates password_hash + password_salt for an existing user. Argon2id-hashed via the same helper Create uses. Runs
+// against a caller-supplied executor (typically *sqlx.Tx) so the break-glass redemption flow can wrap the password set + credential
+// persist + identity insert in one transaction.
 func (s *Store) SetPassword(ctx context.Context, ec Executor, userID int64, password string) error {
 	if password == "" {
 		return errors.New(errPasswordRequired)
@@ -241,10 +216,8 @@ func (s *Store) SetPassword(ctx context.Context, ec Executor, userID int64, pass
 	return s.SetHashedPassword(ctx, ec, userID, hash, salt)
 }
 
-// SetHashedPassword updates password_hash + password_salt for an
-// existing user using a pre-computed argon2 hash. Skips the argon2
-// CPU work — caller MUST have computed (hash, salt) via HashPassword
-// or an equivalent argon2id-compatible helper. Used by the break-glass
+// SetHashedPassword updates password_hash + password_salt for an existing user using a pre-computed argon2 hash. Skips the argon2 CPU
+// work — caller MUST have computed (hash, salt) via HashPassword or an equivalent argon2id-compatible helper. Used by the break-glass
 // FinishSetup flow so the hash runs OUTSIDE the redemption tx.
 func (s *Store) SetHashedPassword(ctx context.Context, ec Executor, userID int64, hash, salt []byte) error {
 	if len(hash) == 0 || len(salt) == 0 {
@@ -267,11 +240,9 @@ func (s *Store) SetHashedPassword(ctx context.Context, ec Executor, userID int64
 	return nil
 }
 
-// GetByEmail looks up a user row by its normalised email. Returns
-// ErrNotFound when no row matches. Distinct from VerifyPassword
-// because the break-glass login flow needs the user id BEFORE
-// password verification (to look up the user's WebAuthn credentials
-// and issue the assertion challenge against them).
+// GetByEmail looks up a user row by its normalised email. Returns ErrNotFound when no row matches. Distinct from VerifyPassword
+// because the break-glass login flow needs the user id BEFORE password verification (to look up the user's WebAuthn credentials and
+// issue the assertion challenge against them).
 func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	var u User
@@ -339,11 +310,10 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 		FROM users WHERE email = ?
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Burn the argon2 cycles anyway so we don't leak via timing. The dummy salt is a
-		// per-process constant — argon2id is deterministic given the same salt, producing
-		// a stable "unknown email" timing profile. (argon2.IDKey still allocates its
-		// output slice; the timing property we care about is work done under the same
-		// memory + cost parameters as the real path, not allocation-free execution.)
+		// Burn the argon2 cycles anyway so we don't leak via timing. The dummy salt is a per-process constant — argon2id is
+		// deterministic given the same salt, producing a stable "unknown email" timing profile. (argon2.IDKey still allocates
+		// its output slice; the timing property we care about is work done under the same memory + cost parameters as the real
+		// path, not allocation-free execution.)
 		_ = argon2.IDKey([]byte(password), dummySalt, argonTime, argonMemory, argonThreads, argonKeyLen)
 		return nil, ErrNotFound
 	}
@@ -360,9 +330,8 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 	}, nil
 }
 
-// dummySalt is the constant-time fallback salt used when an email lookup misses. Its
-// content doesn't matter — we throw away the hash — but its length must match the real
-// salt length or the argon2 cost won't match exactly.
+// dummySalt is the constant-time fallback salt used when an email lookup misses. Its content doesn't matter — we throw away the hash —
+// but its length must match the real salt length or the argon2 cost won't match exactly.
 var dummySalt = make([]byte, argonSaltLen)
 
 // hashPassword generates a fresh salt + argon2id hash for the plaintext password.

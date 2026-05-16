@@ -28,10 +28,8 @@ func TestSudoersTamper_TechniquesMapping(t *testing.T) {
 	assert.Equal(t, []string{"T1548.003"}, r.Techniques())
 }
 
-// TestSudoersTamper_AllowedEdgeCases pins the contract of allowed():
-// nil allowlist always returns false; populated allowlist hits exact
-// path matches. We don't normalise (no trailing-slash stripping, no
-// case folding) — matching is byte-equal.
+// TestSudoersTamper_AllowedEdgeCases pins the contract of allowed(): nil allowlist always returns false; populated allowlist hits
+// exact path matches. We don't normalise (no trailing-slash stripping, no case folding) — matching is byte-equal.
 func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
 	rNoList := &SudoersTamper{}
 	assert.False(t, rNoList.allowed("/usr/sbin/visudo"),
@@ -47,10 +45,8 @@ func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
 		"empty path must not accidentally match an empty-key entry")
 }
 
-// TestSudoersTamper_MalformedPayload exercises the unmarshal-failure
-// path: the fast-path bytes.Contains lets it through (the magic
-// substring is present), then unmarshal trips and the rule drops the
-// event silently.
+// TestSudoersTamper_MalformedPayload exercises the unmarshal-failure path: the fast-path bytes.Contains lets it through (the magic
+// substring is present), then unmarshal trips and the rule drops the event silently.
 func TestSudoersTamper_MalformedPayload(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()

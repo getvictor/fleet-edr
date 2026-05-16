@@ -23,8 +23,7 @@ const defaultRedirect = "/ui/"
 // pin opts.StateTTL. Mirrors config's defaultOIDCStateCookieTTL.
 const defaultStateTTL = 5 * time.Minute
 
-// httpServerErrorThreshold is the smallest 5xx code; the audit row's
-// decision flips to "error" at or above it (per spec 4xx audits as
+// httpServerErrorThreshold is the smallest 5xx code; the audit row's decision flips to "error" at or above it (per spec 4xx audits as
 // "deny", 5xx as "error").
 const httpServerErrorThreshold = 500
 
@@ -147,14 +146,10 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authorizeURL, http.StatusFound)
 }
 
-// withPromptLogin returns the authorize URL with prompt=login set.
-// Used by Phase 5's reauth flow so the IdP rejects its existing
-// session for this request and forces a fresh credential prompt;
-// without it, an IdP that's mid-session would silently re-issue a
-// token, defeating the freshness model. RFC 6749 / OIDC core both
-// reserve `prompt`; conformant IdPs honour it. Non-conformant ones
-// will silently issue a token from their existing session — flag in
-// the operator runbook.
+// withPromptLogin returns the authorize URL with prompt=login set. Used by Phase 5's reauth flow so the IdP rejects its existing
+// session for this request and forces a fresh credential prompt; without it, an IdP that's mid-session would silently re-issue a
+// token, defeating the freshness model. RFC 6749 / OIDC core both reserve `prompt`; conformant IdPs honour it. Non-conformant ones
+// will silently issue a token from their existing session — flag in the operator runbook.
 func withPromptLogin(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -166,12 +161,9 @@ func withPromptLogin(rawURL string) string {
 	return u.String()
 }
 
-// handleCallback finishes the flow: verify state cookie, exchange
-// code, run JIT, mint a session, redirect to the original next URL.
-// Every error path emits an audit row keyed by spec action
-// (auth.oidc.callback.error or auth.oidc.failure) and redirects the
-// browser to /login?error=<reason> so the UI renders a directed error
-// page; the operator never sees raw plaintext.
+// handleCallback finishes the flow: verify state cookie, exchange code, run JIT, mint a session, redirect to the original next URL.
+// Every error path emits an audit row keyed by spec action (auth.oidc.callback.error or auth.oidc.failure) and redirects the browser
+// to /login?error=<reason> so the UI renders a directed error page; the operator never sees raw plaintext.
 func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cookie, err := r.Cookie(StateCookieName)
@@ -199,11 +191,9 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := h.client.Exchange(ctx, code, decoded.CodeVerifier, decoded.Nonce)
 	if err != nil {
-		// Exchange failure crosses two boundaries: a malformed code
-		// (caller's fault, 400) is indistinguishable in the wire from
-		// an IdP/token-endpoint outage. Treat as 502 — closer to the
-		// truth: the upstream we depend on did not produce a usable
-		// token. Operators get a "try again" redirect either way.
+		// Exchange failure crosses two boundaries: a malformed code (caller's fault, 400) is indistinguishable in the wire
+		// from an IdP/token-endpoint outage. Treat as 502 — closer to the truth: the upstream we depend on did not produce a
+		// usable token. Operators get a "try again" redirect either way.
 		h.callbackError(r, w, http.StatusBadGateway, "exchange_failed", err)
 		return
 	}
@@ -218,9 +208,8 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrEmailConflict) {
-			// Email already binds another account — surface a directed
-			// reason so the operator knows to ask an admin to merge,
-			// not a 500.
+			// Email already binds another account — surface a directed reason so the operator knows to ask an admin to
+			// merge, not a 500.
 			h.failureAudit(r, "oidc.email_conflict", api.AuditEvent{
 				ActorEmail: claims.Email,
 				Payload:    map[string]any{"subject": claims.Subject},
@@ -260,13 +249,10 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, decoded.Redirect, http.StatusFound)
 }
 
-// callbackError audits an auth.oidc.callback.error row (the OAuth
-// callback machinery itself rejected the request: bad state, bad code,
-// upstream failure) and redirects the operator to the login page with
-// the reason in the query string. status influences the slog level:
-// 5xx errors warrant ERROR; 4xx warrants WARN. The wire-format reason
-// header is preserved so direct callers (curl, tests) can still discern
-// the failure mode without parsing redirects.
+// callbackError audits an auth.oidc.callback.error row (the OAuth callback machinery itself rejected the request: bad state, bad code,
+// upstream failure) and redirects the operator to the login page with the reason in the query string. status influences the slog
+// level: 5xx errors warrant ERROR; 4xx warrants WARN. The wire-format reason header is preserved so direct callers (curl, tests) can
+// still discern the failure mode without parsing redirects.
 func (h *Handler) callbackError(r *http.Request, w http.ResponseWriter, status int, reason string, err error) {
 	ctx := r.Context()
 	if err != nil {
@@ -295,9 +281,8 @@ func (h *Handler) callbackError(r *http.Request, w http.ResponseWriter, status i
 	h.errorRedirect(w, r, status, reason)
 }
 
-// failureAudit records an auth.oidc.failure row (a denied login with a
-// known actor: e.g., unknown subject under JIT-disabled). Caller sets
-// the reason verbatim per spec wording (e.g. "oidc.unknown_subject").
+// failureAudit records an auth.oidc.failure row (a denied login with a known actor: e.g., unknown subject under JIT-disabled).
+// Caller sets the reason verbatim per spec wording (e.g. "oidc.unknown_subject").
 func (h *Handler) failureAudit(r *http.Request, reason string, base api.AuditEvent) {
 	base.Action = api.AuditAction("auth.oidc.failure")
 	if base.RemoteAddr == "" {
@@ -314,10 +299,8 @@ func (h *Handler) failureAudit(r *http.Request, reason string, base api.AuditEve
 	h.recordAudit(r.Context(), base)
 }
 
-// errorRedirect sends the operator to /login with the failure reason
-// in the query string. The reason header is also set so non-browser
-// clients can still discriminate without following the 302. The state
-// cookie is cleared on every error so a stuck flow doesn't replay.
+// errorRedirect sends the operator to /login with the failure reason in the query string. The reason header is also set so non-browser
+// clients can still discriminate without following the 302. The state cookie is cleared on every error so a stuck flow doesn't replay.
 func (h *Handler) errorRedirect(w http.ResponseWriter, r *http.Request, status int, reason string) {
 	h.writeStateCookie(w, "", -1)
 	w.Header().Set("X-Edr-Auth-Reason", reason)
@@ -326,10 +309,8 @@ func (h *Handler) errorRedirect(w http.ResponseWriter, r *http.Request, status i
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-// writeStateCookie writes (or clears, when maxAge<0) the per-flow
-// state cookie. Single audited construction site so the security
-// flags (Secure, HttpOnly, SameSite, Path scope) live in one place.
-// Secure is unconditional; see the package-level rationale on
+// writeStateCookie writes (or clears, when maxAge<0) the per-flow state cookie. Single audited construction site so the security
+// flags (Secure, HttpOnly, SameSite, Path scope) live in one place. Secure is unconditional; see the package-level rationale on
 // HandlerOptions.
 func (h *Handler) writeStateCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
@@ -358,10 +339,8 @@ func (h *Handler) writeSessionCookie(w http.ResponseWriter, sess *sessions.Sessi
 	})
 }
 
-// recordAudit is the soft-fail audit recorder. A missing audit row
-// does not propagate as an HTTP error; the spec mandates ERROR-level
-// logging on write failure plus a metric so the operator pipeline
-// notices the gap even when the user request still succeeds.
+// recordAudit is the soft-fail audit recorder. A missing audit row does not propagate as an HTTP error; the spec mandates ERROR-level
+// logging on write failure plus a metric so the operator pipeline notices the gap even when the user request still succeeds.
 func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
 	if h.audit == nil {
 		return
@@ -372,10 +351,8 @@ func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
 	}
 }
 
-// safeRedirect sanitises the post-login `next` query parameter.
-// Returns defaultRedirect for empty / malformed / off-site values.
-// Only same-origin absolute paths (starting with `/` and not `//`)
-// pass through, so an attacker cannot smuggle the operator to an
+// safeRedirect sanitises the post-login `next` query parameter. Returns defaultRedirect for empty / malformed / off-site values.
+// Only same-origin absolute paths (starting with `/` and not `//`) pass through, so an attacker cannot smuggle the operator to an
 // off-site phishing target via a crafted login URL.
 func safeRedirect(next string) string {
 	if next == "" {
@@ -394,10 +371,8 @@ func safeRedirect(next string) string {
 	return u.String()
 }
 
-// pathStartsWithSingleSlash returns true for "/foo" but false for
-// "//foo" or "/\foo". Some browsers normalise "\" to "/" before
-// resolving redirects, so /\evil.com would otherwise be treated as a
-// protocol-relative URL pointing off-origin.
+// pathStartsWithSingleSlash returns true for "/foo" but false for "//foo" or "/\foo". Some browsers normalise "\" to "/" before
+// resolving redirects, so /\evil.com would otherwise be treated as a protocol-relative URL pointing off-origin.
 func pathStartsWithSingleSlash(p string) bool {
 	if len(p) == 0 || p[0] != '/' {
 		return false

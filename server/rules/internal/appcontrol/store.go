@@ -12,16 +12,13 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// Store wraps the *sqlx.DB handle for the app_control_policies +
-// app_control_rules tables. Constructed once by the rules bootstrap
-// and shared across the REST handler, the fan-out path, and tests.
-// Satisfies api.ApplicationControlStore.
+// Store wraps the *sqlx.DB handle for the app_control_policies + app_control_rules tables. Constructed once by the rules bootstrap and
+// shared across the REST handler, the fan-out path, and tests. Satisfies api.ApplicationControlStore.
 type Store struct {
 	db *sqlx.DB
 }
 
-// NewStore builds a Store. Panics if db is nil; cmd/main is the only
-// caller and a nil db would mean a wiring bug, not a recoverable
+// NewStore builds a Store. Panics if db is nil; cmd/main is the only caller and a nil db would mean a wiring bug, not a recoverable
 // state.
 func NewStore(db *sqlx.DB) *Store {
 	if db == nil {
@@ -30,10 +27,8 @@ func NewStore(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// EnsureDefaultPolicy idempotently seeds the Default policy. Safe to
-// call on every server boot (Bootstrap does so). Uses INSERT IGNORE so
-// a manual edit of the row's description or version is not clobbered
-// on subsequent restarts.
+// EnsureDefaultPolicy idempotently seeds the Default policy. Safe to call on every server boot (Bootstrap does so). Uses INSERT IGNORE
+// so a manual edit of the row's description or version is not clobbered on subsequent restarts.
 func (s *Store) EnsureDefaultPolicy(ctx context.Context) error {
 	const query = `INSERT IGNORE INTO app_control_policies
 		(name, description, version, default_action, created_by, updated_by)
@@ -47,11 +42,9 @@ func (s *Store) EnsureDefaultPolicy(ctx context.Context) error {
 	return nil
 }
 
-// GetPolicyByName loads the policy row by name. Rules are NOT
-// populated; callers that need rules call ListRulesByPolicy
-// explicitly. A future GetPolicyWithRules helper can join the two
-// queries when an endpoint shows up that needs both in one round
-// trip; today's REST surface fetches them separately.
+// GetPolicyByName loads the policy row by name. Rules are NOT populated; callers that need rules call ListRulesByPolicy explicitly.
+// A future GetPolicyWithRules helper can join the two queries when an endpoint shows up that needs both in one round trip; today's
+// REST surface fetches them separately.
 func (s *Store) GetPolicyByName(ctx context.Context, name string) (api.ApplicationControlPolicy, error) {
 	const query = `SELECT id, name, description, version, default_action,
 		created_at, updated_at, created_by, updated_by
@@ -70,8 +63,7 @@ func (s *Store) GetPolicyByName(ctx context.Context, name string) (api.Applicati
 	return p, nil
 }
 
-// ListPolicies returns every policy in name order. Rules are NOT
-// populated; the list view shows the rule count only, which the REST
+// ListPolicies returns every policy in name order. Rules are NOT populated; the list view shows the rule count only, which the REST
 // handler computes via a separate aggregate query when it needs it.
 func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolicy, error) {
 	const query = `SELECT id, name, description, version, default_action,
@@ -99,8 +91,7 @@ func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolic
 	return out, nil
 }
 
-// ListRulesByPolicy returns every rule belonging to the policy in
-// (rule_type, identifier) order so the response is deterministic and
+// ListRulesByPolicy returns every rule belonging to the policy in (rule_type, identifier) order so the response is deterministic and
 // snapshot-testable.
 func (s *Store) ListRulesByPolicy(ctx context.Context, policyID int64) ([]api.ApplicationControlRule, error) {
 	const query = `SELECT id, policy_id, rule_type, identifier, action, enforcement, enabled,
@@ -195,11 +186,9 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	if err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol create rule lastid: %w", err)
 	}
-	// Bump the policy version so the agent sees a fresh value on its
-	// next snapshot apply. The application-control fan-out also keys
-	// on this for at-most-once dispatch in the follow-on REST handler
-	// task; lifting it into the same transaction as the insert keeps
-	// the "version changes imply snapshot changes" contract atomic.
+	// Bump the policy version so the agent sees a fresh value on its next snapshot apply. The application-control fan-out also keys on
+	// this for at-most-once dispatch in the follow-on REST handler task; lifting it into the same transaction as the insert keeps the
+	// "version changes imply snapshot changes" contract atomic.
 	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies
 		SET version = version + 1, updated_by = ?
 		WHERE id = ?`, req.Actor, req.PolicyID); err != nil {
@@ -237,17 +226,14 @@ const (
 	mysqlForeignKeyViolation = 1452
 )
 
-// isDuplicateKey is the MySQL-driver-agnostic check for the
-// duplicate-entry error. Stays as a small helper so a future driver
-// swap only touches this one site.
+// isDuplicateKey is the MySQL-driver-agnostic check for the duplicate-entry error. Stays as a small helper so a future driver swap
+// only touches this one site.
 func isDuplicateKey(err error) bool {
 	return isMySQLErrorNumber(err, mysqlDuplicateEntry) || errStringContains(err, "Duplicate entry")
 }
 
-// isForeignKeyViolation detects the MySQL "cannot add or update a
-// child row: a foreign key constraint fails" error (1452). The only
-// FK on app_control_rules is policy_id → app_control_policies(id),
-// so a 1452 unambiguously means the caller's PolicyID is missing.
+// isForeignKeyViolation detects the MySQL "cannot add or update a child row: a foreign key constraint fails" error (1452). The only FK
+// on app_control_rules is policy_id → app_control_policies(id), so a 1452 unambiguously means the caller's PolicyID is missing.
 func isForeignKeyViolation(err error) bool {
 	return isMySQLErrorNumber(err, mysqlForeignKeyViolation) ||
 		errStringContains(err, "foreign key constraint fails")

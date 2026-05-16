@@ -15,9 +15,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
-// service implements api.Service by composing the users + sessions stores
-// and delegating to the seed package for first-boot setup. rbac is the
-// wave-1 role-binding read store the AuthZ chokepoint reaches through.
+// service implements api.Service by composing the users + sessions stores and delegating to the seed package for first-boot setup.
+// rbac is the wave-1 role-binding read store the AuthZ chokepoint reaches through.
 type service struct {
 	users    *users.Store
 	sessions *sessions.Store
@@ -129,10 +128,8 @@ func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string
 	}, nil
 }
 
-// UpdateLastAuthAt stamps the session's freshness window. Called from
-// the OIDC callback when handling a reauth=1 dispatch and from the
-// break-glass reauth POST endpoint. Returns ErrSessionNotFound when
-// no row matches the digest.
+// UpdateLastAuthAt stamps the session's freshness window. Called from the OIDC callback when handling a reauth=1 dispatch and from the
+// break-glass reauth POST endpoint. Returns ErrSessionNotFound when no row matches the digest.
 func (s *service) UpdateLastAuthAt(ctx context.Context, sessionToken []byte) error {
 	if err := s.sessions.UpdateLastAuthAt(ctx, sessionToken); err != nil {
 		if errors.Is(err, sessions.ErrNotFound) {
@@ -143,10 +140,8 @@ func (s *service) UpdateLastAuthAt(ctx context.Context, sessionToken []byte) err
 	return nil
 }
 
-// IsFresh reports whether sess.LastAuthAt falls within the configured
-// reauth window. Pass-through to the sessions store; lifted to the
-// public Service surface so middleware can call it through the api
-// boundary without importing internal/sessions.
+// IsFresh reports whether sess.LastAuthAt falls within the configured reauth window. Pass-through to the sessions store; lifted to the
+// public Service surface so middleware can call it through the api boundary without importing internal/sessions.
 func (s *service) IsFresh(sess *api.Session) bool {
 	if sess == nil {
 		return false
@@ -156,15 +151,11 @@ func (s *service) IsFresh(sess *api.Session) bool {
 	return s.sessions.IsFresh(&sessions.Session{LastAuthAt: sess.LastAuthAt})
 }
 
-// TouchSession advances the session's last_seen_at if the cached value
-// is older than the store's throttle window. Wraps sessions.Store.Touch.
-// Returns the resulting last_seen_at (cachedLastSeen when the throttle
-// skipped, otherwise NOW()) so the middleware can refresh its cached
-// *Session — without that, a long-running request that touches the
-// row mid-flight would hand the next request a stale cache and force
-// another write inside the throttle window. Errors are returned;
-// middleware logs + continues since a missed touch costs at most one
-// minute of idle granularity.
+// TouchSession advances the session's last_seen_at if the cached value is older than the store's throttle window. Wraps
+// sessions.Store.Touch. Returns the resulting last_seen_at (cachedLastSeen when the throttle skipped, otherwise NOW()) so the
+// middleware can refresh its cached *Session — without that, a long-running request that touches the row mid-flight would hand the
+// next request a stale cache and force another write inside the throttle window. Errors are returned; middleware logs + continues
+// since a missed touch costs at most one minute of idle granularity.
 func (s *service) TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) (time.Time, error) {
 	t, err := s.sessions.Touch(ctx, sessionToken, cachedLastSeen)
 	if err != nil {
@@ -173,10 +164,9 @@ func (s *service) TouchSession(ctx context.Context, sessionToken []byte, cachedL
 	return t, nil
 }
 
-// toAPIUser converts the internal users.User row into the operator-visible
-// api.User. Skipping the password hash is the whole point: the api type
-// has no slot for it. Caller guarantees u is non-nil (every callsite
-// already early-returns on error before reaching this).
+// toAPIUser converts the internal users.User row into the operator-visible api.User. Skipping the password hash is the whole point:
+// the api type has no slot for it. Caller guarantees u is non-nil (every callsite already early-returns on error before reaching
+// this).
 func toAPIUser(u *users.User) api.User {
 	return api.User{
 		ID:        u.ID,

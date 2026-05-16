@@ -1,7 +1,5 @@
-// fleet-edr-agent is the Go daemon that receives ESF and network events from
-// system extensions over XPC, queues them in SQLite, and uploads them to the
-// ingestion server. Configuration is loaded from environment variables; see
-// agent/config for the full reference.
+// fleet-edr-agent is the Go daemon that receives ESF and network events from system extensions over XPC, queues them in SQLite, and
+// uploads them to the ingestion server. Configuration is loaded from environment variables; see agent/config for the full reference.
 package main
 
 import (
@@ -146,11 +144,9 @@ func run() error {
 		MaxRetries: uploaderMaxRetries,
 	}, httpClient, logger)
 
-	// appControlDispatcher bridges the commander (which wants a stable
-	// ApplicationControlSender across receiver reconnects) and runReceiverLoop
-	// (which creates a new *receiver.Receiver on every connect). The ESF
-	// receiver loop publishes into this dispatcher on connect and clears it on
-	// disconnect.
+	// appControlDispatcher bridges the commander (which wants a stable ApplicationControlSender across receiver reconnects) and
+	// runReceiverLoop (which creates a new *receiver.Receiver on every connect). The ESF receiver loop publishes into this dispatcher on
+	// connect and clears it on disconnect.
 	esfAppControlDispatcher := &appControlDispatcher{}
 
 	pidTable := proctable.New()
@@ -179,9 +175,8 @@ func flushOTel(shutdown func(context.Context) error) {
 	}
 }
 
-// deriveHostID returns the host identity the agent advertises. An operator
-// override (EDR_HOST_ID) wins; otherwise we read IOPlatformUUID. Failures here
-// are non-fatal — the enrollment step re-derives and fails loudly if needed.
+// deriveHostID returns the host identity the agent advertises. An operator override (EDR_HOST_ID) wins; otherwise we read
+// IOPlatformUUID. Failures here are non-fatal — the enrollment step re-derives and fails loudly if needed.
 func deriveHostID(ctx context.Context, override string) string {
 	if override != "" {
 		return override
@@ -240,19 +235,16 @@ func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTrip
 	return agentTransport, &http.Client{Transport: agentTransport, Timeout: agentHTTPTimeout}, nil
 }
 
-// runUploader owns the uploader goroutine; any non-shutdown-induced exit is
-// logged as an error so SigNoz alerts fire if the uploader dies while the
-// agent is otherwise healthy.
+// runUploader owns the uploader goroutine; any non-shutdown-induced exit is logged as an error so SigNoz alerts fire if the uploader
+// dies while the agent is otherwise healthy.
 func runUploader(ctx context.Context, up *uploader.Uploader, logger *slog.Logger) {
 	if err := up.Run(ctx); err != nil && ctx.Err() == nil {
 		logger.ErrorContext(ctx, "uploader", "err", err)
 	}
 }
 
-// drainAndReport gives the uploader a shutdownDrainTimeout window to flush
-// pending events after the shutdown signal, then logs the final queue depth
-// so post-mortems can tell "clean drain" from "we hard-stopped with N events
-// queued".
+// drainAndReport gives the uploader a shutdownDrainTimeout window to flush pending events after the shutdown signal, then logs the
+// final queue depth so post-mortems can tell "clean drain" from "we hard-stopped with N events queued".
 func drainAndReport(up *uploader.Uploader, q *queue.Queue, logger *slog.Logger) {
 	shutdownCtx := context.Background()
 	logger.InfoContext(shutdownCtx, "agent shutting down")
@@ -274,9 +266,8 @@ func safePrefix(s string) string {
 	return s[:8]
 }
 
-// startCommander spins up the command-poll loop when we have a host_id. With no
-// host_id the agent keeps running (events still upload) but cannot receive commands,
-// so commander launch is skipped and logged.
+// startCommander spins up the command-poll loop when we have a host_id. With no host_id the agent keeps running (events still upload)
+// but cannot receive commands, so commander launch is skipped and logged.
 func startCommander(
 	ctx context.Context,
 	hostID, serverURL string,
@@ -306,9 +297,8 @@ func startCommander(
 	logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
 }
 
-// startProcessReconciler runs the agent-side kill(pid,0) sweep that closes
-// processes whose kernel exit notification went missing (issue #6 client
-// half). Disabled when EDR_PROCESS_RECONCILE_INTERVAL=0.
+// startProcessReconciler runs the agent-side kill(pid,0) sweep that closes processes whose kernel exit notification went missing
+// (issue #6 client half). Disabled when EDR_PROCESS_RECONCILE_INTERVAL=0.
 func startProcessReconciler(
 	ctx context.Context,
 	cfg *config.Config,
@@ -350,11 +340,10 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 	}
 }
 
-// runReceiverLoop connects to an XPC service and reconnects with exponential backoff,
-// piping every event the receiver yields into the agent's queue. When dispatcher is
-// non-nil, every successful connection publishes the current *Receiver into it so
-// outbound callers (commander set_application_control) can send messages to the
-// peer; disconnects clear the dispatcher to prevent sending on a dead handle.
+// runReceiverLoop connects to an XPC service and reconnects with exponential backoff, piping every event the receiver yields into the
+// agent's queue. When dispatcher is non-nil, every successful connection publishes the current *Receiver into it so outbound callers
+// (commander set_application_control) can send messages to the peer; disconnects clear the dispatcher to prevent sending on a dead
+// handle.
 func runReceiverLoop(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -394,10 +383,9 @@ func runReceiverLoop(
 	}
 }
 
-// runReceiverOnce performs a single connect→pipe→disconnect cycle against the
-// XPC service. Returns (reconnect, connected): reconnect says whether the outer
-// backoff loop should try again, and connected tells the caller whether the
-// last attempt actually established the peer link so the backoff can be reset.
+// runReceiverOnce performs a single connect→pipe→disconnect cycle against the XPC service. Returns (reconnect, connected): reconnect
+// says whether the outer backoff loop should try again, and connected tells the caller whether the last attempt actually established
+// the peer link so the backoff can be reset.
 func runReceiverOnce(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -439,9 +427,8 @@ func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receive
 				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		case errCode := <-recv.Errors():
-			// All XPC error codes force a reconnect today; the switch is kept so the
-			// call site is explicit about which codes are expected vs unexpected and so
-			// we can route them differently later (e.g. backoff vs fail-fast).
+			// All XPC error codes force a reconnect today; the switch is kept so the call site is explicit about which
+			// codes are expected vs unexpected and so we can route them differently later (e.g. backoff vs fail-fast).
 			logger.WarnContext(ctx, "xpc error", "code", errCode,
 				"expected", errCode == receiver.ErrorConnectionInvalid ||
 					errCode == receiver.ErrorConnectionInterrupted ||
@@ -505,35 +492,28 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// appControlDispatcher satisfies commander.ApplicationControlSender across the
-// lifecycle of the ESF receiver: runReceiverLoop publishes the current
-// *Receiver on connect and clears it on disconnect. Between clear() and the
-// next set(), SendApplicationControl returns an error so the command gets
-// reported as `failed` and the server's next policy fan-out re-queues the
-// update. Using atomic.Pointer keeps the hot path
-// (SendApplicationControl from commander) lock-free.
+// appControlDispatcher satisfies commander.ApplicationControlSender across the lifecycle of the ESF receiver: runReceiverLoop
+// publishes the current *Receiver on connect and clears it on disconnect. Between clear() and the next set(), SendApplicationControl
+// returns an error so the command gets reported as `failed` and the server's next policy fan-out re-queues the update. Using
+// atomic.Pointer keeps the hot path (SendApplicationControl from commander) lock-free.
 type appControlDispatcher struct {
 	cur atomic.Pointer[receiver.Receiver]
 }
 
 func (d *appControlDispatcher) set(r *receiver.Receiver) { d.cur.Store(r) }
 
-// clear unconditionally clears the published receiver pointer. This is safe
-// under the current runReceiverLoop lifecycle, which serialises set/clear for
-// a single service — there is only one goroutine calling set() and clear() in
-// sequence per connect cycle, so there is no window where a later set() can
-// be wiped by an earlier clear(). If this dispatcher is ever extended to
-// handle overlapping receiver lifecycles (multiple services or concurrent
-// reconnects), clear() would need receiver-aware CompareAndSwap semantics to
+// clear unconditionally clears the published receiver pointer. This is safe under the current runReceiverLoop lifecycle, which
+// serialises set/clear for a single service — there is only one goroutine calling set() and clear() in sequence per connect cycle, so
+// there is no window where a later set() can be wiped by an earlier clear(). If this dispatcher is ever extended to handle overlapping
+// receiver lifecycles (multiple services or concurrent reconnects), clear() would need receiver-aware CompareAndSwap semantics to
 // avoid nulling out a freshly-published pointer from a later set().
 func (d *appControlDispatcher) clear() {
 	d.cur.Store(nil)
 }
 
-// SendApplicationControl satisfies commander.ApplicationControlSender. Returns
-// an error when no receiver is published (between disconnect and the next
-// successful reconnect) so the commander treats the command as failed and the
-// server's next push reconverges the agent.
+// SendApplicationControl satisfies commander.ApplicationControlSender. Returns an error when no receiver is published (between
+// disconnect and the next successful reconnect) so the commander treats the command as failed and the server's next push reconverges
+// the agent.
 func (d *appControlDispatcher) SendApplicationControl(payload []byte) error {
 	r := d.cur.Load()
 	if r == nil {

@@ -11,10 +11,9 @@ import (
 //go:embed all:dist
 var embeddedDist embed.FS
 
-// LiveDirEnv is the env var that opts a process into reading the UI bundle from
-// disk instead of the compile-time embedded copy. Set by Taskfile's dev:server
-// task to server/ui/dist so `task build:ui` is picked up without restarting the
-// Go process. Production builds leave the var unset and serve the embedded copy.
+// LiveDirEnv is the env var that opts a process into reading the UI bundle from disk instead of the compile-time embedded copy.
+// Set by Taskfile's dev:server task to server/ui/dist so `task build:ui` is picked up without restarting the Go process. Production
+// builds leave the var unset and serve the embedded copy.
 const LiveDirEnv = "EDR_UI_LIVE_DIR"
 
 // FS returns the filesystem the server should serve UI assets from.

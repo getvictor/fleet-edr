@@ -1,6 +1,5 @@
-// Package logging builds the *slog.Logger used by the EDR agent. It mirrors server/logging:
-// multi-handler fans to stderr and the otelslog bridge, plus span-context enrichment so every
-// record carries trace_id+span_id when a span is active.
+// Package logging builds the *slog.Logger used by the EDR agent. It mirrors server/logging: multi-handler fans to stderr and the
+// otelslog bridge, plus span-context enrichment so every record carries trace_id+span_id when a span is active.
 package logging
 
 import (
@@ -73,9 +72,9 @@ func parseLevel(s string) (slog.Level, error) {
 	return 0, fmt.Errorf("log level %q must be one of debug, info, warn, error", s)
 }
 
-// levelFilter drops records below the configured level before they reach the wrapped handler.
-// Applied to the otelslog bridge because its own Enabled() always returns true — without this
-// filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN or ERROR.
+// levelFilter drops records below the configured level before they reach the wrapped handler. Applied to the otelslog bridge because
+// its own Enabled() always returns true — without this filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN
+// or ERROR.
 type levelFilter struct {
 	level slog.Level
 	next  slog.Handler

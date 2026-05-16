@@ -69,8 +69,7 @@ func TestEncodeBatch_Empty(t *testing.T) {
 	assert.Equal(t, "[]", string(out))
 }
 
-// eventGen produces a randomized api.Event suitable for round-trip
-// PBT. Field ranges are chosen to cover edge cases (negative pids,
+// eventGen produces a randomized api.Event suitable for round-trip PBT. Field ranges are chosen to cover edge cases (negative pids,
 // max-int timestamps) without straying outside the wire contract.
 func eventGen() *rapid.Generator[api.Event] {
 	return rapid.Custom(func(t *rapid.T) api.Event {
@@ -94,10 +93,8 @@ func eventGen() *rapid.Generator[api.Event] {
 	})
 }
 
-// TestWire_RoundTripProperty: for any batch of api.Event values,
-// DecodeBatch(EncodeBatch(b)) reproduces b. This is the load-bearing
-// invariant for the agent contract: the agent and server must agree
-// on the JSON wire shape, and any drift surfaces as a round-trip
+// TestWire_RoundTripProperty: for any batch of api.Event values, DecodeBatch(EncodeBatch(b)) reproduces b. This is the load-bearing
+// invariant for the agent contract: the agent and server must agree on the JSON wire shape, and any drift surfaces as a round-trip
 // mismatch in this property.
 func TestWire_RoundTripProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
@@ -120,8 +117,7 @@ func TestWire_RoundTripProperty(t *testing.T) {
 			assert.Equal(rt, batch[i].TimestampNs, got[i].TimestampNs, "timestamp_ns at i=%d", i)
 			assert.Equal(rt, batch[i].EventType, got[i].EventType, "event_type at i=%d", i)
 			assert.JSONEq(rt, string(batch[i].Payload), string(got[i].Payload), "payload at i=%d", i)
-			// IngestedAtNs uses omitempty: a zero value disappears on
-			// the wire and decodes back to zero. Anything non-zero
+			// IngestedAtNs uses omitempty: a zero value disappears on the wire and decodes back to zero. Anything non-zero
 			// must round-trip exactly.
 			if batch[i].IngestedAtNs != 0 {
 				assert.Equal(rt, batch[i].IngestedAtNs, got[i].IngestedAtNs, "ingested_at_ns at i=%d", i)

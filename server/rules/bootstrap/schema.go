@@ -12,11 +12,9 @@ package bootstrap
 // the full spec) are deferred to follow-on work; for the demo every
 // policy implicitly targets every host in the deployment.
 var schemaStatements = []string{
-	// app_control_policies holds a named ruleset. The product is a
-	// single-instance deployment, so policies are unique by name across
-	// the deployment. `default_action` is constrained to `NONE` in this
-	// phase; the Lockdown change extends the enum to `('NONE','BLOCK')`
-	// so a per-policy default-deny stance can be set on real fleets.
+	// app_control_policies holds a named ruleset. The product is a single-instance deployment, so policies are unique by name across the
+	// deployment. `default_action` is constrained to `NONE` in this phase; the Lockdown change extends the enum to `('NONE','BLOCK')` so a
+	// per-policy default-deny stance can be set on real fleets.
 	`CREATE TABLE IF NOT EXISTS app_control_policies (
 		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
 		name           VARCHAR(64)  NOT NULL,
@@ -29,19 +27,13 @@ var schemaStatements = []string{
 		updated_by     VARCHAR(255) NOT NULL DEFAULT 'system',
 		UNIQUE KEY uk_app_control_policies_name (name)
 	)`,
-	// app_control_rules carries one row per rule. rule_type is the full
-	// six-value enum from the spec so the schema doesn't need a
-	// migration when the other five types come online; identifier
-	// validation in the appcontrol package gates which types are
-	// actually accepted by the REST surface. action is constrained to
-	// `BLOCK` in this phase; ALLOW + SILENT_BLOCK arrive with Lockdown.
-	// enforcement is in the schema with the full pair so the column is
-	// ready for the Phase B Detect/Protect split. severity, source,
-	// source_ref, expires_at all exist for future threat-intel and TTL
-	// work; the demo populates default values for them. The FK on
-	// policy_id is intra-context (both tables live in rules), so the
-	// ADR-0004 cross-context-FK ban does not apply. CASCADE on policy
-	// delete keeps orphan rules from accumulating.
+	// app_control_rules carries one row per rule. rule_type is the full six-value enum from the spec so the schema doesn't need a
+	// migration when the other five types come online; identifier validation in the appcontrol package gates which types are actually
+	// accepted by the REST surface. action is constrained to `BLOCK` in this phase; ALLOW + SILENT_BLOCK arrive with Lockdown. enforcement
+	// is in the schema with the full pair so the column is ready for the Phase B Detect/Protect split. severity, source, source_ref,
+	// expires_at all exist for future threat-intel and TTL work; the demo populates default values for them. The FK on policy_id is
+	// intra-context (both tables live in rules), so the ADR-0004 cross-context-FK ban does not apply. CASCADE on policy delete keeps
+	// orphan rules from accumulating.
 	`CREATE TABLE IF NOT EXISTS app_control_rules (
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
 		policy_id    BIGINT       NOT NULL,

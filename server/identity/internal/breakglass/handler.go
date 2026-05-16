@@ -19,56 +19,42 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
-// Cookie path scope: only sent on /admin/break-glass paths so the
-// challenge cookie doesn't leak to /api/* on the same origin. NO
-// trailing slash: per RFC 6265 §5.1.4, a cookie with Path=/foo/
-// matches request paths whose prefix is "/foo/" — `/foo` (without
-// the trailing slash) does NOT match. Since the login route is
-// /admin/break-glass (no trailing slash), the cookie path must be
-// /admin/break-glass for the assertion cookie to round-trip
-// between the GET-challenge POST and the POST-login.
+// Cookie path scope: only sent on /admin/break-glass paths so the challenge cookie doesn't leak to /api/* on the same origin.
+// NO trailing slash: per RFC 6265 §5.1.4, a cookie with Path=/foo/ matches request paths whose prefix is "/foo/" — `/foo` (without
+// the trailing slash) does NOT match. Since the login route is /admin/break-glass (no trailing slash), the cookie path must be
+// /admin/break-glass for the assertion cookie to round-trip between the GET-challenge POST and the POST-login.
 const cookiePath = "/admin/break-glass"
 
-// reauthCookiePath scopes the Phase 5 reauth challenge cookie to
-// /api/auth/reauth. The login challenge cookie at cookiePath is path-
-// scoped to /admin/break-glass and would NOT round-trip on the reauth
-// POST (browsers only send a cookie when the request path matches the
-// cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name
-// keeps the two flows independent — an operator running a break-glass
-// login in one tab and a reauth in another won't have one flow's
-// cookie clobber the other's.
+// reauthCookiePath scopes the Phase 5 reauth challenge cookie to /api/auth/reauth. The login challenge cookie at cookiePath is path-
+// scoped to /admin/break-glass and would NOT round-trip on the reauth POST (browsers only send a cookie when the request path matches
+// the cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name keeps the two flows independent — an operator running a
+// break-glass login in one tab and a reauth in another won't have one flow's cookie clobber the other's.
 const reauthCookiePath = "/api/auth/reauth"
 
-// reauthChallengeCookieName is distinct from the login challenge cookie
-// so a tab running the login flow + a tab running reauth don't trample
-// each other's WebAuthn challenges.
+// reauthChallengeCookieName is distinct from the login challenge cookie so a tab running the login flow + a tab running reauth don't
+// trample each other's WebAuthn challenges.
 const reauthChallengeCookieName = "edr_reauth_challenge"
 
 // challengeCookieMaxAge is the per-flow cookie lifetime in seconds.
 // Matches the WebAuthn challenge timeout the browser enforces.
 const challengeCookieMaxAge = 300
 
-// Cache-Control header semantics applied uniformly to break-glass auth
-// responses. Success paths set signed challenge / session cookies;
-// error paths are throwaway. Either way the response should not land
-// in any shared cache.
+// Cache-Control header semantics applied uniformly to break-glass auth responses. Success paths set signed challenge / session
+// cookies; error paths are throwaway. Either way the response should not land in any shared cache.
 const (
 	headerCacheControl  = "Cache-Control"
 	cacheControlNoStore = "no-store"
 )
 
-// loginBodyMaxBytes caps the JSON body the login handler reads.
-// 64 KiB comfortably accommodates a CredentialAssertionResponse
-// (with attestationObject) without inviting OOM via a hostile
-// payload.
+// loginBodyMaxBytes caps the JSON body the login handler reads. 64 KiB comfortably accommodates a CredentialAssertionResponse (with
+// attestationObject) without inviting OOM via a hostile payload.
 const loginBodyMaxBytes = 64 * 1024
 
 // emailBodyMaxBytes caps the begin-login challenge body — only the
 // email field, so 4 KiB is generous.
 const emailBodyMaxBytes = 4 * 1024
 
-// authReasonHeader is the wire-format header the failure helpers
-// emit. Lifted to a const so Sonar's S1192 (duplicated literal) is
+// authReasonHeader is the wire-format header the failure helpers emit. Lifted to a const so Sonar's S1192 (duplicated literal) is
 // satisfied as new helpers land.
 const authReasonHeader = "X-Edr-Auth-Reason"
 
@@ -119,12 +105,9 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 }
 
-// AllowlistMiddleware returns next wrapped by the configured IP
-// allowlist. When no allowlist is configured (dev mode), returns next
-// unchanged. Exported so cmd/main can apply the same gate to the
-// React UI's break-glass subroutes — without it, an off-allowlist
-// caller could load /ui/admin/break-glass and see the React form
-// shell, defeating the path-concealment promise of the API gate.
+// AllowlistMiddleware returns next wrapped by the configured IP allowlist. When no allowlist is configured (dev mode), returns next
+// unchanged. Exported so cmd/main can apply the same gate to the React UI's break-glass subroutes — without it, an off-allowlist
+// caller could load /ui/admin/break-glass and see the React form shell, defeating the path-concealment promise of the API gate.
 func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
 	if h.allowlist == nil {
 		return next
@@ -149,9 +132,8 @@ func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
 // than an HTML payload.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	wrap := func(handler http.HandlerFunc) http.Handler {
-		// IP allowlist runs FIRST so off-list callers see a 404
-		// indistinguishable from "no such path" — they must not
-		// learn the path exists by bumping into a rate-limit 429.
+		// IP allowlist runs FIRST so off-list callers see a 404 indistinguishable from "no such path" — they must not learn
+		// the path exists by bumping into a rate-limit 429.
 		var inner http.Handler = handler
 		if h.allowlist != nil {
 			inner = h.allowlist.Middleware(inner)
@@ -187,13 +169,10 @@ func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/reauth", h.handleReauth)
 }
 
-// handleSetupRedirect 302s to the React setup page, preserving the
-// `token` query string. The redirection target is /ui/admin/break-glass/setup
-// because the React UI is mounted under /ui/. The IP allowlist still
-// applies so off-list callers see 404 instead of a redirect (don't
-// leak the path's existence). Cache-Control: no-store keeps the
-// token-bearing Location header out of browser history / proxy
-// caches: the redemption URL is sensitive bearer state.
+// handleSetupRedirect 302s to the React setup page, preserving the `token` query string. The redirection target is
+// /ui/admin/break-glass/setup because the React UI is mounted under /ui/. The IP allowlist still applies so off-list callers see 404
+// instead of a redirect (don't leak the path's existence). Cache-Control: no-store keeps the token-bearing Location header out of
+// browser history / proxy caches: the redemption URL is sensitive bearer state.
 func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	dest := "/ui/admin/break-glass/setup"
@@ -203,8 +182,7 @@ func (h *Handler) handleSetupRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-// handleLoginRedirect 302s to the React login page. Same no-store
-// posture as handleSetupRedirect for consistency, even though this
+// handleLoginRedirect 302s to the React login page. Same no-store posture as handleSetupRedirect for consistency, even though this
 // path carries no token.
 func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(headerCacheControl, cacheControlNoStore)
@@ -213,15 +191,11 @@ func (h *Handler) handleLoginRedirect(w http.ResponseWriter, r *http.Request) {
 
 // ---- /admin/break-glass/setup ----------------------------------------------
 
-// gateSetupRequest applies the public-setup admission gate shared by
-// handleBeginSetup + handleFinishSetup: write the no-store cache header,
-// enforce per-IP + setup-flow rate limits, and parse the redemption
-// token from the query string. Returns the trimmed token and ok=true
-// when the caller should continue; ok=false means the response has
-// already been written (4xx) and the caller must return.
+// gateSetupRequest applies the public-setup admission gate shared by handleBeginSetup + handleFinishSetup: write the no-store cache
+// header, enforce per-IP + setup-flow rate limits, and parse the redemption token from the query string. Returns the trimmed token and
+// ok=true when the caller should continue; ok=false means the response has already been written (4xx) and the caller must return.
 func (h *Handler) gateSetupRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
-	// no-store on every break-glass auth response: success paths set
-	// signed challenge / session cookies; error paths are throwaway.
+	// no-store on every break-glass auth response: success paths set signed challenge / session cookies; error paths are throwaway.
 	// Either way the response should not land in a shared cache.
 	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	ctx := r.Context()
@@ -241,13 +215,9 @@ func (h *Handler) gateSetupRequest(w http.ResponseWriter, r *http.Request) (stri
 	return token, true
 }
 
-// handleBeginSetup validates the redemption token query parameter
-// and issues a WebAuthn registration challenge. The challenge state
-// rides in a signed cookie; the response body carries
-// CredentialCreationOptions for the browser API. The 4c UI hits
-// this on form load; until then, an operator can call it directly
-// with curl + a WebAuthn CLI (or the operator runbook's example
-// browser shim).
+// handleBeginSetup validates the redemption token query parameter and issues a WebAuthn registration challenge. The challenge state
+// rides in a signed cookie; the response body carries CredentialCreationOptions for the browser API. The 4c UI hits this on form load;
+// until then, an operator can call it directly with curl + a WebAuthn CLI (or the operator runbook's example browser shim).
 func (h *Handler) handleBeginSetup(w http.ResponseWriter, r *http.Request) {
 	token, ok := h.gateSetupRequest(w, r)
 	if !ok {
@@ -334,10 +304,8 @@ func (h *Handler) handleFinishSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	h.clearChallengeCookie(w)
 	if res.Session == nil {
-		// Token redemption committed but the post-commit session
-		// mint failed. The token is consumed; the operator must log
-		// in via /admin/break-glass to get a session. Surface a
-		// directed redirect rather than silently failing.
+		// Token redemption committed but the post-commit session mint failed. The token is consumed; the operator must log in via
+		// /admin/break-glass to get a session. Surface a directed redirect rather than silently failing.
 		h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 			"redirect": cookiePath,
 			"hint":     "session_mint_failed",
@@ -418,17 +386,11 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 		h.badRequest(r.Context(), w, "body_invalid")
 		return
 	}
-	// Per-email budget: token-bucket Allow() is consume-or-reject;
-	// no non-consuming peek is exposed by the IPLimiter primitive.
-	// Consume one token at the START of the attempt so a brute-
-	// forcer who exhausted the budget on prior failures cannot
-	// trigger another argon2 + WebAuthn round-trip. Successful
-	// logins burn one slot too, but break-glass logins are rare by
-	// design (incident-only) so the wasted slot is harmless. Spec
-	// nuance: this is the failed-login budget, but practical
-	// constraint of consume-only limiters means it gates EVERY
-	// attempt; the documentation in ratelimit.go has been updated
-	// to reflect this.
+	// Per-email budget: token-bucket Allow() is consume-or-reject; no non-consuming peek is exposed by the IPLimiter primitive. Consume
+	// one token at the START of the attempt so a brute-forcer who exhausted the budget on prior failures cannot trigger another argon2 +
+	// WebAuthn round-trip. Successful logins burn one slot too, but break-glass logins are rare by design (incident-only) so the wasted
+	// slot is harmless. Spec nuance: this is the failed-login budget, but practical constraint of consume-only limiters means it gates
+	// EVERY attempt; the documentation in ratelimit.go has been updated to reflect this.
 	if !h.rates.AllowEmailFail(body.Email) {
 		h.tooMany(r.Context(), w, "email_rate_limited")
 		return
@@ -459,14 +421,10 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		reason := reasonForLoginErr(err)
-		// When the failure falls through to the generic "login.error"
-		// catch-all, the audit row's redacted reason leaves the
-		// operator without a way to diagnose what actually failed
-		// (origin mismatch, signature verify fail, missing challenge
-		// cookie, etc.). Log the underlying error at WARN so SigNoz
-		// captures the breadcrumb. The wire response and audit row
-		// stay generic so a probing attacker can't enumerate failure
-		// modes; the log is operator-only.
+		// When the failure falls through to the generic "login.error" catch-all, the audit row's redacted reason leaves the
+		// operator without a way to diagnose what actually failed (origin mismatch, signature verify fail, missing challenge
+		// cookie, etc.). Log the underlying error at WARN so SigNoz captures the breadcrumb. The wire response and audit row
+		// stay generic so a probing attacker can't enumerate failure modes; the log is operator-only.
 		if reason == "login.error" {
 			h.logger.WarnContext(r.Context(), "breakglass login fell through to generic error",
 				"err", err,
@@ -534,12 +492,9 @@ func (h *Handler) clearReauthChallengeCookie(w http.ResponseWriter) {
 	h.writeChallengeCookie(w, reauthChallengeCookieName, reauthCookiePath, "", -1)
 }
 
-// writeChallengeCookie is the shared cookie-emit helper for both the
-// login (cookiePath / ChallengeStateCookieName) and reauth
-// (reauthCookiePath / reauthChallengeCookieName) WebAuthn flows. The
-// per-flow path scoping keeps each flow's cookie from leaking onto
-// the other's request paths and preserves the path-existence
-// concealment property of the IP allowlist gate on the login routes.
+// writeChallengeCookie is the shared cookie-emit helper for both the login (cookiePath / ChallengeStateCookieName) and reauth
+// (reauthCookiePath / reauthChallengeCookieName) WebAuthn flows. The per-flow path scoping keeps each flow's cookie from leaking onto
+// the other's request paths and preserves the path-existence concealment property of the IP allowlist gate on the login routes.
 func (h *Handler) writeChallengeCookie(w http.ResponseWriter, name, path, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
@@ -552,10 +507,8 @@ func (h *Handler) writeChallengeCookie(w http.ResponseWriter, name, path, value 
 	})
 }
 
-// setSessionCookie writes the api.SessionCookieName cookie with the
-// freshly minted session token. Same Secure-true policy as the OIDC
-// handler (browser localhost carve-out keeps dev workflows working
-// over plain HTTP).
+// setSessionCookie writes the api.SessionCookieName cookie with the freshly minted session token. Same Secure-true policy as the OIDC
+// handler (browser localhost carve-out keeps dev workflows working over plain HTTP).
 func (h *Handler) setSessionCookie(w http.ResponseWriter, sess *sessions.Session) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     api.SessionCookieName,
@@ -569,9 +522,8 @@ func (h *Handler) setSessionCookie(w http.ResponseWriter, sess *sessions.Session
 	})
 }
 
-// reasonForTokenErr maps the typed token-store errors to the
-// audit-payload reason. The wire response uniformly says "token is
-// gone"; the audit row records the precise cause.
+// reasonForTokenErr maps the typed token-store errors to the audit-payload reason. The wire response uniformly says "token is gone";
+// the audit row records the precise cause.
 func reasonForTokenErr(err error) string {
 	switch {
 	case errors.Is(err, ErrTokenExpired):
@@ -601,16 +553,11 @@ func reasonForSetupErr(err error) string {
 	}
 }
 
-// gateReauthRequest applies the authed-reauth admission gate shared
-// by handleReauthChallenge + handleReauth: write the no-store cache
-// header, require a session on the request context, require
-// auth_method=local_password (OIDC sessions dispatch reauth via
-// /api/auth/login?reauth=1 instead), and enforce per-IP rate limits.
-// Returns the resolved session and ok=true to continue; ok=false means
-// the response is already written and the caller must return. The
-// caller re-derives the context with r.Context() to keep contextcheck
-// happy (linter cannot trace context inheritance through a helper
-// return value).
+// gateReauthRequest applies the authed-reauth admission gate shared by handleReauthChallenge + handleReauth: write the no-store
+// cache header, require a session on the request context, require auth_method=local_password (OIDC sessions dispatch reauth via
+// /api/auth/login?reauth=1 instead), and enforce per-IP rate limits. Returns the resolved session and ok=true to continue; ok=false
+// means the response is already written and the caller must return. The caller re-derives the context with r.Context() to keep
+// contextcheck happy (linter cannot trace context inheritance through a helper return value).
 func (h *Handler) gateReauthRequest(w http.ResponseWriter, r *http.Request) (*api.Session, bool) {
 	w.Header().Set(headerCacheControl, cacheControlNoStore)
 	ctx := r.Context()
@@ -674,24 +621,18 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	// Use the reauth-scoped cookie (Path=/api/auth/reauth) so the
-	// browser sends it back on POST /api/auth/reauth. The login
-	// challenge cookie is path-scoped to /admin/break-glass and would
-	// not round-trip here.
+	// Use the reauth-scoped cookie (Path=/api/auth/reauth) so the browser sends it back on POST /api/auth/reauth. The login challenge
+	// cookie is path-scoped to /admin/break-glass and would not round-trip here.
 	h.setReauthChallengeCookie(w, cookieValue)
 	h.writeJSON(ctx, w, http.StatusOK, map[string]any{
 		"publicKey": challenge.Options.Response,
 	})
 }
 
-// handleReauth verifies password + assertion against the current
-// session's user and stamps last_auth_at to NOW(), resetting the
-// freshness window. No new session is minted — the existing cookie
-// keeps working with a refreshed timestamp. On success returns 200
-// + {"ok": true}; on failure returns 401 invalid_credentials with the
-// same wire-shape as a regular break-glass login so an attacker who
-// hijacks a session cookie cannot enumerate password-correctness via
-// the reauth endpoint.
+// handleReauth verifies password + assertion against the current session's user and stamps last_auth_at to NOW(), resetting the
+// freshness window. No new session is minted — the existing cookie keeps working with a refreshed timestamp. On success returns 200 +
+// {"ok": true}; on failure returns 401 invalid_credentials with the same wire-shape as a regular break-glass login so an attacker who
+// hijacks a session cookie cannot enumerate password-correctness via the reauth endpoint.
 func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.gateReauthRequest(w, r)
 	if !ok {
@@ -742,9 +683,8 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 		h.unauthorized(ctx, w, "invalid_credentials")
 		return
 	}
-	// Re-derive the raw cookie token from the request so the identity
-	// service can stamp last_auth_at on this session row. The plaintext
-	// is the cookie value; api.Session deliberately does not carry it.
+	// Re-derive the raw cookie token from the request so the identity service can stamp last_auth_at on this session row. The plaintext is
+	// the cookie value; api.Session deliberately does not carry it.
 	rawToken, err := readSessionCookieToken(r)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "reauth read session cookie", "err", err)
@@ -761,10 +701,8 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(ctx, w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// readSessionCookieToken decodes the api.SessionCookieName value back
-// into the raw plaintext token bytes. Mirrors the middleware's cookie-
-// read path so the reauth endpoint stamps last_auth_at on the SAME
-// row the middleware loaded.
+// readSessionCookieToken decodes the api.SessionCookieName value back into the raw plaintext token bytes. Mirrors the middleware's
+// cookie-read path so the reauth endpoint stamps last_auth_at on the SAME row the middleware loaded.
 func readSessionCookieToken(r *http.Request) ([]byte, error) {
 	cookie, err := r.Cookie(api.SessionCookieName)
 	if err != nil {
@@ -791,11 +729,9 @@ func reasonForLoginErr(err error) string {
 	}
 }
 
-// decodeJSONBody is the standard limited-reader + strict-JSON
-// pattern used elsewhere in identity. maxBytes caps the body size
-// so a hostile payload cannot exhaust memory. Passing the
-// ResponseWriter lets net/http emit the canonical 413 response on
-// overflow rather than falling through to a generic decode error.
+// decodeJSONBody is the standard limited-reader + strict-JSON pattern used elsewhere in identity. maxBytes caps the body size so a
+// hostile payload cannot exhaust memory. Passing the ResponseWriter lets net/http emit the canonical 413 response on overflow rather
+// than falling through to a generic decode error.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) error {
 	body := http.MaxBytesReader(w, r.Body, maxBytes)
 	dec := json.NewDecoder(body)

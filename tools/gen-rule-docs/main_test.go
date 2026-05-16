@@ -10,13 +10,10 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
-// TestEveryRuleHasDocs is the gate that prevents shipping a new detection
-// rule without operator-facing documentation. detection.Rule.Doc() returns
-// a struct, so a rule can technically return the zero value — this test
-// catches that. Severity is also gated to one of the documented constants
-// so a typo'd value (e.g. "urgent") fails the test instead of silently
-// producing a broken UI severity pill class name and a markdown reference
-// that disagrees with the rest of the codebase.
+// TestEveryRuleHasDocs is the gate that prevents shipping a new detection rule without operator-facing documentation.
+// detection.Rule.Doc() returns a struct, so a rule can technically return the zero value — this test catches that. Severity is also
+// gated to one of the documented constants so a typo'd value (e.g. "urgent") fails the test instead of silently producing a broken UI
+// severity pill class name and a markdown reference that disagrees with the rest of the codebase.
 func TestEveryRuleHasDocs(t *testing.T) {
 	allowedSeverities := map[string]struct{}{
 		rulesapi.SeverityLow:      {},
@@ -38,10 +35,8 @@ func TestEveryRuleHasDocs(t *testing.T) {
 	}
 }
 
-// TestRenderProducesIndexEntryPerRule sanity-checks the markdown structure:
-// the index table at the top of the doc must contain a row for every
-// registered rule. Without this, a missing rule could slip through if the
-// generator's loop somehow short-circuited.
+// TestRenderProducesIndexEntryPerRule sanity-checks the markdown structure: the index table at the top of the doc must contain a row
+// for every registered rule. Without this, a missing rule could slip through if the generator's loop somehow short-circuited.
 func TestRenderProducesIndexEntryPerRule(t *testing.T) {
 	rs := allRegisteredRules()
 	var buf bytes.Buffer
@@ -56,9 +51,8 @@ func TestRenderProducesIndexEntryPerRule(t *testing.T) {
 	}
 }
 
-// TestRenderTechniqueLinks checks that every technique in the catalog is
-// rendered as a clickable MITRE link, with sub-technique dots translated to
-// slashes (the URL convention attack.mitre.org expects).
+// TestRenderTechniqueLinks checks that every technique in the catalog is rendered as a clickable MITRE link, with sub-technique dots
+// translated to slashes (the URL convention attack.mitre.org expects).
 func TestRenderTechniqueLinks(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, render(&buf, allRegisteredRules()))

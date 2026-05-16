@@ -12,10 +12,8 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// TestMarshalSetApplicationControlPayload_RoundTrip pins the wire
-// shape every agent sees. The byte-exact form is the contract the
-// extension's Swift decoder parses; field rename / reorder here
-// breaks every deployed agent at the same instant.
+// TestMarshalSetApplicationControlPayload_RoundTrip pins the wire shape every agent sees. The byte-exact form is the contract the
+// extension's Swift decoder parses; field rename / reorder here breaks every deployed agent at the same instant.
 func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
 	msg := "Blocked: corporate policy"
 	url := "https://help.example.com/blocked"
@@ -58,10 +56,8 @@ func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestMarshalSetApplicationControlPayload_FiltersDisabled covers the
-// payload's filtering contract: disabled rules MUST NOT reach the
-// agent. The fan-out path lifts this gate so the extension never
-// allocates snapshot entries for rules an admin has paused.
+// TestMarshalSetApplicationControlPayload_FiltersDisabled covers the payload's filtering contract: disabled rules MUST NOT reach the
+// agent. The fan-out path lifts this gate so the extension never allocates snapshot entries for rules an admin has paused.
 func TestMarshalSetApplicationControlPayload_FiltersDisabled(t *testing.T) {
 	rules := []api.ApplicationControlRule{
 		{RuleType: api.RuleTypeBinary, Identifier: "a", Enabled: true},
@@ -77,9 +73,8 @@ func TestMarshalSetApplicationControlPayload_FiltersDisabled(t *testing.T) {
 	assert.Equal(t, "c", decoded.Rules[1].Identifier)
 }
 
-// TestMarshalSetApplicationControlPayload_FiltersExpired covers the
-// expires_at filter when the caller passes a non-zero `now`. The
-// agent should never see rules whose TTL has passed.
+// TestMarshalSetApplicationControlPayload_FiltersExpired covers the expires_at filter when the caller passes a non-zero `now`.
+// The agent should never see rules whose TTL has passed.
 func TestMarshalSetApplicationControlPayload_FiltersExpired(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Hour)
@@ -98,10 +93,8 @@ func TestMarshalSetApplicationControlPayload_FiltersExpired(t *testing.T) {
 	assert.Equal(t, "live-future-expiry", decoded.Rules[1].Identifier)
 }
 
-// TestMarshalSetApplicationControlPayload_EmptyRules confirms the
-// empty-rules case round-trips cleanly. An empty payload is a valid
-// state (just-after-policy-creation, or after every rule is deleted)
-// and the agent + extension must handle it without erroring.
+// TestMarshalSetApplicationControlPayload_EmptyRules confirms the empty-rules case round-trips cleanly. An empty payload is a valid
+// state (just-after-policy-creation, or after every rule is deleted) and the agent + extension must handle it without erroring.
 func TestMarshalSetApplicationControlPayload_EmptyRules(t *testing.T) {
 	raw, err := api.MarshalSetApplicationControlPayload(api.ApplicationControlPolicy{ID: 1, Version: 1}, nil, time.Time{})
 	require.NoError(t, err)
@@ -112,10 +105,8 @@ func TestMarshalSetApplicationControlPayload_EmptyRules(t *testing.T) {
 	assert.Empty(t, decoded.Rules)
 }
 
-// TestSetApplicationControlPayload_JSONKeys pins the JSON field
-// names that the extension's Swift Decodable reads. Renames here
-// silently break the extension at decode time; this test fails
-// loudly when a rename happens.
+// TestSetApplicationControlPayload_JSONKeys pins the JSON field names that the extension's Swift Decodable reads. Renames here
+// silently break the extension at decode time; this test fails loudly when a rename happens.
 func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 	msg := "blocked"
 	raw, err := api.MarshalSetApplicationControlPayload(
@@ -141,11 +132,9 @@ func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 	}
 }
 
-// ruleTypes is the universe of RuleType values the wire payload can carry.
-// The marshal helper does not gate on rule_type (the server's validator
-// does, before the rule lands in the database), so for the round-trip
-// property test we sample the full enum and assert each value survives
-// Marshal ∘ Unmarshal unchanged.
+// ruleTypes is the universe of RuleType values the wire payload can carry. The marshal helper does not gate on rule_type (the server's
+// validator does, before the rule lands in the database), so for the round-trip property test we sample the full enum and assert each
+// value survives Marshal ∘ Unmarshal unchanged.
 var ruleTypes = []api.RuleType{
 	api.RuleTypeBinary,
 	api.RuleTypeCDHash,
@@ -162,11 +151,9 @@ var severities = []api.Severity{
 	api.SeverityRuleCritical,
 }
 
-// genRule produces a random rule shape. Identifier is opaque to the
-// payload codec (the per-rule_type identifier validator runs server-
-// side, not in the marshal helper), so we use a printable-ASCII string
-// generator to exercise the JSON encoding path without dragging in
-// per-type format gymnastics.
+// genRule produces a random rule shape. Identifier is opaque to the payload codec (the per-rule_type identifier validator runs server-
+// side, not in the marshal helper), so we use a printable-ASCII string generator to exercise the JSON encoding path without dragging
+// in per-type format gymnastics.
 func genRule(t *rapid.T, idx int) api.ApplicationControlRule {
 	identifier := rapid.StringMatching(`[a-zA-Z0-9._:-]{1,64}`).Draw(t, "identifier")
 	enabled := rapid.Bool().Draw(t, "enabled")
@@ -246,10 +233,8 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		assert.Equal(t, policyID, decoded.PolicyID)
 		assert.Equal(t, policyVersion, decoded.PolicyVersion)
 
-		// Build the expected post-filter view from the inputs and
-		// compare element-wise. The filter contract: drop disabled
-		// rules; drop rules whose expires_at is in the past relative
-		// to a non-zero `now`.
+		// Build the expected post-filter view from the inputs and compare element-wise. The filter contract: drop disabled
+		// rules; drop rules whose expires_at is in the past relative to a non-zero `now`.
 		expected := make([]api.SetApplicationControlRule, 0, len(rules))
 		for _, r := range rules {
 			if !r.Enabled {

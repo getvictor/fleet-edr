@@ -19,9 +19,8 @@ import (
 	"log/slog"
 	"time"
 
-	// Register the CGo-free modernc.org/sqlite driver under the name "sqlite" so
-	// sql.Open("sqlite", ...) below finds it. Blank import is required because
-	// database/sql drivers register themselves in an init() function.
+	// Register the CGo-free modernc.org/sqlite driver under the name "sqlite" so sql.Open("sqlite", ...) below finds it. Blank import is
+	// required because database/sql drivers register themselves in an init() function.
 	_ "modernc.org/sqlite"
 )
 
@@ -70,9 +69,8 @@ type Queue struct {
 // Open creates or opens a SQLite queue at the given path. opts may be the zero
 // value for unbounded behaviour.
 func Open(ctx context.Context, dbPath string, opts Options) (*Queue, error) {
-	// Set busy_timeout + journal_size_limit via DSN so they apply to every connection
-	// in the pool. journal_size_limit=32MB keeps the WAL file itself from growing
-	// without bound and silently busting the main-file cap.
+	// Set busy_timeout + journal_size_limit via DSN so they apply to every connection in the pool. journal_size_limit=32MB keeps the WAL
+	// file itself from growing without bound and silently busting the main-file cap.
 	dsn := dbPath +
 		"?_pragma=busy_timeout%3d5000" +
 		"&_pragma=journal_mode%3dwal" +
@@ -106,10 +104,9 @@ func (q *Queue) Close() error {
 	return q.db.Close()
 }
 
-// Enqueue inserts an event into the queue. When MaxBytes is set, it also enforces
-// the cap by trimming oldest rows before insert. Trimming is best-effort: a
-// transient error from the trim step doesn't block the insert (we'd rather accept
-// an over-cap insert than drop the event entirely).
+// Enqueue inserts an event into the queue. When MaxBytes is set, it also enforces the cap by trimming oldest rows before insert.
+// Trimming is best-effort: a transient error from the trim step doesn't block the insert (we'd rather accept an over-cap insert than
+// drop the event entirely).
 func (q *Queue) Enqueue(ctx context.Context, eventJSON []byte) error {
 	if q.maxBytes > 0 {
 		if err := q.enforceCap(ctx); err != nil {
@@ -151,15 +148,12 @@ func (q *Queue) dbSizeBytes(ctx context.Context) (int64, error) {
 	return max(pageCount-freelistCount, 0) * pageSize, nil
 }
 
-// trimBatch is the DELETE cap per iteration. Keeps the transaction bounded so we
-// don't hold the single writer lock for an unreasonable stretch under sustained
-// enqueue pressure.
+// trimBatch is the DELETE cap per iteration. Keeps the transaction bounded so we don't hold the single writer lock for an unreasonable
+// stretch under sustained enqueue pressure.
 const trimBatch = 500
 
-// enforceCap drops rows until the DB is under maxBytes or there is nothing left to
-// drop. Uploaded rows go first (lossless); if still over, non-uploaded rows go next
-// with a warn log. Returns nil even when nothing was dropped — the cap was not
-// exceeded in that case.
+// enforceCap drops rows until the DB is under maxBytes or there is nothing left to drop. Uploaded rows go first (lossless); if still
+// over, non-uploaded rows go next with a warn log. Returns nil even when nothing was dropped — the cap was not exceeded in that case.
 func (q *Queue) enforceCap(ctx context.Context) error {
 	size, err := q.dbSizeBytes(ctx)
 	if err != nil {
@@ -188,9 +182,8 @@ func (q *Queue) enforceCap(ctx context.Context) error {
 	return nil
 }
 
-// dropUntilUnderCap calls deleter in a loop until the DB is under cap or deleter
-// returns 0 rows. Returns total rows dropped and the final size. The lossy flag is
-// passed through to the metrics hook unchanged.
+// dropUntilUnderCap calls deleter in a loop until the DB is under cap or deleter returns 0 rows. Returns total rows dropped and the
+// final size. The lossy flag is passed through to the metrics hook unchanged.
 func (q *Queue) dropUntilUnderCap(
 	ctx context.Context,
 	deleter func(context.Context, int) (int64, error),
@@ -219,9 +212,8 @@ func (q *Queue) dropUntilUnderCap(
 	}
 }
 
-// deleteOldestUploaded removes up to batch already-uploaded rows, oldest first. Split
-// into two fixed-SQL helpers (rather than one parameterised by a WHERE string) so the
-// queries are static — gosec flags string-concat SQL even when every component is a
+// deleteOldestUploaded removes up to batch already-uploaded rows, oldest first. Split into two fixed-SQL helpers (rather than
+// one parameterised by a WHERE string) so the queries are static — gosec flags string-concat SQL even when every component is a
 // compile-time literal, and "uploaded = 1" vs "uploaded = 0" is the only variation.
 func (q *Queue) deleteOldestUploaded(ctx context.Context, batch int) (int64, error) {
 	res, err := q.db.ExecContext(ctx, `
@@ -236,9 +228,8 @@ func (q *Queue) deleteOldestUploaded(ctx context.Context, batch int) (int64, err
 	return res.RowsAffected()
 }
 
-// deleteOldestPending removes up to batch not-yet-uploaded rows, oldest first. Lossy
-// drop path: caller only invokes when the uploaded-first phase could not free enough
-// space.
+// deleteOldestPending removes up to batch not-yet-uploaded rows, oldest first. Lossy drop path: caller only invokes when the
+// uploaded-first phase could not free enough space.
 func (q *Queue) deleteOldestPending(ctx context.Context, batch int) (int64, error) {
 	res, err := q.db.ExecContext(ctx, `
 		DELETE FROM events

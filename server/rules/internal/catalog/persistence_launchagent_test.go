@@ -85,9 +85,9 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			wantDescHas: "com.stealth.plist",
 		},
 		{
-			// Regression: CodeRabbit flagged that `bootstrap gui/501 <plist>` was captured
-			// with "gui/501" as the plistPath (first arg containing "/"), so the rule
-			// dropped the event. Matching on the LaunchAgents plist regex fixes it.
+			// Regression: CodeRabbit flagged that `bootstrap gui/501 <plist>` was captured with "gui/501" as the plistPath
+			// (first arg containing "/"), so the rule dropped the event. Matching on the LaunchAgents plist regex fixes
+			// it.
 			name:        "bootstrap with launch-domain specifier still fires",
 			args:        []string{"/bin/launchctl", "bootstrap", "gui/501", "/Users/alice/Library/LaunchAgents/com.domain.plist"},
 			path:        "/bin/launchctl",

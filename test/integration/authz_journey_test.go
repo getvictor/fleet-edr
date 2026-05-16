@@ -72,8 +72,7 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 
 	t.Run("senior_analyst_denied_after_reauth_window", func(t *testing.T) {
 		stale := testkit.SeedJITUser(t, stack.DB, "stale-senior@journey.test", "senior_analyst")
-		// Age the session past the default 30-minute reauth window so
-		// SessionFresh evaluates false. The Rego policy then layers a
+		// Age the session past the default 30-minute reauth window so SessionFresh evaluates false. The Rego policy then layers a
 		// reauth_required deny on top of the otherwise-granting role.
 		testkit.AgeSession(t, stack.DB, stale.ID, time.Hour)
 
@@ -87,11 +86,9 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 	})
 
 	t.Run("auditor_reads_journey_audit_rows", func(t *testing.T) {
-		// Self-contained: seed the analyst + senior_analyst pair this
-		// subtest cares about and emit the deny + allow chain inline,
-		// rather than relying on the preceding subtests' side effects.
-		// Keeps the subtest runnable in isolation (go test -run ...)
-		// and pins exactly which audit rows the auditor must see.
+		// Self-contained: seed the analyst + senior_analyst pair this subtest cares about and emit the deny + allow chain
+		// inline, rather than relying on the preceding subtests' side effects. Keeps the subtest runnable in isolation (go
+		// test -run ...) and pins exactly which audit rows the auditor must see.
 		analyst := testkit.SeedJITUser(t, stack.DB, "analyst-aud@journey.test", "analyst")
 		denyResp := postCommand(t, stack, analyst, isolateBody("host-journey-aud-deny"))
 		denyResp.Body.Close()
@@ -140,9 +137,8 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 	})
 }
 
-// postCommand drives POST /api/commands with the seeded user's
-// session + CSRF token. Centralised so each subtest reads cleanly
-// as "verb the action; assert the response."
+// postCommand drives POST /api/commands with the seeded user's session + CSRF token. Centralised so each subtest reads cleanly as
+// "verb the action; assert the response."
 func postCommand(t *testing.T, stack *Stack, user testkit.SeededUser, body string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -156,11 +152,9 @@ func postCommand(t *testing.T, stack *Stack, user testkit.SeededUser, body strin
 	return resp
 }
 
-// newGet builds an authenticated GET request with the session
-// cookie. GET is a safe method so the CSRF middleware does not
-// require the X-Csrf-Token header; the cookie alone is enough to
-// pass the session middleware, which is what the read-side endpoint
-// gates on. Tests that hit unsafe methods use postCommand above.
+// newGet builds an authenticated GET request with the session cookie. GET is a safe method so the CSRF middleware does not require
+// the X-Csrf-Token header; the cookie alone is enough to pass the session middleware, which is what the read-side endpoint gates on.
+// Tests that hit unsafe methods use postCommand above.
 func newGet(t *testing.T, url string, user testkit.SeededUser) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)

@@ -8,10 +8,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// TestOpen_ReturnsUsableEmptyDB pins that testdb.Open hands back a
-// connected DB that the caller can run DDL + DML against. The fixture
-// applies no schemas; that's the caller's responsibility (see the
-// testdb/full sub-package for the all-context wrapper).
+// TestOpen_ReturnsUsableEmptyDB pins that testdb.Open hands back a connected DB that the caller can run DDL + DML against. The fixture
+// applies no schemas; that's the caller's responsibility (see the testdb/full sub-package for the all-context wrapper).
 func TestOpen_ReturnsUsableEmptyDB(t *testing.T) {
 	db := testdb.Open(t)
 	_, err := db.ExecContext(t.Context(),

@@ -14,9 +14,8 @@ import (
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 )
 
-// newTestRecorder builds a Recorder backed by a ManualReader so tests can collect
-// metrics synchronously rather than racing a periodic reader. Returns both the
-// Recorder and a snapshot function.
+// newTestRecorder builds a Recorder backed by a ManualReader so tests can collect metrics synchronously rather than racing a periodic
+// reader. Returns both the Recorder and a snapshot function.
 func newTestRecorder(t *testing.T, gauges GaugeSource, opts Options) (*Recorder, func() metricdata.ResourceMetrics) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()

@@ -19,13 +19,11 @@ const (
 	msgNotFound        = "not found"
 	msgInvalidJSONBody = "invalid JSON body"
 
-	// processTreeDefaultLimit is the row cap when the caller does not
-	// supply ?limit=. Sized to fit a typical analyst's investigation
+	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
 	// without paging.
 	processTreeDefaultLimit = 2000
-	// processTreeMaxLimit is the upper bound the handler enforces; values
-	// above this are clamped down. Prevents an operator from accidentally
-	// asking for the whole host's history in one query.
+	// processTreeMaxLimit is the upper bound the handler enforces; values above this are clamped down. Prevents an operator from
+	// accidentally asking for the whole host's history in one query.
 	processTreeMaxLimit = 5000
 )
 
@@ -44,13 +42,10 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-// New creates a detection operator handler. authz is the authorization
-// chokepoint every privileged route gates on; callers also wrap the
-// routes in the operator-session middleware (identity.Session, then
-// identity.CSRF on unsafe methods) at registration time. Panics on
-// nil svc or authz: a Handler without one would silently bypass the
-// role matrix or nil-deref on the first request, neither of which is
-// an acceptable boot-time silent failure.
+// New creates a detection operator handler. authz is the authorization chokepoint every privileged route gates on; callers also
+// wrap the routes in the operator-session middleware (identity.Session, then identity.CSRF on unsafe methods) at registration time.
+// Panics on nil svc or authz: a Handler without one would silently bypass the role matrix or nil-deref on the first request, neither
+// of which is an acceptable boot-time silent failure.
 func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("detection operator.New: api.Service must not be nil")
@@ -64,10 +59,8 @@ func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler
 	return &Handler{svc: svc, authz: authz, logger: logger}
 }
 
-// SetAudit installs the operator audit recorder. Optional: when not
-// set, alert-status changes still apply but no audit row is written.
-// Bootstrap calls this after New so existing tests that pass nil for
-// audit do not need to change.
+// SetAudit installs the operator audit recorder. Optional: when not set, alert-status changes still apply but no audit row is written.
+// Bootstrap calls this after New so existing tests that pass nil for audit do not need to change.
 func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes registers the operator routes on the given mux.
@@ -243,15 +236,10 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 
 	ctx := r.Context()
 
-	// Phase 5: alert.resolve on a critical-severity alert requires a
-	// fresh auth event. Fetch severity before the gate so the
-	// chokepoint sees Resource.Severity. Other actions (Reopen,
-	// Acknowledge) don't need the read but the handler runs it
-	// uniformly — alerts are small + indexed and the row is hot in
-	// the buffer pool from the page-warm GET that typically
-	// precedes a status update. Fetching also lets the 404 short-
-	// circuit before the chokepoint records an audit row for a
-	// non-existent alert.
+	// Phase 5: alert.resolve on a critical-severity alert requires a fresh auth event. Fetch severity before the gate so the chokepoint
+	// sees Resource.Severity. Other actions (Reopen, Acknowledge) don't need the read but the handler runs it uniformly — alerts are small
+	// + indexed and the row is hot in the buffer pool from the page-warm GET that typically precedes a status update. Fetching also lets
+	// the 404 short-circuit before the chokepoint records an audit row for a non-existent alert.
 	preGate, _, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
 		if errors.Is(err, api.ErrAlertNotFound) {
@@ -301,12 +289,9 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordAlertStatusAudit emits one audit row for the just-committed
-// alert-status change. Action is per-status so SIEM filters can scope
-// to "all acks" vs "all resolves" without parsing payload. Audit
-// failures are soft: the action committed; a missing audit row is a
-// follow-up incident, not a reason to fail an HTTP response that
-// already returned 204.
+// recordAlertStatusAudit emits one audit row for the just-committed alert-status change. Action is per-status so SIEM filters can
+// scope to "all acks" vs "all resolves" without parsing payload. Audit failures are soft: the action committed; a missing audit row is
+// a follow-up incident, not a reason to fail an HTTP response that already returned 204.
 func (h *Handler) recordAlertStatusAudit(r *http.Request, alertID int64, newStatus string, userID int64) {
 	if h.audit == nil {
 		return

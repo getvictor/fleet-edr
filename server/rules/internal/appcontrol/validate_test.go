@@ -11,11 +11,9 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 )
 
-// TestValidateRuleType_DemoCutAccepts covers the matrix of accepted /
-// deferred / invalid rule_type values. The demo cut accepts BINARY
-// outright and reports the other five spec'd types as
-// ErrAppControlUnsupportedRuleType so REST callers see a precise
-// "not yet" instead of a generic "unknown" error.
+// TestValidateRuleType_DemoCutAccepts covers the matrix of accepted / deferred / invalid rule_type values. The demo cut accepts BINARY
+// outright and reports the other five spec'd types as ErrAppControlUnsupportedRuleType so REST callers see a precise "not yet" instead
+// of a generic "unknown" error.
 func TestValidateRuleType_DemoCutAccepts(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -44,10 +42,8 @@ func TestValidateRuleType_DemoCutAccepts(t *testing.T) {
 	}
 }
 
-// TestValidateIdentifier_Binary pins the BINARY identifier rule:
-// exactly 64 lowercase hex characters. Anything else returns
-// ErrAppControlInvalidIdentifier with a message that includes the
-// "BINARY rule identifier" hint so audit logs can attribute the
+// TestValidateIdentifier_Binary pins the BINARY identifier rule: exactly 64 lowercase hex characters. Anything else returns
+// ErrAppControlInvalidIdentifier with a message that includes the "BINARY rule identifier" hint so audit logs can attribute the
 // rejection cleanly.
 func TestValidateIdentifier_Binary(t *testing.T) {
 	cases := []struct {
@@ -76,12 +72,9 @@ func TestValidateIdentifier_Binary(t *testing.T) {
 	}
 }
 
-// TestValidateIdentifier_DeferredTypes confirms the rest of the
-// rule_type enum is wired through the validator. The format check
-// for the spec'd identifier fires first; on a well-formed value the
-// validator still reports ErrAppControlUnsupportedRuleType so the
-// REST handler can return "not yet wired" rather than silently
-// accepting the rule.
+// TestValidateIdentifier_DeferredTypes confirms the rest of the rule_type enum is wired through the validator. The format check for
+// the spec'd identifier fires first; on a well-formed value the validator still reports ErrAppControlUnsupportedRuleType so the REST
+// handler can return "not yet wired" rather than silently accepting the rule.
 func TestValidateIdentifier_DeferredTypes(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -112,10 +105,8 @@ func TestValidateIdentifier_DeferredTypes(t *testing.T) {
 	}
 }
 
-// TestCanonicalizePath covers the macOS-specific /tmp, /var, /etc
-// rewrites every PATH rule depends on. The validator path is
-// exercised today; the Phase-A PATH-rule decision engine will consume
-// the same helper.
+// TestCanonicalizePath covers the macOS-specific /tmp, /var, /etc rewrites every PATH rule depends on. The validator path is exercised
+// today; the Phase-A PATH-rule decision engine will consume the same helper.
 func TestCanonicalizePath(t *testing.T) {
 	cases := []struct {
 		name string
@@ -149,9 +140,8 @@ func TestCanonicalizePath(t *testing.T) {
 	}
 }
 
-// TestValidateSeverity covers the empty-is-ok + recognized + rejected
-// cases. The REST handler relies on empty → default behavior so the
-// admin can omit the field on Add Rule.
+// TestValidateSeverity covers the empty-is-ok + recognized + rejected cases. The REST handler relies on empty → default behavior so
+// the admin can omit the field on Add Rule.
 func TestValidateSeverity(t *testing.T) {
 	cases := []struct {
 		name string

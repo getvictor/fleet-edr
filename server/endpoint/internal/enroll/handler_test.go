@@ -207,9 +207,8 @@ func TestEnrollRequest_StringRedactsSecret(t *testing.T) {
 	assert.Contains(t, s, "REDACTED")
 }
 
-// TestEnroll_SecretNeverLogged drives a real HTTP request through the
-// handler with a known-bad secret and asserts the secret string never
-// appears in the captured slog output. Lock-in for the redaction guard.
+// TestEnroll_SecretNeverLogged drives a real HTTP request through the handler with a known-bad secret and asserts the secret string
+// never appears in the captured slog output. Lock-in for the redaction guard.
 func TestEnroll_SecretNeverLogged(t *testing.T) {
 	const secret = "my-super-secret-not-in-logs"
 	var buf bytes.Buffer

@@ -12,8 +12,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/breakglass"
 )
 
-// NewAllowlist accepts CIDRs, bare IPs, IPv6, and a mixed list. The
-// "bare IP normalised to /32 (or /128)" carve-out lets operators
+// NewAllowlist accepts CIDRs, bare IPs, IPv6, and a mixed list. The "bare IP normalised to /32 (or /128)" carve-out lets operators
 // type "203.0.113.5" without remembering CIDR syntax.
 func TestNewAllowlist_AcceptsValidEntries(t *testing.T) {
 	cases := [][]string{
@@ -31,9 +30,7 @@ func TestNewAllowlist_AcceptsValidEntries(t *testing.T) {
 	}
 }
 
-// Malformed CIDRs / IPs refuse to start. Pinned because a typo at
-// boot must surface immediately, not silently leave the surface
-// open.
+// Malformed CIDRs / IPs refuse to start. Pinned because a typo at boot must surface immediately, not silently leave the surface open.
 func TestNewAllowlist_RejectsMalformed(t *testing.T) {
 	cases := []string{
 		"not-an-ip",
@@ -73,9 +70,8 @@ func TestAllowlist_Allows(t *testing.T) {
 	assert.True(t, empty.Allows(net.ParseIP("203.0.113.10")), "empty allowlist passes")
 }
 
-// Off-allowlist requests get a generic 404 — same body as an
-// unrouted path. Pinned because the spec requires the surface's
-// existence to NOT be acknowledged to off-list callers.
+// Off-allowlist requests get a generic 404 — same body as an unrouted path. Pinned because the spec requires the surface's existence
+// to NOT be acknowledged to off-list callers.
 func TestAllowlist_Middleware_404sOffList(t *testing.T) {
 	a, err := breakglass.NewAllowlist([]string{"203.0.113.0/24"})
 	require.NoError(t, err)
@@ -112,10 +108,8 @@ func TestAllowlist_Middleware_PassesThroughOnList(t *testing.T) {
 	assert.True(t, called, "on-allowlist must reach inner handler")
 }
 
-// Empty allowlist is permissive: every request reaches the inner
-// handler. Pinned because the wave-1 default is no allowlist set,
-// and a regression that flipped the default to "deny" would brick
-// every dev deployment.
+// Empty allowlist is permissive: every request reaches the inner handler. Pinned because the wave-1 default is no allowlist set,
+// and a regression that flipped the default to "deny" would brick every dev deployment.
 func TestAllowlist_Middleware_EmptyPassesAll(t *testing.T) {
 	a, err := breakglass.NewAllowlist(nil)
 	require.NoError(t, err)

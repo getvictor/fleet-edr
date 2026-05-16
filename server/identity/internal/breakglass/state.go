@@ -12,18 +12,14 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// ChallengeStateCookieName is the cookie that carries the
-// signed-and-serialized webauthn.SessionData between a GET
-// /admin/break-glass[/setup] (challenge issued) and the matching
-// POST (challenge verified). Distinct from the OIDC state cookie so
-// the two flows never collide on the same Path scope.
+// ChallengeStateCookieName is the cookie that carries the signed-and-serialized webauthn.SessionData between a GET
+// /admin/break-glass[/setup] (challenge issued) and the matching POST (challenge verified). Distinct from the OIDC state cookie so the
+// two flows never collide on the same Path scope.
 const ChallengeStateCookieName = "edr_breakglass_challenge"
 
-// ErrChallengeStateInvalid is returned by DecodeChallengeState when
-// the cookie is missing, malformed, or fails the HMAC check.
-// Distinct from the WebAuthn-finish errors so the handler can
-// distinguish "browser tampered with the cookie" from "browser
-// supplied a bad assertion".
+// ErrChallengeStateInvalid is returned by DecodeChallengeState when the cookie is missing, malformed, or fails the HMAC check.
+// Distinct from the WebAuthn-finish errors so the handler can distinguish "browser tampered with the cookie" from "browser supplied a
+// bad assertion".
 var ErrChallengeStateInvalid = errors.New("breakglass: challenge state invalid")
 
 // EncodeChallengeState serializes a SessionData via gob, prefixes
@@ -48,18 +44,15 @@ func EncodeChallengeState(signingKey []byte, sd webauthn.SessionData) (string, e
 	mac := hmac.New(sha256.New, signingKey)
 	mac.Write(buf.Bytes())
 	sig := mac.Sum(nil)
-	// Wire layout: base64url(sig).base64url(payload). Same shape as
-	// the OIDC state cookie so cookie-handling middleware can split
-	// on the dot without per-cookie special cases.
+	// Wire layout: base64url(sig).base64url(payload). Same shape as the OIDC state cookie so cookie-handling middleware can split on the
+	// dot without per-cookie special cases.
 	return base64.RawURLEncoding.EncodeToString(sig) +
 		"." +
 		base64.RawURLEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-// DecodeChallengeState reverses EncodeChallengeState: split on the
-// dot, base64url-decode, verify the HMAC in constant time, gob-
-// decode the payload back into a SessionData. Any failure collapses
-// to ErrChallengeStateInvalid so the handler can map it to a single
+// DecodeChallengeState reverses EncodeChallengeState: split on the dot, base64url-decode, verify the HMAC in constant time, gob-
+// decode the payload back into a SessionData. Any failure collapses to ErrChallengeStateInvalid so the handler can map it to a single
 // generic 400 without leaking which sub-step failed.
 func DecodeChallengeState(signingKey []byte, raw string) (webauthn.SessionData, error) {
 	if len(signingKey) == 0 {

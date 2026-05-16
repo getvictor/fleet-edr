@@ -22,10 +22,8 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
-// createBodyCap caps POST /api/commands. Payload is operator-supplied
-// JSON; 64 KiB is generous enough for a kill_process or any
-// reasonable IR command without inviting a DoS vector via a
-// session-authed endpoint.
+// createBodyCap caps POST /api/commands. Payload is operator-supplied JSON; 64 KiB is generous enough for a kill_process or any
+// reasonable IR command without inviting a DoS vector via a session-authed endpoint.
 const createBodyCap = 64 << 10
 
 // Handler serves the operator-facing command routes.
@@ -36,10 +34,8 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-// New builds an operator handler. Panics if svc or authz is nil.
-// authz is the authorization chokepoint POST /api/commands and
-// GET /api/commands/{id} gate on; a nil one would silently bypass
-// the role matrix.
+// New builds an operator handler. Panics if svc or authz is nil. authz is the authorization chokepoint POST /api/commands and GET
+// /api/commands/{id} gate on; a nil one would silently bypass the role matrix.
 func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("response operator.New: api.Service must not be nil")
@@ -116,11 +112,9 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(ctx, h.logger, w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-// recordCommandAudit emits one audit row for the just-committed
-// command issuance. target = the host receiving the command;
-// payload carries command_type + command_id so a reviewer can
-// reconstruct the exact action without joining commands. Soft-fail
-// on audit error: the command row is authoritative.
+// recordCommandAudit emits one audit row for the just-committed command issuance. target = the host receiving the command; payload
+// carries command_type + command_id so a reviewer can reconstruct the exact action without joining commands. Soft-fail on audit error:
+// the command row is authoritative.
 func (h *Handler) recordCommandAudit(r *http.Request, hostID, commandType string, commandID int64) {
 	if h.audit == nil {
 		return
@@ -157,12 +151,9 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_command_id")
 		return
 	}
-	// Fetch first so the chokepoint can gate on the command's host_id.
-	// Reading by id alone leaks "command N exists" but no payload, and
-	// matches what GET /api/commands/{id} did before this PR — the
-	// chokepoint then enforces host.read against the resolved host so
-	// future host-scoped roles can deny without special-casing the
-	// commands → host relationship at the policy layer.
+	// Fetch first so the chokepoint can gate on the command's host_id. Reading by id alone leaks "command N exists" but no payload,
+	// and matches what GET /api/commands/{id} did before this PR — the chokepoint then enforces host.read against the resolved host so
+	// future host-scoped roles can deny without special-casing the commands → host relationship at the policy layer.
 	cmd, err := h.svc.Get(ctx, id)
 	switch {
 	case errors.Is(err, api.ErrCommandNotFound):

@@ -1,11 +1,8 @@
 //go:build !race
 
-// The latency gate is gated off the race detector. Race adds 2-20×
-// overhead to allocations and locks, so wall-clock latency assertions
-// become unreliable under -race even when the warm path is healthy.
-// CI runs `go test ./...` with -race for correctness AND a separate
-// non-race authz workflow (.github/workflows/authz.yml) that picks up
-// this file and enforces the p99 budget.
+// The latency gate is gated off the race detector. Race adds 2-20× overhead to allocations and locks, so wall-clock latency assertions
+// become unreliable under -race even when the warm path is healthy. CI runs `go test ./...` with -race for correctness AND a separate
+// non-race authz workflow (.github/workflows/authz.yml) that picks up this file and enforces the p99 budget.
 
 package authz_test
 

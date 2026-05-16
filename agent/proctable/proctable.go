@@ -1,6 +1,5 @@
-// Package proctable provides an in-memory PID-to-process lookup table.
-// It is populated from ESF exec events and cleared on exit events, allowing
-// the agent to enrich network events with process metadata.
+// Package proctable provides an in-memory PID-to-process lookup table. It is populated from ESF exec events and cleared on exit
+// events, allowing the agent to enrich network events with process metadata.
 package proctable
 
 import (
@@ -58,9 +57,8 @@ func (t *Table) Size() int {
 	return n
 }
 
-// Snapshot returns a copy of the current PID-to-info map. The reconciliation
-// loop iterates this copy outside the table mutex so a long kill(pid,0) sweep
-// over thousands of PIDs doesn't block exec/exit event ingestion.
+// Snapshot returns a copy of the current PID-to-info map. The reconciliation loop iterates this copy outside the table mutex so a long
+// kill(pid,0) sweep over thousands of PIDs doesn't block exec/exit event ingestion.
 func (t *Table) Snapshot() map[int32]ProcessInfo {
 	t.mu.RLock()
 	out := make(map[int32]ProcessInfo, len(t.entries))

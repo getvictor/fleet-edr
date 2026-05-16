@@ -21,10 +21,9 @@ func TestFS(t *testing.T) {
 				t.Setenv(LiveDirEnv, "")
 				got, err := FS()
 				require.NoError(t, err)
-				// Assert the embedded subtree is readable, not the presence of any
-				// specific file: CI seeds server/ui/dist with .gitkeep only before
-				// running server tests, so checking for index.html would couple this
-				// unit test to a built UI bundle that doesn't exist in CI.
+				// Assert the embedded subtree is readable, not the presence of any specific file: CI seeds
+				// server/ui/dist with .gitkeep only before running server tests, so checking for index.html would
+				// couple this unit test to a built UI bundle that doesn't exist in CI.
 				entries, err := fs.ReadDir(got, ".")
 				require.NoError(t, err)
 				require.NotEmpty(t, entries, "embedded FS should expose at least one entry")
@@ -50,10 +49,9 @@ func TestFS(t *testing.T) {
 			name: "live dir reflects on-disk rewrites",
 			run: func(t *testing.T) {
 				t.Helper()
-				// Property the dev workflow depends on: an FS opened once must
-				// observe later writes to the underlying directory. Without this,
-				// a server boot that reads index.html once would never see
-				// `task build:ui` rebuilds.
+				// Property the dev workflow depends on: an FS opened once must observe later writes to the underlying
+				// directory. Without this, a server boot that reads index.html once would never see `task build:ui`
+				// rebuilds.
 				dir := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("v1"), 0o600))
 				t.Setenv(LiveDirEnv, dir)
@@ -74,9 +72,8 @@ func TestFS(t *testing.T) {
 			name: "errors at boot when live dir does not exist",
 			run: func(t *testing.T) {
 				t.Helper()
-				// Bad EDR_UI_LIVE_DIR previously surfaced as generic per-request
-				// 500s. The os.Stat check in FS() means the dev server fails to
-				// boot with a clear message instead.
+				// Bad EDR_UI_LIVE_DIR previously surfaced as generic per-request 500s. The os.Stat check in FS() means
+				// the dev server fails to boot with a clear message instead.
 				missing := filepath.Join(t.TempDir(), "does-not-exist")
 				t.Setenv(LiveDirEnv, missing)
 

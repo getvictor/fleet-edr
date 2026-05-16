@@ -30,9 +30,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
-// auditMeterName is the OTel instrumentation-scope name for the
-// audit-recorder's metric. Stable string so a dashboard alert keyed
-// on instrumentation.scope.name matches across versions.
+// auditMeterName is the OTel instrumentation-scope name for the audit-recorder's metric. Stable string so a dashboard alert keyed on
+// instrumentation.scope.name matches across versions.
 const auditMeterName = "github.com/fleetdm/edr/server/identity/audit"
 
 // Store implements both api.AuditRecorder and api.AuditReader against
@@ -54,13 +53,10 @@ type Store struct {
 	writeFailures metric.Int64Counter
 }
 
-// New returns a Store. Panics if db is nil because a Store with a nil
-// db is a programming error that would only surface at request time.
-// A nil logger falls through to slog.Default(), matching AsyncWriter's
-// shape so test code and lightweight wiring stays terse. The
-// audit-write-failure counter is registered against the global meter
-// so a Recorder injection is not required; when OTel is not wired
-// (no OTEL_EXPORTER_OTLP_ENDPOINT) the counter is a no-op.
+// New returns a Store. Panics if db is nil because a Store with a nil db is a programming error that would only surface at request
+// time. A nil logger falls through to slog.Default(), matching AsyncWriter's shape so test code and lightweight wiring stays terse.
+// The audit-write-failure counter is registered against the global meter so a Recorder injection is not required; when OTel is not
+// wired (no OTEL_EXPORTER_OTLP_ENDPOINT) the counter is a no-op.
 func New(db *sqlx.DB, logger *slog.Logger) *Store {
 	if db == nil {
 		panic("audit.New: db must not be nil")
@@ -100,10 +96,8 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 		return errors.New("audit.Record: Action is required")
 	}
 
-	// e.TraceID wins when set so the async chokepoint path (which
-	// runs under a fresh background ctx) keeps trace correlation.
-	// Sync callers continue to leave it empty and the ctx fallback
-	// preserves the wave-1 behavior.
+	// e.TraceID wins when set so the async chokepoint path (which runs under a fresh background ctx) keeps trace correlation. Sync callers
+	// continue to leave it empty and the ctx fallback preserves the wave-1 behavior.
 	traceID := e.TraceID
 	if traceID == "" {
 		traceID = traceIDFromContext(ctx)
@@ -134,11 +128,9 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 		nullString(e.RemoteAddr),
 		nullBytes(payloadBytes),
 	)
-	// Dual-emit BEFORE returning on INSERT failure so the
-	// observability pipeline always sees a record, even when the DB
-	// rejected the row. Per server-identity-audit-log spec: "The
-	// dual emit MUST happen even when the database insert fails so
-	// the observability pipeline sees a record."
+	// Dual-emit BEFORE returning on INSERT failure so the observability pipeline always sees a record, even when the DB rejected the row.
+	// Per server-identity-audit-log spec: "The dual emit MUST happen even when the database insert fails so the observability pipeline
+	// sees a record."
 	s.emitDualEmit(ctx, e, actorEmail, traceID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "audit row INSERT failed",
@@ -156,19 +148,12 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	return nil
 }
 
-// emitDualEmit logs the audit row to slog and sets OTel span
-// attributes on the active request span so a SigNoz / OTLP backend
-// has the row's content without a separate audit_events export. The
-// slog level dispatches by spec: INFO when the decision is allow,
-// WARN when the decision is deny / error or the action is a
-// break-glass action (every break-glass row is operationally
-// noteworthy because the recovery surface is the high-privilege
-// path). Mirrors logDropped's attribute set minus the "reason" key
-// (drops carry queue_full / writer_stopped / drain_deadline_exceeded;
-// a successful row has none). Payload is included verbatim when
-// non-empty so dashboards can filter on payload.decision (chokepoint
-// allow/deny) and payload.reason (OIDC + break-glass failure mode
-// codes).
+// emitDualEmit logs the audit row to slog and sets OTel span attributes on the active request span so a SigNoz / OTLP backend has the
+// row's content without a separate audit_events export. The slog level dispatches by spec: INFO when the decision is allow, WARN when
+// the decision is deny / error or the action is a break-glass action (every break-glass row is operationally noteworthy because the
+// recovery surface is the high-privilege path). Mirrors logDropped's attribute set minus the "reason" key (drops carry queue_full /
+// writer_stopped / drain_deadline_exceeded; a successful row has none). Payload is included verbatim when non-empty so dashboards can
+// filter on payload.decision (chokepoint allow/deny) and payload.reason (OIDC + break-glass failure mode codes).
 func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, traceID string) {
 	uid := int64(0)
 	if e.UserID != nil {
@@ -190,11 +175,9 @@ func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, 
 	level := auditLogLevel(e)
 	s.logger.Log(ctx, level, "audit recorded", attrs...)
 
-	// Per server-identity-audit-log spec: every audit emission must
-	// set the three edr.audit.* attributes on the active request
-	// span. Pulled out of the OTel span (not the slog attrs) so the
-	// trace UI can pivot on the same dimensions the SigNoz log query
-	// uses, regardless of where the operator entered the dashboard.
+	// Per server-identity-audit-log spec: every audit emission must set the three edr.audit.* attributes on the active request span.
+	// Pulled out of the OTel span (not the slog attrs) so the trace UI can pivot on the same dimensions the SigNoz log query uses,
+	// regardless of where the operator entered the dashboard.
 	span := trace.SpanFromContext(ctx)
 	if span.SpanContext().IsValid() {
 		span.SetAttributes(
@@ -205,26 +188,18 @@ func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, 
 	}
 }
 
-// auditLogLevel maps an audit event to the slog level the
-// server-identity-audit-log spec mandates: allow -> INFO; deny /
-// error / break-glass action -> WARN. The dispatcher accepts both
-// the chokepoint payload shape ({"allow": bool, "reason": string})
-// and the breakglass/oidc payload shape ({"decision": string,
-// "reason": string}) so a single function covers every audit-row
-// producer.
+// auditLogLevel maps an audit event to the slog level the server-identity-audit-log spec mandates: allow -> INFO; deny / error /
+// break-glass action -> WARN. The dispatcher accepts both the chokepoint payload shape ({"allow": bool, "reason": string}) and the
+// breakglass/oidc payload shape ({"decision": string, "reason": string}) so a single function covers every audit-row producer.
 func auditLogLevel(e api.AuditEvent) slog.Level {
 	a := string(e.Action)
-	// Break-glass actions are operationally noteworthy even on
-	// success: the recovery surface is the high-privilege path and
-	// every interaction should land in the WARN-or-higher log
-	// stream operators monitor.
+	// Break-glass actions are operationally noteworthy even on success: the recovery surface is the high-privilege path and every
+	// interaction should land in the WARN-or-higher log stream operators monitor.
 	if strings.HasPrefix(a, "auth.breakglass.") {
 		return slog.LevelWarn
 	}
-	// Failure / error suffix actions (auth.oidc.failure,
-	// auth.oidc.callback.error) are the auth-side "decision=error"
-	// shape; emit at WARN so they group with chokepoint denies on
-	// the dashboard's "things to investigate" panel.
+	// Failure / error suffix actions (auth.oidc.failure, auth.oidc.callback.error) are the auth-side "decision=error" shape; emit at WARN
+	// so they group with chokepoint denies on the dashboard's "things to investigate" panel.
 	if strings.HasSuffix(a, ".failure") || strings.HasSuffix(a, ".error") {
 		return slog.LevelWarn
 	}
@@ -242,10 +217,8 @@ func auditLogLevel(e api.AuditEvent) slog.Level {
 	return slog.LevelInfo
 }
 
-// auditDecision extracts the decision string from the audit event's
-// payload, normalizing the two payload shapes the codebase emits
-// (chokepoint's {allow: bool} and breakglass/oidc's {decision: str}).
-// Returns "allow" / "deny" / "error" / "unspecified" — the OTel
+// auditDecision extracts the decision string from the audit event's payload, normalizing the two payload shapes the codebase emits
+// (chokepoint's {allow: bool} and breakglass/oidc's {decision: str}). Returns "allow" / "deny" / "error" / "unspecified" — the OTel
 // attribute lands in SigNoz's traces UI where operators filter on it.
 func auditDecision(e api.AuditEvent) string {
 	if p := e.Payload; p != nil {
@@ -269,10 +242,8 @@ func auditDecision(e api.AuditEvent) string {
 	return "unspecified"
 }
 
-// auditReason extracts the reason string. Empty when no reason is
-// declared on the payload — that's still a valid OTel attribute
-// (queries on edr.audit.reason=” surface 'reasonless' rows like
-// user.created which carry no decision context).
+// auditReason extracts the reason string. Empty when no reason is declared on the payload — that's still a valid OTel attribute
+// (queries on edr.audit.reason=” surface 'reasonless' rows like user.created which carry no decision context).
 func auditReason(e api.AuditEvent) string {
 	if p := e.Payload; p != nil {
 		if r, ok := p["reason"].(string); ok {
@@ -282,12 +253,10 @@ func auditReason(e api.AuditEvent) string {
 	return ""
 }
 
-// resolveActorEmail returns the email to denormalise onto the audit row.
-// Caller-supplied ActorEmail wins (login paths know the email already);
-// otherwise look it up from users by UserID. A failed lookup is not a
-// hard error because the audit row's user_id column is still
-// authoritative; we simply leave actor_email empty and let the LEFT
-// JOIN on read surface the live email when the user still exists.
+// resolveActorEmail returns the email to denormalise onto the audit row. Caller-supplied ActorEmail wins (login paths know the email
+// already); otherwise look it up from users by UserID. A failed lookup is not a hard error because the audit row's user_id column
+// is still authoritative; we simply leave actor_email empty and let the LEFT JOIN on read surface the live email when the user still
+// exists.
 func (s *Store) resolveActorEmail(ctx context.Context, e api.AuditEvent) string {
 	if e.ActorEmail != "" {
 		return e.ActorEmail
@@ -306,8 +275,7 @@ func (s *Store) resolveActorEmail(ctx context.Context, e api.AuditEvent) string 
 	return ""
 }
 
-// List returns audit rows matching the filter, newest first. Caller
-// passes a non-zero Limit; the Store caps it at maxListLimit so a
+// List returns audit rows matching the filter, newest first. Caller passes a non-zero Limit; the Store caps it at maxListLimit so a
 // runaway request cannot scan the whole table.
 func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, error) {
 	limit := f.Limit
@@ -332,11 +300,9 @@ func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, er
 	}
 	defer func() { _ = rows.Close() }()
 
-	// CodeQL flags `make([]T, 0, limit)` when limit traces back to a
-	// user-controlled value, even though limit is clamped to maxListLimit
-	// above. Drop the capacity hint and let the slice grow on demand;
-	// audit pages are bounded (LIMIT in the SELECT, max 500 rows), so
-	// the few reallocations along the way are not measurable.
+	// CodeQL flags `make([]T, 0, limit)` when limit traces back to a user-controlled value, even though limit is clamped to maxListLimit
+	// above. Drop the capacity hint and let the slice grow on demand; audit pages are bounded (LIMIT in the SELECT, max 500 rows),
+	// so the few reallocations along the way are not measurable.
 	var out []api.AuditRow
 	for rows.Next() {
 		r, err := scanListRow(rows)
@@ -351,12 +317,9 @@ func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, er
 	return out, nil
 }
 
-// buildListWhere builds the WHERE clause + bound args for List. Pulled
-// out of List so the parent function stays at a cognitive complexity
-// below Sonar's S3776 threshold; each branch is a single optional
-// filter and is independently testable. The leading `WHERE 1=1` is a
-// trivial harness so each clause appends as ` AND ...?` regardless of
-// which other filters are set.
+// buildListWhere builds the WHERE clause + bound args for List. Pulled out of List so the parent function stays at a cognitive
+// complexity below Sonar's S3776 threshold; each branch is a single optional filter and is independently testable. The leading `WHERE
+// 1=1` is a trivial harness so each clause appends as ` AND ...?` regardless of which other filters are set.
 func buildListWhere(f api.AuditFilter) (string, []any) {
 	args := make([]any, 0, 8)
 	where := "WHERE 1=1"
@@ -391,13 +354,10 @@ func buildListWhere(f api.AuditFilter) (string, []any) {
 	return where, args
 }
 
-// scanListRow unmarshals one row from List's SELECT into a public
-// AuditRow. Pulled out so List's per-row loop body stays trivial; the
-// scan + null-handling logic is the lion's share of the cognitive
-// complexity that S3776 was flagging on the previous in-line shape.
-// The caller's row iteration is therefore a one-liner per row, and the
-// scan logic is independently exercised by mysql_test's round-trip
-// assertions.
+// scanListRow unmarshals one row from List's SELECT into a public AuditRow. Pulled out so List's per-row loop body stays trivial;
+// the scan + null-handling logic is the lion's share of the cognitive complexity that S3776 was flagging on the previous in-line
+// shape. The caller's row iteration is therefore a one-liner per row, and the scan logic is independently exercised by mysql_test's
+// round-trip assertions.
 func scanListRow(rows *sql.Rows) (api.AuditRow, error) {
 	var (
 		r            api.AuditRow
@@ -423,10 +383,8 @@ func scanListRow(rows *sql.Rows) (api.AuditRow, error) {
 		id := actorUserID.Int64
 		r.UserID = &id
 	}
-	// Prefer the live join so the retrieval endpoint reflects current
-	// emails (e.g. an admin who renamed their email post-action sees
-	// the new value). Fall back to the denormalised actor_email when
-	// the user row no longer exists.
+	// Prefer the live join so the retrieval endpoint reflects current emails (e.g. an admin who renamed their email post-action sees the
+	// new value). Fall back to the denormalised actor_email when the user row no longer exists.
 	switch {
 	case joinedEmail != "":
 		r.UserEmail = joinedEmail
@@ -447,10 +405,9 @@ func scanListRow(rows *sql.Rows) (api.AuditRow, error) {
 	return r, nil
 }
 
-// maxListLimit caps the page size so a runaway retrieval request can't
-// scan the whole table. 500 is well above any realistic admin UI page
-// (history grids show 50-100 typically) but small enough to keep the
-// response under a megabyte even with maximally populated payloads.
+// maxListLimit caps the page size so a runaway retrieval request can't scan the whole table. 500 is well above any realistic admin
+// UI page (history grids show 50-100 typically) but small enough to keep the response under a megabyte even with maximally populated
+// payloads.
 const maxListLimit = 500
 
 func traceIDFromContext(ctx context.Context) string {

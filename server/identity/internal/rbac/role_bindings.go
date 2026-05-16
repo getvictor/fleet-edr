@@ -29,18 +29,14 @@ func New(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// DB returns the underlying executor for callers that need to invoke
-// BindRole outside of a transaction (e.g. seed.Admin's idempotent
-// bootstrap-time bind). JIT + admin-promotion paths thread their own
-// transactional executor and don't need this accessor.
+// DB returns the underlying executor for callers that need to invoke BindRole outside of a transaction (e.g. seed.Admin's idempotent
+// bootstrap-time bind). JIT + admin-promotion paths thread their own transactional executor and don't need this accessor.
 func (s *Store) DB() Executor {
 	return s.db
 }
 
-// roleBindingRow is the storage shape; the public api.RoleBinding is
-// the read shape callers see. Keeping them distinct means a wave-2
-// schema add (e.g. created_by) can grow the storage row without
-// pushing into the public boundary.
+// roleBindingRow is the storage shape; the public api.RoleBinding is the read shape callers see. Keeping them distinct means a wave-2
+// schema add (e.g. created_by) can grow the storage row without pushing into the public boundary.
 type roleBindingRow struct {
 	ID        int64        `db:"id"`
 	UserID    int64        `db:"user_id"`
@@ -51,18 +47,14 @@ type roleBindingRow struct {
 	CreatedAt time.Time    `db:"created_at"`
 }
 
-// Executor is the executor subset BindRole consumes; lets the JIT
-// provisioner pass an *sqlx.Tx so the role binding lands in the same
-// transaction as the user + identity insert. Named per the Go
-// convention (single-method interface ends in -er).
+// Executor is the executor subset BindRole consumes; lets the JIT provisioner pass an *sqlx.Tx so the role binding lands in the same
+// transaction as the user + identity insert. Named per the Go convention (single-method interface ends in -er).
 type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// BindRoleRequest is the input to BindRole. Pulled out of the
-// function signature so the call site reads as named fields and stays
-// under the linter's per-call parameter budget. Wave-1 defaults:
-// ExpiresAt nil (non-expiring), ScopeType "global", ScopeID "*".
+// BindRoleRequest is the input to BindRole. Pulled out of the function signature so the call site reads as named fields and stays
+// under the linter's per-call parameter budget. Wave-1 defaults: ExpiresAt nil (non-expiring), ScopeType "global", ScopeID "*".
 type BindRoleRequest struct {
 	UserID    int64
 	RoleID    string
@@ -71,9 +63,8 @@ type BindRoleRequest struct {
 	ExpiresAt *time.Time
 }
 
-// BindRole inserts a role_bindings row. Used by Phase-4 JIT
-// provisioning to bind a freshly-provisioned OIDC user to the
-// default role for the deployment.
+// BindRole inserts a role_bindings row. Used by Phase-4 JIT provisioning to bind a freshly-provisioned OIDC user to the default role
+// for the deployment.
 func (s *Store) BindRole(ctx context.Context, ec Executor, req BindRoleRequest) error {
 	_, err := ec.ExecContext(ctx, `
 		INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id, expires_at)

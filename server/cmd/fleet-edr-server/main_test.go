@@ -12,16 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRegisterUIRoutes_SPAFallback locks in the SPA-fallback contract:
-// /ui/{deep-link} must return 200 with the index.html body so React
-// Router can take over client-side, NOT a 301 redirect to ./. An
-// earlier implementation rewrote URL.Path to /ui/index.html and let
-// http.FileServer serve it, but FileServer canonicalises
-// /index.html → ./ and broke every SPA deep link (e.g.
+// TestRegisterUIRoutes_SPAFallback locks in the SPA-fallback contract: /ui/{deep-link} must return 200 with the index.html
+// body so React Router can take over client-side, NOT a 301 redirect to ./. An earlier implementation rewrote URL.Path to
+// /ui/index.html and let http.FileServer serve it, but FileServer canonicalises /index.html → ./ and broke every SPA deep link (e.g.
 // /ui/hosts/{host_id}).
 func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
-	// Synthesise a minimal "dist" tree so the handler doesn't depend on
-	// a built UI bundle being present. The real embed.FS has the same
+	// Synthesise a minimal "dist" tree so the handler doesn't depend on a built UI bundle being present. The real embed.FS has the same
 	// shape (index.html at the root + an assets/ subdirectory).
 	memFS := fstest.MapFS{
 		"dist/index.html": &fstest.MapFile{
@@ -102,14 +98,10 @@ func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
 	}
 }
 
-// TestRegisterUIRoutes_BreakglassGate locks in the path-concealment
-// promise the breakglass.Handler comment makes for /admin/break-glass:
-// off-allowlist callers must not be able to load the React shell at
-// /ui/admin/break-glass{,/setup} either, since the goal is to hide
-// the path's existence rather than just the API surface. The
-// regression this guards: registering the React routes BEFORE the
-// /ui/ catch-all (so the more-specific patterns are gated), and
-// applying the gate to BOTH the login and setup paths.
+// TestRegisterUIRoutes_BreakglassGate locks in the path-concealment promise the breakglass.Handler comment makes for
+// /admin/break-glass: off-allowlist callers must not be able to load the React shell at /ui/admin/break-glass{,/setup} either,
+// since the goal is to hide the path's existence rather than just the API surface. The regression this guards: registering the React
+// routes BEFORE the /ui/ catch-all (so the more-specific patterns are gated), and applying the gate to BOTH the login and setup paths.
 func TestRegisterUIRoutes_BreakglassGate(t *testing.T) {
 	memFS := fstest.MapFS{
 		"dist/index.html": &fstest.MapFile{
@@ -187,10 +179,8 @@ func denyAllGate(_ http.Handler) http.Handler {
 	})
 }
 
-// registerUIRoutesWithFS is a test-only entry point that wires the
-// same handler topology as registerUIRoutes against a caller-provided
-// FS. Lets the test exercise the SPA fallback + break-glass UI gate
-// without touching the process's real embed.FS.
+// registerUIRoutesWithFS is a test-only entry point that wires the same handler topology as registerUIRoutes against a caller-provided
+// FS. Lets the test exercise the SPA fallback + break-glass UI gate without touching the process's real embed.FS.
 func registerUIRoutesWithFS(
 	t *testing.T,
 	mux *http.ServeMux,

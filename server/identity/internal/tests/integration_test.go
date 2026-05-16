@@ -30,26 +30,20 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// newIdentity wires identity.bootstrap.New against a fresh test DB,
-// matching what cmd/main does in production. Returns the *Identity handle.
-// Tests that need to poke the schema directly call newIdentityWithDB.
+// newIdentity wires identity.bootstrap.New against a fresh test DB, matching what cmd/main does in production. Returns the *Identity
+// handle. Tests that need to poke the schema directly call newIdentityWithDB.
 func newIdentity(t *testing.T) *bootstrap.Identity {
 	id, _ := newIdentityWithDB(t)
 	return id
 }
 
-// newIdentityWithDB returns the bootstrap.Identity AND the underlying
-// *sqlx.DB for tests that need to seed users directly (the Phase 4b
-// SeedAdmin path no longer returns a usable password, so /api/session
-// login tests need a separately-created password user).
+// newIdentityWithDB returns the bootstrap.Identity AND the underlying *sqlx.DB for tests that need to seed users directly (the Phase
+// 4b SeedAdmin path no longer returns a usable password, so /api/session login tests need a separately-created password user).
 func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 	t.Helper()
-	// testdb/full.Open is the project's standard MySQL fixture for
-	// per-context integration tests. It applies every context's schema
-	// (including identity's), so the tables exist before store.New runs
-	// the alerts FK - which means we don't strictly need to re-run
-	// identityCtx.ApplySchema here. We do it anyway to exercise the
-	// production code path and assert it is idempotent.
+	// testdb/full.Open is the project's standard MySQL fixture for per-context integration tests. It applies every context's schema
+	// (including identity's), so the tables exist before store.New runs the alerts FK - which means we don't strictly need to re-run
+	// identityCtx.ApplySchema here. We do it anyway to exercise the production code path and assert it is idempotent.
 	s := full.Open(t)
 
 	signingKey := make([]byte, 32)
@@ -69,10 +63,9 @@ func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 	return id, s
 }
 
-// TestSeedAdmin_FirstBootCreatesAndIsIdempotent walks the seed-admin
-// path. Phase 4b: SeedAdmin returns a NULL-password break-glass row;
-// the redemption URL banner lives in cmd/main, not in seed.Admin.
-// Second call is idempotent on the same DB (returns the same row).
+// TestSeedAdmin_FirstBootCreatesAndIsIdempotent walks the seed-admin path. Phase 4b: SeedAdmin returns a NULL-password break-glass
+// row; the redemption URL banner lives in cmd/main, not in seed.Admin. Second call is idempotent on the same DB (returns the same
+// row).
 func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	id := newIdentity(t)
 	ctx := t.Context()
@@ -92,12 +85,9 @@ func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, user.ID, user2.ID)
 }
 
-// TestService_SessionLifecycle exercises the post-Phase-5b session
-// surface (Logout + GetSession + UserExists). Sessions are minted via
-// the sessions store directly because Phase 5b retired
-// Service.Login + the POST /api/session HTTP path; production sessions
-// now come from the OIDC callback or break-glass FinishLogin/FinishSetup
-// flows, both of which have their own integration tests.
+// TestService_SessionLifecycle exercises the post-Phase-5b session surface (Logout + GetSession + UserExists). Sessions are minted via
+// the sessions store directly because Phase 5b retired Service.Login + the POST /api/session HTTP path; production sessions now come
+// from the OIDC callback or break-glass FinishLogin/FinishSetup flows, both of which have their own integration tests.
 func TestService_SessionLifecycle(t *testing.T) {
 	id, db := newIdentityWithDB(t)
 	ctx := t.Context()
@@ -136,9 +126,8 @@ func TestService_SessionLifecycle(t *testing.T) {
 	require.NoError(t, id.Service().Logout(ctx, sess.ID))
 }
 
-// TestRegisterRoutes_Authed asserts RegisterAuthedRoutes wires GET
-// /api/session. Calling without a session middleware in front returns 500
-// (the handler logs misconfigured), confirming the route is wired.
+// TestRegisterRoutes_Authed asserts RegisterAuthedRoutes wires GET /api/session. Calling without a session middleware in front returns
+// 500 (the handler logs misconfigured), confirming the route is wired.
 func TestRegisterRoutes_Authed(t *testing.T) {
 	id := newIdentity(t)
 	ctx := t.Context()
@@ -148,8 +137,7 @@ func TestRegisterRoutes_Authed(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	// GET /api/session without session middleware: handler returns 500
-	// because Session was never pinned to ctx. The 500 itself proves the
+	// GET /api/session without session middleware: handler returns 500 because Session was never pinned to ctx. The 500 itself proves the
 	// route is registered (else 404).
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/session", nil)
 	require.NoError(t, err)
@@ -160,9 +148,8 @@ func TestRegisterRoutes_Authed(t *testing.T) {
 		"GET /api/session via RegisterAuthedRoutes (without Session middleware -> 500 misconfigured)")
 }
 
-// TestService_LogoutEmptyToken covers the early-return branch in Logout
-// (sessionToken length zero) so a stale or missing cookie cannot turn into
-// a Delete query against the DB.
+// TestService_LogoutEmptyToken covers the early-return branch in Logout (sessionToken length zero) so a stale or missing cookie cannot
+// turn into a Delete query against the DB.
 func TestService_LogoutEmptyToken(t *testing.T) {
 	id := newIdentity(t)
 	require.NoError(t, id.Service().Logout(t.Context(), nil))
@@ -180,19 +167,16 @@ func TestService_UserExistsZeroOrNegative(t *testing.T) {
 	}
 }
 
-// TestService_GetUserNotFound exercises the ErrUserNotFound branch in
-// GetUser. UserExists doesn't reach this branch because it short-circuits
-// on userID <= 0; GetUser is the only API path that surfaces the lookup
-// miss.
+// TestService_GetUserNotFound exercises the ErrUserNotFound branch in GetUser. UserExists doesn't reach this branch because it
+// short-circuits on userID <= 0; GetUser is the only API path that surfaces the lookup miss.
 func TestService_GetUserNotFound(t *testing.T) {
 	id := newIdentity(t)
 	_, err := id.Service().GetUser(t.Context(), 999_999_999)
 	require.ErrorIs(t, err, api.ErrUserNotFound)
 }
 
-// TestRun_StopsOnContextCancel verifies the cleanup goroutine returns when
-// ctx is cancelled, and uses a tiny CleanupInterval so the ticker fires
-// at least once during the test (covering the cleanup-call branch).
+// TestRun_StopsOnContextCancel verifies the cleanup goroutine returns when ctx is cancelled, and uses a tiny CleanupInterval so the
+// ticker fires at least once during the test (covering the cleanup-call branch).
 func TestRun_StopsOnContextCancel(t *testing.T) {
 	s := full.Open(t)
 	signingKey := make([]byte, 32)

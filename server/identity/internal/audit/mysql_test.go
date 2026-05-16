@@ -20,9 +20,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newStore returns a fresh audit Store backed by a test DB. The
-// identity testkit applies users + sessions + audit_events schema, so
-// the LEFT JOIN against users in List can resolve actor emails.
+// newStore returns a fresh audit Store backed by a test DB. The identity testkit applies users + sessions + audit_events schema,
+// so the LEFT JOIN against users in List can resolve actor emails.
 func newStore(t *testing.T) (*audit.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -30,9 +29,8 @@ func newStore(t *testing.T) (*audit.Store, *sqlx.DB) {
 	return audit.New(db, nil), db
 }
 
-// newStoreWithLogger is like newStore but binds the supplied logger so
-// dual-emit assertions can capture the INFO line. Tests that don't
-// care about the slog side use newStore (slog.Default()).
+// newStoreWithLogger is like newStore but binds the supplied logger so dual-emit assertions can capture the INFO line. Tests that
+// don't care about the slog side use newStore (slog.Default()).
 func newStoreWithLogger(t *testing.T, logger *slog.Logger) (*audit.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -77,11 +75,9 @@ func TestRecord_RoundTrip(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), r.OccurredAt, 30*time.Second)
 }
 
-// When the caller does not supply ActorEmail, the Recorder must look it
-// up from the users table by UserID and denormalise it onto the row so
-// the audit row stays attributable after the user is later deleted.
-// This is the key durability promise behind the cross-context recordX
-// helpers, which only have user_id from ctx (no email).
+// When the caller does not supply ActorEmail, the Recorder must look it up from the users table by UserID and denormalise it onto the
+// row so the audit row stays attributable after the user is later deleted. This is the key durability promise behind the cross-context
+// recordX helpers, which only have user_id from ctx (no email).
 func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
 	store, db := newStore(t)
 	const userID = int64(99)
@@ -99,10 +95,8 @@ func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "operator-99@test", rows[0].UserEmail)
 
-	// And after the user is deleted, the denormalised email survives so
-	// the audit row stays attributable. Pre-deletion the LEFT JOIN
-	// returns the live email; post-deletion the join is empty and the
-	// reader falls back to the actor_email column captured at record time.
+	// And after the user is deleted, the denormalised email survives so the audit row stays attributable. Pre-deletion the LEFT JOIN
+	// returns the live email; post-deletion the join is empty and the reader falls back to the actor_email column captured at record time.
 	_, err = db.ExecContext(t.Context(), `DELETE FROM users WHERE id = ?`, userID)
 	require.NoError(t, err)
 	rowsAfter, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
@@ -112,8 +106,7 @@ func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
 		"denormalised actor_email must survive user deletion")
 }
 
-// login_failed rows have no user_id (the email may be unknown). The
-// retrieval endpoint must surface them with the attempted email so a
+// login_failed rows have no user_id (the email may be unknown). The retrieval endpoint must surface them with the attempted email so a
 // brute-force pattern is observable in retention.
 func TestRecord_LoginFailedKeepsEmailWithoutUser(t *testing.T) {
 	store, _ := newStore(t)
@@ -134,10 +127,8 @@ func TestRecord_LoginFailedKeepsEmailWithoutUser(t *testing.T) {
 	assert.Equal(t, "user_not_found", rows[0].Payload["reason"])
 }
 
-// trace_id is pulled from the OTel span on ctx so handler code does not
-// have to thread it explicitly. The span's trace-id ends up in the
-// audit row, which lets a reviewer correlate an audit row with the
-// corresponding SigNoz traces / logs by trace-id alone.
+// trace_id is pulled from the OTel span on ctx so handler code does not have to thread it explicitly. The span's trace-id ends up in
+// the audit row, which lets a reviewer correlate an audit row with the corresponding SigNoz traces / logs by trace-id alone.
 func TestRecord_TraceIDFromContext(t *testing.T) {
 	store, _ := newStore(t)
 
@@ -177,9 +168,8 @@ func TestList_FilterByAction(t *testing.T) {
 	}
 }
 
-// List paginates via the (Limit, BeforeID) cursor: passing the smallest
-// id from page N returns page N+1. We verify the boundary condition
-// (cursor row is excluded, not duplicated).
+// List paginates via the (Limit, BeforeID) cursor: passing the smallest id from page N returns page N+1. We verify the boundary
+// condition (cursor row is excluded, not duplicated).
 func TestList_Paginates(t *testing.T) {
 	store, db := newStore(t)
 	seedUser(t, db, 1, "u1@test")
@@ -218,19 +208,15 @@ func TestRecord_RejectsEmptyAction(t *testing.T) {
 	assert.Contains(t, err.Error(), "Action is required")
 }
 
-// New panics on nil db: a Store with a nil db is a programming error
-// that would only surface at request time (when the user's audit row
-// disappears into a nil-pointer panic).
+// New panics on nil db: a Store with a nil db is a programming error that would only surface at request time (when the user's audit
+// row disappears into a nil-pointer panic).
 func TestNew_PanicsOnNilDB(t *testing.T) {
 	assert.Panics(t, func() { _ = audit.New(nil, nil) })
 }
 
-// Record dual-emits the just-committed audit row to slog at INFO so
-// SigNoz and other OTLP backends have the row's content without a
-// separate audit_events export. The line MUST carry the same
-// attribute keys the async-writer drop log uses, so a single dashboard
-// query can match success, drop, and failure states uniformly. This
-// test captures the slog handler output and pins the wire shape:
+// Record dual-emits the just-committed audit row to slog at INFO so SigNoz and other OTLP backends have the row's content without a
+// separate audit_events export. The line MUST carry the same attribute keys the async-writer drop log uses, so a single dashboard
+// query can match success, drop, and failure states uniformly. This test captures the slog handler output and pins the wire shape:
 // renaming a key here is renaming a dashboard contract.
 func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 	var buf bytes.Buffer
@@ -265,12 +251,9 @@ func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 	assert.Equal(t, "allow", payload["decision"])
 }
 
-// When UserID is nil (e.g. a pre-auth audit row like
-// auth.oidc.callback.error), the dual-emit still fires and emits
-// edr.user.id=0. The audit row itself stays attributable via the
-// actor_email column. Per server-identity-audit-log spec, failure
-// suffix actions land at WARN so a SigNoz alert on
-// severity_text=WARN catches them without a separate filter.
+// When UserID is nil (e.g. a pre-auth audit row like auth.oidc.callback.error), the dual-emit still fires and emits edr.user.id=0.
+// The audit row itself stays attributable via the actor_email column. Per server-identity-audit-log spec, failure suffix actions land
+// at WARN so a SigNoz alert on severity_text=WARN catches them without a separate filter.
 func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -291,12 +274,9 @@ func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 	assert.InDelta(t, float64(0), entry["edr.user.id"], 0)
 }
 
-// Spec contract: a chokepoint deny emits slog at WARN. Pinned so the
-// observability dashboard's "WARN threshold" alert catches chokepoint
-// denies without a separate severity filter per decision type.
-// server-identity-audit-log spec §"Audit rows are dual-emitted":
-// "WARN when the decision is `deny`, the action is a break-glass
-// action, or the decision is `error`."
+// Spec contract: a chokepoint deny emits slog at WARN. Pinned so the observability dashboard's "WARN threshold" alert catches
+// chokepoint denies without a separate severity filter per decision type. server-identity-audit-log spec §"Audit rows are
+// dual-emitted": "WARN when the decision is `deny`, the action is a break-glass action, or the decision is `error`."
 func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -320,11 +300,9 @@ func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 	assert.Equal(t, "authz.host.isolate", entry["action"])
 }
 
-// Spec contract: every break-glass action emits slog at WARN -
-// regardless of outcome - because the recovery surface is the
-// high-privilege path and every interaction is operationally
-// noteworthy. server-identity-audit-log spec: "WARN when ... the
-// action is a break-glass action."
+// Spec contract: every break-glass action emits slog at WARN - regardless of outcome - because the recovery surface is the
+// high-privilege path and every interaction is operationally noteworthy. server-identity-audit-log spec: "WARN when ... the action is
+// a break-glass action."
 func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
 	cases := []api.AuditAction{
 		api.AuditAuthBreakglassBootstrap,
@@ -350,20 +328,16 @@ func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
 	}
 }
 
-// Spec contract: the dual emit MUST happen even when the DB INSERT
-// fails. Closes the observability gap where a transient DB outage
-// erases the audit row's content from the OTel log stream.
-// server-identity-audit-log spec: "The dual emit MUST happen even
-// when the database insert fails so the observability pipeline sees
-// a record."
+// Spec contract: the dual emit MUST happen even when the DB INSERT fails. Closes the observability gap where a transient DB outage
+// erases the audit row's content from the OTel log stream. server-identity-audit-log spec: "The dual emit MUST happen even when the
+// database insert fails so the observability pipeline sees a record."
 func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store, db := newStoreWithLogger(t, logger)
 
-	// Force INSERT failure by violating the action NOT NULL constraint
-	// via a NULL UserID + missing required column. Simpler: close the
-	// db connection so the ExecContext fails fast with a known error.
+	// Force INSERT failure by violating the action NOT NULL constraint via a NULL UserID + missing required column. Simpler: close the db
+	// connection so the ExecContext fails fast with a known error.
 	require.NoError(t, db.Close())
 
 	err := store.Record(t.Context(), api.AuditEvent{
@@ -394,8 +368,7 @@ func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
 	assert.True(t, sawInsertFailed, "INSERT failure must emit a separate ERROR log")
 }
 
-// parseJSONLogs splits a buffer's JSON-per-line slog output into a
-// slice of decoded maps. Pulled out so the dual-emit-on-failure test
+// parseJSONLogs splits a buffer's JSON-per-line slog output into a slice of decoded maps. Pulled out so the dual-emit-on-failure test
 // stays focused on the property being verified.
 func parseJSONLogs(t *testing.T, raw []byte) []map[string]any {
 	t.Helper()
@@ -411,9 +384,8 @@ func parseJSONLogs(t *testing.T, raw []byte) []map[string]any {
 	return entries
 }
 
-// Sanity: the action constants are stable strings — anyone changing
-// them is renaming wire-shape contracts, and this test fails loudly so
-// the rename gets caught at code-review time.
+// Sanity: the action constants are stable strings — anyone changing them is renaming wire-shape contracts, and this test fails loudly
+// so the rename gets caught at code-review time.
 func TestAuditAction_StableConstants(t *testing.T) {
 	cases := []struct {
 		got  api.AuditAction

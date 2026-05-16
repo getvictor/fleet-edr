@@ -46,9 +46,8 @@ func TestParseConfFile_MalformedSkipped(t *testing.T) {
 }
 
 func TestLoadConfFile_MissingIsEmpty(t *testing.T) {
-	// A missing conf file is expected on fresh installs before MDM writes anything.
-	// Must return empty map without logging — error logs for ENOENT would spam the
-	// startup log every boot.
+	// A missing conf file is expected on fresh installs before MDM writes anything. Must return empty map without logging — error logs for
+	// ENOENT would spam the startup log every boot.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	m := loadConfFile(filepath.Join(t.TempDir(), "does-not-exist.conf"), logger)
@@ -57,9 +56,8 @@ func TestLoadConfFile_MissingIsEmpty(t *testing.T) {
 }
 
 func TestLoadConfFile_PermErrorLogged(t *testing.T) {
-	// A file that exists but cannot be read (chmod 0000) must log a warn and return
-	// an empty map so the agent still boots — the operator just won't have the
-	// conf-file-sourced defaults.
+	// A file that exists but cannot be read (chmod 0000) must log a warn and return an empty map so the agent still boots — the operator
+	// just won't have the conf-file-sourced defaults.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "forbidden.conf")
 	require.NoError(t, os.WriteFile(path, []byte("EDR_OK=1"), 0o000))

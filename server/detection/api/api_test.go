@@ -11,10 +11,9 @@ import (
 	"pgregory.net/rapid"
 )
 
-// NullRawJSON's Scan/Value/Marshal/Unmarshal contracts are tested in
-// server/sqlhelpers (the canonical home post-phase-6). detection/api
-// re-exports the type via alias and only tests the detection-specific
-// shapes here (JSONStringSlice, Event wire format, validation errors).
+// NullRawJSON's Scan/Value/Marshal/Unmarshal contracts are tested in server/sqlhelpers (the canonical home post-phase-6).
+// detection/api re-exports the type via alias and only tests the detection-specific shapes here (JSONStringSlice, Event wire format,
+// validation errors).
 
 func TestJSONStringSlice_RoundTrip(t *testing.T) {
 	s := JSONStringSlice{"T1059", "T1105"}
@@ -133,10 +132,8 @@ func TestJSONStringSlice_RoundTripProperty(t *testing.T) {
 	})
 }
 
-// TestIsValidationError_Property: for any error wrapped any number
-// of times around one of the validation sentinels, IsValidationError
-// must return true. For any error not derived from a validation
-// sentinel, it returns false.
+// TestIsValidationError_Property: for any error wrapped any number of times around one of the validation sentinels, IsValidationError
+// must return true. For any error not derived from a validation sentinel, it returns false.
 func TestIsValidationError_Property(t *testing.T) {
 	validationSentinels := []error{ErrInvalidAlertTransition, ErrInvalidUserUpdater}
 	notValidationErrs := []error{

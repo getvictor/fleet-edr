@@ -22,31 +22,26 @@ import (
 const (
 	meterName = "github.com/fleetdm/edr/server/metrics"
 
-	// defaultOfflineThreshold is the gauge cutoff used when
-	// Options.OfflineThreshold is zero. Mirrored as the UI offline cutoff
-	// so SigNoz numbers match what operators see on the host page.
+	// defaultOfflineThreshold is the gauge cutoff used when Options.OfflineThreshold is zero. Mirrored as the UI offline cutoff so SigNoz
+	// numbers match what operators see on the host page.
 	defaultOfflineThreshold = 5 * time.Minute
 )
 
-// dbQueryHistogramBuckets is the explicit-bucket boundary set for the DB
-// query duration histogram, in seconds. Spaced to give p50/p95/p99 fidelity
-// over the SQL latencies this codebase actually sees: sub-millisecond on
-// single-row reads, low milliseconds on indexed batch reads, hundreds of
-// milliseconds on the worst-case unindexed retention scans.
+// dbQueryHistogramBuckets is the explicit-bucket boundary set for the DB query duration histogram, in seconds. Spaced to give
+// p50/p95/p99 fidelity over the SQL latencies this codebase actually sees: sub-millisecond on single-row reads, low milliseconds on
+// indexed batch reads, hundreds of milliseconds on the worst-case unindexed retention scans.
 var dbQueryHistogramBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
-// GaugeSource is the read-only contract used by the observable gauges. The OTel reader
-// invokes the callbacks on its collection cadence; the callback issues a live DB query
-// each time. Interface not concrete struct so tests can swap in fakes without pulling
-// in a MySQL dependency.
+// GaugeSource is the read-only contract used by the observable gauges. The OTel reader invokes the callbacks on its collection
+// cadence; the callback issues a live DB query each time. Interface not concrete struct so tests can swap in fakes without pulling in
+// a MySQL dependency.
 type GaugeSource interface {
 	EnrolledHosts(ctx context.Context) (int, error)
 	OfflineHosts(ctx context.Context, threshold time.Duration) (int, error)
 }
 
-// Recorder is the write surface instrumentation code uses. Every method is safe to
-// call from any goroutine and safe on a nil receiver (methods short-circuit) so call
-// sites don't need defensive `if r != nil` blocks.
+// Recorder is the write surface instrumentation code uses. Every method is safe to call from any goroutine and safe on a nil receiver
+// (methods short-circuit) so call sites don't need defensive `if r != nil` blocks.
 type Recorder struct {
 	eventsIngested       metric.Int64Counter
 	alertsCreated        metric.Int64Counter
@@ -62,20 +57,18 @@ type Recorder struct {
 
 // Options tune the Recorder. All fields are optional.
 type Options struct {
-	// OfflineThreshold is the "how old is too old" for the offline-hosts gauge. Zero
-	// uses 5 minutes — match the UI's threshold so what operators see in SigNoz
-	// matches what they see on the host page.
+	// OfflineThreshold is the "how old is too old" for the offline-hosts gauge. Zero uses 5 minutes — match the UI's threshold so what
+	// operators see in SigNoz matches what they see on the host page.
 	OfflineThreshold time.Duration
 	// Meter, optional. Defaults to otel.Meter(meterName). Tests pass a meter backed by
 	// a ManualReader so they can collect metrics synchronously.
 	Meter metric.Meter
 }
 
-// New builds a Recorder and registers every metric against the OTel meter.
-// When OTEL_EXPORTER_OTLP_ENDPOINT is unset `observability.Init` leaves the SDK in its
-// no-op state; in that case every `Add`/`Record`/`Observe` call is a no-op and this
-// constructor still succeeds, so unit tests and offline dev don't need a collector.
-// Passing nil for `gauges` skips observable gauge registration (unit tests).
+// New builds a Recorder and registers every metric against the OTel meter. When OTEL_EXPORTER_OTLP_ENDPOINT is unset
+// `observability.Init` leaves the SDK in its no-op state; in that case every `Add`/`Record`/`Observe` call is a no-op and this
+// constructor still succeeds, so unit tests and offline dev don't need a collector. Passing nil for `gauges` skips observable gauge
+// registration (unit tests).
 func New(gauges GaugeSource, opts Options) *Recorder {
 	if opts.OfflineThreshold <= 0 {
 		opts.OfflineThreshold = defaultOfflineThreshold
@@ -86,10 +79,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	}
 
 	r := &Recorder{}
-	// Counters and histograms are synchronous instruments; creation is cheap and errors
-	// only surface for truly pathological inputs (duplicate name with conflicting type,
-	// etc.). If any instrument fails to register we leave the field nil and let the
-	// nil-safe method paths below no-op, so a Recorder from New is always usable.
+	// Counters and histograms are synchronous instruments; creation is cheap and errors only surface for truly pathological inputs
+	// (duplicate name with conflicting type, etc.). If any instrument fails to register we leave the field nil and let the nil-safe method
+	// paths below no-op, so a Recorder from New is always usable.
 	r.eventsIngested, _ = meter.Int64Counter(
 		"edr.events.ingested",
 		metric.WithDescription("Events accepted by POST /api/events, by host_id."),
@@ -199,9 +191,8 @@ func (r *Recorder) RetentionRowsDeleted(ctx context.Context, n int64) {
 	r.retentionRowsDeleted.Add(ctx, n)
 }
 
-// ProcessesTTLReconciled satisfies processttl.MetricsRecorder. A non-zero
-// rate of this indicates the fleet is losing exit events (agent drops,
-// kernel back-pressure, queue pruning) — investigate the affected hosts.
+// ProcessesTTLReconciled satisfies processttl.MetricsRecorder. A non-zero rate of this indicates the fleet is losing exit events
+// (agent drops, kernel back-pressure, queue pruning) — investigate the affected hosts.
 func (r *Recorder) ProcessesTTLReconciled(ctx context.Context, n int64) {
 	if r == nil || r.processesReconciled == nil || n <= 0 {
 		return
@@ -209,9 +200,8 @@ func (r *Recorder) ProcessesTTLReconciled(ctx context.Context, n int64) {
 	r.processesReconciled.Add(ctx, n)
 }
 
-// QueueDropped satisfies queue.MetricsRecorder. A single counter with a `lossy` attribute
-// lets operators alert on lossy drops (real data loss) independently of lossless drops
-// (already-delivered events pruned for space) without maintaining two metric families.
+// QueueDropped satisfies queue.MetricsRecorder. A single counter with a `lossy` attribute lets operators alert on lossy drops (real
+// data loss) independently of lossless drops (already-delivered events pruned for space) without maintaining two metric families.
 func (r *Recorder) QueueDropped(ctx context.Context, n int64, lossy bool) {
 	if r == nil || r.queueDropped == nil || n <= 0 {
 		return

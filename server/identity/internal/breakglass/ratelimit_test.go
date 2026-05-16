@@ -8,16 +8,14 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/breakglass"
 )
 
-// AllowIP refuses to bucket an empty IP — a regression that bucketed
-// "" would let an attacker who somehow got past the upstream IP
+// AllowIP refuses to bucket an empty IP — a regression that bucketed "" would let an attacker who somehow got past the upstream IP
 // resolver consume the same single bucket as everyone else.
 func TestRateLimits_EmptyIPRejected(t *testing.T) {
 	r := breakglass.NewRateLimits(0, 0, 0)
 	assert.False(t, r.AllowIP(""))
 }
 
-// Each bucket exhausts independently. Within the configured budget
-// each is allowed; one over and it rejects. Pinned because the spec
+// Each bucket exhausts independently. Within the configured budget each is allowed; one over and it rejects. Pinned because the spec
 // calls for independently-exhaustable buckets.
 func TestRateLimits_IndependentlyExhausted(t *testing.T) {
 	r := breakglass.NewRateLimits(2, 2, 2) // 2/min each; burst=2
@@ -41,9 +39,8 @@ func TestRateLimits_IndependentlyExhausted(t *testing.T) {
 	assert.False(t, r.AllowSetup())
 }
 
-// Email is normalised lowercase + trimmed. Pinned because a
-// regression that bucketed "Admin@x" and "admin@x" separately would
-// double the brute-force budget by case-folding.
+// Email is normalised lowercase + trimmed. Pinned because a regression that bucketed "Admin@x" and "admin@x" separately would double
+// the brute-force budget by case-folding.
 func TestRateLimits_EmailNormalised(t *testing.T) {
 	r := breakglass.NewRateLimits(99, 1, 99) // burst=1 forces same bucket
 	assert.True(t, r.AllowEmailFail(" admin@example.com "))

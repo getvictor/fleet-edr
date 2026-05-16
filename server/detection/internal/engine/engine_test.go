@@ -41,8 +41,7 @@ func TestEngine_RegisterAccumulates(t *testing.T) {
 	assert.Equal(t, []string{"T1"}, cat[1].Techniques)
 }
 
-// TestEngine_LoadActiveReplacesRuleSet pins the replace (not append)
-// semantics: a hot-reload caller can invoke LoadActive repeatedly
+// TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
 // without the engine accumulating duplicates.
 func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
 	e := New(nil, nil)

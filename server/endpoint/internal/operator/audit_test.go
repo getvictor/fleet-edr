@@ -15,9 +15,8 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// fakeRevokeService stubs api.Service. Only Revoke + List + RotateToken
-// are exercised by these tests; other methods panic so a regression
-// that wires this fake into a different path surfaces immediately.
+// fakeRevokeService stubs api.Service. Only Revoke + List + RotateToken are exercised by these tests; other methods panic so a
+// regression that wires this fake into a different path surfaces immediately.
 type fakeRevokeService struct {
 	revoke func(ctx context.Context, hostID, reason, actor string) error
 	rotate func(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error)
@@ -57,10 +56,8 @@ func (c *captureRecorder) Record(_ context.Context, e identityapi.AuditEvent) er
 	return nil
 }
 
-// allowAllAuthZ stubs identityapi.AuthZ for endpoint operator tests
-// that exercise revoke / rotate semantics rather than the role
-// matrix. Per-action coverage lives in
-// server/identity/internal/authz/engine_test.go.
+// allowAllAuthZ stubs identityapi.AuthZ for endpoint operator tests that exercise revoke / rotate semantics rather than the role
+// matrix. Per-action coverage lives in server/identity/internal/authz/engine_test.go.
 type allowAllAuthZ struct{}
 
 func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
@@ -115,9 +112,8 @@ func TestHandler_Revoke_NilAuditOK(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
-// Successful POST .../rotate returns 200 with a JSON body carrying the
-// CommandID + PreviousTokenIDPrefix the operator can pivot from to
-// audit / SigNoz traces.
+// Successful POST .../rotate returns 200 with a JSON body carrying the CommandID + PreviousTokenIDPrefix the operator can pivot from
+// to audit / SigNoz traces.
 func TestHandler_Rotate_HappyPath(t *testing.T) {
 	captured := struct {
 		hostID  string
@@ -162,8 +158,7 @@ func TestHandler_Rotate_HappyPath(t *testing.T) {
 	assert.Equal(t, "incident-2026-Q2", captured.reason)
 }
 
-// Missing actor or reason returns 400; rotation is operator-attributed
-// audit material, so silent rotations without attribution would
+// Missing actor or reason returns 400; rotation is operator-attributed audit material, so silent rotations without attribution would
 // undermine the audit story #87 just shipped.
 func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
 	cases := []struct {
@@ -200,9 +195,8 @@ func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
 	}
 }
 
-// Missing host returns 404, not 500; the handler must surface
-// api.ErrNotFound from the service as the operator-facing
-// "not_found" code.
+// Missing host returns 404, not 500; the handler must surface api.ErrNotFound from the service as the operator-facing "not_found"
+// code.
 func TestHandler_Rotate_NotFound(t *testing.T) {
 	svc := fakeRevokeService{rotate: func(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
 		return api.RotateResult{}, api.ErrNotFound

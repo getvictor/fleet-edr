@@ -12,10 +12,8 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// Tests for the bulk / index / CTE optimisations introduced for
-// issues #91-#94. Each test pins the externally observable behaviour
-// (correctness) the prior shape provided. Microbenchmarks alongside
-// these prove the linear-with-N drop the issues' acceptance criteria
+// Tests for the bulk / index / CTE optimisations introduced for issues #91-#94. Each test pins the externally observable behaviour
+// (correctness) the prior shape provided. Microbenchmarks alongside these prove the linear-with-N drop the issues' acceptance criteria
 // call out.
 
 // --- #91: bulk hosts upsert ------------------------------------------------
@@ -52,8 +50,7 @@ func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
 		assert.Equal(t, int64(200+i), got.LastSeenNs, "%s: last_seen pinned to MAX(timestamp_ns)", host)
 	}
 
-	// Re-running the same batch must accumulate, not duplicate. This is
-	// the property the ON DUPLICATE KEY UPDATE branch is responsible
+	// Re-running the same batch must accumulate, not duplicate. This is the property the ON DUPLICATE KEY UPDATE branch is responsible
 	// for; the bulk-INSERT swap mustn't break it.
 	require.NoError(t, s.UpsertHosts(ctx, events))
 	hosts2, err := s.ListHosts(ctx)
@@ -103,8 +100,7 @@ func TestGetNetworkEventsForProcess_FiltersByIndexedPID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
 
-	// Six events split across two pids on the same host, plus one on a
-	// different host (must be excluded), one with the wrong event_type
+	// Six events split across two pids on the same host, plus one on a different host (must be excluded), one with the wrong event_type
 	// (must be excluded), and one outside the time window.
 	require.NoError(t, s.InsertEventsAt(ctx, []api.Event{
 		{EventID: "n1", HostID: "h", TimestampNs: 100, EventType: "network_connect", Payload: json.RawMessage(`{"pid":1234,"dst":"a"}`)},
@@ -125,10 +121,8 @@ func TestGetNetworkEventsForProcess_FiltersByIndexedPID(t *testing.T) {
 	ids := []string{got[0].EventID, got[1].EventID}
 	assert.Equal(t, []string{"n1", "n2"}, ids)
 
-	// n6 was ingested at 9999; widening the window must surface it. The
-	// query filters on ingested_at_ns (not timestamp_ns); the index
-	// column ordering puts payload_pid before ingested_at_ns so the
-	// pid equality is consumed first, then the ingest range scans.
+	// n6 was ingested at 9999; widening the window must surface it. The query filters on ingested_at_ns (not timestamp_ns); the index
+	// column ordering puts payload_pid before ingested_at_ns so the pid equality is consumed first, then the ingest range scans.
 	got2, err := s.GetNetworkEventsForProcess(ctx, "h", 1234, api.TimeRange{FromNs: 0, ToNs: 50000})
 	require.NoError(t, err)
 	require.Len(t, got2, 3, "widening the ingested_at_ns window picks up n6")
@@ -149,8 +143,7 @@ func TestGetNetworkEventsForProcess_UsesPIDIndex(t *testing.T) {
 			Payload:     json.RawMessage(`{"pid":` + strconv.Itoa(i%5) + `}`),
 		}}))
 	}
-	// EXPLAIN's column set varies by MySQL version; we only care about
-	// the key column. Use a dynamic scan so the test isn't sensitive to
+	// EXPLAIN's column set varies by MySQL version; we only care about the key column. Use a dynamic scan so the test isn't sensitive to
 	// MySQL adding/renaming sibling columns.
 	rows, err := s.DB().QueryxContext(ctx, `EXPLAIN
 		SELECT event_id FROM events
@@ -190,9 +183,8 @@ func BenchmarkGetNetworkEventsForProcess(b *testing.B) {
 			s := newTestStore(b)
 			ctx := b.Context()
 
-			// Most events are noise (different pids); the target pid hits
-			// just a few rows. The win is "no full table scan", which is
-			// why the bench scales with rows in events, not result-set size.
+			// Most events are noise (different pids); the target pid hits just a few rows. The win is "no full table
+			// scan", which is why the bench scales with rows in events, not result-set size.
 			batch := make([]api.Event, eventCount)
 			for i := range batch {
 				batch[i] = api.Event{
@@ -369,11 +361,8 @@ func TestGetExecChain_HostScoped(t *testing.T) {
 }
 
 func TestGetExecChain_CycleGuardCapsAt64(t *testing.T) {
-	// Synthesise a cycle by post-INSERT updating the oldest row's
-	// previous_exec_id to point at itself. Real schema would never
-	// produce this (each generation forks strictly later than its
-	// predecessor) but the cycle guard is the safety net for a
-	// corrupt FK.
+	// Synthesise a cycle by post-INSERT updating the oldest row's previous_exec_id to point at itself. Real schema would never produce
+	// this (each generation forks strictly later than its predecessor) but the cycle guard is the safety net for a corrupt FK.
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -393,13 +382,10 @@ func BenchmarkGetExecChain(b *testing.B) {
 			s := newTestStore(b)
 			ctx := b.Context()
 
-			// Build `depth` ancestor rows linked tail-to-head, then form
-			// a logical `current` whose PreviousExecID points at the most
-			// recent ancestor. Each iteration must capture the inserted
-			// id into a *fresh* int64 (snapshot) and take its address;
-			// reusing one variable's address yields a self-cycle because
-			// the pointer always reads the latest assignment (per
-			// Copilot review on PR #110).
+			// Build `depth` ancestor rows linked tail-to-head, then form a logical `current` whose PreviousExecID points
+			// at the most recent ancestor. Each iteration must capture the inserted id into a *fresh* int64 (snapshot) and
+			// take its address; reusing one variable's address yields a self-cycle because the pointer always reads the
+			// latest assignment (per Copilot review on PR #110).
 			var prevPtr *int64
 			for i := range depth {
 				p := api.Process{HostID: "h", PID: 1, ForkTimeNs: int64(100 + i), PreviousExecID: prevPtr}

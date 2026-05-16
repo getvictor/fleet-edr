@@ -37,10 +37,8 @@ type RetentionOptions struct {
 
 const attrRetentionDays = "edr.retention.days"
 
-// RetentionRunner executes retention passes on a cadence. Deletes
-// rows from `events` older than RetentionDays, preserving any event
-// referenced by an alert_events row so alert detail views still
-// render. Per-batch DELETE bounds InnoDB row-lock footprint.
+// RetentionRunner executes retention passes on a cadence. Deletes rows from `events` older than RetentionDays, preserving any event
+// referenced by an alert_events row so alert detail views still render. Per-batch DELETE bounds InnoDB row-lock footprint.
 type RetentionRunner struct {
 	db            retentionDeleter
 	retentionDays int
@@ -82,8 +80,7 @@ func NewRetention(db retentionDeleter, opts RetentionOptions) *RetentionRunner {
 	}
 }
 
-// SetMetrics installs the metrics recorder after construction. See
-// ProcessTTLRunner.SetMetrics for the cmd/main two-phase setup
+// SetMetrics installs the metrics recorder after construction. See ProcessTTLRunner.SetMetrics for the cmd/main two-phase setup
 // rationale.
 func (r *RetentionRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 

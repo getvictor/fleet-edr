@@ -49,21 +49,17 @@ import (
 
 // FixtureCase is one named scenario loaded from a fixture JSON file.
 type FixtureCase struct {
-	// Events are the event envelopes the rule will see. Fork + exec
-	// pairs are expected for any process the rule's Evaluate dereferences
-	// via GetProcessByPID; Replay calls ProcessBatch to materialise them
-	// before Evaluate.
+	// Events are the event envelopes the rule will see. Fork + exec pairs are expected for any process the rule's Evaluate dereferences
+	// via GetProcessByPID; Replay calls ProcessBatch to materialise them before Evaluate.
 	Events []detectionapi.Event `json:"events"`
-	// ExpectedFindings is the assertion target. An empty slice (or
-	// omitted key) means "rule must not fire for these events" — a
-	// negative test.
+	// ExpectedFindings is the assertion target. An empty slice (or omitted key) means "rule must not fire for these events" — a negative
+	// test.
 	ExpectedFindings []ExpectedFinding `json:"expected_findings,omitempty"`
 }
 
-// ExpectedFinding describes a finding the rule is expected to produce.
-// Strict fields (RuleID + Severity) are equality-matched; soft fields
-// (DescriptionContains, EventIDs) are optional substring / set
-// assertions so fixtures don't break when descriptions are reworded.
+// ExpectedFinding describes a finding the rule is expected to produce. Strict fields (RuleID + Severity) are equality-matched;
+// soft fields (DescriptionContains, EventIDs) are optional substring / set assertions so fixtures don't break when descriptions are
+// reworded.
 type ExpectedFinding struct {
 	RuleID              string   `json:"rule_id"`
 	Severity            string   `json:"severity"`
@@ -109,10 +105,8 @@ func Replay(t *testing.T, rule rulesapi.Rule, fixtureDir string) {
 
 func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	t.Helper()
-	// Path is constructed from a fixed fixtureDir + a filename we
-	// already discovered via filepath.WalkDir on that same directory,
-	// so there's no user-input taint. gosec's G304 is a false positive
-	// in the test-harness context.
+	// Path is constructed from a fixed fixtureDir + a filename we already discovered via filepath.WalkDir on that same directory,
+	// so there's no user-input taint. gosec's G304 is a false positive in the test-harness context.
 	raw, err := os.ReadFile(path) //nolint:gosec // fixture path, not user input
 	require.NoError(t, err)
 

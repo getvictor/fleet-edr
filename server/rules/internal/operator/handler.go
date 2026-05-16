@@ -12,16 +12,14 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// Service is the narrow surface the operator handlers need. Today
-// satisfied by *rules/internal/service.Service. Kept as an interface
+// Service is the narrow surface the operator handlers need. Today satisfied by *rules/internal/service.Service. Kept as an interface
 // so the handler tests can substitute a fake without spinning up a DB.
 type Service interface {
 	api.Lister
 }
 
-// Handler serves the rules-context operator routes. Construct it with
-// the rules service handle and the authorization chokepoint; mount
-// via RegisterRoutes.
+// Handler serves the rules-context operator routes. Construct it with the rules service handle and the authorization chokepoint;
+// mount via RegisterRoutes.
 type Handler struct {
 	svc    Service
 	authz  identityapi.AuthZ
@@ -29,9 +27,8 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-// New builds an operator handler. Panics if svc or authz is nil.
-// Authorization is enforced before each privileged route's side
-// effect; a nil authz would bypass the role matrix entirely.
+// New builds an operator handler. Panics if svc or authz is nil. Authorization is enforced before each privileged route's side effect;
+// a nil authz would bypass the role matrix entirely.
 func New(svc Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("rules operator.New: Service must not be nil")
@@ -45,10 +42,8 @@ func New(svc Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	return &Handler{svc: svc, authz: authz, logger: logger}
 }
 
-// SetAudit installs the operator audit recorder. Optional: today no
-// route under this handler emits audit rows; the setter is retained
-// because cmd/main wires it unconditionally and follow-on changes
-// (application control) will plug into it.
+// SetAudit installs the operator audit recorder. Optional: today no route under this handler emits audit rows; the setter is retained
+// because cmd/main wires it unconditionally and follow-on changes (application control) will plug into it.
 func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the operator routes onto the given mux.
@@ -88,12 +83,9 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})
 }
 
-// handleATTACKCoverage returns a MITRE ATT&CK Navigator layer document
-// that enumerates the techniques covered by the registered detection
-// rules. The output is dropped directly into
-// https://mitre-attack.github.io/attack-navigator/ to render as a
-// heatmap on the matrix. Score is 1 for "any rule covers it"; the
-// list of covering rule IDs is in the technique's `comment`.
+// handleATTACKCoverage returns a MITRE ATT&CK Navigator layer document that enumerates the techniques covered by the registered
+// detection rules. The output is dropped directly into https://mitre-attack.github.io/attack-navigator/ to render as a heatmap on the
+// matrix. Score is 1 for "any rule covers it"; the list of covering rule IDs is in the technique's `comment`.
 func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
@@ -123,11 +115,9 @@ func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 		Techniques  []navigatorTechnique `json:"techniques"`
 	}
 
-	// Emit techniques + per-technique rule lists in sorted order so the
-	// JSON is byte-identical across requests. This makes the endpoint
-	// safe to ETag, diff, and snapshot-test. Dedup rule IDs so a rule
-	// declaring the same technique twice doesn't produce a noisy
-	// "Covered by: X, X" comment.
+	// Emit techniques + per-technique rule lists in sorted order so the JSON is byte-identical across requests. This makes the endpoint
+	// safe to ETag, diff, and snapshot-test. Dedup rule IDs so a rule declaring the same technique twice doesn't produce a noisy "Covered
+	// by: X, X" comment.
 	techniqueIDs := make([]string, 0, len(coverage))
 	for tid := range coverage {
 		techniqueIDs = append(techniqueIDs, tid)

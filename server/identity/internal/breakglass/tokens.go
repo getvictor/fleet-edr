@@ -14,44 +14,34 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// TokenKindBreakglassSetup is the bootstrap_tokens.kind value the
-// break-glass redemption flow consumes. Reserved as a constant so
-// future kinds (wave-2 invite tokens) cannot collide with the
-// break-glass setup flow's WHERE clause.
+// TokenKindBreakglassSetup is the bootstrap_tokens.kind value the break-glass redemption flow consumes. Reserved as a constant so
+// future kinds (wave-2 invite tokens) cannot collide with the break-glass setup flow's WHERE clause.
 const TokenKindBreakglassSetup = "breakglass_setup"
 
-// TokenPlaintextBytes is the size of the random plaintext token in
-// bytes BEFORE base64-url encoding. 32 bytes ≈ 256 bits of entropy:
+// TokenPlaintextBytes is the size of the random plaintext token in bytes BEFORE base64-url encoding. 32 bytes ≈ 256 bits of entropy:
 // well above the brute-force threshold for a token that lives ≤ 1h.
 const TokenPlaintextBytes = 32
 
-// DefaultSetupTokenTTL is the wave-1 fallback when the operator does
-// not pin EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL. 1 hour matches the spec
-// scenario "operator opens the redemption URL within the hour" and
-// is short enough that an exfiltrated stderr log has bounded value.
+// DefaultSetupTokenTTL is the wave-1 fallback when the operator does not pin EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL. 1 hour matches the
+// spec scenario "operator opens the redemption URL within the hour" and is short enough that an exfiltrated stderr log has bounded
+// value.
 const DefaultSetupTokenTTL = time.Hour
 
-// ErrTokenInvalid is returned when no row matches the presented
-// plaintext (after hashing). Distinct from ErrTokenExpired /
-// ErrTokenConsumed so the redemption handler can map each to a
-// directed reason in the audit row, while collapsing all three to a
+// ErrTokenInvalid is returned when no row matches the presented plaintext (after hashing). Distinct from ErrTokenExpired /
+// ErrTokenConsumed so the redemption handler can map each to a directed reason in the audit row, while collapsing all three to a
 // single 410-Gone wire response so an attacker cannot enumerate.
 var ErrTokenInvalid = errors.New("breakglass: token invalid")
 
-// ErrTokenExpired is returned when the matched row's expires_at has
-// passed. Operator must have an admin reissue a token via the
+// ErrTokenExpired is returned when the matched row's expires_at has passed. Operator must have an admin reissue a token via the
 // emergency runbook (wave-1) or the wave-2 admin endpoint.
 var ErrTokenExpired = errors.New("breakglass: token expired")
 
-// ErrTokenConsumed is returned when the matched row already has a
-// non-NULL redeemed_at. Single-use means a second submission is
-// always invalid even if the original redemption succeeded.
+// ErrTokenConsumed is returned when the matched row already has a non-NULL redeemed_at. Single-use means a second submission is always
+// invalid even if the original redemption succeeded.
 var ErrTokenConsumed = errors.New("breakglass: token already consumed")
 
-// Token is the row shape callers see after Find / Issue. Only the
-// hash is persisted; plaintext is returned exactly once at issue
-// time. UserID is the bound break-glass account; FK CASCADE means a
-// deleted user reaps their unredeemed tokens.
+// Token is the row shape callers see after Find / Issue. Only the hash is persisted; plaintext is returned exactly once at issue time.
+// UserID is the bound break-glass account; FK CASCADE means a deleted user reaps their unredeemed tokens.
 type Token struct {
 	ID         int64         `db:"id"`
 	UserID     sql.NullInt64 `db:"user_id"`
@@ -96,18 +86,12 @@ func (s *TokenStore) IssueSetup(ctx context.Context, userID int64, ttl time.Dura
 	issuedAt := time.Now()
 	expiresAt := issuedAt.Add(ttl)
 
-	// Supersede any prior unredeemed setup tokens for this user before
-	// inserting the new one. Without this, a server restart re-runs
-	// the cmd/main first-boot path and emits a fresh banner while the
-	// previously-printed URL stays valid until its own TTL elapses:
-	// two independently-redeemable bearer credentials, with stderr
-	// scrollback or an exfiltrated log file enough to use the older
-	// one. The cleanest fix is to DELETE the stale rows; the audit
-	// trail for "this token existed" lives in the redemption-path
-	// audit row (auth.breakglass.bootstrap), which the redemption
-	// emits only on successful use, so a deleted unredeemed row
-	// never carried audit value. Wrapped in a transaction with the
-	// INSERT so a partial failure leaves no rows behind.
+	// Supersede any prior unredeemed setup tokens for this user before inserting the new one. Without this, a server restart re-runs
+	// the cmd/main first-boot path and emits a fresh banner while the previously-printed URL stays valid until its own TTL elapses:
+	// two independently-redeemable bearer credentials, with stderr scrollback or an exfiltrated log file enough to use the older one.
+	// The cleanest fix is to DELETE the stale rows; the audit trail for "this token existed" lives in the redemption-path audit row
+	// (auth.breakglass.bootstrap), which the redemption emits only on successful use, so a deleted unredeemed row never carried audit
+	// value. Wrapped in a transaction with the INSERT so a partial failure leaves no rows behind.
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return "", Token{}, fmt.Errorf("breakglass tokens: begin tx: %w", err)
@@ -174,10 +158,8 @@ func (s *TokenStore) FindValid(ctx context.Context, plaintext string, now time.T
 	if err != nil {
 		return nil, fmt.Errorf("breakglass tokens: lookup: %w", err)
 	}
-	// Defense-in-depth: re-fetch the hash and compare in constant
-	// time. UNIQUE(token_hash) means the SELECT already matched
-	// exactly the right row, but a future schema change that drops
-	// the index should not silently weaken this check.
+	// Defense-in-depth: re-fetch the hash and compare in constant time. UNIQUE(token_hash) means the SELECT already matched exactly the
+	// right row, but a future schema change that drops the index should not silently weaken this check.
 	var got struct {
 		Hash []byte `db:"token_hash"`
 	}
@@ -227,17 +209,14 @@ func (s *TokenStore) MarkRedeemed(ctx context.Context, ec Executor, id int64) er
 	return nil
 }
 
-// Executor is the executor subset MarkRedeemed accepts. *sqlx.Tx
-// implements it; tests pass *sqlx.DB. Named per the Go convention
+// Executor is the executor subset MarkRedeemed accepts. *sqlx.Tx implements it; tests pass *sqlx.DB. Named per the Go convention
 // (single-method interface ends in -er).
 type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// randomTokenPlaintext returns a base64-url-encoded
-// TokenPlaintextBytes of randomness. base64-url so the token slots
-// directly into a query string without escaping; 32 bytes for ~256
-// bits of entropy.
+// randomTokenPlaintext returns a base64-url-encoded TokenPlaintextBytes of randomness. base64-url so the token slots directly into a
+// query string without escaping; 32 bytes for ~256 bits of entropy.
 func randomTokenPlaintext() (string, error) {
 	buf := make([]byte, TokenPlaintextBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -246,12 +225,9 @@ func randomTokenPlaintext() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// hashTokenPlaintext is the SHA-256 of the plaintext bytes the
-// store persists. The hash is unkeyed: the plaintext is 256 bits of
-// cryptographic randomness so the hash's preimage-resistance derives
-// from the input entropy rather than a server secret. We do NOT use
-// argon2 here because the token's TTL (≤ 1h) and one-shot redemption
-// mean an offline attack on the stored hash has at most minutes to
+// hashTokenPlaintext is the SHA-256 of the plaintext bytes the store persists. The hash is unkeyed: the plaintext is 256 bits of
+// cryptographic randomness so the hash's preimage-resistance derives from the input entropy rather than a server secret. We do NOT use
+// argon2 here because the token's TTL (≤ 1h) and one-shot redemption mean an offline attack on the stored hash has at most minutes to
 // be useful, and the SHA-256 hash makes a stolen DB dump useless.
 func hashTokenPlaintext(plaintext string) [32]byte {
 	return sha256.Sum256([]byte(plaintext))

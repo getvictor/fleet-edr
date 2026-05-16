@@ -13,9 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the
-// userID tests reference (1, 2, 7, 42 — whatever the test passes to Create). Without
-// this the FK constraint sessions.user_id → users(id) rejects inserts.
+// newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the userID tests reference (1, 2, 7, 42 — whatever the
+// test passes to Create). Without this the FK constraint sessions.user_id → users(id) rejects inserts.
 func newTestStore(t *testing.T, opts sessions.Options) *sessions.Store {
 	t.Helper()
 	db := testdb.Open(t)
@@ -91,12 +90,9 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 	assert.Equal(t, created.CSRFToken, got.CSRFToken)
 }
 
-// Phase 4 added IdentityID + AuthMethod columns. Round-trip both
-// through Create -> Get to pin the schema + scan path. A regression
-// here would silently strip OIDC sessions of their identity link
-// (breaking later admin queries that pivot on identities) or default
-// every session to local_password (breaking authz rules that branch
-// on auth_method).
+// Phase 4 added IdentityID + AuthMethod columns. Round-trip both through Create -> Get to pin the schema + scan path. A regression
+// here would silently strip OIDC sessions of their identity link (breaking later admin queries that pivot on identities) or default
+// every session to local_password (breaking authz rules that branch on auth_method).
 func TestGet_IdentityIDAndAuthMethodRoundTrip(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -145,9 +141,8 @@ func TestGet_UnknownIDReturnsNotFound(t *testing.T) {
 }
 
 func TestGet_ExpiredReturnsNotFound(t *testing.T) {
-	// Drive the clock backwards so the row we just created is already past its
-	// expires_at when Get runs. This is more reliable than time.Sleep(ttl+1) and
-	// doesn't tie the test to wall-clock duration.
+	// Drive the clock backwards so the row we just created is already past its expires_at when Get runs. This is more reliable than
+	// time.Sleep(ttl+1) and doesn't tie the test to wall-clock duration.
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
 	s := newTestStore(t, sessions.Options{
@@ -164,10 +159,8 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
-// TestGet_IdleExpiryReturnsNotFound covers the idle-cap branch: created
-// recently (so absolute hasn't elapsed) but last_seen_at hasn't been touched
-// in longer than Idle. Real-world shape: operator opens a tab, walks away
-// without interacting for the idle window.
+// TestGet_IdleExpiryReturnsNotFound covers the idle-cap branch: created recently (so absolute hasn't elapsed) but last_seen_at hasn't
+// been touched in longer than Idle. Real-world shape: operator opens a tab, walks away without interacting for the idle window.
 func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
@@ -185,10 +178,9 @@ func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
-// TestGet_BreakglassUsesStrictTimeouts pins the per-class behaviour: a
-// session minted with auth_method="local_password" expires under the
-// break-glass pair, not the normal pair. The Idle here would be inside the
-// break-glass cap if normal applied; under break-glass it's past.
+// TestGet_BreakglassUsesStrictTimeouts pins the per-class behaviour: a session minted with auth_method="local_password" expires under
+// the break-glass pair, not the normal pair. The Idle here would be inside the break-glass cap if normal applied; under break-glass
+// it's past.
 func TestGet_BreakglassUsesStrictTimeouts(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
@@ -207,9 +199,8 @@ func TestGet_BreakglassUsesStrictTimeouts(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound, "break-glass session must enforce the strict pair")
 }
 
-// TestTouch_SlidingExtensionWithinAbsoluteCap proves the user-visible
-// behaviour: a continuously-active session stays alive past the idle window
-// because each Touch advances last_seen_at. The absolute cap still wins.
+// TestTouch_SlidingExtensionWithinAbsoluteCap proves the user-visible behaviour: a continuously-active session stays alive past the
+// idle window because each Touch advances last_seen_at. The absolute cap still wins.
 func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
@@ -245,10 +236,8 @@ func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound, "absolute cap wins over sliding extension")
 }
 
-// TestTouch_ThrottleSkipsRecentWrites verifies the per-session write-rate
-// cap: a Touch within the throttle window is a no-op. Without this the
-// middleware would write last_seen_at on every authenticated request,
-// turning a busy session into a high-rate write.
+// TestTouch_ThrottleSkipsRecentWrites verifies the per-session write-rate cap: a Touch within the throttle window is a no-op. Without
+// this the middleware would write last_seen_at on every authenticated request, turning a busy session into a high-rate write.
 func TestTouch_ThrottleSkipsRecentWrites(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)
@@ -271,9 +260,8 @@ func TestTouch_ThrottleSkipsRecentWrites(t *testing.T) {
 	assert.True(t, got2.After(created.LastSeenAt), "touch past throttle must advance last_seen_at")
 }
 
-// TestUpdateLastAuthAt_StampsAndBumpsLastSeen pins the contract Phase 5
-// relies on: a successful reauth resets BOTH freshness and idle timers.
-// IsFresh flips back to true; idle countdown restarts.
+// TestUpdateLastAuthAt_StampsAndBumpsLastSeen pins the contract Phase 5 relies on: a successful reauth resets BOTH freshness and idle
+// timers. IsFresh flips back to true; idle countdown restarts.
 func TestUpdateLastAuthAt_StampsAndBumpsLastSeen(t *testing.T) {
 	start := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
 	nowFn, advance := frozenClock(start)

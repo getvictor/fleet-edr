@@ -22,12 +22,9 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return hosts, nil
 }
 
-// CountOfflineHosts returns how many rows in `hosts` have
-// `last_seen_ns` at or before (now - threshold). Used by the OTel
-// `edr.offline.hosts` gauge. The `<=` boundary matches HostList.tsx's
-// predicate so the UI pill and gauge agree on hosts seen exactly at
-// the cutoff. A host with last_seen_ns == 0 (never seen) counts as
-// offline.
+// CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` at or before (now - threshold). Used by the OTel
+// `edr.offline.hosts` gauge. The `<=` boundary matches HostList.tsx's predicate so the UI pill and gauge agree on hosts seen exactly
+// at the cutoff. A host with last_seen_ns == 0 (never seen) counts as offline.
 func (s *Store) CountOfflineHosts(ctx context.Context, threshold time.Duration) (int, error) {
 	cutoff := time.Now().Add(-threshold).UnixNano()
 	var n int

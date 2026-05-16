@@ -13,10 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// alertEventsBatchSize caps the number of (alert_id, event_id) rows
-// per INSERT. Today's rules cap their output at ~10 events per
-// finding, but a future noisy detection could link thousands. Keeping
-// the batch bounded stops a single INSERT from breaching MySQL's
+// alertEventsBatchSize caps the number of (alert_id, event_id) rows per INSERT. Today's rules cap their output at ~10 events per
+// finding, but a future noisy detection could link thousands. Keeping the batch bounded stops a single INSERT from breaching MySQL's
 // max_allowed_packet on hosts where it's tuned low.
 const alertEventsBatchSize = 500
 
@@ -33,9 +31,8 @@ const alertEventsBatchSize = 500
 // an Alert by hand.
 func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error) {
 	eventIDs = deduplicateStrings(eventIDs)
-	// Defense in depth: callers that forget to stamp Source land in
-	// the catalog-rule bucket. The ENUM column would otherwise reject
-	// an empty string with Error 1265 (Data truncated).
+	// Defense in depth: callers that forget to stamp Source land in the catalog-rule bucket. The ENUM column would otherwise reject an
+	// empty string with Error 1265 (Data truncated).
 	if a.Source == "" {
 		a.Source = api.AlertSourceDetection
 	}
@@ -73,10 +70,8 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	return alertID, true, nil
 }
 
-// bulkInsertAlertEvents links eventIDs to alertID with one (chunked)
-// multi-row INSERT instead of N round-trips. dedup=true switches to
-// INSERT IGNORE so re-linking an existing (alert_id, event_id) PK
-// doesn't blow up.
+// bulkInsertAlertEvents links eventIDs to alertID with one (chunked) multi-row INSERT instead of N round-trips. dedup=true switches to
+// INSERT IGNORE so re-linking an existing (alert_id, event_id) PK doesn't blow up.
 func bulkInsertAlertEvents(ctx context.Context, tx *sqlx.Tx, alertID int64, eventIDs []string, dedup bool) error {
 	if len(eventIDs) == 0 {
 		return nil
@@ -114,10 +109,8 @@ func isDuplicateKeyErr(err error) bool {
 	return mysqlErr.Number == mysqlErrDuplicateKey
 }
 
-// attachEventsToExistingAlert handles the dedup branch when
-// (source, host_id, rule_id, process_id) already has an alert row.
-// Extracted from InsertAlert to keep the main path under the
-// cognitive complexity limit.
+// attachEventsToExistingAlert handles the dedup branch when (source, host_id, rule_id, process_id) already has an alert row. Extracted
+// from InsertAlert to keep the main path under the cognitive complexity limit.
 func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, bool, error) {
 	var existingID int64
 	if err := tx.GetContext(ctx, &existingID,
@@ -253,8 +246,7 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 	return nil
 }
 
-// CountAlerts returns the total number of alerts matching the
-// filter (ignoring limit). Filter set MUST stay in lockstep with
+// CountAlerts returns the total number of alerts matching the filter (ignoring limit). Filter set MUST stay in lockstep with
 // ListAlerts so pagination metadata describes the same result set.
 func (s *Store) CountAlerts(ctx context.Context, f api.AlertFilter) (int64, error) {
 	query := "SELECT COUNT(*) FROM alerts WHERE 1=1"
