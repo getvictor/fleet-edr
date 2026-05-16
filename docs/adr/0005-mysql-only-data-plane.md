@@ -23,13 +23,19 @@ hot paths rely on:
 - `FOR UPDATE SKIP LOCKED` in `server/detection/internal/mysql/store.go`
   lets multiple processor workers claim disjoint event batches without
   blocking each other. The query is idiomatic in MySQL 8 and matches the
-  equivalent PostgreSQL feature in semantics but not syntax.
-- Idempotent `CREATE TABLE IF NOT EXISTS` + idempotent `ALTER TABLE` with
-  duplicate-error swallowing across `server/<context>/bootstrap/schema.go`.
-  This intentionally relies on MySQL's error-code shape (1060 "duplicate
-  column", 1061 "duplicate index", 1091 "can't drop"); the recovery code
-  is mechanical to port to Postgres' SQLSTATE codes but every store would
-  need a new branch.
+  equivalent PostgreSQL feature in both semantics and syntax; the
+  remaining MySQL coupling lives in the driver flags and error codes
+  below.
+- Idempotent `CREATE TABLE IF NOT EXISTS` across
+  `server/<context>/bootstrap/schema.go` makes `ApplySchema` safe to
+  re-run on every process start. There is no migration layer today: the
+  five contexts each own their tables and recreate-if-missing is the
+  whole bootstrap. If/when migrations land, the affordance for
+  duplicate-column / duplicate-index recovery on re-run is MySQL's
+  error-code shape (1060 / 1061 / 1091); the equivalent Postgres path
+  would mean branching on SQLSTATE codes instead. The current code has
+  no such branch yet, so this is a forward-looking cost, not a sunk
+  one.
 - `parseTime=true` in the DSN, enforced by `bootstrap.ensureParseTime` for
   callers that forget it. The driver-flag concept is MySQL-specific; the
   pgx driver scans timestamps natively.
