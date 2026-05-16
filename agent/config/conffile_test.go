@@ -73,41 +73,62 @@ func TestLoadConfFile_PermErrorLogged(t *testing.T) {
 }
 
 func TestLayeredGetenv_EnvWinsOverConf(t *testing.T) {
-	t.Setenv("EDR_LAYERED_TEST", "from-env")
+	t.Parallel()
+	lookupEnv := func(key string) (string, bool) {
+		if key == "EDR_LAYERED_TEST" {
+			return "from-env", true
+		}
+		return "", false
+	}
 	confMap := map[string]string{"EDR_LAYERED_TEST": "from-conf", "EDR_FROM_CONF_ONLY": "conf-only"}
-	get := layeredGetenv(confMap)
+	get := layeredGetenv(confMap, lookupEnv)
 	assert.Equal(t, "from-env", get("EDR_LAYERED_TEST"))
 	assert.Equal(t, "conf-only", get("EDR_FROM_CONF_ONLY"))
 	assert.Empty(t, get("EDR_NOT_ANYWHERE"))
 }
 
 func TestLayeredGetenv_EmptyEnvStillBeatsConf(t *testing.T) {
-	// Explicit empty env is a valid operator choice ("clear this value"). Env wins
-	// via os.LookupEnv so the conf-file default does not reassert itself.
-	t.Setenv("EDR_LAYERED_EMPTY", "")
+	t.Parallel()
+	// Explicit empty env is a valid operator choice ("clear this value"). The layering rule treats "present but empty" (the
+	// (value="", ok=true) return) as winning over the conf-file default, just like os.LookupEnv would in production.
+	lookupEnv := func(key string) (string, bool) {
+		if key == "EDR_LAYERED_EMPTY" {
+			return "", true
+		}
+		return "", false
+	}
 	confMap := map[string]string{"EDR_LAYERED_EMPTY": "from-conf"}
-	get := layeredGetenv(confMap)
+	get := layeredGetenv(confMap, lookupEnv)
 	assert.Empty(t, get("EDR_LAYERED_EMPTY"),
 		"explicit empty env var must defeat the conf-file default")
 }
 
 func TestLoad_ConfFileProvidesDefaults(t *testing.T) {
-	// End-to-end: writing a conf file and pointing Load at it via EDR_CONF_FILE
-	// must populate the agent Config with values drawn from the file.
+	t.Parallel()
+	// End-to-end: writing a conf file and pointing loadFromEnv at it via the EDR_CONF_FILE env getter must populate the agent
+	// Config with values drawn from the file. Drives the wiring boundary the same way Load() does in production, just with
+	// fake getenv + lookupEnv so the test stays parallel-safe.
 	dir := t.TempDir()
 	confPath := filepath.Join(dir, "fleet-edr.conf")
 	require.NoError(t, os.WriteFile(confPath, []byte(
 		"EDR_SERVER_URL=https://edr.conf.example\nEDR_ENROLL_SECRET=conf-secret\nEDR_ALLOW_INSECURE=0\n",
 	), 0o600))
 
-	t.Setenv("EDR_CONF_FILE", confPath)
-	// Clear any inherited env that would mask conf values.
-	for _, k := range []string{"EDR_SERVER_URL", "EDR_ENROLL_SECRET", "EDR_ALLOW_INSECURE"} {
-		t.Setenv(k, "")
-		_ = os.Unsetenv(k)
+	getenv := func(key string) string {
+		if key == "EDR_CONF_FILE" {
+			return confPath
+		}
+		return ""
+	}
+	// No env overrides — only EDR_CONF_FILE is "set" so the conf file's defaults flow through.
+	lookupEnv := func(key string) (string, bool) {
+		if v := getenv(key); v != "" {
+			return v, true
+		}
+		return "", false
 	}
 
-	cfg, err := Load()
+	cfg, err := loadFromEnv(getenv, lookupEnv)
 	require.NoError(t, err)
 	assert.Equal(t, "https://edr.conf.example", cfg.ServerURL)
 	assert.Equal(t, "conf-secret", cfg.EnrollSecret)

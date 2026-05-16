@@ -10,6 +10,11 @@ import (
 	"strings"
 )
 
+// LookupEnvFunc is the os.LookupEnv-shaped signature production code passes into layeredGetenv. Pulling it out as a named type makes
+// the boundary easy to inject from tests (issue #179) and documents the empty-string-vs-unset distinction that the layering rule
+// depends on.
+type LookupEnvFunc func(string) (string, bool)
+
 // DefaultConfFile is where the pkg installer drops the agent's static configuration. Fleet's install-script contract writes the enroll
 // secret + server URL here before invoking `installer`; standalone deployments do the same by hand. Env vars always win over conf file
 // entries so operators can override a single host without editing the file.
@@ -81,11 +86,12 @@ func parseConfFile(r io.Reader, path string, logger *slog.Logger) map[string]str
 	return out
 }
 
-// layeredGetenv returns a getenv-shaped function that consults the real environment first and falls back to the conf file map.
-// Real env vars always win so operators can override one host without editing the file.
-func layeredGetenv(confMap map[string]string) func(string) string {
+// layeredGetenv returns a getenv-shaped function that consults the process environment via lookupEnv first and falls back to the
+// conf file map. Real env vars always win so operators can override one host without editing the file. lookupEnv is injected so
+// tests can drive the layering without calling t.Setenv (issue #179).
+func layeredGetenv(confMap map[string]string, lookupEnv LookupEnvFunc) func(string) string {
 	return func(key string) string {
-		if v, ok := os.LookupEnv(key); ok {
+		if v, ok := lookupEnv(key); ok {
 			return v
 		}
 		return confMap[key]

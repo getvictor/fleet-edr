@@ -81,10 +81,10 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	shutdownOTel, err := observability.Init(ctx, observability.Options{
+	shutdownOTel, err := observability.Init(ctx, observability.OptionsFromEnv(observability.Options{
 		ServiceName:    serviceName,
 		ServiceVersion: version,
-	})
+	}))
 	if err != nil {
 		return err
 	}

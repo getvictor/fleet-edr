@@ -60,13 +60,22 @@ type Config struct {
 // path via EDR_CONF_FILE for dev and tests) so the MDM-managed conf file sets baseline values and operator-scoped env vars override a
 // single host without editing the file. Missing or malformed entries in the conf file are logged and the load continues with env-only
 // values.
+//
+// Load is the production wiring boundary: the only place that reaches into the process environment. Tests bypass it and call
+// loadFromEnv directly with fakes so the suite stays parallel-safe (issue #179).
 func Load() (*Config, error) {
-	confPath := os.Getenv("EDR_CONF_FILE")
+	return loadFromEnv(os.Getenv, os.LookupEnv) //nolint:forbidigo // approved agent-config boundary; see issue #179
+}
+
+// loadFromEnv is the testable core of Load: it reads EDR_CONF_FILE, loads the conf file, and builds the layered getenv. Tests inject
+// fakes for getenv + lookupEnv so they can drive every code path without touching the process environment.
+func loadFromEnv(getenv func(string) string, lookupEnv LookupEnvFunc) (*Config, error) {
+	confPath := getenv("EDR_CONF_FILE")
 	if confPath == "" {
 		confPath = DefaultConfFile
 	}
 	confMap := loadConfFile(confPath, slog.Default())
-	return loadFrom(layeredGetenv(confMap))
+	return loadFrom(layeredGetenv(confMap, lookupEnv))
 }
 
 func loadFrom(getenv func(string) string) (*Config, error) {
