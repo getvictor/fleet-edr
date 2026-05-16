@@ -233,8 +233,11 @@ func maxLineWidth(g []rawComment, lines []string) int {
 
 // visualWidth returns the on-screen column count of s under the gofmt convention. Trailing space, tab, and CR are
 // stripped (so CRLF files do not report +1 columns and trailing whitespace is not counted). Tabs advance to the next
-// multiple of tabWidth, matching how the standard Go tooling renders source.
+// multiple of tabWidth, matching how the standard Go tooling renders source. Multi-byte UTF-8 runes count as one
+// column each (the common cases in this codebase are em-dashes and the Unicode arrow, both single-column glyphs);
+// East Asian double-width is not modelled because the codebase contains none.
 func visualWidth(s string) int {
+	// Strip trailing whitespace including CR (CRLF tolerance). Operate on bytes here because the trim set is ASCII.
 	end := len(s)
 	for end > 0 {
 		c := s[end-1]
@@ -244,8 +247,8 @@ func visualWidth(s string) int {
 		end--
 	}
 	width := 0
-	for i := range end {
-		if s[i] == '\t' {
+	for _, r := range s[:end] {
+		if r == '\t' {
 			width += tabWidth - (width % tabWidth)
 		} else {
 			width++

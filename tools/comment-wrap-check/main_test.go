@@ -194,6 +194,12 @@ func TestVisualWidth(t *testing.T) {
 		{name: "leading tab counts 8 columns", in: "\thello", want: 13},
 		{name: "two leading tabs count 16 columns", in: "\t\thello", want: 21},
 		{name: "tab in middle advances to next 8-multiple", in: "abc\tdef", want: 11},
+		// Multi-byte UTF-8 must count as one column per rune, not per byte. Em-dash (3 bytes) and Unicode rightward
+		// arrow (3 bytes) both render as single glyphs in monospace fonts; the byte-counted version would inflate
+		// line widths and over-report the linter / push the rewriter into spurious punts.
+		{name: "em-dash counts as one column", in: "a — b", want: 5},
+		{name: "unicode arrow counts as one column", in: "a → b", want: 5},
+		{name: "section sign counts as one column", in: "see § 10", want: 8},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
