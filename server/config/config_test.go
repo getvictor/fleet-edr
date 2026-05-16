@@ -17,13 +17,15 @@ func envMap(pairs map[string]string) func(string) string {
 }
 
 func TestLoad(t *testing.T) {
-	// Minimal env mirrors the wave-1 dev workflow: TLS off + the Phase-4 break-glass-only opt-out. Production sets neither flag and
-	// provides EDR_OIDC_*; that interaction is covered in a dedicated sub-test below.
+	// Minimal env: every dev + prod deployment must supply TLS cert + key (issue #140 removed the EDR_ALLOW_INSECURE_HTTP opt-out).
+	// EDR_AUTH_ALLOW_NO_OIDC stays as the deliberate break-glass-only dev opt-out; the OIDC-required interaction is covered in
+	// TestLoad_OIDCConfig below.
 	minEnv := map[string]string{
-		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":       "enroll-me",
-		"EDR_ALLOW_INSECURE_HTTP": "1",
-		"EDR_AUTH_ALLOW_NO_OIDC":  "1",
+		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":      "enroll-me",
+		"EDR_TLS_CERT_FILE":      "/tmp/edr.crt",
+		"EDR_TLS_KEY_FILE":       "/tmp/edr.key",
+		"EDR_AUTH_ALLOW_NO_OIDC": "1",
 	}
 
 	cases := []struct {
@@ -39,39 +41,58 @@ func TestLoad(t *testing.T) {
 				t.Helper()
 				assert.Equal(t, "root@tcp(127.0.0.1:3306)/edr?parseTime=true", c.DSN)
 				assert.Equal(t, "enroll-me", c.EnrollSecret)
-				assert.True(t, c.AllowInsecureHTTP)
+				assert.True(t, c.TLSEnabled(), "TLS must always be enabled — no plaintext-HTTP mode (issue #140)")
 				assert.Equal(t, ":8088", c.ListenAddr)
 				assert.Equal(t, "info", c.LogLevel)
 				assert.Equal(t, "json", c.LogFormat)
 				assert.Equal(t, 500*time.Millisecond, c.ProcessInterval)
 				assert.Equal(t, 500, c.ProcessBatch)
 				assert.Equal(t, 30, c.EnrollRatePerMin)
-				assert.False(t, c.TLSEnabled())
 			},
 		},
 		{
 			name: "missing EDR_DSN",
 			env: map[string]string{
-				"EDR_ENROLL_SECRET":       "s",
-				"EDR_ALLOW_INSECURE_HTTP": "1",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
+				"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
 			},
 			wantErr: "EDR_DSN",
 		},
 		{
 			name: "missing EDR_ENROLL_SECRET",
 			env: map[string]string{
-				"EDR_DSN":                 "x",
-				"EDR_ALLOW_INSECURE_HTTP": "1",
+				"EDR_DSN":           "x",
+				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
+				"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
 			},
 			wantErr: "EDR_ENROLL_SECRET",
 		},
 		{
-			name: "TLS required unless EDR_ALLOW_INSECURE_HTTP=1",
+			name: "TLS cert + key unconditionally required (no opt-out)",
 			env: map[string]string{
 				"EDR_DSN":           "x",
 				"EDR_ENROLL_SECRET": "s",
 			},
-			wantErr: "EDR_TLS_CERT_FILE is required",
+			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
+		},
+		{
+			name: "TLS key without cert",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
+			},
+			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
+		},
+		{
+			name: "TLS cert without key",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
+			},
+			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
 		},
 		{
 			name: "missing every required var reports each",
@@ -81,31 +102,6 @@ func TestLoad(t *testing.T) {
 				t.Fatalf("validate should not be called when wantErr is set")
 			},
 			wantErr: "EDR_DSN\nrequired env var EDR_ENROLL_SECRET",
-		},
-		{
-			name: "TLS key without cert",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_TLS_KEY_FILE": "/tmp/edr.key",
-			}),
-			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together",
-		},
-		{
-			name: "TLS cert without key",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
-			}),
-			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together",
-		},
-		{
-			name: "TLS both set",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
-				"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.True(t, c.TLSEnabled())
-			},
 		},
 		{
 			name: "bad log level",
@@ -285,9 +281,10 @@ func TestLoad(t *testing.T) {
 // dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER without the rest produces focused per-field errors.
 func TestLoad_OIDCConfig(t *testing.T) {
 	prodLikeEnv := map[string]string{
-		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":       "enroll-me",
-		"EDR_ALLOW_INSECURE_HTTP": "1",
+		"EDR_DSN":           "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET": "enroll-me",
+		"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
+		"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
 	}
 
 	cases := []struct {
@@ -486,10 +483,11 @@ func withExtra(base, extra map[string]string) map[string]string {
 // regression on either parser surfaces with a focused failure message rather than a single-line "test failed".
 func TestLoad_AuditEnvKnobs(t *testing.T) {
 	minEnv := map[string]string{
-		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":       "enroll-me",
-		"EDR_ALLOW_INSECURE_HTTP": "1",
-		"EDR_AUTH_ALLOW_NO_OIDC":  "1",
+		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":      "enroll-me",
+		"EDR_TLS_CERT_FILE":      "/tmp/edr.crt",
+		"EDR_TLS_KEY_FILE":       "/tmp/edr.key",
+		"EDR_AUTH_ALLOW_NO_OIDC": "1",
 	}
 
 	cases := []struct {
