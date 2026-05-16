@@ -28,10 +28,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// defaultSlowThreshold is the access-log "this request is slow" cutoff used
-// when Options.SlowThreshold is zero. Lines past this latency upgrade from
-// info to warn so SigNoz can alert on regressions without sampling every
-// request.
+// defaultSlowThreshold is the access-log "this request is slow" cutoff used when Options.SlowThreshold is zero. Lines past this
+// latency upgrade from info to warn so SigNoz can alert on regressions without sampling every request.
 const defaultSlowThreshold = 500 * time.Millisecond
 
 // Options configures the middleware chain.
@@ -40,20 +38,16 @@ type Options struct {
 	Logger *slog.Logger
 	// ServiceName is the operation name passed to otelhttp.NewHandler; used in the span name prefix.
 	ServiceName string
-	// SlowThreshold upgrades access-log lines to warn when the handler took longer than this.
-	// Zero uses the default (defaultSlowThreshold = 500ms). A negative value disables the
-	// upgrade entirely — Build leaves negatives untouched and accessLog's `slowThreshold > 0`
-	// gate then short-circuits.
+	// SlowThreshold upgrades access-log lines to warn when the handler took longer than this. Zero uses the default (defaultSlowThreshold
+	// = 500ms). A negative value disables the upgrade entirely — Build leaves negatives untouched and accessLog's `slowThreshold > 0` gate
+	// then short-circuits.
 	SlowThreshold time.Duration
-	// TLSEnabled toggles the HSTS response header. Only set this true when the server actually
-	// speaks TLS; emitting HSTS over plain HTTP is a footgun that can make users unreachable if
-	// they accidentally deploy the next process without TLS.
+	// TLSEnabled toggles the HSTS response header. Only set this true when the server actually speaks TLS; emitting HSTS over plain HTTP
+	// is a footgun that can make users unreachable if they accidentally deploy the next process without TLS.
 	TLSEnabled bool
-	// ClientIPResolver, when set, runs as middleware that resolves the
-	// trusted client IP once per request and stashes it on ctx so
-	// downstream rate-limit + audit code reads the same value (issue
-	// #81). nil disables the middleware: handlers fall back to the
-	// direct TCP peer via httpserver.ClientIP.
+	// ClientIPResolver, when set, runs as middleware that resolves the trusted client IP once per request and stashes it on ctx so
+	// downstream rate-limit + audit code reads the same value (issue #81). nil disables the middleware: handlers fall back to the direct
+	// TCP peer via httpserver.ClientIP.
 	ClientIPResolver *ClientIPResolver
 }
 
@@ -76,21 +70,17 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		h = hstsHeader()(h)
 	}
 	h = xRequestIDEcho()(h)
-	// Client-IP resolution wraps xRequestIDEcho so the resolver runs
-	// outermost in the application layer (still inside otelhttp's
-	// span). The resolved IP is therefore on ctx by the time accessLog
-	// + downstream handlers read it via ClientIP(r). Skipped entirely
-	// when no proxies are configured: the empty trusted list yields
-	// the same value httpserver.ClientIP's fallback does, with one
-	// fewer per-request allocation.
+	// Client-IP resolution wraps xRequestIDEcho so the resolver runs outermost in the application layer (still inside otelhttp's span).
+	// The resolved IP is therefore on ctx by the time accessLog + downstream handlers read it via ClientIP(r). Skipped entirely when no
+	// proxies are configured: the empty trusted list yields the same value httpserver.ClientIP's fallback does, with one fewer per-request
+	// allocation.
 	if opts.ClientIPResolver != nil {
 		h = opts.ClientIPResolver.Middleware(h)
 	}
 	h = otelhttp.NewHandler(h, opts.ServiceName,
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-			// otelhttp calls the formatter inside its own handler, so r.Pattern may be empty.
-			// Use method + path; patterns like "/api/hosts/{host_id}/tree" appear as literal
-			// paths, which is acceptable for a pilot-scale product.
+			// otelhttp calls the formatter inside its own handler, so r.Pattern may be empty. Use method + path; patterns like
+			// "/api/hosts/{host_id}/tree" appear as literal paths, which is acceptable for a pilot-scale product.
 			return r.Method + " " + r.URL.Path
 		}),
 	)
@@ -108,9 +98,9 @@ func hstsHeader() func(http.Handler) http.Handler {
 	}
 }
 
-// xRequestIDEcho sets the X-Request-ID response header to the hex trace-id when a span is active,
-// or to the inbound X-Request-ID header when it is present and no span is running.
-// This header is for humans (curl output, load balancer logs) and does not drive correlation.
+// xRequestIDEcho sets the X-Request-ID response header to the hex trace-id when a span is active, or to the inbound X-Request-ID
+// header when it is present and no span is running. This header is for humans (curl output, load balancer logs) and does not drive
+// correlation.
 func xRequestIDEcho() func(http.Handler) http.Handler {
 	const header = "X-Request-ID"
 	return func(next http.Handler) http.Handler {

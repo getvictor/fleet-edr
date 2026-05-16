@@ -29,11 +29,8 @@ import (
 // against typos and ghost permissions.
 type Action string
 
-// The wave-1 action set. Constants live here; the parallel
-// `policy/data/actions.json` mirrors the same set so the OPA bundle
-// can refer to them. A build-time parity check (in
-// internal/authz/policy_test.go) fails the build if the two lists
-// drift.
+// The wave-1 action set. Constants live here; the parallel `policy/data/actions.json` mirrors the same set so the OPA bundle can refer
+// to them. A build-time parity check (in internal/authz/policy_test.go) fails the build if the two lists drift.
 const (
 	// Host + process reads.
 	ActionHostRead    Action = "host.read"
@@ -57,21 +54,17 @@ const (
 	ActionEnrollmentRevoke      Action = "enrollment.revoke"
 	ActionEnrollmentRotateToken Action = "enrollment.rotate_token"
 
-	// User management. Wired up in wave 1 as part of the break-glass
-	// flow (Phase 4); the constants exist now so the action registry +
-	// Rego policy stay coherent across phases.
+	// User management. Wired up in wave 1 as part of the break-glass flow (Phase 4); the constants exist now so the action registry + Rego
+	// policy stay coherent across phases.
 	ActionUserRead   Action = "user.read"
 	ActionUserInvite Action = "user.invite"
 
 	// Audit-log read.
 	ActionAuditRead Action = "audit.read"
 
-	// Application Control. The admin surface manages the policies
-	// and rules that the extension consults on every AUTH_EXEC.
-	// Read covers the list + detail views; RuleCreate gates the POST
-	// that fans a `set_application_control` command out to every
-	// enrolled host. Other verbs (rule update / delete, bulk upsert)
-	// are post-demo; constants land as they ship.
+	// Application Control. The admin surface manages the policies and rules that the extension consults on every AUTH_EXEC. Read covers
+	// the list + detail views; RuleCreate gates the POST that fans a `set_application_control` command out to every enrolled host.
+	// Other verbs (rule update / delete, bulk upsert) are post-demo; constants land as they ship.
 	ActionAppControlRead       Action = "application_control.read"
 	ActionAppControlRuleCreate Action = "application_control.rule_create"
 )
@@ -110,12 +103,9 @@ func RegisteredActions() []Action {
 type Resource struct {
 	Type string `json:"type,omitempty"`
 	ID   string `json:"id,omitempty"`
-	// Severity is set only on alert-typed resources; it conditions
-	// the reauth-required gate. Phase 5: alert.resolve when
-	// severity=="critical" requires actor.session_fresh; lower
-	// severities pass through. Empty string for non-alert
-	// resources, and `omitempty` keeps OPA's input.resource map
-	// from carrying a meaningless field for them.
+	// Severity is set only on alert-typed resources; it conditions the reauth-required gate. Phase 5: alert.resolve when
+	// severity=="critical" requires actor.session_fresh; lower severities pass through. Empty string for non-alert resources, and
+	// `omitempty` keeps OPA's input.resource map from carrying a meaningless field for them.
 	Severity string `json:"severity,omitempty"`
 }
 
@@ -144,10 +134,8 @@ type Decision struct {
 	Reason string `json:"reason"`
 }
 
-// Reason* are the canonical Decision.Reason values. Authz callers
-// compare against these constants rather than string literals so a
-// rename or addition is a compile error, not a silent drift between
-// the engine, HTTPGate, and the audit-log dashboard.
+// Reason* are the canonical Decision.Reason values. Authz callers compare against these constants rather than string literals so a
+// rename or addition is a compile error, not a silent drift between the engine, HTTPGate, and the audit-log dashboard.
 const (
 	ReasonGranted              = "granted"
 	ReasonNoMatchingRule       = "no_matching_rule"
@@ -189,10 +177,8 @@ type AuthZ interface {
 	Allow(ctx context.Context, action Action, resource Resource) (Decision, error)
 }
 
-// ErrAuthZUnavailable is returned by Allow when the underlying engine
-// cannot evaluate (Rego compile error, runtime panic in policy, etc.).
-// Handlers SHOULD map it to 503 Service Unavailable so a transient
-// engine outage does not look like a permission deny.
+// ErrAuthZUnavailable is returned by Allow when the underlying engine cannot evaluate (Rego compile error, runtime panic in policy,
+// etc.). Handlers SHOULD map it to 503 Service Unavailable so a transient engine outage does not look like a permission deny.
 var ErrAuthZUnavailable = errors.New("identity: authz engine unavailable")
 
 // ctx-key for the actor. Unexported so ctx values can only be set via
@@ -201,17 +187,14 @@ type actorCtxKey int
 
 const ctxKeyActor actorCtxKey = 1
 
-// WithActor returns a context with the actor pinned. Called by the
-// Session middleware on every authed request and by tests that mint a
+// WithActor returns a context with the actor pinned. Called by the Session middleware on every authed request and by tests that mint a
 // synthetic authenticated context.
 func WithActor(ctx context.Context, a *Actor) context.Context {
 	return context.WithValue(ctx, ctxKeyActor, a)
 }
 
-// ActorFromContext returns the actor pinned by Session middleware (or
-// by tests via WithActor). The second return is false when no actor
-// is on ctx (anonymous request, agent-token-only request, or a
-// regression in the middleware); privileged handlers MUST check.
+// ActorFromContext returns the actor pinned by Session middleware (or by tests via WithActor). The second return is false when no
+// actor is on ctx (anonymous request, agent-token-only request, or a regression in the middleware); privileged handlers MUST check.
 func ActorFromContext(ctx context.Context) (*Actor, bool) {
 	v := ctx.Value(ctxKeyActor)
 	a, ok := v.(*Actor)

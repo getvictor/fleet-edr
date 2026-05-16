@@ -33,8 +33,7 @@ type Handler struct {
 	metrics   api.MetricsRecorder
 }
 
-// New creates an ingestion Handler. The store argument may be nil in
-// tests that only exercise the health endpoints; readiness checks
+// New creates an ingestion Handler. The store argument may be nil in tests that only exercise the health endpoints; readiness checks
 // handle that case explicitly.
 func New(s *mysql.Store, logger *slog.Logger, info BuildInfo) *Handler {
 	if logger == nil {

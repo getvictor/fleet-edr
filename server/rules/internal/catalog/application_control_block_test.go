@@ -12,11 +12,9 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// TestApplicationControlBlock_TableDriven covers every branch of the
-// block-event-to-finding mapping: happy path, missing fields, missing
-// process row, malformed payload, and the custom_msg default. Each
-// case names the property under test rather than the input; a failure
-// here pinpoints the exact mapping invariant that broke.
+// TestApplicationControlBlock_TableDriven covers every branch of the block-event-to-finding mapping: happy path, missing fields,
+// missing process row, malformed payload, and the custom_msg default. Each case names the property under test rather than the input;
+// a failure here pinpoints the exact mapping invariant that broke.
 func TestApplicationControlBlock_TableDriven(t *testing.T) {
 	customMsg := "Blocked: Calculator is not allowed"
 	cases := []struct {
@@ -169,11 +167,9 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 	}
 }
 
-// TestApplicationControlBlock_GraphReaderError surfaces the
-// distinct failure mode where the GraphReader itself returns an
-// error (DB unreachable, query timeout). The rule must propagate
-// that error so the processor can unclaim + retry the batch instead
-// of silently dropping the block.
+// TestApplicationControlBlock_GraphReaderError surfaces the distinct failure mode where the GraphReader itself returns an error (DB
+// unreachable, query timeout). The rule must propagate that error so the processor can unclaim + retry the batch instead of silently
+// dropping the block.
 func TestApplicationControlBlock_GraphReaderError(t *testing.T) {
 	rule := &ApplicationControlBlock{}
 	payload, err := json.Marshal(map[string]any{
@@ -197,11 +193,8 @@ func TestApplicationControlBlock_GraphReaderError(t *testing.T) {
 	assert.ErrorIs(t, err, wantErr)
 }
 
-// stubBlockGraphReader is the minimal GraphReader the rule needs:
-// only GetProcessByPID is exercised. Returning exists=false models
-// the "process not yet materialised" race the rule must skip
-// silently; returning err models a transient DB error the rule
-// must propagate.
+// stubBlockGraphReader is the minimal GraphReader the rule needs: only GetProcessByPID is exercised. Returning exists=false models the
+// "process not yet materialised" race the rule must skip silently; returning err models a transient DB error the rule must propagate.
 type stubBlockGraphReader struct {
 	exists bool
 	procID int64

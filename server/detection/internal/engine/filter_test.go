@@ -76,14 +76,12 @@ func TestFilterSnapshotEvents_NoSnapshotsReturnsInputVerbatim(t *testing.T) {
 
 // ---- Property-based tests -------------------------------------------------
 
-// eventForFilterGen produces events with payloads chosen so the
-// filter's branches all get exercised:
+// eventForFilterGen produces events whose payloads exercise every branch of the snapshot filter. Each generated event has one of:
 //   - non-exec events (filter must keep)
 //   - exec without snapshot field (keep)
 //   - exec with snapshot:true (drop)
 //   - exec with snapshot:false (keep)
-//   - exec with malformed payload + snapshot in path (keep, since
-//     the probe fails)
+//   - exec with malformed payload + snapshot in path (keep, since the probe fails)
 func eventForFilterGen() *rapid.Generator[api.Event] {
 	return rapid.Custom(func(t *rapid.T) api.Event {
 		shape := rapid.IntRange(0, 4).Draw(t, "shape")
@@ -146,10 +144,8 @@ func TestFilterSnapshotEvents_PropertyDropsOnlySnapshotsAndPreservesOrder(t *tes
 	})
 }
 
-// TestFilterSnapshotEvents_PropertyIdempotent: applying the filter
-// twice yields the same result as applying it once. A second pass
-// must not drop anything new (every kept event is non-snapshot by
-// construction) and must not re-add anything (the filter is a
+// TestFilterSnapshotEvents_PropertyIdempotent: applying the filter twice yields the same result as applying it once. A second
+// pass must not drop anything new (every kept event is non-snapshot by construction) and must not re-add anything (the filter is a
 // projection).
 func TestFilterSnapshotEvents_PropertyIdempotent(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {

@@ -13,10 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTestStore opens an isolated DB and applies response's schema via
-// the canonical testkit.ApplySchema. Lives in the external test
-// package so the testdb -> response/bootstrap -> response/internal/mysql
-// cycle doesn't bite when this file is in `package mysql`.
+// newTestStore opens an isolated DB and applies response's schema via the canonical testkit.ApplySchema. Lives in the external test
+// package so the testdb -> response/bootstrap -> response/internal/mysql cycle doesn't bite when this file is in `package mysql`.
 func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
 	db := testdb.Open(t)
@@ -108,11 +106,9 @@ func TestUpdateStatus(t *testing.T) {
 	})
 }
 
-// TestUpdateStatusForeignHostRejected covers defence-in-depth on the
-// (id, host_id) WHERE clause: host-b cannot ack a command queued for
-// host-a, even via a hand-crafted id. The store collapses "wrong host"
-// + "unknown id" to the same ErrCommandNotFound so a malicious agent
-// can't probe other hosts' command_ids.
+// TestUpdateStatusForeignHostRejected covers defence-in-depth on the (id, host_id) WHERE clause: host-b cannot ack a command queued
+// for host-a, even via a hand-crafted id. The store collapses "wrong host" + "unknown id" to the same ErrCommandNotFound so a
+// malicious agent can't probe other hosts' command_ids.
 func TestUpdateStatusForeignHostRejected(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
@@ -135,10 +131,8 @@ func TestUpdateStatusNotFound(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
 }
 
-// TestUpdateStatusInvalidTarget covers the store-layer reject of a
-// non-terminal status (or a typo). Passing api.StatusPending here is
-// rejected with ErrInvalidStatusTransition so a buggy caller can't
-// reset an in-flight command to pending.
+// TestUpdateStatusInvalidTarget covers the store-layer reject of a non-terminal status (or a typo). Passing api.StatusPending here is
+// rejected with ErrInvalidStatusTransition so a buggy caller can't reset an in-flight command to pending.
 func TestUpdateStatusInvalidTarget(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
@@ -155,10 +149,8 @@ func TestGetNotFound(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
 }
 
-// TestUpdateStatusRaceLost simulates the TOCTOU window: caller A's
-// expected-from is stale because caller B already advanced the row.
-// The store must reject A's UPDATE with ErrInvalidStatusTransition
-// (not silently overwrite the newer state).
+// TestUpdateStatusRaceLost simulates the TOCTOU window: caller A's expected-from is stale because caller B already advanced the row.
+// The store must reject A's UPDATE with ErrInvalidStatusTransition (not silently overwrite the newer state).
 func TestUpdateStatusRaceLost(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
@@ -168,9 +160,8 @@ func TestUpdateStatusRaceLost(t *testing.T) {
 	// Caller B wins: pending -> acked.
 	require.NoError(t, s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil))
 
-	// Caller A's stale read still says pending. Their UPDATE must
-	// fail with ErrInvalidStatusTransition; the row must keep the
-	// acked state from caller B.
+	// Caller A's stale read still says pending. Their UPDATE must fail with ErrInvalidStatusTransition; the row must keep the acked state
+	// from caller B.
 	err = s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil)
 	require.ErrorIs(t, err, api.ErrInvalidStatusTransition)
 

@@ -99,10 +99,9 @@ func generateBatch(size int, hostID string) []event {
 
 	batch := make([]event, size)
 	for i := range size {
-		// math/rand/v2 is fine here: load-test payloads are synthetic data, not
-		// cryptographic material. The gosec G404 warning is silenced by the v2
-		// import (its auto-seeded RNG is the idiomatic replacement for the old
-		// math/rand default source).
+		// math/rand/v2 is fine here: load-test payloads are synthetic data, not cryptographic material. The gosec G404
+		// warning is silenced by the v2 import (its auto-seeded RNG is the idiomatic replacement for the old math/rand default
+		// source).
 		pid := rand.IntN(65535) + 100
 		path := paths[rand.IntN(len(paths))]
 

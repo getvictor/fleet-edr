@@ -39,14 +39,12 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
 
-// defaultInitTimeout caps the OTLP dial during Init when Options.InitTimeout
-// is zero. 5s is well above a healthy collector's ack latency but bounded
-// enough that a misconfigured endpoint surfaces during boot rather than
-// stalling the agent / server's startup path.
+// defaultInitTimeout caps the OTLP dial during Init when Options.InitTimeout is zero. 5s is well above a healthy collector's ack
+// latency but bounded enough that a misconfigured endpoint surfaces during boot rather than stalling the agent / server's startup
+// path.
 const defaultInitTimeout = 5 * time.Second
 
-// Options configure the OTel SDK. Only the fields we rely on at startup are
-// exposed; the SDK reads every other OTEL_* env var
+// Options configure the OTel SDK. Only the fields we rely on at startup are exposed; the SDK reads every other OTEL_* env var
 // (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_BSP_*, etc.) directly.
 type Options struct {
 	// ServiceName is used when OTEL_SERVICE_NAME is not set in the environment.
@@ -61,18 +59,15 @@ type Options struct {
 	InitTimeout time.Duration
 }
 
-// ShutdownFunc flushes buffered telemetry to the collector and releases SDK
-// resources. Call from main on SIGTERM. Safe to call on a no-op provider; it
-// returns nil.
+// ShutdownFunc flushes buffered telemetry to the collector and releases SDK resources. Call from main on SIGTERM. Safe to call on a
+// no-op provider; it returns nil.
 type ShutdownFunc func(ctx context.Context) error
 
-// Init configures global OTel providers. Returns a ShutdownFunc that is
-// always non-nil. When OTEL_EXPORTER_OTLP_ENDPOINT is empty, Init is a no-op
-// and the returned function returns nil immediately.
+// Init configures global OTel providers. Returns a ShutdownFunc that is always non-nil. When OTEL_EXPORTER_OTLP_ENDPOINT is empty,
+// Init is a no-op and the returned function returns nil immediately.
 func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
-	// Install the W3C propagator unconditionally; it is harmless on a no-op
-	// tracer and crucial when a real tracer is installed later (e.g. a test
-	// swaps in a provider via otel.SetTracerProvider).
+	// Install the W3C propagator unconditionally; it is harmless on a no-op tracer and crucial when a real tracer is installed later (e.g.
+	// a test swaps in a provider via otel.SetTracerProvider).
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
@@ -97,10 +92,8 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 	initCtx, cancel := context.WithTimeout(ctx, initDeadline)
 	defer cancel()
 
-	// Construct every exporter + provider BEFORE publishing any of them
-	// globally. If any step fails, previously-created providers are shut down
-	// and no global is modified, so callers never see a half-initialised
-	// observability stack.
+	// Construct every exporter + provider BEFORE publishing any of them globally. If any step fails, previously-created providers are shut
+	// down and no global is modified, so callers never see a half-initialised observability stack.
 	traceExp, err := otlptracegrpc.New(initCtx)
 	if err != nil {
 		return noopShutdown, fmt.Errorf("create trace exporter: %w", err)
@@ -177,14 +170,10 @@ func (p *providerBundle) shutdown(ctx context.Context) error {
 
 func noopShutdown(context.Context) error { return nil }
 
-// shutdownCtxFrom derives a best-effort cleanup context from the init
-// context. On an init failure the parent may already be at/past cancellation
-// (timeout, operator Ctrl-C), in which case calling tp.Shutdown(parent) is a
-// no-op and leaks the partially-constructed provider. context.WithoutCancel
-// strips the parent's cancellation signal so the timeout added below is the
-// only deadline; values (trace correlation, logger attrs) still propagate.
-// Caller must defer the returned cancel func so the context is released on
-// return.
+// shutdownCtxFrom derives a best-effort cleanup context from the init context. On an init failure the parent may already be at/past
+// cancellation (timeout, operator Ctrl-C), in which case calling tp.Shutdown(parent) is a no-op and leaks the partially-constructed
+// provider. context.WithoutCancel strips the parent's cancellation signal so the timeout added below is the only deadline; values
+// (trace correlation, logger attrs) still propagate. Caller must defer the returned cancel func so the context is released on return.
 func shutdownCtxFrom(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), 2*time.Second)
 }
@@ -201,10 +190,8 @@ func buildResource(ctx context.Context, opts Options) (*resource.Resource, error
 		attrs = append(attrs, semconv.ServiceInstanceID(opts.ServiceInstanceID))
 	}
 
-	// The resource detectors below read OTEL_RESOURCE_ATTRIBUTES,
-	// OTEL_SERVICE_NAME, host, and process info. Merging with the explicit
-	// attributes gives operator-supplied values priority while still picking
-	// up free metadata.
+	// The resource detectors below read OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, host, and process info. Merging with the explicit
+	// attributes gives operator-supplied values priority while still picking up free metadata.
 	return resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithHost(),

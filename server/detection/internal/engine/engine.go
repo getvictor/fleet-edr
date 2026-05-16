@@ -10,10 +10,8 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
-// Engine manages a set of rules and evaluates them against event
-// batches. The store handle is concrete (*mysql.Store) so rules
-// reach api.GraphReader through the same interface and dispatch
-// stays non-allocating.
+// Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
+// api.GraphReader through the same interface and dispatch stays non-allocating.
 type Engine struct {
 	rules   []rulesapi.Rule
 	store   *mysql.Store
@@ -49,11 +47,9 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 	e.rules = append(e.rules[:0], cs.ActiveRules()...)
 }
 
-// Catalog returns the metadata for every registered rule. Order
-// matches registration order so callers can render deterministic
-// output. Production main.go now goes through rules.api.Lister
-// instead of this method, but the method stays so existing engine
-// tests keep compiling.
+// Catalog returns the metadata for every registered rule. Order matches registration order so callers can render deterministic output.
+// Production main.go now goes through rules.api.Lister instead of this method, but the method stays so existing engine tests keep
+// compiling.
 func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 	out := make([]rulesapi.RuleMetadata, 0, len(e.rules))
 	for _, r := range e.rules {

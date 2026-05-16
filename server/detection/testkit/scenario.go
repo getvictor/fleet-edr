@@ -13,12 +13,9 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 )
 
-// Scenario is a per-test detection-stack fixture: a *mysql.Store
-// wrapping the test DB, and a *graph.Builder that materialises events
-// into the processes table. Tests outside detection (e.g. catalog rule
-// tests in server/rules/internal/catalog/) use this to seed events +
-// reach api.GraphReader without going through Go's internal-package
-// rule.
+// Scenario is a per-test detection-stack fixture: a *mysql.Store wrapping the test DB, and a *graph.Builder that materialises events
+// into the processes table. Tests outside detection (e.g. catalog rule tests in server/rules/internal/catalog/) use this to seed
+// events + reach api.GraphReader without going through Go's internal-package rule.
 type Scenario struct {
 	Store   *mysql.Store
 	Builder *graph.Builder
@@ -36,9 +33,8 @@ func NewScenario(t *testing.T, db *sqlx.DB) *Scenario {
 	}
 }
 
-// SeedAndMaterialise inserts the events into the test DB and runs
-// ProcessBatch so the rule under test sees a populated process
-// graph. Returns the GraphReader the rule's Evaluate consumes.
+// SeedAndMaterialise inserts the events into the test DB and runs ProcessBatch so the rule under test sees a populated process graph.
+// Returns the GraphReader the rule's Evaluate consumes.
 func (s *Scenario) SeedAndMaterialise(t *testing.T, ctx context.Context, events []detectionapi.Event) detectionapi.GraphReader {
 	t.Helper()
 	require.NoError(t, s.Store.InsertEvents(ctx, events), "insert events")

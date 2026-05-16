@@ -20,10 +20,8 @@ const (
 	testUUID   = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 )
 
-// newTestStore opens an isolated DB and applies endpoint's schema via
-// the canonical testkit.ApplySchema. Lives in the external test
-// package so the testdb -> endpoint/bootstrap -> endpoint/internal/mysql
-// cycle doesn't bite when this file is in `package mysql`.
+// newTestStore opens an isolated DB and applies endpoint's schema via the canonical testkit.ApplySchema. Lives in the external test
+// package so the testdb -> endpoint/bootstrap -> endpoint/internal/mysql cycle doesn't bite when this file is in `package mysql`.
 func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
 	db := testdb.Open(t)
@@ -57,11 +55,10 @@ func TestRegister_HappyPath(t *testing.T) {
 	assert.ErrorIs(t, err, mysql.ErrTokenMismatch)
 }
 
-// TestVerify_LookupByTokenID exercises the SHA-256-keyed Verify path with a non-trivial
-// number of enrollments. Asymptotic complexity can't be proven in a unit test; this just
-// verifies correctness for many hosts in one DB, which a regression to the old full-table
-// scan would still pass. The stronger O(1) contract is enforced at code-review time by
-// pointing at the `WHERE host_token_id = ?` SQL in Verify.
+// TestVerify_LookupByTokenID exercises the SHA-256-keyed Verify path with a non-trivial number of enrollments. Asymptotic complexity
+// can't be proven in a unit test; this just verifies correctness for many hosts in one DB, which a regression to the old full-table
+// scan would still pass. The stronger O(1) contract is enforced at code-review time by pointing at the `WHERE host_token_id = ?` SQL
+// in Verify.
 func TestVerify_LookupByTokenID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()

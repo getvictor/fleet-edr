@@ -11,10 +11,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTestStore opens an isolated DB and applies identity's schema so
-// the users.Store has a `users` table to operate against. Lives in
-// the external test package so importing identity/bootstrap doesn't
-// create a cycle with the production users package.
+// newTestStore opens an isolated DB and applies identity's schema so the users.Store has a `users` table to operate against. Lives in
+// the external test package so importing identity/bootstrap doesn't create a cycle with the production users package.
 func newTestStore(t *testing.T) *users.Store {
 	t.Helper()
 	db := testdb.Open(t)
@@ -88,11 +86,10 @@ func TestVerifyPassword_UnknownEmail(t *testing.T) {
 	require.ErrorIs(t, err, users.ErrNotFound)
 }
 
-// TestVerifyPassword_TimingInsensitiveToEmail locks in the constant-time property: an
-// unknown email must still run the argon2 computation so the presence/absence of an
-// account is not leakable via response time. We can't measure wall time reliably in a
-// unit test, but we can assert the fallback dummy-salt path exists — errors.Is still
-// returns ErrNotFound, but the function did not return early before the hash loop.
+// TestVerifyPassword_TimingInsensitiveToEmail locks in the constant-time property: an unknown email must still run the argon2
+// computation so the presence/absence of an account is not leakable via response time. We can't measure wall time reliably in a unit
+// test, but we can assert the fallback dummy-salt path exists — errors.Is still returns ErrNotFound, but the function did not return
+// early before the hash loop.
 func TestVerifyPassword_UnknownEmailStillHashes(t *testing.T) {
 	s := newTestStore(t)
 	// Two lookups against an empty table — both must fail with ErrNotFound, neither
@@ -118,9 +115,8 @@ func TestCount(t *testing.T) {
 	assert.Equal(t, int64(1), n)
 }
 
-// HashPassword + SetHashedPassword: the Phase 4b split that lets
-// the break-glass redemption flow run argon2id BEFORE BeginTxx,
-// keeping the ~30ms hash off the transaction's lock window.
+// HashPassword + SetHashedPassword: the Phase 4b split that lets the break-glass redemption flow run argon2id BEFORE BeginTxx, keeping
+// the ~30ms hash off the transaction's lock window.
 func TestHashPassword_AndSetHashedPassword(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -188,10 +184,8 @@ func TestCreateBreakglass_FreshInsertAndIdempotent(t *testing.T) {
 	assert.Equal(t, u.ID, again.ID)
 }
 
-// CreateBreakglass over a pre-existing non-breakglass row surfaces
-// ErrExistingNonBreakglass + the existing user. The wave-0
-// migration runbook handles the row-mutation explicitly; the
-// service layer must not silently flip is_breakglass=0 → 1.
+// CreateBreakglass over a pre-existing non-breakglass row surfaces ErrExistingNonBreakglass + the existing user. The wave-0 migration
+// runbook handles the row-mutation explicitly; the service layer must not silently flip is_breakglass=0 → 1.
 func TestCreateBreakglass_ExistingNonBreakglass(t *testing.T) {
 	s := newTestStore(t)
 	pre, err := s.Create(t.Context(), users.CreateRequest{

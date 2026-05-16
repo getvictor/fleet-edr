@@ -30,19 +30,15 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 )
 
-// ApplySchema runs identity's DDL + idempotent ALTERs against db.
-// Thin wrapper over bootstrap.ApplySchema so the test surface is
+// ApplySchema runs identity's DDL + idempotent ALTERs against db. Thin wrapper over bootstrap.ApplySchema so the test surface is
 // importable separately from the production wiring surface.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return bootstrap.ApplySchema(ctx, db)
 }
 
-// AllowAllAuthZ implements api.AuthZ as an unconditional grant. Used
-// by tests that need a chokepoint dependency satisfied but are not
-// exercising the role matrix; the real engine's per-action behaviour
-// is covered exhaustively in the authz package's own tests, so making
-// every cross-context test compile + recompile a Rego bundle is
-// avoidable overhead.
+// AllowAllAuthZ implements api.AuthZ as an unconditional grant. Used by tests that need a chokepoint dependency satisfied but are
+// not exercising the role matrix; the real engine's per-action behaviour is covered exhaustively in the authz package's own tests,
+// so making every cross-context test compile + recompile a Rego bundle is avoidable overhead.
 type AllowAllAuthZ struct{}
 
 // Allow satisfies api.AuthZ; always returns Decision{Allow: true,
@@ -51,17 +47,14 @@ func (AllowAllAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decis
 	return api.Decision{Allow: true, Reason: "granted"}, nil
 }
 
-// DenyAuthZ implements api.AuthZ with a fixed deny reason. Used by
-// handler tests that exercise the deny-path response shape (403 +
+// DenyAuthZ implements api.AuthZ with a fixed deny reason. Used by handler tests that exercise the deny-path response shape (403 +
 // X-Edr-Authz-Reason header) without depending on the live policy.
 type DenyAuthZ struct {
 	Reason string
 }
 
-// Allow satisfies api.AuthZ; returns Decision{Allow: false} with the
-// configured reason. Default reason "no_matching_rule" matches the
-// production policy's deny label so tests that pin the header value
-// stay in sync with the live decision shape.
+// Allow satisfies api.AuthZ; returns Decision{Allow: false} with the configured reason. Default reason "no_matching_rule" matches the
+// production policy's deny label so tests that pin the header value stay in sync with the live decision shape.
 func (d DenyAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decision, error) {
 	r := d.Reason
 	if r == "" {
@@ -70,11 +63,9 @@ func (d DenyAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decisio
 	return api.Decision{Allow: false, Reason: r}, nil
 }
 
-// SeededUser is the result of SeedJITUser: the user row + a live
-// session ready to drop into a cookie. ID is the user's primary key;
-// SessionCookie is the base64url-encoded session token (use this for
-// the `edr_session` cookie value); CSRFToken is the per-session CSRF
-// secret base64url-encoded for the `X-Csrf-Token` header.
+// SeededUser is the result of SeedJITUser: the user row + a live session ready to drop into a cookie. ID is the user's primary key;
+// SessionCookie is the base64url-encoded session token (use this for the `edr_session` cookie value); CSRFToken is the per-session
+// CSRF secret base64url-encoded for the `X-Csrf-Token` header.
 type SeededUser struct {
 	ID            int64
 	Email         string

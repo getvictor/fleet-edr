@@ -185,10 +185,8 @@ func TestClientIP_FallsBackToRemoteAddrWithoutMiddleware(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	req.RemoteAddr = "203.0.113.1:5555"
 	req.Header.Set("X-Forwarded-For", "1.2.3.4")
-	// No middleware ran -> ctx has no resolved IP -> fall back to peer.
-	// XFF is NOT honoured on this fallback path (the fallback is
-	// httpserver.RemoteIP, not the resolver) so a forgotten middleware
-	// wire-up degrades safely instead of letting XFF spoofing through.
+	// No middleware ran -> ctx has no resolved IP -> fall back to peer. XFF is NOT honoured on this fallback path (the fallback is
+	// httpserver.RemoteIP, not the resolver) so a forgotten middleware wire-up degrades safely instead of letting XFF spoofing through.
 	assert.Equal(t, "203.0.113.1", httpserver.ClientIP(req))
 }
 
@@ -216,9 +214,8 @@ func TestClientIPResolver_MiddlewareStashesIPOnContext(t *testing.T) {
 }
 
 func TestClientIPResolver_MiddlewareSurvivesNilRequestContext(t *testing.T) {
-	// Defensive: pathological middleware ordering could pass an
-	// *http.Request with a nil ctx. r.Context() never returns nil per
-	// Go's contract, but exercise the code path anyway.
+	// Defensive: pathological middleware ordering could pass an *http.Request with a nil ctx. r.Context() never returns nil per Go's
+	// contract, but exercise the code path anyway.
 	resolver, err := httpserver.NewClientIPResolver(nil)
 	require.NoError(t, err)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)

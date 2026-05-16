@@ -85,9 +85,8 @@ func NonNegativeInt64(getenv Getenv, key string, dst *int64, errs *[]error) {
 	}
 }
 
-// PositiveDuration parses key as a Go duration (e.g. "5s", "1h") and requires
-// it to be > 0. Zero or negative durations are invariably wrong — callers feed
-// these into time.NewTicker which panics on non-positive values.
+// PositiveDuration parses key as a Go duration (e.g. "5s", "1h") and requires it to be > 0. Zero or negative durations are invariably
+// wrong — callers feed these into time.NewTicker which panics on non-positive values.
 func PositiveDuration(getenv Getenv, key string, dst *time.Duration, errs *[]error) {
 	v := getenv(key)
 	if v == "" {
@@ -104,9 +103,8 @@ func PositiveDuration(getenv Getenv, key string, dst *time.Duration, errs *[]err
 	}
 }
 
-// NonNegativeDuration parses key as a Go duration and requires it to be >= 0.
-// "0" / "0s" explicitly disables the feature gated by this setting — use when
-// the caller treats zero as "off" (e.g. disable a TTL reconciler entirely).
+// NonNegativeDuration parses key as a Go duration and requires it to be >= 0. "0" / "0s" explicitly disables the feature gated by this
+// setting — use when the caller treats zero as "off" (e.g. disable a TTL reconciler entirely).
 func NonNegativeDuration(getenv Getenv, key string, dst *time.Duration, errs *[]error) {
 	v := getenv(key)
 	if v == "" {
@@ -123,11 +121,9 @@ func NonNegativeDuration(getenv Getenv, key string, dst *time.Duration, errs *[]
 	}
 }
 
-// UnitFraction parses key as a float in [0.0, 1.0]. Used for inclusion
-// probabilities (audit read-sampling rate, tracing sample rate) where
-// any value outside that range is meaningless. Out-of-range inputs
-// produce a validation error; an unset key leaves dst untouched so
-// the caller's default survives.
+// UnitFraction parses key as a float in [0.0, 1.0]. Used for inclusion probabilities (audit read-sampling rate, tracing sample rate)
+// where any value outside that range is meaningless. Out-of-range inputs produce a validation error; an unset key leaves dst untouched
+// so the caller's default survives.
 func UnitFraction(getenv Getenv, key string, dst *float64, errs *[]error) {
 	v := getenv(key)
 	if v == "" {
@@ -144,9 +140,8 @@ func UnitFraction(getenv Getenv, key string, dst *float64, errs *[]error) {
 	}
 }
 
-// Allowlist turns a comma-separated string into a set, trimming whitespace and
-// dropping empty entries. Returns nil for empty input so the caller can detect
-// "operator didn't set it" and keep the package-local default.
+// Allowlist turns a comma-separated string into a set, trimming whitespace and dropping empty entries. Returns nil for empty input so
+// the caller can detect "operator didn't set it" and keep the package-local default.
 func Allowlist(v string) map[string]struct{} {
 	if strings.TrimSpace(v) == "" {
 		return nil
@@ -162,10 +157,9 @@ func Allowlist(v string) map[string]struct{} {
 	return out
 }
 
-// Assert the compile-time shape of the helpers via this unused function. Catches
-// someone accidentally dropping a parameter without updating all call sites when
-// they refactor — the package has no tests today but this block at least keeps
-// the signatures honest under `go vet`.
+// Assert the compile-time shape of the helpers via this unused function. Catches someone accidentally dropping a parameter without
+// updating all call sites when they refactor — the package has no tests today but this block at least keeps the signatures honest
+// under `go vet`.
 var _ = func() error {
 	var errs []error
 	return errors.Join(errs...)

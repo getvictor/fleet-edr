@@ -26,10 +26,9 @@ var (
 const (
 	serviceName = "fleet-edr-ingest"
 
-	// HTTP server timeouts. Read 10s covers the agent's worst-case slow upload
-	// of a full batch; write 30s and idle 60s keep long-poll-style commands
-	// from getting cut off, but bound how long a stuck client can hold a
-	// connection. Same defaults as fleet-edr-server.
+	// HTTP server timeouts. Read 10s covers the agent's worst-case slow upload of a full batch; write 30s and idle 60s keep
+	// long-poll-style commands from getting cut off, but bound how long a stuck client can hold a connection. Same defaults as
+	// fleet-edr-server.
 	httpWriteTimeout = 30 * time.Second
 	httpIdleTimeout  = 60 * time.Second
 )

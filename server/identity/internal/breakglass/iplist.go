@@ -58,8 +58,7 @@ func NewAllowlist(entries []string) (*Allowlist, error) {
 	return out, nil
 }
 
-// Allows reports whether ip is on the allowlist. An empty allowlist
-// (zero CIDRs) returns true: dev mode without an explicit list is
+// Allows reports whether ip is on the allowlist. An empty allowlist (zero CIDRs) returns true: dev mode without an explicit list is
 // unrestricted.
 func (a *Allowlist) Allows(ip net.IP) bool {
 	if a == nil || len(a.cidrs) == 0 {
@@ -73,10 +72,8 @@ func (a *Allowlist) Allows(ip net.IP) bool {
 	return false
 }
 
-// Middleware wraps next so off-allowlist callers receive a generic
-// 404 indistinguishable from a non-existent route. On-list callers
-// pass through. The IP is resolved via httpserver.ClientIP, which
-// honours the X-Forwarded-For trust list configured at boot.
+// Middleware wraps next so off-allowlist callers receive a generic 404 indistinguishable from a non-existent route. On-list callers
+// pass through. The IP is resolved via httpserver.ClientIP, which honours the X-Forwarded-For trust list configured at boot.
 func (a *Allowlist) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a == nil || len(a.cidrs) == 0 {
@@ -86,11 +83,9 @@ func (a *Allowlist) Middleware(next http.Handler) http.Handler {
 		ipStr := httpserver.ClientIP(r)
 		ip := net.ParseIP(ipStr)
 		if ip == nil || !a.Allows(ip) {
-			// Generic 404 with the same body shape Go's stdlib serves
-			// for an unrouted path. We deliberately do NOT log at WARN
-			// here because attackers triggering this path generates
-			// noise; the per-IP rate limiter sitting in front catches
-			// the volumetric signal.
+			// Generic 404 with the same body shape Go's stdlib serves for an unrouted path. We deliberately do NOT log at
+			// WARN here because attackers triggering this path generates noise; the per-IP rate limiter sitting in front
+			// catches the volumetric signal.
 			http.NotFound(w, r)
 			return
 		}

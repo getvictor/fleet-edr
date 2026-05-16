@@ -50,9 +50,9 @@ func TestDyldInsert_TableDriven(t *testing.T) {
 			wantFinding: false,
 		},
 		{
-			// Regression: CodeRabbit flagged scanning every argv element as a false-positive
-			// vector. echo / printf are the canonical "data through argv" shapes — the rule
-			// must not fire just because a process prints the variable name.
+			// Regression: CodeRabbit flagged scanning every argv element as a false-positive vector. echo / printf are the
+			// canonical "data through argv" shapes — the rule must not fire just because a process prints the variable
+			// name.
 			name:        "DYLD_INSERT_LIBRARIES as echo DATA does NOT fire",
 			path:        "/bin/echo",
 			args:        []string{"/bin/echo", "DYLD_INSERT_LIBRARIES=/tmp/inject.dylib"},

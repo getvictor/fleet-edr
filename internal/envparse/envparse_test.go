@@ -209,10 +209,9 @@ func TestAllowlist(t *testing.T) {
 	})
 }
 
-// FuzzAllowlist drives the path-set parser with random comma-separated input.
-// The invariant: never panic, never produce an empty-string key, never include
-// untrimmed whitespace in a key. These match the runtime guarantees the
-// uploader's allowlist matcher relies on.
+// FuzzAllowlist drives the path-set parser with random comma-separated input. The invariant: never panic, never produce an
+// empty-string key, never include untrimmed whitespace in a key. These match the runtime guarantees the uploader's allowlist matcher
+// relies on.
 func FuzzAllowlist(f *testing.F) {
 	for _, seed := range []string{
 		"",
@@ -241,9 +240,8 @@ func FuzzAllowlist(f *testing.F) {
 	})
 }
 
-// errFmt sanity-check: every parse-failure error mentions the key + value so
-// log readers can trace which env var caused the misconfig. Locked in via a
-// substring assertion against one representative path through each parser.
+// errFmt sanity-check: every parse-failure error mentions the key + value so log readers can trace which env var caused the misconfig.
+// Locked in via a substring assertion against one representative path through each parser.
 func TestParseErrorsCarryKeyAndValue(t *testing.T) {
 	check := func(t *testing.T, errs []error, wantKey, wantVal string) {
 		t.Helper()

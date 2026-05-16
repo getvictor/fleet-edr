@@ -25,11 +25,9 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// allowAllAuthZ satisfies identityapi.AuthZ unconditionally for the
-// rules-context integration tests. The chokepoint's per-action role
-// matrix is exercised in server/identity/internal/authz/engine_test.go;
-// here we only need the dependency satisfied so RegisterAuthedRoutes
-// can mount.
+// allowAllAuthZ satisfies identityapi.AuthZ unconditionally for the rules-context integration tests. The chokepoint's per-action
+// role matrix is exercised in server/identity/internal/authz/engine_test.go; here we only need the dependency satisfied so
+// RegisterAuthedRoutes can mount.
 type allowAllAuthZ struct{}
 
 func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
@@ -75,10 +73,8 @@ func TestCatalog_ListShape(t *testing.T) {
 	}
 }
 
-// TestContentService_ActiveRules surfaces every shipped rule through
-// the engine-facing interface. The exact roster lives in
-// TestCatalog_ListShape; this test just confirms the count is in
-// lockstep and every rule has a non-empty descriptor.
+// TestContentService_ActiveRules surfaces every shipped rule through the engine-facing interface. The exact roster lives in
+// TestCatalog_ListShape; this test just confirms the count is in lockstep and every rule has a non-empty descriptor.
 func TestContentService_ActiveRules(t *testing.T) {
 	r := newRules(t)
 	rules := r.ContentService().ActiveRules()

@@ -28,8 +28,7 @@ func TestRegisterRoutes_IndexServesHTMLReferencingAssets(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	s := string(body)
-	// The HTML must point at the two same-origin assets so there's no
-	// external network request. Flags a regression where someone swaps
+	// The HTML must point at the two same-origin assets so there's no external network request. Flags a regression where someone swaps
 	// them for CDN URLs.
 	assert.Contains(t, s, `spec-url="/api/openapi.yaml"`,
 		"index must load the embedded spec")
@@ -39,12 +38,10 @@ func TestRegisterRoutes_IndexServesHTMLReferencingAssets(t *testing.T) {
 		"index must not reference any external CDN")
 }
 
-// TestRedocBundle_NoExternalURLs is the regression test for a previously-
-// shipped external network call. The upstream Redoc standalone bundle
-// references cdn.redoc.ly/redoc/logo-mini.svg for its top-nav brand mark;
-// we patch that URL to /api/docs/logo-mini.svg at vendor time so the page
-// makes zero external requests. If someone re-downloads a fresh Redoc
-// bundle and forgets to re-patch, this test fires.
+// TestRedocBundle_NoExternalURLs is the regression test for a previously-shipped external network call. The upstream Redoc standalone
+// bundle references cdn.redoc.ly/redoc/logo-mini.svg for its top-nav brand mark; we patch that URL to /api/docs/logo-mini.svg at
+// vendor time so the page makes zero external requests. If someone re-downloads a fresh Redoc bundle and forgets to re-patch, this
+// test fires.
 func TestRedocBundle_NoExternalURLs(t *testing.T) {
 	b, err := assets.ReadFile("embed/redoc.standalone.js")
 	require.NoError(t, err)
@@ -93,10 +90,8 @@ func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
 	}
 }
 
-// TestETagRevalidation_Returns304 confirms that a conditional GET with a
-// matching If-None-Match skips the body — the key win of the ETag
-// strategy for the spec and logo. Saves bandwidth on repeat loads while
-// still guaranteeing a correct spec after a server upgrade.
+// TestETagRevalidation_Returns304 confirms that a conditional GET with a matching If-None-Match skips the body — the key win of the
+// ETag strategy for the spec and logo. Saves bandwidth on repeat loads while still guaranteeing a correct spec after a server upgrade.
 func TestETagRevalidation_Returns304(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)

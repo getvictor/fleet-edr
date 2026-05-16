@@ -10,9 +10,8 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// TestOsascriptNetworkExec exercises the download-and-exec chain detection. The rule
-// fires only when a single osascript process's 30s descendant tree contains BOTH a
-// curl/wget exec AND an exec out of a suspicious path — either alone is not enough.
+// TestOsascriptNetworkExec exercises the download-and-exec chain detection. The rule fires only when a single osascript process's 30s
+// descendant tree contains BOTH a curl/wget exec AND an exec out of a suspicious path — either alone is not enough.
 func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -71,9 +70,8 @@ func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
 	assert.Empty(t, findings)
 }
 
-// Multi-hop chain: osascript → sh → curl + /tmp/stage2 exec via a grandchild. Real
-// droppers spawn an intermediate shell; the direct-children-only scan missed this until
-// the BFS fix.
+// Multi-hop chain: osascript → sh → curl + /tmp/stage2 exec via a grandchild. Real droppers spawn an intermediate shell; the
+// direct-children-only scan missed this until the BFS fix.
 func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -107,11 +105,9 @@ func TestOsascriptNetworkExec_DetectsGrandchildChain(t *testing.T) {
 	assert.Contains(t, findings[0].Description, "/tmp/stage2")
 }
 
-// Shebang variant: the dropper stage2 is a shell script under /tmp. The kernel
-// resolves the `#!/bin/sh` line to an exec of /bin/sh; the descendant's
-// payload.path is /bin/sh and the actual script path lives in argv[1]. Without
-// this case the rule missed the runbook's osascript step on edr-qa even though
-// the underlying chain (osascript -> sh -> curl + /tmp/stage2) was identical.
+// Shebang variant: the dropper stage2 is a shell script under /tmp. The kernel resolves the `#!/bin/sh` line to an exec of /bin/sh;
+// the descendant's payload.path is /bin/sh and the actual script path lives in argv[1]. Without this case the rule missed the
+// runbook's osascript step on edr-qa even though the underlying chain (osascript -> sh -> curl + /tmp/stage2) was identical.
 func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -141,14 +137,11 @@ func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
 	assert.Equal(t, "critical", findings[0].Severity)
 }
 
-// TestOsascriptNetworkExec_RealRunbookChainShape mirrors the exact 3-level
-// chain observed on edr-qa: osascript -> /bin/sh -c (the wrapper that
-// AppleScript's `do shell script` always spawns) -> [curl, shebang-sh /tmp/x].
-// The intermediate sh's argv[2] is the full command string starting with
-// /usr/bin/curl — that must NOT be counted as a tempExec match. Only the
-// grandchild shell (whose argv[1] is the script path) is the real signal.
-// This ordering also tickles the iteration: the intermediate sh comes before
-// curl + the shebang sh in BFS order.
+// TestOsascriptNetworkExec_RealRunbookChainShape mirrors the exact 3-level chain observed on edr-qa: osascript -> /bin/sh -c (the
+// wrapper that AppleScript's `do shell script` always spawns) -> [curl, shebang-sh /tmp/x]. The intermediate sh's argv[2] is the full
+// command string starting with /usr/bin/curl — that must NOT be counted as a tempExec match. Only the grandchild shell (whose argv[1]
+// is the script path) is the real signal. This ordering also tickles the iteration: the intermediate sh comes before curl + the
+// shebang sh in BFS order.
 func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -185,15 +178,11 @@ func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
 	assert.Equal(t, "osascript_network_exec", findings[0].RuleID)
 }
 
-// Cross-batch race: in production the agent flushes events ~once per second
-// while a real chain completes in ~150ms, so when the cadence boundary lands
-// mid-chain the osascript exec arrives in batch N and the descendants arrive
-// in batch N+1. Forward-direction matching (osascript -> look for descendants)
-// missed the chain entirely under those conditions because at batch N's
-// Evaluate the descendants weren't yet materialised. Reverse-direction is
-// race-immune: by the time the temp-exec event lands in batch N+1, every
-// ancestor has already been ingested and materialised by batch N. This test
-// exercises that path explicitly.
+// Cross-batch race: in production the agent flushes events ~once per second while a real chain completes in ~150ms, so when the
+// cadence boundary lands mid-chain the osascript exec arrives in batch N and the descendants arrive in batch N+1. Forward-direction
+// matching (osascript -> look for descendants) missed the chain entirely under those conditions because at batch N's Evaluate the
+// descendants weren't yet materialised. Reverse-direction is race-immune: by the time the temp-exec event lands in batch N+1, every
+// ancestor has already been ingested and materialised by batch N. This test exercises that path explicitly.
 func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -236,10 +225,9 @@ func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 	assert.Contains(t, findings2[0].Description, "/tmp/stage2")
 }
 
-// Same-batch dedupe: when both an osascript event and its temp-exec land in
-// the same batch (the lucky case where cadence does NOT split the chain), the
-// rule must still emit one finding per chain rather than once per descendant.
-// Two temp-exec children are present here; the rule should fire once.
+// Same-batch dedupe: when both an osascript event and its temp-exec land in the same batch (the lucky case where cadence does NOT
+// split the chain), the rule must still emit one finding per chain rather than once per descendant. Two temp-exec children are present
+// here; the rule should fire once.
 func TestOsascriptNetworkExec_SameBatchDedupe(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()

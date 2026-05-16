@@ -21,8 +21,7 @@ import (
 	"github.com/fleetdm/edr/server/response/bootstrap"
 )
 
-// ApplySchema runs response's DDL against db. Thin wrapper over
-// bootstrap.ApplySchema so the test surface is importable separately
+// ApplySchema runs response's DDL against db. Thin wrapper over bootstrap.ApplySchema so the test surface is importable separately
 // from the production wiring surface.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return bootstrap.ApplySchema(ctx, db)

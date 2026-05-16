@@ -31,8 +31,7 @@ type Deps struct {
 	DB           *sqlx.DB
 	Logger       *slog.Logger
 	CookieSecure bool
-	// Session timeouts (Phase 5). Per-class idle + absolute caps replace
-	// the pre-Phase-5 flat TTL. Zero means use the sessions package
+	// Session timeouts (Phase 5). Per-class idle + absolute caps replace the pre-Phase-5 flat TTL. Zero means use the sessions package
 	// defaults: normal 8h idle / 24h absolute, break-glass 15m / 1h.
 	SessionIdle               time.Duration
 	SessionAbsolute           time.Duration
@@ -44,40 +43,29 @@ type Deps struct {
 	// CleanupInterval overrides how often Run sweeps expired sessions. Zero
 	// means use the package default (5 min).
 	CleanupInterval time.Duration
-	// AuditReadSampling is the inclusion probability (0.0-1.0) the
-	// chokepoint applies to read-action allow events before submitting
-	// them to the async writer. See server/config/config.go for the
-	// full semantics; identity passes it through to authz.New.
+	// AuditReadSampling is the inclusion probability (0.0-1.0) the chokepoint applies to read-action allow events before submitting them
+	// to the async writer. See server/config/config.go for the full semantics; identity passes it through to authz.New.
 	AuditReadSampling float64
 
 	// AuditAsyncQueueCap sizes the bounded async-writer buffer. Zero
 	// uses the audit package default (8192).
 	AuditAsyncQueueCap int
 
-	// OIDC carries the Phase-4a auth knobs. When OIDC.Issuer is empty,
-	// the OIDC handler + routes are not constructed (break-glass-only
-	// deployment); cfg validation upstream is responsible for refusing
-	// to boot if the operator did not opt into that mode.
+	// OIDC carries the Phase-4a auth knobs. When OIDC.Issuer is empty, the OIDC handler + routes are not constructed (break-glass-only
+	// deployment); cfg validation upstream is responsible for refusing to boot if the operator did not opt into that mode.
 	OIDC OIDCDeps
-	// SessionSigningKey is the HMAC key the OIDC state cookie reuses
-	// (per spec). Required when OIDC.Issuer is set; ignored otherwise.
-	// 32+ bytes recommended. Phase 4b reuses the same key for the
-	// break-glass challenge cookie.
+	// SessionSigningKey is the HMAC key the OIDC state cookie reuses (per spec). Required when OIDC.Issuer is set; ignored otherwise.
+	// 32+ bytes recommended. Phase 4b reuses the same key for the break-glass challenge cookie.
 	SessionSigningKey []byte
 
-	// Breakglass carries the Phase 4b break-glass surface knobs.
-	// When Breakglass.RPID is empty AND OIDC is configured, the
-	// break-glass surface is not constructed (operator opted out by
-	// not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC
-	// is also unconfigured, the bootstrap layer falls through to a
-	// localhost default so dev workflows have a working surface.
+	// Breakglass carries the Phase 4b break-glass surface knobs. When Breakglass.RPID is empty AND OIDC is configured, the break-glass
+	// surface is not constructed (operator opted out by not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC is also
+	// unconfigured, the bootstrap layer falls through to a localhost default so dev workflows have a working surface.
 	Breakglass BreakglassDeps
 }
 
-// BreakglassDeps is the per-deployment configuration the Phase 4b
-// break-glass surface needs. Lifted out of Deps so further
-// break-glass-related additions don't keep widening the parent
-// struct.
+// BreakglassDeps is the per-deployment configuration the Phase 4b break-glass surface needs. Lifted out of Deps so further
+// break-glass-related additions don't keep widening the parent struct.
 type BreakglassDeps struct {
 	BootstrapTokenTTL time.Duration
 	IPAllowlist       []string
@@ -86,8 +74,7 @@ type BreakglassDeps struct {
 	RPOrigins         []string
 }
 
-// OIDCDeps mirrors the deployment-specific OIDC config the identity
-// context needs. Lifted out of Deps so OIDC-related additions don't
+// OIDCDeps mirrors the deployment-specific OIDC config the identity context needs. Lifted out of Deps so OIDC-related additions don't
 // keep widening the parent struct.
 type OIDCDeps struct {
 	Issuer               string
@@ -102,11 +89,9 @@ type OIDCDeps struct {
 
 const defaultCleanupInterval = 5 * time.Minute
 
-// Identity is the handle cmd/main holds for the identity bounded context. It
-// exposes the public Service for cross-context callers (and tests), the
-// AuthZ engine for the chokepoint, the middleware factories the operator
-// HTTP surface chains, the route registration methods, ApplySchema, and a
-// Run method that owns this context's background goroutines.
+// Identity is the handle cmd/main holds for the identity bounded context. It exposes the public Service for cross-context callers
+// (and tests), the AuthZ engine for the chokepoint, the middleware factories the operator HTTP surface chains, the route registration
+// methods, ApplySchema, and a Run method that owns this context's background goroutines.
 type Identity struct {
 	svc               api.Service
 	authzEngine       *authz.Engine
@@ -124,11 +109,9 @@ type Identity struct {
 	cleanupEvery      time.Duration
 }
 
-// New wires the identity context. It does NOT apply the schema (call
-// ApplySchema for that) and does NOT start any goroutines (call Run).
-// Returns an error if Deps is missing required fields. ctx is used to
-// compile the AuthZ engine's OPA query at construction time; cancelling
-// it before New returns aborts engine setup.
+// New wires the identity context. It does NOT apply the schema (call ApplySchema for that) and does NOT start any goroutines (call
+// Run). Returns an error if Deps is missing required fields. ctx is used to compile the AuthZ engine's OPA query at construction time;
+// cancelling it before New returns aborts engine setup.
 func New(ctx context.Context, deps Deps) (*Identity, error) {
 	if deps.DB == nil {
 		return nil, errors.New("identity bootstrap: DB is required")
@@ -219,9 +202,8 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	}, nil
 }
 
-// breakglassDeps bundles the per-call inputs to buildBreakglass.
-// Same shape pattern as oidcHandlerDeps so future field additions
-// don't widen the function signature.
+// breakglassDeps bundles the per-call inputs to buildBreakglass. Same shape pattern as oidcHandlerDeps so future field additions don't
+// widen the function signature.
 type breakglassDeps struct {
 	deps       Deps
 	logger     *slog.Logger
@@ -232,37 +214,28 @@ type breakglassDeps struct {
 	identity   api.Service // for the Phase 5 reauth POST endpoint
 }
 
-// buildBreakglass constructs the break-glass Service + Handler.
-// Returns (nil, nil, nil) when the deployment opted out (no RP ID +
-// OIDC enabled). Returns an error when the operator partially
-// configured the surface — same pattern as the OIDC gate.
+// buildBreakglass constructs the break-glass Service + Handler. Returns (nil, nil, nil) when the deployment opted out (no RP ID + OIDC
+// enabled). Returns an error when the operator partially configured the surface — same pattern as the OIDC gate.
 func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handler, error) {
 	bg := in.deps.Breakglass
 	rpID := bg.RPID
 	rpOrigins := bg.RPOrigins
 	if rpID == "" && len(rpOrigins) == 0 && in.deps.OIDC.Issuer == "" {
-		// Dev fallback: neither OIDC nor break-glass explicitly
-		// configured. Default to localhost so first-boot works
-		// without a long env var prelude. Production is covered by
-		// the explicit-config branch below.
+		// Dev fallback: neither OIDC nor break-glass explicitly configured. Default to localhost so first-boot works without a
+		// long env var prelude. Production is covered by the explicit-config branch below.
 		rpID = "localhost"
 		rpOrigins = []string{"http://localhost:8088", "http://127.0.0.1:8088"}
 	}
-	// Reject partial config: an operator who set RPOrigins WITHOUT
-	// RPID intended to configure break-glass; silently opting out
-	// would brick recovery. Same guard direction as the
-	// EDR_OIDC_ISSUER-without-companion check in config.go.
+	// Reject partial config: an operator who set RPOrigins WITHOUT RPID intended to configure break-glass; silently opting out would brick
+	// recovery. Same guard direction as the EDR_OIDC_ISSUER-without-companion check in config.go.
 	if rpID == "" && len(rpOrigins) > 0 {
 		return nil, nil, errors.New(
 			"identity bootstrap: EDR_BREAKGLASS_RP_ORIGINS set without EDR_BREAKGLASS_RP_ID")
 	}
 	if rpID == "" {
-		// OIDC is configured but break-glass is not — operator
-		// opted out. Routes will not be mounted AND the seed flow
-		// will not issue bootstrap tokens (cmd/main short-circuits
-		// when BreakglassService() returns nil). The operator can
-		// later opt in by setting EDR_BREAKGLASS_RP_ID; the seed
-		// step on the next boot will then issue a token.
+		// OIDC is configured but break-glass is not — operator opted out. Routes will not be mounted AND the seed flow will not issue
+		// bootstrap tokens (cmd/main short-circuits when BreakglassService() returns nil). The operator can later opt in by setting
+		// EDR_BREAKGLASS_RP_ID; the seed step on the next boot will then issue a token.
 		return nil, nil, nil
 	}
 	if len(rpOrigins) == 0 {
@@ -312,10 +285,8 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 	return svc, h, nil
 }
 
-// oidcHandlerDeps bundles the per-call inputs to buildOIDCHandler.
-// Pulled out of the function signature so the call stays under the
-// linter's per-call parameter budget without churning through fields
-// in two places when the wiring expands.
+// oidcHandlerDeps bundles the per-call inputs to buildOIDCHandler. Pulled out of the function signature so the call stays under the
+// linter's per-call parameter budget without churning through fields in two places when the wiring expands.
 type oidcHandlerDeps struct {
 	deps       Deps
 	logger     *slog.Logger
@@ -326,12 +297,9 @@ type oidcHandlerDeps struct {
 	audit      *audit.Store
 }
 
-// buildOIDCHandler constructs the OIDC handler when the deployment
-// supplied OIDC config. Returns (nil, nil) for break-glass-only
-// deployments — the route registration step skips it. Returns an
-// error when the OIDC discovery / verifier setup fails so cmd/main
-// refuses to start with an explicit error rather than silently
-// falling back.
+// buildOIDCHandler constructs the OIDC handler when the deployment supplied OIDC config. Returns (nil, nil) for break-glass-only
+// deployments — the route registration step skips it. Returns an error when the OIDC discovery / verifier setup fails so cmd/main
+// refuses to start with an explicit error rather than silently falling back.
 func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, error) {
 	if in.deps.OIDC.Issuer == "" {
 		return nil, nil
@@ -400,28 +368,23 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return nil
 }
 
-// Service returns the public Service interface. Used by cross-context
-// callers: cmd/main calls Service.SeedAdmin at startup; detection's
-// alert-update handler calls Service.UserExists.
+// Service returns the public Service interface. Used by cross-context callers: cmd/main calls Service.SeedAdmin at startup;
+// detection's alert-update handler calls Service.UserExists.
 func (i *Identity) Service() api.Service { return i.svc }
 
-// SessionMiddleware returns the operator-session middleware. Chain on every
-// authed route as Session(CSRF(handler)) so Session pins ctx before CSRF
-// reads it.
+// SessionMiddleware returns the operator-session middleware. Chain on every authed route as Session(CSRF(handler)) so Session pins ctx
+// before CSRF reads it.
 func (i *Identity) SessionMiddleware() func(http.Handler) http.Handler { return i.sessionMW }
 
 // CSRFMiddleware returns the CSRF middleware. Always inner to Session.
 func (i *Identity) CSRFMiddleware() func(http.Handler) http.Handler { return i.csrfMW }
 
-// OIDCEnabled reports whether the OIDC handler was constructed at
-// boot. cmd/main uses it to log a single info-level line at startup
+// OIDCEnabled reports whether the OIDC handler was constructed at boot. cmd/main uses it to log a single info-level line at startup
 // summarising the auth modes the deployment honours.
 func (i *Identity) OIDCEnabled() bool { return i.oidcHandler != nil }
 
-// RegisterPublicRoutes wires DELETE /api/session (logout) plus the
-// pre-auth OIDC + break-glass routes (when configured). Phase 5b
-// retired POST /api/session; sessions are now minted by the OIDC
-// callback or the break-glass FinishLogin / FinishSetup endpoints.
+// RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured). Phase 5b
+// retired POST /api/session; sessions are now minted by the OIDC callback or the break-glass FinishLogin / FinishSetup endpoints.
 func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterPublicRoutes(mux)
 	if i.oidcHandler != nil {
@@ -432,9 +395,8 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	}
 }
 
-// BreakglassService exposes the Phase 4b break-glass service so
-// cmd/main can call IssueSetupToken on first boot. Returns nil when
-// the deployment opted out of the break-glass surface.
+// BreakglassService exposes the Phase 4b break-glass service so cmd/main can call IssueSetupToken on first boot. Returns nil when the
+// deployment opted out of the break-glass surface.
 func (i *Identity) BreakglassService() *breakglass.Service {
 	return i.breakglassService
 }
@@ -456,10 +418,8 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 	return i.breakglassHandler.AllowlistMiddleware
 }
 
-// RegisterAuthedRoutes wires GET /api/session (who-am-i),
-// GET /api/audit-events (operator-action history), and the Phase 5
-// break-glass reauth POST endpoints. Caller wraps in
-// SessionMiddleware + CSRFMiddleware before mounting.
+// RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), and the Phase 5 break-glass
+// reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
@@ -468,16 +428,12 @@ func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	}
 }
 
-// AuditRecorder returns the cross-context-callable AuditRecorder.
-// Other contexts (response, rules, endpoint) take this as a constructor
-// dependency and call Record() at the point an operator action commits;
-// see api.AuditRecorder for the interface contract.
+// AuditRecorder returns the cross-context-callable AuditRecorder. Other contexts (response, rules, endpoint) take this as a
+// constructor dependency and call Record() at the point an operator action commits; see api.AuditRecorder for the interface contract.
 func (i *Identity) AuditRecorder() api.AuditRecorder { return i.auditStore }
 
-// AuthZ returns the chokepoint engine. Subsequent per-context
-// changes wire this into every privileged handler in detection /
-// rules / response / endpoint; today the only consumer is the
-// per-context tests that exercise the public api.AuthZ surface.
+// AuthZ returns the chokepoint engine. Subsequent per-context changes wire this into every privileged handler in detection / rules /
+// response / endpoint; today the only consumer is the per-context tests that exercise the public api.AuthZ surface.
 func (i *Identity) AuthZ() api.AuthZ { return i.authzEngine }
 
 // Run owns the identity context's background goroutines. Two loops:

@@ -14,12 +14,10 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 )
 
-// HostToken returns a middleware that validates an agent's bearer token
-// against the endpoint Service. On success the middleware pins host_id
-// on the request context (via api.WithHostID) and the active OTel span.
-// On failure it returns 401 with a typed reason; on infra outage it
-// returns 503 (so an agent doesn't misinterpret a transient DB blip as
-// token revocation and burn its re-enroll throttle).
+// HostToken returns a middleware that validates an agent's bearer token against the endpoint Service. On success the middleware
+// pins host_id on the request context (via api.WithHostID) and the active OTel span. On failure it returns 401 with a typed reason;
+// on infra outage it returns 503 (so an agent doesn't misinterpret a transient DB blip as token revocation and burn its re-enroll
+// throttle).
 func HostToken(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handler {
 	if svc == nil {
 		panic("endpoint middleware: Service must not be nil")
@@ -38,9 +36,8 @@ func HostToken(svc api.Service, logger *slog.Logger) func(http.Handler) http.Han
 			hostID, err := svc.VerifyToken(ctx, token)
 			switch {
 			case errors.Is(err, api.ErrInvalidToken):
-				// Unknown + revoked both surface as ErrInvalidToken. We
-				// don't distinguish; doing so would be an oracle for
-				// token-still-active probing.
+				// Unknown + revoked both surface as ErrInvalidToken. We don't distinguish; doing so would be an oracle
+				// for token-still-active probing.
 				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_token")
 				return
 			case err != nil:
@@ -54,11 +51,9 @@ func HostToken(svc api.Service, logger *slog.Logger) func(http.Handler) http.Han
 	}
 }
 
-// extractBearer returns the token portion of an Authorization: Bearer
-// <token> header. The scheme name is matched case-insensitively per
-// RFC 7235 §2.1; clients/intermediaries that normalise the casing to
-// "bearer" are accepted. Returns ("", false) for missing / malformed /
-// empty-token headers.
+// extractBearer returns the token portion of an Authorization: Bearer <token> header. The scheme name is matched case-insensitively
+// per RFC 7235 §2.1; clients/intermediaries that normalise the casing to "bearer" are accepted. Returns ("", false) for missing /
+// malformed / empty-token headers.
 func extractBearer(r *http.Request) (string, bool) {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	scheme, rest, ok := strings.Cut(auth, " ")

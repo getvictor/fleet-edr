@@ -10,9 +10,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// fillBuckets inserts count distinct keys with the given prefix and
-// lastSeen so tests can craft mixed idle/live cohorts deterministically.
-// Keys are prefix+"-"+i so multiple cohorts coexist without collisions.
+// fillBuckets inserts count distinct keys with the given prefix and lastSeen so tests can craft mixed idle/live cohorts
+// deterministically. Keys are prefix+"-"+i so multiple cohorts coexist without collisions.
 func fillBuckets(t *testing.T, l *IPLimiter, prefix string, count int, lastSeen time.Time) {
 	t.Helper()
 	l.mu.Lock()
@@ -29,10 +28,8 @@ func fillBuckets(t *testing.T, l *IPLimiter, prefix string, count int, lastSeen 
 func TestIPLimiter_AllowAtCapacity_EvictsIdleBucketsFirst(t *testing.T) {
 	l := NewIPLimiter(rate.Limit(10), 10)
 
-	// Fill the map: half are idle (older than IPLimiterIdleTTL), half
-	// are fresh. The idle sweep should reclaim the idle half on the
-	// next Allow call so the new entry lands without touching the live
-	// cohort.
+	// Fill the map: half are idle (older than IPLimiterIdleTTL), half are fresh. The idle sweep should reclaim the idle half on the next
+	// Allow call so the new entry lands without touching the live cohort.
 	stale := time.Now().Add(-2 * IPLimiterIdleTTL)
 	fresh := time.Now()
 	const halfFill = IPLimiterMaxBuckets / 2
@@ -55,8 +52,7 @@ func TestIPLimiter_AllowAtCapacity_EvictsIdleBucketsFirst(t *testing.T) {
 func TestIPLimiter_AllowAtCapacity_EvictsOldestWhenAllLive(t *testing.T) {
 	l := NewIPLimiter(rate.Limit(10), 10)
 
-	// Fill with timestamps inside IPLimiterIdleTTL but spread across a
-	// known order so the oldest is identifiable. The idle sweep won't
+	// Fill with timestamps inside IPLimiterIdleTTL but spread across a known order so the oldest is identifiable. The idle sweep won't
 	// reclaim anything; the LRU fallback must drop the oldest.
 	now := time.Now()
 	l.mu.Lock()
@@ -83,9 +79,8 @@ func TestIPLimiter_AllowAtCapacity_EvictsOldestWhenAllLive(t *testing.T) {
 }
 
 func TestIPLimiter_KnownIPDoesNotEvict(t *testing.T) {
-	// A repeat call from a known IP must not trigger eviction logic
-	// even if the map is at capacity -- the existing bucket is hit
-	// and updated in place.
+	// A repeat call from a known IP must not trigger eviction logic even if the map is at capacity -- the existing bucket is hit and
+	// updated in place.
 	l := NewIPLimiter(rate.Limit(10), 10)
 	now := time.Now()
 	fillBuckets(t, l, "filler", IPLimiterMaxBuckets, now)

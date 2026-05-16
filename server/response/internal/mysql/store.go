@@ -14,8 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/sqlhelpers"
 )
 
-// Store owns the commands table. All public methods take the row's
-// fields directly (rather than a pre-constructed struct) so callers
+// Store owns the commands table. All public methods take the row's fields directly (rather than a pre-constructed struct) so callers
 // don't need to import a row type.
 type Store struct {
 	db *sqlx.DB
@@ -29,10 +28,8 @@ func NewStore(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// commandRow mirrors a row in the commands table; held internal to
-// the package so api.Command stays the public contract. Result uses
-// sqlhelpers.NullRawJSON because the column is JSON NULL until the
-// agent completes / fails the command.
+// commandRow mirrors a row in the commands table; held internal to the package so api.Command stays the public contract. Result uses
+// sqlhelpers.NullRawJSON because the column is JSON NULL until the agent completes / fails the command.
 type commandRow struct {
 	ID          int64                  `db:"id"`
 	HostID      string                 `db:"host_id"`
@@ -45,10 +42,8 @@ type commandRow struct {
 	Result      sqlhelpers.NullRawJSON `db:"result"`
 }
 
-// toAPI converts the row into the public api.Command. Result is
-// emitted as nil when the column is NULL; the api type uses
-// json.RawMessage with omitempty so the JSON wire shape preserves
-// the previous "result missing means in-flight" semantics.
+// toAPI converts the row into the public api.Command. Result is emitted as nil when the column is NULL; the api type uses
+// json.RawMessage with omitempty so the JSON wire shape preserves the previous "result missing means in-flight" semantics.
 func (r commandRow) toAPI() api.Command {
 	cmd := api.Command{
 		ID:          r.ID,
@@ -83,10 +78,8 @@ func (s *Store) Insert(ctx context.Context, hostID, commandType string, payload 
 	return id, nil
 }
 
-// ListForHost returns commands for a host, optionally filtered by
-// status (empty string returns every status). Order: created_at
-// DESC (newest first), matching the previous store.ListCommands
-// behaviour.
+// ListForHost returns commands for a host, optionally filtered by status (empty string returns every status). Order: created_at DESC
+// (newest first), matching the previous store.ListCommands behaviour.
 func (s *Store) ListForHost(ctx context.Context, hostID, status string) ([]api.Command, error) {
 	query := `SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
 		FROM commands WHERE host_id = ?`
@@ -160,8 +153,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		// Disambiguate "wrong (id, host)" from "lost the race": one
-		// SELECT settles it. The cost is paid only on the failure
+		// Disambiguate "wrong (id, host)" from "lost the race": one SELECT settles it. The cost is paid only on the failure
 		// path; the happy path stays a single UPDATE.
 		var owner string
 		err := s.db.GetContext(ctx, &owner,
@@ -172,9 +164,8 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 		if err != nil {
 			return fmt.Errorf("disambiguate update miss for command %d: %w", id, err)
 		}
-		// Same (id, host_id) but UPDATE matched 0 rows: status
-		// changed under us. Caller's pre-read saw expectedFrom; a
-		// concurrent caller advanced the row.
+		// Same (id, host_id) but UPDATE matched 0 rows: status changed under us. Caller's pre-read saw expectedFrom; a concurrent caller
+		// advanced the row.
 		return api.ErrInvalidStatusTransition
 	}
 	return nil

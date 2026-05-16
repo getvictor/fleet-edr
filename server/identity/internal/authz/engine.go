@@ -26,52 +26,38 @@ import (
 //go:embed policy/edr.rego policy/data/actions.json policy/data/roles.json
 var policyFS embed.FS
 
-// regoQueryName is the canonical query Engine evaluates. The string
-// is shared with the Rego module's package declaration; renaming one
-// without the other is a compile-time silent break (the policy is
-// still valid Rego, but the query yields no results), so the
+// regoQueryName is the canonical query Engine evaluates. The string is shared with the Rego module's package declaration; renaming
+// one without the other is a compile-time silent break (the policy is still valid Rego, but the query yields no results), so the
 // constructor checks both ends agree.
 const regoQueryName = "data.edr.authz.decision"
 
-// actionAttrKey is the slog / OTel attribute key for the privileged
-// action being evaluated. Callers structure their log entries around
+// actionAttrKey is the slog / OTel attribute key for the privileged action being evaluated. Callers structure their log entries around
 // it so a SigNoz dashboard can pivot on `edr.authz.action` directly.
 const actionAttrKey = "edr.authz.action"
 
-// Engine is the AuthZ-interface implementation. Holds the prepared
-// Rego query (compiled at construction time so per-request evaluation
-// is the warm path) and the audit recorder every decision flows
-// through.
+// Engine is the AuthZ-interface implementation. Holds the prepared Rego query (compiled at construction time so per-request evaluation
+// is the warm path) and the audit recorder every decision flows through.
 type Engine struct {
 	query rego.PreparedEvalQuery
 	audit api.AuditRecorder
-	// asyncRead is the optional read-action allow-event path: the
-	// chokepoint Submits to it instead of calling audit.Record
-	// synchronously when (a) the action is a read action, (b) the
-	// decision is Allow, (c) the actor is non-break-glass, and (d) the
-	// action is not audit.read (which keeps the audit-of-audit row
-	// regardless of sampling). Nil-safe: a missing async writer
-	// degrades silently to the synchronous Record path.
+	// asyncRead is the optional read-action allow-event path: the chokepoint Submits to it instead of calling audit.Record synchronously
+	// when (a) the action is a read action, (b) the decision is Allow, (c) the actor is non-break-glass, and (d) the action is not
+	// audit.read (which keeps the audit-of-audit row regardless of sampling). Nil-safe: a missing async writer degrades silently to the
+	// synchronous Record path.
 	asyncRead api.AsyncAuditWriter
-	// readSamplingRate is the inclusion probability (0.0-1.0) for
-	// non-carve-out read-allow events. 0.0 (default) emits zero such
-	// rows; 1.0 emits every row.
+	// readSamplingRate is the inclusion probability (0.0-1.0) for non-carve-out read-allow events. 0.0 (default) emits zero such rows;
+	// 1.0 emits every row.
 	readSamplingRate float64
 	logger           *slog.Logger
 
-	// registered is the action allowlist the chokepoint validates
-	// against before invoking Rego. A request that names an
-	// unregistered action is denied with reason
-	// `action_not_registered`; the build-time parity check between
-	// api.RegisteredActions and policy/data/actions.json keeps the two
-	// in lockstep, this set is the runtime defense in depth.
+	// registered is the action allowlist the chokepoint validates against before invoking Rego. A request that names an unregistered
+	// action is denied with reason `action_not_registered`; the build-time parity check between api.RegisteredActions and
+	// policy/data/actions.json keeps the two in lockstep, this set is the runtime defense in depth.
 	registered map[api.Action]struct{}
 }
 
-// Options bundles the optional Phase 3 dependencies. Zero values are
-// valid: a nil AsyncRead degrades to fully-synchronous audit;
-// ReadSamplingRate=0 means "audit zero non-carve-out read-allow
-// events" (the wave-1 default).
+// Options bundles the optional Phase 3 dependencies. Zero values are valid: a nil AsyncRead degrades to fully-synchronous audit;
+// ReadSamplingRate=0 means "audit zero non-carve-out read-allow events" (the wave-1 default).
 type Options struct {
 	AsyncRead        api.AsyncAuditWriter
 	ReadSamplingRate float64
@@ -181,11 +167,9 @@ func (e *Engine) Allow(ctx context.Context, action api.Action, resource api.Reso
 	return policyDecision, nil
 }
 
-// engineErrorDecision builds the canonical engine_error deny, writes
-// the audit row, and returns the decision. Shared by the Eval-failure
-// and decode-failure branches in Allow so a single line of code
-// represents both engine-internal-bug paths; the caller still wraps
-// the underlying error into the returned error value.
+// engineErrorDecision builds the canonical engine_error deny, writes the audit row, and returns the decision. Shared by the
+// Eval-failure and decode-failure branches in Allow so a single line of code represents both engine-internal-bug paths; the caller
+// still wraps the underlying error into the returned error value.
 func (e *Engine) engineErrorDecision(ctx context.Context, actor *api.Actor, action api.Action, resource api.Resource) api.Decision {
 	d := api.Decision{Allow: false, Reason: "engine_error"}
 	e.recordDecision(ctx, actor, action, resource, d)
@@ -220,12 +204,10 @@ func (e *Engine) recordDecision(
 		TargetType: resource.Type,
 		TargetID:   resource.ID,
 		Payload:    auditPayload(d),
-		// Capture trace_id at decision time. The async path runs the
-		// eventual INSERT under a background ctx (so a request-scope
-		// cancellation doesn't break in-flight audits); without an
-		// explicit TraceID the row would land with NULL trace_id and
-		// lose correlation. Sync callers can leave the field empty
-		// and Store.Record falls back to the ctx-extracted id.
+		// Capture trace_id at decision time. The async path runs the eventual INSERT under a background ctx (so a
+		// request-scope cancellation doesn't break in-flight audits); without an explicit TraceID the row would land with
+		// NULL trace_id and lose correlation. Sync callers can leave the field empty and Store.Record falls back to the
+		// ctx-extracted id.
 		TraceID: traceIDFromContext(ctx),
 	}
 	if actor != nil {
@@ -239,10 +221,9 @@ func (e *Engine) recordDecision(
 		if e.asyncRead.Submit(ctx, event) {
 			return
 		}
-		// Submit returned false (queue full or writer stopped); fall
-		// through to the sync path so the row still lands. The async
-		// writer already logged the queue-full WARN; double-logging
-		// the same event is acceptable to keep the audit record.
+		// Submit returned false (queue full or writer stopped); fall through to the sync path so the row still lands.
+		// The async writer already logged the queue-full WARN; double-logging the same event is acceptable to keep the audit
+		// record.
 	}
 	if err := e.audit.Record(ctx, event); err != nil {
 		e.logger.WarnContext(ctx, "authz audit write",
@@ -253,12 +234,9 @@ func (e *Engine) recordDecision(
 	}
 }
 
-// routeAsync reports whether this (action, decision, actor) tuple is
-// a candidate for the async + sampling path. Returns true only when
-// every guard holds: an allow decision, a non-audit-read action that
-// IS a read action, a non-break-glass actor, and an asyncRead writer
-// configured. Any miss falls through to the sync path so security-
-// relevant signals are never sampled out.
+// routeAsync reports whether this (action, decision, actor) tuple is a candidate for the async + sampling path. Returns true only
+// when every guard holds: an allow decision, a non-audit-read action that IS a read action, a non-break-glass actor, and an asyncRead
+// writer configured. Any miss falls through to the sync path so security-relevant signals are never sampled out.
 func (e *Engine) routeAsync(action api.Action, d api.Decision, actor *api.Actor) bool {
 	if e.asyncRead == nil {
 		return false
@@ -275,10 +253,8 @@ func (e *Engine) routeAsync(action api.Action, d api.Decision, actor *api.Actor)
 	return api.IsReadAction(action)
 }
 
-// traceIDFromContext extracts the active OTel trace id at chokepoint
-// time so the chokepoint can pin it on the AuditEvent before
-// submitting. Mirrors the audit package's private helper; arch-go
-// forbids reaching across into another context's internal package,
+// traceIDFromContext extracts the active OTel trace id at chokepoint time so the chokepoint can pin it on the AuditEvent before
+// submitting. Mirrors the audit package's private helper; arch-go forbids reaching across into another context's internal package,
 // so the chokepoint owns its own copy. Empty when no span is active.
 func traceIDFromContext(ctx context.Context) string {
 	sc := trace.SpanContextFromContext(ctx)
@@ -343,13 +319,10 @@ func stringsToAny(in []string) []any {
 	return out
 }
 
-// assertActionsParity is the runtime side of the build-time parity
-// check: the policy bundle's actions[] list must match the Go-side
-// RegisteredActions() exactly. A drift here would let the chokepoint
-// silently grant on actions the Go side rejects (or vice versa). The
-// parity check in policy_test.go runs the same comparison, but having
-// it at construction time means a misconfigured pilot deployment
-// fails fast at boot rather than at first denied request.
+// assertActionsParity is the runtime side of the build-time parity check: the policy bundle's actions[] list must match the Go-side
+// RegisteredActions() exactly. A drift here would let the chokepoint silently grant on actions the Go side rejects (or vice versa).
+// The parity check in policy_test.go runs the same comparison, but having it at construction time means a misconfigured pilot
+// deployment fails fast at boot rather than at first denied request.
 func assertActionsParity(data map[string]any) error {
 	rawActions, ok := data["actions"].([]any)
 	if !ok {
@@ -421,7 +394,6 @@ func decisionFromResultSet(rs rego.ResultSet) (api.Decision, error) {
 	return api.Decision{Allow: allow, Reason: reason}, nil
 }
 
-// Compile-time guard: *Engine satisfies api.AuthZ. Renaming the
-// interface or its method breaks compilation here before the consumer
+// Compile-time guard: *Engine satisfies api.AuthZ. Renaming the interface or its method breaks compilation here before the consumer
 // packages — catches signature drift during refactors.
 var _ api.AuthZ = (*Engine)(nil)

@@ -33,9 +33,8 @@ func TestEncodeToken_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestDecodeToken_AcceptsPaddedURLEncoding ensures DecodeToken accepts the
-// padded form some middleboxes emit, in addition to the raw-unpadded form
-// EncodeToken produces.
+// TestDecodeToken_AcceptsPaddedURLEncoding ensures DecodeToken accepts the padded form some middleboxes emit, in addition to the
+// raw-unpadded form EncodeToken produces.
 func TestDecodeToken_AcceptsPaddedURLEncoding(t *testing.T) {
 	raw := []byte{0xab, 0xcd, 0xef}
 	// Hand-written padded base64url for those three bytes is "q83v" with no
@@ -67,8 +66,7 @@ func TestUserIDFromContext_Empty(t *testing.T) {
 }
 
 func TestUserIDFromContext_ZeroUserIDNotAuthenticated(t *testing.T) {
-	// Pinning user_id 0 should not be reported as authenticated. Guards
-	// against a writer accidentally passing a zero-valued int into
+	// Pinning user_id 0 should not be reported as authenticated. Guards against a writer accidentally passing a zero-valued int into
 	// WithUserID and silently authenticating a request with no user.
 	ctx := api.WithUserID(context.Background(), 0)
 	got, ok := api.UserIDFromContext(ctx)

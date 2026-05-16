@@ -17,8 +17,7 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// recordingAudit captures emitted AuditEvents so the integration tests
-// can assert "the rotation produced exactly the audit row a SIEM
+// recordingAudit captures emitted AuditEvents so the integration tests can assert "the rotation produced exactly the audit row a SIEM
 // reviewer will pivot from."
 type recordingAudit struct {
 	mu     sync.Mutex
@@ -40,10 +39,8 @@ func (r *recordingAudit) snapshot() []identityapi.AuditEvent {
 	return out
 }
 
-// withRotation builds the bootstrap.Deps overlay that wires
-// HostTokenLifetime / Grace + the recording audit + command inserter
-// for rotation tests. Returned helpers expose the captured commands +
-// audit rows after each test action; the *sqlx.DB lets the test
+// withRotation builds the bootstrap.Deps overlay that wires HostTokenLifetime / Grace + the recording audit + command inserter for
+// rotation tests. Returned helpers expose the captured commands + audit rows after each test action; the *sqlx.DB lets the test
 // backdate host_token_issued_at to forge stale tokens.
 func withRotation(t *testing.T, lifetime, grace time.Duration) (*bootstrap.Endpoint, *sqlx.DB, *recordingCommandInserter, *recordingAudit) {
 	t.Helper()
@@ -58,10 +55,8 @@ func withRotation(t *testing.T, lifetime, grace time.Duration) (*bootstrap.Endpo
 	return ep, db, cmds, audit
 }
 
-// ageToken backdates host_token_issued_at via a direct UPDATE so the
-// next VerifyToken sees the token as past lifetime without making the
-// test wait. The same pattern is used in the unit-level rotation tests
-// in endpoint/internal/service/rotation_test.go.
+// ageToken backdates host_token_issued_at via a direct UPDATE so the next VerifyToken sees the token as past lifetime without making
+// the test wait. The same pattern is used in the unit-level rotation tests in endpoint/internal/service/rotation_test.go.
 func ageToken(t *testing.T, db *sqlx.DB, hostID string, age time.Duration) {
 	t.Helper()
 	_, err := db.ExecContext(t.Context(),
@@ -70,12 +65,9 @@ func ageToken(t *testing.T, db *sqlx.DB, hostID string, age time.Duration) {
 	require.NoError(t, err)
 }
 
-// TestRotation_AutoTriggerOnStaleToken: enroll, age the token past
-// lifetime, verify -> rotation auto-triggers. A rotate_token command
-// queues with the new bearer in the payload; an audit row records
-// trigger=auto. The new token verifies; the old token still verifies
-// during grace and reports MatchedPrevious-equivalent behaviour by NOT
-// triggering a second rotation.
+// TestRotation_AutoTriggerOnStaleToken: enroll, age the token past lifetime, verify -> rotation auto-triggers. A rotate_token command
+// queues with the new bearer in the payload; an audit row records trigger=auto. The new token verifies; the old token still verifies
+// during grace and reports MatchedPrevious-equivalent behaviour by NOT triggering a second rotation.
 func TestRotation_AutoTriggerOnStaleToken(t *testing.T) {
 	ep, db, cmds, audit := withRotation(t, time.Hour, 5*time.Minute)
 	ctx := t.Context()
@@ -115,10 +107,8 @@ func TestRotation_AutoTriggerOnStaleToken(t *testing.T) {
 	assert.Len(t, cmds.snapshot(), 1, "grace verify must not queue another rotate_token command")
 }
 
-// TestRotation_OldTokenRejectedAfterGrace: same setup, but a 100ms
-// grace + sleep past it proves the previous-token grace boundary is
-// the actual cutoff. Without this, a leaked token would stay valid
-// forever even after rotation.
+// TestRotation_OldTokenRejectedAfterGrace: same setup, but a 100ms grace + sleep past it proves the previous-token grace boundary is
+// the actual cutoff. Without this, a leaked token would stay valid forever even after rotation.
 func TestRotation_OldTokenRejectedAfterGrace(t *testing.T) {
 	ep, db, _, _ := withRotation(t, time.Hour, 100*time.Millisecond)
 	ctx := t.Context()
@@ -141,10 +131,8 @@ func TestRotation_OldTokenRejectedAfterGrace(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrInvalidToken)
 }
 
-// TestRotation_OperatorPath: explicit Service.RotateToken bypasses the
-// lifetime check (operator wants a fresh token NOW). Audit row carries
-// trigger=operator + actor + reason. CommandID is non-zero so a UI
-// can wait for the agent to ack via /api/commands/{id}.
+// TestRotation_OperatorPath: explicit Service.RotateToken bypasses the lifetime check (operator wants a fresh token NOW). Audit row
+// carries trigger=operator + actor + reason. CommandID is non-zero so a UI can wait for the agent to ack via /api/commands/{id}.
 func TestRotation_OperatorPath(t *testing.T) {
 	ep, _, cmds, audit := withRotation(t, 24*time.Hour, 5*time.Minute)
 	ctx := t.Context()
@@ -174,10 +162,8 @@ func TestRotation_OperatorPath(t *testing.T) {
 	assert.Equal(t, "rotate_token", calls[0].CommandType)
 }
 
-// TestRotation_RevokedHostNotRotatable: revoke + rotate must surface
-// ErrNotFound rather than silently rehydrating the row. The audit
-// reviewer's mental model is "revoke is terminal"; a back-door
-// rotation would defeat that.
+// TestRotation_RevokedHostNotRotatable: revoke + rotate must surface ErrNotFound rather than silently rehydrating the row. The audit
+// reviewer's mental model is "revoke is terminal"; a back-door rotation would defeat that.
 func TestRotation_RevokedHostNotRotatable(t *testing.T) {
 	ep, _, cmds, audit := withRotation(t, 24*time.Hour, time.Minute)
 	ctx := t.Context()

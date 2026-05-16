@@ -18,8 +18,7 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// newAppControlStore wires the rules context against a fresh test DB
-// and returns the store handle plus the *Rules so each test can
+// newAppControlStore wires the rules context against a fresh test DB and returns the store handle plus the *Rules so each test can
 // re-apply the schema for idempotency checks.
 func newAppControlStore(t *testing.T) (api.ApplicationControlStore, *rulesbootstrap.Rules) {
 	t.Helper()
@@ -35,8 +34,7 @@ func newAppControlStore(t *testing.T) (api.ApplicationControlStore, *rulesbootst
 	return r.ApplicationControlStore(), r
 }
 
-// TestAppControl_SeedDefaultPolicy locks the bootstrap contract: a
-// fresh deployment boots with one Default policy, version 1, zero
+// TestAppControl_SeedDefaultPolicy locks the bootstrap contract: a fresh deployment boots with one Default policy, version 1, zero
 // rules, default_action='NONE'.
 func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 	store, _ := newAppControlStore(t)
@@ -54,8 +52,7 @@ func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 	assert.Empty(t, rules)
 }
 
-// TestAppControl_BootstrapIdempotent re-applies the schema and seed
-// and confirms the policy count stays at one. Boot loops (e.g.
+// TestAppControl_BootstrapIdempotent re-applies the schema and seed and confirms the policy count stays at one. Boot loops (e.g.
 // cmd/main on restart) must not duplicate the seed row.
 func TestAppControl_BootstrapIdempotent(t *testing.T) {
 	store, rules := newAppControlStore(t)
@@ -78,8 +75,7 @@ func TestAppControl_GetPolicy_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
 }
 
-// TestAppControl_CreateRule_BinaryHappyPath exercises the demo's
-// critical write: an admin creates a BINARY rule, the row persists,
+// TestAppControl_CreateRule_BinaryHappyPath exercises the demo's critical write: an admin creates a BINARY rule, the row persists,
 // the policy version bumps so the next agent poll picks up the change.
 func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 	store, _ := newAppControlStore(t)
@@ -127,10 +123,8 @@ func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 	assert.Equal(t, rule.ID, listed[0].ID)
 }
 
-// TestAppControl_CreateRule_DuplicateRejected confirms the unique key
-// returns the typed sentinel rather than a bare driver error. The
-// REST surface maps the sentinel to HTTP 409 so idempotent retries
-// from automation clients are distinguishable from real failures.
+// TestAppControl_CreateRule_DuplicateRejected confirms the unique key returns the typed sentinel rather than a bare driver error.
+// The REST surface maps the sentinel to HTTP 409 so idempotent retries from automation clients are distinguishable from real failures.
 func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
@@ -152,11 +146,9 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlDuplicateRule)
 }
 
-// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the demo
-// cut's narrow validator: every non-BINARY type is rejected with the
-// "unsupported" sentinel. The schema accepts the values; the
-// validator gates them so the REST surface is honest about what's
-// wired today.
+// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the demo cut's narrow validator: every non-BINARY type is rejected with the
+// "unsupported" sentinel. The schema accepts the values; the validator gates them so the REST surface is honest about what's wired
+// today.
 func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
@@ -177,10 +169,8 @@ func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 	}
 }
 
-// TestAppControl_CreateRule_RejectsBadBinaryIdentifier covers the
-// negative half of the BINARY validator at the store level. The
-// store path is what the REST handler and any automation client both
-// go through, so this is the gate that protects the database.
+// TestAppControl_CreateRule_RejectsBadBinaryIdentifier covers the negative half of the BINARY validator at the store level. The store
+// path is what the REST handler and any automation client both go through, so this is the gate that protects the database.
 func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
@@ -211,8 +201,7 @@ func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 	}
 }
 
-// TestAppControl_CreateRule_RequiresActorAndReason locks in the
-// auditability contract: a state-changing call without an actor or
+// TestAppControl_CreateRule_RequiresActorAndReason locks in the auditability contract: a state-changing call without an actor or
 // reason is rejected up front, not silently attributed to "system".
 func TestAppControl_CreateRule_RequiresActorAndReason(t *testing.T) {
 	store, _ := newAppControlStore(t)
@@ -240,10 +229,8 @@ func TestAppControl_CreateRule_RequiresActorAndReason(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
 }
 
-// TestAppControl_CreateRule_UnknownPolicyMapsToNotFound covers the
-// FK-violation path: a CreateRule that names a non-existent policy
-// must surface ErrAppControlPolicyNotFound so the REST surface can
-// answer 404, not 500.
+// TestAppControl_CreateRule_UnknownPolicyMapsToNotFound covers the FK-violation path: a CreateRule that names a non-existent policy
+// must surface ErrAppControlPolicyNotFound so the REST surface can answer 404, not 500.
 func TestAppControl_CreateRule_UnknownPolicyMapsToNotFound(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
@@ -258,12 +245,9 @@ func TestAppControl_CreateRule_UnknownPolicyMapsToNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
 }
 
-// TestAppControl_CreateRule_AtomicityOnVersionBumpFailure covers the
-// transactional contract: if the post-insert version-bump fails, the
-// rule MUST NOT remain in the table (we lose the audit trail of
-// "version moved" otherwise, and the agent never sees the new rule).
-// Drives the failure by deleting the policy row out from under an
-// in-flight transaction-attempt; this exercises the same atomicity
+// TestAppControl_CreateRule_AtomicityOnVersionBumpFailure covers the transactional contract: if the post-insert version-bump fails,
+// the rule MUST NOT remain in the table (we lose the audit trail of "version moved" otherwise, and the agent never sees the new rule).
+// Drives the failure by deleting the policy row out from under an in-flight transaction-attempt; this exercises the same atomicity
 // guarantee CodeRabbit asked for on the original review.
 func TestAppControl_CreateRule_AtomicityOnVersionBumpFailure(t *testing.T) {
 	store, rules := newAppControlStore(t)
@@ -280,9 +264,8 @@ func TestAppControl_CreateRule_AtomicityOnVersionBumpFailure(t *testing.T) {
 		Reason:     "atomicity baseline",
 	})
 	require.NoError(t, err)
-	// Re-insert the same row with a non-existent policy id; the FK
-	// fires before the version bump, so the transaction rolls back
-	// cleanly and no orphan row lands.
+	// Re-insert the same row with a non-existent policy id; the FK fires before the version bump, so the transaction rolls back cleanly
+	// and no orphan row lands.
 	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
 		PolicyID:   p.ID + 1_000_000,
 		RuleType:   api.RuleTypeBinary,

@@ -16,10 +16,8 @@ import (
 // shoulder-surf defense gate.
 const MinPasswordRunes = 12
 
-// ErrPasswordTooShort signals a redemption attempt with a password
-// below MinPasswordRunes runes. Caller surfaces a directed reason
-// (`password.too_short`) without leaking the configured floor in the
-// response body.
+// ErrPasswordTooShort signals a redemption attempt with a password below MinPasswordRunes runes. Caller surfaces a directed reason
+// (`password.too_short`) without leaking the configured floor in the response body.
 var ErrPasswordTooShort = errors.New("breakglass: password too short")
 
 // ValidatePassword enforces the wave-1 length-only break-glass

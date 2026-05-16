@@ -31,12 +31,10 @@ type (
 	// Finding is a per-rule positive output. Detection persists these
 	// as alerts via mysql.Store.InsertAlert.
 	Finding = detectionapi.Finding
-	// GraphReader is the narrow read surface the engine exposes to
-	// rules. Audit of the eight production rules confirms these three
-	// methods are the entire surface they consume.
+	// GraphReader is the narrow read surface the engine exposes to rules. Audit of the eight production rules confirms these three methods
+	// are the entire surface they consume.
 	GraphReader = detectionapi.GraphReader
-	// NullRawJSON is the json.RawMessage alias that scans MySQL JSON
-	// NULL correctly. Used by some rule code-signing helpers
+	// NullRawJSON is the json.RawMessage alias that scans MySQL JSON NULL correctly. Used by some rule code-signing helpers
 	// (privilege_launchd_plist_write).
 	NullRawJSON = detectionapi.NullRawJSON
 )
@@ -50,10 +48,8 @@ const (
 	SeverityCritical = detectionapi.SeverityCritical
 )
 
-// Alert source constants re-exported from detection/api so catalog
-// rules can stamp Finding.Source without importing detection/api
-// directly. The doc comment on rules/api (see doc.go) makes the
-// no-detection-import rule explicit; mirror constants here whenever a
+// Alert source constants re-exported from detection/api so catalog rules can stamp Finding.Source without importing detection/api
+// directly. The doc comment on rules/api (see doc.go) makes the no-detection-import rule explicit; mirror constants here whenever a
 // rule needs one. Same values, same types, no behavior drift.
 const (
 	AlertSourceDetection          = detectionapi.AlertSourceDetection
@@ -66,31 +62,22 @@ const (
 // events. Concrete rules live in rules/internal/catalog/.
 type Rule interface {
 	ID() string
-	// Techniques returns the MITRE ATT&CK technique IDs the rule maps to
-	// (e.g. []string{"T1059.002", "T1105"}). Used for Navigator export +
-	// UI badging. Return an empty slice, not nil, for "no mapping".
+	// Techniques returns the MITRE ATT&CK technique IDs the rule maps to (e.g. []string{"T1059.002", "T1105"}). Used for Navigator export
+	// + UI badging. Return an empty slice, not nil, for "no mapping".
 	Techniques() []string
-	// Doc returns the operator-facing documentation for the rule.
-	// Surfaces in /docs/detection-rules.md and the UI's per-rule detail
-	// page; tools/gen-rule-docs reads it directly. Required (not
-	// optional) so a new rule cannot ship without a description and a
-	// severity attestation -- the compile error is the gate.
+	// Doc returns the operator-facing documentation for the rule. Surfaces in /docs/detection-rules.md and the UI's per-rule detail page;
+	// tools/gen-rule-docs reads it directly. Required (not optional) so a new rule cannot ship without a description and a severity
+	// attestation -- the compile error is the gate.
 	Doc() Documentation
-	// Evaluate runs the rule against a batch of events. Implementations
-	// may use gr to walk the historical process graph but must not
-	// mutate state. Returning an error skips the rule for this batch
-	// (logged at WARN); returning nil findings is the common case.
+	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
+	// mutate state. Returning an error skips the rule for this batch (logged at WARN); returning nil findings is the common case.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 }
 
-// RuleMetadata is the per-rule descriptor the operator endpoints
-// render. Used in two surfaces: GET /api/rules (the operator handler
-// maps the fields into a JSON-tagged ruleResponse struct, so the
-// wire shape lives in rules/internal/operator and isn't on this
-// struct) and GET /api/attack-coverage (the handler uses ID +
-// Techniques fields directly to build the Navigator layer). The UI's
-// RuleDetail.tsx and tools/gen-rule-docs both depend on the wire
-// shape, so renaming a field here ripples through both.
+// RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
+// maps the fields into a JSON-tagged ruleResponse struct, so the wire shape lives in rules/internal/operator and isn't on this
+// struct) and GET /api/attack-coverage (the handler uses ID + Techniques fields directly to build the Navigator layer). The UI's
+// RuleDetail.tsx and tools/gen-rule-docs both depend on the wire shape, so renaming a field here ripples through both.
 type RuleMetadata struct {
 	ID         string
 	Techniques []string
@@ -100,8 +87,7 @@ type RuleMetadata struct {
 // Documentation is the structured per-rule descriptor consumed by the
 // markdown generator, /api/rules, and the UI's rule detail page.
 type Documentation struct {
-	// Title is the operator-facing display name (e.g. "Keychain dump").
-	// Distinct from ID(): IDs are stable identifiers used in alert rows;
+	// Title is the operator-facing display name (e.g. "Keychain dump"). Distinct from ID(): IDs are stable identifiers used in alert rows;
 	// titles are the human-readable label rendered in tables and headings.
 	Title string `json:"title"`
 	// Summary is a one-sentence elevator pitch shown in lists / tooltips.
@@ -109,20 +95,16 @@ type Documentation struct {
 	// Description is the long-form behavioural spec (a few short
 	// paragraphs). Plain text; renderers may turn newlines into paragraphs.
 	Description string `json:"description"`
-	// Severity is the SeverityLow|Medium|High|Critical constant the rule
-	// emits. Stored separately from per-finding severities because a
+	// Severity is the SeverityLow|Medium|High|Critical constant the rule emits. Stored separately from per-finding severities because a
 	// single rule always emits a single class today.
 	Severity string `json:"severity"`
-	// EventTypes lists the agent event types the rule consumes (e.g.
-	// "exec", "open_write"). Helps operators decide which ESF/NE
+	// EventTypes lists the agent event types the rule consumes (e.g. "exec", "open_write"). Helps operators decide which ESF/NE
 	// subscriptions a minimal deployment must keep enabled.
 	EventTypes []string `json:"event_types"`
-	// FalsePositives names well-known legitimate sources that can trip
-	// the rule. Each entry is one short sentence -- UI renders as a
+	// FalsePositives names well-known legitimate sources that can trip the rule. Each entry is one short sentence -- UI renders as a
 	// bullet list.
 	FalsePositives []string `json:"false_positives,omitempty"`
-	// Limitations names known coverage gaps so an operator knows what
-	// the rule does NOT catch (atomic renames, env-inherited DYLD vars,
+	// Limitations names known coverage gaps so an operator knows what the rule does NOT catch (atomic renames, env-inherited DYLD vars,
 	// etc.).
 	Limitations []string `json:"limitations,omitempty"`
 	// Config enumerates the env var knobs the rule honours. Empty for
@@ -134,10 +116,8 @@ type Documentation struct {
 type ConfigKnob struct {
 	// EnvVar is the canonical name (e.g. EDR_LAUNCHAGENT_ALLOWLIST).
 	EnvVar string `json:"env_var"`
-	// Type tells the operator what value-shape the env var expects:
-	// "csv-paths" for absolute filesystem paths, "csv-team-ids" for
-	// Apple team-ID strings, "duration" for time.ParseDuration values,
-	// etc.
+	// Type tells the operator what value-shape the env var expects: "csv-paths" for absolute filesystem paths, "csv-team-ids" for Apple
+	// team-ID strings, "duration" for time.ParseDuration values, etc.
 	Type string `json:"type"`
 	// Default is the literal value the rule uses when the env var is
 	// unset. Empty string means "feature off until configured".
@@ -147,10 +127,8 @@ type ConfigKnob struct {
 	Description string `json:"description"`
 }
 
-// RegistryOptions carries the operator-tunable allowlists the eight
-// production rules consume at construction. Lifted verbatim from
-// today's detection/rules.RegistryOptions; cmd/main threads
-// config.Config values into these fields.
+// RegistryOptions carries the operator-tunable allowlists the eight production rules consume at construction. Lifted verbatim from
+// today's detection/rules.RegistryOptions; cmd/main threads config.Config values into these fields.
 type RegistryOptions struct {
 	SuspiciousExecParentAllowlist map[string]struct{}
 	LaunchAgentAllowlist          map[string]struct{}
@@ -166,27 +144,20 @@ type RegistryOptions struct {
 // extension snapshot loader can all reference one canonical shape
 // without importing each other.
 
-// DefaultPolicyName is the name of the policy seeded at bootstrap.
-// Created empty; admins add rules to it via the REST surface.
-// Multi-policy support is on the post-demo backlog; for the demo cut
-// the deployment has exactly one policy with this name.
+// DefaultPolicyName is the name of the policy seeded at bootstrap. Created empty; admins add rules to it via the REST surface.
+// Multi-policy support is on the post-demo backlog; for the demo cut the deployment has exactly one policy with this name.
 const DefaultPolicyName = "Default"
 
-// RuleType is the wire-shape identifier of an application-control
-// rule's matching dimension. The schema's `rule_type` ENUM mirrors
-// this set. In the demo cut only BINARY is enforced; the other five
-// values exist on the type so the column accepts them when their
+// RuleType is the wire-shape identifier of an application-control rule's matching dimension. The schema's `rule_type` ENUM mirrors
+// this set. In the demo cut only BINARY is enforced; the other five values exist on the type so the column accepts them when their
 // validators come online.
 type RuleType string
 
 const (
-	// RuleTypeCDHash matches against the signed Code Directory hash.
-	// 40 lowercase hex characters; only honored for hardened-runtime
+	// RuleTypeCDHash matches against the signed Code Directory hash. 40 lowercase hex characters; only honored for hardened-runtime
 	// processes per the spec.
 	RuleTypeCDHash RuleType = "CDHASH"
-	// RuleTypeBinary matches against the SHA-256 of the executable
-	// file. 64 lowercase hex characters. The only type the demo cut
-	// enforces.
+	// RuleTypeBinary matches against the SHA-256 of the executable file. 64 lowercase hex characters. The only type the demo cut enforces.
 	RuleTypeBinary RuleType = "BINARY"
 	// RuleTypeSigningID matches against `<TeamID>:<bundle.id>` or
 	// `platform:<bundle.id>` for Apple platform binaries.
@@ -202,20 +173,16 @@ const (
 	RuleTypePath RuleType = "PATH"
 )
 
-// Action is the verb a matched rule applies. The demo cut and the
-// rest of Phase A constrain this to BLOCK; ALLOW and SILENT_BLOCK
-// arrive with the Lockdown change. Stable wire-shape string; renaming
-// is a contract break.
+// Action is the verb a matched rule applies. The demo cut and the rest of Phase A constrain this to BLOCK; ALLOW and SILENT_BLOCK
+// arrive with the Lockdown change. Stable wire-shape string; renaming is a contract break.
 type Action string
 
 const (
 	ActionBlock Action = "BLOCK"
 )
 
-// Enforcement is the rule's audit-vs-enforce switch. The column is
-// reserved in this phase: every rule runs as PROTECT. The DETECT
-// semantic (log the would-be decision but allow the exec) arrives
-// with the Lockdown change.
+// Enforcement is the rule's audit-vs-enforce switch. The column is reserved in this phase: every rule runs as PROTECT. The DETECT
+// semantic (log the would-be decision but allow the exec) arrives with the Lockdown change.
 type Enforcement string
 
 const (
@@ -223,10 +190,8 @@ const (
 	EnforcementDetect  Enforcement = "DETECT"
 )
 
-// Severity classifies the alert that a triggered rule produces.
-// Aligned with the existing alert severities (Severity* constants
-// above) so a Sonar / Codecov / SIEM operator sees a unified scale
-// across detection rules and application-control rules.
+// Severity classifies the alert that a triggered rule produces. Aligned with the existing alert severities (Severity* constants above)
+// so a Sonar / Codecov / SIEM operator sees a unified scale across detection rules and application-control rules.
 type Severity string
 
 const (
@@ -236,8 +201,7 @@ const (
 	SeverityRuleCritical Severity = "critical"
 )
 
-// Source records where a rule came from. `admin` is the human-edited
-// case the demo exercises; `imported` is a Santa StaticRules import
+// Source records where a rule came from. `admin` is the human-edited case the demo exercises; `imported` is a Santa StaticRules import
 // (post-demo); `intel` is a threat-intel feed entry (post-demo).
 type Source string
 
@@ -247,21 +211,17 @@ const (
 	SourceIntel    Source = "intel"
 )
 
-// PolicyDefaultAction is the policy-level fallback verdict when no
-// rule matches. Constrained to NONE in this phase (default-allow);
-// the Lockdown change extends the enum with BLOCK so admins can flip
-// a policy to default-deny.
+// PolicyDefaultAction is the policy-level fallback verdict when no rule matches. Constrained to NONE in this phase (default-allow);
+// the Lockdown change extends the enum with BLOCK so admins can flip a policy to default-deny.
 type PolicyDefaultAction string
 
 const (
 	PolicyDefaultActionNone PolicyDefaultAction = "NONE"
 )
 
-// ApplicationControlPolicy mirrors a row in app_control_policies.
-// Used by the REST surface for list/get responses and by the
-// fan-out code when constructing the `set_application_control`
-// agent command. Rules is populated by GetWithRules and the rule
-// listing endpoints; bare Get omits it.
+// ApplicationControlPolicy mirrors a row in app_control_policies. Used by the REST surface for list/get responses and by the fan-out
+// code when constructing the `set_application_control` agent command. Rules is populated by GetWithRules and the rule listing
+// endpoints; bare Get omits it.
 type ApplicationControlPolicy struct {
 	ID            int64                    `json:"id"`
 	Name          string                   `json:"name"`
@@ -296,10 +256,8 @@ type ApplicationControlRule struct {
 	CreatedBy   string      `json:"created_by"`
 }
 
-// CreateRuleRequest carries the operator-supplied fields for a new
-// rule. The server fills in `Enabled=true`, `Action=BLOCK`,
-// `Enforcement=PROTECT`, `Source=admin`, `CreatedBy=<session user>`
-// and timestamps. Severity defaults to medium when blank.
+// CreateRuleRequest carries the operator-supplied fields for a new rule. The server fills in `Enabled=true`, `Action=BLOCK`,
+// `Enforcement=PROTECT`, `Source=admin`, `CreatedBy=<session user>` and timestamps. Severity defaults to medium when blank.
 type CreateRuleRequest struct {
 	PolicyID   int64
 	RuleType   RuleType
@@ -319,46 +277,35 @@ var (
 	// row does not exist.
 	ErrAppControlPolicyNotFound = errors.New("rules: application control policy not found")
 
-	// ErrAppControlInvalidRuleType is returned when the rule_type is
-	// not one of the documented enum values. Distinct from
-	// ErrAppControlUnsupportedRuleType (which is the demo-cut signal
-	// that the type is on the enum but not yet wired through
-	// validation and decisioning).
+	// ErrAppControlInvalidRuleType is returned when the rule_type is not one of the documented enum values. Distinct from
+	// ErrAppControlUnsupportedRuleType (which is the demo-cut signal that the type is on the enum but not yet wired through validation and
+	// decisioning).
 	ErrAppControlInvalidRuleType = errors.New("rules: invalid application control rule type")
 
-	// ErrAppControlUnsupportedRuleType is returned when the rule_type
-	// is on the enum but the demo cut hasn't wired its validator and
-	// decision-engine branch yet. Lifts as the remaining types come
-	// online; the constant stays as the named error so callers can
-	// errors.Is on it without breaking when the message changes.
+	// ErrAppControlUnsupportedRuleType is returned when the rule_type is on the enum but the demo cut hasn't wired its validator and
+	// decision-engine branch yet. Lifts as the remaining types come online; the constant stays as the named error so callers can errors.Is
+	// on it without breaking when the message changes.
 	ErrAppControlUnsupportedRuleType = errors.New("rules: rule type not yet supported")
 
-	// ErrAppControlInvalidIdentifier is returned when the identifier
-	// does not match the format required by its rule_type (e.g. a
-	// BINARY identifier that isn't 64 lowercase hex characters).
+	// ErrAppControlInvalidIdentifier is returned when the identifier does not match the format required by its rule_type (e.g. a BINARY
+	// identifier that isn't 64 lowercase hex characters).
 	ErrAppControlInvalidIdentifier = errors.New("rules: invalid application control rule identifier")
 
 	// ErrAppControlInvalidSeverity is returned when the severity is
 	// not one of low/medium/high/critical.
 	ErrAppControlInvalidSeverity = errors.New("rules: invalid application control rule severity")
 
-	// ErrAppControlInvalidRequest is returned when a request is
-	// missing required fields (e.g. empty actor or reason on a
-	// state-changing call). Distinct from the identifier-shape
-	// errors above so audit logs can tell them apart.
+	// ErrAppControlInvalidRequest is returned when a request is missing required fields (e.g. empty actor or reason on a state-changing
+	// call). Distinct from the identifier-shape errors above so audit logs can tell them apart.
 	ErrAppControlInvalidRequest = errors.New("rules: invalid application control request")
 
-	// ErrAppControlDuplicateRule is returned when a rule with the
-	// same (policy_id, rule_type, identifier) already exists. Mapped
-	// to HTTP 409 by the REST handlers so the client can dedup
-	// idempotent retries cleanly.
+	// ErrAppControlDuplicateRule is returned when a rule with the same (policy_id, rule_type, identifier) already exists. Mapped to HTTP
+	// 409 by the REST handlers so the client can dedup idempotent retries cleanly.
 	ErrAppControlDuplicateRule = errors.New("rules: application control rule already exists")
 )
 
-// IsApplicationControlValidationError reports whether err is one of
-// the validation errors that the REST handlers map to HTTP 400. The
-// duplicate-rule and not-found errors are NOT in this set because
-// they map to different HTTP codes; callers handle those explicitly.
+// IsApplicationControlValidationError reports whether err is one of the validation errors that the REST handlers map to HTTP 400. The
+// duplicate-rule and not-found errors are NOT in this set because they map to different HTTP codes; callers handle those explicitly.
 func IsApplicationControlValidationError(err error) bool {
 	return errors.Is(err, ErrAppControlInvalidRuleType) ||
 		errors.Is(err, ErrAppControlUnsupportedRuleType) ||
@@ -367,11 +314,9 @@ func IsApplicationControlValidationError(err error) bool {
 		errors.Is(err, ErrAppControlInvalidRequest)
 }
 
-// ApplicationControlStore is the read+write surface the rules-context
-// REST handler (and tests) consume. The concrete implementation lives
-// at server/rules/internal/appcontrol; this interface lets callers
-// outside the rules tree depend on the contract without pulling in
-// the internal package (ADR-0004's bounded-context import rule).
+// ApplicationControlStore is the read+write surface the rules-context REST handler (and tests) consume. The concrete implementation
+// lives at server/rules/internal/appcontrol; this interface lets callers outside the rules tree depend on the contract without pulling
+// in the internal package (ADR-0004's bounded-context import rule).
 type ApplicationControlStore interface {
 	GetPolicyByName(ctx context.Context, name string) (ApplicationControlPolicy, error)
 	ListPolicies(ctx context.Context) ([]ApplicationControlPolicy, error)
@@ -379,10 +324,8 @@ type ApplicationControlStore interface {
 	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
 }
 
-// CommandTypeSetApplicationControl is the well-known command type the
-// agent reads on every poll and routes to its application-control
-// snapshot dispatcher. Stable wire-shape string; renaming is a
-// contract break for every deployed agent.
+// CommandTypeSetApplicationControl is the well-known command type the agent reads on every poll and routes to its application-control
+// snapshot dispatcher. Stable wire-shape string; renaming is a contract break for every deployed agent.
 const CommandTypeSetApplicationControl = "set_application_control"
 
 // SetApplicationControlPayload is the wire shape the server writes
@@ -425,26 +368,19 @@ type SetApplicationControlRule struct {
 	CustomURL   *string     `json:"custom_url,omitempty"`
 }
 
-// ApplicationControlRuleIDPrefix namespaces the rule_id that the
-// extension echoes in `application_control_block` events. Keeps the
-// alert dedup key collision-free against catalog rule ids even when
-// the alerts.source column is unavailable for filtering.
+// ApplicationControlRuleIDPrefix namespaces the rule_id that the extension echoes in `application_control_block` events. Keeps the
+// alert dedup key collision-free against catalog rule ids even when the alerts.source column is unavailable for filtering.
 const ApplicationControlRuleIDPrefix = "app_control:"
 
-// ApplicationControlRuleID renders the stable string rule_id for a
-// row in app_control_rules. The extension treats this value as
-// opaque; the server uses it for alert dedup and for mapping a
-// block-event back to its row.
+// ApplicationControlRuleID renders the stable string rule_id for a row in app_control_rules. The extension treats this value as
+// opaque; the server uses it for alert dedup and for mapping a block-event back to its row.
 func ApplicationControlRuleID(id int64) string {
 	return fmt.Sprintf("%s%d", ApplicationControlRuleIDPrefix, id)
 }
 
-// MarshalSetApplicationControlPayload returns the JSON bytes the
-// agent's commander forwards to the extension. Filters disabled rules
-// and rules whose expires_at is in the past so the agent + extension
-// never see them. now is provided by the caller (cmd/main passes
-// time.Now()) so tests can pin a deterministic clock; passing the
-// zero value disables the expires_at filter (treat every rule as
+// MarshalSetApplicationControlPayload returns the JSON bytes the agent's commander forwards to the extension. Filters disabled rules
+// and rules whose expires_at is in the past so the agent + extension never see them. now is provided by the caller (cmd/main passes
+// time.Now()) so tests can pin a deterministic clock; passing the zero value disables the expires_at filter (treat every rule as
 // non-expired).
 func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []ApplicationControlRule, now time.Time) (json.RawMessage, error) {
 	entries := make([]SetApplicationControlRule, 0, len(rules))

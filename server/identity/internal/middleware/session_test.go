@@ -20,10 +20,9 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newService returns a ready-to-use api.Service backed by a fresh test DB.
-// A stub users row (id=1, 7, 42 — anything tests reference) is inserted first
-// so the FK sessions.user_id -> users(id) constraint doesn't reject session
-// inserts that the tests below mint via the sessions store directly.
+// newService returns a ready-to-use api.Service backed by a fresh test DB. A stub users row (id=1, 7, 42 — anything tests reference)
+// is inserted first so the FK sessions.user_id -> users(id) constraint doesn't reject session inserts that the tests below mint via
+// the sessions store directly.
 func newService(t *testing.T) (api.Service, *sessions.Store) {
 	t.Helper()
 	s := testdb.Open(t)
@@ -71,11 +70,9 @@ func TestSession_MissingCookieReturns401(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	// Regression for #80: a cookie-auth 401 must not advertise a Bearer challenge.
-	// The Session middleware's failure mode is "open the login page", not
-	// "retry with a Bearer token", so clients that surface WWW-Authenticate
-	// to the user (browsers' HTTP-Basic dialog, curl --anyauth) shouldn't
-	// see one.
+	// Regression for #80: a cookie-auth 401 must not advertise a Bearer challenge. The Session middleware's failure mode is "open the
+	// login page", not "retry with a Bearer token", so clients that surface WWW-Authenticate to the user (browsers' HTTP-Basic dialog,
+	// curl --anyauth) shouldn't see one.
 	assert.Empty(t, resp.Header.Get("WWW-Authenticate"))
 }
 
@@ -154,9 +151,8 @@ func TestCSRF_SafeMethodPassesThrough(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-// CSRF outside Session (no session on ctx for an unsafe method) is a
-// programming error; we surface it as 500 not 401 so the ops team pages on
-// server misconfiguration rather than assuming a bad token.
+// CSRF outside Session (no session on ctx for an unsafe method) is a programming error; we surface it as 500 not 401 so the ops team
+// pages on server misconfiguration rather than assuming a bad token.
 func TestCSRF_MisconfiguredReturns500(t *testing.T) {
 	mw := middleware.CSRF(slog.Default())
 	srv := httptest.NewServer(mw(sealedBody))

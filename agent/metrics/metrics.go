@@ -1,6 +1,5 @@
-// Package metrics owns the agent-side OTel metric surface. Right now the only write
-// surface is queue drop accounting; adding more instruments later (upload latency,
-// batch retries, etc.) should happen here so attribute keys stay centralised.
+// Package metrics owns the agent-side OTel metric surface. Right now the only write surface is queue drop accounting; adding more
+// instruments later (upload latency, batch retries, etc.) should happen here so attribute keys stay centralised.
 package metrics
 
 import (
@@ -13,17 +12,15 @@ import (
 
 const meterName = "github.com/fleetdm/edr/agent/metrics"
 
-// Recorder is the nil-safe write surface agent components use. Backed by the global
-// OTel meter; when `observability.Init` leaves the SDK at its no-op default (no
-// OTEL_EXPORTER_OTLP_ENDPOINT set), Add is a no-op and the Recorder costs nothing.
+// Recorder is the nil-safe write surface agent components use. Backed by the global OTel meter; when `observability.Init` leaves the
+// SDK at its no-op default (no OTEL_EXPORTER_OTLP_ENDPOINT set), Add is a no-op and the Recorder costs nothing.
 type Recorder struct {
 	queueDropped metric.Int64Counter
 }
 
-// New builds a Recorder wired against the global OTel meter. Host identity is
-// carried on the OTLP resource (set by observability.Init), not on the counter
-// attribute set, so per-host drop rates come for free in SigNoz without
-// inflating cardinality on every sample.
+// New builds a Recorder wired against the global OTel meter. Host identity is carried on the OTLP resource (set by
+// observability.Init), not on the counter attribute set, so per-host drop rates come for free in SigNoz without inflating cardinality
+// on every sample.
 func New() *Recorder {
 	m := otel.Meter(meterName)
 	r := &Recorder{}

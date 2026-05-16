@@ -45,9 +45,8 @@ import (
 // to construct enroll requests.
 const EnrollSecret = "integration-test-enroll-secret"
 
-// Stack is the result of Setup: an httptest server hosting the agent + admin
-// HTTP surfaces, plus the per-context handles tests reach for when calling
-// service methods directly.
+// Stack is the result of Setup: an httptest server hosting the agent + admin HTTP surfaces, plus the per-context handles tests reach
+// for when calling service methods directly.
 type Stack struct {
 	Server    *httptest.Server
 	Identity  *identitybootstrap.Identity
@@ -58,9 +57,8 @@ type Stack struct {
 	DB        *sqlx.DB
 }
 
-// IdentityService / EndpointService / etc. expose each context's public
-// api.Service so tests can call methods (e.g. response.Service.Insert to
-// queue a command) without going through HTTP.
+// IdentityService / EndpointService / etc. expose each context's public api.Service so tests can call methods (e.g.
+// response.Service.Insert to queue a command) without going through HTTP.
 func (s *Stack) IdentityService() identityapi.Service   { return s.Identity.Service() }
 func (s *Stack) EndpointService() endpointapi.Service   { return s.Endpoint.Service() }
 func (s *Stack) ResponseService() responseapi.Service   { return s.Response.Service() }
@@ -141,13 +139,9 @@ func Setup(t *testing.T) *Stack {
 		},
 	})
 	require.NoError(t, err, "open rules")
-	// rules-context ApplySchema seeds the Default application_control
-	// policy on top of testdb/full's DDL pass.
-	// full.Open only applies the DDL (testkit.ApplySchema is a thin
-	// wrapper over bootstrap.ApplySchema's package form which doesn't
-	// know about the seed); calling rulesCtx.ApplySchema here brings
-	// the seed online so the cross-context REST tests have a Default
-	// policy to POST against.
+	// rules-context ApplySchema seeds the Default application_control policy on top of testdb/full's DDL pass. full.Open only applies the
+	// DDL (testkit.ApplySchema is a thin wrapper over bootstrap.ApplySchema's package form which doesn't know about the seed); calling
+	// rulesCtx.ApplySchema here brings the seed online so the cross-context REST tests have a Default policy to POST against.
 	require.NoError(t, rulesCtx.ApplySchema(ctx), "seed rules default policy")
 
 	detectionCtx.LoadActive(rulesCtx.ContentService())
@@ -164,11 +158,9 @@ func Setup(t *testing.T) *Stack {
 
 	mux := buildMux(detectionCtx, endpointCtx, identityCtx, rulesCtx, responseCtx, logger)
 
-	// Background loops. Cancelling the context stops them; t.Cleanup
-	// drives that. Errors from the run loop are surfaced via t.Errorf
-	// so a crash in the processor or the session-cleanup loop fails
-	// the test loudly instead of silently letting Eventually timeouts
-	// be the only diagnostic signal.
+	// Background loops. Cancelling the context stops them; t.Cleanup drives that. Errors from the run loop are surfaced via t.Errorf so a
+	// crash in the processor or the session-cleanup loop fails the test loudly instead of silently letting Eventually timeouts be the only
+	// diagnostic signal.
 	go func() {
 		if err := detectionCtx.Run(ctx); err != nil && ctx.Err() == nil {
 			t.Errorf("detection.Run failed: %v", err)
@@ -193,13 +185,10 @@ func Setup(t *testing.T) *Stack {
 	}
 }
 
-// buildMux mirrors cmd/fleet-edr-server's mux composition for the routes
-// the cross-context tests exercise. Operator routes that require an
-// authenticated admin session are wired the same way as production
-// (Session + CSRF middleware), but tests typically skip the HTTP path
-// for those and call Service methods directly via the Stack handles —
-// session minting + CSRF-token plumbing belongs in dedicated identity
-// tests, not in every cross-context smoke.
+// buildMux mirrors cmd/fleet-edr-server's mux composition for the routes the cross-context tests exercise. Operator routes that
+// require an authenticated admin session are wired the same way as production (Session + CSRF middleware), but tests typically skip
+// the HTTP path for those and call Service methods directly via the Stack handles — session minting + CSRF-token plumbing belongs in
+// dedicated identity tests, not in every cross-context smoke.
 func buildMux(
 	detectionCtx *detectionbootstrap.Detection,
 	endpointCtx *endpointbootstrap.Endpoint,
@@ -214,8 +203,7 @@ func buildMux(
 	endpointCtx.RegisterPublicRoutes(mux)
 	identityCtx.RegisterPublicRoutes(mux)
 
-	// Detection's intake route (POST /api/events) is gated by endpoint's
-	// host-token middleware in production. Here we register it the same
+	// Detection's intake route (POST /api/events) is gated by endpoint's host-token middleware in production. Here we register it the same
 	// way: a sub-mux for host-token routes, wrapped with the middleware.
 	hostMW := endpointCtx.HostTokenMiddleware()
 	hostMux := http.NewServeMux()
@@ -233,13 +221,10 @@ func buildMux(
 	// Detection's health probes are public (livez/readyz).
 	detectionCtx.RegisterHealthRoutes(mux)
 
-	// Operator routes (session+CSRF gated). The cross-context authz
-	// journey test in authz_journey_test.go drives these via real
-	// HTTP with seeded session cookies, so the chokepoint + audit
-	// pipeline are exercised end-to-end. Tests that don't care about
-	// the admin path simply ignore them; the routes wire onto the
-	// same mux but the session middleware shorts-circuits anonymous
-	// callers with a 401 before any handler runs.
+	// Operator routes (session+CSRF gated). The cross-context authz journey test in authz_journey_test.go drives these via real HTTP with
+	// seeded session cookies, so the chokepoint + audit pipeline are exercised end-to-end. Tests that don't care about the admin path
+	// simply ignore them; the routes wire onto the same mux but the session middleware shorts-circuits anonymous callers with a 401 before
+	// any handler runs.
 	sessionMW := identityCtx.SessionMiddleware()
 	csrfMW := identityCtx.CSRFMiddleware()
 	apiMux := http.NewServeMux()

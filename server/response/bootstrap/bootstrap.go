@@ -17,13 +17,9 @@ import (
 	"github.com/fleetdm/edr/server/response/internal/service"
 )
 
-// Heartbeat is the closure cmd/main supplies so response.Service
-// can advance the host's last-seen-ns on every /api/commands poll
-// without importing server/store (today's home of
-// UpdateHostLastSeen) or detection (phase-5 home of RecordHostSeen).
-// Returning an error is logged at WARN by the service; a heartbeat
-// failure does NOT fail the poll because the agent already got its
-// commands.
+// Heartbeat is the closure cmd/main supplies so response.Service can advance the host's last-seen-ns on every /api/commands poll
+// without importing server/store (today's home of UpdateHostLastSeen) or detection (phase-5 home of RecordHostSeen). Returning an
+// error is logged at WARN by the service; a heartbeat failure does NOT fail the poll because the agent already got its commands.
 type Heartbeat = service.Heartbeat
 
 // Deps bundles what New needs. cmd/main owns the *sqlx.DB handle and
@@ -32,18 +28,15 @@ type Deps struct {
 	DB     *sqlx.DB
 	Logger *slog.Logger
 
-	// Heartbeat is optional; nil disables the per-poll last-seen
-	// bump. Production wires cmd/main's `s.UpdateHostLastSeen`
-	// closure; cmd/main wires it to detectionCtx.RecordHostSeen.
+	// Heartbeat is optional; nil disables the per-poll last-seen bump. Production wires cmd/main's `s.UpdateHostLastSeen` closure;
+	// cmd/main wires it to detectionCtx.RecordHostSeen.
 	Heartbeat Heartbeat
 
-	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for command issuance. cmd/main wires
+	// Audit is the operator-action recorder. Optional: nil disables audit emission for command issuance. cmd/main wires
 	// identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 
-	// AuthZ is the authorization chokepoint POST /api/commands and
-	// GET /api/commands/{id} gate on. Required. cmd/main wires
+	// AuthZ is the authorization chokepoint POST /api/commands and GET /api/commands/{id} gate on. Required. cmd/main wires
 	// identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 }
@@ -84,17 +77,14 @@ func New(deps Deps) (*Response, error) {
 	}, nil
 }
 
-// ApplySchema runs the DDL statements response owns. Idempotent
-// (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
+// ApplySchema runs the DDL statements response owns. Idempotent (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
 // other contexts' ApplySchema is not load-bearing.
 func (r *Response) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, r.db)
 }
 
-// ApplySchema is the package-level form: applies response's DDL
-// against the given DB without requiring a fully constructed
-// *Response. Used by server/testdb so tests can apply every context's
-// schema without faking out each bootstrap's service dependencies.
+// ApplySchema is the package-level form: applies response's DDL against the given DB without requiring a fully constructed *Response.
+// Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("response ApplySchema: db must not be nil")
@@ -107,10 +97,8 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return nil
 }
 
-// Service exposes the public api.Service for cross-context callers.
-// endpoint and rules consume Service.Insert as a method value
-// satisfying their CommandInserter closure types; cmd/main's metrics
-// adapter consumes Service.CountPending.
+// Service exposes the public api.Service for cross-context callers. endpoint and rules consume Service.Insert as a method value
+// satisfying their CommandInserter closure types; cmd/main's metrics adapter consumes Service.CountPending.
 func (r *Response) Service() api.Service { return r.svc }
 
 // RegisterAgentRoutes wires the host-token-gated agent routes:

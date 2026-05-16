@@ -9,17 +9,13 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// TestOpen_AllContextsSchemaPresent verifies that every bounded
-// context's authoritative table is present after full.Open returns.
-// Catches a future "I added a new context but forgot to wire it into
-// full.Open" regression.
+// TestOpen_AllContextsSchemaPresent verifies that every bounded context's authoritative table is present after full.Open returns.
+// Catches a future "I added a new context but forgot to wire it into full.Open" regression.
 func TestOpen_AllContextsSchemaPresent(t *testing.T) {
 	db := full.Open(t)
 
-	// The rules context owns app_control_policies + app_control_rules
-	// (demo cut). The remaining two spec'd tables (host_groups +
-	// app_control_assignments) land with the full Phase A; for the
-	// demo every policy implicitly targets every host in the deployment.
+	// The rules context owns app_control_policies + app_control_rules (demo cut). The remaining two spec'd tables (host_groups +
+	// app_control_assignments) land with the full Phase A; for the demo every policy implicitly targets every host in the deployment.
 	tables := map[string]string{
 		"users":                "identity",
 		"sessions":             "identity",

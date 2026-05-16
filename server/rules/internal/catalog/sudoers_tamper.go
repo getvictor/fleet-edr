@@ -37,10 +37,8 @@ import (
 // doesn't subscribe to it today (tracked alongside the
 // privilege_launchd_plist_write atomic-rename gap).
 type SudoersTamper struct {
-	// AllowedWriters is the set of absolute writer-process paths the
-	// rule should silently accept. Populated from
-	// EDR_SUDOERS_WRITER_ALLOWLIST. Empty by default — every direct
-	// write to sudoers fires.
+	// AllowedWriters is the set of absolute writer-process paths the rule should silently accept. Populated from
+	// EDR_SUDOERS_WRITER_ALLOWLIST. Empty by default — every direct write to sudoers fires.
 	AllowedWriters map[string]struct{}
 }
 
@@ -84,39 +82,28 @@ func (r *SudoersTamper) Doc() api.Documentation {
 	}
 }
 
-// sudoersPath matches /etc/sudoers itself and any direct child of
-// /etc/sudoers.d/. ESF reports both forms (/etc/...  and
-// /private/etc/... since /etc is a symlink); we accept either. Nested
-// paths (/etc/sudoers.d/foo/bar) are excluded by `[^/]+` so the rule
-// can't be lured by an attacker creating a same-named subdirectory
-// somewhere unrelated.
+// sudoersPath matches /etc/sudoers itself and any direct child of /etc/sudoers.d/. ESF reports both forms (/etc/... and
+// /private/etc/... since /etc is a symlink); we accept either. Nested paths (/etc/sudoers.d/foo/bar) are excluded by `[^/]+` so the
+// rule can't be lured by an attacker creating a same-named subdirectory somewhere unrelated.
 var sudoersPath = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`)
 
-// sudoersBytes is the substring fast-path filter applied to the raw
-// JSON payload before json.Unmarshal. NOTIFY_OPEN fires on every file
-// open in the kernel — thousands per second — and writes to sudoers
-// happen on a stable host literally never. Skipping the JSON decode
-// for opens that obviously don't qualify cuts the rule's CPU cost
-// from "one unmarshal per open" to "one bytes.Contains per open".
-// Both /etc/sudoers and /private/etc/sudoers contain the same magic
-// substring, so a single check covers both forms.
+// sudoersBytes is the substring fast-path filter applied to the raw JSON payload before json.Unmarshal. NOTIFY_OPEN fires on every
+// file open in the kernel — thousands per second — and writes to sudoers happen on a stable host literally never. Skipping the JSON
+// decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal per open" to "one bytes.Contains per
+// open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
 var sudoersBytes = []byte("/etc/sudoers")
 
-// sudoersOpenPayload mirrors the open event shape we care about. Local
-// to this rule rather than a shared package symbol so the
-// privilege_launchd_plist_write rule (in flight on another branch) can
-// keep its own copy without merge collisions; both can dedupe once
-// both rules are on main.
+// sudoersOpenPayload mirrors the open event shape we care about. Local to this rule rather than a shared package symbol so the
+// privilege_launchd_plist_write rule (in flight on another branch) can keep its own copy without merge collisions; both can dedupe
+// once both rules are on main.
 type sudoersOpenPayload struct {
 	PID   int    `json:"pid"`
 	Path  string `json:"path"`
 	Flags int    `json:"flags"`
 }
 
-// Bits 0 and 1 of open(2) flags hold the access mode: O_RDONLY=0,
-// O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits means the
-// fd can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND, ...)
-// don't affect the access mode.
+// Bits 0 and 1 of open(2) flags hold the access mode: O_RDONLY=0, O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits means the
+// fd can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND, ...) don't affect the access mode.
 const sudoersWriteAccessMask = 0x3
 
 // O_TRUNC (0x400) | O_APPEND (0x8) | O_CREAT (0x200) — the bits an
@@ -188,14 +175,10 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 
-	// Narrow the intent-mask suppression to /usr/bin/sudo specifically. sudo
-	// is the one writer we know opens with O_WRONLY-only as part of its
-	// LOCK_EX flock pattern (never actually writes); any other writer
-	// reaching write-mode against /etc/sudoers stays on the unhappy path
-	// even when no intent bit is set, so a custom binary doing
-	// open(O_WRONLY) → write() at offset 0 still alerts. (The known-gap
-	// note up at the top of the file describes the residual case where
-	// the writer IS sudo but is doing something other than flocking.)
+	// Narrow the intent-mask suppression to /usr/bin/sudo specifically. sudo is the one writer we know opens with O_WRONLY-only as part of
+	// its LOCK_EX flock pattern (never actually writes); any other writer reaching write-mode against /etc/sudoers stays on the unhappy
+	// path even when no intent bit is set, so a custom binary doing open(O_WRONLY) → write() at offset 0 still alerts. (The known-gap note
+	// up at the top of the file describes the residual case where the writer IS sudo but is doing something other than flocking.)
 	if proc.Path == "/usr/bin/sudo" && p.Flags&sudoersWriteIntentMask == 0 {
 		return nil, nil
 	}

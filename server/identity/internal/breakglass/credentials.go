@@ -14,25 +14,18 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// ErrCredentialClonedDetected is returned by RecordAssertion when the
-// authenticator's reported sign_count has not advanced past the
-// stored value. Per WebAuthn §6.1.1, a sign_count regression
-// indicates the credential was cloned (or that the authenticator
-// itself does not maintain a counter, which the implementation is
-// permitted to ignore — but for break-glass we treat any regression
-// as suspicious and refuse the assertion).
+// ErrCredentialClonedDetected is returned by RecordAssertion when the authenticator's reported sign_count has not advanced past the
+// stored value. Per WebAuthn §6.1.1, a sign_count regression indicates the credential was cloned (or that the authenticator itself
+// does not maintain a counter, which the implementation is permitted to ignore — but for break-glass we treat any regression as
+// suspicious and refuse the assertion).
 var ErrCredentialClonedDetected = errors.New("breakglass: webauthn sign_count regression — possible cloned credential")
 
-// ErrCredentialNotFound is returned by FindByID when no row matches
-// the supplied credential id. Distinguished from a generic store
-// error so the assertion handler can map it to the directed
-// `webauthn.unknown_credential` reason.
+// ErrCredentialNotFound is returned by FindByID when no row matches the supplied credential id. Distinguished from a generic store
+// error so the assertion handler can map it to the directed `webauthn.unknown_credential` reason.
 var ErrCredentialNotFound = errors.New("breakglass: webauthn credential not found")
 
-// CredentialRow is the storage shape backing webauthn_credentials.
-// Mirrors the schema ordering used by the assertion + registration
-// flows; the "exported" fields here are read+written together via
-// CredentialStore methods (no direct field-by-field exposure).
+// CredentialRow is the storage shape backing webauthn_credentials. Mirrors the schema ordering used by the assertion + registration
+// flows; the "exported" fields here are read+written together via CredentialStore methods (no direct field-by-field exposure).
 type CredentialRow struct {
 	ID             int64          `db:"id"`
 	UserID         int64          `db:"user_id"`
@@ -61,10 +54,8 @@ func NewCredentialStore(db *sqlx.DB) *CredentialStore {
 	return &CredentialStore{db: db}
 }
 
-// InsertWith persists a freshly-registered WebAuthn credential. Runs
-// against a caller-supplied executor (typically *sqlx.Tx) so the
-// insert lands in the same transaction as the bootstrap-token
-// redemption + password set, preserving the spec's atomic-redemption
+// InsertWith persists a freshly-registered WebAuthn credential. Runs against a caller-supplied executor (typically *sqlx.Tx) so the
+// insert lands in the same transaction as the bootstrap-token redemption + password set, preserving the spec's atomic-redemption
 // guarantee.
 func (s *CredentialStore) InsertWith(ctx context.Context, ec Executor, userID int64, c webauthn.Credential, name string) (int64, error) {
 	transports := encodeTransports(c.Transport)
@@ -86,12 +77,9 @@ func (s *CredentialStore) InsertWith(ctx context.Context, ec Executor, userID in
 	return id, nil
 }
 
-// ListByUserID returns every credential owned by the user. The
-// assertion ceremony reads ALL credentials at once because go-webauthn
-// matches the assertion against the union before deciding which
-// credential signed; per-credential lookup would require trusting the
-// browser's claim about which one it used, which a tampered assertion
-// could spoof.
+// ListByUserID returns every credential owned by the user. The assertion ceremony reads ALL credentials at once because go-webauthn
+// matches the assertion against the union before deciding which credential signed; per-credential lookup would require trusting the
+// browser's claim about which one it used, which a tampered assertion could spoof.
 func (s *CredentialStore) ListByUserID(ctx context.Context, userID int64) ([]CredentialRow, error) {
 	rows := []CredentialRow{}
 	err := s.db.SelectContext(ctx, &rows, `
@@ -158,11 +146,8 @@ func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, ne
 	if n != 0 {
 		return nil
 	}
-	// Zero rows updated. Probe to disambiguate the row-missing case
-	// from the clone-detected case. The probe runs against the
-	// post-state which is fine: the clone WHERE clause guards every
-	// writer, so the stored value we read now is exactly what
-	// blocked the UPDATE.
+	// Zero rows updated. Probe to disambiguate the row-missing case from the clone-detected case. The probe runs against the post-state
+	// which is fine: the clone WHERE clause guards every writer, so the stored value we read now is exactly what blocked the UPDATE.
 	var stored uint64
 	err = s.db.GetContext(ctx, &stored,
 		`SELECT sign_count FROM webauthn_credentials WHERE credential_id = ?`,
@@ -176,18 +161,14 @@ func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, ne
 	if stored > 0 && uint64(newSignCount) <= stored {
 		return ErrCredentialClonedDetected
 	}
-	// Defensive: row exists, sign_count is healthy, but UPDATE
-	// matched zero rows. Shouldn't happen; treat as not-found so
-	// the operator retries with a fresh assertion.
+	// Defensive: row exists, sign_count is healthy, but UPDATE matched zero rows. Shouldn't happen; treat as not-found so the operator
+	// retries with a fresh assertion.
 	return ErrCredentialNotFound
 }
 
-// FindByID returns the row for a single credential id (raw bytes,
-// not base64). Used by the login form's GET handler to assert at
-// least one credential exists for the user before issuing a
-// challenge — a user with zero credentials cannot satisfy WebAuthn
-// at all and the form should render an admin-recovery hint
-// instead.
+// FindByID returns the row for a single credential id (raw bytes, not base64). Used by the login form's GET handler to assert at least
+// one credential exists for the user before issuing a challenge — a user with zero credentials cannot satisfy WebAuthn at all and the
+// form should render an admin-recovery hint instead.
 func (s *CredentialStore) FindByID(ctx context.Context, credID []byte) (*CredentialRow, error) {
 	var row CredentialRow
 	err := s.db.GetContext(ctx, &row, `
@@ -206,19 +187,14 @@ func (s *CredentialStore) FindByID(ctx context.Context, credID []byte) (*Credent
 	return &row, nil
 }
 
-// ToWebauthnCredentials converts a slice of stored rows into the
-// shape go-webauthn expects on the User interface's
-// WebAuthnCredentials method. Pulled out so the User adapter and
-// any future migration code can share the conversion.
+// ToWebauthnCredentials converts a slice of stored rows into the shape go-webauthn expects on the User interface's WebAuthnCredentials
+// method. Pulled out so the User adapter and any future migration code can share the conversion.
 func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 	out := make([]webauthn.Credential, len(rows))
 	for i, r := range rows {
-		// SignCount is uint64 in the schema (matches MySQL UNSIGNED
-		// BIGINT); the WebAuthn library carries uint32 because the
-		// authenticatorData wire shape uses 32 bits. A counter that
-		// somehow exceeds uint32 indicates either a bug in the
-		// authenticator or a tampered database row; clamp to MaxUint32
-		// so the comparison still rejects future regressions
+		// SignCount is uint64 in the schema (matches MySQL UNSIGNED BIGINT); the WebAuthn library carries uint32 because
+		// the authenticatorData wire shape uses 32 bits. A counter that somehow exceeds uint32 indicates either a bug in the
+		// authenticator or a tampered database row; clamp to MaxUint32 so the comparison still rejects future regressions
 		// deterministically.
 		signCount := min(r.SignCount, math.MaxUint32)
 		//nolint:gosec // signCount is clamped to MaxUint32 above; the conversion is safe.
@@ -227,11 +203,9 @@ func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 			PublicKey: r.PublicKey,
 			Transport: decodeTransports(r.Transports.String),
 			Flags: webauthn.CredentialFlags{
-				// BE is invariant per the WebAuthn spec; the library
-				// rejects assertions where the asserted BE differs
-				// from this stored value, so getting these flags onto
-				// the credential is what makes platform-authenticator
-				// Passkey logins work past first use.
+				// BE is invariant per the WebAuthn spec; the library rejects assertions where the asserted
+				// BE differs from this stored value, so getting these flags onto the credential is what makes
+				// platform-authenticator Passkey logins work past first use.
 				BackupEligible: r.BackupEligible,
 				BackupState:    r.BackupState,
 			},
@@ -243,11 +217,9 @@ func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 	return out
 }
 
-// encodeTransports collapses a slice of go-webauthn transport
-// constants into a comma-separated wire string for the
-// transports column. The schema uses VARCHAR(64) so a malicious
-// authenticator advertising thousands of transports cannot blow
-// the column; the join is bounded to 64 bytes by the DDL.
+// encodeTransports collapses a slice of go-webauthn transport constants into a comma-separated wire string for the transports column.
+// The schema uses VARCHAR(64) so a malicious authenticator advertising thousands of transports cannot blow the column; the join is
+// bounded to 64 bytes by the DDL.
 func encodeTransports(ts []protocol.AuthenticatorTransport) string {
 	if len(ts) == 0 {
 		return ""
@@ -279,10 +251,8 @@ func decodeTransports(s string) []protocol.AuthenticatorTransport {
 	return out
 }
 
-// nullableString wraps a string in sql.NullString so the empty case
-// inserts NULL rather than the empty string (the column allows NULL
-// but disallows the empty string semantically — credentials without
-// a name should read NULL when listed).
+// nullableString wraps a string in sql.NullString so the empty case inserts NULL rather than the empty string (the column allows NULL
+// but disallows the empty string semantically — credentials without a name should read NULL when listed).
 func nullableString(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{}

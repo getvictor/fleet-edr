@@ -25,9 +25,8 @@ func TestNullRawJSON_Scan(t *testing.T) {
 }
 
 func TestNullRawJSON_Scan_CopiesDriverBuffer(t *testing.T) {
-	// The MySQL driver reuses its scratch buffer across rows. Scan
-	// must copy or a subsequent scan will mutate the previously
-	// captured payload.
+	// The MySQL driver reuses its scratch buffer across rows. Scan must copy or a subsequent scan will mutate the previously captured
+	// payload.
 	buf := []byte(`{"a":1}`)
 	n := NullRawJSON(nil)
 	require.NoError(t, n.Scan(buf))
@@ -100,9 +99,8 @@ func jsonValueGen() *rapid.Generator[json.RawMessage] {
 	)
 }
 
-// TestNullRawJSON_RoundTripProperty: Unmarshal(Marshal(v)) preserves v
-// for every JSON value; the "null" literal collapses to nil per the
-// documented shape.
+// TestNullRawJSON_RoundTripProperty: Unmarshal(Marshal(v)) preserves v for every JSON value; the "null" literal collapses to nil per
+// the documented shape.
 func TestNullRawJSON_RoundTripProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		v := jsonValueGen().Draw(rt, "v")

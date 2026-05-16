@@ -12,8 +12,7 @@ import (
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 )
 
-// Service implements api.Service. It composes the mysql.Store with
-// an optional Heartbeat closure. Status-transition validation lives
+// Service implements api.Service. It composes the mysql.Store with an optional Heartbeat closure. Status-transition validation lives
 // here (so the matrix is testable without a DB).
 type Service struct {
 	store     *mysql.Store
@@ -21,8 +20,7 @@ type Service struct {
 	logger    *slog.Logger
 }
 
-// New builds a Service. store must be non-nil; heartbeat may be nil
-// (tests that don't care about the per-poll last-seen bump pass nil
+// New builds a Service. store must be non-nil; heartbeat may be nil (tests that don't care about the per-poll last-seen bump pass nil
 // and ListForHost skips the call).
 func New(store *mysql.Store, heartbeat Heartbeat, logger *slog.Logger) *Service {
 	if store == nil {
@@ -66,10 +64,8 @@ func (s *Service) Get(ctx context.Context, id int64) (api.Command, error) {
 	return s.store.Get(ctx, id)
 }
 
-// ListForHost returns the host's commands and (best-effort) bumps
-// the host's last-seen-ns via the Heartbeat closure. A heartbeat
-// error is logged at WARN and ignored; the agent already got its
-// commands and the next poll re-tries.
+// ListForHost returns the host's commands and (best-effort) bumps the host's last-seen-ns via the Heartbeat closure. A heartbeat error
+// is logged at WARN and ignored; the agent already got its commands and the next poll re-tries.
 func (s *Service) ListForHost(ctx context.Context, hostID string, status api.Status) ([]api.Command, error) {
 	if s.heartbeat != nil {
 		if err := s.heartbeat(ctx, hostID, time.Now()); err != nil {
@@ -87,20 +83,16 @@ func (s *Service) ListForHost(ctx context.Context, hostID string, status api.Sta
 	return cmds, nil
 }
 
-// UpdateStatus enforces the status-transition matrix on top of the
-// store's row write. Loads the current row to validate ownership +
-// current status before persisting; collapses both "wrong host" and
-// "unknown id" to api.ErrCommandNotFound at the boundary.
+// UpdateStatus enforces the status-transition matrix on top of the store's row write. Loads the current row to validate ownership +
+// current status before persisting; collapses both "wrong host" and "unknown id" to api.ErrCommandNotFound at the boundary.
 func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest) error {
 	if !validTargetStatus(req.Status) {
 		return fmt.Errorf("%w: status must be acked, completed, or failed (got %q)",
 			api.ErrInvalidStatusTransition, req.Status)
 	}
 
-	// Load the current row to validate ownership + current state.
-	// store.Get returns ErrCommandNotFound when the id is unknown;
-	// we additionally collapse the wrong-host case to the same
-	// sentinel (probing-oracle defence).
+	// Load the current row to validate ownership + current state. store.Get returns ErrCommandNotFound when the id is unknown;
+	// we additionally collapse the wrong-host case to the same sentinel (probing-oracle defence).
 	current, err := s.store.Get(ctx, req.ID)
 	if err != nil {
 		return err
@@ -113,11 +105,8 @@ func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest)
 			api.ErrInvalidStatusTransition, current.Status, req.Status)
 	}
 
-	// Pass current.Status as the expected-from value so the store
-	// applies the WHERE clause atomically. If a concurrent caller
-	// advanced the row between our read and this write, the store
-	// returns ErrInvalidStatusTransition (not silently overwriting
-	// the newer state).
+	// Pass current.Status as the expected-from value so the store applies the WHERE clause atomically. If a concurrent caller advanced the
+	// row between our read and this write, the store returns ErrInvalidStatusTransition (not silently overwriting the newer state).
 	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current.Status, req.Status, req.Result)
 }
 
@@ -126,8 +115,7 @@ func (s *Service) CountPending(ctx context.Context) (int, error) {
 	return s.store.CountPending(ctx)
 }
 
-// validTargetStatus reports whether the agent-supplied status is a
-// legal target for an UpdateStatus call. pending is rejected here
+// validTargetStatus reports whether the agent-supplied status is a legal target for an UpdateStatus call. pending is rejected here
 // because the agent must transition forward.
 func validTargetStatus(s api.Status) bool {
 	switch s { //nolint:exhaustive // pending is intentionally rejected; default falls through to false.

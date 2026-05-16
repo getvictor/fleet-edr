@@ -25,21 +25,17 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// capturedCommand records what the appcontrol fan-out enqueued.
-// The integration test uses it to assert that every host received
-// exactly one set_application_control command on a rule-create AND
-// that the JSON payload is the canonical wire shape (filtered for
-// the enabled, non-expired rules).
+// capturedCommand records what the appcontrol fan-out enqueued. The integration test uses it to assert that every host received
+// exactly one set_application_control command on a rule-create AND that the JSON payload is the canonical wire shape (filtered for the
+// enabled, non-expired rules).
 type capturedCommand struct {
 	HostID  string
 	Type    string
 	Payload []byte
 }
 
-// recordingInserter is a goroutine-safe CommandInserter stub. The
-// fan-out runs through it instead of response.Service.Insert so the
-// test can assert on the enqueued set without standing up the
-// response context. Failures are returned for the host_ids listed in
+// recordingInserter is a goroutine-safe CommandInserter stub. The fan-out runs through it instead of response.Service.Insert so the
+// test can assert on the enqueued set without standing up the response context. Failures are returned for the host_ids listed in
 // FailHost so the audit-row fanout_failed accounting can be exercised.
 type recordingInserter struct {
 	mu        sync.Mutex
@@ -78,8 +74,7 @@ func (r *recordingInserter) snapshot() []capturedCommand {
 	return out
 }
 
-// recordingAudit captures AuditEvent rows. The handler emits one
-// row per CreateRule call; tests assert the action, target type,
+// recordingAudit captures AuditEvent rows. The handler emits one row per CreateRule call; tests assert the action, target type,
 // and the fanout_* payload counts.
 type recordingAudit struct {
 	mu     sync.Mutex
@@ -110,12 +105,9 @@ type appControlRig struct {
 	actor    *identityapi.Actor
 }
 
-// newAppControlRig wires a rules bootstrap with the demo-cut REST
-// surface live. Hosts are a fixed []string the recordingInserter
-// fans out to. Sessions and CSRF are bypassed: the handler is
-// mounted directly so the test exercises the route's auth-gate +
-// service plumbing without identity middleware. The actor on
-// context is injected by a tiny wrapper so HTTPGate sees a tenant.
+// newAppControlRig wires a rules bootstrap with the demo-cut REST surface live. Hosts are a fixed []string the recordingInserter
+// fans out to. Sessions and CSRF are bypassed: the handler is mounted directly so the test exercises the route's auth-gate + service
+// plumbing without identity middleware. The actor on context is injected by a tiny wrapper so HTTPGate sees a tenant.
 func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 	t.Helper()
 	db := full.Open(t)
@@ -181,9 +173,8 @@ func (r *appControlRig) do(t *testing.T, method, path string, body any) *http.Re
 	return resp
 }
 
-// TestAppControl_ListPolicies_ReturnsSeededDefault: the seed bootstrap
-// creates one `Default` policy. The list endpoint must surface it so
-// the UI's "open policy detail" link has a target.
+// TestAppControl_ListPolicies_ReturnsSeededDefault: the seed bootstrap creates one `Default` policy. The list endpoint must surface it
+// so the UI's "open policy detail" link has a target.
 func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a", "host-b"})
 	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies", nil)
@@ -197,8 +188,7 @@ func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	assert.Equal(t, rulesapi.DefaultPolicyName, body.Policies[0].Name)
 }
 
-// TestAppControl_GetPolicy_IncludesRules: a freshly-seeded policy
-// has zero rules; after a POST the GET path should include the new
+// TestAppControl_GetPolicy_IncludesRules: a freshly-seeded policy has zero rules; after a POST the GET path should include the new
 // rule in the Rules slice.
 func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a"})
@@ -232,10 +222,8 @@ func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 	assert.Equal(t, rulesapi.SeverityRuleHigh, withRule.Rules[0].Severity)
 }
 
-// TestAppControl_CreateRule_FansOutToEveryHost: the headline contract.
-// One rule create → one set_application_control command per host,
-// each carrying the same wire payload. Dedup if HostLister returns
-// duplicates so the audit row's fanout_hosts is the unique count.
+// TestAppControl_CreateRule_FansOutToEveryHost: the headline contract. One rule create → one set_application_control command per host,
+// each carrying the same wire payload. Dedup if HostLister returns duplicates so the audit row's fanout_hosts is the unique count.
 func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	hosts := []string{"host-a", "host-b", "host-c", "host-a"} // dup to assert dedup
 	r := newAppControlRig(t, hosts)
@@ -282,9 +270,8 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	assert.Equal(t, 0, ev.Payload["fanout_failed"], "no failures expected on the happy path")
 }
 
-// TestAppControl_CreateRule_RecordsFanoutFailures: a per-host
-// CommandInserter failure must not abort the loop AND must surface
-// on the audit row as fanout_failed > 0.
+// TestAppControl_CreateRule_RecordsFanoutFailures: a per-host CommandInserter failure must not abort the loop AND must surface on the
+// audit row as fanout_failed > 0.
 func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a", "host-bad"})
 	r.inserter.failFor("host-bad", errors.New("synthetic insert failure"))
@@ -308,11 +295,9 @@ func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 	assert.Equal(t, 1, events[0].Payload["fanout_failed"], "host-bad's failure must show in fanout_failed")
 }
 
-// TestAppControl_CreateRule_RejectsDuplicate: posting the same
-// (policy, rule_type, identifier) twice should return 409 with the
-// typed error code; the second POST also must NOT fan out a stale
-// duplicate command (the rule didn't change, so the snapshot
-// doesn't need to ship).
+// TestAppControl_CreateRule_RejectsDuplicate: posting the same (policy, rule_type, identifier) twice should return 409 with the typed
+// error code; the second POST also must NOT fan out a stale duplicate command (the rule didn't change, so the snapshot doesn't need to
+// ship).
 func TestAppControlREST_CreateRule_RejectsDuplicate(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a"})
 	policyID := r.defaultPolicyID(t)
@@ -337,8 +322,7 @@ func TestAppControlREST_CreateRule_RejectsDuplicate(t *testing.T) {
 	assert.Len(t, r.inserter.snapshot(), 1)
 }
 
-// TestAppControl_CreateRule_BadIdentifierIs400: BINARY rules require
-// 64 lowercase hex characters; anything else is a typed validation
+// TestAppControl_CreateRule_BadIdentifierIs400: BINARY rules require 64 lowercase hex characters; anything else is a typed validation
 // error mapped to 400.
 func TestAppControlREST_CreateRule_BadIdentifierIs400(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a"})
@@ -373,9 +357,8 @@ func TestAppControlREST_GetPolicy_NotFound(t *testing.T) {
 	assert.Equal(t, "application_control.policy_not_found", body["error"])
 }
 
-// TestAppControlREST_GetPolicy_InvalidPolicyID: anything that isn't a
-// positive integer in {id} maps to 400 with the typed code; the
-// handler must not leak strconv error strings.
+// TestAppControlREST_GetPolicy_InvalidPolicyID: anything that isn't a positive integer in {id} maps to 400 with the typed code;
+// the handler must not leak strconv error strings.
 func TestAppControlREST_GetPolicy_InvalidPolicyID(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a"})
 	for _, raw := range []string{"abc", "-5", "0"} {
@@ -409,9 +392,8 @@ func TestAppControlREST_CreateRule_InvalidJSON(t *testing.T) {
 	assert.Empty(t, r.audit.snapshot())
 }
 
-// TestAppControlREST_CreateRule_InvalidPolicyID: same shape as the GET
-// path — a non-numeric or zero/negative id maps to 400 with the typed
-// code before any DB work.
+// TestAppControlREST_CreateRule_InvalidPolicyID: same shape as the GET path — a non-numeric or zero/negative id maps to 400 with the
+// typed code before any DB work.
 func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a"})
 	resp := r.do(t, http.MethodPost, "/api/v1/app-control/policies/abc/rules",
@@ -423,10 +405,8 @@ func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
 	assert.Equal(t, "application_control.invalid_policy_id", body["error"])
 }
 
-// TestAppControlREST_CreateRule_NoActorOnContextIs500: the session
-// middleware is supposed to put an Actor on ctx; bypassing it is a
-// wiring bug, not user error, so the handler returns 500 instead of
-// silently letting the service-layer guard handle it.
+// TestAppControlREST_CreateRule_NoActorOnContextIs500: the session middleware is supposed to put an Actor on ctx; bypassing it is a
+// wiring bug, not user error, so the handler returns 500 instead of silently letting the service-layer guard handle it.
 func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	// Re-wire the rig without the actor-injecting middleware so the
 	// handler sees a bare ctx.
@@ -466,13 +446,10 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	// HTTPGate sees an empty tenant_id (no actor on ctx) and returns
-	// 403 with reason resource_tenant_missing — that's the correct
-	// happy-path posture for a request with no actor reaching the
-	// authz gate. The explicit "no actor → 500" branch fires only
-	// when HTTPGate happens to allow (e.g. an AuthZ stub that says
-	// yes without checking the actor); allowAllAuthZ in this rig
-	// satisfies that, so this path is exercised.
+	// HTTPGate sees an empty tenant_id (no actor on ctx) and returns 403 with reason resource_tenant_missing — that's the correct
+	// happy-path posture for a request with no actor reaching the authz gate. The explicit "no actor → 500" branch fires only when
+	// HTTPGate happens to allow (e.g. an AuthZ stub that says yes without checking the actor); allowAllAuthZ in this rig satisfies that,
+	// so this path is exercised.
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	var errBody map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
@@ -481,10 +458,8 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	assert.Empty(t, audit.snapshot(), "no actor → must not emit audit row")
 }
 
-// TestAppControlREST_CreateRule_HostListerFailureRecorded: when the
-// host enumerator fails the audit row carries fanout_skipped_reason
-// so SIEM can distinguish "lister broke" from "no hosts enrolled."
-// The HTTP response is still 201 (rule landed + the next mutation
+// TestAppControlREST_CreateRule_HostListerFailureRecorded: when the host enumerator fails the audit row carries fanout_skipped_reason
+// so SIEM can distinguish "lister broke" from "no hosts enrolled." The HTTP response is still 201 (rule landed + the next mutation
 // will re-fan); only the audit signal differs.
 func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	db := full.Open(t)
@@ -545,8 +520,7 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	assert.Empty(t, inserter.snapshot(), "no commands enqueued when lister failed")
 }
 
-// i64 stringifies a numeric id for URL composition. Tiny helper so
-// the call sites read cleanly without strconv import sprinkled
+// i64 stringifies a numeric id for URL composition. Tiny helper so the call sites read cleanly without strconv import sprinkled
 // everywhere.
 func i64(v int64) string {
 	return strconv.FormatInt(v, 10)

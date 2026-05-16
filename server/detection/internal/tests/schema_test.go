@@ -10,11 +10,9 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// TestSchema_NoTenantIDOnHostsAndAlerts pins the removal of the legacy
-// tenant_id scaffolding column on detection's `hosts` and `alerts`
-// tables. The product is a single-instance deployment, so the column
-// was dropped; a regression that re-introduces it silently is caught
-// here.
+// TestSchema_NoTenantIDOnHostsAndAlerts pins the removal of the legacy tenant_id scaffolding column on detection's `hosts` and
+// `alerts` tables. The product is a single-instance deployment, so the column was dropped; a regression that re-introduces it silently
+// is caught here.
 func TestSchema_NoTenantIDOnHostsAndAlerts(t *testing.T) {
 	db := full.Open(t)
 

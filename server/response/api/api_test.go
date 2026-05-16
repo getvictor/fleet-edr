@@ -9,8 +9,7 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
-// TestErrorSentinelsAreDistinct guards against two errors collapsing
-// to the same value (which would make IsValidationError uselessly
+// TestErrorSentinelsAreDistinct guards against two errors collapsing to the same value (which would make IsValidationError uselessly
 // broad or errors.Is short-circuit incorrectly).
 func TestErrorSentinelsAreDistinct(t *testing.T) {
 	require.NotErrorIs(t, api.ErrCommandNotFound, api.ErrInvalidStatusTransition)
@@ -27,8 +26,7 @@ func TestIsValidationError(t *testing.T) {
 	assert.False(t, api.IsValidationError(nil))
 }
 
-// TestStatusValuesMatchAgentWire locks the four status string values
-// the agent's commander encodes/decodes against. Drifting any of
+// TestStatusValuesMatchAgentWire locks the four status string values the agent's commander encodes/decodes against. Drifting any of
 // them silently breaks every in-flight agent.
 func TestStatusValuesMatchAgentWire(t *testing.T) {
 	assert.Equal(t, "pending", string(api.StatusPending))

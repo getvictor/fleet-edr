@@ -19,29 +19,23 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// CommandInserter is the closure cmd/main supplies so endpoint can
-// queue commands (today: rotate_token) without importing response/api
-// directly. Method-value-shaped to match response.Service.Insert
-// exactly: cmd/main passes `responseCtx.Service().Insert` here as a
+// CommandInserter is the closure cmd/main supplies so endpoint can queue commands (today: rotate_token) without importing response/api
+// directly. Method-value-shaped to match response.Service.Insert exactly: cmd/main passes `responseCtx.Service().Insert` here as a
 // one-liner.
 type CommandInserter = service.CommandInserter
 
-// Deps bundles what New needs to wire the endpoint context. cmd/main
-// owns the *sqlx.DB handle and shares it across every context's
+// Deps bundles what New needs to wire the endpoint context. cmd/main owns the *sqlx.DB handle and shares it across every context's
 // bootstrap.
 type Deps struct {
 	DB                  *sqlx.DB
 	Logger              *slog.Logger
 	EnrollSecret        string
 	EnrollRatePerMinute int
-	// CommandInserter inserts commands the endpoint context emits
-	// (today: only rotate_token). Optional: when nil, rotate_token
-	// commits the new bearer to the DB but the agent will not receive
-	// a command — it re-enrolls once the grace window expires.
+	// CommandInserter inserts commands the endpoint context emits (today: only rotate_token). Optional: when nil, rotate_token commits the
+	// new bearer to the DB but the agent will not receive a command — it re-enrolls once the grace window expires.
 	CommandInserter CommandInserter
 
-	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for enrollment.revoke + enrollment.rotate_token.
+	// Audit is the operator-action recorder. Optional: nil disables audit emission for enrollment.revoke + enrollment.rotate_token.
 	// cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 
@@ -49,21 +43,16 @@ type Deps struct {
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
-	// HostTokenLifetime is how long a host bearer token may live before
-	// the verify path triggers an auto-rotation. Zero -> service
-	// default (24h). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
+	// HostTokenLifetime is how long a host bearer token may live before the verify path triggers an auto-rotation. Zero -> service default
+	// (24h). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
 	HostTokenLifetime time.Duration
-	// HostTokenGrace is the window during which the just-superseded
-	// token still verifies after rotation, so an in-flight agent poll
-	// doesn't 401 mid-cycle. Zero -> service default (5m). cmd/main
-	// reads EDR_HOST_TOKEN_GRACE.
+	// HostTokenGrace is the window during which the just-superseded token still verifies after rotation, so an in-flight agent poll
+	// doesn't 401 mid-cycle. Zero -> service default (5m). cmd/main reads EDR_HOST_TOKEN_GRACE.
 	HostTokenGrace time.Duration
 }
 
-// Endpoint is the handle cmd/main holds for the endpoint bounded
-// context. It exposes the Service for cross-context callers (today:
-// metrics' EnrolledHosts gauge), the host-token middleware factory,
-// the route-registration methods, and ApplySchema.
+// Endpoint is the handle cmd/main holds for the endpoint bounded context. It exposes the Service for cross-context callers (today:
+// metrics' EnrolledHosts gauge), the host-token middleware factory, the route-registration methods, and ApplySchema.
 type Endpoint struct {
 	svc         api.Service
 	enrollH     *enroll.Handler
@@ -73,8 +62,7 @@ type Endpoint struct {
 	logger      *slog.Logger
 }
 
-// New wires the endpoint context. Does NOT apply the schema (call
-// ApplySchema for that). Returns an error if Deps is missing required
+// New wires the endpoint context. Does NOT apply the schema (call ApplySchema for that). Returns an error if Deps is missing required
 // fields.
 func New(deps Deps) (*Endpoint, error) {
 	if deps.DB == nil {
@@ -117,18 +105,15 @@ func New(deps Deps) (*Endpoint, error) {
 	}, nil
 }
 
-// ApplySchema runs the DDL statements endpoint owns. Idempotent
-// (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
+// ApplySchema runs the DDL statements endpoint owns. Idempotent (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
 // other contexts' ApplySchema is not load-bearing.
 func (e *Endpoint) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, e.db)
 }
 
-// ApplySchema is the package-level form: applies endpoint's DDL
-// against the given DB without requiring a fully constructed
-// *Endpoint. Used by server/testdb so tests can apply every context's
-// schema without faking out each bootstrap's service dependencies.
-// CREATE TABLE IF NOT EXISTS makes the call safe to re-run.
+// ApplySchema is the package-level form: applies endpoint's DDL against the given DB without requiring a fully constructed *Endpoint.
+// Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service dependencies. CREATE
+// TABLE IF NOT EXISTS makes the call safe to re-run.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("endpoint ApplySchema: db must not be nil")
@@ -141,13 +126,11 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return nil
 }
 
-// Service exposes the public api.Service for cross-context callers.
-// Today: cmd/main's serverGaugeSource calls Service().CountActive for
-// the EnrolledHosts metrics gauge.
+// Service exposes the public api.Service for cross-context callers. Today: cmd/main's serverGaugeSource calls Service().CountActive
+// for the EnrolledHosts metrics gauge.
 func (e *Endpoint) Service() api.Service { return e.svc }
 
-// HostTokenMiddleware returns the per-request middleware that gates
-// agent endpoints. cmd/main chains this on POST /api/events,
+// HostTokenMiddleware returns the per-request middleware that gates agent endpoints. cmd/main chains this on POST /api/events,
 // GET /api/commands, and PUT /api/commands/{id}.
 func (e *Endpoint) HostTokenMiddleware() func(http.Handler) http.Handler { return e.hostTokenMW }
 
@@ -157,9 +140,8 @@ func (e *Endpoint) RegisterPublicRoutes(mux *http.ServeMux) {
 	e.enrollH.RegisterRoutes(mux)
 }
 
-// RegisterAuthedRoutes wires the operator-facing routes:
-// GET /api/enrollments and POST /api/enrollments/{host_id}/revoke.
-// Caller wraps in identity Session + CSRF middleware before mounting.
+// RegisterAuthedRoutes wires the operator-facing routes: GET /api/enrollments and POST /api/enrollments/{host_id}/revoke. Caller wraps
+// in identity Session + CSRF middleware before mounting.
 func (e *Endpoint) RegisterAuthedRoutes(mux *http.ServeMux) {
 	e.operatorH.RegisterRoutes(mux)
 }

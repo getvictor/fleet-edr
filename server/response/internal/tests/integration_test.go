@@ -31,8 +31,7 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant for
-// the response-context integration tests. Per-action role coverage
+// allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant for the response-context integration tests. Per-action role coverage
 // lives in server/identity/internal/authz/engine_test.go.
 type allowAllAuthZ struct{}
 
@@ -40,8 +39,7 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
 }
 
-// recordingHeartbeat captures every Heartbeat invocation so tests
-// can assert the per-poll last-seen bump fires (and only fires when
+// recordingHeartbeat captures every Heartbeat invocation so tests can assert the per-poll last-seen bump fires (and only fires when
 // the closure is wired).
 type recordingHeartbeat struct {
 	mu    sync.Mutex
@@ -104,9 +102,8 @@ func TestInsert_HappyPath(t *testing.T) {
 	assert.JSONEq(t, `{"pid":1234}`, string(cmd.Payload))
 }
 
-// TestInsert_ValidationErrors covers each branch of the
-// service-level validation. Empty strings + zero-byte payload all
-// wrap api.ErrInvalidInsertRequest.
+// TestInsert_ValidationErrors covers each branch of the service-level validation. Empty strings + zero-byte payload all wrap
+// api.ErrInvalidInsertRequest.
 func TestInsert_ValidationErrors(t *testing.T) {
 	r := newResponse(t, nil)
 	ctx := t.Context()
@@ -155,10 +152,8 @@ func TestListForHost_FiltersByStatus(t *testing.T) {
 	assert.Len(t, all, 3)
 }
 
-// TestListForHost_TriggersHeartbeat asserts the per-poll last-seen
-// side effect fires for the right host. Skipping this regression
-// would silently break the UI's "Online / Offline" pill on every
-// poll.
+// TestListForHost_TriggersHeartbeat asserts the per-poll last-seen side effect fires for the right host. Skipping this regression
+// would silently break the UI's "Online / Offline" pill on every poll.
 func TestListForHost_TriggersHeartbeat(t *testing.T) {
 	hb := &recordingHeartbeat{}
 	r := newResponse(t, hb)
@@ -173,10 +168,8 @@ func TestListForHost_TriggersHeartbeat(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), calls[0].At, 5*time.Second)
 }
 
-// TestListForHost_HeartbeatErrorIsNonFatal uses a closure that
-// always returns an error and confirms ListForHost still returns
-// the (empty) command slice. The poll must NOT fail because the
-// hosts table hiccupped -- the agent already got its commands.
+// TestListForHost_HeartbeatErrorIsNonFatal uses a closure that always returns an error and confirms ListForHost still returns the
+// (empty) command slice. The poll must NOT fail because the hosts table hiccupped -- the agent already got its commands.
 func TestListForHost_HeartbeatErrorIsNonFatal(t *testing.T) {
 	r := newResponseWithHeartbeat(t, func(context.Context, string, time.Time) error {
 		return errors.New("hosts table down")
@@ -233,9 +226,8 @@ func TestUpdateStatus_LifecycleHappyPath(t *testing.T) {
 	assert.JSONEq(t, `{"killed":true}`, string(got.Result))
 }
 
-// TestUpdateStatus_RejectsForbiddenTransitions covers two key
-// invariants: pending -> completed (must ack first) and a terminal
-// state being immutable.
+// TestUpdateStatus_RejectsForbiddenTransitions covers two key invariants: pending -> completed (must ack first) and a terminal state
+// being immutable.
 func TestUpdateStatus_RejectsForbiddenTransitions(t *testing.T) {
 	r := newResponse(t, nil)
 	ctx := t.Context()
@@ -267,10 +259,8 @@ func TestUpdateStatus_RejectsForbiddenTransitions(t *testing.T) {
 	})
 }
 
-// TestUpdateStatus_ForeignHostRejected: host-b cannot ack host-a's
-// command. The collapse to ErrCommandNotFound (not a distinct
-// "wrong host" error) defends against probing for other hosts'
-// command_ids.
+// TestUpdateStatus_ForeignHostRejected: host-b cannot ack host-a's command. The collapse to ErrCommandNotFound (not a distinct "wrong
+// host" error) defends against probing for other hosts' command_ids.
 func TestUpdateStatus_ForeignHostRejected(t *testing.T) {
 	r := newResponse(t, nil)
 	ctx := t.Context()
@@ -290,11 +280,9 @@ func TestUpdateStatus_ForeignHostRejected(t *testing.T) {
 	assert.Equal(t, api.StatusPending, got.Status, "host-a's row must be untouched")
 }
 
-// TestAgentRoutes_HostTokenScoped wires the agent handler behind a
-// fake host-token middleware and confirms a token for host-a sees
-// only host-a's commands -- ?host_id=host-b query spoofing is
-// ignored. Inherits the phase-1 TestHostScopedCommandAccess
-// regression coverage.
+// TestAgentRoutes_HostTokenScoped wires the agent handler behind a fake host-token middleware and confirms a token for host-a sees
+// only host-a's commands -- ?host_id=host-b query spoofing is ignored. Inherits the phase-1 TestHostScopedCommandAccess regression
+// coverage.
 func TestAgentRoutes_HostTokenScoped(t *testing.T) {
 	r := newResponse(t, nil)
 	ctx := t.Context()
@@ -341,10 +329,8 @@ func TestAgentRoutes_HostTokenScoped(t *testing.T) {
 	})
 }
 
-// TestOperatorRoutes_PostAndGet covers the session-gated surface.
-// Tests don't wrap in real session+CSRF middleware -- those are
-// owned by identity and tested there. Here we just confirm the
-// routes are wired and the bodies + audit payloads match.
+// TestOperatorRoutes_PostAndGet covers the session-gated surface. Tests don't wrap in real session+CSRF middleware -- those are owned
+// by identity and tested there. Here we just confirm the routes are wired and the bodies + audit payloads match.
 func TestOperatorRoutes_PostAndGet(t *testing.T) {
 	r := newResponse(t, nil)
 	ctx := t.Context()
@@ -428,10 +414,8 @@ func TestBootstrap_MissingDB(t *testing.T) {
 	assert.Contains(t, err.Error(), "DB")
 }
 
-// withHostID wraps mux in a tiny middleware that pins host_id on
-// the request context the way the real endpoint.HostToken middleware
-// does. Lets the agent handler tests run without spinning up
-// endpoint bootstrap + a token mint.
+// withHostID wraps mux in a tiny middleware that pins host_id on the request context the way the real endpoint.HostToken middleware
+// does. Lets the agent handler tests run without spinning up endpoint bootstrap + a token mint.
 func withHostID(next http.Handler, hostID string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := endpointapi.WithHostIDForTest(r.Context(), hostID)

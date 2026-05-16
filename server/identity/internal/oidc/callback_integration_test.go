@@ -26,10 +26,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// fakeIDPClient is the test seam for *oidc.Client. Production code
-// uses the real go-oidc-backed client; tests inject a deterministic
-// stub so the callback's happy path can be walked without spinning
-// up discovery + signing keys.
+// fakeIDPClient is the test seam for *oidc.Client. Production code uses the real go-oidc-backed client; tests inject a deterministic
+// stub so the callback's happy path can be walked without spinning up discovery + signing keys.
 type fakeIDPClient struct {
 	authURL  string
 	claims   *oidc.Claims
@@ -119,11 +117,8 @@ func (e *callbackTestEnv) callbackRequest(t *testing.T, stateOverride string) *h
 	return r
 }
 
-// Happy path: state cookie verifies, code exchanges, JIT runs (subject
-// is fresh, JIT enabled), session minted, response is a 302 to the
-// state's pinned redirect with both cookies set. Audits one
-// auth.oidc.success row plus one user.created row from the
-// provisioner.
+// Happy path: state cookie verifies, code exchanges, JIT runs (subject is fresh, JIT enabled), session minted, response is a 302 to
+// the state's pinned redirect with both cookies set. Audits one auth.oidc.success row plus one user.created row from the provisioner.
 func TestHandleCallback_HappyPath_JITNewUser(t *testing.T) {
 	env := newCallbackEnv(t, true, &oidc.Claims{
 		Subject: "okta-happy",
@@ -187,8 +182,7 @@ func TestHandleCallback_UnknownSubject_JITDisabled(t *testing.T) {
 	assert.Equal(t, "oidc.unknown_subject", env.rec.events[0].Payload["reason"])
 }
 
-// Email collision: a local-password user already owns the email the
-// IdP advertises. Handler emits auth.oidc.failure with reason
+// Email collision: a local-password user already owns the email the IdP advertises. Handler emits auth.oidc.failure with reason
 // oidc.email_conflict and 302s to /login?error=email_conflict.
 func TestHandleCallback_EmailCollision(t *testing.T) {
 	env := newCallbackEnv(t, true, &oidc.Claims{
@@ -265,11 +259,9 @@ func TestHandleLogin_SetsCookieAndRedirects(t *testing.T) {
 	assert.Positive(t, stateCookie.MaxAge)
 }
 
-// HandleLogin?reauth=1 forces the IdP to re-prompt for credentials by
-// setting prompt=login on the authorize URL. Without it, an IdP that's
-// mid-session would silently re-issue a token, defeating the Phase 5
-// freshness model. Pin here so a regression in withPromptLogin or in
-// handleLogin's branch surfaces immediately.
+// HandleLogin?reauth=1 forces the IdP to re-prompt for credentials by setting prompt=login on the authorize URL. Without it,
+// an IdP that's mid-session would silently re-issue a token, defeating the Phase 5 freshness model. Pin here so a regression in
+// withPromptLogin or in handleLogin's branch surfaces immediately.
 func TestHandleLogin_ReauthSetsPromptLogin(t *testing.T) {
 	env := newCallbackEnv(t, true, nil)
 	r := httptest.NewRequestWithContext(t.Context(), "GET",
@@ -285,8 +277,7 @@ func TestHandleLogin_ReauthSetsPromptLogin(t *testing.T) {
 		"reauth=1 must append prompt=login to the authorize URL")
 }
 
-// HandleLogin without reauth=1 must NOT set prompt=login. Guards a
-// regression that always sets it (which would defeat the IdP's own
+// HandleLogin without reauth=1 must NOT set prompt=login. Guards a regression that always sets it (which would defeat the IdP's own
 // session reuse on every login).
 func TestHandleLogin_NormalLoginOmitsPromptLogin(t *testing.T) {
 	env := newCallbackEnv(t, true, nil)

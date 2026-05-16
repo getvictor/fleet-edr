@@ -18,9 +18,8 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
-// fakeService is a minimal api.Service stub. Each method delegates to a
-// closure so each test can inject the exact behavior it needs; unset
-// closures panic so an accidental call surfaces immediately.
+// fakeService is a minimal api.Service stub. Each method delegates to a closure so each test can inject the exact behavior it needs;
+// unset closures panic so an accidental call surfaces immediately.
 type fakeService struct {
 	insert       func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 	get          func(ctx context.Context, id int64) (api.Command, error)
@@ -121,11 +120,9 @@ func TestHandleList_StatusFilter(t *testing.T) {
 		wantStatus api.Status
 	}{
 		{
-			// Bare GET /api/commands must default to pending so the agent
-			// poller never receives terminal rows (completed / failed).
-			// Re-delivering an already-handled command would either
-			// double-execute or produce a confused log line in the
-			// agent's commander.
+			// Bare GET /api/commands must default to pending so the agent poller never receives terminal rows (completed /
+			// failed). Re-delivering an already-handled command would either double-execute or produce a confused log line
+			// in the agent's commander.
 			name:       "no query defaults to pending",
 			query:      "",
 			wantStatus: api.StatusPending,

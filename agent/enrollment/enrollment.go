@@ -42,20 +42,16 @@ import (
 )
 
 const (
-	// tokenFileMode is the required Unix mode for the persisted token file.
-	// 0600 keeps the bearer token readable only by root; loading a more
-	// permissive file is a hard error so a misconfigured umask never silently
-	// becomes a credential exposure.
+	// tokenFileMode is the required Unix mode for the persisted token file. 0600 keeps the bearer token readable only by root; loading a
+	// more permissive file is a hard error so a misconfigured umask never silently becomes a credential exposure.
 	tokenFileMode os.FileMode = 0o600
 
-	// enrollErrorBodyLimit caps how much of an enrollment-error response body
-	// we read into a returned error string. The server is trusted; the cap is
-	// belt-and-braces against an unexpectedly large 5xx body.
+	// enrollErrorBodyLimit caps how much of an enrollment-error response body we read into a returned error string. The server is trusted;
+	// the cap is belt-and-braces against an unexpectedly large 5xx body.
 	enrollErrorBodyLimit = 2048
 
-	// logAttrHostID is the structured-log attribute key for the agent's
-	// persisted host_id. Centralised so a key rename propagates uniformly
-	// to operator log dashboards.
+	// logAttrHostID is the structured-log attribute key for the agent's persisted host_id. Centralised so a key rename propagates
+	// uniformly to operator log dashboards.
 	logAttrHostID = "edr.host_id"
 )
 
@@ -67,11 +63,10 @@ type Persisted struct {
 	ServerURL  string    `plist:"server_url" json:"server_url"`
 }
 
-// TokenProvider returns the current host token. Callers call Token() on every request and
-// OnUnauthorized() when they see an HTTP 401 from the server. Rotate replaces the
-// in-memory + on-disk token atomically; the commander's rotate_token dispatch (issue #86)
-// is the only caller in production. A nil error means subsequent Token() calls observe
-// the new value, even if the agent crashes mid-write (writePersisted is atomic-via-rename).
+// TokenProvider returns the current host token. Callers call Token() on every request and OnUnauthorized() when they see an HTTP 401
+// from the server. Rotate replaces the in-memory + on-disk token atomically; the commander's rotate_token dispatch (issue #86) is the
+// only caller in production. A nil error means subsequent Token() calls observe the new value, even if the agent crashes mid-write
+// (writePersisted is atomic-via-rename).
 type TokenProvider interface {
 	Token() string
 	HostID() string
@@ -108,9 +103,9 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 
 	// Try to load the persisted token first. Happy path on every restart.
 	if existing, err := loadPersisted(opts.TokenFile); err == nil {
-		// Refuse a token bound to a different server. If EDR_SERVER_URL changed, sending the
-		// old host_token to a new endpoint would leak it to whatever server answers; fail loud
-		// and make the operator delete the file (or re-enroll with the matching URL) instead.
+		// Refuse a token bound to a different server. If EDR_SERVER_URL changed, sending the old host_token to a new endpoint
+		// would leak it to whatever server answers; fail loud and make the operator delete the file (or re-enroll with the
+		// matching URL) instead.
 		if trimTrailingSlash(existing.ServerURL) != trimTrailingSlash(opts.ServerURL) {
 			return nil, fmt.Errorf(
 				"token file %q is bound to server_url %q but EDR_SERVER_URL is %q; delete the file or re-enroll",
@@ -122,9 +117,8 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 			logAttrHostID, existing.HostID, "edr.token_file", opts.TokenFile)
 		return p, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard
-		// fail — the operator needs to take action. Silent fallback to enroll would leave a
-		// stale token on disk.
+		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard fail — the operator needs to
+		// take action. Silent fallback to enroll would leave a stale token on disk.
 		return nil, fmt.Errorf("load token file %q: %w", opts.TokenFile, err)
 	}
 
@@ -185,12 +179,10 @@ func (p *provider) HostID() string {
 	return s.p.HostID
 }
 
-// Rotate replaces the persisted bearer token with newToken atomically (write to a temp
-// file + rename). Subsequent Token() calls return the new value. The provider's same
-// reenrollMu serialises Rotate against any concurrent re-enroll so a 401-driven re-enroll
-// and a server-driven rotate cannot interleave their writes. Returns an error when
-// newToken is empty (a programmer error, surfaced loudly), when there is no persisted
-// state to rotate from (the agent never enrolled), or when the on-disk write fails.
+// Rotate replaces the persisted bearer token with newToken atomically (write to a temp file + rename). Subsequent Token() calls return
+// the new value. The provider's same reenrollMu serialises Rotate against any concurrent re-enroll so a 401-driven re-enroll and a
+// server-driven rotate cannot interleave their writes. Returns an error when newToken is empty (a programmer error, surfaced loudly),
+// when there is no persisted state to rotate from (the agent never enrolled), or when the on-disk write fails.
 func (p *provider) Rotate(ctx context.Context, newToken string) error {
 	if newToken == "" {
 		return errors.New("enrollment.Rotate: empty token")
@@ -212,11 +204,9 @@ func (p *provider) Rotate(ctx context.Context, newToken string) error {
 	return nil
 }
 
-// OnUnauthorized is called by the uploader/commander when the server returns 401. We throttle
-// to at most one attempt per minute so a misconfigured server doesn't get spammed. If the
-// operator started the agent from a persisted token without EDR_ENROLL_SECRET, re-enroll
-// cannot succeed — log a loud error and skip so we don't spin through pointless throttled
-// attempts.
+// OnUnauthorized is called by the uploader/commander when the server returns 401. We throttle to at most one attempt per minute so
+// a misconfigured server doesn't get spammed. If the operator started the agent from a persisted token without EDR_ENROLL_SECRET,
+// re-enroll cannot succeed — log a loud error and skip so we don't spin through pointless throttled attempts.
 func (p *provider) OnUnauthorized(ctx context.Context) {
 	p.reenrollMu.Lock()
 	defer p.reenrollMu.Unlock()
@@ -248,10 +238,8 @@ func (p *provider) enroll(ctx context.Context) error {
 		hostID = derived
 	}
 
-	// httpClient() is pure config assembly (TLS options + http.Client struct). It
-	// takes no context because it does no I/O or cancellable work, so the
-	// contextcheck traversal through BuildTLSConfig's VerifyPeerCertificate closure
-	// is a known false positive.
+	// httpClient() is pure config assembly (TLS options + http.Client struct). It takes no context because it does no I/O or cancellable
+	// work, so the contextcheck traversal through BuildTLSConfig's VerifyPeerCertificate closure is a known false positive.
 	client, err := p.httpClient() //nolint:contextcheck // see comment above.
 	if err != nil {
 		return err
@@ -311,10 +299,9 @@ func (p *provider) enroll(ctx context.Context) error {
 	return nil
 }
 
-// httpClient builds an http.Client that honours the fingerprint-pinning + insecure toggles.
-// We clone http.DefaultTransport so we inherit the stdlib's dial/idle/keep-alive timeouts and
-// ProxyFromEnvironment support — a bare &http.Transport{} loses those, which in turn loses
-// HTTPS_PROXY support and can leak connections under load.
+// httpClient builds an http.Client that honours the fingerprint-pinning + insecure toggles. We clone http.DefaultTransport so we
+// inherit the stdlib's dial/idle/keep-alive timeouts and ProxyFromEnvironment support — a bare &http.Transport{} loses those, which in
+// turn loses HTTPS_PROXY support and can leak connections under load.
 func (p *provider) httpClient() (*http.Client, error) {
 	tlsCfg, err := BuildTLSConfig(p.opts.AllowInsecure, p.opts.ServerFingerprint, p.logger)
 	if err != nil {
@@ -356,15 +343,12 @@ func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.L
 	if err != nil {
 		return nil, fmt.Errorf("parse server fingerprint: %w", err)
 	}
-	// Fingerprint pinning replaces chain verification, not augments it. We set
-	// InsecureSkipVerify so Go's default chain verification is skipped (it would otherwise
-	// reject self-signed certs BEFORE reaching VerifyPeerCertificate), then do our own
-	// fingerprint-equality check. The callback is guaranteed to run on every handshake
-	// because SessionTicketsDisabled above prevents resume.
+	// Fingerprint pinning replaces chain verification, not augments it. We set InsecureSkipVerify so Go's default chain verification is
+	// skipped (it would otherwise reject self-signed certs BEFORE reaching VerifyPeerCertificate), then do our own fingerprint-equality
+	// check. The callback is guaranteed to run on every handshake because SessionTicketsDisabled above prevents resume.
 	tlsCfg.InsecureSkipVerify = true //nolint:gosec // We implement our own verification below.
-	// VerifyPeerCertificate is invoked by the TLS stack during the handshake with
-	// no request context available, so the warn log here intentionally uses
-	// context.Background().
+	// VerifyPeerCertificate is invoked by the TLS stack during the handshake with no request context available, so the warn log here
+	// intentionally uses context.Background().
 	tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error { //nolint:contextcheck // see comment above.
 		if len(rawCerts) == 0 {
 			return errors.New("tls: no peer certificates")
@@ -384,9 +368,8 @@ func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.L
 
 // --- persistence ---
 
-// loadPersisted reads + validates the on-disk token. Mode must be 0600; the file must
-// round-trip through our plist schema. Any deviation is a hard error rather than silent
-// recovery — the operator needs to either delete the file or fix its perms.
+// loadPersisted reads + validates the on-disk token. Mode must be 0600; the file must round-trip through our plist schema. Any
+// deviation is a hard error rather than silent recovery — the operator needs to either delete the file or fix its perms.
 func loadPersisted(path string) (*Persisted, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -399,9 +382,8 @@ func loadPersisted(path string) (*Persisted, error) {
 	if err != nil {
 		return nil, err
 	}
-	// We write plist XML via marshalMinimalPlist; parse that back here. JSON fallback is
-	// intentionally not attempted — a malformed file is an operator signal, not something to
-	// heuristically recover.
+	// We write plist XML via marshalMinimalPlist; parse that back here. JSON fallback is intentionally not attempted — a malformed file is
+	// an operator signal, not something to heuristically recover.
 	p, perr := parseMinimalPlist(buf)
 	if perr != nil {
 		return nil, fmt.Errorf("parse plist: %w", perr)
@@ -512,9 +494,8 @@ func parseMinimalPlist(buf []byte) (*Persisted, error) {
 	return p, nil
 }
 
-// applyPlistElement decodes a single XML element into the Persisted struct, mutating
-// *keyPtr to track the "key" token preceding each value. Extracted from
-// parseMinimalPlist so the driver loop stays flat.
+// applyPlistElement decodes a single XML element into the Persisted struct, mutating *keyPtr to track the "key" token preceding each
+// value. Extracted from parseMinimalPlist so the driver loop stays flat.
 func applyPlistElement(dec *xml.Decoder, se xml.StartElement, keyPtr *string, p *Persisted) error {
 	switch se.Name.Local {
 	case "key":

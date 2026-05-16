@@ -26,12 +26,9 @@ const (
 	testSecret = "test-enroll-secret"
 )
 
-// fakeRecorder captures audit events for assertion. Goroutine-safe so
-// future moves of the verify-time auto-rotate trigger to a background
-// scheduler do not silently introduce data races; today the path is
-// synchronous, but the contract is the safer side of the change.
-// Tests read events via Snapshot so the slice copy is taken under the
-// same mutex.
+// fakeRecorder captures audit events for assertion. Goroutine-safe so future moves of the verify-time auto-rotate trigger to a
+// background scheduler do not silently introduce data races; today the path is synchronous, but the contract is the safer side of the
+// change. Tests read events via Snapshot so the slice copy is taken under the same mutex.
 type fakeRecorder struct {
 	mu     sync.Mutex
 	events []identityapi.AuditEvent
@@ -54,10 +51,8 @@ func (f *fakeRecorder) Snapshot() []identityapi.AuditEvent {
 	return out
 }
 
-// commandCapture records (host_id, command_type, payload) tuples so
-// tests can assert which commands the service queued. Returns a fake
-// command_id sequence (1, 2, ...) so the operator path can verify the
-// CommandID field of the api.RotateResult.
+// commandCapture records (host_id, command_type, payload) tuples so tests can assert which commands the service queued. Returns a fake
+// command_id sequence (1, 2, ...) so the operator path can verify the CommandID field of the api.RotateResult.
 type commandCapture struct {
 	calls atomic.Int64
 	last  struct {
@@ -75,8 +70,7 @@ func (c *commandCapture) Insert(_ context.Context, hostID, commandType string, p
 	return id, nil
 }
 
-// newServiceForTest stands up an endpoint Service backed by a real
-// MySQL test DB, with a captured CommandInserter + audit recorder so
+// newServiceForTest stands up an endpoint Service backed by a real MySQL test DB, with a captured CommandInserter + audit recorder so
 // each test can inspect the side effects of rotation.
 func newServiceForTest(t *testing.T, lifetime, grace time.Duration) (svc api.Service, store *mysql.Store, db *sqlx.DB, audit *fakeRecorder, cmds *commandCapture) {
 	t.Helper()
@@ -97,10 +91,8 @@ func newServiceForTest(t *testing.T, lifetime, grace time.Duration) (svc api.Ser
 	return svc, store, db, audit, cmds
 }
 
-// enrollOne issues a fresh enrollment via the public Service.Enroll
-// path and returns the bearer token + the row's current host_token_id
-// (lifted out of the DB for tests that need to assert "this rotation
-// changed the underlying id").
+// enrollOne issues a fresh enrollment via the public Service.Enroll path and returns the bearer token + the row's current
+// host_token_id (lifted out of the DB for tests that need to assert "this rotation changed the underlying id").
 func enrollOne(t *testing.T, svc api.Service, hostID string) string {
 	t.Helper()
 	res, err := svc.Enroll(t.Context(), api.EnrollRequest{
@@ -114,10 +106,8 @@ func enrollOne(t *testing.T, svc api.Service, hostID string) string {
 	return res.HostToken
 }
 
-// ageToken backdates the host's host_token_issued_at by the given
-// duration so the next VerifyToken sees the token as past lifetime
-// without making the test wait. The schema column is NOT NULL with a
-// CURRENT_TIMESTAMP default; a direct UPDATE is the cheap test-only
+// ageToken backdates the host's host_token_issued_at by the given duration so the next VerifyToken sees the token as past lifetime
+// without making the test wait. The schema column is NOT NULL with a CURRENT_TIMESTAMP default; a direct UPDATE is the cheap test-only
 // way to forge token age.
 func ageToken(t *testing.T, db *sqlx.DB, hostID string, age time.Duration) {
 	t.Helper()
@@ -140,9 +130,8 @@ func TestVerifyToken_FreshTokenDoesNotRotate(t *testing.T) {
 	assert.Zero(t, cmds.calls.Load(), "fresh token must not queue any rotate_token command")
 }
 
-// A token past lifetime triggers rotation on the next verify, queues a
-// rotate_token command for the agent, and emits exactly one audit row
-// tagged with trigger=auto.
+// A token past lifetime triggers rotation on the next verify, queues a rotate_token command for the agent, and emits exactly one audit
+// row tagged with trigger=auto.
 func TestVerifyToken_StaleTokenAutoRotates(t *testing.T) {
 	svc, _, db, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
 	tok := enrollOne(t, svc, testHostID)
@@ -166,10 +155,8 @@ func TestVerifyToken_StaleTokenAutoRotates(t *testing.T) {
 	assert.Contains(t, string(cmds.last.payload), "new_token", "rotate_token payload must carry the new bearer")
 }
 
-// A verify against the previous-token grace path must NOT trigger a
-// rotation: rotation is already in flight (the new token has been
-// issued; the agent just hasn't picked it up yet). Triggering another
-// would discard the in-flight rotation prematurely.
+// A verify against the previous-token grace path must NOT trigger a rotation: rotation is already in flight (the new token has been
+// issued; the agent just hasn't picked it up yet). Triggering another would discard the in-flight rotation prematurely.
 func TestVerifyToken_GraceTokenDoesNotReRotate(t *testing.T) {
 	svc, _, db, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
 	oldTok := enrollOne(t, svc, testHostID)
@@ -189,8 +176,7 @@ func TestVerifyToken_GraceTokenDoesNotReRotate(t *testing.T) {
 	assert.Equal(t, int64(1), cmds.calls.Load(), "grace-path verify must not queue another rotate_token command")
 }
 
-// RotateToken (operator path) force-rotates regardless of the token's
-// age and emits an audit row tagged with trigger=operator + the
+// RotateToken (operator path) force-rotates regardless of the token's age and emits an audit row tagged with trigger=operator + the
 // supplied actor + reason fields.
 func TestRotateToken_OperatorPath(t *testing.T) {
 	svc, _, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
@@ -222,10 +208,8 @@ func TestRotateToken_MissingHost(t *testing.T) {
 	assert.Zero(t, cmds.calls.Load())
 }
 
-// Rotate against a revoked enrollment also surfaces as ErrNotFound:
-// the row exists but is no longer eligible for rotation. Otherwise an
-// attacker who has the (revoked) token could nudge the row back into
-// a usable state.
+// Rotate against a revoked enrollment also surfaces as ErrNotFound: the row exists but is no longer eligible for rotation. Otherwise
+// an attacker who has the (revoked) token could nudge the row back into a usable state.
 func TestRotateToken_RevokedHost(t *testing.T) {
 	svc, store, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
 	enrollOne(t, svc, testHostID)
@@ -237,9 +221,8 @@ func TestRotateToken_RevokedHost(t *testing.T) {
 	assert.Zero(t, cmds.calls.Load())
 }
 
-// RotateToken with both Audit and Commands nil must not panic; the
-// service degrades gracefully (DB rotation still happens, audit + command
-// emission no-op). This is the "tests / ingest binary" mode.
+// RotateToken with both Audit and Commands nil must not panic; the service degrades gracefully (DB rotation still happens, audit +
+// command emission no-op). This is the "tests / ingest binary" mode.
 func TestRotateToken_NilDepsOK(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -262,19 +245,16 @@ func TestRotateToken_NilDepsOK(t *testing.T) {
 	assert.NotEmpty(t, res.PreviousTokenIDPrefix)
 }
 
-// erroringRecorder satisfies identityapi.AuditRecorder by returning a
-// fixed error for every Record call so tests can drive the audit-emit
-// error branch.
+// erroringRecorder satisfies identityapi.AuditRecorder by returning a fixed error for every Record call so tests can drive the
+// audit-emit error branch.
 type erroringRecorder struct{}
 
 func (erroringRecorder) Record(_ context.Context, _ identityapi.AuditEvent) error {
 	return errors.New("audit sink offline")
 }
 
-// RotateToken must not surface an audit-record failure to the caller:
-// rotation already committed in the DB and a missed audit row is a
-// follow-up incident, not a reason to fail the HTTP 200. The error
-// is logged + swallowed.
+// RotateToken must not surface an audit-record failure to the caller: rotation already committed in the DB and a missed audit row is a
+// follow-up incident, not a reason to fail the HTTP 200. The error is logged + swallowed.
 func TestRotateToken_AuditRecordErrorIsSwallowed(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -307,10 +287,8 @@ func erroringInserter(_ context.Context, _, _ string, _ []byte) (int64, error) {
 	return 0, errors.New("commands queue offline")
 }
 
-// RotateToken must not surface a commands-enqueue failure: the agent's
-// previous token still works during grace; once grace expires it'll
-// 401 and re-enroll. Acceptable failure mode for a queue hiccup.
-// CommandID must be nil so the wire shape omits command_id.
+// RotateToken must not surface a commands-enqueue failure: the agent's previous token still works during grace; once grace expires
+// it'll 401 and re-enroll. Acceptable failure mode for a queue hiccup. CommandID must be nil so the wire shape omits command_id.
 func TestRotateToken_CommandsEnqueueErrorIsSwallowed(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))

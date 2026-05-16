@@ -28,9 +28,8 @@ import (
 )
 
 const (
-	// defaultInterval is the fallback for Options.Interval. 60s is short
-	// enough to close missed-exit gaps within a minute but long enough that
-	// the kill(pid, 0) sweep does not show up on the host's syscall trace.
+	// defaultInterval is the fallback for Options.Interval. 60s is short enough to close missed-exit gaps within a minute but long enough
+	// that the kill(pid, 0) sweep does not show up on the host's syscall trace.
 	defaultInterval = 60 * time.Second
 
 	// defaultMinAge is the fallback for Options.MinAge. The window guards
@@ -40,11 +39,9 @@ const (
 	// defaultMaxPerPass caps synthetic-exit emissions per tick.
 	defaultMaxPerPass = 256
 
-	// RFC 4122 §4.4 specifies how to derive a v4 UUID from random bytes:
-	// clear the version nibble in byte 6 and set 0b0100 (version 4); clear
-	// the variant nibble's top two bits in byte 8 and set 0b10 (RFC 4122
-	// variant). The masks below are the bit-pattern definitions, not
-	// arbitrary tuning knobs.
+	// RFC 4122 §4.4 specifies how to derive a v4 UUID from random bytes: clear the version nibble in byte 6 and set 0b0100 (version 4);
+	// clear the variant nibble's top two bits in byte 8 and set 0b10 (RFC 4122 variant). The masks below are the bit-pattern definitions,
+	// not arbitrary tuning knobs.
 	uuidV4VersionMask byte = 0x0f
 	uuidV4VersionBits byte = 0x40
 	uuidV4VariantMask byte = 0x3f
@@ -57,9 +54,8 @@ type Enqueuer interface {
 	Enqueue(ctx context.Context, eventJSON []byte) error
 }
 
-// HostIDProvider returns the current enrolled host_id. Returning empty is
-// allowed and skips the reconciliation pass for that tick (we'd rather miss
-// a sweep than emit events with a placeholder host_id).
+// HostIDProvider returns the current enrolled host_id. Returning empty is allowed and skips the reconciliation pass for that tick
+// (we'd rather miss a sweep than emit events with a placeholder host_id).
 type HostIDProvider func() string
 
 // KillFunc is the syscall hook. Defaults to syscall.Kill(pid, 0). Tests
@@ -68,23 +64,18 @@ type KillFunc func(pid int, sig syscall.Signal) error
 
 // Options configures the reconciler. Zero values fall back to defaults.
 type Options struct {
-	// Interval between reconciliation passes. Zero or negative values
-	// fall back to the default. Default 60s. Disabling the loop entirely
-	// is a wiring decision — the agent main skips constructing the
-	// runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level
-	// API always runs.
+	// Interval between reconciliation passes. Zero or negative values fall back to the default. Default 60s. Disabling the loop entirely
+	// is a wiring decision — the agent main skips constructing the runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level API
+	// always runs.
 	Interval time.Duration
 
-	// MinAge filters out PIDs first seen less than this long ago. ESF and
-	// the agent's queue can have a few hundred ms of latency between the
-	// real exec and the proctable Update; without this guard a kill(pid,0)
-	// against a brand-new PID could race the exec and falsely report "gone"
-	// before the row exists server-side. Default 30s.
+	// MinAge filters out PIDs first seen less than this long ago. ESF and the agent's queue can have a few hundred ms of latency between
+	// the real exec and the proctable Update; without this guard a kill(pid,0) against a brand-new PID could race the exec and falsely
+	// report "gone" before the row exists server-side. Default 30s.
 	MinAge time.Duration
 
-	// MaxPerPass caps the number of synthetic exits emitted per tick so a
-	// pathological ESF gap (10k missing exits) doesn't flood the queue in
-	// one shot. The remainder is picked up on subsequent ticks. Default 256.
+	// MaxPerPass caps the number of synthetic exits emitted per tick so a pathological ESF gap (10k missing exits) doesn't flood the queue
+	// in one shot. The remainder is picked up on subsequent ticks. Default 256.
 	MaxPerPass int
 
 	// Logger for audit lines. Nil uses slog.Default().
@@ -108,12 +99,9 @@ type Reconciler struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	kill       KillFunc
-	// newID and marshal are seams for tests so the rare error paths in
-	// emitSyntheticExit are reachable. Default to crypto/rand-backed
-	// newUUIDv4 and stdlib json.Marshal — both effectively never fail in
-	// production on a healthy host. Tests inject failing versions to lock
-	// in our error-handling shape (issue: synthetic exits must surface
-	// queue-affecting failures rather than silently skip a PID).
+	// newID and marshal are seams for tests so the rare error paths in emitSyntheticExit are reachable. Default to crypto/rand-backed
+	// newUUIDv4 and stdlib json.Marshal — both effectively never fail in production on a healthy host. Tests inject failing versions to
+	// lock in our error-handling shape (issue: synthetic exits must surface queue-affecting failures rather than silently skip a PID).
 	newID   func() (string, error)
 	marshal func(any) ([]byte, error)
 }
@@ -165,11 +153,9 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 	}
 }
 
-// Run loops until ctx is cancelled, emitting one log line per non-zero pass.
-// Blocks; intended for a dedicated goroutine. Per-PID failures inside RunOnce
-// are logged inline and never propagate up — one bad enqueue must not stall
-// the whole pass — so RunOnce returns just the count and Run has nothing to
-// branch on but `n > 0`.
+// Run loops until ctx is cancelled, emitting one log line per non-zero pass. Blocks; intended for a dedicated goroutine. Per-PID
+// failures inside RunOnce are logged inline and never propagate up — one bad enqueue must not stall the whole pass — so RunOnce
+// returns just the count and Run has nothing to branch on but `n > 0`.
 func (r *Reconciler) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
@@ -192,17 +178,14 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce performs a single reconciliation pass and returns the count of
-// synthetic exit events enqueued. Exposed for tests and one-shot usage.
-// Per-PID failures (enqueue errors, marshal errors, UUID errors) are logged
-// inline so one bad PID can't stall the whole pass — there's nothing the
-// caller can do that the inline log path hasn't already done.
+// RunOnce performs a single reconciliation pass and returns the count of synthetic exit events enqueued. Exposed for tests and
+// one-shot usage. Per-PID failures (enqueue errors, marshal errors, UUID errors) are logged inline so one bad PID can't stall the
+// whole pass — there's nothing the caller can do that the inline log path hasn't already done.
 func (r *Reconciler) RunOnce(ctx context.Context) int {
 	hostID := r.hostID()
 	if hostID == "" {
-		// No host_id yet — the enroll flow hasn't completed. Skip the pass
-		// rather than emit events with an empty host_id (the server's ingest
-		// handler would reject the whole batch on the first one).
+		// No host_id yet — the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
+		// server's ingest handler would reject the whole batch on the first one).
 		return 0
 	}
 
@@ -212,21 +195,18 @@ func (r *Reconciler) RunOnce(ctx context.Context) int {
 
 	for pid, info := range r.pt.Snapshot() {
 		if pid <= 0 {
-			// Skip PID 0 / negative — kill(0, 0) signals all processes in the
-			// caller's process group, kill(-1, 0) signals every process the
-			// caller may signal. Neither is what we want.
+			// Skip PID 0 / negative — kill(0, 0) signals all processes in the caller's process group, kill(-1, 0) signals
+			// every process the caller may signal. Neither is what we want.
 			continue
 		}
 		if info.StartTime > cutoff {
 			continue
 		}
-		// kill(pid, 0) is the standard liveness probe. Three outcomes:
+		// kill(pid, 0) is the standard liveness probe. Three outcomes drive the synthetic-exit decision:
 		//   nil   — pid exists and we may signal it; treat as alive.
 		//   ESRCH — "no such process"; the missed-exit signal we react to.
-		//   EPERM — pid exists but we lack permission; treat as alive. The
-		//           agent runs as root in production so this is rare, but the
-		//           conservative read keeps non-root dev runs from reaping
-		//           entries they can't probe authoritatively.
+		//   EPERM — pid exists but we lack permission; treat as alive. The agent runs as root in production so this is rare,
+		//           but the conservative read keeps non-root dev runs from reaping entries they can't probe authoritatively.
 		// Anything else (very rare; bad fd, weird kernel state) we skip too.
 		if err := r.kill(int(pid), 0); !errors.Is(err, syscall.ESRCH) {
 			continue
@@ -236,9 +216,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) int {
 				"pid", pid, "err", err)
 			continue
 		}
-		// Drop the entry from the proctable so subsequent passes skip it
-		// and so network-event enrichment doesn't continue attributing to a
-		// dead PID.
+		// Drop the entry from the proctable so subsequent passes skip it and so network-event enrichment doesn't continue
+		// attributing to a dead PID.
 		r.pt.Remove(pid)
 		emitted++
 		if emitted >= r.maxPerPass {
@@ -248,9 +227,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) int {
 	return emitted
 }
 
-// eventEnvelope is the on-the-wire shape the ingest handler expects. We
-// duplicate it locally rather than import server/store types because the
-// agent must not depend on server packages.
+// eventEnvelope is the on-the-wire shape the ingest handler expects. We duplicate it locally rather than import server/store types
+// because the agent must not depend on server packages.
 type eventEnvelope struct {
 	EventID     string         `json:"event_id"`
 	HostID      string         `json:"host_id"`
@@ -282,9 +260,8 @@ func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid i
 	return r.q.Enqueue(ctx, body)
 }
 
-// newUUIDv4 returns an RFC-4122 v4 UUID without taking on a non-stdlib
-// dependency. The agent already imports crypto/rand for elsewhere; this is
-// a 12-line copy of what google/uuid.NewRandom does, scoped to one call site.
+// newUUIDv4 returns an RFC-4122 v4 UUID without taking on a non-stdlib dependency. The agent already imports crypto/rand for
+// elsewhere; this is a 12-line copy of what google/uuid.NewRandom does, scoped to one call site.
 func newUUIDv4() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

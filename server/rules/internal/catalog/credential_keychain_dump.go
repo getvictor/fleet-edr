@@ -30,10 +30,8 @@ type CredentialKeychainDump struct{}
 
 func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1555.001
-// (Credentials from Password Stores → Keychain). Apple's own docs list
-// `security dump-keychain` as the tool for enumerating Keychain items,
-// and MITRE explicitly cites it on the technique page.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1555.001 (Credentials from Password Stores → Keychain). Apple's own docs
+// list `security dump-keychain` as the tool for enumerating Keychain items, and MITRE explicitly cites it on the technique page.
 func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.001"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
@@ -60,21 +58,16 @@ func (r *CredentialKeychainDump) Doc() api.Documentation {
 	}
 }
 
-// securityBinaryPaths is the set of `security` binary locations we'll
-// flag. Canonical-only by design: /usr/bin/security is where the tool
-// lives on every shipping macOS SKU; SIP guarantees it. If a pilot
-// customer surfaces a legitimate alternate path (symlink farm on a
-// locked-down dev VM, for example), extend the map here rather than
-// loosening the match.
+// securityBinaryPaths is the set of `security` binary locations we'll flag. Canonical-only by design: /usr/bin/security is where the
+// tool lives on every shipping macOS SKU; SIP guarantees it. If a pilot customer surfaces a legitimate alternate path (symlink farm on
+// a locked-down dev VM, for example), extend the map here rather than loosening the match.
 var securityBinaryPaths = map[string]bool{
 	"/usr/bin/security": true,
 }
 
-// dumpKeychainArgTokens is the subcommand set we flag. `dump-keychain`
-// is the observed hit; `find-internet-password -w`, `find-generic-
-// password -w`, and `unlock-keychain <path>` are adjacent tools that
-// also exfiltrate credentials but we leave them out to keep the rule
-// high-precision. Add them when a pilot customer asks.
+// dumpKeychainArgTokens is the subcommand set we flag. `dump-keychain` is the observed hit; `find-internet-password -w`,
+// `find-generic-password -w`, and `unlock-keychain <path>` are adjacent tools that also exfiltrate credentials but we leave them out
+// to keep the rule high-precision. Add them when a pilot customer asks.
 var dumpKeychainArgTokens = map[string]bool{
 	"dump-keychain": true,
 }
@@ -108,14 +101,10 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
 		}
 		if proc == nil {
-			// Defensive: the exec event landed but the process row
-			// isn't materialised (e.g. a race where ingestion
-			// delivered the exec before the builder's ProcessBatch
-			// ran). Skip this event — we have no process_id to
-			// link the finding to, and the engine won't re-feed
-			// this batch. In practice the processor loop always
-			// materialises before detection runs, so this branch
-			// is a defensive guard, not a dropped-alert path.
+			// Defensive: the exec event landed but the process row isn't materialised (e.g. a race where ingestion
+			// delivered the exec before the builder's ProcessBatch ran). Skip this event — we have no process_id to link
+			// the finding to, and the engine won't re-feed this batch. In practice the processor loop always materialises
+			// before detection runs, so this branch is a defensive guard, not a dropped-alert path.
 			continue
 		}
 
@@ -132,14 +121,10 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 	return findings, nil
 }
 
-// findDumpKeychainArg returns the matched subcommand (e.g.
-// "dump-keychain") and true when argv invokes a flagged subcommand as
-// the security tool's actual subcommand — i.e. the first non-flag token
-// after argv[0]. argv[0] is the binary itself and is skipped; flag
-// tokens (leading `-`) are skipped so `security -v dump-keychain` still
-// matches. A subcommand like `help` that merely mentions the string
-// `dump-keychain` in its arguments (`security help dump-keychain`)
-// does NOT match, because `help` is the first non-flag token.
+// findDumpKeychainArg returns the matched subcommand (e.g. "dump-keychain") and true when argv invokes a flagged subcommand as the
+// security tool's actual subcommand — i.e. the first non-flag token after argv[0]. argv[0] is the binary itself and is skipped; flag
+// tokens (leading `-`) are skipped so `security -v dump-keychain` still matches. A subcommand like `help` that merely mentions the
+// string `dump-keychain` in its arguments (`security help dump-keychain`) does NOT match, because `help` is the first non-flag token.
 func findDumpKeychainArg(argv []string) (string, bool) {
 	for i, a := range argv {
 		if i == 0 {
@@ -153,10 +138,8 @@ func findDumpKeychainArg(argv []string) (string, bool) {
 		if dumpKeychainArgTokens[a] {
 			return a, true
 		}
-		// First non-flag token after argv[0] is the subcommand the
-		// security tool will act on; if it's not one we flag, don't
-		// keep scanning for a later match (avoids matching a path
-		// arg that happens to contain "dump-keychain").
+		// First non-flag token after argv[0] is the subcommand the security tool will act on; if it's not one we flag,
+		// don't keep scanning for a later match (avoids matching a path arg that happens to contain "dump-keychain").
 		return "", false
 	}
 	return "", false

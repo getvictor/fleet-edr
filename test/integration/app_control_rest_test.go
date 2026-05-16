@@ -44,13 +44,10 @@ func TestAppControlREST_CreateRule_FansOutAndAudits(t *testing.T) {
 	ctx := t.Context()
 
 	const hostID = "DDDD1111-2222-3333-4444-555566667777"
-	// Enrolling the host (a) gives the fan-out path a real recipient
-	// to enumerate via ListHosts AND (b) provisions the host token
-	// the agent would later use to poll for the queued command.
-	// stepEnroll posts /api/enroll which records the host id via the
-	// endpoint service; for the rules-side fan-out to see the host
-	// in ListHosts we also need a detection-side row. The cleanest
-	// way is to send one event so UpsertHosts runs.
+	// Enrolling the host (a) gives the fan-out path a real recipient to enumerate via ListHosts AND (b) provisions the host token the
+	// agent would later use to poll for the queued command. stepEnroll posts /api/enroll which records the host id via the endpoint
+	// service; for the rules-side fan-out to see the host in ListHosts we also need a detection-side row. The cleanest way is to send one
+	// event so UpsertHosts runs.
 	hostToken := stepEnroll(t, stack, hostID)
 	now := time.Now().UnixNano()
 	postEvents(t, stack, hostToken, []detectionapi.Event{{
@@ -102,10 +99,8 @@ func TestAppControlREST_CreateRule_FansOutAndAudits(t *testing.T) {
 	assert.Equal(t, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", created.Identifier)
 	assert.Equal(t, rulesapi.SeverityRuleHigh, created.Severity)
 
-	// The fan-out path put exactly one set_application_control
-	// command in the host's queue. Use ListForHost (the agent's
-	// poll endpoint backend) so we exercise the same SQL path the
-	// agent would on its next poll.
+	// The fan-out path put exactly one set_application_control command in the host's queue. Use ListForHost (the agent's poll endpoint
+	// backend) so we exercise the same SQL path the agent would on its next poll.
 	commands, err := stack.ResponseService().ListForHost(ctx, hostID, "")
 	require.NoError(t, err)
 	var found *responseapi.Command
@@ -126,10 +121,8 @@ func TestAppControlREST_CreateRule_FansOutAndAudits(t *testing.T) {
 	assert.Equal(t, rulesapi.RuleTypeBinary, payload.Rules[0].RuleType)
 }
 
-// TestAppControlREST_CreateRule_AnalystForbidden pins the wave-1
-// role matrix: an analyst is allowed to read alerts but not author
-// application-control rules. The chokepoint must return 403 with
-// reason=no_matching_rule before the handler reaches the store.
+// TestAppControlREST_CreateRule_AnalystForbidden pins the wave-1 role matrix: an analyst is allowed to read alerts but not author
+// application-control rules. The chokepoint must return 403 with reason=no_matching_rule before the handler reaches the store.
 func TestAppControlREST_CreateRule_AnalystForbidden(t *testing.T) {
 	stack := Setup(t)
 	ctx := t.Context()
@@ -157,8 +150,7 @@ func TestAppControlREST_CreateRule_AnalystForbidden(t *testing.T) {
 	assert.Equal(t, identityapi.ReasonNoMatchingRule, resp.Header.Get(identityapi.AuthzReasonHeader))
 }
 
-// lookupDefaultPolicy returns the seeded Default policy via the
-// rules-context store. Tests rely on it to grab the id without
+// lookupDefaultPolicy returns the seeded Default policy via the rules-context store. Tests rely on it to grab the id without
 // re-running the seed query themselves.
 func lookupDefaultPolicy(t *testing.T, ctx context.Context, stack *Stack) rulesapi.ApplicationControlPolicy {
 	t.Helper()

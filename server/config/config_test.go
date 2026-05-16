@@ -17,10 +17,8 @@ func envMap(pairs map[string]string) func(string) string {
 }
 
 func TestLoad(t *testing.T) {
-	// Minimal env mirrors the wave-1 dev workflow: TLS off + the
-	// Phase-4 break-glass-only opt-out. Production sets neither flag
-	// and provides EDR_OIDC_*; that interaction is covered in a
-	// dedicated sub-test below.
+	// Minimal env mirrors the wave-1 dev workflow: TLS off + the Phase-4 break-glass-only opt-out. Production sets neither flag and
+	// provides EDR_OIDC_*; that interaction is covered in a dedicated sub-test below.
 	minEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
 		"EDR_ENROLL_SECRET":       "enroll-me",
@@ -200,9 +198,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST parsed and trimmed",
 			env: withExtra(minEnv, map[string]string{
-				// Mixed whitespace + an empty entry to exercise envparse.Allowlist's
-				// trim/empty-skip behaviour, same way every other allowlist env var
-				// is documented to behave.
+				// Mixed whitespace + an empty entry to exercise envparse.Allowlist's trim/empty-skip behaviour,
+				// same way every other allowlist env var is documented to behave.
 				"EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST": "/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal,,/Applications/iTerm.app/Contents/MacOS/iTerm2",
 			}),
 			validate: func(t *testing.T, c *Config) {
@@ -231,9 +228,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "EDR_TRUSTED_PROXIES populates and trims",
 			env: withExtra(minEnv, map[string]string{
-				// Mixed CIDR forms + whitespace + an empty entry. CIDR
-				// validation is deferred to httpserver.NewClientIPResolver,
-				// so config-level parsing only trims and drops empties.
+				// Mixed CIDR forms + whitespace + an empty entry. CIDR validation is deferred to
+				// httpserver.NewClientIPResolver, so config-level parsing only trims and drops empties.
 				"EDR_TRUSTED_PROXIES": " 10.0.0.0/8 , 192.168.1.5,, fd00::/8",
 			}),
 			validate: func(t *testing.T, c *Config) {
@@ -285,10 +281,8 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-// TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a
-// production deployment without OIDC config refuses to start;
-// dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER
-// without the rest produces focused per-field errors.
+// TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a production deployment without OIDC config refuses to start;
+// dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER without the rest produces focused per-field errors.
 func TestLoad_OIDCConfig(t *testing.T) {
 	prodLikeEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
@@ -428,11 +422,9 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			},
 		},
 		{
-			// EDR_OIDC_SCOPES override that drops "openid" must refuse
-			// to start. Without openid the discovery + ID-token flow
-			// has no contract; the failure is "token endpoint succeeds,
-			// id_token absent at callback" which is harder to debug
-			// than a startup error.
+			// EDR_OIDC_SCOPES override that drops "openid" must refuse to start. Without openid the discovery + ID-token
+			// flow has no contract; the failure is "token endpoint succeeds, id_token absent at callback" which is harder
+			// to debug than a startup error.
 			name: "EDR_OIDC_SCOPES without openid is rejected",
 			env: withExtra(prodLikeEnv, map[string]string{
 				"EDR_OIDC_ISSUER":         "https://example.okta.com",
@@ -445,11 +437,9 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			wantErr: "EDR_OIDC_SCOPES must include \"openid\"",
 		},
 		{
-			// Partial OIDC config + EDR_AUTH_ALLOW_NO_OIDC=1 must NOT
-			// silently disable OIDC. A typo in EDR_OIDC_ISSUER while
-			// EDR_OIDC_CLIENT_ID is set is unmistakeably an OIDC
-			// intent; falling through to break-glass-only mode masks
-			// the misconfiguration.
+			// Partial OIDC config + EDR_AUTH_ALLOW_NO_OIDC=1 must NOT silently disable OIDC. A typo in EDR_OIDC_ISSUER
+			// while EDR_OIDC_CLIENT_ID is set is unmistakeably an OIDC intent; falling through to break-glass-only mode
+			// masks the misconfiguration.
 			name: "partial OIDC config + allow-no-oidc still refuses",
 			env: withExtra(prodLikeEnv, map[string]string{
 				"EDR_AUTH_ALLOW_NO_OIDC": "1",
@@ -492,10 +482,8 @@ func withExtra(base, extra map[string]string) map[string]string {
 	return out
 }
 
-// TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling +
-// async-queue env knobs in isolation. Mirrors the pattern in TestLoad
-// so a regression on either parser surfaces with a focused failure
-// message rather than a single-line "test failed".
+// TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling + async-queue env knobs in isolation. Mirrors the pattern in TestLoad so a
+// regression on either parser surfaces with a focused failure message rather than a single-line "test failed".
 func TestLoad_AuditEnvKnobs(t *testing.T) {
 	minEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",

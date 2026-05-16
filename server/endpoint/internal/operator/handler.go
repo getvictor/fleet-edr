@@ -26,10 +26,8 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// revokeBodyCap caps the JSON body size for POST /revoke. The handler
-// only reads two short string fields; matches the 64KiB cap admin uses
-// for /api/policy and protects the operator surface from clients that
-// stream a large body before any auth check fails.
+// revokeBodyCap caps the JSON body size for POST /revoke. The handler only reads two short string fields; matches the 64KiB cap admin
+// uses for /api/policy and protects the operator surface from clients that stream a large body before any auth check fails.
 const revokeBodyCap = 64 << 10
 
 // Handler serves the operator-facing enrollment routes.
@@ -40,8 +38,7 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-// New builds an operator handler. Panics if svc or authz is nil.
-// authz is the authorization chokepoint every privileged route gates
+// New builds an operator handler. Panics if svc or authz is nil. authz is the authorization chokepoint every privileged route gates
 // on; a nil one would silently bypass the role matrix.
 func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
@@ -139,11 +136,9 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordRevokeAudit emits one audit row for the just-committed enrollment
-// revoke. body.Actor / body.Reason are operator-supplied attribution
-// strings carried in the payload; the session userID is the
-// authenticated identity that signed the request. Soft-fail on audit
-// error.
+// recordRevokeAudit emits one audit row for the just-committed enrollment revoke. body.Actor / body.Reason are operator-supplied
+// attribution strings carried in the payload; the session userID is the authenticated identity that signed the request. Soft-fail on
+// audit error.
 func (h *Handler) recordRevokeAudit(r *http.Request, hostID string, body revokeRequest) {
 	if h.audit == nil {
 		return
@@ -173,11 +168,9 @@ func (h *Handler) recordRevokeAudit(r *http.Request, hostID string, body revokeR
 	}
 }
 
-// rotateRequest is the body shape accepted by POST
-// /api/enrollments/{host_id}/rotate. Actor + Reason are required so
-// the audit row records the operator who triggered the rotation and
-// why; making both required avoids silent rotations that audit
-// reviewers can't attribute later.
+// rotateRequest is the body shape accepted by POST /api/enrollments/{host_id}/rotate. Actor + Reason are required so the audit row
+// records the operator who triggered the rotation and why; making both required avoids silent rotations that audit reviewers can't
+// attribute later.
 type rotateRequest struct {
 	Actor  string `json:"actor"`
 	Reason string `json:"reason"`
@@ -243,11 +236,9 @@ func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, s
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
 }
 
-// commandIDForLog dereferences a *int64 for slog attribute output, returning
-// 0 when the rotation committed but no rotate_token command was queued (the
-// nil case carries that signal explicitly on the wire via the omitempty JSON
-// shape; the access log uses 0 to keep the attribute monomorphic int64
-// rather than mixing int64 and "absent").
+// commandIDForLog dereferences a *int64 for slog attribute output, returning 0 when the rotation committed but no rotate_token command
+// was queued (the nil case carries that signal explicitly on the wire via the omitempty JSON shape; the access log uses 0 to keep the
+// attribute monomorphic int64 rather than mixing int64 and "absent").
 func commandIDForLog(p *int64) int64 {
 	if p == nil {
 		return 0

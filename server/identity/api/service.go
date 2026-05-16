@@ -20,36 +20,28 @@ import (
 // breakglass). The remaining surface is session lifecycle, user lookup,
 // chokepoint actor loading, and reauth-window helpers.
 type Service interface {
-	// Logout deletes the session identified by the cookie token. Idempotent:
-	// returns nil if the session is already gone, so logout under network
-	// retry is safe.
+	// Logout deletes the session identified by the cookie token. Idempotent: returns nil if the session is already gone, so logout under
+	// network retry is safe.
 	Logout(ctx context.Context, sessionToken []byte) error
 
-	// GetSession resolves a cookie-borne session token to its session
-	// metadata. Used by the Session middleware on every authed request.
+	// GetSession resolves a cookie-borne session token to its session metadata. Used by the Session middleware on every authed request.
 	// Returns ErrSessionNotFound for unknown or expired tokens.
 	GetSession(ctx context.Context, sessionToken []byte) (*Session, error)
 
-	// GetUser returns the user record for the given user id. Used by
-	// handlers that need user fields beyond the userID pinned on ctx
-	// (e.g. handleGet renders {user.id, user.email}). Returns
-	// ErrUserNotFound for unknown ids.
+	// GetUser returns the user record for the given user id. Used by handlers that need user fields beyond the userID pinned on ctx (e.g.
+	// handleGet renders {user.id, user.email}). Returns ErrUserNotFound for unknown ids.
 	GetUser(ctx context.Context, userID int64) (User, error)
 
-	// SeedAdmin creates the first admin user if no users exist, prints the
-	// generated password to w, and returns the user record + plaintext
-	// password. Returns (zero User, "", ErrAlreadySeeded) if the table is
-	// non-empty so the caller can errors.Is to the success-but-noop case.
+	// SeedAdmin creates the first admin user if no users exist, prints the generated password to w, and returns the user record +
+	// plaintext password. Returns (zero User, "", ErrAlreadySeeded) if the table is non-empty so the caller can errors.Is to the
+	// success-but-noop case.
 	SeedAdmin(ctx context.Context, w io.Writer) (User, string, error)
 
-	// UserExists reports whether the user id refers to a live user.
-	// Replaces the cross-context FK fk_alerts_updated_by that the
-	// bounded-context split dropped: detection's alert-update handler
-	// calls UserExists before writing alerts.updated_by.
+	// UserExists reports whether the user id refers to a live user. Replaces the cross-context FK fk_alerts_updated_by that the
+	// bounded-context split dropped: detection's alert-update handler calls UserExists before writing alerts.updated_by.
 	UserExists(ctx context.Context, userID int64) (bool, error)
 
-	// CleanupExpiredSessions deletes session rows whose expires_at is in
-	// the past. Returns the count removed. Called from the identity Run
+	// CleanupExpiredSessions deletes session rows whose expires_at is in the past. Returns the count removed. Called from the identity Run
 	// loop on a fixed-interval ticker.
 	CleanupExpiredSessions(ctx context.Context) (int64, error)
 
@@ -82,24 +74,15 @@ type Service interface {
 	// rate becomes a concern at scale.
 	UpdateLastAuthAt(ctx context.Context, sessionToken []byte) error
 
-	// IsFresh reports whether the session's last_auth_at falls
-	// within the configured reauth window. The Session middleware
-	// reads it at request time to populate Actor.SessionFresh.
-	// Returns false for a nil session.
+	// IsFresh reports whether the session's last_auth_at falls within the configured reauth window. The Session middleware reads it at
+	// request time to populate Actor.SessionFresh. Returns false for a nil session.
 	IsFresh(s *Session) bool
 
-	// TouchSession advances the session's last_seen_at to NOW(),
-	// throttled so a tight-loop of authenticated requests collapses
-	// to one DB write per ~minute. The Session middleware calls it
-	// on every authed request as the sliding-extension mechanism
-	// behind the idle timeout. cachedLastSeen lets the store skip
-	// the UPDATE without a SELECT when the cached value is already
-	// fresh. Returns the resulting last_seen_at — when the throttle
-	// skipped the UPDATE this is cachedLastSeen, otherwise the
-	// store clock at write time. Caller should plumb the returned
-	// value back onto its cached *Session so a chain of Touches
-	// inside the same throttle window stays a no-op against the
-	// updated cache. Errors are non-fatal — a missed touch costs
-	// at most the throttle window of idle granularity.
+	// TouchSession advances the session's last_seen_at to NOW(), throttled so a tight-loop of authenticated requests collapses to one
+	// DB write per ~minute. The Session middleware calls it on every authed request as the sliding-extension mechanism behind the
+	// idle timeout. cachedLastSeen lets the store skip the UPDATE without a SELECT when the cached value is already fresh. Returns the
+	// resulting last_seen_at — when the throttle skipped the UPDATE this is cachedLastSeen, otherwise the store clock at write time.
+	// Caller should plumb the returned value back onto its cached *Session so a chain of Touches inside the same throttle window stays a
+	// no-op against the updated cache. Errors are non-fatal — a missed touch costs at most the throttle window of idle granularity.
 	TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) (time.Time, error)
 }

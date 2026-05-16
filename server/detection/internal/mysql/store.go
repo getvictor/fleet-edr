@@ -12,8 +12,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// Store is the persistence handle for the detection bounded context.
-// Holds the shared *sqlx.DB pool that cmd/main opens once via
+// Store is the persistence handle for the detection bounded context. Holds the shared *sqlx.DB pool that cmd/main opens once via
 // server/bootstrap.OpenDB and shares across every context.
 type Store struct {
 	db *sqlx.DB
@@ -41,24 +40,19 @@ func (s *Store) PingContext(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
 
-// Close is a no-op. The db handle is shared across bounded contexts
-// and owned by cmd/main; closing it here would yank the pool out
+// Close is a no-op. The db handle is shared across bounded contexts and owned by cmd/main; closing it here would yank the pool out
 // from under sibling contexts.
 func (s *Store) Close() error { return nil }
 
-// InsertEvents upserts a batch of events. Duplicates (by event_id)
-// are ignored. Each row is stamped with a server-controlled
-// ingested_at_ns; the caller's Event.IngestedAtNs is ignored so
-// agents can't set it.
+// InsertEvents upserts a batch of events. Duplicates (by event_id) are ignored. Each row is stamped with a server-controlled
+// ingested_at_ns; the caller's Event.IngestedAtNs is ignored so agents can't set it.
 func (s *Store) InsertEvents(ctx context.Context, events []api.Event) error {
 	return s.insertEventsAt(ctx, events, time.Now().UnixNano())
 }
 
-// InsertEventsAt is a test-only variant that takes a deterministic
-// ingest timestamp. Production callers go through InsertEvents.
-// This path exists so cross-source correlation tests can simulate
-// the ES/NE clock-drift scenario (issue #7) without relying on
-// wall-clock timing.
+// InsertEventsAt is a test-only variant that takes a deterministic ingest timestamp. Production callers go through InsertEvents. This
+// path exists so cross-source correlation tests can simulate the ES/NE clock-drift scenario (issue #7) without relying on wall-clock
+// timing.
 func (s *Store) InsertEventsAt(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
 	return s.insertEventsAt(ctx, events, ingestedAtNs)
 }
@@ -121,21 +115,17 @@ func (s *Store) CountEvents(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-// CountUnprocessed returns the number of events that have not been
-// fully processed (state 0 or 2). Used by the OTel
-// unprocessed-events gauge.
+// CountUnprocessed returns the number of events that have not been fully processed (state 0 or 2). Used by the OTel unprocessed-events
+// gauge.
 func (s *Store) CountUnprocessed(ctx context.Context) (int64, error) {
 	var count int64
 	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events WHERE processed != 1")
 	return count, err
 }
 
-// FetchUnprocessed atomically claims up to limit unprocessed events
-// for the graph builder. Uses SELECT ... FOR UPDATE SKIP LOCKED to
-// prevent concurrent processors from claiming the same rows, and
-// transitions events from state 0 (unprocessed) to 2 (processing)
-// within the same transaction. Events are ordered by host_id and
-// timestamp to ensure correct per-host ordering.
+// FetchUnprocessed atomically claims up to limit unprocessed events for the graph builder. Uses SELECT ... FOR UPDATE SKIP LOCKED
+// to prevent concurrent processors from claiming the same rows, and transitions events from state 0 (unprocessed) to 2 (processing)
+// within the same transaction. Events are ordered by host_id and timestamp to ensure correct per-host ordering.
 func (s *Store) FetchUnprocessed(ctx context.Context, limit int) ([]api.Event, error) {
 	if limit <= 0 {
 		return nil, nil

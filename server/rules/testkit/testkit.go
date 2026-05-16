@@ -20,8 +20,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/bootstrap"
 )
 
-// ApplySchema runs rules' DDL + seed-row inserts against db. Thin
-// wrapper over bootstrap.ApplySchema so the test surface is importable
+// ApplySchema runs rules' DDL + seed-row inserts against db. Thin wrapper over bootstrap.ApplySchema so the test surface is importable
 // separately from the production wiring surface.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	return bootstrap.ApplySchema(ctx, db)

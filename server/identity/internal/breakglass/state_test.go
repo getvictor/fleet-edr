@@ -13,10 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/breakglass"
 )
 
-// EncodeChallengeState → DecodeChallengeState round-trips the
-// SessionData. The HMAC-signed cookie is the integrity gate; a
-// regression that lost the gob payload or dropped the signature
-// step would either leak SessionData or accept tampered cookies.
+// EncodeChallengeState → DecodeChallengeState round-trips the SessionData. The HMAC-signed cookie is the integrity gate; a regression
+// that lost the gob payload or dropped the signature step would either leak SessionData or accept tampered cookies.
 func TestChallengeState_RoundTrip(t *testing.T) {
 	key := bytes32(0x42)
 	sd := webauthn.SessionData{
@@ -46,9 +44,7 @@ func TestEncodeChallengeState_NoKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "signing key")
 }
 
-// A malformed cookie (no dot separator) returns
-// ErrChallengeStateInvalid; same for tampered signature, garbled
-// base64, or wrong key.
+// A malformed cookie (no dot separator) returns ErrChallengeStateInvalid; same for tampered signature, garbled base64, or wrong key.
 func TestDecodeChallengeState_FailureModes(t *testing.T) {
 	key := bytes32(0x42)
 	good, err := breakglass.EncodeChallengeState(key, webauthn.SessionData{
