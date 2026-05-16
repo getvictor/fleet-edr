@@ -23,14 +23,14 @@ export default defineConfig({
   workers: 1, // shared DB; one worker
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: `https://localhost:${PORT}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
-    // Allow Secure cookies on localhost HTTP (the EDR's session +
-    // OIDC state cookies set Secure; Chrome treats localhost as a
-    // secure origin so this Just Works in practice, but spelling it
-    // out keeps the intent obvious).
+    // The dev cert is self-signed (openssl fallback when mkcert isn't installed,
+    // typical in CI). Without ignoreHTTPSErrors, every page.goto raises a TLS
+    // verification error. Production deployments use a real cert chain so this
+    // is a dev-only relaxation, not a posture change (issue #140).
     ignoreHTTPSErrors: true,
   },
   projects: [
@@ -48,7 +48,11 @@ export default defineConfig({
     // the process is up; tests that hit DB-backed endpoints need
     // the readiness guarantee.
     command: "cd ../.. && task dev:server:qa-oidc",
-    url: `http://localhost:${PORT}/readyz`,
+    url: `https://localhost:${PORT}/readyz`,
+    // The webServer probe ignores TLS-cert errors so a self-signed dev cert
+    // doesn't kill the probe before the server has a chance to start. Same
+    // rationale as `use.ignoreHTTPSErrors` above (issue #140).
+    ignoreHTTPSErrors: true,
     // The default `!CI` reuse rule prevents the coverage runner from
     // attaching to a server it just booted (CI is set in GH Actions,
     // so Playwright would normally spawn its own `task dev:server:

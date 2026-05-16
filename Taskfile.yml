@@ -395,15 +395,64 @@ tasks:
 
   # -------- dev loops --------
 
+  dev:certs:
+    desc: |
+      Generate a localhost TLS cert + key at tmp/dev.crt and tmp/dev.key so dev:server
+      can boot in the same TLS-required posture as production (issue #140 — "dev mirrors
+      prod"). Prefers mkcert (https://github.com/FiloSottile/mkcert), which installs a
+      local CA into the system trust store and issues certs every browser accepts
+      without warnings; falls back to openssl self-signed when mkcert is absent (e.g.
+      a fresh CI runner) — browsers warn once and the operator clicks "Advanced ->
+      Proceed to localhost".
+
+      For warning-free dev, install mkcert once on this workstation:
+        brew install mkcert nss   # nss is for Firefox trust on macOS
+        mkcert -install
+
+      Idempotent: the task short-circuits when tmp/dev.crt exists and the cert's
+      notAfter is more than 24h from now. Delete tmp/dev.crt (or both files) to force
+      regeneration. Cert SAN covers localhost + 127.0.0.1 + ::1; access via any other
+      hostname (e.g. a LAN IP from a UTM VM) shows a cert mismatch — add the extra
+      hostname to the mkcert invocation (or to the openssl -addext SAN list in the
+      fallback path) and delete tmp/dev.crt to force regeneration.
+    generates:
+      - tmp/dev.crt
+      - tmp/dev.key
+    status:
+      - test -f tmp/dev.crt && test -f tmp/dev.key && openssl x509 -checkend 86400 -noout -in tmp/dev.crt
+    cmds:
+      - mkdir -p tmp
+      - |
+        if command -v mkcert >/dev/null 2>&1; then
+          echo "generating dev cert via mkcert (browser-trusted)"
+          mkcert -cert-file tmp/dev.crt -key-file tmp/dev.key localhost 127.0.0.1 ::1
+        else
+          echo "mkcert not found; falling back to openssl self-signed (browser warns once)"
+          echo "install mkcert for warning-free dev: brew install mkcert nss && mkcert -install"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+            -keyout tmp/dev.key -out tmp/dev.crt \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"
+        fi
+      - chmod 0600 tmp/dev.key
+
   dev:server:
     desc: |
-      Run the server against local MySQL with insecure HTTP for dev. Binds 0.0.0.0:8088
+      Run the server against local MySQL at https://localhost:8088 (issue #140 — dev
+      mirrors prod). TLS uses the cert pair from `task dev:certs`. Binds 0.0.0.0:8088
       so a UTM/QEMU VM agent on the bridge interface (typically 192.168.64.1 from inside
-      the VM) can reach it. On an untrusted LAN, override EDR_LISTEN_ADDR back to
-      127.0.0.1:8088. The DSN uses an empty password to match the docker-compose mysql
-      service (MYSQL_ALLOW_EMPTY_PASSWORD=yes); a `root:toor@...` DSN will fail with
-      access-denied. OTel exporter targets the local signoz-otel-collector on 4317; if
-      no collector is running, exporter init logs warnings and request handling continues.
+      the VM) can reach it; the cert SAN covers localhost + 127.0.0.1 + ::1 only — a
+      remote host accessing via a different name sees a cert mismatch. On an untrusted
+      LAN, override EDR_LISTEN_ADDR back to 127.0.0.1:8088. The DSN uses an empty
+      password to match the docker-compose mysql service (MYSQL_ALLOW_EMPTY_PASSWORD=yes);
+      a `root:toor@...` DSN will fail with access-denied. OTel exporter targets the local
+      signoz-otel-collector on 4317; if no collector is running, exporter init logs
+      warnings and request handling continues.
+
+      For tooling that can't trust the dev cert, install mkcert + `mkcert -install` so
+      the local CA lands in the system trust store, OR use `curl -k` / equivalent
+      client-side overrides. The server binary has no plaintext-HTTP mode (issue #140);
+      reach for those client-side workarounds, not a non-existent HTTP variant.
 
       Host-token rotation defaults (issue #86): EDR_HOST_TOKEN_LIFETIME 24h,
       EDR_HOST_TOKEN_GRACE 5m. Override either to a short value (e.g.
@@ -414,10 +463,12 @@ tasks:
       the compile-time embedded bundle, so `task build:ui` is picked up on the next
       request without restarting the server. Production binaries leave the var unset and
       serve the embedded copy.
+    deps: [dev:certs]
     env:
       EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
       EDR_ENROLL_SECRET: dev-enroll-secret
-      EDR_ALLOW_INSECURE_HTTP: "1"
+      EDR_TLS_CERT_FILE: tmp/dev.crt
+      EDR_TLS_KEY_FILE: tmp/dev.key
       EDR_LISTEN_ADDR: "0.0.0.0:8088"
       EDR_LOG_FORMAT: text
       EDR_HOST_TOKEN_LIFETIME: 24h
@@ -429,17 +480,17 @@ tasks:
       # secrets convention) — never reuse this placeholder. Length: 49 bytes, well
       # past the 32-byte minimum the bootstrap validates.
       EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
-      # Default break-glass relying-party config bound to the dev listen address.
-      # RP_ID must be the registrable host portion (no scheme, no port) of every
-      # entry in RP_ORIGINS - if they disagree, the browser rejects the WebAuthn
-      # ceremony with a generic "Setup failed" in the UI. Browsers also allow
-      # WebAuthn over plaintext HTTP only when the origin host is literally
-      # `localhost` (not 127.0.0.1), so both vars use `localhost` here. The
-      # printed redemption banner's URL is built from RP_ORIGINS[0], so the
-      # operator clicks through the banner and lands on the matching origin
-      # automatically. Override both together when QA-ing against a remote host.
+      # Default dev mode is break-glass-only (no OIDC IdP wired up). For the OIDC-against-dex
+      # flow used by Playwright e2e + the QA matrix, use `task dev:server:qa-oidc` instead.
+      EDR_AUTH_ALLOW_NO_OIDC: "1"
+      # Break-glass RP_ORIGINS now uses https:// to match the server's TLS posture;
+      # RP_ID stays the registrable host (no scheme, no port). Mismatch between the
+      # browser-observed origin and any RP_ORIGINS entry rejects the WebAuthn ceremony
+      # with a generic "Setup failed" in the UI. CookieSecure flips on automatically
+      # via cfg.TLSEnabled() in cmd/main, so session + reauth cookies now carry the
+      # Secure attribute — same shape as prod.
       EDR_BREAKGLASS_RP_ID: localhost
-      EDR_BREAKGLASS_RP_ORIGINS: http://localhost:8088
+      EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_EXPORTER_OTLP_INSECURE: "true"
@@ -588,10 +639,16 @@ tasks:
       admin@qa.local) all share password `qa-password-123`. First
       sign-in JIT-provisions the user as `analyst`; promote via SQL
       per docs/authz.md to test the role matrix.
+
+      HTTPS-only since issue #140 — depends on dev:certs and binds the
+      dex redirect URL to https://localhost:8088/api/auth/callback;
+      config/dex/dev-config.yaml's redirectURIs list mirrors that.
+    deps: [dev:certs]
     env:
       EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
       EDR_ENROLL_SECRET: dev-enroll-secret
-      EDR_ALLOW_INSECURE_HTTP: "1"
+      EDR_TLS_CERT_FILE: tmp/dev.crt
+      EDR_TLS_KEY_FILE: tmp/dev.key
       EDR_LISTEN_ADDR: "0.0.0.0:8088"
       EDR_LOG_FORMAT: text
       EDR_HOST_TOKEN_LIFETIME: 24h
@@ -599,12 +656,16 @@ tasks:
       EDR_UI_LIVE_DIR: server/ui/dist
       EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
       EDR_BREAKGLASS_RP_ID: localhost
-      EDR_BREAKGLASS_RP_ORIGINS: http://localhost:8088
-      # OIDC: point at the local dex from qa:up.
+      EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
+      # OIDC: point at the local dex from qa:up. Dex itself runs over plain HTTP
+      # on :5556 — that's the dex container's listener, not the EDR's, and the
+      # OIDC client lib speaks HTTP to the issuer just fine. The redirect URL
+      # MUST match config/dex/dev-config.yaml's redirectURIs entry exactly,
+      # both sides on https://localhost:8088 (issue #140).
       EDR_OIDC_ISSUER: http://localhost:5556/dex
       EDR_OIDC_CLIENT_ID: edr-qa
       EDR_OIDC_CLIENT_SECRET: edr-qa-client-secret-do-not-use-in-prod
-      EDR_OIDC_REDIRECT_URL: http://localhost:8088/api/auth/callback
+      EDR_OIDC_REDIRECT_URL: https://localhost:8088/api/auth/callback
       EDR_OIDC_ALLOW_JIT_PROVISIONING: "1"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc

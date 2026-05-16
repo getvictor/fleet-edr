@@ -24,10 +24,10 @@ printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > se
 printf 'pilot-enroll-secret-rotate-me' > secrets/enroll_secret
 chmod 0600 secrets/*
 
-# 3. TLS. Either put fullchain.pem + privkey.pem under ./tls (Let's Encrypt
-#    output via certbot works directly), or opt into insecure HTTP for dev
-#    only:
-#      echo 'EDR_ALLOW_INSECURE_HTTP=1' >> .env
+# 3. TLS. Put fullchain.pem + privkey.pem under ./tls (Let's Encrypt output via
+#    certbot works directly). TLS is unconditionally required (issue #140
+#    removed the plaintext-HTTP opt-out); the server refuses to boot when
+#    either cert path is unreadable.
 
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
@@ -35,12 +35,12 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 ## Verify
 
 ```sh
-# TLS-enabled deployments (default):
 curl -sk https://localhost:8088/readyz | jq .
-# For EDR_ALLOW_INSECURE_HTTP=1 dev deployments, use http:// instead:
-curl -s http://localhost:8088/readyz | jq .
 # {"status":"ok","checks":{"db":{"status":"ok","latency_ms":N}}}
 ```
+
+`-k` bypasses cert verification for the local self-signed probe; production
+automation against a real Let's Encrypt-issued cert should drop it.
 
 Seeded admin email + password are printed once on server boot: `docker compose
 -f docker-compose.prod.yml --env-file .env logs server | head -20`.

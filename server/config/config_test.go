@@ -1,7 +1,15 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"maps"
+	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,14 +24,45 @@ func envMap(pairs map[string]string) func(string) string {
 	}
 }
 
+// writeTestCert generates a fresh self-signed ed25519 cert + key pair in tb.TempDir() and returns the file paths. Tests pass the
+// paths to EDR_TLS_CERT_FILE / EDR_TLS_KEY_FILE so loadTLSConfig's tls.LoadX509KeyPair fail-fast check (CodeRabbit PR #182)
+// sees real material; ed25519 is small, generates instantly, and avoids the RSA keygen cost across the many config tests.
+func writeTestCert(tb testing.TB) (certFile, keyFile string) {
+	tb.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(tb, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	require.NoError(tb, err)
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(tb, err)
+
+	dir := tb.TempDir()
+	certFile = filepath.Join(dir, "cert.pem")
+	keyFile = filepath.Join(dir, "key.pem")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+	require.NoError(tb, os.WriteFile(certFile, certPEM, 0o600))
+	require.NoError(tb, os.WriteFile(keyFile, keyPEM, 0o600))
+	return certFile, keyFile
+}
+
 func TestLoad(t *testing.T) {
-	// Minimal env mirrors the wave-1 dev workflow: TLS off + the Phase-4 break-glass-only opt-out. Production sets neither flag and
-	// provides EDR_OIDC_*; that interaction is covered in a dedicated sub-test below.
+	// Minimal env: every dev + prod deployment must supply TLS cert + key (issue #140 removed the EDR_ALLOW_INSECURE_HTTP opt-out).
+	// EDR_AUTH_ALLOW_NO_OIDC stays as the deliberate break-glass-only dev opt-out; the OIDC-required interaction is covered in
+	// TestLoad_OIDCConfig below.
+	certFile, keyFile := writeTestCert(t)
 	minEnv := map[string]string{
-		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":       "enroll-me",
-		"EDR_ALLOW_INSECURE_HTTP": "1",
-		"EDR_AUTH_ALLOW_NO_OIDC":  "1",
+		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":      "enroll-me",
+		"EDR_TLS_CERT_FILE":      certFile,
+		"EDR_TLS_KEY_FILE":       keyFile,
+		"EDR_AUTH_ALLOW_NO_OIDC": "1",
 	}
 
 	cases := []struct {
@@ -39,39 +78,58 @@ func TestLoad(t *testing.T) {
 				t.Helper()
 				assert.Equal(t, "root@tcp(127.0.0.1:3306)/edr?parseTime=true", c.DSN)
 				assert.Equal(t, "enroll-me", c.EnrollSecret)
-				assert.True(t, c.AllowInsecureHTTP)
+				assert.True(t, c.TLSEnabled(), "TLS must always be enabled — no plaintext-HTTP mode (issue #140)")
 				assert.Equal(t, ":8088", c.ListenAddr)
 				assert.Equal(t, "info", c.LogLevel)
 				assert.Equal(t, "json", c.LogFormat)
 				assert.Equal(t, 500*time.Millisecond, c.ProcessInterval)
 				assert.Equal(t, 500, c.ProcessBatch)
 				assert.Equal(t, 30, c.EnrollRatePerMin)
-				assert.False(t, c.TLSEnabled())
 			},
 		},
 		{
 			name: "missing EDR_DSN",
 			env: map[string]string{
-				"EDR_ENROLL_SECRET":       "s",
-				"EDR_ALLOW_INSECURE_HTTP": "1",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_CERT_FILE": certFile,
+				"EDR_TLS_KEY_FILE":  keyFile,
 			},
 			wantErr: "EDR_DSN",
 		},
 		{
 			name: "missing EDR_ENROLL_SECRET",
 			env: map[string]string{
-				"EDR_DSN":                 "x",
-				"EDR_ALLOW_INSECURE_HTTP": "1",
+				"EDR_DSN":           "x",
+				"EDR_TLS_CERT_FILE": certFile,
+				"EDR_TLS_KEY_FILE":  keyFile,
 			},
 			wantErr: "EDR_ENROLL_SECRET",
 		},
 		{
-			name: "TLS required unless EDR_ALLOW_INSECURE_HTTP=1",
+			name: "TLS cert + key unconditionally required (no opt-out)",
 			env: map[string]string{
 				"EDR_DSN":           "x",
 				"EDR_ENROLL_SECRET": "s",
 			},
-			wantErr: "EDR_TLS_CERT_FILE is required",
+			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
+		},
+		{
+			name: "TLS key without cert",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
+			},
+			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
+		},
+		{
+			name: "TLS cert without key",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
+			},
+			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
 		},
 		{
 			name: "missing every required var reports each",
@@ -81,31 +139,6 @@ func TestLoad(t *testing.T) {
 				t.Fatalf("validate should not be called when wantErr is set")
 			},
 			wantErr: "EDR_DSN\nrequired env var EDR_ENROLL_SECRET",
-		},
-		{
-			name: "TLS key without cert",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_TLS_KEY_FILE": "/tmp/edr.key",
-			}),
-			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together",
-		},
-		{
-			name: "TLS cert without key",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
-			}),
-			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together",
-		},
-		{
-			name: "TLS both set",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
-				"EDR_TLS_KEY_FILE":  "/tmp/edr.key",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.True(t, c.TLSEnabled())
-			},
 		},
 		{
 			name: "bad log level",
@@ -284,10 +317,12 @@ func TestLoad(t *testing.T) {
 // TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a production deployment without OIDC config refuses to start;
 // dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER without the rest produces focused per-field errors.
 func TestLoad_OIDCConfig(t *testing.T) {
+	certFile, keyFile := writeTestCert(t)
 	prodLikeEnv := map[string]string{
-		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":       "enroll-me",
-		"EDR_ALLOW_INSECURE_HTTP": "1",
+		"EDR_DSN":           "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET": "enroll-me",
+		"EDR_TLS_CERT_FILE": certFile,
+		"EDR_TLS_KEY_FILE":  keyFile,
 	}
 
 	cases := []struct {
@@ -485,11 +520,13 @@ func withExtra(base, extra map[string]string) map[string]string {
 // TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling + async-queue env knobs in isolation. Mirrors the pattern in TestLoad so a
 // regression on either parser surfaces with a focused failure message rather than a single-line "test failed".
 func TestLoad_AuditEnvKnobs(t *testing.T) {
+	certFile, keyFile := writeTestCert(t)
 	minEnv := map[string]string{
-		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":       "enroll-me",
-		"EDR_ALLOW_INSECURE_HTTP": "1",
-		"EDR_AUTH_ALLOW_NO_OIDC":  "1",
+		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":      "enroll-me",
+		"EDR_TLS_CERT_FILE":      certFile,
+		"EDR_TLS_KEY_FILE":       keyFile,
+		"EDR_AUTH_ALLOW_NO_OIDC": "1",
 	}
 
 	cases := []struct {
@@ -574,4 +611,50 @@ func TestLoad_AuditEnvKnobs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoad_TLSCertFailFast pins the fail-fast behaviour added in response to a CodeRabbit review on PR #182: bad cert paths
+// must surface during config.Load, before any caller mutates DB state (schema apply, admin seeding). Without this, a typoed
+// EDR_TLS_CERT_FILE used to escape Config validation and only failed inside configureTLS — long after the first-boot admin
+// password had been printed to the log.
+func TestLoad_TLSCertFailFast(t *testing.T) {
+	certFile, keyFile := writeTestCert(t)
+	base := map[string]string{
+		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET":      "enroll-me",
+		"EDR_AUTH_ALLOW_NO_OIDC": "1",
+	}
+
+	t.Run("nonexistent cert file rejected at Load time", func(t *testing.T) {
+		env := withExtra(base, map[string]string{
+			"EDR_TLS_CERT_FILE": filepath.Join(t.TempDir(), "does-not-exist.crt"),
+			"EDR_TLS_KEY_FILE":  keyFile,
+		})
+		_, err := loadFrom(envMap(env))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "EDR_TLS_CERT_FILE/EDR_TLS_KEY_FILE unreadable or mismatched")
+	})
+
+	t.Run("mismatched cert + key rejected at Load time", func(t *testing.T) {
+		// Swap in a fresh key that doesn't match the cert.
+		_, mismatchKey := writeTestCert(t)
+		env := withExtra(base, map[string]string{
+			"EDR_TLS_CERT_FILE": certFile,
+			"EDR_TLS_KEY_FILE":  mismatchKey,
+		})
+		_, err := loadFrom(envMap(env))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "EDR_TLS_CERT_FILE/EDR_TLS_KEY_FILE unreadable or mismatched")
+	})
+
+	t.Run("valid cert + key passes", func(t *testing.T) {
+		env := withExtra(base, map[string]string{
+			"EDR_TLS_CERT_FILE": certFile,
+			"EDR_TLS_KEY_FILE":  keyFile,
+		})
+		cfg, err := loadFrom(envMap(env))
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		assert.True(t, cfg.TLSEnabled())
+	})
 }

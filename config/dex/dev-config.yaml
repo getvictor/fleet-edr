@@ -35,7 +35,10 @@ staticClients:
     name: "EDR QA"
     secret: edr-qa-client-secret-do-not-use-in-prod
     redirectURIs:
-      - "http://localhost:8088/api/auth/callback"
+      # HTTPS-only since issue #140. Must match task dev:server:qa-oidc's
+      # EDR_OIDC_REDIRECT_URL exactly; dex refuses any other URL during the
+      # authorization-code redirect.
+      - "https://localhost:8088/api/auth/callback"
 
 enablePasswordDB: true
 

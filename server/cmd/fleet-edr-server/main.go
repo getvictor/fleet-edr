@@ -87,12 +87,8 @@ func run() error {
 		"version", version,
 		"commit", commit,
 		"build_time", buildTime,
-		"tls", cfg.TLSEnabled(),
 		"tls12_allowed", cfg.AllowTLS12,
 	)
-	if !cfg.TLSEnabled() {
-		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
-	}
 
 	db, err := bootstrap.OpenDB(ctx, cfg.DSN)
 	if err != nil {
@@ -165,10 +161,10 @@ func run() error {
 	}
 
 	srv := newHTTPServer(cfg, mux, logger, clientIPResolver)
-	if err := configureTLSIfEnabled(ctx, logger, srv, cfg); err != nil {
+	if err := configureTLS(ctx, logger, srv, cfg); err != nil {
 		return err
 	}
-	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
+	return httpserver.RunAndShutdown(ctx, srv, logger)
 }
 
 func openIdentity(
@@ -427,21 +423,15 @@ func redemptionURL(cfg *config.Config, plaintext string) string {
 		origin := strings.TrimRight(cfg.BreakglassRPOrigins[0], "/")
 		return origin + path + plaintext
 	}
-	scheme := "http"
-	if cfg.TLSEnabled() {
-		scheme = "https"
-	}
 	host := cfg.ListenAddr
 	if len(host) > 0 && host[0] == ':' {
 		host = "localhost" + host
 	}
-	return scheme + "://" + host + path + plaintext
+	// Server is HTTPS-only (issue #140 removed the plaintext-HTTP opt-out), so the redemption URL is always https://.
+	return "https://" + host + path + plaintext
 }
 
-func configureTLSIfEnabled(ctx context.Context, logger *slog.Logger, srv *http.Server, cfg *config.Config) error {
-	if !cfg.TLSEnabled() {
-		return nil
-	}
+func configureTLS(ctx context.Context, logger *slog.Logger, srv *http.Server, cfg *config.Config) error {
 	return httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,

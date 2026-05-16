@@ -86,17 +86,11 @@ EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
 
 **Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).**
-The server runs in plaintext HTTP on 8088 inside the compose network; your
-upstream handles TLS. Set:
-
-```
-EDR_ALLOW_INSECURE_HTTP=1
-```
-
-Never set that flag on an internet-exposed server that isn't behind a
-TLS-terminating proxy. The agent refuses `http://` URLs unless its own
-`EDR_ALLOW_INSECURE` flag is also set, so a misconfigured customer would
-fail closed rather than silently deploy unencrypted telemetry.
+The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs
+over TLS — issue #140 removed the plaintext-HTTP opt-out, so the EDR server
+binary cannot serve HTTP under any configuration. Issue the proxy-to-backend
+cert from your internal CA (or reuse the public cert) and mount it under
+`./tls/`; the env-var shape is identical to Option A.
 
 ### 5. Pin a version in .env
 
@@ -135,11 +129,17 @@ either add the CA to the local trust store, pass
 `--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe.
 Don't paper over a trust failure with `-k` in an automation script.
 
-Insecure-HTTP deployment (dev / behind-proxy):
+Local dev deployment (`task dev:server`, issue #140 — TLS by default with the
+self-signed cert from `task dev:certs`):
 
 ```sh
-curl -s http://localhost:8088/readyz | jq .
+curl -sk https://localhost:8088/readyz | jq .
 ```
+
+`-k` is acceptable here because the cert is a known self-signed dev cert; never
+ship `-k` in an automation script against a real deployment — install mkcert
+locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and
+the cert validates without the flag.
 
 Expect:
 
@@ -183,9 +183,11 @@ re-seed. Don't lose it.
 
 ### Log into the UI
 
-Open `https://edr.example.com/ui/` (or `http://localhost:8088/ui/` in
-dev). Sign in with `admin@fleet-edr.local` + the password above. The
-hosts page should be empty; that changes when the first agent enrolls.
+Open `https://edr.example.com/ui/` (or `https://localhost:8088/ui/`
+when running `task dev:server` locally — accept the self-signed cert
+warning once if mkcert isn't installed). Sign in with
+`admin@fleet-edr.local` + the password above. The hosts page should be
+empty; that changes when the first agent enrolls.
 
 ## Configuration reference
 
@@ -196,10 +198,9 @@ unset uses the documented default.
 |---|---|---|---|
 | `EDR_DSN` / `EDR_DSN_FILE` | yes | - | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
 | `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | - | Shared secret agents present at enrollment |
-| `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTP server binds |
-| `EDR_TLS_CERT_FILE` | no | - | PEM cert for TLS termination (pair with key) |
-| `EDR_TLS_KEY_FILE` | no | - | PEM key (pair with cert) |
-| `EDR_ALLOW_INSECURE_HTTP` | no | 0 | Set to `1` to skip TLS (only behind an upstream terminator) |
+| `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTPS server binds |
+| `EDR_TLS_CERT_FILE` | **yes** | - | PEM cert. Unconditionally required; the server has no plaintext-HTTP mode (issue #140) |
+| `EDR_TLS_KEY_FILE` | **yes** | - | PEM key (pair with cert) |
 | `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_LOGIN_RATE_PER_MIN` | no | 6 | Per-IP UI login rate limit |
@@ -340,9 +341,11 @@ docker compose -f docker-compose.prod.yml restart server
 **Server keeps exiting with "EDR_DSN is required"** — the `edr_dsn`
 secret file is missing or unreadable. Re-run the secrets step in Setup.
 
-**Server exits with "EDR_TLS_CERT_FILE is required"** — you're running
-without TLS and forgot `EDR_ALLOW_INSECURE_HTTP=1`. Either provide a
-cert+key or set the flag.
+**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both
+required"** — either cert path is unset or unreadable. The server has
+no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem
+under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE`
+env vars before retrying.
 
 **Agents see "enrollment failed: unauthorized"** — the `enroll_secret`
 on the server and the `EDR_ENROLL_SECRET` the agent reads from

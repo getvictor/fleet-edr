@@ -53,11 +53,7 @@ func run() error {
 		"addr", cfg.ListenAddr,
 		"version", version,
 		"commit", commit,
-		"tls", cfg.TLSEnabled(),
 	)
-	if !cfg.TLSEnabled() {
-		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE_HTTP=1 set; TLS disabled — do not run in production")
-	}
 
 	db, err := bootstrap.OpenDB(ctx, cfg.DSN)
 	if err != nil {
@@ -130,15 +126,13 @@ func run() error {
 		WriteTimeout: httpWriteTimeout,
 		IdleTimeout:  httpIdleTimeout,
 	}
-	if cfg.TLSEnabled() {
-		if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
-			CertFile:   cfg.TLSCertFile,
-			KeyFile:    cfg.TLSKeyFile,
-			AllowTLS12: cfg.AllowTLS12,
-			Logger:     logger,
-		}); err != nil {
-			return err
-		}
+	if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
+		CertFile:   cfg.TLSCertFile,
+		KeyFile:    cfg.TLSKeyFile,
+		AllowTLS12: cfg.AllowTLS12,
+		Logger:     logger,
+	}); err != nil {
+		return err
 	}
-	return httpserver.RunAndShutdown(ctx, srv, cfg.TLSEnabled(), logger)
+	return httpserver.RunAndShutdown(ctx, srv, logger)
 }

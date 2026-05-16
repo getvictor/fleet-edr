@@ -180,10 +180,11 @@ test.describe.serial("RBAC, reauth, and audit flows", () => {
       const originalState = stateMatch![1];
 
       // The state cookie's Path is "/api/auth/" (see oidc handler.go),
-      // so ctx.cookies("http://localhost:8088") with bare "/" filters
+      // so ctx.cookies("https://localhost:8088") with bare "/" filters
       // it out. Pass the cookie's actual scope path so the URL-filter
       // matches; omitting the URL would also work but is less specific.
-      const cookies = await ctx.cookies("http://localhost:8088/api/auth/");
+      // Scheme is https since issue #140 made TLS mandatory.
+      const cookies = await ctx.cookies("https://localhost:8088/api/auth/");
       const stateCookie = cookies.find((c) => c.name === "edr_oidc_state");
       expect(stateCookie).toBeDefined();
 

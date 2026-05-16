@@ -5,6 +5,7 @@
 package config
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -48,18 +49,17 @@ const (
 
 // Config is the resolved server configuration.
 type Config struct {
-	DSN               string
-	ListenAddr        string
-	EnrollSecret      string
-	TLSCertFile       string
-	TLSKeyFile        string
-	AllowInsecureHTTP bool
-	AllowTLS12        bool
-	EnrollRatePerMin  int
-	LogLevel          string
-	LogFormat         string
-	ProcessInterval   time.Duration
-	ProcessBatch      int
+	DSN              string
+	ListenAddr       string
+	EnrollSecret     string
+	TLSCertFile      string
+	TLSKeyFile       string
+	AllowTLS12       bool
+	EnrollRatePerMin int
+	LogLevel         string
+	LogFormat        string
+	ProcessInterval  time.Duration
+	ProcessBatch     int
 
 	// Data lifecycle + observability.
 	//
@@ -149,8 +149,8 @@ type Config struct {
 
 	// AuthAllowNoOIDC is the dedicated dev flag that lets the server boot in break-glass-only mode (no OIDC). Default false:
 	// production deployments without OIDC config refuse to start with an explicit error pointing the operator at the missing
-	// env vars. Set EDR_AUTH_ALLOW_NO_OIDC=1 in dev environments where running against a real IdP is overkill. Pattern mirrors
-	// EDR_ALLOW_INSECURE_HTTP=1's "you must opt in to the unsafe path" shape.
+	// env vars. Set EDR_AUTH_ALLOW_NO_OIDC=1 in dev environments where running against a real IdP is overkill. The TLS posture
+	// has no equivalent opt-out: TLS cert + key are unconditionally required (issue #140).
 	AuthAllowNoOIDC bool
 
 	// SessionSigningKey is the HMAC key the OIDC state cookie uses to sign + verify per-flow secrets (state, nonce, PKCE verifier).
@@ -283,7 +283,6 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 
-	c.AllowInsecureHTTP = getenv("EDR_ALLOW_INSECURE_HTTP") == "1"
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
 	envparse.UnitFraction(getenv, "EDR_AUDIT_READ_SAMPLING", &c.AuditReadSampling, errs)
 	envparse.NonNegativeInt(getenv, "EDR_AUDIT_ASYNC_QUEUE_CAP", &c.AuditAsyncQueueCap, errs)
@@ -296,15 +295,16 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 // loadTLSConfig validates the TLS configuration's cross-field
 // invariants now that loadCoreEnv has populated the cert paths.
 func loadTLSConfig(c *Config, errs *[]error) {
-	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
 		*errs = append(*errs, errors.New(
-			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE must be set together (or both left unset)"))
+			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required: the server has no plaintext-HTTP mode (issue #140)"))
+		return
 	}
-	// TLS is required in production. The opt-out is deliberately noisy so operators
-	// don't accidentally ship plaintext.
-	if !c.TLSEnabled() && !c.AllowInsecureHTTP {
-		*errs = append(*errs, errors.New(
-			"EDR_TLS_CERT_FILE is required (set EDR_ALLOW_INSECURE_HTTP=1 for dev)"))
+	// Fail fast on unreadable / mismatched cert material so boot exits before bootstrap.New mutates the DB (admin seeding prints
+	// a one-time password the operator can lose to log noise on a misconfigured retry). configureTLS in cmd/main would otherwise
+	// catch this only AFTER ApplySchema + seedAdmin had already run (CodeRabbit review on PR #182).
+	if _, err := tls.LoadX509KeyPair(c.TLSCertFile, c.TLSKeyFile); err != nil {
+		*errs = append(*errs, fmt.Errorf("EDR_TLS_CERT_FILE/EDR_TLS_KEY_FILE unreadable or mismatched: %w", err))
 	}
 }
 
