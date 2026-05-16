@@ -191,11 +191,9 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := h.client.Exchange(ctx, code, decoded.CodeVerifier, decoded.Nonce)
 	if err != nil {
-		// Exchange failure crosses two boundaries: a malformed code
-		// (caller's fault, 400) is indistinguishable in the wire from
-		// an IdP/token-endpoint outage. Treat as 502 — closer to the
-		// truth: the upstream we depend on did not produce a usable
-		// token. Operators get a "try again" redirect either way.
+		// Exchange failure crosses two boundaries: a malformed code (caller's fault, 400) is indistinguishable in the wire
+		// from an IdP/token-endpoint outage. Treat as 502 — closer to the truth: the upstream we depend on did not produce a
+		// usable token. Operators get a "try again" redirect either way.
 		h.callbackError(r, w, http.StatusBadGateway, "exchange_failed", err)
 		return
 	}
@@ -210,9 +208,8 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrEmailConflict) {
-			// Email already binds another account — surface a directed
-			// reason so the operator knows to ask an admin to merge,
-			// not a 500.
+			// Email already binds another account — surface a directed reason so the operator knows to ask an admin to
+			// merge, not a 500.
 			h.failureAudit(r, "oidc.email_conflict", api.AuditEvent{
 				ActorEmail: claims.Email,
 				Payload:    map[string]any{"subject": claims.Subject},

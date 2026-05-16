@@ -192,12 +192,9 @@ func (s *CredentialStore) FindByID(ctx context.Context, credID []byte) (*Credent
 func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 	out := make([]webauthn.Credential, len(rows))
 	for i, r := range rows {
-		// SignCount is uint64 in the schema (matches MySQL UNSIGNED
-		// BIGINT); the WebAuthn library carries uint32 because the
-		// authenticatorData wire shape uses 32 bits. A counter that
-		// somehow exceeds uint32 indicates either a bug in the
-		// authenticator or a tampered database row; clamp to MaxUint32
-		// so the comparison still rejects future regressions
+		// SignCount is uint64 in the schema (matches MySQL UNSIGNED BIGINT); the WebAuthn library carries uint32 because
+		// the authenticatorData wire shape uses 32 bits. A counter that somehow exceeds uint32 indicates either a bug in the
+		// authenticator or a tampered database row; clamp to MaxUint32 so the comparison still rejects future regressions
 		// deterministically.
 		signCount := min(r.SignCount, math.MaxUint32)
 		//nolint:gosec // signCount is clamped to MaxUint32 above; the conversion is safe.
@@ -206,11 +203,9 @@ func ToWebauthnCredentials(rows []CredentialRow) []webauthn.Credential {
 			PublicKey: r.PublicKey,
 			Transport: decodeTransports(r.Transports.String),
 			Flags: webauthn.CredentialFlags{
-				// BE is invariant per the WebAuthn spec; the library
-				// rejects assertions where the asserted BE differs
-				// from this stored value, so getting these flags onto
-				// the credential is what makes platform-authenticator
-				// Passkey logins work past first use.
+				// BE is invariant per the WebAuthn spec; the library rejects assertions where the asserted
+				// BE differs from this stored value, so getting these flags onto the credential is what makes
+				// platform-authenticator Passkey logins work past first use.
 				BackupEligible: r.BackupEligible,
 				BackupState:    r.BackupState,
 			},

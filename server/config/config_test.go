@@ -198,9 +198,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST parsed and trimmed",
 			env: withExtra(minEnv, map[string]string{
-				// Mixed whitespace + an empty entry to exercise envparse.Allowlist's
-				// trim/empty-skip behaviour, same way every other allowlist env var
-				// is documented to behave.
+				// Mixed whitespace + an empty entry to exercise envparse.Allowlist's trim/empty-skip behaviour,
+				// same way every other allowlist env var is documented to behave.
 				"EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST": "/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal,,/Applications/iTerm.app/Contents/MacOS/iTerm2",
 			}),
 			validate: func(t *testing.T, c *Config) {
@@ -229,9 +228,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "EDR_TRUSTED_PROXIES populates and trims",
 			env: withExtra(minEnv, map[string]string{
-				// Mixed CIDR forms + whitespace + an empty entry. CIDR
-				// validation is deferred to httpserver.NewClientIPResolver,
-				// so config-level parsing only trims and drops empties.
+				// Mixed CIDR forms + whitespace + an empty entry. CIDR validation is deferred to
+				// httpserver.NewClientIPResolver, so config-level parsing only trims and drops empties.
 				"EDR_TRUSTED_PROXIES": " 10.0.0.0/8 , 192.168.1.5,, fd00::/8",
 			}),
 			validate: func(t *testing.T, c *Config) {
@@ -424,11 +422,9 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			},
 		},
 		{
-			// EDR_OIDC_SCOPES override that drops "openid" must refuse
-			// to start. Without openid the discovery + ID-token flow
-			// has no contract; the failure is "token endpoint succeeds,
-			// id_token absent at callback" which is harder to debug
-			// than a startup error.
+			// EDR_OIDC_SCOPES override that drops "openid" must refuse to start. Without openid the discovery + ID-token
+			// flow has no contract; the failure is "token endpoint succeeds, id_token absent at callback" which is harder
+			// to debug than a startup error.
 			name: "EDR_OIDC_SCOPES without openid is rejected",
 			env: withExtra(prodLikeEnv, map[string]string{
 				"EDR_OIDC_ISSUER":         "https://example.okta.com",
@@ -441,11 +437,9 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			wantErr: "EDR_OIDC_SCOPES must include \"openid\"",
 		},
 		{
-			// Partial OIDC config + EDR_AUTH_ALLOW_NO_OIDC=1 must NOT
-			// silently disable OIDC. A typo in EDR_OIDC_ISSUER while
-			// EDR_OIDC_CLIENT_ID is set is unmistakeably an OIDC
-			// intent; falling through to break-glass-only mode masks
-			// the misconfiguration.
+			// Partial OIDC config + EDR_AUTH_ALLOW_NO_OIDC=1 must NOT silently disable OIDC. A typo in EDR_OIDC_ISSUER
+			// while EDR_OIDC_CLIENT_ID is set is unmistakeably an OIDC intent; falling through to break-glass-only mode
+			// masks the misconfiguration.
 			name: "partial OIDC config + allow-no-oidc still refuses",
 			env: withExtra(prodLikeEnv, map[string]string{
 				"EDR_AUTH_ALLOW_NO_OIDC": "1",

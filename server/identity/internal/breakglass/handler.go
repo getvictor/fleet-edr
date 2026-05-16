@@ -132,9 +132,8 @@ func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
 // than an HTML payload.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	wrap := func(handler http.HandlerFunc) http.Handler {
-		// IP allowlist runs FIRST so off-list callers see a 404
-		// indistinguishable from "no such path" — they must not
-		// learn the path exists by bumping into a rate-limit 429.
+		// IP allowlist runs FIRST so off-list callers see a 404 indistinguishable from "no such path" — they must not learn
+		// the path exists by bumping into a rate-limit 429.
 		var inner http.Handler = handler
 		if h.allowlist != nil {
 			inner = h.allowlist.Middleware(inner)
@@ -422,14 +421,10 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		reason := reasonForLoginErr(err)
-		// When the failure falls through to the generic "login.error"
-		// catch-all, the audit row's redacted reason leaves the
-		// operator without a way to diagnose what actually failed
-		// (origin mismatch, signature verify fail, missing challenge
-		// cookie, etc.). Log the underlying error at WARN so SigNoz
-		// captures the breadcrumb. The wire response and audit row
-		// stay generic so a probing attacker can't enumerate failure
-		// modes; the log is operator-only.
+		// When the failure falls through to the generic "login.error" catch-all, the audit row's redacted reason leaves the
+		// operator without a way to diagnose what actually failed (origin mismatch, signature verify fail, missing challenge
+		// cookie, etc.). Log the underlying error at WARN so SigNoz captures the breadcrumb. The wire response and audit row
+		// stay generic so a probing attacker can't enumerate failure modes; the log is operator-only.
 		if reason == "login.error" {
 			h.logger.WarnContext(r.Context(), "breakglass login fell through to generic error",
 				"err", err,

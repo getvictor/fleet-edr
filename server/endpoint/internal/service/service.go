@@ -101,9 +101,8 @@ func New(opts Options) api.Service {
 func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP string) (api.EnrollResponse, error) {
 	if req.EnrollSecret == "" || req.HardwareUUID == "" || req.Hostname == "" ||
 		req.OSVersion == "" || req.AgentVersion == "" {
-		// The handler maps this to 400/bad_body via the missing-field check
-		// it already does. Service returns ErrInvalidSecret only if secret
-		// is non-empty but wrong; an empty secret is a body-shape error.
+		// The handler maps this to 400/bad_body via the missing-field check it already does. Service returns ErrInvalidSecret
+		// only if secret is non-empty but wrong; an empty secret is a body-shape error.
 		return api.EnrollResponse{}, api.ErrInvalidEnrollRequest
 	}
 	if !hardwareUUIDPattern.MatchString(req.HardwareUUID) {
@@ -140,14 +139,10 @@ func (s *service) VerifyToken(ctx context.Context, token string) (string, error)
 		return "", fmt.Errorf("verify token: %w", err)
 	}
 
-	// Verify-time auto-rotation trigger. Conditions:
-	//   - The verify hit the CURRENT token (not the previous-token
-	//     grace path; if it hit previous, a rotation is already in
-	//     flight and another would be wasteful).
-	//   - The current token is past its lifetime.
-	// Best-effort: failures are warn-logged but do not fail the verify.
-	// The verify already succeeded; the agent's next poll will re-trigger
-	// any rotation we couldn't queue this time.
+	// Verify-time auto-rotation trigger. Conditions: the verify hit the CURRENT token (not the previous-token grace path; if it
+	// hit previous, a rotation is already in flight and another would be wasteful) AND the current token is past its lifetime.
+	// Best-effort: failures are warn-logged but do not fail the verify. The verify already succeeded; the agent's next poll will
+	// re-trigger any rotation we couldn't queue this time.
 	if !res.MatchedPrevious && time.Since(res.TokenIssuedAt) > s.lifetime {
 		s.maybeAutoRotate(ctx, res.HostID, res.CurrentTokenID)
 	}

@@ -620,9 +620,8 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 			return false
 		}
 		paths := flattenPaths(tree)
-		// All three exec'd paths must be present; the third one is the
-		// last event in the batch, so its presence implies every prior
-		// fork + exec has materialised.
+		// All three exec'd paths must be present; the third one is the last event in the batch, so its presence implies every
+		// prior fork + exec has materialised.
 		return slices.Contains(paths, "/usr/bin/python3") &&
 			slices.Contains(paths, "/bin/sh") &&
 			slices.Contains(paths, "/tmp/payload")

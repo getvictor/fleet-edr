@@ -427,9 +427,8 @@ func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receive
 				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		case errCode := <-recv.Errors():
-			// All XPC error codes force a reconnect today; the switch is kept so the
-			// call site is explicit about which codes are expected vs unexpected and so
-			// we can route them differently later (e.g. backoff vs fail-fast).
+			// All XPC error codes force a reconnect today; the switch is kept so the call site is explicit about which
+			// codes are expected vs unexpected and so we can route them differently later (e.g. backoff vs fail-fast).
 			logger.WarnContext(ctx, "xpc error", "code", errCode,
 				"expected", errCode == receiver.ErrorConnectionInvalid ||
 					errCode == receiver.ErrorConnectionInterrupted ||

@@ -163,10 +163,8 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
 	}
 	if proc == nil {
-		// Defensive: the open event landed before the writer's exec
-		// row materialised. Same race as credential_keychain_dump; the
-		// processor loop normally lands the row first, so this is a
-		// guard, not a regular drop path.
+		// Defensive: the open event landed before the writer's exec row materialised. Same race as credential_keychain_dump;
+		// the processor loop normally lands the row first, so this is a guard, not a regular drop path.
 		return nil, nil
 	}
 	if r.allowed(proc.CodeSigning) {

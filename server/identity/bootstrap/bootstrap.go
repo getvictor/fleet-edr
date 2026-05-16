@@ -221,10 +221,8 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 	rpID := bg.RPID
 	rpOrigins := bg.RPOrigins
 	if rpID == "" && len(rpOrigins) == 0 && in.deps.OIDC.Issuer == "" {
-		// Dev fallback: neither OIDC nor break-glass explicitly
-		// configured. Default to localhost so first-boot works
-		// without a long env var prelude. Production is covered by
-		// the explicit-config branch below.
+		// Dev fallback: neither OIDC nor break-glass explicitly configured. Default to localhost so first-boot works without a
+		// long env var prelude. Production is covered by the explicit-config branch below.
 		rpID = "localhost"
 		rpOrigins = []string{"http://localhost:8088", "http://127.0.0.1:8088"}
 	}

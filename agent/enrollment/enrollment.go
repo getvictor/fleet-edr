@@ -103,9 +103,9 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 
 	// Try to load the persisted token first. Happy path on every restart.
 	if existing, err := loadPersisted(opts.TokenFile); err == nil {
-		// Refuse a token bound to a different server. If EDR_SERVER_URL changed, sending the
-		// old host_token to a new endpoint would leak it to whatever server answers; fail loud
-		// and make the operator delete the file (or re-enroll with the matching URL) instead.
+		// Refuse a token bound to a different server. If EDR_SERVER_URL changed, sending the old host_token to a new endpoint
+		// would leak it to whatever server answers; fail loud and make the operator delete the file (or re-enroll with the
+		// matching URL) instead.
 		if trimTrailingSlash(existing.ServerURL) != trimTrailingSlash(opts.ServerURL) {
 			return nil, fmt.Errorf(
 				"token file %q is bound to server_url %q but EDR_SERVER_URL is %q; delete the file or re-enroll",
@@ -117,9 +117,8 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 			logAttrHostID, existing.HostID, "edr.token_file", opts.TokenFile)
 		return p, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard
-		// fail — the operator needs to take action. Silent fallback to enroll would leave a
-		// stale token on disk.
+		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard fail — the operator needs to
+		// take action. Silent fallback to enroll would leave a stale token on disk.
 		return nil, fmt.Errorf("load token file %q: %w", opts.TokenFile, err)
 	}
 

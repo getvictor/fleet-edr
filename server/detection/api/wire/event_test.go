@@ -117,8 +117,7 @@ func TestWire_RoundTripProperty(t *testing.T) {
 			assert.Equal(rt, batch[i].TimestampNs, got[i].TimestampNs, "timestamp_ns at i=%d", i)
 			assert.Equal(rt, batch[i].EventType, got[i].EventType, "event_type at i=%d", i)
 			assert.JSONEq(rt, string(batch[i].Payload), string(got[i].Payload), "payload at i=%d", i)
-			// IngestedAtNs uses omitempty: a zero value disappears on
-			// the wire and decodes back to zero. Anything non-zero
+			// IngestedAtNs uses omitempty: a zero value disappears on the wire and decodes back to zero. Anything non-zero
 			// must round-trip exactly.
 			if batch[i].IngestedAtNs != 0 {
 				assert.Equal(rt, batch[i].IngestedAtNs, got[i].IngestedAtNs, "ingested_at_ns at i=%d", i)

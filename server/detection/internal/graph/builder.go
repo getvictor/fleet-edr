@@ -115,14 +115,12 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 		return err
 	}
 
-	// Resolve the running-at-this-moment row for the PID. Three shapes:
+	// Resolve the running-at-this-moment row for the PID. Three shapes drive different recovery paths:
 	//   (a) no row: exec-without-fork (synthesize a root row).
 	//   (b) row, exec_time_ns NULL: first exec after fork; UPDATE in place.
-	//   (c) row, exec_time_ns set: same-PID re-exec (issue #10): close the
-	//       prior generation and INSERT a new linked row. Without this
-	//       branch, shell exec-optimization chains
-	//       (python -> sh -> bash -> /tmp/payload) get collapsed into the
-	//       final exec only.
+	//   (c) row, exec_time_ns set: same-PID re-exec (issue #10). Close the prior generation and INSERT a new linked row.
+	//       Without this branch, shell exec-optimization chains (python -> sh -> bash -> /tmp/payload) get collapsed
+	//       into the final exec only.
 	current, err := b.store.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return err
@@ -174,9 +172,8 @@ func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload
 	_, reLinked, err := b.store.ReExec(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs, api.Process{
 		HostID: evt.HostID,
 		PID:    p.PID,
-		// Preserve the parent linkage from the original fork: a re-exec
-		// doesn't change PPID on macOS. Falls back to whatever the exec
-		// event carries if the prior row somehow has ppid=0.
+		// Preserve the parent linkage from the original fork: a re-exec doesn't change PPID on macOS. Falls back to whatever
+		// the exec event carries if the prior row somehow has ppid=0.
 		PPID:             pickPPID(prior.PPID, p.PPID),
 		Path:             p.Path,
 		Args:             p.Args,

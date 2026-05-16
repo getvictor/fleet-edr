@@ -70,11 +70,9 @@ func TestSafeRedirect(t *testing.T) {
 		{"javascript: scheme -> default", "javascript:alert(1)", "/ui/"},
 		{"data: scheme -> default", "data:text/html,<script>", "/ui/"},
 		{"non-leading slash -> default", "ui/hosts", "/ui/"},
-		// Backslash bypass: some browsers normalise "\" to "/" before
-		// resolving redirects, so /\evil.com would otherwise be treated
-		// as a protocol-relative URL pointing off-origin. Caught by both
-		// Gemini and Copilot in PR review; pinned here so a regression
-		// can't sneak through.
+		// Backslash bypass: some browsers normalise "\" to "/" before resolving redirects, so /\evil.com would otherwise be
+		// treated as a protocol-relative URL pointing off-origin. Caught by both Gemini and Copilot in PR review; pinned here
+		// so a regression can't sneak through.
 		{"backslash bypass -> default", "/\\evil.example.com", "/ui/"},
 		{"trailing backslash path -> default", "/\\\\evil", "/ui/"},
 	}

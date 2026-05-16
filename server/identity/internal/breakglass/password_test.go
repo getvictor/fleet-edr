@@ -23,9 +23,8 @@ func TestValidatePassword(t *testing.T) {
 		{"11 ascii rejects", strings.Repeat("a", 11), breakglass.ErrPasswordTooShort},
 		{"12 ascii accepts", strings.Repeat("a", 12), nil},
 		{"100 ascii accepts (no upper bound)", strings.Repeat("a", 100), nil},
-		// Rune counting: a single emoji is 4 bytes but 1 rune. 11
-		// emojis (44 bytes) must still reject so a multi-byte
-		// password cannot game the byte-count.
+		// Rune counting: a single emoji is 4 bytes but 1 rune. 11 emojis (44 bytes) must still reject so a multi-byte password
+		// cannot game the byte-count.
 		{"11 emojis rejects (rune-count, not byte-count)", strings.Repeat("🔑", 11), breakglass.ErrPasswordTooShort},
 		{"12 emojis accepts", strings.Repeat("🔑", 12), nil},
 		// Diceware-style passphrase: spaces count as runes.

@@ -143,9 +143,8 @@ func (w *AsyncWriter) Run(ctx context.Context) error {
 			w.shutdown()
 			return nil
 		case e := <-w.queue:
-			//nolint:contextcheck // intentional: writeOne builds its
-			// own bounded ctx so an INSERT in flight after parent ctx
-			// cancellation still completes; trace_id rides on the event.
+			// nolint:contextcheck // intentional: writeOne builds its own bounded ctx so an INSERT in flight after parent
+			// ctx cancellation still completes; trace_id rides on the event.
 			w.writeOne(e)
 		}
 	}

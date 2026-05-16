@@ -36,9 +36,8 @@ func HostToken(svc api.Service, logger *slog.Logger) func(http.Handler) http.Han
 			hostID, err := svc.VerifyToken(ctx, token)
 			switch {
 			case errors.Is(err, api.ErrInvalidToken):
-				// Unknown + revoked both surface as ErrInvalidToken. We
-				// don't distinguish; doing so would be an oracle for
-				// token-still-active probing.
+				// Unknown + revoked both surface as ErrInvalidToken. We don't distinguish; doing so would be an oracle
+				// for token-still-active probing.
 				httpserver.WriteAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_token")
 				return
 			case err != nil:

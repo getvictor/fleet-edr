@@ -240,12 +240,9 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 		AuthMethod: identities.ProviderLocalPassword,
 	})
 	if err != nil {
-		// Setup committed; only the post-commit session mint failed.
-		// The redemption is a one-shot, so we MUST NOT return an
-		// error that suggests the operator should retry the URL —
-		// the token is already consumed. Return a successful result
-		// with Session=nil; the handler renders a "log in via
-		// /admin/break-glass" hint instead of setting the cookie.
+		// Setup committed; only the post-commit session mint failed. The redemption is a one-shot, so we MUST NOT return an
+		// error that suggests the operator should retry the URL — the token is already consumed. Return a successful result
+		// with Session=nil; the handler renders a "log in via /admin/break-glass" hint instead of setting the cookie.
 		s.logger.ErrorContext(ctx, "breakglass post-commit session mint failed",
 			"err", err, "user_id", req.User.ID,
 			"credential_id", credID, "identity_id", identityID)

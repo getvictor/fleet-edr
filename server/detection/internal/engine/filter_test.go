@@ -76,7 +76,7 @@ func TestFilterSnapshotEvents_NoSnapshotsReturnsInputVerbatim(t *testing.T) {
 
 // ---- Property-based tests -------------------------------------------------
 
-// eventForFilterGen produces events with payloads chosen so the filter's branches all get exercised:
+// eventForFilterGen produces events whose payloads exercise every branch of the snapshot filter. Each generated event has one of:
 //   - non-exec events (filter must keep)
 //   - exec without snapshot field (keep)
 //   - exec with snapshot:true (drop)

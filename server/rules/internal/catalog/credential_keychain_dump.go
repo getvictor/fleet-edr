@@ -101,14 +101,10 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
 		}
 		if proc == nil {
-			// Defensive: the exec event landed but the process row
-			// isn't materialised (e.g. a race where ingestion
-			// delivered the exec before the builder's ProcessBatch
-			// ran). Skip this event — we have no process_id to
-			// link the finding to, and the engine won't re-feed
-			// this batch. In practice the processor loop always
-			// materialises before detection runs, so this branch
-			// is a defensive guard, not a dropped-alert path.
+			// Defensive: the exec event landed but the process row isn't materialised (e.g. a race where ingestion
+			// delivered the exec before the builder's ProcessBatch ran). Skip this event — we have no process_id to link
+			// the finding to, and the engine won't re-feed this batch. In practice the processor loop always materialises
+			// before detection runs, so this branch is a defensive guard, not a dropped-alert path.
 			continue
 		}
 
@@ -142,10 +138,8 @@ func findDumpKeychainArg(argv []string) (string, bool) {
 		if dumpKeychainArgTokens[a] {
 			return a, true
 		}
-		// First non-flag token after argv[0] is the subcommand the
-		// security tool will act on; if it's not one we flag, don't
-		// keep scanning for a later match (avoids matching a path
-		// arg that happens to contain "dump-keychain").
+		// First non-flag token after argv[0] is the subcommand the security tool will act on; if it's not one we flag,
+		// don't keep scanning for a later match (avoids matching a path arg that happens to contain "dump-keychain").
 		return "", false
 	}
 	return "", false

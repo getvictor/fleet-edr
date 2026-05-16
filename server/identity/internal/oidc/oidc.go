@@ -77,10 +77,8 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	verifier := provider.Verifier(&gooidc.Config{
 		ClientID: opts.ClientID,
 		Now: func() time.Time {
-			// Backdate the verifier's clock by the tolerance so a
-			// token whose Expiry just passed (within the window) still
-			// verifies. iat/nbf checks read the same Now, so a
-			// future-dated token within the window also passes — both
+			// Backdate the verifier's clock by the tolerance so a token whose Expiry just passed (within the window) still
+			// verifies. iat/nbf checks read the same Now, so a future-dated token within the window also passes — both
 			// directions of the tolerance covered by a single offset.
 			return time.Now().Add(-clockSkewTolerance)
 		},

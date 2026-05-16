@@ -50,15 +50,11 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 			ctx = api.WithSession(ctx, sess)
 			ctx = api.WithActor(ctx, actor)
 			next.ServeHTTP(w, r.WithContext(ctx))
-			// Phase 5 sliding-extension: stamp last_seen_at after the
-			// handler returns so the request itself isn't blocked on the
-			// write. TouchSession is throttled internally — most calls
-			// are a no-op against the cached LastSeenAt. The returned
-			// value is plumbed back onto sess so a touch that DID write
-			// updates the cache for downstream code-paths that hold the
-			// session reference (e.g. an audit emit reading
-			// sess.LastSeenAt). Errors are logged + dropped; idle
-			// granularity tolerates a missed touch.
+			// Phase 5 sliding-extension: stamp last_seen_at after the handler returns so the request itself isn't blocked
+			// on the write. TouchSession is throttled internally — most calls are a no-op against the cached LastSeenAt.
+			// The returned value is plumbed back onto sess so a touch that DID write updates the cache for downstream
+			// code-paths that hold the session reference (e.g. an audit emit reading sess.LastSeenAt). Errors are logged +
+			// dropped; idle granularity tolerates a missed touch.
 			if newLastSeen, err := svc.TouchSession(ctx, rawToken, sess.LastSeenAt); err != nil {
 				logger.WarnContext(ctx, "touch session", "err", err)
 			} else {
@@ -149,9 +145,8 @@ func CSRF(logger *slog.Logger) func(http.Handler) http.Handler {
 			ctx := r.Context()
 			sess, ok := api.SessionFromContext(ctx)
 			if !ok {
-				// Middleware mis-wiring: CSRF without Session. Fail loud
-				// with 500 because the problem is server-side, not the
-				// caller's credentials.
+				// Middleware mis-wiring: CSRF without Session. Fail loud with 500 because the problem is server-side,
+				// not the caller's credentials.
 				logger.ErrorContext(ctx, "CSRF middleware invoked without Session on ctx")
 				httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusInternalServerError, "csrf_misconfigured")
 				return

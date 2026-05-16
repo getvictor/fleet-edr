@@ -141,10 +141,8 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
-		// Session middleware guarantees an actor on every request that
-		// reaches HTTPGate's allow path; an absent actor here is a
-		// wiring bug, not a user error. Surface a 500 so the
-		// regression is loud rather than silently let CreateRule fall
+		// Session middleware guarantees an actor on every request that reaches HTTPGate's allow path; an absent actor here
+		// is a wiring bug, not a user error. Surface a 500 so the regression is loud rather than silently let CreateRule fall
 		// through to a service-layer guard.
 		h.logger.ErrorContext(ctx, "appcontrol create rule: no actor on ctx despite session middleware")
 		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)

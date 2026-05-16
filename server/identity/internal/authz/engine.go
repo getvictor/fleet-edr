@@ -204,12 +204,10 @@ func (e *Engine) recordDecision(
 		TargetType: resource.Type,
 		TargetID:   resource.ID,
 		Payload:    auditPayload(d),
-		// Capture trace_id at decision time. The async path runs the
-		// eventual INSERT under a background ctx (so a request-scope
-		// cancellation doesn't break in-flight audits); without an
-		// explicit TraceID the row would land with NULL trace_id and
-		// lose correlation. Sync callers can leave the field empty
-		// and Store.Record falls back to the ctx-extracted id.
+		// Capture trace_id at decision time. The async path runs the eventual INSERT under a background ctx (so a
+		// request-scope cancellation doesn't break in-flight audits); without an explicit TraceID the row would land with
+		// NULL trace_id and lose correlation. Sync callers can leave the field empty and Store.Record falls back to the
+		// ctx-extracted id.
 		TraceID: traceIDFromContext(ctx),
 	}
 	if actor != nil {
@@ -223,10 +221,9 @@ func (e *Engine) recordDecision(
 		if e.asyncRead.Submit(ctx, event) {
 			return
 		}
-		// Submit returned false (queue full or writer stopped); fall
-		// through to the sync path so the row still lands. The async
-		// writer already logged the queue-full WARN; double-logging
-		// the same event is acceptable to keep the audit record.
+		// Submit returned false (queue full or writer stopped); fall through to the sync path so the row still lands.
+		// The async writer already logged the queue-full WARN; double-logging the same event is acceptable to keep the audit
+		// record.
 	}
 	if err := e.audit.Record(ctx, event); err != nil {
 		e.logger.WarnContext(ctx, "authz audit write",

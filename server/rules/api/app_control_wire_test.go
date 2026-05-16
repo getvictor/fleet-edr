@@ -233,10 +233,8 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		assert.Equal(t, policyID, decoded.PolicyID)
 		assert.Equal(t, policyVersion, decoded.PolicyVersion)
 
-		// Build the expected post-filter view from the inputs and
-		// compare element-wise. The filter contract: drop disabled
-		// rules; drop rules whose expires_at is in the past relative
-		// to a non-zero `now`.
+		// Build the expected post-filter view from the inputs and compare element-wise. The filter contract: drop disabled
+		// rules; drop rules whose expires_at is in the past relative to a non-zero `now`.
 		expected := make([]api.SetApplicationControlRule, 0, len(rules))
 		for _, r := range rules {
 			if !r.Enabled {

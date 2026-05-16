@@ -53,14 +53,10 @@ func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, at
 	if proc.ForkIngestedAtNs != nil {
 		forkAnchorNs = *proc.ForkIngestedAtNs
 	} else {
-		// Pre-migration row: no server ingest time exists for the fork,
-		// so we fall back to the on-host kernel timestamp as an
-		// approximate lower bound. The postSchemaMigrations backfill
-		// copies fork_time_ns into fork_ingested_at_ns for historical
-		// rows, so in steady state this branch only fires during a brief
-		// window right after the migration lands. Mark the anchor as
-		// mixed so the upper bound doesn't also rely on an ingest-time
-		// comparison.
+		// Pre-migration row: no server ingest time exists for the fork, so we fall back to the on-host kernel timestamp as
+		// an approximate lower bound. The postSchemaMigrations backfill copies fork_time_ns into fork_ingested_at_ns for
+		// historical rows, so in steady state this branch only fires during a brief window right after the migration lands.
+		// Mark the anchor as mixed so the upper bound doesn't also rely on an ingest-time comparison.
 		forkAnchorNs = proc.ForkTimeNs
 		mixedAnchor = true
 	}
@@ -68,10 +64,8 @@ func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, at
 	tr := api.TimeRange{FromNs: fromNs}
 	switch {
 	case mixedAnchor:
-		// Already lost precision on the lower bound by using a kernel
-		// timestamp against an ingest-time predicate; using kernel
-		// ExitTimeNs as the upper bound compounds the risk. Prefer the
-		// wide 30-day bound, which is already how still-running
+		// Already lost precision on the lower bound by using a kernel timestamp against an ingest-time predicate; using kernel
+		// ExitTimeNs as the upper bound compounds the risk. Prefer the wide 30-day bound, which is already how still-running
 		// processes are handled and matches the pre-issue-7 behavior.
 		tr.ToNs = forkAnchorNs + thirtyDayBoundNs
 	case proc.ExitIngestedAtNs != nil:

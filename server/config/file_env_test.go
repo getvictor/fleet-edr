@@ -110,8 +110,7 @@ func TestWriteSecretFile_BadDir(t *testing.T) {
 }
 
 func TestFileBackedGetenv_TrimsOnlyOuterWhitespace(t *testing.T) {
-	// Docker secrets often trail a newline. We strip leading + trailing whitespace
-	// but preserve interior characters. A DSN like
+	// Docker secrets often trail a newline. We strip leading + trailing whitespace but preserve interior characters. A DSN like
 	//   root:pw 1@tcp(mysql:3306)/edr
 	// must survive with its embedded space intact.
 	dir := t.TempDir()

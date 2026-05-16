@@ -163,10 +163,8 @@ func (s *Service) CreateRule(
 	// row.
 	policy, payload, err := s.buildSnapshotPayload(ctx, req.PolicyID)
 	if err != nil {
-		// Rule landed but the snapshot compose failed. Persist the
-		// audit signal so the SIEM dashboard can distinguish this
-		// state from "rule landed and reached every host", then
-		// bubble the error so the HTTP layer returns 5xx. The next
+		// Rule landed but the snapshot compose failed. Persist the audit signal so the SIEM dashboard can distinguish this
+		// state from "rule landed and reached every host", then bubble the error so the HTTP layer returns 5xx. The next
 		// mutation re-composes and the rule reaches the hosts then.
 		s.emitAudit(ctx, actor, req, rule, 0, 0, 0, "snapshot_compose_failed")
 		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after CreateRule failed; rule is persisted but unenforced until next mutation",

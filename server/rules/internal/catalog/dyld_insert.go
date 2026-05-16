@@ -120,9 +120,8 @@ func matchDyldArg(path string, args []string) string {
 	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
 
 	for i, a := range args {
-		// Stop once we've walked past the leading env-assignment window. For `env`-style
-		// invocations that's every leading KEY=VALUE until the first non-assignment arg;
-		// for everything else it's argv[0] only.
+		// Stop once we've walked past the leading env-assignment window. For `env`-style invocations that's every leading
+		// KEY=VALUE until the first non-assignment arg; for everything else it's argv[0] only.
 		if !isEnv && i > 0 {
 			break
 		}

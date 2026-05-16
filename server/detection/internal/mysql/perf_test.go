@@ -183,9 +183,8 @@ func BenchmarkGetNetworkEventsForProcess(b *testing.B) {
 			s := newTestStore(b)
 			ctx := b.Context()
 
-			// Most events are noise (different pids); the target pid hits
-			// just a few rows. The win is "no full table scan", which is
-			// why the bench scales with rows in events, not result-set size.
+			// Most events are noise (different pids); the target pid hits just a few rows. The win is "no full table
+			// scan", which is why the bench scales with rows in events, not result-set size.
 			batch := make([]api.Event, eventCount)
 			for i := range batch {
 				batch[i] = api.Event{
@@ -383,13 +382,10 @@ func BenchmarkGetExecChain(b *testing.B) {
 			s := newTestStore(b)
 			ctx := b.Context()
 
-			// Build `depth` ancestor rows linked tail-to-head, then form
-			// a logical `current` whose PreviousExecID points at the most
-			// recent ancestor. Each iteration must capture the inserted
-			// id into a *fresh* int64 (snapshot) and take its address;
-			// reusing one variable's address yields a self-cycle because
-			// the pointer always reads the latest assignment (per
-			// Copilot review on PR #110).
+			// Build `depth` ancestor rows linked tail-to-head, then form a logical `current` whose PreviousExecID points
+			// at the most recent ancestor. Each iteration must capture the inserted id into a *fresh* int64 (snapshot) and
+			// take its address; reusing one variable's address yields a self-cycle because the pointer always reads the
+			// latest assignment (per Copilot review on PR #110).
 			var prevPtr *int64
 			for i := range depth {
 				p := api.Process{HostID: "h", PID: 1, ForkTimeNs: int64(100 + i), PreviousExecID: prevPtr}

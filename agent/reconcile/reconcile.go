@@ -184,9 +184,8 @@ func (r *Reconciler) Run(ctx context.Context) {
 func (r *Reconciler) RunOnce(ctx context.Context) int {
 	hostID := r.hostID()
 	if hostID == "" {
-		// No host_id yet — the enroll flow hasn't completed. Skip the pass
-		// rather than emit events with an empty host_id (the server's ingest
-		// handler would reject the whole batch on the first one).
+		// No host_id yet — the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
+		// server's ingest handler would reject the whole batch on the first one).
 		return 0
 	}
 
@@ -196,21 +195,18 @@ func (r *Reconciler) RunOnce(ctx context.Context) int {
 
 	for pid, info := range r.pt.Snapshot() {
 		if pid <= 0 {
-			// Skip PID 0 / negative — kill(0, 0) signals all processes in the
-			// caller's process group, kill(-1, 0) signals every process the
-			// caller may signal. Neither is what we want.
+			// Skip PID 0 / negative — kill(0, 0) signals all processes in the caller's process group, kill(-1, 0) signals
+			// every process the caller may signal. Neither is what we want.
 			continue
 		}
 		if info.StartTime > cutoff {
 			continue
 		}
-		// kill(pid, 0) is the standard liveness probe. Three outcomes:
+		// kill(pid, 0) is the standard liveness probe. Three outcomes drive the synthetic-exit decision:
 		//   nil   — pid exists and we may signal it; treat as alive.
 		//   ESRCH — "no such process"; the missed-exit signal we react to.
-		//   EPERM — pid exists but we lack permission; treat as alive. The
-		//           agent runs as root in production so this is rare, but the
-		//           conservative read keeps non-root dev runs from reaping
-		//           entries they can't probe authoritatively.
+		//   EPERM — pid exists but we lack permission; treat as alive. The agent runs as root in production so this is rare,
+		//           but the conservative read keeps non-root dev runs from reaping entries they can't probe authoritatively.
 		// Anything else (very rare; bad fd, weird kernel state) we skip too.
 		if err := r.kill(int(pid), 0); !errors.Is(err, syscall.ESRCH) {
 			continue
@@ -220,9 +216,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) int {
 				"pid", pid, "err", err)
 			continue
 		}
-		// Drop the entry from the proctable so subsequent passes skip it
-		// and so network-event enrichment doesn't continue attributing to a
-		// dead PID.
+		// Drop the entry from the proctable so subsequent passes skip it and so network-event enrichment doesn't continue
+		// attributing to a dead PID.
 		r.pt.Remove(pid)
 		emitted++
 		if emitted >= r.maxPerPass {

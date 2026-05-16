@@ -55,17 +55,12 @@ func NewWebAuthn(opts WebAuthnOptions) (*webauthn.WebAuthn, error) {
 		RPID:          opts.RPID,
 		RPDisplayName: opts.RPDisplayName,
 		RPOrigins:     opts.RPOrigins,
-		// AttestationPreference: indirect — accept anonymized CA
-		// attestation (matches the Apple platform authenticator
-		// default) but allow direct for hardware keys that prefer
-		// it. This balances "operator can see authenticator
-		// brand" against "platform authenticators that refuse
-		// direct attestation work".
+		// AttestationPreference: indirect — accept anonymized CA attestation (matches the Apple platform authenticator
+		// default) but allow direct for hardware keys that prefer it. This balances "operator can see authenticator brand"
+		// against "platform authenticators that refuse direct attestation work".
 		AttestationPreference: protocol.PreferIndirectAttestation,
-		// AuthenticatorSelection: a cross-platform authenticator
-		// (USB security key) is the spec-aligned default but the
-		// platform authenticator (TouchID) is also acceptable.
-		// Empty means no constraint; the browser+OS pick.
+		// AuthenticatorSelection: a cross-platform authenticator (USB security key) is the spec-aligned default but the
+		// platform authenticator (TouchID) is also acceptable. Empty means no constraint; the browser+OS pick.
 	}
 	w, err := webauthn.New(cfg)
 	if err != nil {

@@ -83,11 +83,9 @@ func (a *Allowlist) Middleware(next http.Handler) http.Handler {
 		ipStr := httpserver.ClientIP(r)
 		ip := net.ParseIP(ipStr)
 		if ip == nil || !a.Allows(ip) {
-			// Generic 404 with the same body shape Go's stdlib serves
-			// for an unrouted path. We deliberately do NOT log at WARN
-			// here because attackers triggering this path generates
-			// noise; the per-IP rate limiter sitting in front catches
-			// the volumetric signal.
+			// Generic 404 with the same body shape Go's stdlib serves for an unrouted path. We deliberately do NOT log at
+			// WARN here because attackers triggering this path generates noise; the per-IP rate limiter sitting in front
+			// catches the volumetric signal.
 			http.NotFound(w, r)
 			return
 		}

@@ -499,8 +499,7 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 		require.NotEmpty(t, rec.events)
 		assert.Equal(t, api.AuditAuthBreakglassBootstrap, rec.events[len(rec.events)-1].Action)
 	} else {
-		// The protocol parser rejected our minimal stub; verify
-		// the handler routed it to attestation_parse_failed (the
+		// The protocol parser rejected our minimal stub; verify the handler routed it to attestation_parse_failed (the
 		// expected error reason for malformed attestation bytes).
 		assert.Equal(t, http.StatusBadRequest, resp2.StatusCode)
 		assert.Equal(t, "attestation_parse_failed",

@@ -120,11 +120,9 @@ func TestHandleList_StatusFilter(t *testing.T) {
 		wantStatus api.Status
 	}{
 		{
-			// Bare GET /api/commands must default to pending so the agent
-			// poller never receives terminal rows (completed / failed).
-			// Re-delivering an already-handled command would either
-			// double-execute or produce a confused log line in the
-			// agent's commander.
+			// Bare GET /api/commands must default to pending so the agent poller never receives terminal rows (completed /
+			// failed). Re-delivering an already-handled command would either double-execute or produce a confused log line
+			// in the agent's commander.
 			name:       "no query defaults to pending",
 			query:      "",
 			wantStatus: api.StatusPending,

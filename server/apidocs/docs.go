@@ -82,8 +82,7 @@ const (
 func mustReadAsset(path string) []byte {
 	b, err := assets.ReadFile(path)
 	if err != nil {
-		// Should never fire — the //go:embed directive fails at compile
-		// time when a referenced file is missing. Panicking here
+		// Should never fire — the //go:embed directive fails at compile time when a referenced file is missing. Panicking here
 		// surfaces a developer bug rather than a runtime 500.
 		panic(fmt.Sprintf("docs: embedded asset %q missing: %v", path, err))
 	}

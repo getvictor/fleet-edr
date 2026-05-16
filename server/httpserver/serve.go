@@ -38,10 +38,8 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, tlsEnabled bool, logg
 
 	select {
 	case <-ctx.Done():
-		// slog doesn't honour ctx.Done()/cancellation — it just reads the ctx
-		// for trace-id correlation — so logging through the cancelled ctx here
-		// is fine and keeps the shutdown log on the same trace as the request
-		// that triggered it.
+		// slog doesn't honour ctx.Done()/cancellation — it just reads the ctx for trace-id correlation — so logging through
+		// the cancelled ctx here is fine and keeps the shutdown log on the same trace as the request that triggered it.
 		logger.InfoContext(ctx, "shutdown starting", "reason", ctx.Err())
 	case err := <-serverErr:
 		if err != nil {

@@ -129,12 +129,9 @@ func TestHandleCreate(t *testing.T) {
 			wantStatus: http.StatusCreated,
 		},
 		{
-			// Unknown command_type is rejected at the chokepoint's
-			// command_type → action mapping before the service is
-			// touched. Defense-in-depth against an operator typo
-			// dropping a command into the queue under an audit-log
-			// label that doesn't match the role it would normally
-			// gate on.
+			// Unknown command_type is rejected at the chokepoint's command_type → action mapping before the service is
+			// touched. Defense-in-depth against an operator typo dropping a command into the queue under an audit-log
+			// label that doesn't match the role it would normally gate on.
 			name:       "unsupported command_type rejected",
 			body:       `{"host_id":"host-a","command_type":"unknown_action","payload":{}}`,
 			wantStatus: http.StatusBadRequest,

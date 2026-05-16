@@ -177,9 +177,8 @@ func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []by
 		return VerifyResult{}, false, fmt.Errorf("query enrollment by token id: %w", err)
 	}
 	if !verifyToken(token, row.Hash, row.Salt) {
-		// Token_id match but hash mismatch would require a SHA-256 collision; treat as
-		// mismatch rather than internal error and do not fall through to previous-token
-		// lookup (which is for a different token entirely, by id).
+		// Token_id match but hash mismatch would require a SHA-256 collision; treat as mismatch rather than internal error and
+		// do not fall through to previous-token lookup (which is for a different token entirely, by id).
 		return VerifyResult{}, true, ErrTokenMismatch
 	}
 	return VerifyResult{

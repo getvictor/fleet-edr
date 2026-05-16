@@ -51,9 +51,8 @@ func TestAssertActionsParity(t *testing.T) {
 	})
 
 	t.Run("missing-from-go drift fails with named action", func(t *testing.T) {
-		// Add an action to the bundle that's not in Go's
-		// RegisteredActions(). The chokepoint would otherwise grant
-		// on actions the Go enum doesn't know about.
+		// Add an action to the bundle that's not in Go's RegisteredActions(). The chokepoint would otherwise grant on actions
+		// the Go enum doesn't know about.
 		extra := append([]any(nil), bundleAll...)
 		extra = append(extra, "ghost.action")
 		err := assertActionsParity(map[string]any{"actions": extra})

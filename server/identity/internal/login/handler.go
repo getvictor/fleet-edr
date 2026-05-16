@@ -114,10 +114,8 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	raw := h.decodeLogoutToken(r)
 	if raw != nil {
-		// Resolve the session BEFORE deletion so we can record who logged
-		// out. Logout is idempotent on missing sessions, so a failed
-		// resolve falls through silently to the cookie clear without an
-		// audit row (there is nothing to audit).
+		// Resolve the session BEFORE deletion so we can record who logged out. Logout is idempotent on missing sessions,
+		// so a failed resolve falls through silently to the cookie clear without an audit row (there is nothing to audit).
 		actorUserID, actorEmail := h.resolveLogoutActor(ctx, raw)
 		switch err := h.svc.Logout(ctx, raw); {
 		case err != nil:

@@ -86,11 +86,9 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 	})
 
 	t.Run("auditor_reads_journey_audit_rows", func(t *testing.T) {
-		// Self-contained: seed the analyst + senior_analyst pair this
-		// subtest cares about and emit the deny + allow chain inline,
-		// rather than relying on the preceding subtests' side effects.
-		// Keeps the subtest runnable in isolation (go test -run ...)
-		// and pins exactly which audit rows the auditor must see.
+		// Self-contained: seed the analyst + senior_analyst pair this subtest cares about and emit the deny + allow chain
+		// inline, rather than relying on the preceding subtests' side effects. Keeps the subtest runnable in isolation (go
+		// test -run ...) and pins exactly which audit rows the auditor must see.
 		analyst := testkit.SeedJITUser(t, stack.DB, "analyst-aud@journey.test", "analyst")
 		denyResp := postCommand(t, stack, analyst, isolateBody("host-journey-aud-deny"))
 		denyResp.Body.Close()

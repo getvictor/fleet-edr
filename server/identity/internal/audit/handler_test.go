@@ -162,11 +162,9 @@ func TestHandler_ListParseErrors(t *testing.T) {
 			defer resp.Body.Close()
 
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-			// Regression for #80 review: validation 400s must not advertise
-			// a Bearer challenge AND must not flow through
-			// WriteCookieAuthFailure (which would tag the OTel span as
-			// auth.result=fail and emit a `Warn authn failed` log line for
-			// what is actually a query-string parse error).
+			// Regression for #80 review: validation 400s must not advertise a Bearer challenge AND must not flow through
+			// WriteCookieAuthFailure (which would tag the OTel span as auth.result=fail and emit a `Warn authn failed` log
+			// line for what is actually a query-string parse error).
 			assert.Empty(t, resp.Header.Get("WWW-Authenticate"))
 
 			body, _ := io.ReadAll(resp.Body)

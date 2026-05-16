@@ -153,8 +153,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		// Disambiguate "wrong (id, host)" from "lost the race": one
-		// SELECT settles it. The cost is paid only on the failure
+		// Disambiguate "wrong (id, host)" from "lost the race": one SELECT settles it. The cost is paid only on the failure
 		// path; the happy path stays a single UPDATE.
 		var owner string
 		err := s.db.GetContext(ctx, &owner,

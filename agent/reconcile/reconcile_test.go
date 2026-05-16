@@ -64,10 +64,9 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 		opts.Now = func() time.Time { return time.Unix(0, 1_000_000_000_000) }
 	}
 	if opts.Kill == nil {
-		// Falling back to k.call is a convenience for the common case; if a
-		// test passed nil for both we'd dereference nil in the runner's first
-		// pass. Fail-fast in the helper instead so the diagnostic points at
-		// the test setup, not at a nil-deref panic deep inside the loop.
+		// Falling back to k.call is a convenience for the common case; if a test passed nil for both we'd dereference nil
+		// in the runner's first pass. Fail-fast in the helper instead so the diagnostic points at the test setup, not at a
+		// nil-deref panic deep inside the loop.
 		if k == nil {
 			t.Fatal("newRunner: either opts.Kill or k must be non-nil")
 		}

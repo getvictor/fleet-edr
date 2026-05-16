@@ -209,11 +209,10 @@ func (c *Commander) executeSetApplicationControl(ctx context.Context, cmd comman
 		return
 	}
 	if payload.PolicyVersion <= 0 {
-		// Versioning is the ordering guard for snapshot state on the extension; a
-		// zero/negative version would either mask an out-of-order delivery or reflect a
-		// hand-queued test command that shouldn't be acted on. Fail fast so the server-
-		// side audit trail attributes the error to its source rather than to the XPC
-		// layer returning opaque decode errors from the extension.
+		// Versioning is the ordering guard for snapshot state on the extension; a zero/negative version would either mask an
+		// out-of-order delivery or reflect a hand-queued test command that shouldn't be acted on. Fail fast so the server-
+		// side audit trail attributes the error to its source rather than to the XPC layer returning opaque decode errors from
+		// the extension.
 		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid policy_version"))
 		return
 	}
