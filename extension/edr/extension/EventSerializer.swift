@@ -30,11 +30,56 @@ struct ExecPayload: Codable, Sendable {
     let gid: gid_t
     let codeSigning: CodeSigning?
     let sha256: String?
+    /// True only for synthetic exec events emitted by the ESF startup snapshot pass
+    /// (issue #11). The custom encoder below OMITS the key entirely when false, so
+    /// the wire shape for live execs stays byte-identical to the pre-#11 format.
+    /// Server-side detection rules drop snapshot=true events; the graph builder
+    /// still materialises them so the process tree shows pre-existing processes
+    /// after an extension restart.
+    let snapshot: Bool
 
     enum CodingKeys: String, CodingKey {
         case pid, ppid, path, args, cwd, uid, gid
         case codeSigning = "code_signing"
         case sha256
+        case snapshot
+    }
+
+    init(
+        pid: pid_t, ppid: pid_t, path: String, args: [String], cwd: String,
+        uid: uid_t, gid: gid_t, codeSigning: CodeSigning?, sha256: String?,
+        snapshot: Bool = false
+    ) {
+        self.pid = pid
+        self.ppid = ppid
+        self.path = path
+        self.args = args
+        self.cwd = cwd
+        self.uid = uid
+        self.gid = gid
+        self.codeSigning = codeSigning
+        self.sha256 = sha256
+        self.snapshot = snapshot
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(pid, forKey: .pid)
+        try container.encode(ppid, forKey: .ppid)
+        try container.encode(path, forKey: .path)
+        try container.encode(args, forKey: .args)
+        try container.encode(cwd, forKey: .cwd)
+        try container.encode(uid, forKey: .uid)
+        try container.encode(gid, forKey: .gid)
+        try container.encodeIfPresent(codeSigning, forKey: .codeSigning)
+        try container.encodeIfPresent(sha256, forKey: .sha256)
+        // Only emit snapshot when true — keeps the live-exec wire shape stable
+        // and avoids tripping the server detection-engine bytes.Contains gate
+        // on a `"snapshot":false` payload (false events would correctly be
+        // kept by the JSON probe, but we want zero wire change for live exec).
+        if snapshot {
+            try container.encode(true, forKey: .snapshot)
+        }
     }
 }
 
