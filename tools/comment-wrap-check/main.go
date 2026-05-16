@@ -1,6 +1,7 @@
 // comment-wrap-check is the standalone CLI form of the comment-wrap linter
-// (issue #149). It runs the analyzer defined in the tools/comment-wrap-
-// check/lint package via golang.org/x/tools/go/analysis/singlechecker so
+// (issue #149). This file (tools/comment-wrap-check/main.go) runs the
+// analyzer defined in the tools/comment-wrap-check/lint package via
+// golang.org/x/tools/go/analysis/singlechecker so
 // `go run ./tools/comment-wrap-check ./...` works without needing the
 // custom golangci-lint binary built.
 //

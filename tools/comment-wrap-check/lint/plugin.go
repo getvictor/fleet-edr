@@ -16,8 +16,8 @@
 //     the plugin out of the type-checking critical path.
 //
 // The plugin is a thin shell over NewAnalyzer; the actual heuristic lives
-// in analyzer.go. The standalone CLI at cmd/main.go uses NewAnalyzer
-// directly without going through this plugin shim.
+// in analyzer.go. The standalone CLI at tools/comment-wrap-check/main.go
+// uses NewAnalyzer directly without going through this plugin shim.
 package lint
 
 import (
@@ -42,11 +42,21 @@ func New(settings any) (register.LinterPlugin, error) {
 	}
 	// Apply defaults for any zero-valued field; an operator who configures
 	// only one of the two knobs gets the project default for the other.
+	// Reject negative values so a typo like `min-line-len: -120` fails at
+	// load time with a clear error rather than silently disabling the
+	// linter (every block's longest line is >= 0, so a negative floor
+	// means the analyzer never fires).
 	if s.MinLineLen == 0 {
 		s.MinLineLen = DefaultMinLineLen
 	}
 	if s.MinBlock == 0 {
 		s.MinBlock = DefaultMinBlock
+	}
+	if s.MinLineLen < 1 {
+		return nil, fmt.Errorf("commentwrap: min-line-len must be >= 1, got %d", s.MinLineLen)
+	}
+	if s.MinBlock < 1 {
+		return nil, fmt.Errorf("commentwrap: min-block must be >= 1, got %d", s.MinBlock)
 	}
 	return &commentwrapPlugin{settings: s}, nil
 }

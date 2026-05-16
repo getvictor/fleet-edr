@@ -3,13 +3,13 @@ package narrow
 // a // want "wrapped narrowly"
 // b
 // c
-func A() {}
+var A = 1
 
-// Two-line block sits below the min-block floor so the analyzer leaves it untouched.
-func B() {}
+// Single-line block is below the min-block floor so the analyzer leaves it untouched.
+var B = 1
 
 // d // want "wrapped narrowly"
 // e
 // f
 // g
-func C() {}
+var C = 1

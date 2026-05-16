@@ -1,7 +1,7 @@
 // Package lint is the comment-wrap-check linter, exposed as a `go/analysis`
 // Analyzer so it can run inside golangci-lint v2 (via the module-plugin
 // machinery in plugin.go) and as a standalone `singlechecker` binary
-// (cmd/main.go).
+// (tools/comment-wrap-check/main.go).
 //
 // Heuristic: for each multi-line `//` comment group of N >= Settings.MinBlock
 // lines, compute the longest rendered line's visual column width (tabs
@@ -121,7 +121,6 @@ func runPass(pass *analysis.Pass, s *Settings) (any, error) {
 			if shouldSkipGroup(g.List, s.MinBlock) {
 				continue
 			}
-			startLine := pass.Fset.Position(g.List[0].Slash).Line
 			maxLen := maxLineWidth(g.List, pass, lines)
 			if maxLen >= s.MinLineLen {
 				continue
@@ -129,7 +128,6 @@ func runPass(pass *analysis.Pass, s *Settings) (any, error) {
 			pass.Reportf(g.List[0].Slash,
 				"comment block of %d lines wrapped narrowly (longest line %d chars; expected at least %d)",
 				len(g.List), maxLen, s.MinLineLen)
-			_ = startLine // pos already carries the line; kept for symmetry with prior CLI output
 		}
 	}
 	return nil, nil

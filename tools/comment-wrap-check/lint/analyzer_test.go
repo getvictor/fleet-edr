@@ -39,24 +39,21 @@ func TestFilled(t *testing.T) {
 }
 
 // TestCustomSettings exercises the Settings plumbing: an analyzer
-// constructed with a small MinBlock + small MinLineLen should fire on
-// content the default settings would skip, and an analyzer with very
-// large MinLineLen should never fire. Both directions are exercised in a
-// single run against the same narrow fixture so the test stays compact.
+// constructed with a very small MinLineLen must NOT fire on content the
+// default settings WOULD fire on. The narrow_silent fixture is a copy of
+// narrow with the `// want` annotations stripped; if the custom Settings
+// argument were ignored, the default 120-column floor would kick in and
+// the analyzer would fire on those 3-line blocks, producing diagnostics
+// that analysistest treats as unexpected and fails on. A clean run is
+// only possible if the low MinLineLen actually silences the linter.
 func TestCustomSettings(t *testing.T) {
 	testdata := mustTestdataDir(t)
-
-	// MinLineLen=10 means no realistic block ever drops below the floor;
-	// every block should be silently accepted, including the otherwise-
-	// flagged 3-line blocks in narrow/.
-	low := lint.Settings{MinLineLen: 10, MinBlock: 3}
-	// Subtest runs the analyzer against a copy of the fixture; the
-	// fixture's `// want` annotations would NORMALLY cause a failure if
-	// the analyzer didn't fire, but analysistest treats want annotations
-	// as expected behaviour for the DEFAULT analyzer. For an alternate-
-	// settings probe we point at a fixture that has no want annotations.
-	t.Run("min_line_len_10_silences_everything", func(t *testing.T) {
-		analysistest.Run(t, testdata, lint.NewAnalyzer(&low), "filled")
+	// MinLineLen=1 means no realistic block ever fires (every // line is at least 2 chars wide), so the analyzer
+	// stays silent regardless of how narrow the source comments are. The default-settings analyzer WOULD fire on
+	// these blocks (their longest line is 4 chars, well below the 120-column default).
+	low := lint.Settings{MinLineLen: 1, MinBlock: 3}
+	t.Run("low_min_line_len_silences_narrow_blocks", func(t *testing.T) {
+		analysistest.Run(t, testdata, lint.NewAnalyzer(&low), "narrow_silent")
 	})
 }
 

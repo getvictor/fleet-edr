@@ -10,8 +10,8 @@
 #
 # Version pinning: this MUST agree with the upstream golangci-lint binary
 # the plugin loader's API matches. Bumping the project's golangci-lint
-# version (mise.toml, go-lint.yml workflow, etc.) requires bumping the
-# `version:` here in lockstep, then rerunning `task lint:install`.
+# version (.tool-versions, go-lint.yml workflow, etc.) requires bumping
+# the `version:` here in lockstep, then rerunning `task lint:install`.
 
 version: v2.11.3
 name: golangci-lint-custom

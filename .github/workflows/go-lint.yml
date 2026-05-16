@@ -15,6 +15,7 @@ on:
       - "**/go.mod"
       - "**/go.sum"
       - ".golangci.yml"
+      - ".custom-gcl.yml"
       - "Taskfile.yml"
       - ".github/workflows/go-lint.yml"
   pull_request:
@@ -47,7 +48,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.golangci\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
+          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.golangci\.yml$|^\.custom-gcl\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running unconditionally."
@@ -96,10 +97,30 @@ jobs:
       # the action's built-in `golangci-lint run` so we can first build the
       # custom binary (with the repo-local commentwrap plugin baked in) and
       # then delegate the actual invocation to Taskfile.
+      # Pin to the exact patch the custom plugin spec depends on (.custom-gcl.yml).
+      # The plugin-loader API contract between golangci-lint and the plugin module
+      # is patch-version-specific; a floating v2.11 can resolve to a newer patch
+      # whose API has drifted, which surfaces only when `task lint:install` calls
+      # `golangci-lint custom`.
       - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
-          version: v2.11
+          version: v2.11.3
           install-only: "true"
+
+      # The v9 action with install-only=true puts the binary at
+      # /Users/runner/golangci-lint-<version>-<os-arch>/golangci-lint but does
+      # not always extend PATH on macOS runners. Add the directory explicitly
+      # so `task lint:install` (which shells out to `golangci-lint custom`)
+      # can find it.
+      - name: Add golangci-lint to PATH
+        run: |
+          BIN_DIR=$(find /Users/runner -maxdepth 1 -type d -name "golangci-lint-*-darwin-*" 2>/dev/null | head -1)
+          if [ -z "$BIN_DIR" ] || [ ! -x "$BIN_DIR/golangci-lint" ]; then
+            echo "could not locate golangci-lint install directory under /Users/runner" >&2
+            exit 1
+          fi
+          echo "$BIN_DIR" >> "$GITHUB_PATH"
+          echo "Added to PATH: $BIN_DIR"
 
       # Cache the custom golangci-lint binary keyed on the plugin source
       # hash + the .custom-gcl.yml version pin. On a cache hit, the next
@@ -132,6 +153,13 @@ jobs:
       # short-circuits).
       - name: Build custom golangci-lint with commentwrap plugin
         run: task lint:install
+
+      # Plugin tests live in tools/comment-wrap-check/lint/, which is a Go
+      # sub-module (required by golangci-lint custom). The parent module's
+      # `go test ./...` does not descend into sub-modules, so without this
+      # step a regression in the linter itself would slip through.
+      - name: Run commentwrap plugin tests
+        run: task lint:go:plugin
 
       - name: Run golangci-lint via Taskfile
         run: task lint:go
