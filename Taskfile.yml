@@ -311,6 +311,17 @@ tasks:
     cmds:
       - swiftlint lint --strict
 
+  lint:comments:
+    desc: |
+      Detect Go `//` comment blocks of 3 or more lines whose longest line lands
+      more than 20 characters below the 120-char wrap target (issue #149: catches
+      blocks that were hard-wrapped at 80 instead of CLAUDE.md's 140). Non-
+      blocking today and not part of the lint: aggregate; ship the fix sweep
+      separately and graduate to a CI gate once the existing offender count
+      hits zero. See tools/comment-wrap-check/main.go for the heuristic.
+    cmds:
+      - go run ./tools/comment-wrap-check ./server ./agent ./internal ./test ./tools
+
   lint:c:
     desc: clang-tidy + clang-format --dry-run on the CGo bridge (requires `brew install llvm`)
     cmds:
