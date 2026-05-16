@@ -44,10 +44,10 @@ import (
 
 const (
 	// defaultMinLineLen is the visual-column floor below which a block's longest line counts as "narrowly wrapped".
-	// CLAUDE.md sets the project wrap target at 140 characters; 100 sits 40 columns below that, comfortably above the
-	// old 80-character target, so blocks wrapped at 80 land below the floor and blocks wrapped anywhere near 140 stay
-	// safely above it.
-	defaultMinLineLen = 100
+	// CLAUDE.md sets the project wrap target at 140 characters; 120 matches the literal spec in issue #149 ("wrap at
+	// least 120 characters and not 80"). Twenty columns below the 140 cap is a tight feedback envelope: blocks wrapped
+	// at the old 80 target land well below, and blocks wrapped near the 140 cap stay above.
+	defaultMinLineLen = 120
 	defaultMinBlock   = 3
 	// tabWidth matches the gofmt convention: a tab advances the cursor to the next multiple of 8 columns. This is the
 	// width assumed when computing visual line length so deeply-indented short comments are not flagged for false
@@ -73,7 +73,7 @@ func main() {
 	var cfg config
 	flag.IntVar(&cfg.minLineLen, "min-line-len", defaultMinLineLen,
 		"flag blocks of >=min-block consecutive // comment lines whose longest line falls below this visual width. "+
-			"The repo wrap target is 140 chars per CLAUDE.md; the default 100 is the narrowly-wrapped threshold.")
+			"The repo wrap target is 140 chars per CLAUDE.md; the default 120 matches issue #149's literal spec.")
 	flag.IntVar(&cfg.minBlock, "min-block", defaultMinBlock,
 		"minimum number of consecutive // comment lines for a group to be considered")
 	flag.BoolVar(&cfg.failOn, "fail", false,
