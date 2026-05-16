@@ -52,8 +52,22 @@ linters:
     - usetesting
     - wastedassign # catches x := foo(); x = bar() (the first value is wasted)
     - whitespace # catches extraneous leading/trailing blank lines in blocks
+    - commentwrap # repo-local; flags // comment blocks of 3+ lines whose longest line < 120 cols (issue #149)
 
   settings:
+    custom:
+      # commentwrap is the repo-internal linter shipped via tools/comment-wrap-check/lint. golangci-lint discovers
+      # it through the module plugin registered by tools/comment-wrap-check/lint/plugin.go when the custom binary
+      # (built by `task lint:install`) loads. The upstream golangci-lint binary does NOT have this plugin compiled
+      # in; running `golangci-lint run` outside `task lint:go` will produce "unknown linter" errors.
+      commentwrap:
+        type: module
+        description: Detect narrowly-wrapped Go `//` comment blocks (issue #149).
+        original-url: github.com/getvictor/fleet-edr/tree/main/tools/comment-wrap-check
+        settings:
+          min-line-len: 120
+          min-block: 3
+
     forbidigo:
       forbid:
         - pattern: "^print$"

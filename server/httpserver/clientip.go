@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -116,10 +117,10 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 // caller's cognitive complexity below the project lint cap.
 func (c *ClientIPResolver) firstUntrustedXFFEntry(r *http.Request) string {
 	values := r.Header.Values("X-Forwarded-For")
-	for i := len(values) - 1; i >= 0; i-- {
-		parts := strings.Split(values[i], ",")
-		for j := len(parts) - 1; j >= 0; j-- {
-			entry := strings.TrimSpace(parts[j])
+	for _, v := range slices.Backward(values) {
+		parts := strings.Split(v, ",")
+		for _, raw := range slices.Backward(parts) {
+			entry := strings.TrimSpace(raw)
 			if entry == "" {
 				continue
 			}

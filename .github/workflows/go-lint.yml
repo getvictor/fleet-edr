@@ -92,14 +92,23 @@ jobs:
           version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Install + cache the pinned golangci-lint binary. `install-mode: goinstall`
-      # is faster than the binary release for pinned versions on actionlint-cached
-      # runners; `install-only: true` skips the action's built-in `golangci-lint
-      # run` so we can delegate the actual invocation to Taskfile below.
+      # Install the pinned golangci-lint binary. `install-only: true` skips
+      # the action's built-in `golangci-lint run` so we can first build the
+      # custom binary (with the repo-local commentwrap plugin baked in) and
+      # then delegate the actual invocation to Taskfile.
       - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
           version: v2.11
           install-only: "true"
+
+      # Build the custom golangci-lint binary at tmp/golangci-lint-custom.
+      # It bakes in the commentwrap plugin from tools/comment-wrap-check/lint/
+      # so `task lint:go` runs commentwrap alongside every other linter. The
+      # upstream binary installed by the action above does NOT have this
+      # plugin compiled in; the custom binary is what enforces issue #149's
+      # wrap rule on every PR.
+      - name: Build custom golangci-lint with commentwrap plugin
+        run: task lint:install
 
       - name: Run golangci-lint via Taskfile
         run: task lint:go
