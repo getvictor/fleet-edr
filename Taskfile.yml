@@ -412,8 +412,9 @@ tasks:
       Idempotent: the task short-circuits when tmp/dev.crt exists and the cert's
       notAfter is more than 24h from now. Delete tmp/dev.crt (or both files) to force
       regeneration. Cert SAN covers localhost + 127.0.0.1 + ::1; access via any other
-      hostname (e.g. a LAN IP from a UTM VM) shows a cert mismatch — add the hostname
-      to the mkcert invocation or fall back to dev:server:insecure for those flows.
+      hostname (e.g. a LAN IP from a UTM VM) shows a cert mismatch — add the extra
+      hostname to the mkcert invocation (or to the openssl -addext SAN list in the
+      fallback path) and delete tmp/dev.crt to force regeneration.
     generates:
       - tmp/dev.crt
       - tmp/dev.key
@@ -448,8 +449,10 @@ tasks:
       signoz-otel-collector on 4317; if no collector is running, exporter init logs
       warnings and request handling continues.
 
-      For tooling that can't trust the dev cert (legacy QA scripts, raw curl without -k),
-      use `task dev:server:insecure` to get the prior plaintext-HTTP shape.
+      For tooling that can't trust the dev cert, install mkcert + `mkcert -install` so
+      the local CA lands in the system trust store, OR use `curl -k` / equivalent
+      client-side overrides. The server binary has no plaintext-HTTP mode (issue #140);
+      reach for those client-side workarounds, not a non-existent HTTP variant.
 
       Host-token rotation defaults (issue #86): EDR_HOST_TOKEN_LIFETIME 24h,
       EDR_HOST_TOKEN_GRACE 5m. Override either to a short value (e.g.
