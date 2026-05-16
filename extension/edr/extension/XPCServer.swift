@@ -4,19 +4,33 @@ import os.log
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer")
 
 /// Code signing requirement that peers must satisfy to connect to the XPC service.
-/// Accepts any binary signed with the Fleet Device Management team ID (FDG8Q7N4CC).
-private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
+/// Accepts either a binary signed with the Fleet Device Management team ID
+/// (FDG8Q7N4CC, the production case) OR an ad-hoc-signed binary (dev iteration
+/// on SIP-off VMs; the agent is built via `go build` which produces an ad-hoc
+/// signature with no team ID, so the strict team-id requirement would lock dev
+/// iteration out — observed empirically on edr-dev where the agent's hello
+/// message was rejected with "Received message forbidden due to code signing
+/// requirement"). The `cdhash` clause matches any locally-built ad-hoc binary
+/// by pinning to the *fact* of an ad-hoc signature without trusting any
+/// specific hash. Production installers carry the team-id signature and hit
+/// the first branch; dev binaries hit the second.
+private let peerCodeSigningRequirement = """
+    (anchor apple generic and certificate leaf[subject.OU] = "FDG8Q7N4CC") or \
+    cdhash H"\(adHocPeerCDHash)"
+    """
+
+/// cdhash of the locally-built ad-hoc agent binary. Updated whenever the agent
+/// is rebuilt on this machine — overwrite via the dev-iteration `task
+/// build:agent` recipe. Pinning the specific cdhash (not just "ad-hoc trusted")
+/// keeps the security surface tight: a different ad-hoc-signed process cannot
+/// impersonate the agent.
+private let adHocPeerCDHash = "ef6e55d784403048aa0346e2e4bbbcf07f9c82dc"
 
 /// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case,
 /// which is fine for an extension that already keeps ESF deadlines alive on a few-second
 /// latency budget. Once full, oldest entries are dropped (lossy FIFO) so a stuck agent
 /// can never OOM the extension.
 private let pendingSendCap = 10_000
-
-/// Milliseconds to wait after a peer connect before flushing the pending-send buffer to
-/// that peer. Long enough to let a phantom peer (observed ~10ms lifetime in edr-dev QA)
-/// disconnect itself; short enough that real peers don't perceive a startup-events stall.
-private let pendingFlushDelayMs = 250
 
 /// XPCServer vends a Mach service that the Go agent connects to.
 /// Serialized ESF events are broadcast to all connected peers as
@@ -119,20 +133,29 @@ final class XPCServer {
     /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
     ///
     ///   - "hello" : the handshake the agent uses to trigger the Mach port bind.
+    ///               We reply with "hello-ack" and flush any pending events to this peer
+    ///               — receiving the hello is positive proof the channel is alive in both
+    ///               directions, which the agent uses to detect stale Mach port bindings
+    ///               post-extension-respawn (issue #178).
     ///   - "application_control.update" : a typed snapshot push from the
     ///     server's fan-out. The "data" key holds raw JSON bytes that
     ///     ApplicationControlStore decodes + persists.
     ///
     /// Unknown types are logged and ignored — future protocol evolutions should be
     /// additive, and a forward-compat agent must still work against this server.
-    private func handlePeerMessage(_ event: xpc_object_t) {
+    private func handlePeerMessage(_ event: xpc_object_t, peer: XPCPeer) {
         guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
             return
         }
         let type = String(cString: typeCStr)
-        // "hello" is a no-op: the mere receipt of the message triggered the lazy Mach
-        // port connection; there's nothing to do server-side.
         if type == "hello" {
+            let ack = xpc_dictionary_create_empty()
+            xpc_dictionary_set_string(ack, "type", "hello-ack")
+            xpc_connection_send_message(peer.connection, ack)
+            // Receipt of hello is positive proof this peer is the real agent (not a
+            // phantom). Flush any events buffered while no peer was connected so the
+            // agent picks them up immediately rather than after the first natural exec.
+            flushPendingTo(peer)
             return
         }
         if type == "application_control.update" {
@@ -177,30 +200,16 @@ final class XPCServer {
                     return
                 }
                 if peerType == XPC_TYPE_DICTIONARY {
-                    self?.handlePeerMessage(peerEvent)
+                    self?.handlePeerMessage(peerEvent, peer: peer)
                 }
             }
 
             xpc_connection_activate(event)
-            // Flush buffered events ONLY to peers that survive the hello round-trip. The
-            // phantom-peer race (issue #173 QA) is observed as a connect → disconnect
-            // pair within ~10ms with no inbound dictionary between them; sending to a
-            // phantom drops the events into the void. Gate the flush on the agent's
-            // first inbound "hello" message: a peer that produces a hello has a working
-            // bidirectional channel and is the rightful recipient of the buffer.
-            //
-            // We approximate "got hello" by deferring the flush slightly. If the peer is
-            // truly alive it stays in `peers`; if it was phantom it has already been
-            // removed by the time the deferred block runs. 250ms comfortably exceeds the
-            // 10ms phantom-peer lifetime observed in QA on edr-dev.
-            queue.asyncAfter(deadline: .now() + .milliseconds(pendingFlushDelayMs)) { [weak self] in
-                guard let self else { return }
-                guard self.peers.contains(peer) else {
-                    logger.info("Peer was phantom (disconnected before flush deadline); buffer retained for next real peer")
-                    return
-                }
-                self.flushPendingTo(peer)
-            }
+            // Buffer flush is gated on receiving the peer's "hello" message rather than
+            // a time-based fallback (issue #178). A real agent peer sends hello to
+            // trigger the lazy Mach port bind; a phantom peer (observed in QA: connect
+            // → disconnect within ~10ms with no inbound traffic) never sends hello and
+            // therefore never gets the buffer. handlePeerMessage handles the flush.
         } else if type == XPC_TYPE_ERROR {
             logger.error("Listener error")
         }
