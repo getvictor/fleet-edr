@@ -38,6 +38,17 @@ func (r *recAudit) Record(_ context.Context, e api.AuditEvent) error {
 // a virtual authenticator) require go-webauthn's test authenticator helper and live in the cross-context integration suite under
 // test/integration; this file covers the no-WebAuthn failure paths (rate-limit, token-missing, challenge-missing, allowlist-404) where
 // no signed assertion is needed.
+//
+// http://localhost:8088 appears throughout this file (and the rest of the breakglass
+// tests). It looks inconsistent with issue #140 — which made the server binary HTTPS-
+// only — but it is intentional. These tests exercise the breakglass handler in
+// isolation via httptest.NewServer, which is plaintext HTTP by Go-stdlib convention
+// (matches fleetdm/fleet's test pattern and every other Go server we benchmarked).
+// The WebAuthn library validates the claimed `origin` against RPOrigins as a string
+// match; what matters is that both sides agree, not the scheme. Switching to
+// httptest.NewTLSServer + https://... origins would add ceremony without coverage —
+// the production guarantee "this server binary can never serve HTTP" lives in
+// server/config + server/httpserver/serve.go, where boot fails without TLS.
 func newHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit) {
 	t.Helper()
 	db := testdb.Open(t)

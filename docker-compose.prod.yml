@@ -52,13 +52,12 @@ services:
       EDR_DSN: ""
       EDR_DSN_FILE: /run/secrets/edr_dsn
       EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
-      # TLS cert paths only wired when the operator has mounted ./tls with
-      # the matching files; otherwise left unset and EDR_ALLOW_INSECURE_HTTP
-      # controls whether TLS is required. Leaving these blank when no cert is
-      # mounted avoids the server refusing to start on "cert file missing".
-      EDR_TLS_CERT_FILE: ${EDR_TLS_CERT_FILE:-}
-      EDR_TLS_KEY_FILE: ${EDR_TLS_KEY_FILE:-}
-      EDR_ALLOW_INSECURE_HTTP: ${EDR_ALLOW_INSECURE_HTTP:-0}
+      # TLS cert paths are unconditionally required (issue #140 removed the
+      # EDR_ALLOW_INSECURE_HTTP opt-out). Mount fullchain.pem + privkey.pem
+      # under ./tls/ (or override EDR_TLS_DIR to point at your cert store).
+      # The server refuses to boot when either path is empty or unreadable.
+      EDR_TLS_CERT_FILE: ${EDR_TLS_CERT_FILE:-/tls/fullchain.pem}
+      EDR_TLS_KEY_FILE: ${EDR_TLS_KEY_FILE:-/tls/privkey.pem}
       EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
       EDR_LOG_FORMAT: "json"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
