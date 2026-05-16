@@ -116,10 +116,20 @@ pre-push:
 
     go-lint-fast:
       # --fast-only enables the quick-running linters (under ~2s usually).
-      # The full run still happens in CI and before release.
+      # The full run still happens in CI and before release. Uses the custom
+      # golangci-lint binary at tmp/golangci-lint-custom because .golangci.yml
+      # enables the commentwrap plugin which the upstream binary cannot load;
+      # falls back to upstream only with --no-config to avoid the unknown-
+      # linter error, surfacing a clear stderr hint for the operator.
       run: |
         mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
-        golangci-lint run --fast-only ./server/... ./agent/... ./internal/... ./test/...
+        if [ -x tmp/golangci-lint-custom ]; then
+          tmp/golangci-lint-custom run --fast-only ./server/... ./agent/... ./internal/... ./test/...
+        else
+          echo "[lefthook] tmp/golangci-lint-custom missing; running upstream golangci-lint --no-config (no commentwrap)" >&2
+          echo "[lefthook] Run 'task lint:install' once to enable the full linter set including commentwrap." >&2
+          golangci-lint run --no-config --fast-only ./server/... ./agent/... ./internal/... ./test/...
+        fi
 
     arch-go:
       # Bounded-context architecture lint via arch-go. Local feedback in

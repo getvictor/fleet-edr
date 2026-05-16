@@ -282,14 +282,63 @@ tasks:
     deps: [lint:go, lint:ui, lint:swift, lint:actions]
 
   lint:go:
-    desc: golangci-lint across the whole Go module
+    desc: |
+      golangci-lint across the whole Go module. Runs the CUSTOM golangci-lint binary
+      at tmp/golangci-lint-custom which has the repo-local commentwrap plugin compiled
+      in (see .custom-gcl.yml). `task lint:install` builds it. The upstream binary
+      cannot load the plugin, so we refuse to fall back to it: `.golangci.yml` enables
+      `commentwrap` under `linters.enable` and the upstream binary aborts with
+      "unknown linter" before any real lint runs. Better to fail loud here with
+      actionable text than silently produce a non-equivalent lint result.
     cmds:
-      - golangci-lint run ./server/... ./agent/... ./internal/... ./test/...
+      - cmd: |
+          if [ ! -x tmp/golangci-lint-custom ]; then
+            echo "tmp/golangci-lint-custom missing." >&2
+            echo "Run 'task lint:install' first to build the custom binary that bakes in the commentwrap plugin." >&2
+            echo "(The upstream golangci-lint binary cannot load the plugin, so we deliberately do NOT fall back.)" >&2
+            exit 1
+          fi
+          tmp/golangci-lint-custom run ./server/... ./agent/... ./internal/... ./test/...
 
   lint:go:fix:
-    desc: golangci-lint with --fix for auto-fixable findings
+    desc: golangci-lint with --fix for auto-fixable findings (uses the custom binary built by `task lint:install`)
     cmds:
-      - golangci-lint run --fix ./server/... ./agent/... ./internal/... ./test/...
+      - cmd: |
+          if [ ! -x tmp/golangci-lint-custom ]; then
+            echo "tmp/golangci-lint-custom missing. Run 'task lint:install' first." >&2
+            exit 1
+          fi
+          tmp/golangci-lint-custom run --fix ./server/... ./agent/... ./internal/... ./test/...
+
+  lint:install:
+    desc: |
+      Build the custom golangci-lint binary at tmp/golangci-lint-custom by running
+      `golangci-lint custom` against .custom-gcl.yml. The custom binary bakes in the
+      repo-local commentwrap plugin (issue #149) so `task lint:go` enforces it as a
+      standard linter. Re-run whenever .custom-gcl.yml or the plugin's source under
+      tools/comment-wrap-check/lint/ changes, or after a golangci-lint version bump.
+    sources:
+      - .custom-gcl.yml
+      - tools/comment-wrap-check/lint/*.go
+      - tools/comment-wrap-check/lint/go.mod
+      - tools/comment-wrap-check/lint/go.sum
+      - go.mod
+      - go.sum
+    generates:
+      - tmp/golangci-lint-custom
+    cmds:
+      - mkdir -p tmp
+      - golangci-lint custom
+
+  lint:go:plugin:
+    desc: |
+      Run the commentwrap plugin's own analyzer tests (its sub-module is not picked up by
+      the parent module's `go test ./...`). Wired into CI's go-lint workflow as a safety
+      net: a regression in the linter itself would otherwise slip past the parent's test
+      sweep.
+    dir: tools/comment-wrap-check/lint
+    cmds:
+      - go test -race -count=1 ./...
 
   lint:arch:
     desc: |
@@ -310,17 +359,6 @@ tasks:
     desc: swiftlint on the macOS extensions (requires `brew install swiftlint`)
     cmds:
       - swiftlint lint --strict
-
-  lint:comments:
-    desc: |
-      Detect Go `//` comment blocks of 3 or more lines whose longest line lands
-      more than 20 characters below the 120-char wrap target (issue #149: catches
-      blocks that were hard-wrapped at 80 instead of CLAUDE.md's 140). Non-
-      blocking today and not part of the lint: aggregate; ship the fix sweep
-      separately and graduate to a CI gate once the existing offender count
-      hits zero. See tools/comment-wrap-check/main.go for the heuristic.
-    cmds:
-      - go run ./tools/comment-wrap-check ./server ./agent ./internal ./test ./tools
 
   lint:c:
     desc: clang-tidy + clang-format --dry-run on the CGo bridge (requires `brew install llvm`)
