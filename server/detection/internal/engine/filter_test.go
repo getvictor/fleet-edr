@@ -49,12 +49,34 @@ func TestIsSnapshotExec(t *testing.T) {
 			evt:  api.Event{EventType: "exec", Payload: json.RawMessage(`{"path":"/bin/snapshot/x"}`)},
 			want: false,
 		},
+		{
+			// Negative guard — isSnapshotExec is exec-only, not the generic plumbing filter.
+			// snapshot_heartbeat events are handled by isPlumbingEvent's switch arm.
+			name: "snapshot_heartbeat is NOT a snapshot exec",
+			evt:  api.Event{EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":1}`)},
+			want: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, isSnapshotExec(tc.evt))
 		})
 	}
+}
+
+func TestFilterSnapshotEvents_DropsHeartbeats(t *testing.T) {
+	// Issue #173: snapshot_heartbeat events are pure liveness plumbing. They must not reach rule evaluation, otherwise rules would
+	// have to remember to skip a no-op event type that carries only a pid and a timestamp.
+	in := []api.Event{
+		{EventID: "fork-1", EventType: "fork", Payload: json.RawMessage(`{}`)},
+		{EventID: "hb-1", EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":1}`)},
+		{EventID: "exec-1", EventType: "exec", Payload: json.RawMessage(`{"path":"/bin/x"}`)},
+		{EventID: "hb-2", EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":2}`)},
+	}
+	out := filterSnapshotEvents(in)
+	require.Len(t, out, 2, "both heartbeats must be dropped, fork + exec kept")
+	assert.Equal(t, "fork-1", out[0].EventID)
+	assert.Equal(t, "exec-1", out[1].EventID)
 }
 
 func TestFilterSnapshotEvents_Empty(t *testing.T) {
@@ -76,15 +98,20 @@ func TestFilterSnapshotEvents_NoSnapshotsReturnsInputVerbatim(t *testing.T) {
 
 // ---- Property-based tests -------------------------------------------------
 
-// eventForFilterGen produces events whose payloads exercise every branch of the snapshot filter. Each generated event has one of:
-//   - non-exec events (filter must keep)
+// eventForFilterGen produces events whose payloads exercise every branch of the plumbing
+// filter (issue #173 broadened the filter from snapshot-exec only to all plumbing events).
+// Each generated event has one of these shapes:
+//
+//   - non-exec, non-heartbeat events (filter must keep)
 //   - exec without snapshot field (keep)
 //   - exec with snapshot:true (drop)
 //   - exec with snapshot:false (keep)
-//   - exec with malformed payload + snapshot in path (keep, since the probe fails)
+//   - exec with malformed payload + snapshot in path (keep; the bytes.Contains fast-path
+//     misses and the JSON probe fails)
+//   - snapshot_heartbeat event (drop -- pure liveness plumbing)
 func eventForFilterGen() *rapid.Generator[api.Event] {
 	return rapid.Custom(func(t *rapid.T) api.Event {
-		shape := rapid.IntRange(0, 4).Draw(t, "shape")
+		shape := rapid.IntRange(0, 5).Draw(t, "shape")
 		evt := api.Event{
 			EventID: rapid.StringMatching(`[a-z0-9]{1,8}`).Draw(t, "id"),
 			HostID:  "h",
@@ -105,6 +132,9 @@ func eventForFilterGen() *rapid.Generator[api.Event] {
 		case 4:
 			evt.EventType = "exec"
 			evt.Payload = json.RawMessage(`{"path":"/bin/snapshot"}`)
+		case 5:
+			evt.EventType = "snapshot_heartbeat"
+			evt.Payload = json.RawMessage(`{"pid":` + rapid.StringMatching(`[1-9][0-9]{0,4}`).Draw(t, "pid") + `}`)
 		}
 		return evt
 	})
@@ -113,30 +143,29 @@ func eventForFilterGen() *rapid.Generator[api.Event] {
 // TestFilterSnapshotEvents_PropertyDropsOnlySnapshotsAndPreservesOrder
 // asserts two invariants on every random batch:
 //
-//  1. The output equals the input minus exactly the snapshot-true
-//     exec events (set-equality on the kept subset).
+//  1. The output equals the input minus exactly the plumbing events
+//     (snapshot=true exec + snapshot_heartbeat).
 //  2. The kept events appear in the same order as in the input.
 //
-// PBT here is the natural fit because the input space is "any
-// permutation of any subset of events of the five shapes above" —
-// far larger than a table-driven test reasonably covers, and
-// shrinking gives a minimal counter-example on failure.
+// PBT here is the natural fit because the input space is "any permutation of any subset
+// of events of the six shapes above" -- far larger than a table-driven test reasonably
+// covers, and shrinking gives a minimal counter-example on failure. Predicate matches
+// the filter's `isPlumbingEvent` rather than the narrower `isSnapshotExec` so the
+// expected output reflects both kinds of drops.
 func TestFilterSnapshotEvents_PropertyDropsOnlySnapshotsAndPreservesOrder(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		in := rapid.SliceOfN(eventForFilterGen(), 0, 16).Draw(rt, "in")
 		out := filterSnapshotEvents(in)
 
-		// Build the expected output by running the same predicate
-		// the filter uses (isSnapshotExec) over a copy of in.
 		expected := make([]api.Event, 0, len(in))
 		for _, e := range in {
-			if !isSnapshotExec(e) {
+			if !isPlumbingEvent(e) {
 				expected = append(expected, e)
 			}
 		}
 
 		require.Len(rt, out, len(expected),
-			"output length must equal input minus snapshot exec events")
+			"output length must equal input minus plumbing events")
 		for i := range expected {
 			assert.Equal(rt, expected[i].EventID, out[i].EventID,
 				"order preservation: kept event at i=%d must match expected", i)

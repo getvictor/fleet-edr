@@ -46,10 +46,13 @@ var schemaStatements = []string{
 		exit_reason          VARCHAR(32),
 		exit_code            INT,
 		previous_exec_id     BIGINT,
+		is_snapshot          BOOL         NOT NULL DEFAULT FALSE,
+		last_seen_ns         BIGINT,
 		INDEX idx_processes_host_pid (host_id, pid, fork_time_ns),
 		INDEX idx_processes_host_ppid (host_id, ppid, fork_time_ns),
 		INDEX idx_processes_host_time (host_id, fork_time_ns),
-		INDEX idx_processes_previous_exec (previous_exec_id)
+		INDEX idx_processes_previous_exec (previous_exec_id),
+		INDEX idx_processes_snapshot_lastseen (is_snapshot, last_seen_ns)
 	)`,
 	`CREATE TABLE IF NOT EXISTS alerts (
 		id           BIGINT AUTO_INCREMENT PRIMARY KEY,

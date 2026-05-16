@@ -4,50 +4,61 @@ import os.log
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer")
 
 /// Code signing requirement that peers must satisfy to connect to the XPC service.
-/// Accepts any binary signed with the Fleet Device Management team ID (FDG8Q7N4CC).
+/// Production: only binaries signed with the Fleet Device Management team ID
+/// (FDG8Q7N4CC) pass. Debug builds additionally accept the pinned cdhash of the
+/// locally-built ad-hoc agent so dev iteration on SIP-off VMs works -- `go build`
+/// produces an ad-hoc signature with no team ID, so the strict production
+/// requirement would lock dev iteration out (observed on edr-dev as
+/// "Received message forbidden due to code signing requirement" rejecting the
+/// agent's hello message).
+///
+/// The cdhash clause pins to ONE specific hash, not "any ad-hoc binary." A
+/// different ad-hoc-signed process cannot impersonate the agent. `#if DEBUG`
+/// excludes the entire ad-hoc branch from release builds so production binaries
+/// are team-id-only even if this constant is left in source.
+#if DEBUG
+private let peerCodeSigningRequirement = """
+    (anchor apple generic and certificate leaf[subject.OU] = "FDG8Q7N4CC") or \
+    cdhash H"\(adHocPeerCDHash)"
+    """
+
+/// cdhash of the locally-built ad-hoc agent binary. Update via `task build:agent`
+/// followed by `codesign -d -r - agent/tmp/fleet-edr-agent` to read the new hash.
+/// Go's deterministic builds keep this stable across rebuilds of identical
+/// source, so the update cadence matches Go-side code changes, not every build.
+private let adHocPeerCDHash = "ef6e55d784403048aa0346e2e4bbbcf07f9c82dc"
+#else
 private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
+#endif
+
+/// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case,
+/// which is fine for an extension that already keeps ESF deadlines alive on a few-second
+/// latency budget. Once full, oldest entries are dropped (lossy FIFO) so a stuck agent
+/// can never OOM the extension.
+private let pendingSendCap = 10_000
 
 /// XPCServer vends a Mach service that the Go agent connects to.
 /// Serialized ESF events are broadcast to all connected peers as
 /// XPC dictionaries with a "data" key containing raw JSON bytes.
+///
+/// Startup race the buffer handles (issue #11 + #173 review): on extension restart a
+/// phantom XPC peer can connect-and-immediately-disconnect within a few ms — observed
+/// empirically as "Peer connected (total: 1)" followed by "Peer disconnected (total: 0)"
+/// 10ms later, with the real agent peer arriving a second or two afterwards. Without the
+/// buffer, every event the extension sends in that window (snapshot pass, plus the first
+/// few live execs) goes into an empty peer set and is silently lost. The buffer captures
+/// those sends so the next connecting peer drains them on accept.
 final class XPCServer {
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
     private let queue = DispatchQueue(label: "com.fleetdm.edr.xpcserver")
-    /// Signalled once the FIRST peer (the agent) connects post-listener-activate.
-    /// Used by the issue #11 startup snapshot pass to avoid emitting baseline
-    /// exec events into the void during the brief window between extension
-    /// restart + agent XPC reconnect. The semaphore is one-shot: callers wait
-    /// until either the first connect (or wait-timeout) and then proceed.
-    /// Subsequent peer connects/disconnects do not signal again.
-    private let firstPeerSemaphore = DispatchSemaphore(value: 0)
-    private var firstPeerSignalled = false
+    /// FIFO buffer of event payloads enqueued while no peer was connected. Drained to the
+    /// next peer that connects (in order, oldest-first). All access on `queue`.
+    private var pendingSends: [Data] = []
 
     init(serviceName: String) {
         self.serviceName = serviceName
-    }
-
-    /// waitForFirstPeer blocks the calling thread until the listener accepts a peer
-    /// connection, or `timeout` elapses, whichever comes first. Returns true if a
-    /// peer connected in time. Callers MUST NOT invoke this from a thread that is
-    /// also responsible for delivering peer events (eg the xpcserver dispatch queue);
-    /// the snapshot enumerator runs on a background utility queue specifically to
-    /// keep this constraint satisfied.
-    func waitForFirstPeer(timeout: DispatchTime) -> Bool {
-        guard firstPeerSemaphore.wait(timeout: timeout) == .success else {
-            // Timed out without ever observing the first-peer signal. Do NOT
-            // re-signal here — a spurious signal would credit a later waiter
-            // with a peer connection that never happened, violating the
-            // return contract. Snapshot enumerator handles the false return
-            // by skipping the pass for this boot.
-            return false
-        }
-        // Re-signal so any subsequent waiter also returns immediately. The
-        // semaphore is otherwise consumed by the first wait, leaving later
-        // callers to block forever if the connect never happens a second time.
-        firstPeerSemaphore.signal()
-        return true
     }
 
     func start() {
@@ -65,38 +76,91 @@ final class XPCServer {
         logger.info("XPC listener started on \(self.serviceName)")
     }
 
+    /// send enqueues an event payload for delivery to every connected peer. When no peer
+    /// is connected the event is appended to pendingSends and flushed to the next peer
+    /// that connects. Drops oldest entries when the buffer fills (lossy FIFO) so a stuck
+    /// or never-connecting agent can never OOM the extension.
     func send(data: Data) {
         queue.async { [weak self] in
             guard let self else { return }
+            if self.peers.isEmpty {
+                self.appendPending(data)
+                return
+            }
+            self.broadcastLocked(data)
+        }
+    }
+
+    // MARK: - Private — all callers run on `queue`
+
+    private func appendPending(_ data: Data) {
+        pendingSends.append(data)
+        if pendingSends.count > pendingSendCap {
+            let drop = pendingSends.count - pendingSendCap
+            pendingSends.removeFirst(drop)
+            logger.warning("XPC peer absent; dropped \(drop, privacy: .public) oldest pending events (cap \(pendingSendCap, privacy: .public))")
+        }
+    }
+
+    private func broadcastLocked(_ data: Data) {
+        let msg = xpc_dictionary_create_empty()
+        data.withUnsafeBytes { buf in
+            guard let baseAddress = buf.baseAddress else { return }
+            xpc_dictionary_set_data(msg, "data", baseAddress, buf.count)
+        }
+        for peer in peers {
+            xpc_connection_send_message(peer.connection, msg)
+        }
+    }
+
+    /// flushPendingTo sends every buffered event to the freshly-connected peer in order,
+    /// then clears the buffer. Sending to one peer rather than broadcasting to all peers
+    /// reflects the design contract: a queued event is the same event the broadcast would
+    /// have delivered, and at the moment it was queued there were no peers — the newly
+    /// arriving peer is the rightful recipient. If a SECOND peer connects later, that's
+    /// a separate session and doesn't get the historical buffer.
+    private func flushPendingTo(_ peer: XPCPeer) {
+        guard !pendingSends.isEmpty else { return }
+        let count = pendingSends.count
+        for data in pendingSends {
             let msg = xpc_dictionary_create_empty()
             data.withUnsafeBytes { buf in
                 guard let baseAddress = buf.baseAddress else { return }
                 xpc_dictionary_set_data(msg, "data", baseAddress, buf.count)
             }
-            for peer in self.peers {
-                xpc_connection_send_message(peer.connection, msg)
-            }
+            xpc_connection_send_message(peer.connection, msg)
         }
+        pendingSends.removeAll(keepingCapacity: false)
+        logger.info("XPC flushed \(count, privacy: .public) buffered events to newly-connected peer")
     }
 
     /// handlePeerMessage dispatches an inbound XPC dictionary from a connected peer (the
     /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
     ///
     ///   - "hello" : the handshake the agent uses to trigger the Mach port bind.
+    ///               We reply with "hello-ack" and flush any pending events to this peer
+    ///               — receiving the hello is positive proof the channel is alive in both
+    ///               directions, which the agent uses to detect stale Mach port bindings
+    ///               post-extension-respawn (issue #178).
     ///   - "application_control.update" : a typed snapshot push from the
     ///     server's fan-out. The "data" key holds raw JSON bytes that
     ///     ApplicationControlStore decodes + persists.
     ///
     /// Unknown types are logged and ignored — future protocol evolutions should be
     /// additive, and a forward-compat agent must still work against this server.
-    private func handlePeerMessage(_ event: xpc_object_t) {
+    private func handlePeerMessage(_ event: xpc_object_t, peer: XPCPeer) {
         guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
             return
         }
         let type = String(cString: typeCStr)
-        // "hello" is a no-op: the mere receipt of the message triggered the lazy Mach
-        // port connection; there's nothing to do server-side.
         if type == "hello" {
+            let ack = xpc_dictionary_create_empty()
+            xpc_dictionary_set_string(ack, "type", "hello-ack")
+            xpc_connection_send_message(peer.connection, ack)
+            // Receipt of hello is positive proof this peer is the real agent (not a
+            // phantom). Flush any events buffered while no peer was connected so the
+            // agent picks them up immediately rather than after the first natural exec.
+            flushPendingTo(peer)
             return
         }
         if type == "application_control.update" {
@@ -130,13 +194,6 @@ final class XPCServer {
             let peer = XPCPeer(connection: event)
             peers.insert(peer)
             logger.info("Peer connected (total: \(self.peers.count))")
-            // Unblock the issue #11 snapshot enumerator on the FIRST peer. Subsequent
-            // connects after a disconnect/reconnect cycle don't re-signal — the
-            // snapshot pass is a one-shot startup operation.
-            if !firstPeerSignalled {
-                firstPeerSignalled = true
-                firstPeerSemaphore.signal()
-            }
 
             xpc_connection_set_event_handler(event) { [weak self] peerEvent in
                 let peerType = xpc_get_type(peerEvent)
@@ -148,11 +205,16 @@ final class XPCServer {
                     return
                 }
                 if peerType == XPC_TYPE_DICTIONARY {
-                    self?.handlePeerMessage(peerEvent)
+                    self?.handlePeerMessage(peerEvent, peer: peer)
                 }
             }
 
             xpc_connection_activate(event)
+            // Buffer flush is gated on receiving the peer's "hello" message rather than
+            // a time-based fallback (issue #178). A real agent peer sends hello to
+            // trigger the lazy Mach port bind; a phantom peer (observed in QA: connect
+            // → disconnect within ~10ms with no inbound traffic) never sends hello and
+            // therefore never gets the buffer. handlePeerMessage handles the flush.
         } else if type == XPC_TYPE_ERROR {
             logger.error("Listener error")
         }

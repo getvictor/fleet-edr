@@ -85,8 +85,9 @@ func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 
 	r := newRunner(t, pt, q, k, "host-A", Options{})
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 1, n, "exactly one synthetic exit must be emitted")
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 1, stats.Exits, "exactly one synthetic exit must be emitted")
+	assert.Equal(t, 0, stats.Heartbeats)
 
 	events := q.snapshot()
 	require.Len(t, events, 1)
@@ -129,8 +130,9 @@ func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
 		},
 	})
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 0, n, "only ESRCH must trigger a synthetic exit; EPERM/EINVAL stay live")
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits, "only ESRCH must trigger a synthetic exit; EPERM/EINVAL stay live")
+	assert.Equal(t, 0, stats.Heartbeats)
 	assert.Empty(t, q.snapshot())
 	assert.Equal(t, 2, pt.Size(), "neither PID may be pruned")
 }
@@ -150,8 +152,8 @@ func TestRunOnce_RespectsMinAge(t *testing.T) {
 		Now:    func() time.Time { return now },
 	})
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 1, n, "only the older PID is eligible for reconciliation")
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 1, stats.Exits, "only the older PID is eligible for reconciliation")
 
 	_, ok := pt.Lookup(8)
 	assert.False(t, ok, "old dead PID must be pruned")
@@ -169,8 +171,9 @@ func TestRunOnce_NoHostIDSkips(t *testing.T) {
 	r := New(pt, q, func() string { return "" }, Options{Kill: k.call,
 		Now: func() time.Time { return time.Unix(0, 1_000_000_000_000) }})
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 0, n)
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits)
+	assert.Equal(t, 0, stats.Heartbeats)
 	assert.Empty(t, q.snapshot())
 	_, ok := pt.Lookup(1)
 	assert.True(t, ok, "no host_id means no events; the proctable must stay intact")
@@ -187,10 +190,10 @@ func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 	q := &recorderQueue{}
 	r := newRunner(t, pt, q, &killer{dead: dead}, "h", Options{MaxPerPass: 3})
 
-	n := r.RunOnce(context.Background())
+	stats := r.RunOnce(context.Background())
 	// Map iteration is non-deterministic in Go, so we deliberately assert only on the count of reaped PIDs and the table size — never on
 	// which specific PIDs survive. Adding "PID X must be reaped" assertions here would flake.
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 3, stats.Exits)
 	assert.Equal(t, 7, pt.Size(), "only the cap is reaped per pass")
 }
 
@@ -206,9 +209,77 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 		},
 	})
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 0, n)
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits)
 	assert.Equal(t, 1, pt.Size(), "PID 0 is left alone, not reaped")
+}
+
+func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
+	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side liveness ping the server's 6h TTL reconciler
+	// force-exits them. RunOnce emits a snapshot_heartbeat for every alive PID flagged IsSnapshot=true.
+	pt := proctable.New()
+	pt.Update(1, proctable.ProcessInfo{Path: "/sbin/launchd", StartTime: 0, IsSnapshot: true})
+	pt.Update(99, proctable.ProcessInfo{Path: "/bin/live", StartTime: 0, IsSnapshot: false})
+
+	q := &recorderQueue{}
+	// Both PIDs alive (kill returns nil).
+	r := newRunner(t, pt, q, &killer{}, "host-A", Options{})
+
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits, "no PIDs are dead")
+	assert.Equal(t, 1, stats.Heartbeats, "only the snapshot PID gets a heartbeat")
+
+	events := q.snapshot()
+	require.Len(t, events, 1)
+
+	var env struct {
+		EventID   string         `json:"event_id"`
+		HostID    string         `json:"host_id"`
+		EventType string         `json:"event_type"`
+		Payload   map[string]any `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(events[0], &env))
+	assert.Equal(t, "snapshot_heartbeat", env.EventType)
+	assert.Equal(t, "host-A", env.HostID)
+	assert.EqualValues(t, 1, env.Payload["pid"])
+}
+
+func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
+	// Regression guard for the issue #173 implementation: only snapshot PIDs heartbeat. A regular live PID must not produce a
+	// heartbeat - the fork/exec/exit stream already keeps the server's row fresh.
+	pt := proctable.New()
+	pt.Update(50, proctable.ProcessInfo{Path: "/bin/regular", StartTime: 0, IsSnapshot: false})
+
+	q := &recorderQueue{}
+	r := newRunner(t, pt, q, &killer{}, "h", Options{})
+
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Heartbeats)
+	assert.Empty(t, q.snapshot())
+}
+
+func TestRunOnce_DeadSnapshotPIDEmitsExitNotHeartbeat(t *testing.T) {
+	// A snapshot PID that the kernel says is gone emits a host_reconciled exit, not a
+	// heartbeat. Same path as the issue #6 dead-PID flow; snapshot flag doesn't change it.
+	pt := proctable.New()
+	pt.Update(33, proctable.ProcessInfo{Path: "/bin/dead-snap", StartTime: 0, IsSnapshot: true})
+
+	q := &recorderQueue{}
+	r := newRunner(t, pt, q, &killer{dead: map[int]bool{33: true}}, "h", Options{})
+
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 1, stats.Exits, "dead snapshot PID emits an exit")
+	assert.Equal(t, 0, stats.Heartbeats, "no heartbeat for a dead PID")
+
+	events := q.snapshot()
+	require.Len(t, events, 1)
+	var env struct {
+		EventType string         `json:"event_type"`
+		Payload   map[string]any `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(events[0], &env))
+	assert.Equal(t, "exit", env.EventType)
+	assert.Equal(t, "host_reconciled", env.Payload["exit_reason"])
 }
 
 func TestNew_PanicsOnNilDependencies(t *testing.T) {
@@ -306,8 +377,8 @@ func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 
 	// RunOnce logs the per-PID enqueue error and continues so one bad enqueue
 	// doesn't stall the whole pass — there's no error return to assert on.
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 0, n)
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits)
 	_, ok := pt.Lookup(42)
 	assert.True(t, ok, "PID must stay in the proctable when its synthetic exit failed to enqueue, so the next pass retries it")
 }
@@ -323,8 +394,8 @@ func TestEmitSyntheticExit_NewIDError(t *testing.T) {
 	// crypto/rand stops working, which is a fundamental platform failure we still want to surface rather than swallow.
 	r.newID = func() (string, error) { return "", errors.New("rand unavailable") }
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 0, n, "newID failure must propagate as a per-PID error and not enqueue an event")
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits, "newID failure must propagate as a per-PID error and not enqueue an event")
 	assert.Empty(t, q.snapshot(), "no event should land in the queue when ID generation fails")
 	_, ok := pt.Lookup(7)
 	assert.True(t, ok, "PID stays in the proctable when emit fails so the next pass can retry")
@@ -341,8 +412,8 @@ func TestEmitSyntheticExit_MarshalError(t *testing.T) {
 	// the only way to exercise the error branch — and locks in the behaviour that a marshal failure does not crash the pass.
 	r.marshal = func(_ any) ([]byte, error) { return nil, errors.New("marshal broken") }
 
-	n := r.RunOnce(context.Background())
-	assert.Equal(t, 0, n, "marshal failure must propagate as a per-PID error and not enqueue garbage")
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits, "marshal failure must propagate as a per-PID error and not enqueue garbage")
 	assert.Empty(t, q.snapshot())
 	_, ok := pt.Lookup(8)
 	assert.True(t, ok)

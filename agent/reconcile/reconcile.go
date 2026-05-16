@@ -154,8 +154,9 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 }
 
 // Run loops until ctx is cancelled, emitting one log line per non-zero pass. Blocks; intended for a dedicated goroutine. Per-PID
-// failures inside RunOnce are logged inline and never propagate up — one bad enqueue must not stall the whole pass — so RunOnce
-// returns just the count and Run has nothing to branch on but `n > 0`.
+// failures inside RunOnce are logged inline and never propagate up - one bad enqueue must not stall the whole pass - so RunOnce
+// returns a PassStats with per-event-kind counters and Run branches on Exits + Heartbeats both being zero to suppress noisy
+// "nothing happened" log lines on quiet hosts.
 func (r *Reconciler) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
@@ -169,29 +170,39 @@ func (r *Reconciler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if n := r.RunOnce(ctx); n > 0 {
+			stats := r.RunOnce(ctx)
+			if stats.Exits > 0 || stats.Heartbeats > 0 {
 				r.logger.InfoContext(ctx, "process reconciliation pass",
-					"edr.reconcile.synthetic_exits", n,
+					"edr.reconcile.synthetic_exits", stats.Exits,
+					"edr.reconcile.snapshot_heartbeats", stats.Heartbeats,
 				)
 			}
 		}
 	}
 }
 
-// RunOnce performs a single reconciliation pass and returns the count of synthetic exit events enqueued. Exposed for tests and
-// one-shot usage. Per-PID failures (enqueue errors, marshal errors, UUID errors) are logged inline so one bad PID can't stall the
-// whole pass — there's nothing the caller can do that the inline log path hasn't already done.
-func (r *Reconciler) RunOnce(ctx context.Context) int {
+// PassStats summarises a single reconciliation pass. exits is the count of synthetic exit events emitted; heartbeats is the count of
+// snapshot_heartbeat events emitted (issue #173). RunOnce returns this so Run's log line surfaces both numbers, and so the agent's
+// test suite can pin both counters without reaching into private state.
+type PassStats struct {
+	Exits      int
+	Heartbeats int
+}
+
+// RunOnce performs a single reconciliation pass and returns counts of synthetic exit events and snapshot-heartbeat events enqueued.
+// Exposed for tests and one-shot usage. Per-PID failures (enqueue errors, marshal errors, UUID errors) are logged inline so one bad
+// PID can't stall the whole pass.
+func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 	hostID := r.hostID()
 	if hostID == "" {
 		// No host_id yet — the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
 		// server's ingest handler would reject the whole batch on the first one).
-		return 0
+		return PassStats{}
 	}
 
 	now := r.now()
 	cutoff := now.Add(-r.minAge).UnixNano()
-	emitted := 0
+	stats := PassStats{}
 
 	for pid, info := range r.pt.Snapshot() {
 		if pid <= 0 {
@@ -202,29 +213,49 @@ func (r *Reconciler) RunOnce(ctx context.Context) int {
 		if info.StartTime > cutoff {
 			continue
 		}
-		// kill(pid, 0) is the standard liveness probe. Three outcomes drive the synthetic-exit decision:
-		//   nil   — pid exists and we may signal it; treat as alive.
-		//   ESRCH — "no such process"; the missed-exit signal we react to.
-		//   EPERM — pid exists but we lack permission; treat as alive. The agent runs as root in production so this is rare,
-		//           but the conservative read keeps non-root dev runs from reaping entries they can't probe authoritatively.
-		// Anything else (very rare; bad fd, weird kernel state) we skip too.
-		if err := r.kill(int(pid), 0); !errors.Is(err, syscall.ESRCH) {
-			continue
-		}
-		if err := r.emitSyntheticExit(ctx, hostID, pid, now); err != nil {
-			r.logger.WarnContext(ctx, "enqueue synthetic exit failed",
-				"pid", pid, "err", err)
-			continue
-		}
-		// Drop the entry from the proctable so subsequent passes skip it and so network-event enrichment doesn't continue
-		// attributing to a dead PID.
-		r.pt.Remove(pid)
-		emitted++
-		if emitted >= r.maxPerPass {
-			break
+		// kill(pid, 0) is the standard liveness probe. Three outcomes drive the per-PID decision:
+		//   nil   - pid exists and we may signal it; treat as alive. Snapshot PIDs emit a heartbeat; live PIDs no-op.
+		//   ESRCH - "no such process"; emit a synthetic exit and drop the entry.
+		//   EPERM - pid exists but we lack permission. The kernel only sets EPERM after confirming the pid exists, so this is
+		//           positive proof of liveness. Snapshot PIDs still emit a heartbeat so the server's TTL reconciler doesn't
+		//           prematurely close them (per review on PR #180). Non-root dev runs hit this for root-owned PIDs.
+		err := r.kill(int(pid), 0)
+		switch {
+		case errors.Is(err, syscall.ESRCH):
+			// Cap reached: keep scanning so live snapshot PIDs later in iteration still get their heartbeat. Without this,
+			// a host with > maxPerPass dead PIDs could indefinitely starve heartbeats and the server would TTL-reconcile the
+			// snapshot rows even though the agent knew they were alive (per review on PR #180).
+			if stats.Exits >= r.maxPerPass {
+				continue
+			}
+			if emitErr := r.emitSyntheticExit(ctx, hostID, pid, now); emitErr != nil {
+				r.logger.WarnContext(ctx, "enqueue synthetic exit failed",
+					"pid", pid, "err", emitErr)
+				continue
+			}
+			// Drop the entry from the proctable so subsequent passes skip it and so network-event enrichment doesn't continue
+			// attributing to a dead PID.
+			r.pt.Remove(pid)
+			stats.Exits++
+		case err == nil, errors.Is(err, syscall.EPERM):
+			// PID alive (either signallable or we lacked permission, which itself proves the pid exists). Only snapshot PIDs
+			// need a heartbeat - live PIDs are kept fresh by the natural fork/exec/exit stream and don't need a separate
+			// liveness ping.
+			if !info.IsSnapshot {
+				continue
+			}
+			if emitErr := r.emitHeartbeat(ctx, hostID, pid, now); emitErr != nil {
+				r.logger.WarnContext(ctx, "enqueue snapshot heartbeat failed",
+					"pid", pid, "err", emitErr)
+				continue
+			}
+			stats.Heartbeats++
+		default:
+			// Other errors (rare; bad fd, weird kernel state): skip silently. A snapshot row that misses one heartbeat is
+			// still well within the server's TTL window; the next pass will retry.
 		}
 	}
-	return emitted
+	return stats
 }
 
 // eventEnvelope is the on-the-wire shape the ingest handler expects. We duplicate it locally rather than import server/store types
@@ -238,6 +269,23 @@ type eventEnvelope struct {
 }
 
 func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid int32, now time.Time) error {
+	return r.emitEvent(ctx, "exit", hostID, now, map[string]any{
+		"pid":         int(pid),
+		"exit_code":   -1,
+		"exit_reason": "host_reconciled",
+	})
+}
+
+// emitHeartbeat enqueues a snapshot_heartbeat event for a still-alive snapshot PID. The server bumps processes.last_seen_ns on
+// receipt; the TTL reconciler reads COALESCE(last_seen_ns, fork_time_ns) and exempts the row from the issue #6 force-exit while
+// heartbeats keep landing. Issue #173.
+func (r *Reconciler) emitHeartbeat(ctx context.Context, hostID string, pid int32, now time.Time) error {
+	return r.emitEvent(ctx, "snapshot_heartbeat", hostID, now, map[string]any{
+		"pid": int(pid),
+	})
+}
+
+func (r *Reconciler) emitEvent(ctx context.Context, eventType, hostID string, now time.Time, payload map[string]any) error {
 	id, err := r.newID()
 	if err != nil {
 		return fmt.Errorf("generate event id: %w", err)
@@ -246,16 +294,12 @@ func (r *Reconciler) emitSyntheticExit(ctx context.Context, hostID string, pid i
 		EventID:     id,
 		HostID:      hostID,
 		TimestampNs: now.UnixNano(),
-		EventType:   "exit",
-		Payload: map[string]any{
-			"pid":         int(pid),
-			"exit_code":   -1,
-			"exit_reason": "host_reconciled",
-		},
+		EventType:   eventType,
+		Payload:     payload,
 	}
 	body, err := r.marshal(env)
 	if err != nil {
-		return fmt.Errorf("marshal exit envelope: %w", err)
+		return fmt.Errorf("marshal %s envelope: %w", eventType, err)
 	}
 	return r.q.Enqueue(ctx, body)
 }

@@ -66,6 +66,12 @@ type Process struct {
 	// PreviousExecID points at the row representing the prior generation in a same-PID re-exec chain (issue #10). The first exec after a
 	// fork has PreviousExecID == nil; that's the chain root.
 	PreviousExecID *int64 `db:"previous_exec_id" json:"previous_exec_id,omitempty"`
+	// IsSnapshot is true for rows materialised from the extension's startup baseline pass (issue #11). The TTL reconciler exempts these
+	// from the issue #6 force-exit unless they're stale relative to last_seen_ns.
+	IsSnapshot bool `db:"is_snapshot" json:"is_snapshot,omitempty"`
+	// LastSeenNs is the most recent agent-side liveness signal for a snapshot row (issue #173). NULL for non-snapshot rows. The TTL
+	// reconciler uses COALESCE(last_seen_ns, fork_time_ns) so non-snapshot rows fall back to existing #6 behaviour.
+	LastSeenNs *int64 `db:"last_seen_ns" json:"last_seen_ns,omitempty"`
 }
 
 // ExitReason values for Process.ExitReason.

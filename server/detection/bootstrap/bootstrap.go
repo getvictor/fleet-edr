@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -180,7 +181,59 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 			return fmt.Errorf("detection schema apply: %w", err)
 		}
 	}
+	return applyAdditiveAlters(ctx, db)
+}
+
+// MySQL error numbers we treat as "already applied" for additive ALTER statements. Documented at
+// https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html.
+const (
+	mysqlDuplicateColumn = 1060
+	mysqlDuplicateKey    = 1061
+)
+
+// applyAdditiveAlters runs ALTER TABLE statements that add columns to tables already
+// populated by an earlier deployment. The product hasn't shipped (no migration story
+// yet -- issue #115), but dev DBs survive across branches and we want a `task dev:server`
+// to work without a `task db:reset` after a schema bump on a feature branch.
+//
+// Statements run one-clause-at-a-time. Combining multiple ADD COLUMN / ADD INDEX clauses
+// into a single ALTER fails atomically: if one clause was already applied by a previous
+// pass and another is new, MySQL rejects the whole statement and isAlreadyAppliedError
+// would skip past it, permanently stranding the un-applied clauses. Splitting into one
+// statement per clause makes each idempotent in isolation (per review on PR #180).
+//
+// When the product ships, this whole function moves to a real migration runner (#115).
+func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
+	alters := []string{
+		// issue #173: snapshot-aware TTL reconciliation. is_snapshot marks rows originated by the extension's baseline pass;
+		// last_seen_ns is bumped by agent heartbeats. Index supports the heartbeat UPDATE's WHERE predicate.
+		`ALTER TABLE processes ADD COLUMN is_snapshot BOOL NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE processes ADD COLUMN last_seen_ns BIGINT NULL`,
+		`ALTER TABLE processes ADD INDEX idx_processes_snapshot_lastseen (is_snapshot, last_seen_ns)`,
+	}
+	for _, stmt := range alters {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if isAlreadyAppliedError(err) {
+				continue
+			}
+			return fmt.Errorf("detection additive alter: %w", err)
+		}
+	}
 	return nil
+}
+
+// isAlreadyAppliedError matches MySQL errors that mean "this ALTER is a no-op because the change already exists." Uses errors.As
+// against go-sql-driver's typed *mysql.MySQLError so a future message format change can't silently break the idempotency contract --
+// substring-matching err.Error() was brittle (per review on PR #180). Mirrors the pattern in server/identity/internal/seed/admin.go.
+func isAlreadyAppliedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mErr *mysqldriver.MySQLError
+	if errors.As(err, &mErr) {
+		return mErr.Number == mysqlDuplicateColumn || mErr.Number == mysqlDuplicateKey
+	}
+	return false
 }
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is

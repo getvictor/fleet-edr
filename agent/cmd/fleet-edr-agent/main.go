@@ -446,9 +446,10 @@ type eventHeader struct {
 }
 
 type execFields struct {
-	PID  int32  `json:"pid"`
-	Path string `json:"path"`
-	UID  uint32 `json:"uid"`
+	PID      int32  `json:"pid"`
+	Path     string `json:"path"`
+	UID      uint32 `json:"uid"`
+	Snapshot bool   `json:"snapshot"`
 }
 
 type exitFields struct {
@@ -468,9 +469,10 @@ func updateProcTable(pt *proctable.Table, data []byte) {
 			return
 		}
 		pt.Update(fields.PID, proctable.ProcessInfo{
-			Path:      fields.Path,
-			UID:       fields.UID,
-			StartTime: hdr.TimestampNs,
+			Path:       fields.Path,
+			UID:        fields.UID,
+			StartTime:  hdr.TimestampNs,
+			IsSnapshot: fields.Snapshot,
 		})
 	case "exit":
 		var fields exitFields
