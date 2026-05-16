@@ -215,9 +215,8 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 }
 
 func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
-	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side
-	// liveness ping the server's 6h TTL reconciler force-exits them. RunOnce emits a
-	// snapshot_heartbeat for every alive PID flagged IsSnapshot=true.
+	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side liveness ping the server's 6h TTL reconciler
+	// force-exits them. RunOnce emits a snapshot_heartbeat for every alive PID flagged IsSnapshot=true.
 	pt := proctable.New()
 	pt.Update(1, proctable.ProcessInfo{Path: "/sbin/launchd", StartTime: 0, IsSnapshot: true})
 	pt.Update(99, proctable.ProcessInfo{Path: "/bin/live", StartTime: 0, IsSnapshot: false})
@@ -246,9 +245,8 @@ func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 }
 
 func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
-	// Regression guard for the issue #173 implementation: only snapshot PIDs heartbeat.
-	// A regular live PID must not produce a heartbeat — the fork/exec/exit stream already
-	// keeps the server's row fresh.
+	// Regression guard for the issue #173 implementation: only snapshot PIDs heartbeat. A regular live PID must not produce a
+	// heartbeat - the fork/exec/exit stream already keeps the server's row fresh.
 	pt := proctable.New()
 	pt.Update(50, proctable.ProcessInfo{Path: "/bin/regular", StartTime: 0, IsSnapshot: false})
 
