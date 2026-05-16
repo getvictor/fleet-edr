@@ -39,8 +39,8 @@ Reality on the ground in this codebase, before this ADR is written:
   this same `Init`.
 - `server/metrics/metrics.go` and `agent/metrics/metrics.go` expose
   typed `Recorder` methods (`EventsIngested`, `AlertCreated`,
-  `RetentionRowsDeleted`, `ProcessesReconciled`, `QueueDropped`,
-  `DBQueryDuration`, plus observable gauges for enrolled and offline
+  `RetentionRowsDeleted`, `ProcessesTTLReconciled`, `QueueDropped`,
+  `ObserveDBQuery`, plus observable gauges for enrolled and offline
   host counts). Every instrument is registered against the global
   OTel meter; there is no second registry. Recorders are nil-safe so
   call sites do not need defensive checks.
@@ -137,9 +137,13 @@ than free-form labels, and document the name + cardinality story in
   ground but is an extra hop their runbooks have to cover.
 - Pull-model debugging (curl `/metrics` from a developer laptop to
   read the current counter snapshot) is not available out of the box.
-  The OTel SDK's `stdoutmetric` exporter can be wired in via env if a
-  developer wants this locally, but it is not a built-in deployment
-  shape.
+  `internal/observability/observability.go` instantiates
+  `otlpmetricgrpc` directly rather than going through the OTel SDK's
+  autoconfigure path, so swapping in the `stdoutmetric` exporter for
+  local debugging is a small code edit to `Init`, not a configuration
+  toggle. If a built-in stdout path is wanted later, the fix is to
+  route exporter selection through an env var inside `Init`; the ADR
+  doesn't preclude that.
 - The team has to track OTel SDK releases as a load-bearing
   dependency. The OTel Go SDK has shipped breaking API changes in
   pre-`v1.0` modules (the logs API was experimental for a long time)
