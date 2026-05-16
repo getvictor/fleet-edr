@@ -135,7 +135,20 @@ either add the CA to the local trust store, pass
 `--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe.
 Don't paper over a trust failure with `-k` in an automation script.
 
-Insecure-HTTP deployment (dev / behind-proxy):
+Local dev deployment (`task dev:server`, issue #140 — TLS by default with the
+self-signed cert from `task dev:certs`):
+
+```sh
+curl -sk https://localhost:8088/readyz | jq .
+```
+
+`-k` is acceptable here because the cert is a known self-signed dev cert; never
+ship `-k` in an automation script against a real deployment — install mkcert
+locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and
+the cert validates without the flag.
+
+Insecure-HTTP deployment (behind-proxy where the proxy terminates TLS, or the
+legacy `task dev:server:insecure` shape):
 
 ```sh
 curl -s http://localhost:8088/readyz | jq .
@@ -183,9 +196,11 @@ re-seed. Don't lose it.
 
 ### Log into the UI
 
-Open `https://edr.example.com/ui/` (or `http://localhost:8088/ui/` in
-dev). Sign in with `admin@fleet-edr.local` + the password above. The
-hosts page should be empty; that changes when the first agent enrolls.
+Open `https://edr.example.com/ui/` (or `https://localhost:8088/ui/`
+when running `task dev:server` locally — accept the self-signed cert
+warning once if mkcert isn't installed). Sign in with
+`admin@fleet-edr.local` + the password above. The hosts page should be
+empty; that changes when the first agent enrolls.
 
 ## Configuration reference
 
