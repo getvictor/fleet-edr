@@ -10,10 +10,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/breakglass"
 )
 
-// ValidatePassword enforces a rune-counted ≥ 12 floor. A regression
-// that bytes-counted instead of rune-counted would let an operator
-// satisfy the floor with three 4-byte runes; a regression that
-// dropped the floor entirely would re-open the wave-0 weak-password
+// ValidatePassword enforces a rune-counted ≥ 12 floor. A regression that bytes-counted instead of rune-counted would let an operator
+// satisfy the floor with three 4-byte runes; a regression that dropped the floor entirely would re-open the wave-0 weak-password
 // surface that motivated Phase 4 in the first place.
 func TestValidatePassword(t *testing.T) {
 	cases := []struct {

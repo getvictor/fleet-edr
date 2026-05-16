@@ -21,8 +21,7 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// Local mirror types pinned to the wire shape so the external test
-// package can decode without reaching for handler.go's private struct
+// Local mirror types pinned to the wire shape so the external test package can decode without reaching for handler.go's private struct
 // names.
 type sessionResponse struct {
 	User struct {
@@ -33,10 +32,8 @@ type sessionResponse struct {
 	AuthMethod string `json:"auth_method"`
 }
 
-// setupServer wires the GET + DELETE /api/session handler stack the
-// way main.go does. Returns the HTTP server + the users / sessions
-// stores so tests can seed users and mint sessions directly via the
-// underlying stores (the Phase 5b cleanup retired POST /api/session,
+// setupServer wires the GET + DELETE /api/session handler stack the way main.go does. Returns the HTTP server + the users / sessions
+// stores so tests can seed users and mint sessions directly via the underlying stores (the Phase 5b cleanup retired POST /api/session,
 // so there is no longer a wire-level path to mint a session here).
 func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store) {
 	t.Helper()
@@ -69,8 +66,7 @@ func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store)
 	return srv, us, ss
 }
 
-// sessionCookie creates a user and a session row via the underlying
-// stores and returns a cookie pointing at it. Replaces the
+// sessionCookie creates a user and a session row via the underlying stores and returns a cookie pointing at it. Replaces the
 // pre-Phase-5b POST /api/session login path that is no longer wired.
 func sessionCookie(t *testing.T, us *users.Store, ss *sessions.Store) *http.Cookie {
 	t.Helper()

@@ -6,8 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// White-box tests for package-private helpers. The other test file
-// (store_test.go, package mysql_test) covers the public Store API
+// White-box tests for package-private helpers. The other test file (store_test.go, package mysql_test) covers the public Store API
 // against a real MySQL via testdb.
 func TestDeduplicateStrings(t *testing.T) {
 	cases := []struct {

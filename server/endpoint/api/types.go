@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-// Enrollment mirrors the operator-visible row from the enrollments table.
-// The token hash + salt are intentionally omitted; callers that need to
-// verify a token go through Service.VerifyToken, not direct row access.
+// Enrollment mirrors the operator-visible row from the enrollments table. The token hash + salt are intentionally omitted; callers
+// that need to verify a token go through Service.VerifyToken, not direct row access.
 type Enrollment struct {
 	HostID       string     `db:"host_id" json:"host_id"`
 	Hostname     string     `db:"hostname" json:"hostname"`
@@ -23,9 +22,8 @@ type Enrollment struct {
 	RevokedBy    *string    `db:"revoked_by" json:"revoked_by,omitempty"`
 }
 
-// EnrollRequest is the wire payload the agent POSTs at /api/enroll.
-// Field names + JSON tags preserved exactly across the modular-monolith
-// migration; the agent contract is byte-identical with main.
+// EnrollRequest is the wire payload the agent POSTs at /api/enroll. Field names + JSON tags preserved exactly across the
+// modular-monolith migration; the agent contract is byte-identical with main.
 type EnrollRequest struct {
 	EnrollSecret string `json:"enroll_secret"`
 	HardwareUUID string `json:"hardware_uuid"`
@@ -47,12 +45,9 @@ type EnrollResponse struct {
 	EnrolledAt time.Time `json:"enrolled_at"`
 }
 
-// RotationTrigger describes who initiated a host-token rotation. Used by
-// the audit row payload so reviewers can distinguish a routine
-// scheduled rotation from a deliberate operator-driven one (incident
-// response, suspected token leak). Stored as a string so adding new
-// triggers (e.g. "scheduler" if a background sweep is added later) is a
-// constant-time addition rather than a wire-shape break.
+// RotationTrigger describes who initiated a host-token rotation. Used by the audit row payload so reviewers can distinguish a routine
+// scheduled rotation from a deliberate operator-driven one (incident response, suspected token leak). Stored as a string so adding new
+// triggers (e.g. "scheduler" if a background sweep is added later) is a constant-time addition rather than a wire-shape break.
 type RotationTrigger string
 
 const (
@@ -94,22 +89,17 @@ var (
 	// match the configured value. Mapped to 401 by the enroll handler.
 	ErrInvalidSecret = errors.New("endpoint: invalid enroll secret")
 
-	// ErrInvalidToken is returned when a presented bearer token does not
-	// resolve to an active enrollment (unknown, revoked, or malformed).
-	// Callers do not get to distinguish those cases; that would be an
-	// oracle for token-still-active probing.
+	// ErrInvalidToken is returned when a presented bearer token does not resolve to an active enrollment (unknown, revoked, or malformed).
+	// Callers do not get to distinguish those cases; that would be an oracle for token-still-active probing.
 	ErrInvalidToken = errors.New("endpoint: invalid host token")
 
 	// ErrInvalidHardwareUUID is returned when the agent presents an
 	// unparseable hardware UUID. Mapped to 400.
 	ErrInvalidHardwareUUID = errors.New("endpoint: invalid hardware uuid")
 
-	// ErrInvalidEnrollRequest is returned when one or more required fields
-	// of the EnrollRequest are blank (enroll_secret, hardware_uuid,
-	// hostname, os_version, agent_version). Mapped to 400 by the HTTP
-	// handler. A separate sentinel from ErrInvalidSecret so non-HTTP
-	// callers (tests, future contexts) can distinguish "shape" from
-	// "credential" without parsing free-form error strings.
+	// ErrInvalidEnrollRequest is returned when one or more required fields of the EnrollRequest are blank (enroll_secret, hardware_uuid,
+	// hostname, os_version, agent_version). Mapped to 400 by the HTTP handler. A separate sentinel from ErrInvalidSecret so non-HTTP
+	// callers (tests, future contexts) can distinguish "shape" from "credential" without parsing free-form error strings.
 	ErrInvalidEnrollRequest = errors.New("endpoint: invalid enroll request")
 
 	// ErrNotFound is returned by Get / Revoke when the host_id has no
@@ -117,10 +107,7 @@ var (
 	ErrNotFound = errors.New("endpoint: enrollment not found")
 )
 
-// CommandInserter is a closure type defined in endpoint/bootstrap
-// (consumed by endpoint/internal/service via the call site
-// `s.commands(ctx, hostID, ct, payload)`). cmd/main passes
-// responseCtx.Service().Insert as a method value, which matches the
-// closure shape; using a func type instead of a one-method interface
-// lets endpoint and rules share the pattern without endpoint
-// importing response/api.
+// CommandInserter is a closure type defined in endpoint/bootstrap (consumed by endpoint/internal/service via the call site
+// `s.commands(ctx, hostID, ct, payload)`). cmd/main passes responseCtx.Service().Insert as a method value, which matches the closure
+// shape; using a func type instead of a one-method interface lets endpoint and rules share the pattern without endpoint importing
+// response/api.

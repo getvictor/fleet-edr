@@ -45,10 +45,8 @@ func TestAppControlBlock_EventBecomesAlert(t *testing.T) {
 	const blockPID = 5151
 	hostToken := stepEnroll(t, stack, hostID)
 
-	// Seed a process row the block-event's pid can resolve against.
-	// The rule skips events whose pid doesn't materialise into a
-	// process row (the graph builder hadn't seen the exec yet), so
-	// without the fork/exec pair the block event would land as no-op.
+	// Seed a process row the block-event's pid can resolve against. The rule skips events whose pid doesn't materialise into a process row
+	// (the graph builder hadn't seen the exec yet), so without the fork/exec pair the block event would land as no-op.
 	now := time.Now().UnixNano()
 	seedEvents := []detectionapi.Event{
 		{
@@ -139,10 +137,9 @@ func TestAppControlBlock_EventBecomesAlert(t *testing.T) {
 	}, 2*time.Second, 50*time.Millisecond, "repeat block on same (rule, process) must dedup into one alert row")
 }
 
-// TestAppControlBlock_DefaultDescriptionWhenCustomMsgAbsent verifies
-// the server-detection-rules-engine spec's default summary contract:
-// when the operator did not author a custom_msg, the alert description
-// falls back to "Blocked <rule_type> rule for <identifier>".
+// TestAppControlBlock_DefaultDescriptionWhenCustomMsgAbsent verifies the server-detection-rules-engine spec's default summary
+// contract: when the operator did not author a custom_msg, the alert description falls back to "Blocked <rule_type> rule for
+// <identifier>".
 func TestAppControlBlock_DefaultDescriptionWhenCustomMsgAbsent(t *testing.T) {
 	stack := Setup(t)
 
@@ -211,12 +208,9 @@ type blockPayloadInput struct {
 	PolicyVersion int64
 }
 
-// blockPayload renders the JSON shape the extension emits for an
-// application_control_block event. Kept as a local helper so the
-// wire-tag contract is exercised by the test rather than imported
-// from production code. Takes *testing.T so a marshal failure fails
-// the test loudly instead of slipping a corrupt payload into the
-// event post (would surface downstream as an opaque mismatch
+// blockPayload renders the JSON shape the extension emits for an application_control_block event. Kept as a local helper so the
+// wire-tag contract is exercised by the test rather than imported from production code. Takes *testing.T so a marshal failure
+// fails the test loudly instead of slipping a corrupt payload into the event post (would surface downstream as an opaque mismatch
 // otherwise).
 func blockPayload(t *testing.T, in blockPayloadInput) json.RawMessage {
 	t.Helper()

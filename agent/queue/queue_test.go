@@ -181,9 +181,8 @@ func openCappedQueue(t *testing.T, maxBytes int64) *Queue {
 	return q
 }
 
-// TestEnqueue_CapDropsUploadedFirst locks in the queue-cap contract: with a tight
-// cap plus a batch of uploaded-then-unuploaded rows, cap enforcement drops the
-// uploaded rows before it touches the unuploaded ones.
+// TestEnqueue_CapDropsUploadedFirst locks in the queue-cap contract: with a tight cap plus a batch of uploaded-then-unuploaded rows,
+// cap enforcement drops the uploaded rows before it touches the unuploaded ones.
 func TestEnqueue_CapDropsUploadedFirst(t *testing.T) {
 	// ~1 KiB payload so the SQLite main file grows in predictable ~4 KiB page steps.
 	payload := make([]byte, 1024)
@@ -222,9 +221,8 @@ func TestEnqueue_CapDropsUploadedFirst(t *testing.T) {
 		}
 	}
 
-	// The cap is enforced on each Enqueue; after the extra writes the DB should be
-	// within the cap (allowing a single page of slack) AND the surviving rows should
-	// be the non-uploaded ones (the uploaded ones get dropped first).
+	// The cap is enforced on each Enqueue; after the extra writes the DB should be within the cap (allowing a single page of slack) AND
+	// the surviving rows should be the non-uploaded ones (the uploaded ones get dropped first).
 	size, err := q.dbSizeBytes(ctx)
 	if err != nil {
 		t.Fatalf("dbSizeBytes: %v", err)
@@ -264,9 +262,8 @@ func TestEnqueue_CapIsNoOpWhenUnbounded(t *testing.T) {
 	}
 }
 
-// TestEnqueue_CapLossyDropWhenOnlyUnuploaded covers the worst case: the server is
-// offline for long enough that EVERY row is non-uploaded, cap is still exceeded,
-// and we must drop lossy. The warn log + metric hook fire.
+// TestEnqueue_CapLossyDropWhenOnlyUnuploaded covers the worst case: the server is offline for long enough that EVERY row is
+// non-uploaded, cap is still exceeded, and we must drop lossy. The warn log + metric hook fire.
 func TestEnqueue_CapLossyDropWhenOnlyUnuploaded(t *testing.T) {
 	q := openCappedQueue(t, 32*1024) // very tight cap so a handful of ~1 KiB rows triggers drop
 	ctx := t.Context()

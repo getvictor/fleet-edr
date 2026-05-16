@@ -24,10 +24,9 @@ type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1574.006
-// (Hijack Execution Flow → Dynamic Linker Hijacking). Sub-technique chosen
-// deliberately: the rule catches DYLD_* env-var abuse specifically, not the
-// broader "Hijack Execution Flow" parent.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1574.006 (Hijack Execution Flow → Dynamic Linker Hijacking).
+// Sub-technique chosen deliberately: the rule catches DYLD_* env-var abuse specifically, not the broader "Hijack Execution Flow"
+// parent.
 func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
@@ -56,9 +55,8 @@ func (r *DyldInsert) Doc() api.Documentation {
 	}
 }
 
-// Dangerous env prefixes. DYLD_FRAMEWORK_PATH + DYLD_FALLBACK_* also exist but are
-// higher-false-positive (SIP disables them for Apple binaries anyway); we leave them
-// out for MVP and revisit if pilot customers surface real evasion.
+// Dangerous env prefixes. DYLD_FRAMEWORK_PATH + DYLD_FALLBACK_* also exist but are higher-false-positive (SIP disables them for Apple
+// binaries anyway); we leave them out for MVP and revisit if pilot customers surface real evasion.
 var dyldPrefixes = []string{
 	"DYLD_INSERT_LIBRARIES=",
 	"DYLD_LIBRARY_PATH=",
@@ -117,9 +115,8 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 // or the `env VAR=value binary` invocation. We capture both without firing on arbitrary
 // data that happens to contain the substring.
 func matchDyldArg(path string, args []string) string {
-	// The canonical env invocations are "env", "/usr/bin/env", and shim paths ending in
-	// "/env". For anything else, only argv[0] is a legitimate VAR=VALUE slot (the shell's
-	// `VAR=value cmd` form).
+	// The canonical env invocations are "env", "/usr/bin/env", and shim paths ending in "/env". For anything else, only argv[0] is a
+	// legitimate VAR=VALUE slot (the shell's `VAR=value cmd` form).
 	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
 
 	for i, a := range args {

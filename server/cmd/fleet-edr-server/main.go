@@ -1,6 +1,5 @@
-// fleet-edr-server is the main EDR server that handles event processing,
-// serves the API and UI. Event ingestion can be handled by this server or
-// by a separate fleet-edr-ingest instance.
+// fleet-edr-server is the main EDR server that handles event processing, serves the API and UI. Event ingestion can be handled by this
+// server or by a separate fleet-edr-ingest instance.
 package main
 
 import (
@@ -57,15 +56,13 @@ var (
 const (
 	serviceName = "fleet-edr-server"
 
-	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s
-	// and idle 60s bound how long a stuck client holds a connection. Same
-	// values as fleet-edr-ingest.
+	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s and idle 60s bound how long a stuck client holds a connection.
+	// Same values as fleet-edr-ingest.
 	httpWriteTimeout = 30 * time.Second
 	httpIdleTimeout  = 60 * time.Second
 
-	// metricsOfflineThreshold is the "how old is too old" cutoff for the
-	// edr.offline.hosts gauge. Mirrored as the UI's offline threshold so
-	// what operators see in SigNoz matches what they see on the host page.
+	// metricsOfflineThreshold is the "how old is too old" cutoff for the edr.offline.hosts gauge. Mirrored as the UI's offline threshold
+	// so what operators see in SigNoz matches what they see on the host page.
 	metricsOfflineThreshold = 5 * time.Minute
 )
 
@@ -130,12 +127,9 @@ func run() error {
 		return err
 	}
 
-	// Build the metrics recorder AFTER detectionCtx + endpointCtx exist
-	// so the gauge source can read live state from both. Wire it back
-	// into detectionCtx via SetMetrics so the engine + intake +
-	// pipeline (processttl + retention) all instrument: the
-	// recorder + recorder consumer dependency cycle resolves through
-	// this two-phase setup.
+	// Build the metrics recorder AFTER detectionCtx + endpointCtx exist so the gauge source can read live state from both. Wire it back
+	// into detectionCtx via SetMetrics so the engine + intake + pipeline (processttl + retention) all instrument: the recorder + recorder
+	// consumer dependency cycle resolves through this two-phase setup.
 	metricsRec := metrics.New(
 		serverGaugeSource{endpointSvc: endpointCtx.Service(), detectionSvc: detectionCtx.Service()},
 		metrics.Options{OfflineThreshold: metricsOfflineThreshold},
@@ -157,12 +151,9 @@ func run() error {
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
 
-	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty.
-	// httpserver.Build skips installing the middleware on a nil resolver,
-	// and httpserver.ClientIP's fallback returns the same peer IP the
-	// resolver's empty-list path would return — so this saves one
-	// per-request middleware hop in the default deployment (per Copilot
-	// review on PR #113).
+	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
+	// resolver, and httpserver.ClientIP's fallback returns the same peer IP the resolver's empty-list path would return — so this saves
+	// one per-request middleware hop in the default deployment (per Copilot review on PR #113).
 	var clientIPResolver *httpserver.ClientIPResolver
 	if len(cfg.TrustedProxies) > 0 {
 		clientIPResolver, err = httpserver.NewClientIPResolver(cfg.TrustedProxies)
@@ -322,12 +313,9 @@ func openRules(
 	return rulesCtx, nil
 }
 
-// hostListerFromDetection projects detection's ListHosts (returns the
-// richer HostSummary shape) down to the appcontrol.HostLister closure
-// shape ([]string of host_ids). Lives in cmd/main because the
-// projection is part of the rules-context dep wiring, not rules
-// itself: rules can't import detection/bootstrap without breaking
-// the bounded-context import rule (ADR-0004).
+// hostListerFromDetection projects detection's ListHosts (returns the richer HostSummary shape) down to the appcontrol.HostLister
+// closure shape ([]string of host_ids). Lives in cmd/main because the projection is part of the rules-context dep wiring, not rules
+// itself: rules can't import detection/bootstrap without breaking the bounded-context import rule (ADR-0004).
 func hostListerFromDetection(svc detectionapi.Service) func(context.Context) ([]string, error) {
 	return func(ctx context.Context) ([]string, error) {
 		hosts, err := svc.ListHosts(ctx)
@@ -383,11 +371,9 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 		// pre-existing row. Nothing to do.
 		return
 	}
-	// Phase 4b: print the redemption URL banner when the admin
-	// account has no registered WebAuthn credentials yet. Idempotent
-	// across container restarts: a fresh deployment prints on every
-	// boot until the operator redeems; once the credential is
-	// stored, this is silent.
+	// Phase 4b: print the redemption URL banner when the admin account has no registered WebAuthn credentials yet. Idempotent across
+	// container restarts: a fresh deployment prints on every boot until the operator redeems; once the credential is stored, this is
+	// silent.
 	bg := identityCtx.BreakglassService()
 	if bg == nil {
 		return
@@ -400,11 +386,9 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 	if hasCred {
 		return
 	}
-	// Default the TTL HERE (not when assembling the banner) so the
-	// banner reflects the actual TTL the token was issued with.
-	// IssueSetupToken's internal default is fine for the DB row,
-	// but the banner string has to match. Mirrors the package-side
-	// 1h default in breakglass/tokens.go.
+	// Default the TTL HERE (not when assembling the banner) so the banner reflects the actual TTL the token was issued with.
+	// IssueSetupToken's internal default is fine for the DB row, but the banner string has to match. Mirrors the package-side 1h default
+	// in breakglass/tokens.go.
 	ttl := cfg.BreakglassBootstrapTokenTTL
 	if ttl <= 0 {
 		ttl = config.DefaultBreakglassBootstrapTokenTTL
@@ -417,12 +401,9 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 	printBreakglassBanner(ctx, logger, admin.Email, plaintext, ttl, cfg)
 }
 
-// printBreakglassBanner writes the redemption URL to stderr in a
-// single write. The plaintext token appears once; the structured
-// log line carries the user id only. The URL is built from the
-// first configured RPOrigin (the externally reachable address an
-// operator's browser can use); falls back to ListenAddr only when
-// no RPOrigin is set, which is the dev-localhost path.
+// printBreakglassBanner writes the redemption URL to stderr in a single write. The plaintext token appears once; the structured log
+// line carries the user id only. The URL is built from the first configured RPOrigin (the externally reachable address an operator's
+// browser can use); falls back to ListenAddr only when no RPOrigin is set, which is the dev-localhost path.
 func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plaintext string, ttl time.Duration, cfg *config.Config) {
 	url := redemptionURL(cfg, plaintext)
 	banner := "" +
@@ -437,10 +418,8 @@ func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plai
 	}
 }
 
-// redemptionURL builds the operator-visible redemption URL. Prefers
-// the first BreakglassRPOrigins entry because that is the URL the
-// browser uses to talk to the server (and the WebAuthn engine binds
-// credentials to that origin). Falls back to scheme + ListenAddr
+// redemptionURL builds the operator-visible redemption URL. Prefers the first BreakglassRPOrigins entry because that is the URL the
+// browser uses to talk to the server (and the WebAuthn engine binds credentials to that origin). Falls back to scheme + ListenAddr
 // when no origin is configured — the dev-localhost path.
 func redemptionURL(cfg *config.Config, plaintext string) string {
 	const path = "/admin/break-glass/setup?token="
@@ -595,15 +574,10 @@ func registerUIRoutes(
 	}
 	fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(uiDist)))
 
-	// /ui/admin/break-glass{,/setup} are the React routes for the
-	// break-glass login + setup pages. The breakglass.Handler gates
-	// the API endpoints with an IP allowlist and promises the path's
-	// existence is concealed from off-list callers; gate the UI
-	// shell with the same allowlist so that promise extends to the
-	// React layer. Off-list callers see a 404 indistinguishable
-	// from "no such path" instead of a fully rendered form they
-	// can't actually submit. Register BEFORE the /ui/ catch-all so
-	// the more-specific patterns win.
+	// /ui/admin/break-glass{,/setup} are the React routes for the break-glass login + setup pages. The breakglass.Handler gates the API
+	// endpoints with an IP allowlist and promises the path's existence is concealed from off-list callers; gate the UI shell with the same
+	// allowlist so that promise extends to the React layer. Off-list callers see a 404 indistinguishable from "no such path" instead of a
+	// fully rendered form they can't actually submit. Register BEFORE the /ui/ catch-all so the more-specific patterns win.
 	breakglassUI := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveIndex(w, r, uiDist, logger)
 	})
@@ -636,10 +610,8 @@ func registerUIRoutes(
 	})
 }
 
-// serveIndex writes the embedded SPA index.html bytes directly. Used
-// as the SPA fallback so React Router handles deep links like
-// /ui/hosts/{id} client-side without bouncing through http.FileServer's
-// canonicalisation redirect for index files.
+// serveIndex writes the embedded SPA index.html bytes directly. Used as the SPA fallback so React Router handles deep links like
+// /ui/hosts/{id} client-side without bouncing through http.FileServer's canonicalisation redirect for index files.
 func serveIndex(w http.ResponseWriter, r *http.Request, uiDist fs.FS, logger *slog.Logger) {
 	f, err := uiDist.Open("index.html")
 	if err != nil {

@@ -19,9 +19,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// installTracer installs a real SDK tracer provider so otelhttp produces valid SpanContexts
-// (the global no-op provider returns zero trace IDs, which defeats the test). Both the
-// tracer provider and the text-map propagator are restored on cleanup so the global state
+// installTracer installs a real SDK tracer provider so otelhttp produces valid SpanContexts (the global no-op provider returns zero
+// trace IDs, which defeats the test). Both the tracer provider and the text-map propagator are restored on cleanup so the global state
 // does not leak into subsequent tests.
 func installTracer(t *testing.T) {
 	t.Helper()

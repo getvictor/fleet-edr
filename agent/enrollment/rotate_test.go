@@ -14,9 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// rotateTestServer stands up a minimal /api/enroll responder so the
-// initial enroll succeeds; Rotate is a pure-local op so rotateTestServer
-// is only consulted on the very first Ensure.
+// rotateTestServer stands up a minimal /api/enroll responder so the initial enroll succeeds; Rotate is a pure-local op so
+// rotateTestServer is only consulted on the very first Ensure.
 func rotateTestServer(t *testing.T, hostID string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -43,10 +42,8 @@ func newTestProvider(t *testing.T) (TokenProvider, string) {
 	return tp, tokenFile
 }
 
-// Happy path: Rotate replaces the in-memory + on-disk token, the next
-// Token() returns the new value, and the on-disk plist parses back to
-// the same shape (so a subsequent agent restart loads the rotated
-// token rather than the original).
+// Happy path: Rotate replaces the in-memory + on-disk token, the next Token() returns the new value, and the on-disk plist parses back
+// to the same shape (so a subsequent agent restart loads the rotated token rather than the original).
 func TestRotate_HappyPath(t *testing.T) {
 	tp, tokenFile := newTestProvider(t)
 	const newTok = "rotated-token-43-chars-base64url-aaaaaaaaa"
@@ -75,8 +72,7 @@ func TestRotate_EmptyTokenRejected(t *testing.T) {
 	assert.Equal(t, pre.HostToken, post.HostToken, "on-disk token must be unchanged after a rejected rotate")
 }
 
-// Rotate against a provider with no persisted state (e.g., a panic
-// path that constructed a provider without Ensure) must surface as an
+// Rotate against a provider with no persisted state (e.g., a panic path that constructed a provider without Ensure) must surface as an
 // error rather than a nil-pointer panic at write time.
 func TestRotate_NoStateRejected(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

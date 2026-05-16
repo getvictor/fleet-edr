@@ -17,10 +17,8 @@ func envMap(pairs map[string]string) func(string) string {
 }
 
 func TestLoad(t *testing.T) {
-	// Minimal env mirrors the wave-1 dev workflow: TLS off + the
-	// Phase-4 break-glass-only opt-out. Production sets neither flag
-	// and provides EDR_OIDC_*; that interaction is covered in a
-	// dedicated sub-test below.
+	// Minimal env mirrors the wave-1 dev workflow: TLS off + the Phase-4 break-glass-only opt-out. Production sets neither flag and
+	// provides EDR_OIDC_*; that interaction is covered in a dedicated sub-test below.
 	minEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
 		"EDR_ENROLL_SECRET":       "enroll-me",
@@ -285,10 +283,8 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-// TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a
-// production deployment without OIDC config refuses to start;
-// dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER
-// without the rest produces focused per-field errors.
+// TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a production deployment without OIDC config refuses to start;
+// dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER without the rest produces focused per-field errors.
 func TestLoad_OIDCConfig(t *testing.T) {
 	prodLikeEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
@@ -492,10 +488,8 @@ func withExtra(base, extra map[string]string) map[string]string {
 	return out
 }
 
-// TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling +
-// async-queue env knobs in isolation. Mirrors the pattern in TestLoad
-// so a regression on either parser surfaces with a focused failure
-// message rather than a single-line "test failed".
+// TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling + async-queue env knobs in isolation. Mirrors the pattern in TestLoad so a
+// regression on either parser surfaces with a focused failure message rather than a single-line "test failed".
 func TestLoad_AuditEnvKnobs(t *testing.T) {
 	minEnv := map[string]string{
 		"EDR_DSN":                 "root@tcp(127.0.0.1:3306)/edr?parseTime=true",

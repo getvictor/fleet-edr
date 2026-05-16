@@ -1,7 +1,5 @@
-// This file holds the cryptographic primitives that back agent
-// host-token authentication: token generation, argon2id hashing,
-// constant-time verification, and the SHA-256 token-id lookup key.
-// See doc.go for the package contract.
+// This file holds the cryptographic primitives that back agent host-token authentication: token generation, argon2id hashing,
+// constant-time verification, and the SHA-256 token-id lookup key. See doc.go for the package contract.
 
 package mysql
 
@@ -16,10 +14,9 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// argon2id parameters chosen per OWASP Password Storage Cheat Sheet 2024 for a modern server
-// running interactive hashing. ~30 ms per hash on an M-series Mac. Every other request on the
-// hot path is a constant-time compare against the stored hash, not a fresh hash, so steady-
-// state auth is microseconds.
+// argon2id parameters chosen per OWASP Password Storage Cheat Sheet 2024 for a modern server running interactive hashing. ~30 ms per
+// hash on an M-series Mac. Every other request on the hot path is a constant-time compare against the stored hash, not a fresh hash,
+// so steady- state auth is microseconds.
 const (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // 64 MiB
@@ -41,11 +38,10 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// tokenID returns the SHA-256 of `token`. This is stored alongside the argon2id hash/salt as
-// a deterministic lookup key so Verify can fetch a single candidate row by indexed equality
-// rather than scan every active enrollment. SHA-256 of a 32-byte random token has the same
-// entropy as the token and is one-way, so leaking the column does not let an attacker recover
-// the token; the argon2id hash is still the authenticator.
+// tokenID returns the SHA-256 of `token`. This is stored alongside the argon2id hash/salt as a deterministic lookup key so Verify can
+// fetch a single candidate row by indexed equality rather than scan every active enrollment. SHA-256 of a 32-byte random token has
+// the same entropy as the token and is one-way, so leaking the column does not let an attacker recover the token; the argon2id hash is
+// still the authenticator.
 func tokenID(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
@@ -75,9 +71,7 @@ func verifyToken(token string, wantHash, salt []byte) bool {
 // ErrTokenMismatch is returned when a presented token does not match any enrolled host.
 var ErrTokenMismatch = errors.New("enrollment: token mismatch")
 
-// ErrRotateRaced is returned when RotateHostToken's optimistic-lock
-// UPDATE matched zero rows: another rotation for the same host has
-// already swapped the token between the caller's verify and the
-// rotate. Callers map this to a no-op (the other path's rotation
-// already produced a fresh token; nothing for this caller to do).
+// ErrRotateRaced is returned when RotateHostToken's optimistic-lock UPDATE matched zero rows: another rotation for the same host has
+// already swapped the token between the caller's verify and the rotate. Callers map this to a no-op (the other path's rotation already
+// produced a fresh token; nothing for this caller to do).
 var ErrRotateRaced = errors.New("enrollment: rotate raced with another rotation")

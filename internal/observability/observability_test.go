@@ -12,9 +12,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
-// restoreGlobals captures the current global OTel providers + propagator and registers a
-// cleanup that restores them after the test. Tests that call Init with a non-empty endpoint
-// MUST call this first, otherwise their providers leak into subsequent tests.
+// restoreGlobals captures the current global OTel providers + propagator and registers a cleanup that restores them after the test.
+// Tests that call Init with a non-empty endpoint MUST call this first, otherwise their providers leak into subsequent tests.
 func restoreGlobals(t *testing.T) {
 	t.Helper()
 	prevTP := otel.GetTracerProvider()
@@ -48,9 +47,8 @@ func TestInit_Disabled(t *testing.T) {
 
 func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 	restoreGlobals(t)
-	// Dial a port we are confident nothing is listening on. gRPC dialing is lazy and the
-	// BatchProcessor export happens asynchronously, so Init must still return quickly and
-	// Shutdown must not block on the dead endpoint for longer than the deadline we pass.
+	// Dial a port we are confident nothing is listening on. gRPC dialing is lazy and the BatchProcessor export happens asynchronously,
+	// so Init must still return quickly and Shutdown must not block on the dead endpoint for longer than the deadline we pass.
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 

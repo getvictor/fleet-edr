@@ -91,9 +91,8 @@ func TestPolicy_ActionsParity(t *testing.T) {
 func TestPolicy_RegoTestSuite(t *testing.T) {
 	ctx := context.Background()
 
-	// Load every .rego file under policy/ (both the policy module and
-	// the test module). ast.NewModuleLoader-equivalent path: read
-	// files, parse, hand to tester.Runner.
+	// Load every .rego file under policy/ (both the policy module and the test module). ast.NewModuleLoader-equivalent path: read files,
+	// parse, hand to tester.Runner.
 	regoFiles := []string{
 		filepath.Join("policy", "edr.rego"),
 		filepath.Join("policy", "edr_test.rego"),
@@ -107,9 +106,8 @@ func TestPolicy_RegoTestSuite(t *testing.T) {
 		modules[path] = mod
 	}
 
-	// The test runner needs the role-grant data the policy reads from
-	// data.roles. Load roles.json into the in-memory store so the
-	// suite evaluates against the production grant matrix, not a stub.
+	// The test runner needs the role-grant data the policy reads from data.roles. Load roles.json into the in-memory store so the suite
+	// evaluates against the production grant matrix, not a stub.
 	dataObj := loadDataForRegoTests(t)
 	store := inmem.NewFromObject(dataObj)
 
@@ -140,10 +138,8 @@ func TestPolicy_RegoTestSuite(t *testing.T) {
 	assert.Empty(t, failures, "rego test failures: %v", failures)
 }
 
-// loadDataForRegoTests parses roles.json + actions.json into the
-// shape the Rego policy reads from data.* . Mirrors loadDataBundle
-// in engine.go, kept private to the test package so the production
-// path stays the single source of truth.
+// loadDataForRegoTests parses roles.json + actions.json into the shape the Rego policy reads from data.* . Mirrors loadDataBundle in
+// engine.go, kept private to the test package so the production path stays the single source of truth.
 func loadDataForRegoTests(t *testing.T) map[string]any {
 	t.Helper()
 	rolesBytes, err := os.ReadFile(filepath.Join("policy", "data", "roles.json")) //nolint:gosec // path is a fixed test fixture
@@ -200,7 +196,6 @@ func setDifference(a, b map[string]struct{}) []string {
 	return out
 }
 
-// Compile-time guard against a stray import this file would
-// otherwise miss; keeps `strings` from being a dead import if a
-// future rewrite drops the diff helper.
+// Compile-time guard against a stray import this file would otherwise miss; keeps `strings` from being a dead import if a future
+// rewrite drops the diff helper.
 var _ = strings.Builder{}

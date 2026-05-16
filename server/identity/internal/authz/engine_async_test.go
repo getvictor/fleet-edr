@@ -12,10 +12,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/authz"
 )
 
-// recordingAsync is the AsyncAuditWriter test double: every Submit
-// records the event and reports success. Tests pin the count + the
-// per-event payload so the chokepoint's routing decisions are
-// observable end-to-end.
+// recordingAsync is the AsyncAuditWriter test double: every Submit records the event and reports success. Tests pin the count + the
+// per-event payload so the chokepoint's routing decisions are observable end-to-end.
 type recordingAsync struct {
 	mu     sync.Mutex
 	events []api.AuditEvent
@@ -54,8 +52,7 @@ func newAsyncEngine(t *testing.T, rate float64) (*authz.Engine, *recordingAudit,
 	return e, syncRec, asyncW
 }
 
-// rate=0.0 + read action + non-break-glass + Allow → no row anywhere.
-// The chokepoint elides the emission entirely; sampling drops it
+// rate=0.0 + read action + non-break-glass + Allow → no row anywhere. The chokepoint elides the emission entirely; sampling drops it
 // before it reaches the async writer or the sync recorder.
 func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
@@ -68,9 +65,8 @@ func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
 	assert.Empty(t, asyncRec.snapshot(), "rate=0.0 must NOT submit to the async writer")
 }
 
-// rate=1.0 + read action + non-break-glass + Allow → exactly one
-// async submission, zero sync rows. Confirms the chokepoint routes
-// to async (not sync) when sampling includes the event.
+// rate=1.0 + read action + non-break-glass + Allow → exactly one async submission, zero sync rows. Confirms the chokepoint routes to
+// async (not sync) when sampling includes the event.
 func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
 	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
@@ -83,9 +79,8 @@ func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
 	assert.Equal(t, api.AuditAction("authz.alert.read"), asyncRec.snapshot()[0].Action)
 }
 
-// Break-glass actor reads at rate=0.0 still audit synchronously. The
-// carve-out is critical: missing one break-glass action would defeat
-// the surface's audit purpose.
+// Break-glass actor reads at rate=0.0 still audit synchronously. The carve-out is critical: missing one break-glass action would
+// defeat the surface's audit purpose.
 func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
@@ -98,8 +93,7 @@ func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
 	assert.Empty(t, asyncRec.snapshot(), "break-glass reads must NOT take the async path")
 }
 
-// audit.read at rate=0.0 always writes the audit-of-audit row. The
-// chokepoint exempts ActionAuditRead from the sampling gate so
+// audit.read at rate=0.0 always writes the audit-of-audit row. The chokepoint exempts ActionAuditRead from the sampling gate so
 // auditors can always trace who read the audit log.
 func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
@@ -113,8 +107,7 @@ func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 	assert.Empty(t, asyncRec.snapshot(), "audit.read does not take the async path")
 }
 
-// Deny on a read action at rate=0.0 always writes sync. Denies are
-// the security signal Phase 6's dashboard pivots on; sampling them
+// Deny on a read action at rate=0.0 always writes sync. Denies are the security signal Phase 6's dashboard pivots on; sampling them
 // would defeat the dashboard.
 func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
@@ -129,9 +122,8 @@ func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 	assert.Empty(t, asyncRec.snapshot())
 }
 
-// Write actions never take the async path even at rate=1.0. Writes
-// are infrequent and security-relevant; durability matters more
-// than latency on these emissions.
+// Write actions never take the async path even at rate=1.0. Writes are infrequent and security-relevant; durability matters more than
+// latency on these emissions.
 func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
 	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
@@ -143,8 +135,7 @@ func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
 	assert.Empty(t, asyncRec.snapshot())
 }
 
-// When the async writer reports false (queue full or stopped), the
-// chokepoint falls back to the sync path so the row still lands.
+// When the async writer reports false (queue full or stopped), the chokepoint falls back to the sync path so the row still lands.
 // Dual-emit guards against losing audit content on transient burst.
 func TestAllow_ReadAllow_AsyncDrop_FallsBackToSync(t *testing.T) {
 	syncRec := &recordingAudit{}

@@ -43,10 +43,9 @@ func TestArchitecture(t *testing.T) {
 	}
 }
 
-// summarize formats the failing rules into a readable error message.
-// arch-go's Result type carries per-rule details on .DependenciesRuleResult,
-// .ContentsRuleResult, etc.; we surface only the dependency failures since
-// that's the only rule family in use for now.
+// summarize formats the failing rules into a readable error message. arch-go's Result type carries per-rule details on
+// .DependenciesRuleResult, .ContentsRuleResult, etc.; we surface only the dependency failures since that's the only rule family in use
+// for now.
 func summarize(r *archapi.Result) string {
 	var b strings.Builder
 	summarizeDependencies(&b, r)

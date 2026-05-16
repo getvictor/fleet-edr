@@ -26,8 +26,7 @@ func NewBuilder(s *mysql.Store, logger *slog.Logger) *Builder {
 	return &Builder{store: s, logger: logger}
 }
 
-// ProcessBatch processes a batch of events, updating the processes
-// table for fork, exec, and exit events. Other event types are
+// ProcessBatch processes a batch of events, updating the processes table for fork, exec, and exit events. Other event types are
 // ignored.
 func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 	// Sort by timestamp so fork always precedes exec/exit for the same PID.
@@ -143,9 +142,8 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 	return b.insertReExec(ctx, evt, p, current)
 }
 
-// insertExecWithoutFork synthesizes a root process row when an exec
-// event arrives for a PID we've never seen fork for. fork_time_ns
-// is set to the exec time as a best effort.
+// insertExecWithoutFork synthesizes a root process row when an exec event arrives for a PID we've never seen fork for. fork_time_ns is
+// set to the exec time as a best effort.
 func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p execPayload) error {
 	ppid := 0
 	if p.PPID != 0 {
@@ -169,11 +167,9 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 	return err
 }
 
-// insertReExec handles the issue #10 branch: a process called
-// execve() again on the same PID without forking in between. The
-// store's ReExec helper wraps the close + insert in a single
-// transaction so we can never leave the PID appearing exited with
-// no current generation (partial failure).
+// insertReExec handles the issue #10 branch: a process called execve() again on the same PID without forking in between. The store's
+// ReExec helper wraps the close + insert in a single transaction so we can never leave the PID appearing exited with no current
+// generation (partial failure).
 func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload, prior *api.Process) error {
 	_, reLinked, err := b.store.ReExec(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs, api.Process{
 		HostID: evt.HostID,
@@ -204,10 +200,8 @@ func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload
 	return nil
 }
 
-// pickPPID prefers a non-zero prior PPID. macOS ES reports PPID on
-// every NOTIFY_EXEC and it should be identical for re-execs on the
-// same pid, but staying defensive: if prior has it and the event
-// doesn't, use prior.
+// pickPPID prefers a non-zero prior PPID. macOS ES reports PPID on every NOTIFY_EXEC and it should be identical for re-execs on the
+// same pid, but staying defensive: if prior has it and the event doesn't, use prior.
 func pickPPID(prior, fromEvent int) int {
 	if prior != 0 {
 		return prior
@@ -227,11 +221,8 @@ func (b *Builder) handleExit(ctx context.Context, evt api.Event) error {
 		return err
 	}
 
-	// Whitelist: only the agent-emitted reconciled reason is honoured
-	// on the wire. Anything else (server-only synthetic reasons:
-	// reexec, pid_reuse, ttl_reconciliation) collapses to
-	// ExitReasonEvent so a compromised agent can't mark normal exits
-	// with a misleading reason.
+	// Whitelist: only the agent-emitted reconciled reason is honoured on the wire. Anything else (server-only synthetic reasons: reexec,
+	// pid_reuse, ttl_reconciliation) collapses to ExitReasonEvent so a compromised agent can't mark normal exits with a misleading reason.
 	reason := api.ExitReasonEvent
 	if p.ExitReason == api.ExitReasonHostReconciled {
 		reason = api.ExitReasonHostReconciled

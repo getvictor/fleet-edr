@@ -1,7 +1,6 @@
-// Enroll handler: POST /api/enroll. Public, rate-limited, validates the
-// agent's enroll secret, then delegates to api.Service.Enroll for the
-// business logic. Owns the HTTP-flavoured concerns: body parse, body
-// cap, rate limit, audit log, span attributes, error mapping.
+// Enroll handler: POST /api/enroll. Public, rate-limited, validates the agent's enroll secret, then delegates to api.Service.Enroll
+// for the business logic. Owns the HTTP-flavoured concerns: body parse, body cap, rate limit, audit log, span attributes, error
+// mapping.
 
 package enroll
 
@@ -37,9 +36,8 @@ type Handler struct {
 
 // Options control handler behaviour.
 type Options struct {
-	// RatePerMinute is the per-source-IP enrollment attempt cap. Defaults
-	// to 30. The handler does not see the enroll secret directly; that
-	// lives inside the Service which receives it at construction time.
+	// RatePerMinute is the per-source-IP enrollment attempt cap. Defaults to 30. The handler does not see the enroll secret directly;
+	// that lives inside the Service which receives it at construction time.
 	RatePerMinute int
 	// Logger for audit lines.
 	Logger *slog.Logger
@@ -69,10 +67,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/enroll", h.handleEnroll)
 }
 
-// enrollRequest is the wire payload. Field names + JSON tags MUST match
-// api.EnrollRequest exactly; this local struct exists only to give us
-// a String() method that redacts the secret on accidental log
-// formatting.
+// enrollRequest is the wire payload. Field names + JSON tags MUST match api.EnrollRequest exactly; this local struct exists only to
+// give us a String() method that redacts the secret on accidental log formatting.
 type enrollRequest struct {
 	EnrollSecret string `json:"enroll_secret"`
 	HardwareUUID string `json:"hardware_uuid"`
@@ -99,10 +95,8 @@ type errBody struct {
 	Error string `json:"error"`
 }
 
-// maxEnrollBodyBytes caps the enroll request body. /api/enroll is
-// public + unauthenticated; decoding directly from an unbounded r.Body
-// would let any client burn memory/CPU before field validation. The
-// real payload is ~300 bytes; 4 KiB leaves plenty of headroom for
+// maxEnrollBodyBytes caps the enroll request body. /api/enroll is public + unauthenticated; decoding directly from an unbounded r.Body
+// would let any client burn memory/CPU before field validation. The real payload is ~300 bytes; 4 KiB leaves plenty of headroom for
 // metadata but closes the DoS vector.
 const maxEnrollBodyBytes = 4 << 10
 

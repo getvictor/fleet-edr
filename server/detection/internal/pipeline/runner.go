@@ -40,10 +40,8 @@ func NewRunner(opts RunnerOptions) *Runner {
 	}
 }
 
-// SetMetrics propagates the metrics recorder to processTTL +
-// retention (the processor itself doesn't take a recorder directly;
-// alert metrics flow through engine.SetMetrics). Called by
-// Detection.SetMetrics.
+// SetMetrics propagates the metrics recorder to processTTL + retention (the processor itself doesn't take a recorder directly;
+// alert metrics flow through engine.SetMetrics). Called by Detection.SetMetrics.
 func (r *Runner) SetMetrics(m api.MetricsRecorder) {
 	if r.processTTL != nil {
 		r.processTTL.SetMetrics(m)
@@ -53,8 +51,7 @@ func (r *Runner) SetMetrics(m api.MetricsRecorder) {
 	}
 }
 
-// Run launches the three loops and blocks until ctx is cancelled and
-// every loop returns. Each loop logs its own errors; a single
+// Run launches the three loops and blocks until ctx is cancelled and every loop returns. Each loop logs its own errors; a single
 // goroutine panic recovers via slog.Default per goroutine.
 func (r *Runner) Run(ctx context.Context) error {
 	var wg sync.WaitGroup

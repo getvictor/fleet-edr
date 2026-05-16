@@ -11,10 +11,8 @@ import (
 	"github.com/fleetdm/edr/server/attrkeys"
 )
 
-// AuthErrBody is the JSON shape every auth/CSRF middleware in the project
-// writes on failure. Exported so callers can reuse the same wire format
-// when they don't go through WriteAuthFailure (e.g. handlers that fail
-// before any middleware fires).
+// AuthErrBody is the JSON shape every auth/CSRF middleware in the project writes on failure. Exported so callers can reuse the same
+// wire format when they don't go through WriteAuthFailure (e.g. handlers that fail before any middleware fires).
 type AuthErrBody struct {
 	Error string `json:"error"`
 }
@@ -61,10 +59,9 @@ func WriteCookieAuthFailure(ctx context.Context, w http.ResponseWriter, logger *
 	NoStoreJSON(ctx, logger, w, status, AuthErrBody{Error: reason})
 }
 
-// tagAuthFailure is the shared bookkeeping for both WriteAuthFailure and
-// WriteCookieAuthFailure: pin auth.result/auth.reason on the active OTel
-// span and emit a single warn log line. Pulled out so the two writers
-// stay byte-identical in everything except the WWW-Authenticate header.
+// tagAuthFailure is the shared bookkeeping for both WriteAuthFailure and WriteCookieAuthFailure: pin auth.result/auth.reason on
+// the active OTel span and emit a single warn log line. Pulled out so the two writers stay byte-identical in everything except the
+// WWW-Authenticate header.
 func tagAuthFailure(ctx context.Context, logger *slog.Logger, status int, reason string) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(

@@ -9,12 +9,9 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
-// auditDecision + auditReason normalise the two payload shapes the
-// codebase emits (chokepoint's {allow: bool} and breakglass/oidc's
-// {decision: str}) so the OTel span dual-emit lands a consistent
-// edr.audit.decision / edr.audit.reason on every row. Pinned so a
-// regression doesn't silently break SigNoz's "decision" filter on the
-// audit dashboard.
+// auditDecision + auditReason normalise the two payload shapes the codebase emits (chokepoint's {allow: bool} and breakglass/oidc's
+// {decision: str}) so the OTel span dual-emit lands a consistent edr.audit.decision / edr.audit.reason on every row. Pinned so a
+// regression doesn't silently break SigNoz's "decision" filter on the audit dashboard.
 func TestAuditDecisionAndReason(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -96,8 +93,7 @@ func TestAuditDecisionAndReason(t *testing.T) {
 	}
 }
 
-// auditLogLevel mirrors the spec table: break-glass actions WARN,
-// failure-suffix actions WARN, payload.allow=false WARN,
+// auditLogLevel mirrors the spec table: break-glass actions WARN, failure-suffix actions WARN, payload.allow=false WARN,
 // payload.decision in {deny,error} WARN, everything else INFO.
 func TestAuditLogLevel(t *testing.T) {
 	cases := []struct {

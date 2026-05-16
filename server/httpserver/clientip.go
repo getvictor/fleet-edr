@@ -83,10 +83,8 @@ func parseTrustedPrefix(token string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, bits), nil
 }
 
-// ClientIP resolves the trustworthy client IP for r per the rules in
-// the type doc. Returns "" when r is nil. A nil receiver is treated
-// as an empty trusted list — useful for tests and for the boot path
-// before the resolver is constructed.
+// ClientIP resolves the trustworthy client IP for r per the rules in the type doc. Returns "" when r is nil. A nil receiver is treated
+// as an empty trusted list — useful for tests and for the boot path before the resolver is constructed.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -107,13 +105,10 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	return peer
 }
 
-// firstUntrustedXFFEntry walks the X-Forwarded-For header(s) on r
-// from right to left and returns the first entry that is NOT in any
-// trusted CIDR. Returns "" when the chain is empty, every entry is
-// trusted, or every entry is malformed. r.Header.Values returns one
-// element per header; each element may itself contain a
-// comma-separated chain. Extracted from ClientIP to keep the
-// caller's cognitive complexity below the project lint cap.
+// firstUntrustedXFFEntry walks the X-Forwarded-For header(s) on r from right to left and returns the first entry that is NOT in any
+// trusted CIDR. Returns "" when the chain is empty, every entry is trusted, or every entry is malformed. r.Header.Values returns one
+// element per header; each element may itself contain a comma-separated chain. Extracted from ClientIP to keep the caller's cognitive
+// complexity below the project lint cap.
 func (c *ClientIPResolver) firstUntrustedXFFEntry(r *http.Request) string {
 	values := r.Header.Values("X-Forwarded-For")
 	for i := len(values) - 1; i >= 0; i-- {
@@ -143,9 +138,8 @@ func (c *ClientIPResolver) isTrusted(addr netip.Addr) bool {
 	return false
 }
 
-// remoteHost strips the port from a "host:port" string. Falls back to
-// the trimmed input when SplitHostPort fails (e.g. Unix socket peer
-// or a test that passed an already-stripped IP).
+// remoteHost strips the port from a "host:port" string. Falls back to the trimmed input when SplitHostPort fails (e.g. Unix socket
+// peer or a test that passed an already-stripped IP).
 func remoteHost(remoteAddr string) string {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -154,10 +148,9 @@ func remoteHost(remoteAddr string) string {
 	return host
 }
 
-// parseAddr parses a single XFF entry. Strips a trailing :port via
-// remoteHost first — non-standard but seen in some proxy / NLB setups
-// (per Gemini Code Assist review on PR #113). Unmaps IPv4-mapped IPv6
-// so a "::ffff:10.0.0.1" entry compares against an IPv4 trusted CIDR.
+// parseAddr parses a single XFF entry. Strips a trailing :port via remoteHost first — non-standard but seen in some proxy / NLB setups
+// (per Gemini Code Assist review on PR #113). Unmaps IPv4-mapped IPv6 so a "::ffff:10.0.0.1" entry compares against an IPv4 trusted
+// CIDR.
 func parseAddr(s string) (netip.Addr, bool) {
 	addr, err := netip.ParseAddr(remoteHost(s))
 	if err != nil {
@@ -166,10 +159,8 @@ func parseAddr(s string) (netip.Addr, bool) {
 	return addr.Unmap(), true
 }
 
-// Middleware returns an http.Handler middleware that resolves the
-// client IP once per request and stashes it on ctx so downstream
-// handlers (rate limiter, audit recorders, access log) read the same
-// value. Idempotent if installed more than once on a request.
+// Middleware returns an http.Handler middleware that resolves the client IP once per request and stashes it on ctx so downstream
+// handlers (rate limiter, audit recorders, access log) read the same value. Idempotent if installed more than once on a request.
 func (c *ClientIPResolver) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := c.ClientIP(r)

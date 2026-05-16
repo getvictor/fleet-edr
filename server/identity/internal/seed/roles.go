@@ -8,10 +8,8 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// BuiltinRole is one of the five seeded RBAC roles. The string values
-// are stable wire shapes referenced from OPA / Rego policy bundles and
-// from role-binding rows; renaming a constant here is a schema-level
-// break.
+// BuiltinRole is one of the five seeded RBAC roles. The string values are stable wire shapes referenced from OPA / Rego policy bundles
+// and from role-binding rows; renaming a constant here is a schema-level break.
 type BuiltinRole struct {
 	ID          string
 	DisplayName string
@@ -76,12 +74,9 @@ var BuiltinRoles = []BuiltinRole{
 	},
 }
 
-// Roles seeds the `roles` table with the five built-in roles. Idempotent
-// via INSERT IGNORE: a populated DB is a no-op; an empty DB inserts
-// every row. is_builtin is set to 1 so the future admin API can refuse
-// to delete them; an operator who wants a different name can edit
-// display_name or description in place because INSERT IGNORE preserves
-// whatever's there.
+// Roles seeds the `roles` table with the five built-in roles. Idempotent via INSERT IGNORE: a populated DB is a no-op; an empty DB
+// inserts every row. is_builtin is set to 1 so the future admin API can refuse to delete them; an operator who wants a different name
+// can edit display_name or description in place because INSERT IGNORE preserves whatever's there.
 func Roles(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("seed.Roles: db must not be nil")

@@ -27,11 +27,9 @@ func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, 
 	return buildForest(procs), nil
 }
 
-// GetProcessDetail returns a process with its network connections,
-// DNS queries, and re-exec chain. Method name matches the
-// detection/api.Service.GetProcessDetail entry point so the eventual
-// service layer (detection/internal/service) can delegate without an
-// adapter or rename.
+// GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. Method name matches the
+// detection/api.Service.GetProcessDetail entry point so the eventual service layer (detection/internal/service) can delegate without
+// an adapter or rename.
 func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.ProcessDetail, error) {
 	proc, err := q.store.GetProcessByPID(ctx, hostID, pid, atTimeNs)
 	if err != nil {
@@ -41,15 +39,11 @@ func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, at
 		return nil, nil
 	}
 
-	// Build an ingest-time window from the process lifetime. We used
-	// to bound by the ES kernel-stamped fork_time_ns with a 5-second
-	// pad to compensate for ES/NE clock drift (NE-emitted
-	// network_connect events routinely arrived 50-100 ms before the
-	// ES-emitted fork for the same pid). With issue #7 the events
-	// table carries a server-stamped ingested_at_ns, and processes
-	// carry fork_ingested_at_ns; we correlate on those instead so
-	// the clock is single-authority and monotonic per server. A
-	// small 1s pad remains to absorb intra-batch ordering slop.
+	// Build an ingest-time window from the process lifetime. We used to bound by the ES kernel-stamped fork_time_ns with a 5-second pad
+	// to compensate for ES/NE clock drift (NE-emitted network_connect events routinely arrived 50-100 ms before the ES-emitted fork for
+	// the same pid). With issue #7 the events table carries a server-stamped ingested_at_ns, and processes carry fork_ingested_at_ns; we
+	// correlate on those instead so the clock is single-authority and monotonic per server. A small 1s pad remains to absorb intra-batch
+	// ordering slop.
 	const intraBatchPadNs = int64(1 * 1_000_000_000)
 	const thirtyDayBoundNs = int64(30 * 86400 * 1_000_000_000)
 	var (
@@ -111,10 +105,8 @@ func (q *Query) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return q.store.ListHosts(ctx)
 }
 
-// buildForest constructs a tree from a flat list of processes by
-// matching ppid -> pid. Uses Process.ID as map key to handle PID
-// reuse correctly, and builds parent-child links via pointers
-// before converting to value tree so grandchildren aren't lost.
+// buildForest constructs a tree from a flat list of processes by matching ppid -> pid. Uses Process.ID as map key to handle PID reuse
+// correctly, and builds parent-child links via pointers before converting to value tree so grandchildren aren't lost.
 func buildForest(procs []api.Process) []api.ProcessNode {
 	nodeMap, pidToID := indexProcesses(procs)
 
@@ -147,12 +139,9 @@ func buildForest(procs []api.Process) []api.ProcessNode {
 	return roots
 }
 
-// indexProcesses builds the two lookup tables buildForest needs:
-// nodeMap keyed by the unique Process.ID (so PID reuse within a time
-// range doesn't collapse rows) and pidToID pointing each OS PID at
-// the row ID of its latest fork (so the parent-lookup phase finds
-// the current generation, not a historical one with the same PID).
-// Extracted from buildForest so that function stays below the
+// indexProcesses builds the two lookup tables buildForest needs: nodeMap keyed by the unique Process.ID (so PID reuse within a time
+// range doesn't collapse rows) and pidToID pointing each OS PID at the row ID of its latest fork (so the parent-lookup phase finds
+// the current generation, not a historical one with the same PID). Extracted from buildForest so that function stays below the
 // cognitive-complexity cap.
 func indexProcesses(procs []api.Process) (map[int64]*api.ProcessNode, map[int]int64) {
 	nodeMap := make(map[int64]*api.ProcessNode, len(procs))

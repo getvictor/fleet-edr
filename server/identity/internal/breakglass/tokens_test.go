@@ -16,10 +16,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTokenStore opens a fresh DB, applies identity schema, and seeds
-// a placeholder admin user that bootstrap tokens can FK against.
-// Returns the store + the seeded user id so individual tests don't
-// each repeat the seeding.
+// newTokenStore opens a fresh DB, applies identity schema, and seeds a placeholder admin user that bootstrap tokens can FK against.
+// Returns the store + the seeded user id so individual tests don't each repeat the seeding.
 func newTokenStore(t *testing.T) (*breakglass.TokenStore, *sqlx.DB, int64) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -33,10 +31,8 @@ func newTokenStore(t *testing.T) (*breakglass.TokenStore, *sqlx.DB, int64) {
 	return breakglass.NewTokenStore(db), db, uid
 }
 
-// IssueSetup → FindValid round-trip returns the same row with the
-// same expires_at (within MySQL's 6-digit precision), and the
-// plaintext is non-trivial. Pinned because a regression that issued
-// the token but stored a different hash would render the token
+// IssueSetup → FindValid round-trip returns the same row with the same expires_at (within MySQL's 6-digit precision), and the
+// plaintext is non-trivial. Pinned because a regression that issued the token but stored a different hash would render the token
 // permanently unusable while looking healthy at issue time.
 func TestIssueSetup_RoundTrip(t *testing.T) {
 	s, _, uid := newTokenStore(t)
@@ -55,18 +51,15 @@ func TestIssueSetup_RoundTrip(t *testing.T) {
 	assert.False(t, got.RedeemedAt.Valid, "fresh token has no redeemed_at")
 }
 
-// FindValid returns ErrTokenInvalid for a plaintext that doesn't
-// match any persisted hash. Includes a syntactically-correct-but-
-// unknown token to verify the lookup hashes the input rather than
-// comparing plaintext directly (which would never match).
+// FindValid returns ErrTokenInvalid for a plaintext that doesn't match any persisted hash. Includes a syntactically-correct-but-
+// unknown token to verify the lookup hashes the input rather than comparing plaintext directly (which would never match).
 func TestFindValid_Unknown(t *testing.T) {
 	s, _, _ := newTokenStore(t)
 	_, err := s.FindValid(t.Context(), "this-is-not-a-real-token", time.Now())
 	assert.ErrorIs(t, err, breakglass.ErrTokenInvalid)
 }
 
-// FindValid returns ErrTokenExpired when the row's expires_at is in
-// the past per the now-frozen clock. The MySQL row remains; only the
+// FindValid returns ErrTokenExpired when the row's expires_at is in the past per the now-frozen clock. The MySQL row remains; only the
 // in-Go check rejects.
 func TestFindValid_Expired(t *testing.T) {
 	s, _, uid := newTokenStore(t)
@@ -78,10 +71,8 @@ func TestFindValid_Expired(t *testing.T) {
 	assert.ErrorIs(t, err, breakglass.ErrTokenExpired)
 }
 
-// MarkRedeemed once flips redeemed_at; second call returns
-// ErrTokenConsumed and FindValid likewise rejects. Pinned because
-// the single-use invariant is the entire security guarantee of the
-// bootstrap flow.
+// MarkRedeemed once flips redeemed_at; second call returns ErrTokenConsumed and FindValid likewise rejects. Pinned because the
+// single-use invariant is the entire security guarantee of the bootstrap flow.
 func TestMarkRedeemed_SingleUse(t *testing.T) {
 	s, db, uid := newTokenStore(t)
 	plaintext, tok, err := s.IssueSetup(t.Context(), uid, time.Hour)
@@ -98,10 +89,8 @@ func TestMarkRedeemed_SingleUse(t *testing.T) {
 	assert.ErrorIs(t, err, breakglass.ErrTokenConsumed)
 }
 
-// IssueSetup falls through to DefaultSetupTokenTTL when ttl <= 0.
-// Pinned because callers pass the configured duration verbatim and
-// a config with no TTL would otherwise produce already-expired
-// tokens.
+// IssueSetup falls through to DefaultSetupTokenTTL when ttl <= 0. Pinned because callers pass the configured duration verbatim and a
+// config with no TTL would otherwise produce already-expired tokens.
 func TestIssueSetup_DefaultsToWaveOneTTL(t *testing.T) {
 	s, _, uid := newTokenStore(t)
 	_, tok, err := s.IssueSetup(t.Context(), uid, 0)
@@ -124,15 +113,11 @@ func TestIssueSetup_PlaintextFormat(t *testing.T) {
 		"URL-safe alphabet only (- and _, not + and /)")
 }
 
-// IssueSetup supersedes any prior unredeemed setup token for the same
-// user so a server restart cycle doesn't leave the previously-printed
-// banner URL valid alongside the freshly-printed one. The cmd/main
-// first-boot path re-runs IssueSetup on every restart while no
-// WebAuthn credential exists; without supersession the operator
-// accumulates one independently-redeemable bearer credential per
-// restart, each viable until its own TTL elapses. Pinned because
-// regressing this would re-introduce the credential-lifetime bug QA
-// surfaced before v0.1.
+// IssueSetup supersedes any prior unredeemed setup token for the same user so a server restart cycle doesn't leave the
+// previously-printed banner URL valid alongside the freshly-printed one. The cmd/main first-boot path re-runs IssueSetup on
+// every restart while no WebAuthn credential exists; without supersession the operator accumulates one independently-redeemable
+// bearer credential per restart, each viable until its own TTL elapses. Pinned because regressing this would re-introduce the
+// credential-lifetime bug QA surfaced before v0.1.
 func TestIssueSetup_SupersedesPriorUnredeemed(t *testing.T) {
 	s, db, uid := newTokenStore(t)
 	ctx := t.Context()
@@ -155,8 +140,7 @@ func TestIssueSetup_SupersedesPriorUnredeemed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, freshTok.ID, got.ID)
 
-	// At most one unredeemed setup token row exists for the user (the
-	// fresh one). Any prior row was deleted, not just hidden behind a
+	// At most one unredeemed setup token row exists for the user (the fresh one). Any prior row was deleted, not just hidden behind a
 	// flag.
 	var unredeemedCount int
 	require.NoError(t, db.GetContext(ctx, &unredeemedCount, `
@@ -167,20 +151,16 @@ func TestIssueSetup_SupersedesPriorUnredeemed(t *testing.T) {
 		"exactly one unredeemed setup token per user after a re-issue")
 }
 
-// IssueSetup only supersedes unredeemed tokens; redeemed-and-historic
-// rows are preserved. The break-glass surface treats redeemed_at as
-// the canonical "this token was used" marker; deleting redeemed rows
-// would erase the audit trail of which tokens were spent. Pinned so
-// the supersession sweep stays narrow.
+// IssueSetup only supersedes unredeemed tokens; redeemed-and-historic rows are preserved. The break-glass surface treats redeemed_at
+// as the canonical "this token was used" marker; deleting redeemed rows would erase the audit trail of which tokens were spent.
+// Pinned so the supersession sweep stays narrow.
 func TestIssueSetup_LeavesRedeemedRowsIntact(t *testing.T) {
 	s, db, uid := newTokenStore(t)
 	ctx := t.Context()
 
-	// Mint + mark redeemed: simulates the post-redemption state where
-	// the operator has a registered WebAuthn credential. MarkRedeemed
-	// requires a transactional executor; the equivalent direct UPDATE
-	// keeps this test independent of the redemption transaction
-	// machinery while pinning the same row shape.
+	// Mint + mark redeemed: simulates the post-redemption state where the operator has a registered WebAuthn credential. MarkRedeemed
+	// requires a transactional executor; the equivalent direct UPDATE keeps this test independent of the redemption transaction machinery
+	// while pinning the same row shape.
 	_, redeemedTok, err := s.IssueSetup(ctx, uid, time.Hour)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx,

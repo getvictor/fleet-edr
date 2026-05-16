@@ -54,9 +54,8 @@ func TestFileBackedGetenv_NeitherSetReturnsEmpty(t *testing.T) {
 }
 
 func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
-	// A _FILE pointing at a missing path must not crash the caller; the existing
-	// required-var validator then reports "required env var X is not set" with the
-	// canonical error message the operator expects.
+	// A _FILE pointing at a missing path must not crash the caller; the existing required-var validator then reports "required env var X
+	// is not set" with the canonical error message the operator expects.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	base := func(k string) string {
@@ -70,12 +69,10 @@ func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
 	assert.Contains(t, buf.String(), "failed to read *_FILE env var")
 }
 
-// TestFileBackedGetenv_NilLoggerUsesDefault locks in the safe-fallback path so
-// callers (e.g. early bootstrap code that hasn't built a logger yet) can pass
-// nil and still get a working decorator. Drives the missing-_FILE branch
-// specifically — that branch is the only one that exercises the nil-logger
-// fallback (`logger.WarnContext` would panic on a nil logger if the fallback
-// weren't applied), so a regression there must be observable in this test.
+// TestFileBackedGetenv_NilLoggerUsesDefault locks in the safe-fallback path so callers (e.g. early bootstrap code that hasn't built
+// a logger yet) can pass nil and still get a working decorator. Drives the missing-_FILE branch specifically — that branch is the
+// only one that exercises the nil-logger fallback (`logger.WarnContext` would panic on a nil logger if the fallback weren't applied),
+// so a regression there must be observable in this test.
 func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
 	base := func(k string) string {
 		if k == "EDR_ENROLL_SECRET_FILE" {
@@ -88,10 +85,8 @@ func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
 	assert.Empty(t, get("EDR_ENROLL_SECRET"))
 }
 
-// TestWriteSecretFile drives the small helper that compose-fixture tests use to
-// stage a docker-secret-style file. We assert the content is written verbatim
-// and the perms are 0600 (the rest of the security model assumes secrets are
-// not world-readable).
+// TestWriteSecretFile drives the small helper that compose-fixture tests use to stage a docker-secret-style file. We assert the
+// content is written verbatim and the perms are 0600 (the rest of the security model assumes secrets are not world-readable).
 func TestWriteSecretFile(t *testing.T) {
 	dir := t.TempDir()
 	path, err := WriteSecretFile(dir, "enroll-secret", "supersecret\n")
@@ -108,9 +103,8 @@ func TestWriteSecretFile(t *testing.T) {
 }
 
 func TestWriteSecretFile_BadDir(t *testing.T) {
-	// Pointing at a path under a non-existent parent surfaces the os.WriteFile
-	// error rather than swallowing it — operators tracing config issues need to
-	// see the path-not-found error verbatim.
+	// Pointing at a path under a non-existent parent surfaces the os.WriteFile error rather than swallowing it — operators tracing config
+	// issues need to see the path-not-found error verbatim.
 	_, err := WriteSecretFile(filepath.Join(t.TempDir(), "missing-dir"), "x", "v")
 	require.Error(t, err)
 }

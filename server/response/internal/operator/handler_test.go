@@ -18,19 +18,16 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
-// allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant.
-// Tests in this package focus on response semantics; the per-action
-// role matrix is exercised exhaustively in
-// server/identity/internal/authz/engine_test.go.
+// allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant. Tests in this package focus on response semantics; the per-action
+// role matrix is exercised exhaustively in server/identity/internal/authz/engine_test.go.
 type allowAllAuthZ struct{}
 
 func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
 	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
 }
 
-// fakeService is a minimal api.Service stub. Each method delegates to a
-// closure so each test can inject the exact behavior it needs; unset
-// closures panic so an accidental call surfaces immediately.
+// fakeService is a minimal api.Service stub. Each method delegates to a closure so each test can inject the exact behavior it needs;
+// unset closures panic so an accidental call surfaces immediately.
 type fakeService struct {
 	insert       func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 	get          func(ctx context.Context, id int64) (api.Command, error)

@@ -19,10 +19,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
-// Service composes the stores + WebAuthn engine + audit recorder
-// behind the four operator-facing operations the handler exposes:
-// BeginSetup / FinishSetup (token redemption), BeginLogin /
-// FinishLogin (password + WebAuthn assertion). Each operation is
+// Service composes the stores + WebAuthn engine + audit recorder behind the four operator-facing operations the handler exposes:
+// BeginSetup / FinishSetup (token redemption), BeginLogin / FinishLogin (password + WebAuthn assertion). Each operation is
 // transaction-scoped where the spec requires atomicity.
 type Service struct {
 	db          *sqlx.DB
@@ -36,12 +34,9 @@ type Service struct {
 	logger      *slog.Logger
 }
 
-// WebAuthnEngine is the slice of *webauthn.WebAuthn the service
-// consumes. Exposed as an interface so test code can swap in a fake
-// without standing up a real browser ceremony — the production
-// path uses *webauthn.WebAuthn (which satisfies the interface
-// natively), tests use a fake that returns deterministic
-// SessionData + Credential values.
+// WebAuthnEngine is the slice of *webauthn.WebAuthn the service consumes. Exposed as an interface so test code can swap in a fake
+// without standing up a real browser ceremony — the production path uses *webauthn.WebAuthn (which satisfies the interface natively),
+// tests use a fake that returns deterministic SessionData + Credential values.
 type WebAuthnEngine interface {
 	BeginRegistration(
 		user webauthn.User, opts ...webauthn.RegistrationOption,
@@ -59,8 +54,7 @@ type WebAuthnEngine interface {
 	) (*webauthn.Credential, error)
 }
 
-// ServiceOptions carries every dependency Service needs at
-// construction time. Empty values trip a panic in NewService — every
+// ServiceOptions carries every dependency Service needs at construction time. Empty values trip a panic in NewService — every
 // dependency is load-bearing in production.
 type ServiceOptions struct {
 	DB          *sqlx.DB
@@ -74,8 +68,7 @@ type ServiceOptions struct {
 	Logger      *slog.Logger
 }
 
-// NewService validates each dependency and returns the composed
-// Service. A nil dependency panics rather than nil-checking on every
+// NewService validates each dependency and returns the composed Service. A nil dependency panics rather than nil-checking on every
 // hot-path method call.
 func NewService(opts ServiceOptions) *Service {
 	switch {
@@ -111,21 +104,16 @@ func NewService(opts ServiceOptions) *Service {
 	}
 }
 
-// SetupChallenge bundles the response of BeginSetup. Options is the
-// public-key creation options the browser passes to
-// navigator.credentials.create. SessionData is the engine-internal
-// challenge state the caller must round-trip via the signed cookie.
+// SetupChallenge bundles the response of BeginSetup. Options is the public-key creation options the browser passes to
+// navigator.credentials.create. SessionData is the engine-internal challenge state the caller must round-trip via the signed cookie.
 type SetupChallenge struct {
 	Options     *protocol.CredentialCreation
 	SessionData webauthn.SessionData
 }
 
-// BeginSetup verifies the bootstrap token and issues a WebAuthn
-// registration challenge bound to the token's owning user. The
-// caller serializes SessionData into the challenge cookie via
-// EncodeChallengeState and renders Options for the browser. Any
-// token-validity failure surfaces as the typed token-store error so
-// the handler can audit the precise reason.
+// BeginSetup verifies the bootstrap token and issues a WebAuthn registration challenge bound to the token's owning user. The caller
+// serializes SessionData into the challenge cookie via EncodeChallengeState and renders Options for the browser. Any token-validity
+// failure surfaces as the typed token-store error so the handler can audit the precise reason.
 func (s *Service) BeginSetup(ctx context.Context, plaintextToken string) (*SetupChallenge, *Token, *users.User, error) {
 	tok, err := s.tokens.FindValid(ctx, plaintextToken, time.Now())
 	if err != nil {
@@ -151,10 +139,8 @@ func (s *Service) BeginSetup(ctx context.Context, plaintextToken string) (*Setup
 	return &SetupChallenge{Options: options, SessionData: *sd}, tok, u, nil
 }
 
-// FinishSetupRequest is the input to FinishSetup: the password the
-// operator chose, the credential name they typed (optional), and
-// the parsed attestation (the handler decodes the JSON body via
-// protocol.ParseCredentialCreationResponse before calling).
+// FinishSetupRequest is the input to FinishSetup: the password the operator chose, the credential name they typed (optional), and the
+// parsed attestation (the handler decodes the JSON body via protocol.ParseCredentialCreationResponse before calling).
 type FinishSetupRequest struct {
 	Token          *Token
 	User           *users.User
@@ -164,9 +150,8 @@ type FinishSetupRequest struct {
 	Attestation    *protocol.ParsedCredentialCreationData
 }
 
-// FinishSetupResult is the output: the freshly-minted session row
-// (plaintext id) the caller wraps in a Set-Cookie, plus the
-// internal credential id for audit.
+// FinishSetupResult is the output: the freshly-minted session row (plaintext id) the caller wraps in a Set-Cookie, plus the internal
+// credential id for audit.
 type FinishSetupResult struct {
 	Session      *sessions.Session
 	CredentialID int64
@@ -190,10 +175,8 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	if err := ValidatePassword(req.Password); err != nil {
 		return nil, err
 	}
-	// Hash the password BEFORE opening the transaction. Argon2id
-	// holds ~30ms of CPU per call on M-series hardware; running it
-	// inside the redemption tx would extend lock duration and cause
-	// contention under any nontrivial load.
+	// Hash the password BEFORE opening the transaction. Argon2id holds ~30ms of CPU per call on M-series hardware; running it inside the
+	// redemption tx would extend lock duration and cause contention under any nontrivial load.
 	hash, salt, err := users.HashPassword(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("breakglass: hash password: %w", err)
@@ -235,9 +218,8 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	}
 	committed = true
 
-	// Audit AFTER commit: a missing audit row does not roll the
-	// account-creation back, but a successful audit is evidence the
-	// account is live.
+	// Audit AFTER commit: a missing audit row does not roll the account-creation back, but a successful audit is evidence the account is
+	// live.
 	uid := req.User.ID
 	s.recordAudit(ctx, api.AuditEvent{
 		UserID:     &uid,
@@ -272,13 +254,10 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	return &FinishSetupResult{Session: sess, CredentialID: credID}, nil
 }
 
-// resolveLocalPasswordIdentityID inserts the local_password
-// identity row for the redeeming user, OR — when the row already
-// exists from an earlier seed — finds it. Distinguishes
-// duplicate-key (the only acceptable path to "row already exists")
-// from any other DB failure: a transient outage or permission
-// glitch must propagate so the redemption rolls back instead of
-// silently committing a partial account.
+// resolveLocalPasswordIdentityID inserts the local_password identity row for the redeeming user, OR — when the row already exists
+// from an earlier seed — finds it. Distinguishes duplicate-key (the only acceptable path to "row already exists") from any other
+// DB failure: a transient outage or permission glitch must propagate so the redemption rolls back instead of silently committing a
+// partial account.
 func (s *Service) resolveLocalPasswordIdentityID(
 	ctx context.Context, tx *sqlx.Tx, u *users.User,
 ) (int64, error) {
@@ -290,9 +269,7 @@ func (s *Service) resolveLocalPasswordIdentityID(
 	if !isMySQLDuplicateKey(err) {
 		return 0, fmt.Errorf("breakglass: insert identity: %w", err)
 	}
-	// Dup-key only: the row exists from a prior seed/migration.
-	// Look it up via the same tx so the CASCADE guarantees a
-	// consistent read.
+	// Dup-key only: the row exists from a prior seed/migration. Look it up via the same tx so the CASCADE guarantees a consistent read.
 	existing, lookupErr := s.identities.FindByProviderSubject(ctx,
 		identities.ProviderLocalPassword, u.Email)
 	if lookupErr != nil {
@@ -301,8 +278,7 @@ func (s *Service) resolveLocalPasswordIdentityID(
 	return existing.ID, nil
 }
 
-// mysqlErrDupEntry is the MySQL "Duplicate entry" code we expect on
-// the local_password identity insert when the row already exists.
+// mysqlErrDupEntry is the MySQL "Duplicate entry" code we expect on the local_password identity insert when the row already exists.
 // Lifted to a const so the magic-number lint is satisfied.
 const mysqlErrDupEntry = 1062
 
@@ -322,12 +298,9 @@ type LoginChallenge struct {
 	SessionData webauthn.SessionData
 }
 
-// BeginLogin issues a WebAuthn assertion challenge for the
-// supplied email. Returns ErrNoCredentials when the user exists but
-// has no registered credential (the spec scenario "operator who lost
-// every authenticator" — admin must reissue a token). User
-// enumeration: a non-existent email also surfaces ErrNoCredentials so
-// an attacker cannot probe for valid emails via response shape.
+// BeginLogin issues a WebAuthn assertion challenge for the supplied email. Returns ErrNoCredentials when the user exists but has no
+// registered credential (the spec scenario "operator who lost every authenticator" — admin must reissue a token). User enumeration:
+// a non-existent email also surfaces ErrNoCredentials so an attacker cannot probe for valid emails via response shape.
 func (s *Service) BeginLogin(ctx context.Context, email string) (*LoginChallenge, *users.User, error) {
 	u, err := s.users.GetByEmail(ctx, email)
 	if errors.Is(err, users.ErrNotFound) {
@@ -360,9 +333,8 @@ func (s *Service) BeginLogin(ctx context.Context, email string) (*LoginChallenge
 	return &LoginChallenge{Options: options, SessionData: *sd}, u, nil
 }
 
-// FinishLoginRequest packages the inputs to FinishLogin. The
-// handler decodes the JSON body to ParsedCredentialAssertionData
-// before calling.
+// FinishLoginRequest packages the inputs to FinishLogin. The handler decodes the JSON body to ParsedCredentialAssertionData before
+// calling.
 type FinishLoginRequest struct {
 	User      *users.User
 	Session   webauthn.SessionData
@@ -370,8 +342,7 @@ type FinishLoginRequest struct {
 	Assertion *protocol.ParsedCredentialAssertionData
 }
 
-// ErrNoCredentials is returned by BeginLogin when no credentials
-// match the email. Caller maps to the directed reason
+// ErrNoCredentials is returned by BeginLogin when no credentials match the email. Caller maps to the directed reason
 // `webauthn.no_credentials`.
 var ErrNoCredentials = errors.New("breakglass: no registered credentials")
 
@@ -447,11 +418,9 @@ func (s *Service) VerifyLogin(ctx context.Context, req FinishLoginRequest) error
 	return nil
 }
 
-// IssueSetupToken mints a fresh bootstrap token bound to userID and
-// returns the plaintext (caller prints once to the operator banner)
-// + the persisted row id (for audit). Thin wrapper over the
-// TokenStore so cmd/main does not need to import the underlying
-// store directly.
+// IssueSetupToken mints a fresh bootstrap token bound to userID and returns the plaintext (caller prints once to the operator banner)
+// + the persisted row id (for audit). Thin wrapper over the TokenStore so cmd/main does not need to import the underlying store
+// directly.
 func (s *Service) IssueSetupToken(ctx context.Context, userID int64, ttl time.Duration) (string, *Token, error) {
 	plaintext, tok, err := s.tokens.IssueSetup(ctx, userID, ttl)
 	if err != nil {
@@ -460,11 +429,8 @@ func (s *Service) IssueSetupToken(ctx context.Context, userID int64, ttl time.Du
 	return plaintext, &tok, nil
 }
 
-// HasCredential reports whether the user has at least one
-// registered WebAuthn credential. cmd/main uses this to decide
-// whether to print a (re)redemption banner: a fresh-deployment
-// admin with no credentials should see the URL on every boot until
-// they redeem.
+// HasCredential reports whether the user has at least one registered WebAuthn credential. cmd/main uses this to decide whether to
+// print a (re)redemption banner: a fresh-deployment admin with no credentials should see the URL on every boot until they redeem.
 func (s *Service) HasCredential(ctx context.Context, userID int64) (bool, error) {
 	rows, err := s.credentials.ListByUserID(ctx, userID)
 	if err != nil {
@@ -485,12 +451,9 @@ func (s *Service) recordAudit(ctx context.Context, e api.AuditEvent) {
 	}
 }
 
-// AuditFailure is the spec-aligned auth.breakglass.failure helper
-// the handler invokes on any login failure. Reason is the
-// audit-payload string (`password.too_short`, `webauthn.cloned`,
-// `webauthn.invalid_assertion`, `password.mismatch`,
-// `webauthn.no_credentials`, `bootstrap.expired`, `bootstrap.consumed`,
-// etc.).
+// AuditFailure is the spec-aligned auth.breakglass.failure helper the handler invokes on any login failure. Reason is
+// the audit-payload string (`password.too_short`, `webauthn.cloned`, `webauthn.invalid_assertion`, `password.mismatch`,
+// `webauthn.no_credentials`, `bootstrap.expired`, `bootstrap.consumed`, etc.).
 func (s *Service) AuditFailure(ctx context.Context, email, reason, remoteAddr, userAgent string) {
 	s.recordAudit(ctx, api.AuditEvent{
 		ActorEmail: email,

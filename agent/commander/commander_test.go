@@ -51,9 +51,8 @@ func TestFetchPendingWithAuth(t *testing.T) {
 	assert.Empty(t, result)
 }
 
-// TestFetchPending401_CallsOnAuthFail locks in the contract that a 401 from the server wakes
-// up the enrollment re-auth hook. Regression bar for an early QA bug where a revoked token
-// left the commander silently stuck.
+// TestFetchPending401_CallsOnAuthFail locks in the contract that a 401 from the server wakes up the enrollment re-auth hook.
+// Regression bar for an early QA bug where a revoked token left the commander silently stuck.
 func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -74,10 +73,9 @@ func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
 	assert.Equal(t, int64(1), called.Load(), "401 on fetchPending must trigger OnAuthFail exactly once")
 }
 
-// recordingApplicationControlSender captures application_control snapshot payloads so
-// tests can inspect them without cgo / real XPC. Mimics the production sender's
-// contract: return nil on success, a non-nil error on failure so the commander
-// reports the command as `failed`.
+// recordingApplicationControlSender captures application_control snapshot payloads so tests can inspect them without cgo / real XPC.
+// Mimics the production sender's contract: return nil on success, a non-nil error on failure so the commander reports the command as
+// `failed`.
 type recordingApplicationControlSender struct {
 	sent    [][]byte
 	sendErr error
@@ -91,9 +89,8 @@ func (r *recordingApplicationControlSender) SendApplicationControl(payload []byt
 	return nil
 }
 
-// TestExecuteSetApplicationControl_HappyPath covers the set_application_control
-// command path: server enqueues the command, commander forwards it to the
-// extension, and reports `completed` with policy_id + policy_version.
+// TestExecuteSetApplicationControl_HappyPath covers the set_application_control command path: server enqueues the command, commander
+// forwards it to the extension, and reports `completed` with policy_id + policy_version.
 func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	var gotStatus string
 	var gotResult []byte
@@ -126,10 +123,8 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	c.executeSetApplicationControl(t.Context(), cmd)
 
 	require.Len(t, sender.sent, 1)
-	// Byte equality, not JSONEq — the commander's contract with the extension is
-	// "forward the exact payload bytes the server sent", not "forward some JSON
-	// equivalent". Re-marshalling could change field ordering or whitespace and the
-	// test must catch that.
+	// Byte equality, not JSONEq — the commander's contract with the extension is "forward the exact payload bytes the server sent",
+	// not "forward some JSON equivalent". Re-marshalling could change field ordering or whitespace and the test must catch that.
 	assert.Equal(t, []byte(rawPayload), sender.sent[0],
 		"commander must forward the raw payload bytes, not a re-marshalled copy")
 
@@ -140,9 +135,8 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	assert.EqualValues(t, 42, result["policy_version"])
 }
 
-// TestExecuteSetApplicationControl_InvalidPayload covers the malformed-JSON
-// path: the commander must report `failed` BEFORE handing off to XPC so a
-// future schema tightening on the extension side never sees garbage bytes.
+// TestExecuteSetApplicationControl_InvalidPayload covers the malformed-JSON path: the commander must report `failed` BEFORE handing
+// off to XPC so a future schema tightening on the extension side never sees garbage bytes.
 func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	var gotStatus string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,10 +159,8 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
 }
 
-// TestExecuteSetApplicationControl_InvalidVersion covers the version
-// validation guard: real server versions start at 1, so a zero or negative
-// payload version is either a hand-queued test command or an out-of-order
-// delivery and the extension must never see it.
+// TestExecuteSetApplicationControl_InvalidVersion covers the version validation guard: real server versions start at 1, so a zero or
+// negative payload version is either a hand-queued test command or an out-of-order delivery and the extension must never see it.
 func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	var gotStatus, gotErr string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -195,9 +187,8 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	assert.Empty(t, sender.sent, "payload with invalid version must not reach the extension")
 }
 
-// TestExecuteSetApplicationControl_MissingPolicyID covers the symmetric
-// envelope check for policy_id. Zero policy_id never comes from a healthy
-// server fan-out; fail explicitly rather than hand garbage to the extension.
+// TestExecuteSetApplicationControl_MissingPolicyID covers the symmetric envelope check for policy_id. Zero policy_id never comes from
+// a healthy server fan-out; fail explicitly rather than hand garbage to the extension.
 func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	var gotStatus, gotErr string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,12 +215,10 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	assert.Empty(t, sender.sent)
 }
 
-// TestExecuteSetApplicationControl_RulesMissingOrInvalid covers the
-// envelope check on `rules`. Without this gate, a payload with missing
-// or null rules slips past json.Unmarshal-into-json.RawMessage and only
-// fails on the extension's typed decode — but by then the commander has
-// already reported `completed`, so the server is wrong about per-host
-// convergence. The commander must reject those shapes BEFORE forwarding.
+// TestExecuteSetApplicationControl_RulesMissingOrInvalid covers the envelope check on `rules`. Without this gate, a payload with
+// missing or null rules slips past json.Unmarshal-into-json.RawMessage and only fails on the extension's typed decode — but by then
+// the commander has already reported `completed`, so the server is wrong about per-host convergence. The commander must reject those
+// shapes BEFORE forwarding.
 func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -268,10 +257,8 @@ func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
 	}
 }
 
-// TestExecuteSetApplicationControl_EmptyRulesAccepted covers the
-// converse: an empty rules array is a legal state (just-after-policy
-// creation, or after every rule is deleted) and the commander must
-// forward it cleanly.
+// TestExecuteSetApplicationControl_EmptyRulesAccepted covers the converse: an empty rules array is a legal state (just-after-policy
+// creation, or after every rule is deleted) and the commander must forward it cleanly.
 func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -288,11 +275,9 @@ func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 	require.Len(t, sender.sent, 1, "empty rules array is a valid snapshot push")
 }
 
-// TestExecuteSetApplicationControl_NoSenderConfigured covers the agent
-// startup case where the XPC bridge has not been wired yet (or has
-// disconnected). The command must fail with a clear reason so the
-// operator's audit log surfaces "no extension" rather than a silent
-// success.
+// TestExecuteSetApplicationControl_NoSenderConfigured covers the agent startup case where the XPC bridge has not been wired yet (or
+// has disconnected). The command must fail with a clear reason so the operator's audit log surfaces "no extension" rather than a
+// silent success.
 func TestExecuteSetApplicationControl_NoSenderConfigured(t *testing.T) {
 	var gotStatus string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -312,9 +297,8 @@ func TestExecuteSetApplicationControl_NoSenderConfigured(t *testing.T) {
 	assert.Equal(t, "failed", gotStatus)
 }
 
-// TestUpdateStatus401_CallsOnAuthFail covers the PUT /commands/{id} path — a token can be
-// revoked between fetchPending and the following ack/complete, and the hook must fire there
-// too or recovery waits for the next poll tick.
+// TestUpdateStatus401_CallsOnAuthFail covers the PUT /commands/{id} path — a token can be revoked between fetchPending and the
+// following ack/complete, and the hook must fire there too or recovery waits for the next poll tick.
 func TestUpdateStatus401_CallsOnAuthFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

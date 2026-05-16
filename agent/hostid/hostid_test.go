@@ -58,10 +58,9 @@ func TestParseIORegOutput(t *testing.T) {
 	}
 }
 
-// TestGet_FromFakeIOReg drives the Get() shell-out path. Real ioreg only runs
-// on macOS and emits non-deterministic data, so we point ioregPath at a tiny
-// shell wrapper that prints a known IOPlatformUUID line. This is the only way
-// to cover the success path of Get without making the test host-dependent.
+// TestGet_FromFakeIOReg drives the Get() shell-out path. Real ioreg only runs on macOS and emits non-deterministic data, so we point
+// ioregPath at a tiny shell wrapper that prints a known IOPlatformUUID line. This is the only way to cover the success path of Get
+// without making the test host-dependent.
 func TestGet_FromFakeIOReg(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-ioreg.sh")
@@ -80,9 +79,8 @@ func TestGet_FromFakeIOReg(t *testing.T) {
 	assert.Equal(t, "FAKE-UUID-1234", got)
 }
 
-// TestGet_ExecError exercises the failure-wrapping branch when ioreg cannot be
-// launched at all (missing binary). The error must mention "run ioreg" so log
-// readers can diagnose.
+// TestGet_ExecError exercises the failure-wrapping branch when ioreg cannot be launched at all (missing binary). The error must
+// mention "run ioreg" so log readers can diagnose.
 func TestGet_ExecError(t *testing.T) {
 	orig := ioregPath
 	ioregPath = filepath.Join(t.TempDir(), "does-not-exist")
@@ -93,10 +91,9 @@ func TestGet_ExecError(t *testing.T) {
 	assert.Contains(t, err.Error(), "run ioreg")
 }
 
-// FuzzParseIORegOutput drives the regex-based parser with random bytes. The
-// invariant we care about is "must not panic on any input" — a malformed
-// ioreg(1) output (truncated buffer, encoding glitch) should turn into a
-// "not found" error, never crash the agent's startup path.
+// FuzzParseIORegOutput drives the regex-based parser with random bytes. The invariant we care about is "must not panic on any input"
+// — a malformed ioreg(1) output (truncated buffer, encoding glitch) should turn into a "not found" error, never crash the agent's
+// startup path.
 func FuzzParseIORegOutput(f *testing.F) {
 	for _, seed := range []string{
 		`"IOPlatformUUID" = "AAA"`,

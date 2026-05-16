@@ -34,13 +34,10 @@ func (r *recAudit) Record(_ context.Context, e api.AuditEvent) error {
 	return nil
 }
 
-// newHandler bundles the wired-up dependencies a handler test
-// needs. The deep WebAuthn ceremony tests (registering + asserting
-// against a virtual authenticator) require go-webauthn's test
-// authenticator helper and live in the cross-context integration
-// suite under test/integration; this file covers the no-WebAuthn
-// failure paths (rate-limit, token-missing, challenge-missing,
-// allowlist-404) where no signed assertion is needed.
+// newHandler bundles the wired-up dependencies a handler test needs. The deep WebAuthn ceremony tests (registering + asserting against
+// a virtual authenticator) require go-webauthn's test authenticator helper and live in the cross-context integration suite under
+// test/integration; this file covers the no-WebAuthn failure paths (rate-limit, token-missing, challenge-missing, allowlist-404) where
+// no signed assertion is needed.
 func newHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -78,9 +75,8 @@ func newHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit) {
 	return h, db, rec
 }
 
-// GET /admin/break-glass/setup with no token returns 410. Pinned
-// because a regression that fell through to a free-form challenge
-// would let an attacker farm setup challenges.
+// GET /admin/break-glass/setup with no token returns 410. Pinned because a regression that fell through to a free-form challenge would
+// let an attacker farm setup challenges.
 func TestHandleSetupChallenge_TokenMissing(t *testing.T) {
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
@@ -118,10 +114,8 @@ func TestHandleSetupChallenge_TokenInvalid(t *testing.T) {
 	assert.Equal(t, "bootstrap.invalid", rec.events[0].Payload["reason"])
 }
 
-// POST /admin/break-glass/setup/challenge with a VALID, freshly
-// issued token returns 200 + a CredentialCreationOptions JSON body
-// + the signed challenge cookie. Pinned to confirm the BeginSetup
-// path round-trips through the new POST endpoint.
+// POST /admin/break-glass/setup/challenge with a VALID, freshly issued token returns 200 + a CredentialCreationOptions JSON body + the
+// signed challenge cookie. Pinned to confirm the BeginSetup path round-trips through the new POST endpoint.
 func TestHandleSetupChallenge_ValidTokenIssuesChallenge(t *testing.T) {
 	h, db, _ := newHandler(t)
 	ctx := t.Context()
@@ -167,10 +161,8 @@ func TestHandleSetupChallenge_ValidTokenIssuesChallenge(t *testing.T) {
 	assert.True(t, found, "challenge cookie must be set")
 }
 
-// GET /admin/break-glass/setup redirects 302 to /ui/admin/break-glass/setup
-// preserving the token query string. The operator clicks the
-// printed redemption URL → server sends them to the React UI →
-// React page POSTs to /admin/break-glass/setup/challenge.
+// GET /admin/break-glass/setup redirects 302 to /ui/admin/break-glass/setup preserving the token query string. The operator clicks the
+// printed redemption URL → server sends them to the React UI → React page POSTs to /admin/break-glass/setup/challenge.
 func TestHandleSetupRedirect_PreservesToken(t *testing.T) {
 	h, _, _ := newHandler(t)
 	mux := http.NewServeMux()
@@ -210,8 +202,7 @@ func TestHandleLoginRedirect(t *testing.T) {
 	assert.Equal(t, "/ui/admin/break-glass", resp.Header.Get("Location"))
 }
 
-// POST /admin/break-glass with no challenge cookie returns 400
-// challenge_missing. The signed challenge cookie is the assertion's
+// POST /admin/break-glass with no challenge cookie returns 400 challenge_missing. The signed challenge cookie is the assertion's
 // integrity gate; a missing cookie cannot be verified.
 func TestHandleLogin_ChallengeMissing(t *testing.T) {
 	h, _, _ := newHandler(t)
@@ -228,8 +219,7 @@ func TestHandleLogin_ChallengeMissing(t *testing.T) {
 	assert.Equal(t, "challenge_missing", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// POST /admin/break-glass with a malformed challenge cookie returns
-// 400 challenge_invalid (HMAC mismatch). The body never reaches the
+// POST /admin/break-glass with a malformed challenge cookie returns 400 challenge_invalid (HMAC mismatch). The body never reaches the
 // service.
 func TestHandleLogin_ChallengeTampered(t *testing.T) {
 	h, _, _ := newHandler(t)
@@ -253,8 +243,7 @@ func TestHandleLogin_ChallengeTampered(t *testing.T) {
 	assert.Equal(t, "challenge_invalid", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// POST /admin/break-glass/challenge with an unknown email returns
-// 400 no_credentials. Same wire response as a known email with zero
+// POST /admin/break-glass/challenge with an unknown email returns 400 no_credentials. Same wire response as a known email with zero
 // credentials, so an attacker cannot enumerate valid emails.
 func TestHandleBeginLogin_UnknownEmail(t *testing.T) {
 	h, _, _ := newHandler(t)
@@ -287,8 +276,7 @@ func TestHandleSetupPost_TokenMissing(t *testing.T) {
 	assert.Equal(t, "token_missing", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// POST /admin/break-glass/setup without the challenge cookie returns
-// 400 challenge_missing. The cookie is the integrity gate; absence
+// POST /admin/break-glass/setup without the challenge cookie returns 400 challenge_missing. The cookie is the integrity gate; absence
 // is unrecoverable.
 func TestHandleSetupPost_ChallengeMissing(t *testing.T) {
 	h, _, _ := newHandler(t)
@@ -305,8 +293,7 @@ func TestHandleSetupPost_ChallengeMissing(t *testing.T) {
 	assert.Equal(t, "challenge_missing", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// POST /admin/break-glass/challenge with malformed JSON returns 400
-// body_invalid. Pinned because handler must reject before reaching
+// POST /admin/break-glass/challenge with malformed JSON returns 400 body_invalid. Pinned because handler must reject before reaching
 // the service layer.
 func TestHandleBeginLogin_BadBody(t *testing.T) {
 	h, _, _ := newHandler(t)
@@ -374,12 +361,9 @@ func TestHandleFinishLogin_AssertionParseFailed(t *testing.T) {
 	assert.Equal(t, "assertion_parse_failed", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// stubIdentity is a minimal api.Service stub for exercising the
-// reauth handlers' failure paths. The reauth POST only calls
-// UpdateLastAuthAt on the success path; everything before that
-// (session-on-ctx check, auth_method check, rate-limit, cookie
-// parse, body parse, assertion parse) is reachable without going
-// through this stub. Failure-mode tests can leave updateErr nil.
+// stubIdentity is a minimal api.Service stub for exercising the reauth handlers' failure paths. The reauth POST only calls
+// UpdateLastAuthAt on the success path; everything before that (session-on-ctx check, auth_method check, rate-limit, cookie parse,
+// body parse, assertion parse) is reachable without going through this stub. Failure-mode tests can leave updateErr nil.
 type stubIdentity struct {
 	api.Service
 	updateErr error
@@ -391,10 +375,8 @@ func (s *stubIdentity) UpdateLastAuthAt(_ context.Context, _ []byte) error {
 	return s.updateErr
 }
 
-// withSession is a tiny middleware that pins a synthetic session on
-// ctx so the reauth handlers can read it via api.SessionFromContext.
-// The real Session middleware does the same plus actor + CSRF; reauth
-// failure paths only need the session field.
+// withSession is a tiny middleware that pins a synthetic session on ctx so the reauth handlers can read it via api.SessionFromContext.
+// The real Session middleware does the same plus actor + CSRF; reauth failure paths only need the session field.
 func withSession(sess *api.Session) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -404,11 +386,9 @@ func withSession(sess *api.Session) func(http.Handler) http.Handler {
 	}
 }
 
-// newHandlerWithIdentity wires the same handler newHandler builds plus
-// the identity stub the Phase 5 reauth POST needs. Returns the handler,
-// db, audit recorder, AND a *stubIdentity so the test can configure
-// the UpdateLastAuthAt return value if it wants to drive the success
-// path (none of the failure-mode tests below need to).
+// newHandlerWithIdentity wires the same handler newHandler builds plus the identity stub the Phase 5 reauth POST needs. Returns the
+// handler, db, audit recorder, AND a *stubIdentity so the test can configure the UpdateLastAuthAt return value if it wants to drive
+// the success path (none of the failure-mode tests below need to).
 func newHandlerWithIdentity(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit, *stubIdentity) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -458,9 +438,8 @@ func TestRegisterAuthedRoutes_RequiresIdentity(t *testing.T) {
 	h.RegisterAuthedRoutes(mux)
 }
 
-// Reauth challenge for an OIDC session returns 400 reauth_not_supported.
-// The UI is expected to dispatch OIDC reauth via /api/auth/login?reauth=1
-// instead — the break-glass POST flow doesn't apply.
+// Reauth challenge for an OIDC session returns 400 reauth_not_supported. The UI is expected to dispatch OIDC reauth via
+// /api/auth/login?reauth=1 instead — the break-glass POST flow doesn't apply.
 func TestHandleReauthChallenge_OIDCSessionRejected(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
@@ -478,9 +457,8 @@ func TestHandleReauthChallenge_OIDCSessionRejected(t *testing.T) {
 	assert.Equal(t, "reauth_not_supported", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// gateReauthRequest's per-IP rate-limit branch (AllowIP=false). Pinned
-// at /api/auth/reauth/challenge so both reauth handlers share the same
-// enforcement contract through the gate helper.
+// gateReauthRequest's per-IP rate-limit branch (AllowIP=false). Pinned at /api/auth/reauth/challenge so both reauth handlers share the
+// same enforcement contract through the gate helper.
 func TestHandleReauthChallenge_PerIPRateLimit(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -500,9 +478,8 @@ func TestHandleReauthChallenge_PerIPRateLimit(t *testing.T) {
 	for i := range signingKey {
 		signingKey[i] = byte(i + 1)
 	}
-	// perIP=1: first call passes the gate (and fails later, but that's fine);
-	// second call trips AllowIP=false in gateReauthRequest before the user
-	// lookup runs.
+	// perIP=1: first call passes the gate (and fails later, but that's fine); second call trips AllowIP=false in gateReauthRequest before
+	// the user lookup runs.
 	rates := breakglass.NewRateLimits(1, 99, 99)
 	h := breakglass.NewHandler(breakglass.HandlerOptions{
 		Service: svc, Identity: &stubIdentity{}, SigningKey: signingKey, RateLimits: rates,
@@ -525,10 +502,8 @@ func TestHandleReauthChallenge_PerIPRateLimit(t *testing.T) {
 	assert.Equal(t, "rate_limited", resp2.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth POST with no challenge cookie returns 400 challenge_missing.
-// Even though the operator is authenticated, the WebAuthn ceremony
-// requires the signed challenge from the begin step; without it the
-// assertion can't be verified.
+// Reauth POST with no challenge cookie returns 400 challenge_missing. Even though the operator is authenticated, the WebAuthn ceremony
+// requires the signed challenge from the begin step; without it the assertion can't be verified.
 func TestHandleReauth_ChallengeMissing(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
@@ -546,10 +521,8 @@ func TestHandleReauth_ChallengeMissing(t *testing.T) {
 	assert.Equal(t, "challenge_missing", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth POST with a tampered challenge cookie returns 400
-// challenge_invalid. Pinned because the signed-cookie integrity is the
-// reauth flow's defense against an attacker forging a challenge to
-// bypass the begin step's BeginLogin.
+// Reauth POST with a tampered challenge cookie returns 400 challenge_invalid. Pinned because the signed-cookie integrity is the reauth
+// flow's defense against an attacker forging a challenge to bypass the begin step's BeginLogin.
 func TestHandleReauth_ChallengeTampered(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
@@ -571,8 +544,7 @@ func TestHandleReauth_ChallengeTampered(t *testing.T) {
 	assert.Equal(t, "challenge_invalid", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth POST for an OIDC session is rejected before any cookie or
-// body parsing. Mirrors the challenge endpoint's auth_method gate so
+// Reauth POST for an OIDC session is rejected before any cookie or body parsing. Mirrors the challenge endpoint's auth_method gate so
 // the per-flow contract is consistent across both reauth verbs.
 func TestHandleReauth_OIDCSessionRejected(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)
@@ -591,11 +563,9 @@ func TestHandleReauth_OIDCSessionRejected(t *testing.T) {
 	assert.Equal(t, "reauth_not_supported", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth challenge for a break-glass user with no registered
-// credentials returns 400 no_credentials. Pinned because reauth must
-// not silently succeed against an account whose credentials were
-// rotated out from under a still-valid session — the operator should
-// see the same error a fresh break-glass login would surface.
+// Reauth challenge for a break-glass user with no registered credentials returns 400 no_credentials. Pinned because reauth must not
+// silently succeed against an account whose credentials were rotated out from under a still-valid session — the operator should see
+// the same error a fresh break-glass login would surface.
 func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
 	h, db, _, _ := newHandlerWithIdentity(t)
 	mux := http.NewServeMux()
@@ -619,8 +589,7 @@ func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
 	assert.Equal(t, "no_credentials", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth challenge with no session on ctx returns 500. Defense-in-
-// depth against a routing misconfig — the handler must not silently
+// Reauth challenge with no session on ctx returns 500. Defense-in- depth against a routing misconfig — the handler must not silently
 // continue without an authenticated session.
 func TestHandleReauthChallenge_NoSession(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)
@@ -651,8 +620,7 @@ func TestHandleReauth_NoSession(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
-// Reauth POST with a malformed body (not valid JSON) returns 400
-// body_invalid. Pinned because the handler must short-circuit before
+// Reauth POST with a malformed body (not valid JSON) returns 400 body_invalid. Pinned because the handler must short-circuit before
 // the password / assertion path on a parse failure.
 func TestHandleReauth_BodyInvalid(t *testing.T) {
 	h, _, _, _ := newHandlerWithIdentity(t)
@@ -663,15 +631,11 @@ func TestHandleReauth_BodyInvalid(t *testing.T) {
 	srv := httptest.NewServer(wrapped)
 	t.Cleanup(srv.Close)
 
-	// Use a valid encoded challenge cookie so we get past challenge_*
-	// branches and exercise body_invalid specifically. Easiest: hit
-	// the challenge endpoint first (with a credentialed user) to mint
-	// a real cookie. Not worth it here — just verify the wire shape
-	// of "tampered cookie" branch ALREADY covers body validation
-	// indirectly. Instead, send invalid JSON with no cookie so we
-	// land on challenge_missing first; that's already tested above.
-	// This test pins the handler's tolerance to a malformed JSON
-	// header value as a separate signal.
+	// Use a valid encoded challenge cookie so we get past challenge_* branches and exercise body_invalid specifically. Easiest:
+	// hit the challenge endpoint first (with a credentialed user) to mint a real cookie. Not worth it here — just verify the wire shape
+	// of "tampered cookie" branch ALREADY covers body validation indirectly. Instead, send invalid JSON with no cookie so we land on
+	// challenge_missing first; that's already tested above. This test pins the handler's tolerance to a malformed JSON header value as a
+	// separate signal.
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 		srv.URL+"/api/auth/reauth", strings.NewReader(`{not-json`))
 	require.NoError(t, err)
@@ -679,9 +643,8 @@ func TestHandleReauth_BodyInvalid(t *testing.T) {
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
-	// challenge_missing wins (cookie precedes body); but as long as
-	// we get a 4xx with a non-empty Auth-Reason, the handler's wire
-	// shape is intact.
+	// challenge_missing wins (cookie precedes body); but as long as we get a 4xx with a non-empty Auth-Reason, the handler's wire shape is
+	// intact.
 	assert.GreaterOrEqual(t, resp.StatusCode, http.StatusBadRequest)
 	assert.NotEmpty(t, resp.Header.Get("X-Edr-Auth-Reason"))
 }

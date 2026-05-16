@@ -14,34 +14,25 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 )
 
-// applicationControlReadBodyLimit caps the size of an incoming
-// create-rule request body. The expected payload is a small JSON
-// object (a few hundred bytes); 16 KiB is far more than that and
-// stops a hostile client from streaming megabytes through the handler.
+// applicationControlReadBodyLimit caps the size of an incoming create-rule request body. The expected payload is a small JSON object
+// (a few hundred bytes); 16 KiB is far more than that and stops a hostile client from streaming megabytes through the handler.
 const applicationControlReadBodyLimit = 16 * 1024
 
-// internalErrorMessage is the human-readable body the handler writes
-// on every 5xx response that isn't otherwise typed. Extracted to one
-// constant so the wire shape stays stable and Sonar's duplicate-
-// literal rule (go:S1192) doesn't fire on the four call sites.
+// internalErrorMessage is the human-readable body the handler writes on every 5xx response that isn't otherwise typed. Extracted to
+// one constant so the wire shape stays stable and Sonar's duplicate- literal rule (go:S1192) doesn't fire on the four call sites.
 const internalErrorMessage = "internal error"
 
-// AppControlHandler serves the rules-context /api/v1/app-control/*
-// admin routes. Separate from the catalog Handler because the surface,
-// the dependencies (audit + commands + hosts), and the auth gates
-// don't overlap; folding both into one struct would force the catalog
-// handler tests to mock orchestration concerns they have no business
-// touching.
+// AppControlHandler serves the rules-context /api/v1/app-control/* admin routes. Separate from the catalog Handler because the
+// surface, the dependencies (audit + commands + hosts), and the auth gates don't overlap; folding both into one struct would force the
+// catalog handler tests to mock orchestration concerns they have no business touching.
 type AppControlHandler struct {
 	svc    *appcontrol.Service
 	authz  identityapi.AuthZ
 	logger *slog.Logger
 }
 
-// NewAppControl builds the application-control operator handler. svc
-// + authz are required; logger defaults to slog.Default. A nil authz
-// would bypass the role matrix entirely — the same panic-on-nil
-// posture the catalog handler uses.
+// NewAppControl builds the application-control operator handler. svc + authz are required; logger defaults to slog.Default. A nil
+// authz would bypass the role matrix entirely — the same panic-on-nil posture the catalog handler uses.
 func NewAppControl(svc *appcontrol.Service, authz identityapi.AuthZ, logger *slog.Logger) *AppControlHandler {
 	if svc == nil {
 		panic("rules operator.NewAppControl: Service must not be nil")
@@ -112,12 +103,9 @@ func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Reque
 	writeJSON(ctx, h.logger, w, http.StatusOK, policy)
 }
 
-// createRuleRequest is the wire shape POST consumers send. Mirrors
-// api.CreateRuleRequest but excludes the server-supplied fields
-// (PolicyID comes from the URL, Actor from the actor on ctx). Keeping
-// the JSON struct local to the handler so the public api.CreateRule
-// Request stays a pure server-internal contract that catalog tests
-// keep using without HTTP scaffolding.
+// createRuleRequest is the wire shape POST consumers send. Mirrors api.CreateRuleRequest but excludes the server-supplied
+// fields (PolicyID comes from the URL, Actor from the actor on ctx). Keeping the JSON struct local to the handler so the public
+// api.CreateRule Request stays a pure server-internal contract that catalog tests keep using without HTTP scaffolding.
 type createRuleRequest struct {
 	RuleType   api.RuleType `json:"rule_type"`
 	Identifier string       `json:"identifier"`
@@ -181,8 +169,7 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 	writeJSON(ctx, h.logger, w, http.StatusCreated, rule)
 }
 
-// writeCreateRuleError maps an appcontrol.Service.CreateRule error
-// onto the HTTP wire shape. Switching on errors.Is keeps the mapping
+// writeCreateRuleError maps an appcontrol.Service.CreateRule error onto the HTTP wire shape. Switching on errors.Is keeps the mapping
 // in one place so the handler reads as a happy-path linear function.
 func (h *AppControlHandler) writeCreateRuleError(ctx context.Context, w http.ResponseWriter, err error, policyID int64) {
 	switch {
@@ -198,10 +185,8 @@ func (h *AppControlHandler) writeCreateRuleError(ctx context.Context, w http.Res
 	}
 }
 
-// parsePolicyID extracts the {id} path value and parses it as int64.
-// Reports false on missing or non-numeric values so callers respond
-// 400 with the typed error code rather than letting strconv error
-// strings leak into the response.
+// parsePolicyID extracts the {id} path value and parses it as int64. Reports false on missing or non-numeric values so callers respond
+// 400 with the typed error code rather than letting strconv error strings leak into the response.
 func parsePolicyID(r *http.Request) (int64, bool) {
 	raw := r.PathValue("id")
 	if raw == "" {
@@ -214,15 +199,11 @@ func parsePolicyID(r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// actorIdentifierFromContext returns a stable string identifier the
-// store + audit row use as the "who authored this" tag. The actor's
-// email isn't on identityapi.Actor today (Actor carries UserID +
-// Roles but not email; the audit recorder fetches the email
-// separately when writing the row), so this helper renders the
-// canonical `user:<id>` shape the store-level "actor is required"
-// gate accepts. Empty when no actor is on ctx, which lets the
-// store-level Actor required check produce a typed 400 rather than
-// the handler having to short-circuit there too.
+// actorIdentifierFromContext returns a stable string identifier the store + audit row use as the "who authored this" tag. The actor's
+// email isn't on identityapi.Actor today (Actor carries UserID + Roles but not email; the audit recorder fetches the email separately
+// when writing the row), so this helper renders the canonical `user:<id>` shape the store-level "actor is required" gate accepts.
+// Empty when no actor is on ctx, which lets the store-level Actor required check produce a typed 400 rather than the handler having to
+// short-circuit there too.
 func actorIdentifierFromContext(ctx context.Context) string {
 	a, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
@@ -234,10 +215,8 @@ func actorIdentifierFromContext(ctx context.Context) string {
 	return ""
 }
 
-// writeAppControlErr emits the typed ErrorResponse shape every other
-// operator handler in the codebase uses. Code is the
-// `application_control.<reason>` token; message is the
-// human-readable body for the UI to surface.
+// writeAppControlErr emits the typed ErrorResponse shape every other operator handler in the codebase uses. Code is the
+// `application_control.<reason>` token; message is the human-readable body for the UI to surface.
 func writeAppControlErr(
 	ctx context.Context,
 	logger *slog.Logger,

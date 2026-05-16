@@ -11,11 +11,9 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// catalogStore is a thin wrapper that exposes the limited
-// per-rule-test surface (insert events, materialise the process
-// graph, satisfy GraphReader). It hides the *mysql.Store +
-// *graph.Builder behind the testkit.Scenario type because
-// catalog tests cannot import detection/internal/* directly.
+// catalogStore is a thin wrapper that exposes the limited per-rule-test surface (insert events, materialise the process graph,
+// satisfy GraphReader). It hides the *mysql.Store + *graph.Builder behind the testkit.Scenario type because catalog tests cannot
+// import detection/internal/* directly.
 type catalogStore struct {
 	scenario *detectiontestkit.Scenario
 }

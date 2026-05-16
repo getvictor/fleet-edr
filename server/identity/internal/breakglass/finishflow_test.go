@@ -130,8 +130,7 @@ func (f *fakeWebAuthnEngine) ValidateLogin(
 	}, nil
 }
 
-// newFakeService is the service-with-fake-webauthn fixture. Returns
-// the service, the underlying DB, the audit recorder, the seeded
+// newFakeService is the service-with-fake-webauthn fixture. Returns the service, the underlying DB, the audit recorder, the seeded
 // admin user id, and the fake engine so tests can pre-set errors.
 func newFakeService(t *testing.T) (
 	*breakglass.Service, *sqlx.DB, *recAudit, int64, *fakeWebAuthnEngine,
@@ -162,10 +161,8 @@ func newFakeService(t *testing.T) (
 	return svc, db, rec, user.ID, fake
 }
 
-// fakeAttestation returns a non-nil
-// *ParsedCredentialCreationData. The fake CreateCredential ignores
-// its contents, so this is deliberately minimal — enough to satisfy
-// the type system and the handler's "attestation present" guard.
+// fakeAttestation returns a non-nil *ParsedCredentialCreationData. The fake CreateCredential ignores its contents, so this is
+// deliberately minimal — enough to satisfy the type system and the handler's "attestation present" guard.
 func fakeAttestation() *protocol.ParsedCredentialCreationData {
 	return &protocol.ParsedCredentialCreationData{}
 }
@@ -175,10 +172,8 @@ func fakeAssertion() *protocol.ParsedCredentialAssertionData {
 	return &protocol.ParsedCredentialAssertionData{}
 }
 
-// FinishSetup happy path: token redeemed, password set, credential
-// persisted, identity row inserted, session minted, audit row
-// written. The fake WebAuthn engine returns a credential keyed on
-// the user handle so we can verify it lands in webauthn_credentials.
+// FinishSetup happy path: token redeemed, password set, credential persisted, identity row inserted, session minted, audit row
+// written. The fake WebAuthn engine returns a credential keyed on the user handle so we can verify it lands in webauthn_credentials.
 func TestService_FinishSetup_HappyPath(t *testing.T) {
 	svc, db, rec, uid, _ := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
@@ -231,9 +226,8 @@ func TestService_FinishSetup_HappyPath(t *testing.T) {
 	assert.ErrorIs(t, err, breakglass.ErrTokenConsumed)
 }
 
-// FinishSetup with a too-short password rejects with
-// ErrPasswordTooShort BEFORE touching the WebAuthn engine — the
-// validator runs first per the implementation contract.
+// FinishSetup with a too-short password rejects with ErrPasswordTooShort BEFORE touching the WebAuthn engine — the validator runs
+// first per the implementation contract.
 func TestService_FinishSetup_PasswordTooShort(t *testing.T) {
 	svc, _, _, uid, _ := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
@@ -273,10 +267,8 @@ func TestService_FinishSetup_CreateCredentialFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "create credential")
 }
 
-// FinishLogin happy path: assertion validates, password verifies,
-// session minted. Pre-seeds password + credential via FinishSetup
-// so the full round-trip is exercised, then primes the fake so its
-// ValidateLogin returns the persisted credential id with a
+// FinishLogin happy path: assertion validates, password verifies, session minted. Pre-seeds password + credential via FinishSetup
+// so the full round-trip is exercised, then primes the fake so its ValidateLogin returns the persisted credential id with a
 // strictly-larger sign_count (so RecordAssertion accepts).
 func TestService_FinishLogin_HappyPath(t *testing.T) {
 	svc, db, _, uid, fake := newFakeService(t)
@@ -319,10 +311,8 @@ func TestService_FinishLogin_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, sess.ID)
 }
 
-// FinishLogin with a wrong password (correct WebAuthn assertion)
-// surfaces ErrBadPassword. Pinned because the WebAuthn-before-
-// password order matters: we must hit ValidateLogin first, then
-// VerifyPassword.
+// FinishLogin with a wrong password (correct WebAuthn assertion) surfaces ErrBadPassword. Pinned because the WebAuthn-before- password
+// order matters: we must hit ValidateLogin first, then VerifyPassword.
 func TestService_FinishLogin_WrongPassword(t *testing.T) {
 	svc, db, _, uid, _ := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
@@ -380,11 +370,8 @@ func TestService_FinishLogin_BadAssertion(t *testing.T) {
 	assert.Contains(t, err.Error(), "validate login")
 }
 
-// FinishLogin sign_count regression: ValidateLogin succeeds (the
-// authenticator returned a valid assertion) but the new sign_count
-// is <= the stored sign_count. RecordAssertion rejects with
-// ErrCredentialClonedDetected — the central security signal of
-// WebAuthn §6.1.1.
+// FinishLogin sign_count regression: ValidateLogin succeeds (the authenticator returned a valid assertion) but the new sign_count is
+// <= the stored sign_count. RecordAssertion rejects with ErrCredentialClonedDetected — the central security signal of WebAuthn §6.1.1.
 func TestService_FinishLogin_SignCountRegression(t *testing.T) {
 	svc, db, _, uid, fake := newFakeService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
@@ -400,9 +387,8 @@ func TestService_FinishLogin_SignCountRegression(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Force ValidateLogin to return a SignCount < the stored 1.
-	// The credential ID matches what the fake CreateCredential
-	// produced on FinishSetup ("cred-" + user handle bytes).
+	// Force ValidateLogin to return a SignCount < the stored 1. The credential ID matches what the fake CreateCredential produced on
+	// FinishSetup ("cred-" + user handle bytes).
 	credRows, err := breakglass.NewCredentialStore(db).ListByUserID(t.Context(), user.ID)
 	require.NoError(t, err)
 	require.Len(t, credRows, 1)
@@ -429,9 +415,8 @@ func TestService_FinishLogin_SignCountRegression(t *testing.T) {
 
 // ----- Handler-level happy-path tests ---------------------------------------
 
-// newFakeHandler bundles the fake-WebAuthn service into a real
-// breakglass.Handler so the HTTP route success paths can be
-// exercised. Cleaner than reaching past the handler's wiring.
+// newFakeHandler bundles the fake-WebAuthn service into a real breakglass.Handler so the HTTP route success paths can be exercised.
+// Cleaner than reaching past the handler's wiring.
 func newFakeHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit, int64, *fakeWebAuthnEngine) {
 	t.Helper()
 	svc, db, rec, uid, fake := newFakeService(t)
@@ -447,9 +432,8 @@ func newFakeHandler(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit, int
 	return h, db, rec, uid, fake
 }
 
-// Successful end-to-end via the handler: GET /setup → POST /setup
-// (with a valid challenge cookie + attestation that the fake
-// accepts) → 200 with session cookie set and bootstrap audit row.
+// Successful end-to-end via the handler: GET /setup → POST /setup (with a valid challenge cookie + attestation that the fake accepts)
+// → 200 with session cookie set and bootstrap audit row.
 func TestHandle_FullSetup_Success(t *testing.T) {
 	h, db, rec, uid, _ := newFakeHandler(t)
 	mux := http.NewServeMux()
@@ -460,10 +444,8 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 	plaintext, _, err := breakglass.NewTokenStore(db).IssueSetup(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
 
-	// 1. POST the challenge — Phase 4c moved challenge issuance off
-	// GET (now a redirect to /ui/...) onto a dedicated POST so the
-	// React UI can fetch it after the GET landed it. Sets the
-	// signed challenge cookie.
+	// 1. POST the challenge — Phase 4c moved challenge issuance off GET (now a redirect to /ui/...) onto a dedicated POST so the React UI
+	// can fetch it after the GET landed it. Sets the signed challenge cookie.
 	resp1, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token="+plaintext,
 		"application/json", nil)
 	require.NoError(t, err)
@@ -477,10 +459,8 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 	}
 	require.NotNil(t, challengeCookie)
 
-	// 2. POST the redemption with a fake attestation. The
-	// fakeWebAuthnEngine ignores the attestation contents but
-	// protocol.ParseCredentialCreationResponseBytes still has to
-	// succeed; that parser accepts any well-shaped JSON.
+	// 2. POST the redemption with a fake attestation. The fakeWebAuthnEngine ignores the attestation contents but
+	// protocol.ParseCredentialCreationResponseBytes still has to succeed; that parser accepts any well-shaped JSON.
 	body, err := json.Marshal(map[string]any{
 		"password":        "long-enough-password",
 		"credential_name": "yk-handler",
@@ -504,12 +484,9 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 	resp2, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp2.Body.Close() }()
-	// The protocol parser is strict; if it rejects the attestation
-	// bytes the handler returns 400. That's still useful coverage:
-	// it exercises the parse path before the WebAuthn engine. The
-	// HappyPath case here is "200 OR 400" depending on whether the
-	// stub attestation parses; either way the route + middleware +
-	// rate-limit + token-redemption code is hit.
+	// The protocol parser is strict; if it rejects the attestation bytes the handler returns 400. That's still useful coverage:
+	// it exercises the parse path before the WebAuthn engine. The HappyPath case here is "200 OR 400" depending on whether the stub
+	// attestation parses; either way the route + middleware + rate-limit + token-redemption code is hit.
 	if resp2.StatusCode == http.StatusOK {
 		var sessCookie *http.Cookie
 		for _, c := range resp2.Cookies() {
@@ -531,11 +508,9 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 	}
 }
 
-// End-to-end login via the handler. Covers the
-// /admin/break-glass/challenge → /admin/break-glass POST round-trip
-// with a fake-WebAuthn engine that accepts the assertion. Exercises
-// unauthorized, clearChallengeCookie, setSessionCookie, and the
-// reasonForLoginErr success branch.
+// End-to-end login via the handler. Covers the /admin/break-glass/challenge → /admin/break-glass POST round-trip with a fake-WebAuthn
+// engine that accepts the assertion. Exercises unauthorized, clearChallengeCookie, setSessionCookie, and the reasonForLoginErr success
+// branch.
 func TestHandle_FullLogin_Success(t *testing.T) {
 	h, db, rec, uid, fake := newFakeHandler(t)
 	mux := http.NewServeMux()
@@ -608,8 +583,7 @@ func TestHandle_FullLogin_Success(t *testing.T) {
 	resp2, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp2.Body.Close() }()
-	// Same protocol-parser caveat as the setup test: a stub
-	// assertion may not parse, in which case the route returns 400
+	// Same protocol-parser caveat as the setup test: a stub assertion may not parse, in which case the route returns 400
 	// assertion_parse_failed (still useful coverage).
 	if resp2.StatusCode == http.StatusOK {
 		var sessCookie *http.Cookie
@@ -626,13 +600,10 @@ func TestHandle_FullLogin_Success(t *testing.T) {
 	}
 }
 
-// Generic WebAuthn failure (origin mismatch, signature verify fail,
-// etc.) maps to the catch-all "login.error" audit reason. The
-// handler logs the underlying error at WARN so an operator can
-// diagnose the failure in SigNoz; the wire response stays redacted
-// so a probing attacker cannot enumerate failure modes. Pinned
-// because the WARN branch is the operator's only diagnostic
-// breadcrumb when the failure isn't one of the named cases.
+// Generic WebAuthn failure (origin mismatch, signature verify fail, etc.) maps to the catch-all "login.error" audit reason.
+// The handler logs the underlying error at WARN so an operator can diagnose the failure in SigNoz; the wire response stays redacted so
+// a probing attacker cannot enumerate failure modes. Pinned because the WARN branch is the operator's only diagnostic breadcrumb when
+// the failure isn't one of the named cases.
 func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 	h, db, rec, uid, fake := newFakeHandler(t)
 	mux := http.NewServeMux()
@@ -675,12 +646,9 @@ func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 	}
 	require.NotNil(t, challengeCookie)
 
-	// Construct a parseable WebAuthn assertion. The fields just need
-	// to satisfy protocol.ParseCredentialRequestResponseBytes' shape
-	// checks (base64url-decodable clientDataJSON with valid JSON,
-	// authenticatorData ≥ 37 bytes, base64url-decodable signature) —
-	// the fake ValidateLogin pre-set above rejects this regardless of
-	// content, so we skip the full ceremony.
+	// Construct a parseable WebAuthn assertion. The fields just need to satisfy protocol.ParseCredentialRequestResponseBytes' shape
+	// checks (base64url-decodable clientDataJSON with valid JSON, authenticatorData ≥ 37 bytes, base64url-decodable signature) — the fake
+	// ValidateLogin pre-set above rejects this regardless of content, so we skip the full ceremony.
 	clientDataJSON, err := json.Marshal(map[string]any{
 		"type":      "webauthn.get",
 		"challenge": "fake-challenge",
@@ -773,9 +741,8 @@ func TestHandle_PerIPRateLimit(t *testing.T) {
 	assert.Equal(t, "60", resp2.Header.Get("Retry-After"))
 }
 
-// gateSetupRequest's per-IP rate-limit branch (AllowIP=false). Pinned
-// at the /setup/challenge entry so handleBeginSetup + handleFinishSetup
-// share the same enforcement path through the gate helper.
+// gateSetupRequest's per-IP rate-limit branch (AllowIP=false). Pinned at the /setup/challenge entry so handleBeginSetup +
+// handleFinishSetup share the same enforcement path through the gate helper.
 func TestHandleSetupChallenge_PerIPRateLimit(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -817,9 +784,8 @@ func TestHandleSetupChallenge_PerIPRateLimit(t *testing.T) {
 	assert.Equal(t, "rate_limited", resp2.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// gateSetupRequest's per-setup-bucket branch (AllowSetup=false).
-// Distinct from AllowIP because perIP=large keeps the IP fresh; the
-// global Setup bucket is what trips.
+// gateSetupRequest's per-setup-bucket branch (AllowSetup=false). Distinct from AllowIP because perIP=large keeps the IP fresh;
+// the global Setup bucket is what trips.
 func TestHandleSetupChallenge_PerSetupRateLimit(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))

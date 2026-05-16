@@ -31,8 +31,7 @@ const (
 // ErrNotFound is returned by FindByProviderSubject when no row matches.
 var ErrNotFound = errors.New("identities: not found")
 
-// Identity is the row shape callers see after a Find / Insert. Subject
-// is the IdP-stable identifier (sub claim for OIDC, email for the
+// Identity is the row shape callers see after a Find / Insert. Subject is the IdP-stable identifier (sub claim for OIDC, email for the
 // local_password seed). user_id FKs into users.
 type Identity struct {
 	ID        int64     `db:"id"`
@@ -56,8 +55,7 @@ func New(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// FindByProviderSubject returns the identity (and its owning user_id)
-// for a given (provider, subject) pair, or ErrNotFound if no row
+// FindByProviderSubject returns the identity (and its owning user_id) for a given (provider, subject) pair, or ErrNotFound if no row
 // exists. UNIQUE(provider, subject) guarantees the result is unique.
 func (s *Store) FindByProviderSubject(ctx context.Context, provider, subject string) (*Identity, error) {
 	var i Identity
@@ -75,20 +73,16 @@ func (s *Store) FindByProviderSubject(ctx context.Context, provider, subject str
 	return &i, nil
 }
 
-// Executor is the executor subset Insert / InsertWith consume. Pass
-// an *sqlx.Tx for the JIT provisioner's atomic insert; pass the
-// Store's db for standalone calls. Caller is responsible for matching
-// tx + user_id — the identity row's FK CASCADEs on user delete, so
-// inserting into an uncommitted user orphans if the parent rolls
-// back. Named per the Go convention (single-method interface ends
-// in -er).
+// Executor is the executor subset Insert / InsertWith consume. Pass an *sqlx.Tx for the JIT provisioner's atomic insert; pass the
+// Store's db for standalone calls. Caller is responsible for matching tx + user_id — the identity row's FK CASCADEs on user delete,
+// so inserting into an uncommitted user orphans if the parent rolls back. Named per the Go convention (single-method interface ends in
+// -er).
 type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// InsertWith persists a new identity row using the provided executor
-// (typically the *sqlx.Tx wrapping a JIT provision). Returns the row
-// id assigned by MySQL's auto_increment.
+// InsertWith persists a new identity row using the provided executor (typically the *sqlx.Tx wrapping a JIT provision). Returns the
+// row id assigned by MySQL's auto_increment.
 func (s *Store) InsertWith(ctx context.Context, ec Executor, userID int64, provider, subject string) (int64, error) {
 	res, err := ec.ExecContext(ctx, `
 		INSERT INTO identities (user_id, provider, subject) VALUES (?, ?, ?)

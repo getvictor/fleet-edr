@@ -50,12 +50,10 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, tlsEnabled bool, logg
 		}
 	}
 
-	// Derive the shutdown deadline context from ctx via WithoutCancel so it
-	// inherits ctx's values (trace-id, logger attrs) but NOT ctx's cancellation
-	// — otherwise srv.Shutdown would return immediately because ctx is already
-	// Done. http.Server.Shutdown uses its context purely to decide when to give
-	// up on in-flight connections, so a fresh, timeout-bounded, values-inherited
-	// context is the correct shape.
+	// Derive the shutdown deadline context from ctx via WithoutCancel so it inherits ctx's values (trace-id, logger attrs) but NOT ctx's
+	// cancellation — otherwise srv.Shutdown would return immediately because ctx is already Done. http.Server.Shutdown uses its context
+	// purely to decide when to give up on in-flight connections, so a fresh, timeout-bounded, values-inherited context is the correct
+	// shape.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownTimeout)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

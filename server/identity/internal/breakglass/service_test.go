@@ -21,10 +21,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newService builds a Service against a fresh DB + a localhost
-// WebAuthn engine. No real authenticator is needed for the Begin*
-// paths (challenge generation is server-side); Finish* paths are
-// covered by the deeper handler integration tests once go-webauthn
+// newService builds a Service against a fresh DB + a localhost WebAuthn engine. No real authenticator is needed for the Begin*
+// paths (challenge generation is server-side); Finish* paths are covered by the deeper handler integration tests once go-webauthn
 // virtual-authenticator fixture lands.
 func newService(t *testing.T, allowJIT ...bool) (*breakglass.Service, *sqlx.DB, *recAudit, int64) {
 	t.Helper()
@@ -96,10 +94,8 @@ func TestService_HasCredential(t *testing.T) {
 	assert.True(t, has)
 }
 
-// BeginSetup happy path: a valid token returns a SetupChallenge
-// + the bound Token + User. The challenge carries a non-empty
-// SessionData (the engine-internal challenge state the cookie
-// rides).
+// BeginSetup happy path: a valid token returns a SetupChallenge + the bound Token + User. The challenge carries a non-empty
+// SessionData (the engine-internal challenge state the cookie rides).
 func TestService_BeginSetup_HappyPath(t *testing.T) {
 	svc, _, _, uid := newService(t)
 	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
@@ -112,9 +108,8 @@ func TestService_BeginSetup_HappyPath(t *testing.T) {
 	require.NotNil(t, user)
 	assert.Equal(t, uid, user.ID)
 	assert.NotEmpty(t, challenge.Options.Response.Challenge)
-	// SessionData carries the same challenge bytes the browser will
-	// echo back; round-tripping that through the cookie is covered
-	// by state_test.
+	// SessionData carries the same challenge bytes the browser will echo back; round-tripping that through the cookie is covered by
+	// state_test.
 	assert.NotEmpty(t, challenge.SessionData.Challenge)
 }
 
@@ -140,19 +135,15 @@ func TestService_BeginSetup_TokenConsumed(t *testing.T) {
 	assert.ErrorIs(t, err, breakglass.ErrTokenConsumed)
 }
 
-// BeginLogin with an email that has no registered credentials
-// surfaces ErrNoCredentials. The handler collapses this onto the
-// same wire response as "user not found" so attackers cannot
-// enumerate.
+// BeginLogin with an email that has no registered credentials surfaces ErrNoCredentials. The handler collapses this onto the same wire
+// response as "user not found" so attackers cannot enumerate.
 func TestService_BeginLogin_NoCredentials(t *testing.T) {
 	svc, _, _, _ := newService(t)
 	_, _, err := svc.BeginLogin(t.Context(), "admin@fleet-edr.local")
 	assert.ErrorIs(t, err, breakglass.ErrNoCredentials)
 }
 
-// BeginLogin with a non-existent email also surfaces
-// ErrNoCredentials (collapsed from users.ErrNotFound to prevent
-// enumeration).
+// BeginLogin with a non-existent email also surfaces ErrNoCredentials (collapsed from users.ErrNotFound to prevent enumeration).
 func TestService_BeginLogin_UnknownEmail(t *testing.T) {
 	svc, _, _, _ := newService(t)
 	_, _, err := svc.BeginLogin(t.Context(), "ghost@example.com")
@@ -176,10 +167,8 @@ func TestService_BeginLogin_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, challenge.Options.Response.Challenge)
 }
 
-// BeginLogin against a non-break-glass user surfaces
-// ErrNoCredentials. Pinned because non-breakglass users MUST go
-// through OIDC; the wire response collapses to the same shape so
-// an attacker cannot probe for the type.
+// BeginLogin against a non-break-glass user surfaces ErrNoCredentials. Pinned because non-breakglass users MUST go through OIDC;
+// the wire response collapses to the same shape so an attacker cannot probe for the type.
 func TestService_BeginLogin_NonBreakglass(t *testing.T) {
 	svc, db, _, _ := newService(t)
 	// Pre-seed a non-breakglass user.
@@ -213,10 +202,8 @@ func TestService_AuditHelpers(t *testing.T) {
 	assert.Equal(t, "password.mismatch", rec.events[1].Payload["reason"])
 }
 
-// NewService panics on any missing dependency. Pinned because the
-// constructor is the only place where the wire-up gets validated;
-// a regression that dropped a panic would let production boot with
-// a half-built service.
+// NewService panics on any missing dependency. Pinned because the constructor is the only place where the wire-up gets validated;
+// a regression that dropped a panic would let production boot with a half-built service.
 func TestNewService_PanicsOnMissingDeps(t *testing.T) {
 	cases := []struct {
 		name string

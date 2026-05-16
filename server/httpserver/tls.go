@@ -11,9 +11,8 @@ import (
 	"syscall"
 )
 
-// TLSOptions configures TLS for a fleet-edr daemon. CertFile and KeyFile must both
-// be non-empty. AllowTLS12 drops the floor from TLS 1.3 to 1.2 only when the
-// operator explicitly opts in (EDR_TLS_ALLOW_TLS12=1).
+// TLSOptions configures TLS for a fleet-edr daemon. CertFile and KeyFile must both be non-empty. AllowTLS12 drops the floor from TLS
+// 1.3 to 1.2 only when the operator explicitly opts in (EDR_TLS_ALLOW_TLS12=1).
 type TLSOptions struct {
 	CertFile   string
 	KeyFile    string

@@ -11,10 +11,8 @@ import (
 	"github.com/fleetdm/edr/server/sqlhelpers"
 )
 
-// NullRawJSON is the canonical nullable JSON column scanner. The
-// authoritative type lives in server/sqlhelpers; detection/api keeps
-// the public name so existing callers (and the rules.api re-export)
-// stay byte-identical with the pre-phase-6 import path.
+// NullRawJSON is the canonical nullable JSON column scanner. The authoritative type lives in server/sqlhelpers; detection/api keeps
+// the public name so existing callers (and the rules.api re-export) stay byte-identical with the pre-phase-6 import path.
 type NullRawJSON = sqlhelpers.NullRawJSON
 
 // Compile-time pin that the scanner / valuer / json contracts the rest
@@ -65,8 +63,7 @@ type Process struct {
 	ExitIngestedAtNs *int64      `db:"exit_ingested_at_ns" json:"exit_ingested_at_ns,omitempty"`
 	ExitReason       *string     `db:"exit_reason" json:"exit_reason,omitempty"`
 	ExitCode         *int        `db:"exit_code" json:"exit_code,omitempty"`
-	// PreviousExecID points at the row representing the prior generation
-	// in a same-PID re-exec chain (issue #10). The first exec after a
+	// PreviousExecID points at the row representing the prior generation in a same-PID re-exec chain (issue #10). The first exec after a
 	// fork has PreviousExecID == nil; that's the chain root.
 	PreviousExecID *int64 `db:"previous_exec_id" json:"previous_exec_id,omitempty"`
 }
@@ -80,20 +77,16 @@ const (
 	ExitReasonHostReconciled    = "host_reconciled"    // synthesized: agent's kill(pid,0) confirmed the PID is gone (issue #6)
 )
 
-// HostSummary is the lightweight per-host activity row the operator
-// list endpoint returns. Distinct from Host so future extensions
-// (alert counts, status pill) can land without touching Host's wire
-// shape.
+// HostSummary is the lightweight per-host activity row the operator list endpoint returns. Distinct from Host so future extensions
+// (alert counts, status pill) can land without touching Host's wire shape.
 type HostSummary struct {
 	HostID     string `db:"host_id" json:"host_id"`
 	EventCount int64  `db:"event_count" json:"event_count"`
 	LastSeenNs int64  `db:"last_seen_ns" json:"last_seen_ns"`
 }
 
-// Host is the operator-visible row from the hosts summary table.
-// Mirrors HostSummary but adds updated_at; both are kept distinct
-// because the operator list endpoint historically returned the
-// HostSummary shape and the UI snapshots it.
+// Host is the operator-visible row from the hosts summary table. Mirrors HostSummary but adds updated_at; both are kept distinct
+// because the operator list endpoint historically returned the HostSummary shape and the UI snapshots it.
 type Host struct {
 	HostID     string    `db:"host_id" json:"host_id"`
 	EventCount int64     `db:"event_count" json:"event_count"`
@@ -101,10 +94,8 @@ type Host struct {
 	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
 
-// JSONStringSlice is a []string persisted as a JSON array in a MySQL
-// JSON column. NULL + SQL empty-string round-trip to a nil slice;
-// the JSON marshal path keeps the field omitted when empty. Used by
-// Alert.Techniques (the MITRE ATT&CK technique IDs).
+// JSONStringSlice is a []string persisted as a JSON array in a MySQL JSON column. NULL + SQL empty-string round-trip to a nil slice;
+// the JSON marshal path keeps the field omitted when empty. Used by Alert.Techniques (the MITRE ATT&CK technique IDs).
 type JSONStringSlice []string
 
 func (s *JSONStringSlice) Scan(value any) error {
@@ -153,25 +144,20 @@ type Alert struct {
 	UpdatedBy   *int64          `db:"updated_by" json:"updated_by,omitempty"`
 }
 
-// AlertSource records what subsystem emitted an alert. The schema's
-// `source` ENUM mirrors this set. Including source in the alert dedup
-// key prevents a catalog rule and an application-control rule that
-// happen to share an identifier value from collapsing into one alert
-// row (see server-detection-rules-engine delta spec).
+// AlertSource records what subsystem emitted an alert. The schema's `source` ENUM mirrors this set. Including source in the alert
+// dedup key prevents a catalog rule and an application-control rule that happen to share an identifier value from collapsing into one
+// alert row (see server-detection-rules-engine delta spec).
 const (
-	// AlertSourceDetection is the source for findings produced by
-	// catalog rules. The default for engine.persistFinding when a
-	// Finding leaves the field blank, since every catalog rule was
-	// "detection" before the source column was introduced.
+	// AlertSourceDetection is the source for findings produced by catalog rules. The default for engine.persistFinding when a Finding
+	// leaves the field blank, since every catalog rule was "detection" before the source column was introduced.
 	AlertSourceDetection = "detection"
 	// AlertSourceApplicationControl is the source for alerts
 	// produced by an application_control_block ingest event.
 	AlertSourceApplicationControl = "application_control"
 )
 
-// AlertStatus enumerates the operator-driven alert lifecycle.
-// Schema-level ENUM('open','acknowledged','resolved'); the UI
-// presents these labels.
+// AlertStatus enumerates the operator-driven alert lifecycle. Schema-level ENUM('open','acknowledged','resolved'); the UI presents
+// these labels.
 type AlertStatus string
 
 const (
@@ -210,18 +196,13 @@ type Finding struct {
 	Techniques  []string
 }
 
-// TimeRange is the [from, to] nanosecond window every graph query
-// takes. The canonical type lives in server/httpserver because the
-// concept is generic and shared across every operator endpoint that
-// parses ?from=&to= query parameters; detection/api keeps the public
-// name via alias so existing callers (and the rules.api re-export)
-// stay byte-identical.
+// TimeRange is the [from, to] nanosecond window every graph query takes. The canonical type lives in server/httpserver because the
+// concept is generic and shared across every operator endpoint that parses ?from=&to= query parameters; detection/api keeps the public
+// name via alias so existing callers (and the rules.api re-export) stay byte-identical.
 type TimeRange = httpserver.TimeRange
 
-// AlertFilter is the optional scope an operator passes to ListAlerts.
-// Mirrors the existing GET /api/alerts query params so the wire
-// shape is preserved; Since / Until / Offset are deferred follow-ups
-// (filed alongside the time-range and pagination work).
+// AlertFilter is the optional scope an operator passes to ListAlerts. Mirrors the existing GET /api/alerts query params so the wire
+// shape is preserved; Since / Until / Offset are deferred follow-ups (filed alongside the time-range and pagination work).
 type AlertFilter struct {
 	HostID    string
 	Status    AlertStatus
@@ -246,11 +227,9 @@ type ProcessDetail struct {
 	Process            Process `json:"process"`
 	NetworkConnections []Event `json:"network_connections"`
 	DNSQueries         []Event `json:"dns_queries"`
-	// ReExecChain is the list of prior exec generations on the same
-	// PID (issue #10), oldest-first. Empty for processes that only
-	// exec'd once after fork. The UI renders this as a visual chain
-	// (python -> sh -> bash -> current) so analysts see the full
-	// exec sequence instead of just the final path.
+	// ReExecChain is the list of prior exec generations on the same PID (issue #10), oldest-first. Empty for processes that only exec'd
+	// once after fork. The UI renders this as a visual chain (python -> sh -> bash -> current) so analysts see the full exec sequence
+	// instead of just the final path.
 	ReExecChain []Process `json:"re_exec_chain,omitempty"`
 }
 
@@ -261,16 +240,12 @@ var (
 	// when the id doesn't exist.
 	ErrAlertNotFound = errors.New("detection: alert not found")
 
-	// ErrInvalidAlertTransition is returned when UpdateAlertStatus is
-	// called with a status that doesn't follow from the row's current
-	// status (e.g. resolved -> open). Mapped to 400 by the operator
-	// handler.
+	// ErrInvalidAlertTransition is returned when UpdateAlertStatus is called with a status that doesn't follow from the row's current
+	// status (e.g. resolved -> open). Mapped to 400 by the operator handler.
 	ErrInvalidAlertTransition = errors.New("detection: invalid alert status transition")
 
-	// ErrInvalidUserUpdater is returned when UpdateAlertStatus is
-	// called with a user_id that the identity context does not
-	// recognise. Replaces the FK-level rejection that fk_alerts_updated_by
-	// enforced in the pre-bounded-context schema.
+	// ErrInvalidUserUpdater is returned when UpdateAlertStatus is called with a user_id that the identity context does not recognise.
+	// Replaces the FK-level rejection that fk_alerts_updated_by enforced in the pre-bounded-context schema.
 	ErrInvalidUserUpdater = errors.New("detection: updated_by user does not exist")
 
 	// ErrHostNotFound is returned by host-keyed reads when the host

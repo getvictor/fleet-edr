@@ -9,19 +9,16 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// allStatuses enumerates the alert lifecycle states the schema's
-// ENUM accepts. Used by both the example-based + property-based
-// tests below so they stay in lockstep with the schema.
+// allStatuses enumerates the alert lifecycle states the schema's ENUM accepts. Used by both the example-based + property-based tests
+// below so they stay in lockstep with the schema.
 var allStatuses = []api.AlertStatus{
 	api.AlertStatusOpen,
 	api.AlertStatusAcknowledged,
 	api.AlertStatusResolved,
 }
 
-// allowedTransitions encodes the legal lifecycle matrix as the
-// authoritative reference. Tests assert canTransition matches this
-// set exactly. See server/detection/internal/service/service.go's
-// UpdateAlertStatus docstring for the prose version.
+// allowedTransitions encodes the legal lifecycle matrix as the authoritative reference. Tests assert canTransition matches this set
+// exactly. See server/detection/internal/service/service.go's UpdateAlertStatus docstring for the prose version.
 var allowedTransitions = map[api.AlertStatus]map[api.AlertStatus]bool{
 	api.AlertStatusOpen: {
 		api.AlertStatusAcknowledged: true,
@@ -59,13 +56,10 @@ func TestCanTransition_ExampleMatrix(t *testing.T) {
 	}
 }
 
-// TestCanTransition_MatchesAllowedTransitionsProperty:
-// canTransition(from, to) == allowedTransitions[from][to] for every
-// pair (from, to) in the AlertStatus enum cross-product. PBT here
-// means rapid samples the cross-product exhaustively across runs;
-// any future drift between canTransition's switch and the
-// allowedTransitions reference table fails the property loudly,
-// with a shrunken counter-example naming the exact (from, to) pair.
+// TestCanTransition_MatchesAllowedTransitionsProperty: canTransition(from, to) == allowedTransitions[from][to] for every pair (from,
+// to) in the AlertStatus enum cross-product. PBT here means rapid samples the cross-product exhaustively across runs; any future drift
+// between canTransition's switch and the allowedTransitions reference table fails the property loudly, with a shrunken counter-example
+// naming the exact (from, to) pair.
 func TestCanTransition_MatchesAllowedTransitionsProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		from := rapid.SampledFrom(allStatuses).Draw(rt, "from")
@@ -76,8 +70,7 @@ func TestCanTransition_MatchesAllowedTransitionsProperty(t *testing.T) {
 	})
 }
 
-// TestCanTransition_NeverFromUnknownState pins the "every undefined
-// state rejects all transitions" behaviour: passing a status the
+// TestCanTransition_NeverFromUnknownState pins the "every undefined state rejects all transitions" behaviour: passing a status the
 // service has never seen returns false, regardless of target.
 func TestCanTransition_NeverFromUnknownState(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {

@@ -20,10 +20,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newWriterWithStore stands up an AsyncWriter against a real test DB
-// + the identity schema. Tests assert against either the writer's
-// internal state (Dropped) or the audit_events row count after a
-// Run-and-cancel cycle.
+// newWriterWithStore stands up an AsyncWriter against a real test DB + the identity schema. Tests assert against either the writer's
+// internal state (Dropped) or the audit_events row count after a Run-and-cancel cycle.
 func newWriterWithStore(t *testing.T, capHint int, logger *slog.Logger) (*audit.AsyncWriter, *audit.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -33,9 +31,8 @@ func newWriterWithStore(t *testing.T, capHint int, logger *slog.Logger) (*audit.
 	return w, store, db
 }
 
-// runAndCancel starts Run in a goroutine, lets it process for `d`,
-// then cancels and waits for Run to return. Tests use it to drain
-// the queue under their own clock without leaking goroutines.
+// runAndCancel starts Run in a goroutine, lets it process for `d`, then cancels and waits for Run to return. Tests use it to drain the
+// queue under their own clock without leaking goroutines.
 func runAndCancel(t *testing.T, w *audit.AsyncWriter, d time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -51,8 +48,7 @@ func runAndCancel(t *testing.T, w *audit.AsyncWriter, d time.Duration) {
 	}
 }
 
-// Submit accepts events up to capacity and writes them to the store
-// once Run drains. End-to-end smoke test against the real DB so the
+// Submit accepts events up to capacity and writes them to the store once Run drains. End-to-end smoke test against the real DB so the
 // store's INSERT shape is exercised, not just the channel plumbing.
 func TestAsyncWriter_SubmitDrainsToStore(t *testing.T) {
 	uid := int64(1)
@@ -74,9 +70,8 @@ func TestAsyncWriter_SubmitDrainsToStore(t *testing.T) {
 	assert.Equal(t, uint64(0), w.Dropped())
 }
 
-// Drop policy: queue_full -> Submit returns false, slog WARN
-// captures the dropped event for the dual-emit secondary backend,
-// Dropped() counter increments.
+// Drop policy: queue_full -> Submit returns false, slog WARN captures the dropped event for the dual-emit secondary backend, Dropped()
+// counter increments.
 func TestAsyncWriter_DropOnFull(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -127,11 +122,9 @@ func TestAsyncWriter_DrainOnShutdown(t *testing.T) {
 	assert.Equal(t, 4, n, "drain must flush queued events before Run returns")
 }
 
-// Submit after the writer has stopped must drop with a stopped
-// reason, not panic. Two sources of false return are present in
-// production: queue_full (transient) and writer_stopped (terminal);
-// distinguishing them in the slog line lets a dashboard separate
-// "we burst" from "we shut down with traffic still arriving."
+// Submit after the writer has stopped must drop with a stopped reason, not panic. Two sources of false return are present in
+// production: queue_full (transient) and writer_stopped (terminal); distinguishing them in the slog line lets a dashboard separate "we
+// burst" from "we shut down with traffic still arriving."
 func TestAsyncWriter_SubmitAfterStopDrops(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -146,10 +139,8 @@ func TestAsyncWriter_SubmitAfterStopDrops(t *testing.T) {
 	assert.Contains(t, buf.String(), `"reason":"writer_stopped"`)
 }
 
-// Concurrent Submit from many goroutines must not panic and the
-// total accepted + dropped count must equal the offered count.
-// This guards against a future race when someone "optimises" the
-// queue full path.
+// Concurrent Submit from many goroutines must not panic and the total accepted + dropped count must equal the offered count. This
+// guards against a future race when someone "optimises" the queue full path.
 func TestAsyncWriter_ConcurrentSubmit(t *testing.T) {
 	w, _, _ := newWriterWithStore(t, 32, slog.Default())
 
@@ -174,8 +165,7 @@ func TestAsyncWriter_ConcurrentSubmit(t *testing.T) {
 	assert.Equal(t, uint64(goroutines*perGoroutine), accepted.Load()+dropped.Load())
 }
 
-// NewAsyncWriter panics on a nil store. A writer that buffers events
-// with nowhere to send them is a programming error; the panic
+// NewAsyncWriter panics on a nil store. A writer that buffers events with nowhere to send them is a programming error; the panic
 // surfaces it at construction time rather than on the first Submit.
 func TestAsyncWriter_NilStorePanics(t *testing.T) {
 	assert.Panics(t, func() {
@@ -183,8 +173,7 @@ func TestAsyncWriter_NilStorePanics(t *testing.T) {
 	})
 }
 
-// Zero values for QueueCap + Logger fall through to the documented
-// defaults; the writer constructs without ceremony for cmd/main's
+// Zero values for QueueCap + Logger fall through to the documented defaults; the writer constructs without ceremony for cmd/main's
 // "use the defaults" path.
 func TestAsyncWriter_ZeroOptionsUsesDefaults(t *testing.T) {
 	store := audit.New(testdb.Open(t), nil)
@@ -192,14 +181,10 @@ func TestAsyncWriter_ZeroOptionsUsesDefaults(t *testing.T) {
 	assert.NotNil(t, w)
 }
 
-// Regression for the PR #120 shutdown-race finding (Gemini + Copilot):
-// a Submit racing with shutdown must NOT silently enqueue an event
-// that no goroutine consumes. The fix is the submitMu RWMutex: once
-// shutdown takes the writer Lock and flips closed=true, all
-// subsequent Submits return false. This test stresses the boundary
-// by spawning many concurrent Submits while cancelling Run; every
-// returned-true Submit must result in an audit_events row, every
-// returned-false must show a "writer_stopped" slog line.
+// Regression for the PR #120 shutdown-race finding (Gemini + Copilot): a Submit racing with shutdown must NOT silently enqueue an
+// event that no goroutine consumes. The fix is the submitMu RWMutex: once shutdown takes the writer Lock and flips closed=true,
+// all subsequent Submits return false. This test stresses the boundary by spawning many concurrent Submits while cancelling Run;
+// every returned-true Submit must result in an audit_events row, every returned-false must show a "writer_stopped" slog line.
 func TestAsyncWriter_ShutdownRace_NoLostEvents(t *testing.T) {
 	w, _, db := newWriterWithStore(t, 32, slog.Default())
 
@@ -210,8 +195,7 @@ func TestAsyncWriter_ShutdownRace_NoLostEvents(t *testing.T) {
 		close(runDone)
 	}()
 
-	// Spawn Submit-ers that keep trying until the writer closes. Count
-	// every "true" return (queued for INSERT) and every "false" return
+	// Spawn Submit-ers that keep trying until the writer closes. Count every "true" return (queued for INSERT) and every "false" return
 	// (dropped). Cancel mid-stream to force the race.
 	const submitters = 16
 	var queued, dropped atomic.Uint64
@@ -242,10 +226,8 @@ func TestAsyncWriter_ShutdownRace_NoLostEvents(t *testing.T) {
 	close(stopSubmits)
 	submitWG.Wait()
 
-	// Every Submit that returned true must have a corresponding row
-	// in the DB. Drains may have been bounded by the global deadline,
-	// in which case some "queued" events landed in slog instead, but
-	// the row count must equal queued under default deadline + healthy
+	// Every Submit that returned true must have a corresponding row in the DB. Drains may have been bounded by the global deadline,
+	// in which case some "queued" events landed in slog instead, but the row count must equal queued under default deadline + healthy
 	// MySQL (the test DB is healthy).
 	var n int
 	require.NoError(t, db.QueryRowxContext(t.Context(),
@@ -264,8 +246,7 @@ func TestAsyncWriter_ShutdownRace_NoLostEvents(t *testing.T) {
 // numeric without dragging math.MaxInt into a single test file.
 const intMaxAsUint64 uint64 = 1<<63 - 1
 
-// drain bounded by the global deadline: when the wall clock runs
-// out before the queue empties, remaining events spill to slog as
+// drain bounded by the global deadline: when the wall clock runs out before the queue empties, remaining events spill to slog as
 // "drain_deadline_exceeded" rather than blocking shutdown forever.
 func TestAsyncWriter_DrainGlobalDeadline_SpillsToSlog(t *testing.T) {
 	t.Skip("skipping: the 30s global deadline is slow for a unit test; behavior is exercised by TestAsyncWriter_ShutdownRace_NoLostEvents under a degraded DB")

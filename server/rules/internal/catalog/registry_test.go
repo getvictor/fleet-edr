@@ -9,12 +9,10 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// TestAll_RegisterEveryShippedRule pins down the registration order + size of
-// the registry, so a new rule cannot land without explicitly being added here.
-// The slice this returns is the single source of truth used by the production
-// server's main.go and the docs generator (tools/gen-rule-docs); a silent
-// drift between the two would mean operators see a different surface than
-// the ATT&CK coverage promises.
+// TestAll_RegisterEveryShippedRule pins down the registration order + size of the registry, so a new rule cannot land without
+// explicitly being added here. The slice this returns is the single source of truth used by the production server's main.go and the
+// docs generator (tools/gen-rule-docs); a silent drift between the two would mean operators see a different surface than the ATT&CK
+// coverage promises.
 func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	got := New(api.RegistryOptions{})
 	wantIDs := []string{
@@ -34,13 +32,10 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	}
 }
 
-// TestAll_DocStructIsPopulated walks every shipped rule's Doc() and locks in
-// the operator-facing invariants. Drives coverage of each rule's Doc() body
-// from the rules package itself so SonarCloud's Go coverage profile attributes
-// the lines correctly (cross-package coverage isn't aggregated under the
-// project's current `-coverprofile` setup). Same checks as the gate in
-// tools/gen-rule-docs, repeated here so a future tool can be deleted without
-// losing the contract.
+// TestAll_DocStructIsPopulated walks every shipped rule's Doc() and locks in the operator-facing invariants. Drives coverage of each
+// rule's Doc() body from the rules package itself so SonarCloud's Go coverage profile attributes the lines correctly (cross-package
+// coverage isn't aggregated under the project's current `-coverprofile` setup). Same checks as the gate in tools/gen-rule-docs,
+// repeated here so a future tool can be deleted without losing the contract.
 func TestAll_DocStructIsPopulated(t *testing.T) {
 	allowedSeverities := map[string]struct{}{
 		api.SeverityLow:      {},
@@ -67,11 +62,9 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 	}
 }
 
-// TestAll_AppliesAllowlists confirms that the four configurable rules actually
-// thread the supplied allowlists through onto the rule struct. Without this,
-// a refactor of `All` could silently drop the maps and every fleet would
-// suddenly see the alerts they thought they'd silenced. We only check the
-// rules that have a configurable allowlist; the others have empty Doc().Config.
+// TestAll_AppliesAllowlists confirms that the four configurable rules actually thread the supplied allowlists through onto the rule
+// struct. Without this, a refactor of `All` could silently drop the maps and every fleet would suddenly see the alerts they thought
+// they'd silenced. We only check the rules that have a configurable allowlist; the others have empty Doc().Config.
 func TestAll_AppliesAllowlists(t *testing.T) {
 	susParents := map[string]struct{}{"/usr/libexec/sshd-session": {}}
 	plists := map[string]struct{}{"/Library/LaunchAgents/com.example.foo.plist": {}}

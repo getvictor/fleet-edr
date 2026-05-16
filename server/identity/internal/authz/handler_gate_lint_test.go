@@ -55,10 +55,8 @@ func TestPrivilegedHandlersGateOnAllow(t *testing.T) {
 	}
 }
 
-// privilegedHandlerFiles lists every file the lint asserts is a
-// privileged operator handler. Adding a new operator package without
-// adding it here is itself a regression; add the path AND the
-// chokepoint call together.
+// privilegedHandlerFiles lists every file the lint asserts is a privileged operator handler. Adding a new operator package without
+// adding it here is itself a regression; add the path AND the chokepoint call together.
 var privilegedHandlerFiles = []string{
 	"server/identity/internal/audit/handler.go",
 	"server/detection/internal/operator/handler.go",
@@ -67,19 +65,15 @@ var privilegedHandlerFiles = []string{
 	"server/endpoint/internal/operator/handler.go",
 }
 
-// chokepointSelectors enumerates the selector method names that count
-// as the AuthZ chokepoint. `Allow` is the AuthZ interface's method;
-// `HTTPGate` is the shared wrapper in identity/api/authzhttp.go. Any
-// expansion of the helper surface should be reflected here.
+// chokepointSelectors enumerates the selector method names that count as the AuthZ chokepoint. `Allow` is the AuthZ interface's
+// method; `HTTPGate` is the shared wrapper in identity/api/authzhttp.go. Any expansion of the helper surface should be reflected here.
 var chokepointSelectors = map[string]struct{}{
 	"Allow":    {},
 	"HTTPGate": {},
 }
 
-// repoRoot returns the absolute path of the repository root by deriving
-// it from this source file's location at compile time. Using
-// runtime.Caller (instead of os.Getwd-based path-suffix matching)
-// keeps the lint correct under test runners that change the working
+// repoRoot returns the absolute path of the repository root by deriving it from this source file's location at compile time. Using
+// runtime.Caller (instead of os.Getwd-based path-suffix matching) keeps the lint correct under test runners that change the working
 // directory and on filesystems with non-/-separators (#119 review).
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -90,10 +84,9 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
 }
 
-// functionsCallingChokepoint returns the set of function names declared
-// in astFile whose body contains a call to a chokepoint selector. The
-// helper that delegates to it (e.g. authzGate calling .Allow) is
-// included so a same-file delegation chain still satisfies the lint.
+// functionsCallingChokepoint returns the set of function names declared in astFile whose body contains a call to a chokepoint
+// selector. The helper that delegates to it (e.g. authzGate calling .Allow) is included so a same-file delegation chain still
+// satisfies the lint.
 func functionsCallingChokepoint(astFile *ast.File) map[string]bool {
 	out := map[string]bool{}
 	for _, decl := range astFile.Decls {
@@ -108,12 +101,9 @@ func functionsCallingChokepoint(astFile *ast.File) map[string]bool {
 	return out
 }
 
-// handlerReachesChokepoint reports whether handlerName's body either
-// calls a chokepoint selector directly or delegates to a same-file
-// helper that does. One level of indirection is enough for the
-// wave-1 helper pattern; deeper chains would let the chokepoint hide
-// behind layers of abstraction the next reviewer cannot see at the
-// handler call site.
+// handlerReachesChokepoint reports whether handlerName's body either calls a chokepoint selector directly or delegates to a same-file
+// helper that does. One level of indirection is enough for the wave-1 helper pattern; deeper chains would let the chokepoint hide
+// behind layers of abstraction the next reviewer cannot see at the handler call site.
 func handlerReachesChokepoint(astFile *ast.File, handlerName string, gatedFns map[string]bool) bool {
 	fn := findFuncDecl(astFile, handlerName)
 	if fn == nil || fn.Body == nil {
@@ -122,10 +112,8 @@ func handlerReachesChokepoint(astFile *ast.File, handlerName string, gatedFns ma
 	return bodyCallsChokepoint(fn.Body, gatedFns)
 }
 
-// bodyCallsChokepoint walks node looking for a call expression that
-// either matches a chokepoint selector directly, or invokes a
-// same-file helper recorded in gatedFns. Returns true on the first
-// match. Pass gatedFns=nil to skip the same-file-helper check (used
+// bodyCallsChokepoint walks node looking for a call expression that either matches a chokepoint selector directly, or invokes a
+// same-file helper recorded in gatedFns. Returns true on the first match. Pass gatedFns=nil to skip the same-file-helper check (used
 // when computing the gated-function set itself).
 func bodyCallsChokepoint(node ast.Node, gatedFns map[string]bool) bool {
 	found := false
@@ -179,11 +167,9 @@ func findFuncDecl(astFile *ast.File, name string) *ast.FuncDecl {
 	return nil
 }
 
-// registeredHandlerMethods walks the file looking for
-// `mux.HandleFunc("PATTERN", h.handlerMethod)` calls and returns a
-// map of method name -> route pattern. The pattern is captured for
-// the failure message so a violation surfaces "GET /api/policy
-// (handler: handleGetPolicy)" without forcing the maintainer to grep.
+// registeredHandlerMethods walks the file looking for `mux.HandleFunc("PATTERN", h.handlerMethod)` calls and returns a map of
+// method name -> route pattern. The pattern is captured for the failure message so a violation surfaces "GET /api/policy (handler:
+// handleGetPolicy)" without forcing the maintainer to grep.
 func registeredHandlerMethods(astFile *ast.File) map[string]string {
 	out := map[string]string{}
 	ast.Inspect(astFile, func(n ast.Node) bool {
@@ -201,11 +187,9 @@ func registeredHandlerMethods(astFile *ast.File) map[string]string {
 	return out
 }
 
-// extractRouteRegistration returns (handlerMethodName, routePattern,
-// true) when call is a `mux.HandleFunc(pattern, h.method)` expression
-// with both arguments shaped as expected. Anything else (computed
-// patterns, closure handlers) returns ok=false because the lint cannot
-// assert correctness for those forms without symbolic analysis.
+// extractRouteRegistration returns (handlerMethodName, routePattern, true) when call is a `mux.HandleFunc(pattern, h.method)`
+// expression with both arguments shaped as expected. Anything else (computed patterns, closure handlers) returns ok=false because the
+// lint cannot assert correctness for those forms without symbolic analysis.
 func extractRouteRegistration(call *ast.CallExpr) (string, string, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -228,10 +212,8 @@ func extractRouteRegistration(call *ast.CallExpr) (string, string, bool) {
 	return method, pattern, true
 }
 
-// stringLitValue extracts the literal value from a string-literal AST
-// node. Returns ok=false for anything else — the lint refuses to
-// assert correctness for routes registered with computed patterns
-// because the pattern's value isn't visible at AST time.
+// stringLitValue extracts the literal value from a string-literal AST node. Returns ok=false for anything else — the lint refuses to
+// assert correctness for routes registered with computed patterns because the pattern's value isn't visible at AST time.
 func stringLitValue(expr ast.Expr) (string, bool) {
 	bl, ok := expr.(*ast.BasicLit)
 	if !ok || bl.Kind != token.STRING {
@@ -246,10 +228,8 @@ func stringLitValue(expr ast.Expr) (string, bool) {
 	return raw[1 : len(raw)-1], true
 }
 
-// selectorMethodName extracts the method name from a `recv.Method`
-// selector expression passed as an HTTP handler reference. Returns
-// ok=false for anything else (a closure, a top-level function, a
-// higher-order expression); those forms aren't used by any wave-1
+// selectorMethodName extracts the method name from a `recv.Method` selector expression passed as an HTTP handler reference. Returns
+// ok=false for anything else (a closure, a top-level function, a higher-order expression); those forms aren't used by any wave-1
 // operator handler and would need their own lint shape.
 func selectorMethodName(expr ast.Expr) (string, bool) {
 	sel, ok := expr.(*ast.SelectorExpr)

@@ -12,24 +12,18 @@ import (
 )
 
 const (
-	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte
-	// token (tokenLen lives in hash.go). For n bytes the encoded length is
-	// ceil(n*4/3) = (n*4+2)/3 — derived from tokenLen rather than hard-coded
-	// so a future tokenLen bump stays in sync without a second edit. Anything
-	// else is a malformed presentation; we reject before paying the argon2id
-	// cost.
+	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte token (tokenLen lives in hash.go). For n bytes the encoded
+	// length is ceil(n*4/3) = (n*4+2)/3 — derived from tokenLen rather than hard-coded so a future tokenLen bump stays in sync without a
+	// second edit. Anything else is a malformed presentation; we reject before paying the argon2id cost.
 	hostTokenBase64Len = (tokenLen*4 + 2) / 3
 
-	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we
-	// hex-encode for audit metadata (8 hex chars). Long enough to disambiguate
-	// in operator UIs, short enough that the prefix stays a credential-free
-	// identifier.
+	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we hex-encode for audit metadata (8 hex chars). Long enough to
+	// disambiguate in operator UIs, short enough that the prefix stays a credential-free identifier.
 	tokenIDPrefixBytes = 4
 )
 
-// Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash
-// and salt are intentionally not exported; callers that need to verify a token go through
-// Verify, not direct row access.
+// Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash and salt are intentionally not exported;
+// callers that need to verify a token go through Verify, not direct row access.
 type Enrollment struct {
 	HostID       string     `db:"host_id" json:"host_id"`
 	Hostname     string     `db:"hostname" json:"hostname"`
@@ -43,9 +37,8 @@ type Enrollment struct {
 	RevokedBy    *string    `db:"revoked_by" json:"revoked_by,omitempty"`
 }
 
-// Store owns the `enrollments` table. It is backed by *sqlx.DB (the store package already
-// opens one via otelsql.Open); we take a db handle rather than the full *store.Store so this
-// package stays unit-testable with a plain sqlx.DB.
+// Store owns the `enrollments` table. It is backed by *sqlx.DB (the store package already opens one via otelsql.Open); we take a db
+// handle rather than the full *store.Store so this package stays unit-testable with a plain sqlx.DB.
 type Store struct {
 	db *sqlx.DB
 }
@@ -55,9 +48,8 @@ func NewStore(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// RegisterRequest captures the inputs to a successful enrollment. The presented secret has
-// already been validated by the handler; by the time Register is called we're committed to
-// issuing a token.
+// RegisterRequest captures the inputs to a successful enrollment. The presented secret has already been validated by the handler;
+// by the time Register is called we're committed to issuing a token.
 type RegisterRequest struct {
 	HostID       string
 	Hostname     string
@@ -73,13 +65,11 @@ type RegisterResult struct {
 	EnrolledAt time.Time
 }
 
-// Register issues a new token for HostID and replaces any existing row keyed by host_id. The
-// enrollments table holds the *current* enrollment state only; an older design called for an
-// archive UPDATE before REPLACE, but REPLACE on the primary key deletes and re-inserts the
-// row, so "re-enrolled" audit metadata cannot survive in the same row. Enrollment history
-// (revocation reasons, who revoked, etc.) is deferred to a dedicated history table; for
-// the MVP, the audit trail lives in structured logs emitted by handler.go (enroll) and
-// admin.go (revoke).
+// Register issues a new token for HostID and replaces any existing row keyed by host_id. The enrollments table holds the *current*
+// enrollment state only; an older design called for an archive UPDATE before REPLACE, but REPLACE on the primary key deletes and
+// re-inserts the row, so "re-enrolled" audit metadata cannot survive in the same row. Enrollment history (revocation reasons, who
+// revoked, etc.) is deferred to a dedicated history table; for the MVP, the audit trail lives in structured logs emitted by handler.go
+// (enroll) and admin.go (revoke).
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
 	token, err := generateToken()
 	if err != nil {
@@ -113,14 +103,10 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	}, nil
 }
 
-// VerifyResult is the rotation-aware shape returned by VerifyWithMeta:
-// HostID identifies the matched enrollment, CurrentTokenID is the
-// SHA-256 of the matched token (used by the service layer as the
-// optimistic-lock key for RotateHostToken), TokenIssuedAt is the
-// current token's issue timestamp (the rotation-eligibility input),
-// and MatchedPrevious tells the caller whether the verify succeeded
-// against the grace-window previous token (in which case rotation is
-// already in flight and the caller must NOT trigger another).
+// VerifyResult is the rotation-aware shape returned by VerifyWithMeta: HostID identifies the matched enrollment, CurrentTokenID is
+// the SHA-256 of the matched token (used by the service layer as the optimistic-lock key for RotateHostToken), TokenIssuedAt is the
+// current token's issue timestamp (the rotation-eligibility input), and MatchedPrevious tells the caller whether the verify succeeded
+// against the grace-window previous token (in which case rotation is already in flight and the caller must NOT trigger another).
 type VerifyResult struct {
 	HostID          string
 	CurrentTokenID  []byte
@@ -128,9 +114,8 @@ type VerifyResult struct {
 	MatchedPrevious bool
 }
 
-// Verify is the thin wrapper that callers who only need the host_id keep
-// using; new callers (the service-level rotation trigger) reach for
-// VerifyWithMeta below.
+// Verify is the thin wrapper that callers who only need the host_id keep using; new callers (the service-level rotation trigger) reach
+// for VerifyWithMeta below.
 func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 	r, err := s.VerifyWithMeta(ctx, token)
 	if err != nil {
@@ -169,13 +154,10 @@ func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult,
 	return s.verifyAgainstPrevious(ctx, token, tid)
 }
 
-// verifyAgainstCurrent does the host_token_id lookup. ok=false means the
-// row was not found (caller should fall through to previous-token path);
-// any other error is surfaced as-is. ok=true with err=nil is the happy
-// path; ok=true with ErrTokenMismatch means the row was found but the
-// argon2id verify failed (treat as mismatch, do NOT fall through to
-// previous since that would be redundant computation against the same
-// host).
+// verifyAgainstCurrent does the host_token_id lookup. ok=false means the row was not found (caller should fall through to
+// previous-token path); any other error is surfaced as-is. ok=true with err=nil is the happy path; ok=true with ErrTokenMismatch means
+// the row was found but the argon2id verify failed (treat as mismatch, do NOT fall through to previous since that would be redundant
+// computation against the same host).
 func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []byte) (VerifyResult, bool, error) {
 	var row struct {
 		HostID   string    `db:"host_id"`
@@ -207,10 +189,9 @@ func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []by
 	}, true, nil
 }
 
-// verifyAgainstPrevious does the previous_host_token_id lookup, gated on
-// previous_token_expires_at > NOW. Returns the same VerifyResult shape
-// with MatchedPrevious=true so the service layer skips the rotation
-// trigger (rotation is already in flight; another would be wasteful).
+// verifyAgainstPrevious does the previous_host_token_id lookup, gated on previous_token_expires_at > NOW. Returns the same
+// VerifyResult shape with MatchedPrevious=true so the service layer skips the rotation trigger (rotation is already in flight; another
+// would be wasteful).
 func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []byte) (VerifyResult, error) {
 	var row struct {
 		HostID   string    `db:"host_id"`
@@ -243,13 +224,10 @@ func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []b
 	}, nil
 }
 
-// RotateResult carries the freshly minted token + audit-friendly metadata
-// back to the caller. NewToken is the raw bearer the service layer
-// queues into a rotate_token command for the agent. PreviousTokenIDPrefix
-// is the first 8 hex chars of the prior host_token_id, included on the
-// audit row so reviewers can correlate a rotation to the verify request
-// that triggered it without storing the full token id (which is
-// preimage-resistant but still a per-host identifier).
+// RotateResult carries the freshly minted token + audit-friendly metadata back to the caller. NewToken is the raw bearer the service
+// layer queues into a rotate_token command for the agent. PreviousTokenIDPrefix is the first 8 hex chars of the prior host_token_id,
+// included on the audit row so reviewers can correlate a rotation to the verify request that triggered it without storing the full
+// token id (which is preimage-resistant but still a per-host identifier).
 type RotateResult struct {
 	NewToken              string
 	PreviousTokenIDPrefix string
@@ -413,9 +391,8 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 	}, nil
 }
 
-// CountActive returns how many non-revoked enrollments exist. Cheaper than
-// ActiveHostIDs when the caller only needs the count — the OTel gauge
-// `edr.enrolled.hosts` is the primary caller.
+// CountActive returns how many non-revoked enrollments exist. Cheaper than ActiveHostIDs when the caller only needs the count — the
+// OTel gauge `edr.enrolled.hosts` is the primary caller.
 func (s *Store) CountActive(ctx context.Context) (int, error) {
 	var n int
 	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM enrollments WHERE revoked_at IS NULL`); err != nil {
@@ -424,10 +401,9 @@ func (s *Store) CountActive(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment.
-// Used to fan out policy updates to the set of hosts that still have a valid token;
-// returning just the id column keeps the payload small when the caller is already
-// going to look up the full row by id.
+// ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment. Used to fan out policy updates to the set of
+// hosts that still have a valid token; returning just the id column keeps the payload small when the caller is already going to look
+// up the full row by id.
 func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	var ids []string
 	if err := s.db.SelectContext(ctx, &ids, `
@@ -469,9 +445,8 @@ func (s *Store) Get(ctx context.Context, hostID string) (*Enrollment, error) {
 	return &e, nil
 }
 
-// Revoke marks a host's enrollment as revoked. Idempotent: calling Revoke a second time
-// preserves the original revoked_at + revoke_reason + revoked_by. Returns sql.ErrNoRows
-// if the host_id is not in the table at all.
+// Revoke marks a host's enrollment as revoked. Idempotent: calling Revoke a second time preserves the original revoked_at +
+// revoke_reason + revoked_by. Returns sql.ErrNoRows if the host_id is not in the table at all.
 func (s *Store) Revoke(ctx context.Context, hostID, reason, actor string) error {
 	// Verify the row exists first so "not found" and "already revoked" are distinguishable in
 	// RowsAffected — MySQL's affected-rows counter excludes no-op updates.
@@ -484,9 +459,8 @@ func (s *Store) Revoke(ctx context.Context, hostID, reason, actor string) error 
 		return fmt.Errorf("revoke lookup: %w", err)
 	}
 
-	// Only set the columns when they are still null. COALESCE preserves the original
-	// revoke_reason/revoked_by across subsequent revoke calls, so the first revoker's audit
-	// trail is the source of truth.
+	// Only set the columns when they are still null. COALESCE preserves the original revoke_reason/revoked_by across subsequent revoke
+	// calls, so the first revoker's audit trail is the source of truth.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE enrollments
 		SET revoked_at    = COALESCE(revoked_at, ?),

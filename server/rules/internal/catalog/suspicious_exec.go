@@ -114,24 +114,19 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 }
 
 const (
-	// suspiciousExecWindowNs bounds the temporal distance between the shell
-	// exec and the trigger event (temp-exec or network_connect). Real chains
-	// complete in seconds; 30s is a generous ceiling that matches the
-	// original forward-direction rule.
+	// suspiciousExecWindowNs bounds the temporal distance between the shell exec and the trigger event (temp-exec or network_connect).
+	// Real chains complete in seconds; 30s is a generous ceiling that matches the original forward-direction rule.
 	suspiciousExecWindowNs = int64(30_000_000_000)
 
-	// maxSuspiciousAncestorWalkSteps caps the parent-chain traversal so a
-	// pathological process tree (or a malformed event with self-referential
-	// ppid) can't loop. Real chains go non-shell -> shell -> temp, and
-	// shell-to-shell layering rarely exceeds two or three hops.
+	// maxSuspiciousAncestorWalkSteps caps the parent-chain traversal so a pathological process tree (or a malformed event with
+	// self-referential ppid) can't loop. Real chains go non-shell -> shell -> temp, and shell-to-shell layering rarely exceeds two or
+	// three hops.
 	maxSuspiciousAncestorWalkSteps = 16
 )
 
-// execPayload is the subset of exec event payload fields needed for detection.
-// Args carries argv so the rule can detect shebang-shell execs where the
-// kernel resolves `#!/bin/sh` to /bin/sh and the actual script path lives
-// in argv[1] — the rule must consider those temp-path execs even though
-// the exec event's `path` field is /bin/sh, not /tmp/whatever.
+// execPayload is the subset of exec event payload fields needed for detection. Args carries argv so the rule can detect shebang-shell
+// execs where the kernel resolves `#!/bin/sh` to /bin/sh and the actual script path lives in argv[1] — the rule must consider those
+// temp-path execs even though the exec event's `path` field is /bin/sh, not /tmp/whatever.
 type execPayload struct {
 	PID  int      `json:"pid"`
 	PPID int      `json:"ppid"`
@@ -139,9 +134,8 @@ type execPayload struct {
 	Args []string `json:"args"`
 }
 
-// networkConnectPayload is the subset of network_connect event fields needed
-// for detection. PID identifies the process making the connection — the rule
-// walks UP from there looking for a shell ancestor with a non-shell parent.
+// networkConnectPayload is the subset of network_connect event fields needed for detection. PID identifies the process making the
+// connection — the rule walks UP from there looking for a shell ancestor with a non-shell parent.
 type networkConnectPayload struct {
 	PID           int    `json:"pid"`
 	Direction     string `json:"direction"`
@@ -150,11 +144,9 @@ type networkConnectPayload struct {
 }
 
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	// Two-pass evaluation. Pass 1 handles temp-exec triggers (preferred); Pass 2
-	// handles outbound network_connect triggers as a fallback. Splitting the
-	// passes preserves the original rule's "prefer the path-based finding when
-	// both signals exist for the same shell" semantics — which would otherwise
-	// be order-dependent on event arrival within a single pass.
+	// Two-pass evaluation. Pass 1 handles temp-exec triggers (preferred); Pass 2 handles outbound network_connect triggers as a fallback.
+	// Splitting the passes preserves the original rule's "prefer the path-based finding when both signals exist for the same shell"
+	// semantics — which would otherwise be order-dependent on event arrival within a single pass.
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
 
@@ -189,12 +181,10 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 	return findings, nil
 }
 
-// findShellExecEventID scans the current batch for an exec event matching the
-// shell's PID and host so the finding's EventIDs can include the shell-stage
-// event when it happens to be in the same batch as the trigger. Best-effort:
-// when the shell exec is in an earlier batch it isn't findable here and
-// EventIDs simply omits it. The trigger's own event ID is excluded to avoid
-// duplicates in the arm-2 (re-exec) case where shell and temp share a PID.
+// findShellExecEventID scans the current batch for an exec event matching the shell's PID and host so the finding's EventIDs can
+// include the shell-stage event when it happens to be in the same batch as the trigger. Best-effort: when the shell exec is in an
+// earlier batch it isn't findable here and EventIDs simply omits it. The trigger's own event ID is excluded to avoid duplicates in the
+// arm-2 (re-exec) case where shell and temp share a PID.
 func findShellExecEventID(events []api.Event, hostID string, shellPID int, excludeEventID string) string {
 	for _, e := range events {
 		if e.EventType != "exec" || e.HostID != hostID || e.EventID == excludeEventID {
@@ -215,10 +205,9 @@ func findShellExecEventID(events []api.Event, hostID string, shellPID int, exclu
 	return ""
 }
 
-// evalExec inspects a single exec event. Returns (finding, shellPID, err) on a
-// match. The shellPID is the PID of the attributed shell ancestor — the caller
-// uses it for batch-level dedupe so multiple temp-exec children of one shell
-// produce one finding rather than one per child.
+// evalExec inspects a single exec event. Returns (finding, shellPID, err) on a match. The shellPID is the PID of the attributed shell
+// ancestor — the caller uses it for batch-level dedupe so multiple temp-exec children of one shell produce one finding rather than one
+// per child.
 func (r *SuspiciousExec) evalExec(
 	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*api.Finding, int, error) {
@@ -251,11 +240,9 @@ func (r *SuspiciousExec) evalExec(
 	return r.evalExecArm2(ctx, s, in)
 }
 
-// execMatchInputs bundles the per-event evaluation state shared by both exec
-// arms. Sonar's go:S107 caps function signatures at 7 parameters; passing
-// these through individually pushed both arms over the limit. Bundling reads
-// cleaner anyway — every field below is "inputs about this single exec event"
-// and they always travel together.
+// execMatchInputs bundles the per-event evaluation state shared by both exec arms. Sonar's go:S107 caps function signatures at 7
+// parameters; passing these through individually pushed both arms over the limit. Bundling reads cleaner anyway — every field below is
+// "inputs about this single exec event" and they always travel together.
 type execMatchInputs struct {
 	evt       api.Event
 	batch     []api.Event
@@ -265,12 +252,9 @@ type execMatchInputs struct {
 	tempPath  string
 }
 
-// evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary
-// is a SEPARATE process from the shell, so the shell sits at the temp-binary's
-// PPID (or higher, through possible shell-to-shell layering). The walk starts
-// at the temp-exec's own PID; the loop's first check is `shellPaths[..]` which
-// is false for the temp-binary, so it trivially advances to PPID on the next
-// step.
+// evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary is a SEPARATE process from the shell, so the shell
+// sits at the temp-binary's PPID (or higher, through possible shell-to-shell layering). The walk starts at the temp-exec's own PID;
+// the loop's first check is `shellPaths[..]` which is false for the temp-binary, so it trivially advances to PPID on the next step.
 func (r *SuspiciousExec) evalExecArm1(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
 ) (*api.Finding, int, error) {
@@ -287,14 +271,11 @@ func (r *SuspiciousExec) evalExecArm1(
 	return r.makeExecFinding(in.evt, parent, shell, in.tempProc, in.tempPath, in.batch), shell.PID, nil
 }
 
-// evalExecArm2 handles the same-PID re-exec optimisation. `sh -c "/tmp/foo"`
-// is commonly implemented by execve(/tmp/foo) at the shell's PID, leaving no
-// fork boundary between the shell and the payload. The latest exec record at
-// this PID is /tmp/foo (which is what got us here); the shell stage is
-// reachable via the previous_exec_id chain. Without this branch the PPID walk
-// above misses re-exec chains entirely because temp.PPID is the shell's parent
-// (a non-shell) and the shell itself is on the re-exec history of the same
-// PID, not in the parent chain.
+// evalExecArm2 handles the same-PID re-exec optimisation. `sh -c "/tmp/foo"` is commonly implemented by execve(/tmp/foo) at the
+// shell's PID, leaving no fork boundary between the shell and the payload. The latest exec record at this PID is /tmp/foo (which
+// is what got us here); the shell stage is reachable via the previous_exec_id chain. Without this branch the PPID walk above misses
+// re-exec chains entirely because temp.PPID is the shell's parent (a non-shell) and the shell itself is on the re-exec history of the
+// same PID, not in the parent chain.
 func (r *SuspiciousExec) evalExecArm2(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
 ) (*api.Finding, int, error) {
@@ -322,12 +303,10 @@ func (r *SuspiciousExec) evalExecArm2(
 	return nil, 0, nil
 }
 
-// shouldFire is the common gate shared by both exec arms (and evalNetwork): a
-// candidate shell only produces a finding when (a) we haven't already fired on
-// it in this batch, (b) the trigger event falls within the shell's 30-second
-// window, and (c) the shell's non-shell parent isn't on the operator's
-// allowlist. Returning false means "skip this candidate, continue / give up";
-// the callers handle the `nil, 0, nil` reply.
+// shouldFire is the common gate shared by both exec arms (and evalNetwork): a candidate shell only produces a finding when (a) we
+// haven't already fired on it in this batch, (b) the trigger event falls within the shell's 30-second window, and (c) the shell's
+// non-shell parent isn't on the operator's allowlist. Returning false means "skip this candidate, continue / give up"; the callers
+// handle the `nil, 0, nil` reply.
 func (r *SuspiciousExec) shouldFire(
 	seenShell map[int]struct{}, shell, parent *api.Process, triggerTS int64,
 ) bool {
@@ -343,10 +322,9 @@ func (r *SuspiciousExec) shouldFire(
 	return true
 }
 
-// evalNetwork inspects an outbound network_connect event and walks UP from the
-// connecting process looking for a shell ancestor whose parent is non-shell.
-// The connecting process itself can be the shell (curl|sh case) or any
-// descendant of it (shell spawned curl); the inclusive walk handles both.
+// evalNetwork inspects an outbound network_connect event and walks UP from the connecting process looking for a shell ancestor whose
+// parent is non-shell. The connecting process itself can be the shell (curl|sh case) or any descendant of it (shell spawned curl);
+// the inclusive walk handles both.
 func (r *SuspiciousExec) evalNetwork(
 	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*api.Finding, int, error) {
@@ -461,9 +439,8 @@ func (r *SuspiciousExec) examineCandidate(
 		}
 		return nil, nil, next, nil
 	}
-	// `current` is a shell. Distinguish "launchd parent" (match) from
-	// "parent record missing" (defer) from "non-shell parent" (match)
-	// from "shell parent" (continue walking up).
+	// `current` is a shell. Distinguish "launchd parent" (match) from "parent record missing" (defer) from "non-shell parent" (match) from
+	// "shell parent" (continue walking up).
 	if current.PPID <= 1 {
 		return current, nil, nil, nil
 	}
@@ -496,11 +473,9 @@ func (r *SuspiciousExec) lookupAncestor(
 	return p, nil
 }
 
-// shellWithinWindow reports whether the trigger event's timestamp falls within
-// the 30-second window after the shell's exec. Anchored on the shell's
-// exec_time_ns when set (preferred — that's the kernel's actual exec moment)
-// and falls back to fork_time_ns otherwise (defensive — should always be set
-// for a fully-materialised process).
+// shellWithinWindow reports whether the trigger event's timestamp falls within the 30-second window after the shell's exec. Anchored
+// on the shell's exec_time_ns when set (preferred — that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
+// (defensive — should always be set for a fully-materialised process).
 func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	anchor := shell.ForkTimeNs
 	if shell.ExecTimeNs != nil {
@@ -509,10 +484,9 @@ func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	return triggerTS >= anchor && triggerTS <= anchor+suspiciousExecWindowNs
 }
 
-// makeExecFinding builds the temp-path finding shared by arm 1 and arm 2.
-// In the arm-2 re-exec case tempProc and shell share a PID; the finding
-// still links to tempProc so the analyst lands on the temp-stage record
-// (the re-exec'd row), not the earlier shell-stage row.
+// makeExecFinding builds the temp-path finding shared by arm 1 and arm 2. In the arm-2 re-exec case tempProc and shell share a PID;
+// the finding still links to tempProc so the analyst lands on the temp-stage record (the re-exec'd row), not the earlier shell-stage
+// row.
 func (r *SuspiciousExec) makeExecFinding(
 	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, batch []api.Event,
 ) *api.Finding {
@@ -535,10 +509,9 @@ func (r *SuspiciousExec) makeExecFinding(
 	}
 }
 
-// parentAllowed reports whether the given non-shell parent process is on the
-// operator's allowlist. A nil parent (shell parented at launchd, or parent
-// not yet materialised) never matches — those are the cases the rule must
-// continue to flag because there's no human-attested entry point.
+// parentAllowed reports whether the given non-shell parent process is on the operator's allowlist. A nil parent (shell parented at
+// launchd, or parent not yet materialised) never matches — those are the cases the rule must continue to flag because there's no
+// human-attested entry point.
 func (r *SuspiciousExec) parentAllowed(parent *api.Process) bool {
 	if r.AllowedNonShellParents == nil || parent == nil {
 		return false

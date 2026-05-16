@@ -35,8 +35,7 @@ func OpenDB(ctx context.Context, dsn string) (*sqlx.DB, error) {
 	return db, nil
 }
 
-// ensureParseTime appends parseTime=true to a MySQL DSN if missing,
-// so sql.DB returns time.Time for DATETIME columns instead of raw
+// ensureParseTime appends parseTime=true to a MySQL DSN if missing, so sql.DB returns time.Time for DATETIME columns instead of raw
 // bytes.
 func ensureParseTime(dsn string) string {
 	if strings.Contains(dsn, "parseTime") {

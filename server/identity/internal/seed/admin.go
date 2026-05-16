@@ -30,18 +30,13 @@ import (
 // accounts post-v1.1; for MVP this is the only one.
 const DefaultAdminEmail = "admin@fleet-edr.local"
 
-// DefaultAdminRole is the role bound to the seeded break-glass admin
-// at first boot. `docs/authz.md` documents the contract: the
-// break-glass account lands in `super_admin` so an operator who
-// completes the redemption flow can do every operator action without
-// a manual SQL promotion. Without this binding the user has zero
-// grants and the chokepoint denies even host.read.
+// DefaultAdminRole is the role bound to the seeded break-glass admin at first boot. `docs/authz.md` documents the contract: the
+// break-glass account lands in `super_admin` so an operator who completes the redemption flow can do every operator action without a
+// manual SQL promotion. Without this binding the user has zero grants and the chokepoint denies even host.read.
 const DefaultAdminRole = "super_admin"
 
-// mysqlErrDupEntry is the SQL state for "row already exists with the
-// unique key you tried to insert." We rely on the role_bindings unique
-// key (user_id, role_id, scope_type, scope_id) to make the seed
-// idempotent across container restarts; a duplicate just means
+// mysqlErrDupEntry is the SQL state for "row already exists with the unique key you tried to insert." We rely on the role_bindings
+// unique key (user_id, role_id, scope_type, scope_id) to make the seed idempotent across container restarts; a duplicate just means
 // "already seeded, nothing to do."
 const mysqlErrDupEntry = 1062
 
@@ -82,14 +77,10 @@ func Admin(ctx context.Context, us *users.Store, rb *rbac.Store, logger *slog.Lo
 	return u, "", nil
 }
 
-// resolveOrCreateAdmin finds the canonical break-glass admin row,
-// creating it if it doesn't exist yet. Idempotent: on a restart the
-// existing row is returned unchanged so the caller can re-issue a
-// fresh redemption token + re-bind super_admin without rewriting the
-// user record. Returns a hard error on any inconsistency (e.g. a
-// non-breakglass row at the canonical email) — there is no
-// pre-release deployment to migrate from, so an unexpected state is
-// always a bug, not a known migration path.
+// resolveOrCreateAdmin finds the canonical break-glass admin row, creating it if it doesn't exist yet. Idempotent: on a restart the
+// existing row is returned unchanged so the caller can re-issue a fresh redemption token + re-bind super_admin without rewriting the
+// user record. Returns a hard error on any inconsistency (e.g. a non-breakglass row at the canonical email) — there is no pre-release
+// deployment to migrate from, so an unexpected state is always a bug, not a known migration path.
 func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Logger) (*users.User, error) {
 	existing, err := us.GetByEmail(ctx, DefaultAdminEmail)
 	if err == nil {
@@ -115,10 +106,8 @@ func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Log
 	return u, nil
 }
 
-// bindSuperAdmin inserts the role_bindings row that gives the
-// break-glass admin its wave-1 grants. Idempotent on the rbac unique
-// key: a duplicate-entry error is swallowed (binding already exists,
-// nothing to do); any other DB failure surfaces.
+// bindSuperAdmin inserts the role_bindings row that gives the break-glass admin its wave-1 grants. Idempotent on the rbac unique key:
+// a duplicate-entry error is swallowed (binding already exists, nothing to do); any other DB failure surfaces.
 func bindSuperAdmin(ctx context.Context, rb *rbac.Store, u *users.User, logger *slog.Logger) error {
 	err := rb.BindRole(ctx, rb.DB(), rbac.BindRoleRequest{
 		UserID:    u.ID,

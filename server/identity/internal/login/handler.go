@@ -39,10 +39,9 @@ type Options struct {
 	CookieSecure bool
 	// Logger for audit lines.
 	Logger *slog.Logger
-	// Audit is the operator-action audit recorder. Optional: when nil the
-	// handler skips the Record calls (existing tests that don't care about
-	// the audit trail need not stand one up). When set, the logout path
-	// emits one row through this recorder after the action commits.
+	// Audit is the operator-action audit recorder. Optional: when nil the handler skips the Record calls (existing tests that don't
+	// care about the audit trail need not stand one up). When set, the logout path emits one row through this recorder after the action
+	// commits.
 	Audit api.AuditRecorder
 }
 
@@ -63,8 +62,7 @@ func New(svc api.Service, opts Options) *Handler {
 	}
 }
 
-// RegisterPublicRoutes wires DELETE /api/session on the given mux.
-// Logout is public (and permissive) by design — a stale cookie still
+// RegisterPublicRoutes wires DELETE /api/session on the given mux. Logout is public (and permissive) by design — a stale cookie still
 // needs a clearing Set-Cookie regardless of session validity.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/session", h.handleLogout)
@@ -108,10 +106,8 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	h.writeSessionJSON(ctx, w, u, sess.CSRFToken)
 }
 
-// handleLogout is public (not behind Session middleware). It does its own
-// cookie lookup so a stale / expired / unknown cookie still produces a
-// clearing Set-Cookie. Idempotent: any decode / lookup failure falls
-// through to the cookie clear.
+// handleLogout is public (not behind Session middleware). It does its own cookie lookup so a stale / expired / unknown cookie still
+// produces a clearing Set-Cookie. Idempotent: any decode / lookup failure falls through to the cookie clear.
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := httpserver.ClientIP(r)
@@ -147,12 +143,9 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// decodeLogoutToken extracts the raw session token from the logout request,
-// returning nil when the cookie is absent, empty, or malformed. Pulled out
-// of handleLogout so its happy path is a single early-return instead of a
-// double-nested `if cookie { if raw, err := ...`. Returning nil on every
-// failure mode preserves logout's "always clear the cookie, never error"
-// contract.
+// decodeLogoutToken extracts the raw session token from the logout request, returning nil when the cookie is absent, empty,
+// or malformed. Pulled out of handleLogout so its happy path is a single early-return instead of a double-nested `if cookie { if raw,
+// err := ...`. Returning nil on every failure mode preserves logout's "always clear the cookie, never error" contract.
 func (h *Handler) decodeLogoutToken(r *http.Request) []byte {
 	cookie, err := r.Cookie(api.SessionCookieName)
 	if err != nil || cookie.Value == "" {
@@ -165,13 +158,10 @@ func (h *Handler) decodeLogoutToken(r *http.Request) []byte {
 	return raw
 }
 
-// resolveLogoutActor looks up the user behind a session token so the audit
-// row records the right user_id + email. Returns (nil, "") when the
-// session is unknown / expired (logout is idempotent so a missing session
-// produces no audit row). When the session resolves but the users row
-// fetch fails (e.g. the user was deleted between session create and now),
-// returns the user_id with an empty email; the audit row still records
-// the user_id, and reviewers can correlate via that.
+// resolveLogoutActor looks up the user behind a session token so the audit row records the right user_id + email. Returns (nil, "")
+// when the session is unknown / expired (logout is idempotent so a missing session produces no audit row). When the session resolves
+// but the users row fetch fails (e.g. the user was deleted between session create and now), returns the user_id with an empty email;
+// the audit row still records the user_id, and reviewers can correlate via that.
 func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, string) {
 	sess, err := h.svc.GetSession(ctx, raw)
 	if err != nil {
@@ -186,14 +176,10 @@ func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, s
 }
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {
-	// auth_method is read off the session pinned to ctx (Session
-	// middleware wired by App.tsx's authed routes). Every session in
-	// the system is now minted by either the OIDC callback or the
-	// break-glass FinishLogin path; if no session is on ctx the
-	// caller is misconfigured (this handler is GET /api/session,
-	// always behind Session middleware). The "local_password"
-	// fallback remains as a defense-in-depth default since reading
-	// it as the empty string would surface as "" in the wire response.
+	// auth_method is read off the session pinned to ctx (Session middleware wired by App.tsx's authed routes). Every session in the system
+	// is now minted by either the OIDC callback or the break-glass FinishLogin path; if no session is on ctx the caller is misconfigured
+	// (this handler is GET /api/session, always behind Session middleware). The "local_password" fallback remains as a defense-in-depth
+	// default since reading it as the empty string would surface as "" in the wire response.
 	authMethod := "local_password"
 	if sess, ok := api.SessionFromContext(ctx); ok && sess.AuthMethod != "" {
 		authMethod = sess.AuthMethod
@@ -236,12 +222,9 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 	}
 }
 
-// recordAudit writes one audit row, treating recorder errors as soft:
-// log-warn-and-continue. The action being audited (login/logout) has
-// already committed by the time we reach this helper, so failing the
-// HTTP response on an audit-table hiccup would be worse than a missed
-// audit row. The structured warn line preserves the full event for
-// log-based reconstruction if needed.
+// recordAudit writes one audit row, treating recorder errors as soft: log-warn-and-continue. The action being audited (login/logout)
+// has already committed by the time we reach this helper, so failing the HTTP response on an audit-table hiccup would be worse than a
+// missed audit row. The structured warn line preserves the full event for log-based reconstruction if needed.
 func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
 	if h.audit == nil {
 		return

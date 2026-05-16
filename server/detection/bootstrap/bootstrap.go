@@ -22,14 +22,11 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
-// BuildInfo is injected by cmd/main and surfaced through the intake
-// handler's livez/readyz payloads. Re-exported from
-// detection/internal/intake so cmd/* don't have to reach into an
-// internal package for the type.
+// BuildInfo is injected by cmd/main and surfaced through the intake handler's livez/readyz payloads. Re-exported from
+// detection/internal/intake so cmd/* don't have to reach into an internal package for the type.
 type BuildInfo = intake.BuildInfo
 
-// Mode controls which background goroutines + routes the bootstrap
-// wires up. Two binaries consume this: fleet-edr-server (full mode)
+// Mode controls which background goroutines + routes the bootstrap wires up. Two binaries consume this: fleet-edr-server (full mode)
 // and fleet-edr-ingest (intake-only mode).
 type Mode int
 
@@ -42,10 +39,8 @@ const (
 	ModeIntake
 )
 
-// UserExists is the closure cmd/main wires from
-// identity.api.Service.UserExists. PUT /api/alerts/{id} calls it
-// before persisting `updated_by` so that orphan user_ids cannot
-// silently land on the row in the absence of a cross-context FK.
+// UserExists is the closure cmd/main wires from identity.api.Service.UserExists. PUT /api/alerts/{id} calls it before persisting
+// `updated_by` so that orphan user_ids cannot silently land on the row in the absence of a cross-context FK.
 type UserExists = service.UserExists
 
 // Deps bundles what New needs to wire the detection context.
@@ -70,14 +65,11 @@ type Deps struct {
 	// Cross-context inputs (Full mode only).
 	UserExists UserExists
 	Metrics    api.MetricsRecorder
-	// Audit is the operator-action recorder. Optional: nil disables
-	// audit emission for alert-status changes (existing tests pass nil
+	// Audit is the operator-action recorder. Optional: nil disables audit emission for alert-status changes (existing tests pass nil
 	// without ceremony). cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
-	// AuthZ is the authorization chokepoint every privileged operator
-	// route gates on. Required in ModeFull. cmd/main wires
-	// identityCtx.AuthZ(); intake-only mode (ModeIntake) does not
-	// register the operator handler so AuthZ may be nil there.
+	// AuthZ is the authorization chokepoint every privileged operator route gates on. Required in ModeFull. cmd/main wires
+	// identityCtx.AuthZ(); intake-only mode (ModeIntake) does not register the operator handler so AuthZ may be nil there.
 	AuthZ identityapi.AuthZ
 }
 
@@ -176,10 +168,9 @@ func (d *Detection) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, d.db)
 }
 
-// ApplySchema is the package-level form: applies detection's DDL
-// against the given DB without requiring a fully constructed
-// *Detection. Used by server/testdb so tests can apply every context's
-// schema without faking out each bootstrap's service dependencies.
+// ApplySchema is the package-level form: applies detection's DDL against the given DB without requiring a fully constructed
+// *Detection. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service
+// dependencies.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("detection ApplySchema: db must not be nil")
@@ -196,10 +187,8 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // the hot path response consumes via its Heartbeat closure.
 func (d *Detection) Service() api.Service { return d.svc }
 
-// SetMetrics wires the metrics recorder into the engine + intake +
-// pipeline (processttl + retention) AFTER construction. Used by
-// cmd/main to break the circular dependency between detectionCtx and
-// metrics.New (the OfflineHosts gauge source needs detectionCtx;
+// SetMetrics wires the metrics recorder into the engine + intake + pipeline (processttl + retention) AFTER construction. Used by
+// cmd/main to break the circular dependency between detectionCtx and metrics.New (the OfflineHosts gauge source needs detectionCtx;
 // detectionCtx's engine + intake + pipeline need the recorder).
 func (d *Detection) SetMetrics(m api.MetricsRecorder) {
 	d.metrics = m

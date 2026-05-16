@@ -10,10 +10,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-// TestRecorder_QueueDropped proves the Recorder emits the expected counter samples
-// with `lossy` attributes that downstream alerts key on. We build a local
-// MeterProvider + ManualReader rather than overriding the global one so the test can
-// run in parallel with any other that happens to touch otel.Meter.
+// TestRecorder_QueueDropped proves the Recorder emits the expected counter samples with `lossy` attributes that downstream alerts key
+// on. We build a local MeterProvider + ManualReader rather than overriding the global one so the test can run in parallel with any
+// other that happens to touch otel.Meter.
 func TestRecorder_QueueDropped(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -64,12 +63,10 @@ func TestNilRecorder_QueueDropped_Safe(t *testing.T) {
 	})
 }
 
-// TestNew exercises the production constructor that wires the global OTel meter,
-// covering the path that the agent main package takes at startup. We can't
-// inspect the resulting counter through the global meter without leaking state
-// across tests, so we just verify the Recorder is shaped correctly and that
-// recording against it does not panic — the no-op SDK swallows the sample when
-// no OTLP endpoint is configured.
+// TestNew exercises the production constructor that wires the global OTel meter, covering the path that the agent main package takes
+// at startup. We can't inspect the resulting counter through the global meter without leaking state across tests, so we just verify
+// the Recorder is shaped correctly and that recording against it does not panic — the no-op SDK swallows the sample when no OTLP
+// endpoint is configured.
 func TestNew(t *testing.T) {
 	r := New()
 	require.NotNil(t, r)

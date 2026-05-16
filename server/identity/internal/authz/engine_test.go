@@ -13,10 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 )
 
-// recordingAudit collects every AuditEvent the engine writes so tests
-// can assert "the chokepoint emitted exactly the audit row a Phase 6
-// dashboard would pivot on". Mirrors the recordingAudit pattern in
-// other context tests.
+// recordingAudit collects every AuditEvent the engine writes so tests can assert "the chokepoint emitted exactly the audit row a Phase
+// 6 dashboard would pivot on". Mirrors the recordingAudit pattern in other context tests.
 type recordingAudit struct {
 	mu     sync.Mutex
 	events []api.AuditEvent
@@ -67,10 +65,8 @@ func globalBinding(roleID, _ string) api.RoleBinding {
 	}
 }
 
-// TestAllow_RoleActionMatrix exercises every (role, action) cell the
-// spec names. Failure here means a Rego edit changed the policy
-// matrix in a way the table didn't expect; the matching opa-test
-// suite catches the same bug from the policy side.
+// TestAllow_RoleActionMatrix exercises every (role, action) cell the spec names. Failure here means a Rego edit changed the policy
+// matrix in a way the table didn't expect; the matching opa-test suite catches the same bug from the policy side.
 func TestAllow_RoleActionMatrix(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -116,10 +112,8 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 		{"analyst application_control.read", "analyst", api.ActionAppControlRead, false},
 		{"auditor application_control.rule_create", "auditor", api.ActionAppControlRuleCreate, false},
 	}
-	// One engine for the whole matrix. The Rego compile is the
-	// expensive part (~30ms) and the engine is read-only here, so
-	// 21 reuses of the same prepared query keep `go test` snappy
-	// without changing any assertion.
+	// One engine for the whole matrix. The Rego compile is the expensive part (~30ms) and the engine is read-only here, so 21 reuses of
+	// the same prepared query keep `go test` snappy without changing any assertion.
 	e, _ := newEngine(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,8 +183,7 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 	}
 }
 
-// TestAllow_UnregisteredAction_Denied verifies the defense-in-depth
-// gate: a caller passing an action string outside RegisteredActions
+// TestAllow_UnregisteredAction_Denied verifies the defense-in-depth gate: a caller passing an action string outside RegisteredActions
 // is denied with reason action_not_registered before Rego sees it.
 func TestAllow_UnregisteredAction_Denied(t *testing.T) {
 	e, rec := newEngine(t)
@@ -204,10 +197,8 @@ func TestAllow_UnregisteredAction_Denied(t *testing.T) {
 	assert.Equal(t, api.AuditAction("authz.not.a.real.action"), rec.snapshot()[0].Action)
 }
 
-// TestAllow_NoActor_Denied verifies the chokepoint denies anonymous
-// requests with reason no_actor and writes an audit row noting the
-// regression. A handler should have rejected the request earlier;
-// reaching the chokepoint without an actor is itself a signal.
+// TestAllow_NoActor_Denied verifies the chokepoint denies anonymous requests with reason no_actor and writes an audit row noting the
+// regression. A handler should have rejected the request earlier; reaching the chokepoint without an actor is itself a signal.
 func TestAllow_NoActor_Denied(t *testing.T) {
 	e, rec := newEngine(t)
 	d, err := e.Allow(t.Context(), api.ActionHostRead, api.Resource{})
@@ -217,10 +208,8 @@ func TestAllow_NoActor_Denied(t *testing.T) {
 	require.Len(t, rec.snapshot(), 1)
 }
 
-// TestAllow_HostScope_NotYetSupported pins the wave-1 scope contract:
-// a binding with scope_type=host on the matching resource is denied
-// with reason scope_not_yet_supported (the wave-2 resolver isn't
-// shipped). Without this assertion a wave-2 author could add the
+// TestAllow_HostScope_NotYetSupported pins the wave-1 scope contract: a binding with scope_type=host on the matching resource is
+// denied with reason scope_not_yet_supported (the wave-2 resolver isn't shipped). Without this assertion a wave-2 author could add the
 // resolver and not realise wave-1 deployments expected the deny.
 func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 	e, _ := newEngine(t)
@@ -235,10 +224,8 @@ func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 	assert.Equal(t, "scope_not_yet_supported", d.Reason)
 }
 
-// TestAllow_GlobalGrantWinsOverHostScopeDeny guards against a Rego
-// rule-ordering mistake: if an actor has BOTH a global binding AND a
-// host-scope binding for the same role+action, the global grant must
-// win. Otherwise the scope_not_yet_supported branch shadows real
+// TestAllow_GlobalGrantWinsOverHostScopeDeny guards against a Rego rule-ordering mistake: if an actor has BOTH a global binding AND
+// a host-scope binding for the same role+action, the global grant must win. Otherwise the scope_not_yet_supported branch shadows real
 // authorisations once wave-2 host scopes are mixed in.
 func TestAllow_GlobalGrantWinsOverHostScopeDeny(t *testing.T) {
 	e, _ := newEngine(t)
@@ -253,8 +240,7 @@ func TestAllow_GlobalGrantWinsOverHostScopeDeny(t *testing.T) {
 	assert.Equal(t, "granted", d.Reason)
 }
 
-// TestAllow_NilAuditDoesNotPanic guards the test-only path where a
-// caller passes nil for the AuditRecorder. Production callers must
+// TestAllow_NilAuditDoesNotPanic guards the test-only path where a caller passes nil for the AuditRecorder. Production callers must
 // supply one; tests sometimes don't.
 func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
 	e, err := authz.New(t.Context(), nil, nil, authz.Options{})

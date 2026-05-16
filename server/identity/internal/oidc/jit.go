@@ -16,30 +16,22 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
-// mysqlErrDupEntry is the duplicate-key error code we expect on the
-// JIT race: a concurrent callback for the same OIDC subject (or the
+// mysqlErrDupEntry is the duplicate-key error code we expect on the JIT race: a concurrent callback for the same OIDC subject (or the
 // same email) wins the insert, and the loser sees this code.
 const mysqlErrDupEntry = 1062
 
-// DefaultJITRole is the role JIT-provisioned OIDC users are bound
-// to. Per the spec (Phase 4.3): the lowest-privilege role available,
-// so a freshly-provisioned operator can read but cannot mutate. An
-// admin promotes them later via the wave-2 admin surface.
+// DefaultJITRole is the role JIT-provisioned OIDC users are bound to. Per the spec (Phase 4.3): the lowest-privilege role available,
+// so a freshly-provisioned operator can read but cannot mutate. An admin promotes them later via the wave-2 admin surface.
 const DefaultJITRole = "analyst"
 
-// ErrUnknownIdentity is returned by ProvisionOrFind when JIT is
-// disabled (allowJIT=false) and the OIDC subject does not match an
-// existing identity. The handler maps it to 403 + audit
-// auth.oidc.failure with reason oidc.unknown_subject.
+// ErrUnknownIdentity is returned by ProvisionOrFind when JIT is disabled (allowJIT=false) and the OIDC subject does not match an
+// existing identity. The handler maps it to 403 + audit auth.oidc.failure with reason oidc.unknown_subject.
 var ErrUnknownIdentity = errors.New("oidc: unknown identity and JIT disabled")
 
-// ErrEmailConflict is returned when JIT cannot create the user
-// because another row already owns the same email. This happens when
-// an existing local-password user (or another OIDC user from a
-// previous binding) has the same email but no identity row links
-// them; promoting the binding is an admin task, not a silent JIT
-// merge. The handler maps it to a 409 / 403 redirect with the reason
-// surfaced to the operator.
+// ErrEmailConflict is returned when JIT cannot create the user because another row already owns the same email. This happens when
+// an existing local-password user (or another OIDC user from a previous binding) has the same email but no identity row links them;
+// promoting the binding is an admin task, not a silent JIT merge. The handler maps it to a 409 / 403 redirect with the reason surfaced
+// to the operator.
 var ErrEmailConflict = errors.New("oidc: email already bound to another account")
 
 // Provisioner holds the per-deployment knobs JIT consults: the
@@ -66,19 +58,16 @@ type Provisioner struct {
 	allowJIT    bool
 }
 
-// ProvisionerOptions bundles the per-deployment knobs. Zero values
-// fall through to wave-1 defaults: defaultRole="analyst", allowJIT=false
-// (spec wave-1 default: unknown subjects are denied unless the operator
-// opts in). Logger defaults to slog.Default.
+// ProvisionerOptions bundles the per-deployment knobs. Zero values fall through to wave-1 defaults: defaultRole="analyst",
+// allowJIT=false (spec wave-1 default: unknown subjects are denied unless the operator opts in). Logger defaults to slog.Default.
 type ProvisionerOptions struct {
 	AllowJIT    bool
 	DefaultRole string
 	Logger      *slog.Logger
 }
 
-// NewProvisioner constructs a Provisioner over an existing DB +
-// already-constructed stores. db is the same handle the stores
-// share so the JIT transaction wraps every insert atomically.
+// NewProvisioner constructs a Provisioner over an existing DB + already-constructed stores. db is the same handle the stores share so
+// the JIT transaction wraps every insert atomically.
 func NewProvisioner(
 	db *sqlx.DB,
 	usersStore *users.Store,
@@ -142,8 +131,7 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 	if err == nil {
 		return userID, identityID, nil
 	}
-	// Duplicate-key on the identity insert means a concurrent callback
-	// for the same subject won. Re-resolve and let the loser ride the
+	// Duplicate-key on the identity insert means a concurrent callback for the same subject won. Re-resolve and let the loser ride the
 	// winner's commit.
 	if isDuplicateKey(err) {
 		existing, lookupErr := p.identities.FindByProviderSubject(
@@ -166,13 +154,10 @@ func isDuplicateKey(err error) bool {
 	return mysqlErr.Number == mysqlErrDupEntry
 }
 
-// jitProvision creates the user + identity + role binding in a single
-// transaction. Email comes from the ID-token claim — non-empty in
-// every modern IdP, but if the IdP omits it we fall back to the
-// subject as a stable display value (the audit row records it
-// verbatim). When the email exists already on a different account we
-// surface ErrEmailConflict so the operator path doesn't silently
-// merge identities — that promotion is an admin action.
+// jitProvision creates the user + identity + role binding in a single transaction. Email comes from the ID-token claim — non-empty in
+// every modern IdP, but if the IdP omits it we fall back to the subject as a stable display value (the audit row records it verbatim).
+// When the email exists already on a different account we surface ErrEmailConflict so the operator path doesn't silently merge
+// identities — that promotion is an admin action.
 func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, identityID int64, err error) {
 	email := jitEmail(c)
 	tx, err := p.db.BeginTxx(ctx, nil)
@@ -187,9 +172,8 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, iden
 	}()
 	user, err := p.users.CreateOIDC(ctx, tx, users.CreateOIDCRequest{Email: email})
 	if err != nil {
-		// Distinguish the email-collision branch: another row already
-		// owns this email (likely a local-password user). Caller maps
-		// to a directed 403/conflict response rather than a 500.
+		// Distinguish the email-collision branch: another row already owns this email (likely a local-password user). Caller maps to a
+		// directed 403/conflict response rather than a 500.
 		if isDuplicateKey(err) {
 			return 0, 0, fmt.Errorf("%w: %s", ErrEmailConflict, email)
 		}
@@ -217,12 +201,9 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, iden
 	return user.ID, idID, nil
 }
 
-// jitEmail derives the email used for the JIT users row. Only trust
-// the IdP-supplied email when email_verified=true (or absent — the
-// claim is optional in spec, and IdPs that don't emit it rarely allow
-// unverified emails). When the IdP signals an unverified email, fall
-// back to the synthetic subject-prefixed sentinel; an admin promotion
-// path can attach the real email later.
+// jitEmail derives the email used for the JIT users row. Only trust the IdP-supplied email when email_verified=true (or absent — the
+// claim is optional in spec, and IdPs that don't emit it rarely allow unverified emails). When the IdP signals an unverified email,
+// fall back to the synthetic subject-prefixed sentinel; an admin promotion path can attach the real email later.
 func jitEmail(c *Claims) string {
 	if c.Email != "" && c.EmailTrusted() {
 		return c.Email
@@ -230,12 +211,9 @@ func jitEmail(c *Claims) string {
 	return "oidc:" + c.Subject
 }
 
-// recordCreated emits an audit row for a successful JIT provisioning.
-// Soft-fail at the request level: a missing audit row does NOT roll
-// the transaction back — the user is real and reachable. The
-// chokepoint's standard authz rows still capture every subsequent
-// action. Per spec, audit-write failures must log at ERROR so the
-// operator pipeline notices the gap.
+// recordCreated emits an audit row for a successful JIT provisioning. Soft-fail at the request level: a missing audit row does NOT
+// roll the transaction back — the user is real and reachable. The chokepoint's standard authz rows still capture every subsequent
+// action. Per spec, audit-write failures must log at ERROR so the operator pipeline notices the gap.
 func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subject string) {
 	if p.audit == nil {
 		return

@@ -24,8 +24,7 @@ func TestHostIDFromContext_Empty(t *testing.T) {
 }
 
 func TestHostIDFromContext_EmptyStringNotAuthenticated(t *testing.T) {
-	// Pinning an empty host id should not be reported as authenticated.
-	// Guards against a writer accidentally passing "" and silently
+	// Pinning an empty host id should not be reported as authenticated. Guards against a writer accidentally passing "" and silently
 	// authenticating a request without a real host id.
 	ctx := api.WithHostID(context.Background(), "")
 	got, ok := api.HostIDFromContext(ctx)

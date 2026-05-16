@@ -36,10 +36,9 @@ type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1059.002
-// (Command and Scripting Interpreter → AppleScript) + T1105 (Ingress Tool
-// Transfer). The rule specifically flags osascript invoking a curl/wget
-// that stages an executable to /tmp — the exact shape of a T1105 dropper.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1059.002 (Command and Scripting Interpreter → AppleScript) + T1105
+// (Ingress Tool Transfer). The rule specifically flags osascript invoking a curl/wget that stages an executable to /tmp — the exact
+// shape of a T1105 dropper.
 func (r *OsascriptNetworkExec) Techniques() []string {
 	return []string{"T1059.002", "T1105"}
 }
@@ -82,12 +81,10 @@ var downloadBinaries = map[string]bool{
 	"/opt/homebrew/bin/wget": true,
 }
 
-// shebangShellPaths is the set of shells the kernel transparently exec()s
-// when running a `#!/bin/sh`-style script. The exec event's path field is
-// the SHELL path (because that's what the kernel actually called exec on),
-// not the script path; the script path lives in argv[1]. Without this
-// detour the rule would miss the canonical "osascript → sh /tmp/stage2.sh"
-// chain even though the data is right there in the descendant's args.
+// shebangShellPaths is the set of shells the kernel transparently exec()s when running a `#!/bin/sh`-style script. The exec event's
+// path field is the SHELL path (because that's what the kernel actually called exec on), not the script path; the script path lives in
+// argv[1]. Without this detour the rule would miss the canonical "osascript → sh /tmp/stage2.sh" chain even though the data is right
+// there in the descendant's args.
 var shebangShellPaths = map[string]bool{
 	"/bin/sh":       true,
 	"/bin/bash":     true,
@@ -99,16 +96,12 @@ var shebangShellPaths = map[string]bool{
 }
 
 const (
-	// osascriptWindowNs bounds the descendant walk from the osascript exec.
-	// Real droppers stage and run within a couple of seconds; 30s is a
-	// generous ceiling that keeps slow networks in-bound without making the
-	// rule a sliding-window fish-hook.
+	// osascriptWindowNs bounds the descendant walk from the osascript exec. Real droppers stage and run within a couple of seconds;
+	// 30s is a generous ceiling that keeps slow networks in-bound without making the rule a sliding-window fish-hook.
 	osascriptWindowNs = int64(30_000_000_000)
 
-	// maxAncestorWalkSteps caps the parent-chain traversal so a runaway
-	// process tree (or a malformed event with a self-referential ppid)
-	// can't loop. Real chains go osascript → sh → maybe-one-more → temp-exec,
-	// so any depth beyond a handful is suspicious in itself.
+	// maxAncestorWalkSteps caps the parent-chain traversal so a runaway process tree (or a malformed event with a self-referential ppid)
+	// can't loop. Real chains go osascript → sh → maybe-one-more → temp-exec, so any depth beyond a handful is suspicious in itself.
 	maxAncestorWalkSteps = 16
 )
 
@@ -120,10 +113,9 @@ type osascriptPayload struct {
 }
 
 func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	// One osascript chain commonly produces multiple temp-exec descendants
-	// — the kernel re-execs sh→bash, the chain runs more than one stage, etc.
-	// Track which osascript ancestor PIDs we've already fired on within this
-	// batch so we emit one finding per chain, not one per descendant row.
+	// One osascript chain commonly produces multiple temp-exec descendants — the kernel re-execs sh→bash, the chain runs more than one
+	// stage, etc. Track which osascript ancestor PIDs we've already fired on within this batch so we emit one finding per chain, not one
+	// per descendant row.
 	seenOsa := map[int]struct{}{}
 	var findings []api.Finding
 	for _, evt := range events {
@@ -139,9 +131,8 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event,
 	return findings, nil
 }
 
-// evalEvent inspects a single event and returns (finding, osaPID, err) on a
-// match. osaPID is the PID of the osascript ancestor that triggered the
-// finding; the caller uses it for batch-level dedupe.
+// evalEvent inspects a single event and returns (finding, osaPID, err) on a match. osaPID is the PID of the osascript ancestor that
+// triggered the finding; the caller uses it for batch-level dedupe.
 func (r *OsascriptNetworkExec) evalEvent(
 	ctx context.Context, evt api.Event, s api.GraphReader, seenOsa map[int]struct{},
 ) (*api.Finding, int, error) {
@@ -167,9 +158,8 @@ func (r *OsascriptNetworkExec) evalEvent(
 		return nil, 0, nil
 	}
 
-	// Anchor the descendant window on the osascript exec time, not on the
-	// triggering temp-exec event time, since the curl sibling may have run
-	// before the temp-exec.
+	// Anchor the descendant window on the osascript exec time, not on the triggering temp-exec event time, since the curl sibling may have
+	// run before the temp-exec.
 	osaExecTS := osa.ForkTimeNs
 	if osa.ExecTimeNs != nil {
 		osaExecTS = *osa.ExecTimeNs
@@ -211,9 +201,8 @@ func (r *OsascriptNetworkExec) evalEvent(
 	}, osa.PID, nil
 }
 
-// findOsascriptAncestor walks the parent chain upward from startPID looking
-// for an osascript process within `maxAncestorWalkSteps` hops. Returns nil if
-// no osascript ancestor exists or the chain bottoms out at launchd (PPID 1).
+// findOsascriptAncestor walks the parent chain upward from startPID looking for an osascript process within `maxAncestorWalkSteps`
+// hops. Returns nil if no osascript ancestor exists or the chain bottoms out at launchd (PPID 1).
 func (r *OsascriptNetworkExec) findOsascriptAncestor(
 	ctx context.Context, s api.GraphReader, hostID string, startPID int, asOfNs int64,
 ) (*api.Process, error) {
@@ -264,12 +253,10 @@ func shebangScriptArg(p osascriptPayload) string {
 	return ""
 }
 
-// looksLikeTempExec reports whether the exec event represents a binary
-// running out of /tmp (or one of the other temp-prefix paths) OR a shell
-// invoked with a `#!/bin/sh`-style script path in argv[1+]. Both shapes
-// signal the same intent: stage-2 from a tempdir. Reading argv directly
-// off the event payload (rather than the materialised process record)
-// avoids a race against args being persisted to the processes table.
+// looksLikeTempExec reports whether the exec event represents a binary running out of /tmp (or one of the other temp-prefix paths)
+// OR a shell invoked with a `#!/bin/sh`-style script path in argv[1+]. Both shapes signal the same intent: stage-2 from a tempdir.
+// Reading argv directly off the event payload (rather than the materialised process record) avoids a race against args being persisted
+// to the processes table.
 func looksLikeTempExec(p osascriptPayload) bool {
 	if isSuspiciousPath(p.Path) {
 		return true
@@ -278,10 +265,9 @@ func looksLikeTempExec(p osascriptPayload) bool {
 	return script != "" && isSuspiciousPath(script)
 }
 
-// displayTempExec renders the operator-friendly path for the finding's
-// description. For a binary stage-2, this is just the binary path. For a
-// shebang-shell exec, it's `<shell> <script-path>` so the responder can see
-// the script that actually ran rather than just "/bin/sh".
+// displayTempExec renders the operator-friendly path for the finding's description. For a binary stage-2, this is just the binary
+// path. For a shebang-shell exec, it's `<shell> <script-path>` so the responder can see the script that actually ran rather than just
+// "/bin/sh".
 func displayTempExec(p osascriptPayload) string {
 	if isSuspiciousPath(p.Path) {
 		return p.Path
@@ -292,11 +278,9 @@ func displayTempExec(p osascriptPayload) string {
 	return p.Path
 }
 
-// collectDescendants runs a bounded breadth-first traversal rooted at rootPID, returning
-// every process whose ancestry within the given time range terminates at rootPID. The
-// traversal is capped by `maxDescendants` to keep pathological fork-bomb trees from
-// blowing up memory; real dropper chains land in single digits, so a 500-node cap is
-// generous without being abusable.
+// collectDescendants runs a bounded breadth-first traversal rooted at rootPID, returning every process whose ancestry within the given
+// time range terminates at rootPID. The traversal is capped by `maxDescendants` to keep pathological fork-bomb trees from blowing up
+// memory; real dropper chains land in single digits, so a 500-node cap is generous without being abusable.
 const maxDescendants = 500
 
 func collectDescendants(ctx context.Context, s api.GraphReader, hostID string, rootPID int, tr api.TimeRange) ([]api.Process, error) {

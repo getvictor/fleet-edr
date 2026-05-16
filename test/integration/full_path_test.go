@@ -73,10 +73,8 @@ func stepEnroll(t *testing.T, stack *Stack, hostID string) string {
 
 func stepIngestEvents(t *testing.T, stack *Stack, hostID, hostToken string) {
 	t.Helper()
-	// Fork + exec from /private/tmp/xxx. We don't rely on this
-	// triggering a rule (catalog is content; this smoke does not
-	// exercise rule content); the events themselves landing proves
-	// endpoint→detection wiring through the host-token middleware.
+	// Fork + exec from /private/tmp/xxx. We don't rely on this triggering a rule (catalog is content; this smoke does not exercise rule
+	// content); the events themselves landing proves endpoint→detection wiring through the host-token middleware.
 	now := time.Now().UnixNano()
 	events := []detectionapi.Event{
 		{
@@ -118,10 +116,8 @@ func stepIngestEvents(t *testing.T, stack *Stack, hostID, hostToken string) {
 
 func stepIssueKillCommand(t *testing.T, stack *Stack, hostID string) int64 {
 	t.Helper()
-	// Skip the operator HTTP path (would require session + CSRF
-	// plumbing). Layer-3's value is verifying cross-context wiring,
-	// which response.Service.Insert exercises directly: it goes
-	// through response/internal/service which validates + writes via
+	// Skip the operator HTTP path (would require session + CSRF plumbing). Layer-3's value is verifying cross-context wiring,
+	// which response.Service.Insert exercises directly: it goes through response/internal/service which validates + writes via
 	// response/internal/mysql.
 	id, err := stack.ResponseService().Insert(
 		t.Context(), hostID, "kill_process",
@@ -179,13 +175,10 @@ func stepAgentAcksCommand(t *testing.T, stack *Stack, hostToken string, commandI
 
 func stepHeartbeatRecorded(t *testing.T, stack *Stack, hostID string) {
 	t.Helper()
-	// /api/commands doubles as heartbeat in production: response calls
-	// detection.api.Service.RecordHostSeen on every poll. The
-	// agent_polls_commands step above triggered it. Use Eventually
-	// (rather than asserting once) because the heartbeat write happens
-	// via a closure invoked from the response handler — there's no
-	// in-process synchronisation guaranteeing it lands before the HTTP
-	// reply, so a single-shot assertion can race.
+	// /api/commands doubles as heartbeat in production: response calls detection.api.Service.RecordHostSeen on every poll. The
+	// agent_polls_commands step above triggered it. Use Eventually (rather than asserting once) because the heartbeat write happens via
+	// a closure invoked from the response handler — there's no in-process synchronisation guaranteeing it lands before the HTTP reply,
+	// so a single-shot assertion can race.
 	require.Eventually(t, func() bool {
 		hosts, err := stack.DetectionService().ListHosts(t.Context())
 		if err != nil {
@@ -224,9 +217,7 @@ func mustReadBody(t *testing.T, resp *http.Response) string {
 	return string(b)
 }
 
-// Compile-time check that test/integration/ is a layer-3 package whose
-// imports are bootstrap + api + testdb (everything else is platform).
-// If a future edit accidentally pulls in <X>/internal/, Go's internal/
-// rule blocks the import; this declaration just keeps `context.Context`
-// in the import list so unused-import never fires the deletion.
+// Compile-time check that test/integration/ is a layer-3 package whose imports are bootstrap + api + testdb (everything else is
+// platform). If a future edit accidentally pulls in <X>/internal/, Go's internal/ rule blocks the import; this declaration just keeps
+// `context.Context` in the import list so unused-import never fires the deletion.
 var _ context.Context = context.TODO()

@@ -12,19 +12,16 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
-// Handler serves GET /api/audit-events. Cookie-auth gated by the identity
-// Session middleware (caller wraps before mounting); the handler also
-// gates the read on api.ActionAuditRead through the AuthZ chokepoint
-// so only roles whose grants include audit.read (auditor, super_admin)
-// can list audit history.
+// Handler serves GET /api/audit-events. Cookie-auth gated by the identity Session middleware (caller wraps before mounting);
+// the handler also gates the read on api.ActionAuditRead through the AuthZ chokepoint so only roles whose grants include audit.read
+// (auditor, super_admin) can list audit history.
 type Handler struct {
 	reader api.AuditReader
 	authz  api.AuthZ
 	logger *slog.Logger
 }
 
-// NewHandler builds a handler around the given AuditReader. Panics if
-// reader or authz is nil; both are load-bearing dependencies and a
+// NewHandler builds a handler around the given AuditReader. Panics if reader or authz is nil; both are load-bearing dependencies and a
 // Handler that always 500s on either is not useful.
 func NewHandler(reader api.AuditReader, authz api.AuthZ, logger *slog.Logger) *Handler {
 	if reader == nil {
@@ -127,9 +124,8 @@ func parseAuditFilter(q url.Values) (api.AuditFilter, string, bool) {
 	return f, "", true
 }
 
-// parseOptionalUserID parses ?user_id=. Empty returns (nil, "", true)
-// because the filter field is optional. A non-empty unparseable value
-// returns the wire error code.
+// parseOptionalUserID parses ?user_id=. Empty returns (nil, "", true) because the filter field is optional. A non-empty unparseable
+// value returns the wire error code.
 func parseOptionalUserID(v string) (*int64, string, bool) {
 	if v == "" {
 		return nil, "", true
@@ -141,10 +137,8 @@ func parseOptionalUserID(v string) (*int64, string, bool) {
 	return &uid, "", true
 }
 
-// parseOptionalTime parses an RFC3339 query-string time. Empty input
-// returns the zero time; the AuditFilter treats t.IsZero() as "no
-// constraint" so the wire shape preserves the optional-filter
-// semantics every operator endpoint shares.
+// parseOptionalTime parses an RFC3339 query-string time. Empty input returns the zero time; the AuditFilter treats t.IsZero() as "no
+// constraint" so the wire shape preserves the optional-filter semantics every operator endpoint shares.
 func parseOptionalTime(v, code string) (time.Time, string, bool) {
 	if v == "" {
 		return time.Time{}, "", true
@@ -156,9 +150,8 @@ func parseOptionalTime(v, code string) (time.Time, string, bool) {
 	return t, "", true
 }
 
-// parsePositiveInt parses a strictly-positive integer query
-// parameter. Empty input returns (0, "", true). Non-numeric or
-// non-positive inputs return the wire error code.
+// parsePositiveInt parses a strictly-positive integer query parameter. Empty input returns (0, "", true). Non-numeric or non-positive
+// inputs return the wire error code.
 func parsePositiveInt(v, code string) (int, string, bool) {
 	if v == "" {
 		return 0, "", true
@@ -170,8 +163,7 @@ func parsePositiveInt(v, code string) (int, string, bool) {
 	return n, "", true
 }
 
-// parsePositiveInt64 is the int64 sibling of parsePositiveInt; the
-// audit cursor is int64-keyed because the audit_events.id column is
+// parsePositiveInt64 is the int64 sibling of parsePositiveInt; the audit cursor is int64-keyed because the audit_events.id column is
 // BIGINT.
 func parsePositiveInt64(v, code string) (int64, string, bool) {
 	if v == "" {
@@ -184,13 +176,10 @@ func parsePositiveInt64(v, code string) (int64, string, bool) {
 	return n, "", true
 }
 
-// writeListErr writes a 4xx / 5xx response from the audit-list endpoint
-// using the project's standard `{"error": "code"}` body. NoStoreJSON
-// (not WriteCookieAuthFailure) is the right helper here because these
-// failures are validation / backend-read errors, not authentication
-// failures: routing them through WriteCookieAuthFailure would stamp
-// `edr.auth.result=fail` on the active OTel span and emit `authn failed`
-// log lines, polluting auth dashboards with parsing errors.
+// writeListErr writes a 4xx / 5xx response from the audit-list endpoint using the project's standard `{"error": "code"}` body.
+// NoStoreJSON (not WriteCookieAuthFailure) is the right helper here because these failures are validation / backend-read errors,
+// not authentication failures: routing them through WriteCookieAuthFailure would stamp `edr.auth.result=fail` on the active OTel span
+// and emit `authn failed` log lines, polluting auth dashboards with parsing errors.
 func writeListErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
 }

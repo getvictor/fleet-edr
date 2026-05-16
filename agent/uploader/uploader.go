@@ -70,9 +70,8 @@ type Uploader struct {
 	logger *slog.Logger
 }
 
-// New creates an Uploader. The http.Client should already be wrapped with otelhttp.NewTransport
-// if the caller wants OTel propagation; callers that pass nil get a vanilla client with a 30s
-// timeout and no instrumentation.
+// New creates an Uploader. The http.Client should already be wrapped with otelhttp.NewTransport if the caller wants OTel propagation;
+// callers that pass nil get a vanilla client with a 30s timeout and no instrumentation.
 func New(q *queue.Queue, cfg Config, client *http.Client, logger *slog.Logger) *Uploader {
 	if client == nil {
 		client = &http.Client{Timeout: defaultClientTimeout}
@@ -104,9 +103,8 @@ func (u *Uploader) Run(ctx context.Context) error {
 	}
 }
 
-// Drain attempts one more upload cycle without waiting for the next tick. Callers that need
-// to report shutdown status (e.g. "final flush failed, N events still queued") can inspect
-// the returned error. An empty queue returns nil.
+// Drain attempts one more upload cycle without waiting for the next tick. Callers that need to report shutdown status (e.g. "final
+// flush failed, N events still queued") can inspect the returned error. An empty queue returns nil.
 func (u *Uploader) Drain(ctx context.Context) error {
 	return u.drainOnce(ctx)
 }

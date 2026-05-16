@@ -15,12 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// rotateServerState models the minimal subset of the command-poll +
-// status-update server endpoints the commander hits for a rotate_token
-// dispatch: GET /api/commands once (returning the pending rotate_token
-// command) then PUT /api/commands/{id} twice (acked + completed). The
-// fields capture the status sequence so tests can assert "the
-// commander acked then completed" without diving into the HTTP shape.
+// rotateServerState models the minimal subset of the command-poll + status-update server endpoints the commander hits for a
+// rotate_token dispatch: GET /api/commands once (returning the pending rotate_token command) then PUT /api/commands/{id} twice (acked
+// + completed). The fields capture the status sequence so tests can assert "the commander acked then completed" without diving into
+// the HTTP shape.
 type rotateServerState struct {
 	mu             sync.Mutex
 	commandPolled  atomic.Int64
@@ -90,10 +88,8 @@ func TestExecuteRotateToken_HappyPath(t *testing.T) {
 		"rotate_token must surface as acked then completed")
 }
 
-// A malformed payload (missing new_token) reports the command failed
-// without invoking RotateTokenFn. Defensive; a server that ships an
-// empty payload is broken, and the agent must not silently accept a
-// blank bearer.
+// A malformed payload (missing new_token) reports the command failed without invoking RotateTokenFn. Defensive; a server that ships an
+// empty payload is broken, and the agent must not silently accept a blank bearer.
 func TestExecuteRotateToken_PayloadValidation(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -137,10 +133,8 @@ func TestExecuteRotateToken_PayloadValidation(t *testing.T) {
 	}
 }
 
-// A nil RotateTokenFn surfaces as a "rotate not configured" failure, not
-// a panic. Production wires enrollment.TokenProvider.Rotate; tests /
-// dry-runs that don't carry a real provider must still receive a clean
-// failure response.
+// A nil RotateTokenFn surfaces as a "rotate not configured" failure, not a panic. Production wires enrollment.TokenProvider.Rotate;
+// tests / dry-runs that don't carry a real provider must still receive a clean failure response.
 func TestExecuteRotateToken_NilFn(t *testing.T) {
 	cmd := command{
 		ID:          1,
@@ -160,10 +154,8 @@ func TestExecuteRotateToken_NilFn(t *testing.T) {
 	assert.Equal(t, "failed", state.statusSequence[1])
 }
 
-// RotateTokenFn returning an error (e.g. on-disk write failure) must
-// surface as a "failed" status update, not as a silent success that
-// claims the rotation applied when in fact it did not. This is the
-// integrity property the audit trail relies on.
+// RotateTokenFn returning an error (e.g. on-disk write failure) must surface as a "failed" status update, not as a silent success that
+// claims the rotation applied when in fact it did not. This is the integrity property the audit trail relies on.
 func TestExecuteRotateToken_FnError(t *testing.T) {
 	cmd := command{
 		ID:          1,

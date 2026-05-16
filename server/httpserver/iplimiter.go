@@ -39,9 +39,8 @@ type IPLimiter struct {
 	buckets map[string]*ipBucket
 }
 
-// NewIPLimiter creates a limiter with the given per-IP rate. The same
-// limit + burst applies to every IP; per-IP overrides are not supported
-// because every caller in the project needs the same flat shape.
+// NewIPLimiter creates a limiter with the given per-IP rate. The same limit + burst applies to every IP; per-IP overrides are not
+// supported because every caller in the project needs the same flat shape.
 func NewIPLimiter(limit rate.Limit, burst int) *IPLimiter {
 	return &IPLimiter{limit: limit, burst: burst, buckets: make(map[string]*ipBucket)}
 }
@@ -77,9 +76,8 @@ func (l *IPLimiter) evictIdleLocked(now time.Time) {
 	}
 }
 
-// evictOldestLocked removes the least-recently-seen bucket so the map
-// size cap is honoured even when every entry is "live". Caller must
-// hold l.mu.
+// evictOldestLocked removes the least-recently-seen bucket so the map size cap is honoured even when every entry is "live". Caller
+// must hold l.mu.
 func (l *IPLimiter) evictOldestLocked() {
 	var oldestIP string
 	var oldestSeen time.Time
@@ -92,9 +90,8 @@ func (l *IPLimiter) evictOldestLocked() {
 	delete(l.buckets, oldestIP)
 }
 
-// RemoteIP returns the client IP from r.RemoteAddr, stripping the port.
-// Falls back to the raw RemoteAddr if SplitHostPort fails (e.g. the
-// caller used a Unix socket).
+// RemoteIP returns the client IP from r.RemoteAddr, stripping the port. Falls back to the raw RemoteAddr if SplitHostPort fails (e.g.
+// the caller used a Unix socket).
 func RemoteIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

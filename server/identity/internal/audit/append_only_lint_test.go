@@ -12,11 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// forbiddenAuditSQL matches an UPDATE or DELETE FROM statement
-// against audit_events anywhere in a Go source file. Word boundaries
-// keep the regex from matching unrelated identifiers (e.g.,
-// `updateAuditEvents` as a Go function name) and case-insensitive so
-// SQL casing variations all trip the gate.
+// forbiddenAuditSQL matches an UPDATE or DELETE FROM statement against audit_events anywhere in a Go source file. Word boundaries keep
+// the regex from matching unrelated identifiers (e.g., `updateAuditEvents` as a Go function name) and case-insensitive so SQL casing
+// variations all trip the gate.
 var forbiddenAuditSQL = regexp.MustCompile(
 	`(?i)\b(update\s+audit_events|delete\s+from\s+audit_events)\b`)
 
@@ -53,11 +51,9 @@ func TestAuditEventsAppendOnly(t *testing.T) {
 			"document the package-level rationale.")
 }
 
-// scanForForbiddenSQL walks the Go source tree under root and returns
-// every "<path>: <match>" string for files containing the forbidden
-// regex. Pulled out of TestAuditEventsAppendOnly so the parent test's
-// cognitive complexity stays under Sonar's S3776 threshold (the walk
-// callback's branching dominated complexity at CC=17).
+// scanForForbiddenSQL walks the Go source tree under root and returns every "<path>: <match>" string for files containing the
+// forbidden regex. Pulled out of TestAuditEventsAppendOnly so the parent test's cognitive complexity stays under Sonar's S3776
+// threshold (the walk callback's branching dominated complexity at CC=17).
 func scanForForbiddenSQL(root string) ([]string, error) {
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
@@ -85,8 +81,7 @@ func scanForForbiddenSQL(root string) ([]string, error) {
 	return violations, err
 }
 
-// shouldScanFile reports whether path is a Go production source file
-// the lint should inspect. Test files are exempt (fixtures may
+// shouldScanFile reports whether path is a Go production source file the lint should inspect. Test files are exempt (fixtures may
 // legitimately mutate audit_events); non-Go files are skipped.
 func shouldScanFile(path string) bool {
 	if !strings.HasSuffix(path, ".go") {
@@ -140,10 +135,8 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-// shouldSkipDir reports whether walking under dir would scan content
-// the lint should not police. Non-Go directories and third-party
-// trees are excluded so a transitive dependency mentioning an
-// "audit_events" column in its own SQL doesn't fail the build.
+// shouldSkipDir reports whether walking under dir would scan content the lint should not police. Non-Go directories and third-party
+// trees are excluded so a transitive dependency mentioning an "audit_events" column in its own SQL doesn't fail the build.
 func shouldSkipDir(dir, root string) bool {
 	rel, err := filepath.Rel(root, dir)
 	if err != nil {

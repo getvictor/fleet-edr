@@ -18,9 +18,8 @@ import (
 type recorderQueue struct {
 	mu     sync.Mutex
 	events [][]byte
-	// failNext, when non-nil, makes the next Enqueue call return this error
-	// instead of recording. Used to exercise the reconciler's enqueue-error
-	// branch without standing up a real queue.
+	// failNext, when non-nil, makes the next Enqueue call return this error instead of recording. Used to exercise the reconciler's
+	// enqueue-error branch without standing up a real queue.
 	failNext error
 }
 
@@ -190,9 +189,8 @@ func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 	r := newRunner(t, pt, q, &killer{dead: dead}, "h", Options{MaxPerPass: 3})
 
 	n := r.RunOnce(context.Background())
-	// Map iteration is non-deterministic in Go, so we deliberately assert only
-	// on the count of reaped PIDs and the table size — never on which specific
-	// PIDs survive. Adding "PID X must be reaped" assertions here would flake.
+	// Map iteration is non-deterministic in Go, so we deliberately assert only on the count of reaped PIDs and the table size — never on
+	// which specific PIDs survive. Adding "PID X must be reaped" assertions here would flake.
 	assert.Equal(t, 3, n)
 	assert.Equal(t, 7, pt.Size(), "only the cap is reaped per pass")
 }
@@ -322,10 +320,8 @@ func TestEmitSyntheticExit_NewIDError(t *testing.T) {
 	q := &recorderQueue{}
 	k := &killer{dead: map[int]bool{7: true}}
 	r := newRunner(t, pt, q, k, "h", Options{})
-	// Inject a UUID generator that always fails. Covers the
-	// emitSyntheticExit→r.newID error branch — in production this fires
-	// only when crypto/rand stops working, which is a fundamental
-	// platform failure we still want to surface rather than swallow.
+	// Inject a UUID generator that always fails. Covers the emitSyntheticExit→r.newID error branch — in production this fires only when
+	// crypto/rand stops working, which is a fundamental platform failure we still want to surface rather than swallow.
 	r.newID = func() (string, error) { return "", errors.New("rand unavailable") }
 
 	n := r.RunOnce(context.Background())
@@ -342,10 +338,8 @@ func TestEmitSyntheticExit_MarshalError(t *testing.T) {
 	q := &recorderQueue{}
 	k := &killer{dead: map[int]bool{8: true}}
 	r := newRunner(t, pt, q, k, "h", Options{})
-	// Inject a marshaler that always fails. In production json.Marshal
-	// over a map[string]any of int+int+string can't fail, so the test
-	// is the only way to exercise the error branch — and locks in the
-	// behaviour that a marshal failure does not crash the pass.
+	// Inject a marshaler that always fails. In production json.Marshal over a map[string]any of int+int+string can't fail, so the test is
+	// the only way to exercise the error branch — and locks in the behaviour that a marshal failure does not crash the pass.
 	r.marshal = func(_ any) ([]byte, error) { return nil, errors.New("marshal broken") }
 
 	n := r.RunOnce(context.Background())

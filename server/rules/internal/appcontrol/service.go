@@ -11,20 +11,15 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// CommandInserter is the closure cmd/main supplies so the
-// application-control fan-out can enqueue `set_application_control`
-// commands per host. Method-value shape matches response.Service.Insert
-// so cmd/main passes `responseCtx.Service().Insert` directly without
-// an adapter.
+// CommandInserter is the closure cmd/main supplies so the application-control fan-out can enqueue `set_application_control` commands
+// per host. Method-value shape matches response.Service.Insert so cmd/main passes `responseCtx.Service().Insert` directly without an
+// adapter.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
-// HostLister returns the set of host_ids to fan a rule mutation out
-// to. In the demo cut this is every enrolled host in the deployment
-// (host-groups + assignments are post-demo); cmd/main passes a thin
-// wrapper over detection.api.Service.ListHosts that projects each
-// HostSummary down to its host_id. Distinct closure type rather than
-// reusing detection's so the rules context does not import detection
-// outside of the api re-export rule.
+// HostLister returns the set of host_ids to fan a rule mutation out to. In the demo cut this is every enrolled host in the deployment
+// (host-groups + assignments are post-demo); cmd/main passes a thin wrapper over detection.api.Service.ListHosts that projects
+// each HostSummary down to its host_id. Distinct closure type rather than reusing detection's so the rules context does not import
+// detection outside of the api re-export rule.
 type HostLister func(ctx context.Context) ([]string, error)
 
 // Service is the application-control orchestrator the REST handler
@@ -45,29 +40,23 @@ type Service struct {
 	logger   *slog.Logger
 }
 
-// ServiceDeps bundles the constructor inputs. Keeps the call site at
-// cmd/main from drifting on argument order when the dep set grows
-// (PATCH/DELETE/bulkUpsert will add a couple of audit-action variants
-// post-demo and passing arguments through a struct keeps the wiring
-// readable).
+// ServiceDeps bundles the constructor inputs. Keeps the call site at cmd/main from drifting on argument order when the dep set grows
+// (PATCH/DELETE/bulkUpsert will add a couple of audit-action variants post-demo and passing arguments through a struct keeps the
+// wiring readable).
 type ServiceDeps struct {
 	Store    *Store
 	Commands CommandInserter
 	Hosts    HostLister
 	Audit    identityapi.AuditRecorder
-	// Clock is optional. Defaults to time.Now. Tests pin a deterministic
-	// value so MarshalSetApplicationControlPayload's expires_at filter
+	// Clock is optional. Defaults to time.Now. Tests pin a deterministic value so MarshalSetApplicationControlPayload's expires_at filter
 	// is predictable across runs.
 	Clock  func() time.Time
 	Logger *slog.Logger
 }
 
-// NewService builds a Service. Store + Commands + Hosts are required;
-// passing nil for any of them is a wiring bug and panics so cmd/main
-// surfaces it at boot rather than at the first rule-create.
-// Audit is optional (a nil Audit drops the audit row with a WARN
-// log line — the same posture identity's chokepoint uses today on
-// the read-path async fallback).
+// NewService builds a Service. Store + Commands + Hosts are required; passing nil for any of them is a wiring bug and panics so
+// cmd/main surfaces it at boot rather than at the first rule-create. Audit is optional (a nil Audit drops the audit row with a WARN
+// log line — the same posture identity's chokepoint uses today on the read-path async fallback).
 func NewService(deps ServiceDeps) *Service {
 	if deps.Store == nil {
 		panic("appcontrol.NewService: Store must not be nil")
@@ -96,18 +85,14 @@ func NewService(deps ServiceDeps) *Service {
 	}
 }
 
-// ListPolicies is the read-only list endpoint's backend. Passes
-// straight through to the store; the orchestrator layer exists so
-// future read-side decorators (rule-count aggregation, assignment
-// summary) land in one place without changing the handler.
+// ListPolicies is the read-only list endpoint's backend. Passes straight through to the store; the orchestrator layer exists so future
+// read-side decorators (rule-count aggregation, assignment summary) land in one place without changing the handler.
 func (s *Service) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolicy, error) {
 	return s.store.ListPolicies(ctx)
 }
 
-// GetPolicyWithRules returns the policy row plus its rules in one
-// call so the policy-detail page can render without an extra round
-// trip. Returns ErrAppControlPolicyNotFound when the policy is
-// absent; the handler maps that to HTTP 404.
+// GetPolicyWithRules returns the policy row plus its rules in one call so the policy-detail page can render without an extra round
+// trip. Returns ErrAppControlPolicyNotFound when the policy is absent; the handler maps that to HTTP 404.
 func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
 	policies, err := s.store.ListPolicies(ctx)
 	if err != nil {
@@ -162,11 +147,9 @@ func (s *Service) CreateRule(
 	req api.CreateRuleRequest,
 	actor *identityapi.Actor,
 ) (api.ApplicationControlRule, error) {
-	// Defense in depth: the handler already requires the actor (session
-	// middleware pins it before reaching the chokepoint), but failing
-	// closed at the service layer means a future caller that bypasses
-	// the handler (a CLI tool, a background job) can't silently produce
-	// an unattributed audit row.
+	// Defense in depth: the handler already requires the actor (session middleware pins it before reaching the chokepoint), but failing
+	// closed at the service layer means a future caller that bypasses the handler (a CLI tool, a background job) can't silently produce an
+	// unattributed audit row.
 	if actor == nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
 	}
@@ -176,9 +159,8 @@ func (s *Service) CreateRule(
 		return api.ApplicationControlRule{}, err
 	}
 
-	// Compose the post-bump snapshot the agents will receive. Find
-	// the parent policy and its full rule list including the
-	// just-inserted row.
+	// Compose the post-bump snapshot the agents will receive. Find the parent policy and its full rule list including the just-inserted
+	// row.
 	policy, payload, err := s.buildSnapshotPayload(ctx, req.PolicyID)
 	if err != nil {
 		// Rule landed but the snapshot compose failed. Persist the
@@ -197,10 +179,8 @@ func (s *Service) CreateRule(
 	return rule, nil
 }
 
-// buildSnapshotPayload re-reads the policy + rules after a mutation
-// and renders the wire shape the agent's command codec consumes.
-// Separated so the CreateRule path stays linear and the lookup +
-// marshal failure cases have one place to fail.
+// buildSnapshotPayload re-reads the policy + rules after a mutation and renders the wire shape the agent's command codec consumes.
+// Separated so the CreateRule path stays linear and the lookup + marshal failure cases have one place to fail.
 func (s *Service) buildSnapshotPayload(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, []byte, error) {
 	policy, err := s.findPolicyByID(ctx, policyID)
 	if err != nil {
@@ -217,10 +197,8 @@ func (s *Service) buildSnapshotPayload(ctx context.Context, policyID int64) (api
 	return policy, raw, nil
 }
 
-// findPolicyByID is the policy lookup the snapshot composer needs.
-// Store doesn't expose a GetPolicyByID (intentionally: the demo cut
-// indexes policies by name), so we walk the list. Cheap for the
-// demo's single-policy shape.
+// findPolicyByID is the policy lookup the snapshot composer needs. Store doesn't expose a GetPolicyByID (intentionally: the demo cut
+// indexes policies by name), so we walk the list. Cheap for the demo's single-policy shape.
 func (s *Service) findPolicyByID(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
 	policies, err := s.store.ListPolicies(ctx)
 	if err != nil {
@@ -234,8 +212,7 @@ func (s *Service) findPolicyByID(ctx context.Context, policyID int64) (api.Appli
 	return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
 }
 
-// fanoutSkipReason values land verbatim on the audit row when the
-// fan-out couldn't run end-to-end. The empty string means "no skip;
+// fanoutSkipReason values land verbatim on the audit row when the fan-out couldn't run end-to-end. The empty string means "no skip;
 // the loop ran" and is the happy path.
 const (
 	fanoutSkipReasonHostLister = "host_lister_error"

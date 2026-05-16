@@ -33,10 +33,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// stubUserExists is a closure-typed UserExists fixture. Tests pin the
-// known-user set up front; UpdateAlertStatus consults it for the
-// FK-replacement check (the cross-context guard that replaces
-// fk_alerts_updated_by).
+// stubUserExists is a closure-typed UserExists fixture. Tests pin the known-user set up front; UpdateAlertStatus consults it for the
+// FK-replacement check (the cross-context guard that replaces fk_alerts_updated_by).
 func stubUserExists(known ...int64) bootstrap.UserExists {
 	set := make(map[int64]struct{}, len(known))
 	for _, id := range known {
@@ -48,10 +46,8 @@ func stubUserExists(known ...int64) bootstrap.UserExists {
 	}
 }
 
-// stubRule is a minimal rules.api.Rule that emits one finding for
-// every "trigger" event in the batch. Used by the engine + processor
-// tests that need a deterministic rule signal without dragging in
-// any production rule's allowlist + tuning.
+// stubRule is a minimal rules.api.Rule that emits one finding for every "trigger" event in the batch. Used by the engine + processor
+// tests that need a deterministic rule signal without dragging in any production rule's allowlist + tuning.
 type stubRule struct {
 	id         string
 	techniques []string
@@ -135,11 +131,9 @@ func (m *recordingMetrics) snapshot() (events, queries, alerts int, reconciled, 
 	return m.eventsIngested, m.dbQueries, m.alertsCreated, m.processesReconciled, m.rowsDeleted
 }
 
-// allowAllAuthZ is a chokepoint stub: every Allow returns granted.
-// Tests defined here exercise detection's ingest / processor paths,
-// which are NOT privileged operator routes; the operator-route allow
-// path is sufficiently covered by the engine's own per-action matrix
-// in server/identity/internal/authz/engine_test.go.
+// allowAllAuthZ is a chokepoint stub: every Allow returns granted. Tests defined here exercise detection's ingest / processor paths,
+// which are NOT privileged operator routes; the operator-route allow path is sufficiently covered by the engine's own per-action
+// matrix in server/identity/internal/authz/engine_test.go.
 type allowAllAuthZ struct{}
 
 func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
@@ -197,8 +191,7 @@ func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 	return d
 }
 
-// withHostID pins host_id on the request context the way the real
-// endpoint.HostToken middleware does. Lets the ingest handler tests
+// withHostID pins host_id on the request context the way the real endpoint.HostToken middleware does. Lets the ingest handler tests
 // run without spinning up endpoint bootstrap + a token mint.
 func withHostID(next http.Handler, hostID string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -282,9 +275,8 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	}
 	insertEventsViaIngest(ctx, t, d, "host-a", events)
 
-	// One processor tick is enough; ProcessOnce is exposed on the
-	// processor for deterministic test signalling. Use a brief
-	// busy-loop on Run to converge.
+	// One processor tick is enough; ProcessOnce is exposed on the processor for deterministic test signalling. Use a brief busy-loop on
+	// Run to converge.
 	require.Eventually(t, func() bool {
 		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 		return len(alerts) > 0
@@ -318,9 +310,8 @@ func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 		return len(alerts) >= 1
 	}, 5*time.Second, 50*time.Millisecond)
 
-	// The unique key is (host_id, rule_id, process_id); two trigger
-	// events from the same rule against the same process must collapse
-	// into ONE alert row regardless of how many triggers we sent.
+	// The unique key is (host_id, rule_id, process_id); two trigger events from the same rule against the same process must collapse into
+	// ONE alert row regardless of how many triggers we sent.
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	assert.Len(t, alerts, 1)
@@ -532,10 +523,8 @@ func TestBootstrap_FullModeRunsAllGoroutines(t *testing.T) {
 func TestBootstrap_IntakeModeIsNoOp(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeIntake})
 
-	// Intake mode skips the operator surface, so the service has no
-	// engine wired and LoadActive is a no-op (the intake binary
-	// doesn't evaluate rules). RegisterAuthedRoutes must also be a
-	// no-op so cmd/main can call it unconditionally.
+	// Intake mode skips the operator surface, so the service has no engine wired and LoadActive is a no-op (the intake binary doesn't
+	// evaluate rules). RegisterAuthedRoutes must also be a no-op so cmd/main can call it unconditionally.
 	mux := http.NewServeMux()
 	d.RegisterAuthedRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -563,9 +552,7 @@ func TestBootstrap_MissingDB(t *testing.T) {
 func TestBootstrap_SchemaIdempotent(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
-	// ApplySchema MUST be re-runnable without error (boot does it
-	// unconditionally; a partial restart must not fail on the second
-	// pass).
+	// ApplySchema MUST be re-runnable without error (boot does it unconditionally; a partial restart must not fail on the second pass).
 	require.NoError(t, d.ApplySchema(ctx))
 	require.NoError(t, d.ApplySchema(ctx))
 }
@@ -603,10 +590,8 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
-	// python (50) -> sh (100) -> /tmp/payload (200). Three forks +
-	// three execs exercises handleFork, handleExec, the parent-path
-	// inheritance in fork-without-exec, and the tree builder's
-	// ppid -> pid linkage.
+	// python (50) -> sh (100) -> /tmp/payload (200). Three forks + three execs exercises handleFork, handleExec, the parent-path
+	// inheritance in fork-without-exec, and the tree builder's ppid -> pid linkage.
 	now := time.Now().UnixNano()
 	events := []api.Event{
 		{EventID: "fork-py", HostID: "h", TimestampNs: now, EventType: "fork",
@@ -624,13 +609,10 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	}
 	insertEventsViaIngest(ctx, t, d, "h", events)
 
-	// Wait until the LAST exec has been applied — not just until 3 rows
-	// exist. A fork creates a row with the parent's path inherited; the
-	// exec that follows rewrites that row's path. If we polled on
-	// countNodes >= 3 we'd race the window where row 200's path is
-	// still the inherited "/bin/sh" because exec-pl hasn't been
-	// processed yet (CI surfaced exactly that as
-	// `["/usr/bin/python3", "/bin/sh", "/bin/sh"]`).
+	// Wait until the LAST exec has been applied — not just until 3 rows exist. A fork creates a row with the parent's path inherited;
+	// the exec that follows rewrites that row's path. If we polled on countNodes >= 3 we'd race the window where row 200's path is still
+	// the inherited "/bin/sh" because exec-pl hasn't been processed yet (CI surfaced exactly that as `["/usr/bin/python3", "/bin/sh",
+	// "/bin/sh"]`).
 	require.Eventually(t, func() bool {
 		tree, err := d.Service().BuildTree(ctx, "h",
 			api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100)
@@ -651,9 +633,8 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, tree, "BuildTree must return at least one root")
 
-	// Final post-condition mirrors what Eventually waited on; kept as
-	// explicit asserts so a failure points at the missing path
-	// directly rather than at the polling timeout.
+	// Final post-condition mirrors what Eventually waited on; kept as explicit asserts so a failure points at the missing path directly
+	// rather than at the polling timeout.
 	paths := flattenPaths(tree)
 	assert.Contains(t, paths, "/usr/bin/python3")
 	assert.Contains(t, paths, "/bin/sh")
@@ -675,9 +656,8 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 	}
 	insertEventsViaIngest(ctx, t, d, "h", events)
 
-	// Query at the exit time exactly: GetProcessByPID's predicate is
-	// (exit_time_ns IS NULL OR exit_time_ns >= ?), so the row is
-	// reachable at its exit time and earlier, then drops out.
+	// Query at the exit time exactly: GetProcessByPID's predicate is (exit_time_ns IS NULL OR exit_time_ns >= ?), so the row is reachable
+	// at its exit time and earlier, then drops out.
 	require.Eventually(t, func() bool {
 		p, err := d.Service().GetProcessDetail(ctx, "h", 777, now+2)
 		if err != nil || p == nil {
@@ -688,9 +668,8 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 }
 
 func TestGraph_ExecWithoutFork(t *testing.T) {
-	// Issue #7 / boot sequence: agent restart can deliver an exec
-	// without the originating fork (we missed it). The builder
-	// synthesizes a root row with fork_time_ns == exec time.
+	// Issue #7 / boot sequence: agent restart can deliver an exec without the originating fork (we missed it). The builder synthesizes a
+	// root row with fork_time_ns == exec time.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -710,10 +689,8 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 }
 
 func TestGraph_SamePIDReExec(t *testing.T) {
-	// Issue #10: shell exec-optimization. python -> sh -c "<binary>"
-	// re-execs the binary on the SAME pid without forking. The
-	// builder must close the prior generation and link the new one
-	// via previous_exec_id.
+	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
+	// close the prior generation and link the new one via previous_exec_id.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -785,22 +762,18 @@ func TestOperatorHTTP_ListAlerts_Empty(t *testing.T) {
 	assert.Empty(t, alerts)
 }
 
-// TestOperatorHTTP_ListAlerts_SourceFilter pins the GET /api/alerts ?source=
-// query-param contract end to end. The UI's alert-list source filter relies on
-// the handler parsing the param and the store applying it to the WHERE clause;
-// dropping either layer would silently regress the "filter by app-control vs
-// detection" demo beat, which is precisely what step 9 exists to land.
+// TestOperatorHTTP_ListAlerts_SourceFilter pins the GET /api/alerts ?source= query-param contract end to end. The UI's alert-list
+// source filter relies on the handler parsing the param and the store applying it to the WHERE clause; dropping either layer would
+// silently regress the "filter by app-control vs detection" demo beat, which is precisely what step 9 exists to land.
 func TestOperatorHTTP_ListAlerts_SourceFilter(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	procID := mustInsertProcess(t, ctx, d, "host-a", 100)
 
-	// One alert per source value so the same row set covers both filter
-	// branches in one HTTP test. Seed via the store rather than the engine
-	// path: insertAlertDirect would default Source to "detection" and we'd
-	// need a separate stubRule that emits an application_control finding
-	// just to seed the second row. Direct InsertAlert keeps the test
-	// focused on the filter wiring, not on engine internals.
+	// One alert per source value so the same row set covers both filter branches in one HTTP test. Seed via the store rather
+	// than the engine path: insertAlertDirect would default Source to "detection" and we'd need a separate stubRule that emits an
+	// application_control finding just to seed the second row. Direct InsertAlert keeps the test focused on the filter wiring, not on
+	// engine internals.
 	for _, source := range []string{api.AlertSourceDetection, api.AlertSourceApplicationControl} {
 		_, _, err := d.Store().InsertAlert(ctx, api.Alert{
 			HostID:    "host-a",
@@ -952,9 +925,8 @@ func TestOperatorHTTP_ProcessTree_RequiresHostID(t *testing.T) {
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	// Empty path segment yields a 404 from the mux (the path matcher
-	// doesn't accept the empty {host_id}). Either 400 or 404 is
-	// acceptable; just confirm it's NOT 200.
+	// Empty path segment yields a 404 from the mux (the path matcher doesn't accept the empty {host_id}). Either 400 or 404 is acceptable;
+	// just confirm it's NOT 200.
 	assert.NotEqual(t, http.StatusOK, resp.StatusCode)
 }
 
@@ -1010,13 +982,10 @@ func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, body.Roots)
 }
 
-// TestOperatorHTTP_ProcessTree_LimitClamping pins the three branches in the
-// handler's limit handling so a regression in the parse helper or the
-// processTreeDefaultLimit / processTreeMaxLimit constants does not silently
-// slip through. Each subtest only asserts a 200 status: the clamp happens
-// before the underlying query runs, so the observable contract is "every
-// limit value -- absent, zero, negative, oversized -- yields a successful
-// response".
+// TestOperatorHTTP_ProcessTree_LimitClamping pins the three branches in the handler's limit handling so a regression in the parse
+// helper or the processTreeDefaultLimit / processTreeMaxLimit constants does not silently slip through. Each subtest only asserts a
+// 200 status: the clamp happens before the underlying query runs, so the observable contract is "every limit value -- absent, zero,
+// negative, oversized -- yields a successful response".
 func TestOperatorHTTP_ProcessTree_LimitClamping(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	mux := http.NewServeMux()
@@ -1088,22 +1057,18 @@ func TestRegisterIngestRoutes_MountsPostEvents(t *testing.T) {
 
 // ---- API wire helpers ------------------------------------------------------
 
-// (Wire decode + Marshal/Unmarshal for NullRawJSON are tested in the
-// detection/api package's own _test.go file alongside these
+// (Wire decode + Marshal/Unmarshal for NullRawJSON are tested in the detection/api package's own _test.go file alongside these
 // integration tests.)
 
 // ---- Cross-context heartbeat (response -> detection) ----------------------
 
 func TestRecordHostSeen_SatisfiesResponseHeartbeatShape(t *testing.T) {
-	// The response context wires its Heartbeat closure to
-	// detectionCtx.Service().RecordHostSeen. This test pins the
-	// signature compatibility so a future signature drift breaks the
-	// build via the type alias check below rather than at runtime.
+	// The response context wires its Heartbeat closure to detectionCtx.Service().RecordHostSeen. This test pins the signature
+	// compatibility so a future signature drift breaks the build via the type alias check below rather than at runtime.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 
-	// Wrapping in a function literal with the exact heartbeat signature pins the shape:
-	// if RecordHostSeen drifts away from what the response context's Heartbeat closure
-	// expects, this fails to compile rather than at runtime.
+	// Wrapping in a function literal with the exact heartbeat signature pins the shape: if RecordHostSeen drifts away from what the
+	// response context's Heartbeat closure expects, this fails to compile rather than at runtime.
 	responseHeartbeat := func(ctx context.Context, hostID string, at time.Time) error {
 		return d.Service().RecordHostSeen(ctx, hostID, at)
 	}
@@ -1120,8 +1085,7 @@ func TestRecordHostSeen_SatisfiesResponseHeartbeatShape(t *testing.T) {
 
 // ---- Helpers ---------------------------------------------------------------
 
-// insertEventsViaIngest sends the batch through the agent-facing
-// IngestHandler so the test exercises the same path production uses
+// insertEventsViaIngest sends the batch through the agent-facing IngestHandler so the test exercises the same path production uses
 // (validation + host_id pin enforcement + UpsertHosts side effect).
 func insertEventsViaIngest(ctx context.Context, t *testing.T, d *bootstrap.Detection, hostID string, events []api.Event) {
 	t.Helper()
@@ -1138,10 +1102,8 @@ func insertEventsViaIngest(ctx context.Context, t *testing.T, d *bootstrap.Detec
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-// mustInsertProcess seeds a process row (so subsequent alerts can
-// reference its id via fk_alerts_process). Uses the public Service
-// surface so the helper doesn't reach into detection/internal/mysql
-// from outside detection/.
+// mustInsertProcess seeds a process row (so subsequent alerts can reference its id via fk_alerts_process). Uses the public Service
+// surface so the helper doesn't reach into detection/internal/mysql from outside detection/.
 func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID string, pid int) int64 {
 	t.Helper()
 	insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
@@ -1187,10 +1149,9 @@ func seedSingleAlert(t *testing.T, ctx context.Context, d *bootstrap.Detection) 
 	return alertID
 }
 
-// insertAlertDirect drives one alert through the engine path for the
-// given host. ruleID picks the dedup key; the stub rule's
-// ProcessID=1 happens to resolve against the seed process row this
-// helper relies on having been inserted by mustInsertProcess up front.
+// insertAlertDirect drives one alert through the engine path for the given host. ruleID picks the dedup key; the stub rule's
+// ProcessID=1 happens to resolve against the seed process row this helper relies on having been inserted by mustInsertProcess up
+// front.
 func insertAlertDirect(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID, ruleID string, _ int64, _ []string) {
 	t.Helper()
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: ruleID}}})

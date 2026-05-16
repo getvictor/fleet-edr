@@ -11,16 +11,13 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// wrapFmt is the standard `error_sentinel: hint` format used by every
-// validator below. Extracted to a constant per Sonar go:S1192 so a
+// wrapFmt is the standard `error_sentinel: hint` format used by every validator below. Extracted to a constant per Sonar go:S1192 so a
 // future rename to a structured-error shape is a one-line change.
 const wrapFmt = "%w: %s"
 
-// ValidateRuleType reports whether rt is a recognized rule type. The
-// demo cut enforces only BINARY; the other five types are recognized
-// (so REST callers see the precise "unsupported yet" error rather
-// than a generic "unknown" error) but the validator path below
-// short-circuits with ErrAppControlUnsupportedRuleType for them.
+// ValidateRuleType reports whether rt is a recognized rule type. The demo cut enforces only BINARY; the other five types are
+// recognized (so REST callers see the precise "unsupported yet" error rather than a generic "unknown" error) but the validator path
+// below short-circuits with ErrAppControlUnsupportedRuleType for them.
 func ValidateRuleType(rt api.RuleType) error {
 	switch rt {
 	case api.RuleTypeBinary:
@@ -48,13 +45,10 @@ var teamID = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 // The bundle.id portion is ASCII alphanumeric with `.`, `_`, `-`.
 var signingID = regexp.MustCompile(`^(?:[A-Z0-9]{10}|platform):[a-zA-Z0-9._-]+$`)
 
-// ValidateIdentifier checks that the identifier value matches the
-// format required by the rule type. Returns
-// ErrAppControlInvalidIdentifier with the expected-shape hint string
-// (the raw identifier value is NOT included so this validator does
-// not turn unbounded admin input into log lines). Returns
-// ErrAppControlUnsupportedRuleType if the type is on the enum but
-// not yet wired through validation.
+// ValidateIdentifier checks that the identifier value matches the format required by the rule type. Returns
+// ErrAppControlInvalidIdentifier with the expected-shape hint string (the raw identifier value is NOT included so this validator does
+// not turn unbounded admin input into log lines). Returns ErrAppControlUnsupportedRuleType if the type is on the enum but not yet
+// wired through validation.
 func ValidateIdentifier(rt api.RuleType, identifier string) error {
 	switch rt {
 	case api.RuleTypeBinary:
@@ -92,13 +86,10 @@ func ValidateIdentifier(rt api.RuleType, identifier string) error {
 	}
 }
 
-// CanonicalizePath returns the macOS-canonical form of an absolute
-// path: rejects relative, empty, or `..`-containing paths, runs the
-// input through filepath.Clean to collapse redundant slashes, then
-// rewrites the /tmp, /var, /etc symlinks into their /private/...
-// forms. Exported for the eventual PATH validator and the
-// extension's path-match comparison; the demo cut doesn't call it on
-// the hot path.
+// CanonicalizePath returns the macOS-canonical form of an absolute path: rejects relative, empty, or `..`-containing paths, runs the
+// input through filepath.Clean to collapse redundant slashes, then rewrites the /tmp, /var, /etc symlinks into their /private/...
+// forms. Exported for the eventual PATH validator and the extension's path-match comparison; the demo cut doesn't call it on the hot
+// path.
 func CanonicalizePath(p string) (string, error) { return canonicalizePath(p) }
 
 func canonicalizePath(p string) (string, error) {
@@ -108,10 +99,8 @@ func canonicalizePath(p string) (string, error) {
 	if !filepath.IsAbs(p) {
 		return "", errors.New("path must be absolute")
 	}
-	// Reject `..` segments before Clean would collapse them. An admin
-	// who writes `/var/foo/../../etc/sudoers` is either confused or
-	// trying to bypass an audit trail; either way the canonical form
-	// should be what they wrote, not what filepath.Clean computed.
+	// Reject `..` segments before Clean would collapse them. An admin who writes `/var/foo/../../etc/sudoers` is either confused or trying
+	// to bypass an audit trail; either way the canonical form should be what they wrote, not what filepath.Clean computed.
 	if slices.Contains(strings.Split(p, "/"), "..") {
 		return "", errors.New("path must not contain `..` segments")
 	}
@@ -125,8 +114,7 @@ func canonicalizePath(p string) (string, error) {
 	return cleaned, nil
 }
 
-// ValidateSeverity returns nil for a recognized severity and an
-// ErrAppControlInvalidSeverity for anything else. Empty severity is
+// ValidateSeverity returns nil for a recognized severity and an ErrAppControlInvalidSeverity for anything else. Empty severity is
 // allowed and is treated by callers as "use the default" (medium).
 func ValidateSeverity(s api.Severity) error {
 	if s == "" {

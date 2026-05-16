@@ -189,11 +189,9 @@ func TestEngine_NonGlobalScope_PBT(t *testing.T) {
 	})
 }
 
-// canonicalReasons is the closed set of strings api.ReasonReauthRequired
-// and friends declare. The PBT asserts every decision lands in this
-// set; a regression that introduces a freeform reason string fails
-// here before it can drift across the audit row's `payload.reason`
-// column and break the SigNoz dashboard's grouping.
+// canonicalReasons is the closed set of strings api.ReasonReauthRequired and friends declare. The PBT asserts every decision
+// lands in this set; a regression that introduces a freeform reason string fails here before it can drift across the audit row's
+// `payload.reason` column and break the SigNoz dashboard's grouping.
 var canonicalReasons = []string{
 	api.ReasonGranted,
 	api.ReasonNoMatchingRule,
@@ -228,9 +226,8 @@ func requiresFreshAuth(action api.Action, resource api.Resource) bool {
 	return action == api.ActionAlertResolve && resource.Severity == "critical"
 }
 
-// newEnginePBT builds a real Engine over the embedded policy bundle.
-// audit recorder is nil (per Engine.New's doc: "Audit may be nil only
-// in tests"); no async writer.
+// newEnginePBT builds a real Engine over the embedded policy bundle. audit recorder is nil (per Engine.New's doc: "Audit may be nil
+// only in tests"); no async writer.
 func newEnginePBT(t *testing.T) *authz.Engine {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(testLogWriter{t}, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -239,10 +236,8 @@ func newEnginePBT(t *testing.T) *authz.Engine {
 	return e
 }
 
-// loadRolesFromBundle reads policy/data/roles.json via the test's own
-// embedded copy. The package's authz.policyFS embed is unexported, so
-// the test can't reach it; embedding the same file from the test
-// keeps the PBT in sync with the live data without exposing the
+// loadRolesFromBundle reads policy/data/roles.json via the test's own embedded copy. The package's authz.policyFS embed is unexported,
+// so the test can't reach it; embedding the same file from the test keeps the PBT in sync with the live data without exposing the
 // production embed.FS.
 func loadRolesFromBundle(t *testing.T) map[string][]string {
 	t.Helper()
@@ -262,8 +257,7 @@ func loadRolesFromBundle(t *testing.T) map[string][]string {
 	return out
 }
 
-// testLogWriter routes engine error logs through t.Log so PBT shrink
-// reports include the engine's own error context, not just the bare
+// testLogWriter routes engine error logs through t.Log so PBT shrink reports include the engine's own error context, not just the bare
 // require failure.
 type testLogWriter struct{ t *testing.T }
 

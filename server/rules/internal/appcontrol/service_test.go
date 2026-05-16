@@ -19,11 +19,9 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// Unit tests for appcontrol.Service paths the rules-context REST tests
-// don't reach: the snapshot-compose failure branch, the
-// nil-actor/empty-tenant validation guards, and the host-lister
-// skip-reason on the audit row. These exercise the orchestrator
-// directly so the REST tests can stay focused on HTTP behaviour.
+// Unit tests for appcontrol.Service paths the rules-context REST tests don't reach: the snapshot-compose failure branch, the
+// nil-actor/empty-tenant validation guards, and the host-lister skip-reason on the audit row. These exercise the orchestrator directly
+// so the REST tests can stay focused on HTTP behaviour.
 
 type captureInserter struct {
 	mu    sync.Mutex
@@ -61,8 +59,7 @@ func newAdmin() *identityapi.Actor {
 	return &identityapi.Actor{UserID: 7}
 }
 
-// newService wires a fresh Service backed by a real test DB. The seed
-// runs explicitly so the Default policy exists for the tests pin
+// newService wires a fresh Service backed by a real test DB. The seed runs explicitly so the Default policy exists for the tests pin
 // under.
 func newService(t *testing.T) (*appcontrol.Service, *appcontrol.Store, *captureInserter, *captureAudit) {
 	t.Helper()
@@ -82,10 +79,8 @@ func newService(t *testing.T) (*appcontrol.Service, *appcontrol.Store, *captureI
 	return svc, store, inserter, audit
 }
 
-// TestService_CreateRule_RejectsNilActor verifies the service-layer
-// guard catches a handler bypass: a nil actor is a wiring bug, not
-// user input, so we fail closed rather than silently produce an
-// unattributed audit row. The handler converts the absent actor into
+// TestService_CreateRule_RejectsNilActor verifies the service-layer guard catches a handler bypass: a nil actor is a wiring bug,
+// not user input, so we fail closed rather than silently produce an unattributed audit row. The handler converts the absent actor into
 // a 500 directly; this gate is the back-stop for any non-HTTP caller.
 func TestService_CreateRule_RejectsNilActor(t *testing.T) {
 	svc, store, _, _ := newService(t)
@@ -104,11 +99,9 @@ func TestService_CreateRule_RejectsNilActor(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
 }
 
-// TestService_CreateRule_AuditCarriesActorEmail confirms the
-// AuditEvent.ActorEmail is populated from req.Actor so the audit
-// row records who authored the rule (the handler passes
-// "user:<id>" today; the audit recorder denormalises to the
-// user's email at write time).
+// TestService_CreateRule_AuditCarriesActorEmail confirms the AuditEvent.ActorEmail is populated from req.Actor so the audit row
+// records who authored the rule (the handler passes "user:<id>" today; the audit recorder denormalises to the user's email at write
+// time).
 func TestService_CreateRule_AuditCarriesActorEmail(t *testing.T) {
 	svc, store, _, audit := newService(t)
 	policy, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
@@ -130,11 +123,8 @@ func TestService_CreateRule_AuditCarriesActorEmail(t *testing.T) {
 		"AuditEvent must carry req.Actor so the audit row records who authored the rule")
 }
 
-// TestService_NilDeps_Panics verifies the constructor's
-// fail-fast posture: a nil Store / Commands / Hosts is a wiring
-// bug at cmd/main, not a recoverable runtime state, so the
-// constructor panics rather than letting CreateRule fall through
-// to a nil-pointer dereference.
+// TestService_NilDeps_Panics verifies the constructor's fail-fast posture: a nil Store / Commands / Hosts is a wiring bug at cmd/main,
+// not a recoverable runtime state, so the constructor panics rather than letting CreateRule fall through to a nil-pointer dereference.
 func TestService_NilDeps_Panics(t *testing.T) {
 	cases := []struct {
 		name string
@@ -169,8 +159,7 @@ func TestService_NilDeps_Panics(t *testing.T) {
 	}
 }
 
-// TestService_NilAudit_RuleStillCreates verifies audit is optional:
-// a nil audit recorder drops the audit row with a WARN log but the
+// TestService_NilAudit_RuleStillCreates verifies audit is optional: a nil audit recorder drops the audit row with a WARN log but the
 // rule + fan-out still happen.
 func TestService_NilAudit_RuleStillCreates(t *testing.T) {
 	db := testdb.Open(t)

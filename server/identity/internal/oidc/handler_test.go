@@ -23,12 +23,9 @@ func (c *captureAudit) Record(_ context.Context, e api.AuditEvent) error {
 	return nil
 }
 
-// newTestHandler builds a Handler whose collaborators don't reach DB
-// or the IdP. Tests that walk the failure paths of handleCallback
-// (missing/malformed state, state mismatch, missing code) never call
-// Client.Exchange, so a zero-value *Client is safe; tests that DO
-// call Exchange would need a real IdP fixture and live in jit_test
-// (DB-backed) instead.
+// newTestHandler builds a Handler whose collaborators don't reach DB or the IdP. Tests that walk the failure paths of handleCallback
+// (missing/malformed state, state mismatch, missing code) never call Client.Exchange, so a zero-value *Client is safe; tests that DO
+// call Exchange would need a real IdP fixture and live in jit_test (DB-backed) instead.
 func newTestHandler(t *testing.T) (*Handler, *captureAudit) {
 	t.Helper()
 	rec := &captureAudit{}
@@ -56,10 +53,8 @@ func (w testWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// safeRedirect must drop off-site, scheme-laden, or protocol-relative
-// values and fall back to the default UI landing. Pinned here because
-// a regression that lets `next=https://evil.example.com` pass through
-// is a phishing vector.
+// safeRedirect must drop off-site, scheme-laden, or protocol-relative values and fall back to the default UI landing. Pinned here
+// because a regression that lets `next=https://evil.example.com` pass through is a phishing vector.
 func TestSafeRedirect(t *testing.T) {
 	cases := []struct {
 		name string
@@ -90,10 +85,8 @@ func TestSafeRedirect(t *testing.T) {
 	}
 }
 
-// pathStartsWithSingleSlash distinguishes "/foo" from "//foo" and
-// "/\foo". The double-slash + backslash forms are both protocol-
-// relative (some browsers normalise "\" to "/"); rejecting both is
-// the safeRedirect contract.
+// pathStartsWithSingleSlash distinguishes "/foo" from "//foo" and "/\foo". The double-slash + backslash forms are both protocol-
+// relative (some browsers normalise "\" to "/"); rejecting both is the safeRedirect contract.
 func TestPathStartsWithSingleSlash(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -115,9 +108,8 @@ func TestPathStartsWithSingleSlash(t *testing.T) {
 	}
 }
 
-// failureAudit emits an auth.oidc.failure row with the spec reason and
-// payload populated; pinned because it's the unknown-subject + email-
-// conflict path the operator dashboards key on.
+// failureAudit emits an auth.oidc.failure row with the spec reason and payload populated; pinned because it's the unknown-subject +
+// email- conflict path the operator dashboards key on.
 func TestFailureAudit(t *testing.T) {
 	h, rec := newTestHandler(t)
 	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/auth/callback?state=x", nil)
@@ -138,11 +130,9 @@ func TestFailureAudit(t *testing.T) {
 	assert.Equal(t, "okta-1", got.Payload["subject"])
 }
 
-// writeStateCookie + writeSessionCookie set a single audited cookie
-// with HttpOnly + SameSiteLax + the path scope expected by the
-// handler. Pinned because the cookie helpers consolidate three
-// previous inline construction sites; a regression that stripped
-// HttpOnly would silently expose state to JS-level XSS.
+// writeStateCookie + writeSessionCookie set a single audited cookie with HttpOnly + SameSiteLax + the path scope expected by the
+// handler. Pinned because the cookie helpers consolidate three previous inline construction sites; a regression that stripped HttpOnly
+// would silently expose state to JS-level XSS.
 func TestWriteStateCookie(t *testing.T) {
 	h, _ := newTestHandler(t)
 	w := httptest.NewRecorder()

@@ -12,12 +12,9 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// TestSchema_NoTenantIDOnEnrollments pins the removal of the legacy
-// tenant_id scaffolding column on endpoint's `enrollments` table. The
-// product is a single-instance deployment, so the column was dropped;
-// a regression that re-introduces it silently is caught here. The
-// follow-up ApplySchema call verifies the boot-time re-apply remains
-// idempotent.
+// TestSchema_NoTenantIDOnEnrollments pins the removal of the legacy tenant_id scaffolding column on endpoint's `enrollments` table.
+// The product is a single-instance deployment, so the column was dropped; a regression that re-introduces it silently is caught here.
+// The follow-up ApplySchema call verifies the boot-time re-apply remains idempotent.
 func TestSchema_NoTenantIDOnEnrollments(t *testing.T) {
 	db := full.Open(t)
 

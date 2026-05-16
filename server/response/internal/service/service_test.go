@@ -44,8 +44,7 @@ func TestCanTransitionMatrix(t *testing.T) {
 	}
 }
 
-// TestValidTargetStatus locks the agent-supplied input vocabulary.
-// pending is intentionally rejected -- the agent never asks the
+// TestValidTargetStatus locks the agent-supplied input vocabulary. pending is intentionally rejected -- the agent never asks the
 // server to "un-ack" a command.
 func TestValidTargetStatus(t *testing.T) {
 	assert.False(t, validTargetStatus(api.StatusPending))

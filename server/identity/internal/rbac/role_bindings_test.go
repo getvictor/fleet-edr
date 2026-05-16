@@ -17,8 +17,7 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// TestListLiveBindings_NilDBRejected pins the precondition: a Store
-// constructed without a real DB must surface the misconfiguration as
+// TestListLiveBindings_NilDBRejected pins the precondition: a Store constructed without a real DB must surface the misconfiguration as
 // a typed error rather than nil-dereferencing inside SelectContext.
 func TestListLiveBindings_NilDBRejected(t *testing.T) {
 	s := rbac.New(nil)
@@ -27,12 +26,9 @@ func TestListLiveBindings_NilDBRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "db must not be nil")
 }
 
-// TestListLiveBindings_EmptyTableReturnsEmptySlice covers the
-// happy-path query against a real MySQL with no role_bindings rows.
-// A user without any binding (the wave-1 default for SSO-provisioned
-// users until they're admin-bound) must not error; the chokepoint
-// then runs against an actor with an empty Roles slice and the
-// policy returns no_matching_rule.
+// TestListLiveBindings_EmptyTableReturnsEmptySlice covers the happy-path query against a real MySQL with no role_bindings rows.
+// A user without any binding (the wave-1 default for SSO-provisioned users until they're admin-bound) must not error; the chokepoint
+// then runs against an actor with an empty Roles slice and the policy returns no_matching_rule.
 func TestListLiveBindings_EmptyTableReturnsEmptySlice(t *testing.T) {
 	db := openSchema(t)
 	uid := insertUser(t, db, "empty-bindings@test")
@@ -42,11 +38,9 @@ func TestListLiveBindings_EmptyTableReturnsEmptySlice(t *testing.T) {
 	assert.Empty(t, got)
 }
 
-// TestListLiveBindings_RoundTrip pins the storage shape: a binding
-// inserted by the seeded admin path (or wave-2's writer) round-trips
-// through SelectContext into the api.RoleBinding shape with the
-// scope_type ENUM, the wildcard scope_id, and a nil ExpiresAt for
-// the never-expiring case.
+// TestListLiveBindings_RoundTrip pins the storage shape: a binding inserted by the seeded admin path (or wave-2's writer) round-trips
+// through SelectContext into the api.RoleBinding shape with the scope_type ENUM, the wildcard scope_id, and a nil ExpiresAt for the
+// never-expiring case.
 func TestListLiveBindings_RoundTrip(t *testing.T) {
 	db := openSchema(t)
 	uid := insertUser(t, db, "active-bindings@test")
@@ -74,11 +68,9 @@ func TestListLiveBindings_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestListLiveBindings_ExpiredBindingsFiltered locks in the wave-1
-// invariant: an expired binding (expires_at < NOW(6)) MUST NOT be
-// part of the actor the chokepoint evaluates against. The Rego
-// policy treats expired bindings as if they did not exist; this is
-// the storage-side enforcement of that contract.
+// TestListLiveBindings_ExpiredBindingsFiltered locks in the wave-1 invariant: an expired binding (expires_at < NOW(6)) MUST NOT be
+// part of the actor the chokepoint evaluates against. The Rego policy treats expired bindings as if they did not exist; this is the
+// storage-side enforcement of that contract.
 func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
 	db := openSchema(t)
 	uid := insertUser(t, db, "expired-bindings@test")
@@ -109,8 +101,7 @@ func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
 		"expired analyst binding must not appear; the future and never-expiring ones must")
 }
 
-// TestListLiveBindings_OnlyTargetUser confirms the user_id WHERE
-// clause: a binding for some other user must not bleed into the
+// TestListLiveBindings_OnlyTargetUser confirms the user_id WHERE clause: a binding for some other user must not bleed into the
 // caller's actor.
 func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
 	db := openSchema(t)
@@ -137,10 +128,8 @@ func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
 	assert.Equal(t, "auditor", gotB[0].RoleID)
 }
 
-// openSchema returns a fresh test DB with identity's full schema +
-// seeds applied. roles are seeded by ApplySchema so the FK-bound
-// role_bindings inserts in these tests don't trip
-// fk_role_bindings_role.
+// openSchema returns a fresh test DB with identity's full schema + seeds applied. roles are seeded by ApplySchema so the FK-bound
+// role_bindings inserts in these tests don't trip fk_role_bindings_role.
 func openSchema(t *testing.T) *sqlx.DB {
 	t.Helper()
 	db := testdb.Open(t)
@@ -161,10 +150,8 @@ func insertUser(t *testing.T, db *sqlx.DB, email string) int64 {
 	return id
 }
 
-// bindingFixture bundles the role_bindings columns each test row
-// pins. Collapsing the previous 8-parameter helper into a struct keeps
-// individual call sites legible (named fields beat positional args
-// when many strings have the same type) and quiets Sonar's S107
+// bindingFixture bundles the role_bindings columns each test row pins. Collapsing the previous 8-parameter helper into a struct keeps
+// individual call sites legible (named fields beat positional args when many strings have the same type) and quiets Sonar's S107
 // "function has too many parameters" rule.
 type bindingFixture struct {
 	UserID    int64

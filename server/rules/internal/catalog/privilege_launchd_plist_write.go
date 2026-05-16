@@ -38,9 +38,8 @@ import (
 //     where `cp` is a platform binary): skipped here, but the parent
 //     shell's exec is captured by suspicious_exec / process tree.
 type PrivilegeLaunchdPlistWrite struct {
-	// AllowedTeamIDs is the set of code-signing team IDs whose writes
-	// to /Library/LaunchDaemons should be silently accepted. Keep it
-	// small — every entry is a deployment-trusted vendor.
+	// AllowedTeamIDs is the set of code-signing team IDs whose writes to /Library/LaunchDaemons should be silently accepted. Keep it small
+	// — every entry is a deployment-trusted vendor.
 	AllowedTeamIDs map[string]struct{}
 }
 
@@ -86,31 +85,22 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 	}
 }
 
-// launchDaemonPath matches a plist directly under /Library/LaunchDaemons.
-// The trailing `[^/]+` excludes nested paths (e.g.
-// /Library/LaunchDaemons/foo/bar.plist isn't a real LaunchDaemon location)
-// so the rule stays focused on the actual drop site.
+// launchDaemonPath matches a plist directly under /Library/LaunchDaemons. The trailing `[^/]+` excludes nested paths (e.g.
+// /Library/LaunchDaemons/foo/bar.plist isn't a real LaunchDaemon location) so the rule stays focused on the actual drop site.
 var launchDaemonPath = regexp.MustCompile(`^/Library/LaunchDaemons/[^/]+\.plist$`)
 
-// launchDaemonsBytes is the substring fast-path filter applied to the raw
-// JSON payload before json.Unmarshal. ESF NOTIFY_OPEN fires on every file
-// open in the kernel — thousands per second on a busy host — and well
-// over 99.99% of those opens never touch /Library/LaunchDaemons. Skipping
-// the JSON decode for opens that obviously don't qualify cuts the rule's
-// CPU cost from "one unmarshal per open" to "one bytes.Contains per
-// open". The substring can over-match (e.g. an open whose `path` happens
-// to mention the directory name elsewhere in the JSON), but
-// launchDaemonPath.MatchString below tightens it to the canonical drop
-// site, so the gate is purely an optimisation, not a correctness check.
+// launchDaemonsBytes is the substring fast-path filter applied to the raw JSON payload before json.Unmarshal. ESF NOTIFY_OPEN
+// fires on every file open in the kernel — thousands per second on a busy host — and well over 99.99% of those opens never touch
+// /Library/LaunchDaemons. Skipping the JSON decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal
+// per open" to "one bytes.Contains per open". The substring can over-match (e.g. an open whose `path` happens to mention the directory
+// name elsewhere in the JSON), but launchDaemonPath.MatchString below tightens it to the canonical drop site, so the gate is purely an
+// optimisation, not a correctness check.
 var launchDaemonsBytes = []byte("/Library/LaunchDaemons/")
 
-// Bits 0 and 1 of the open(2) flags hold the access mode: O_RDONLY=0,
-// O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits means the
-// file descriptor can be written. This matches the kernel's interpretation
-// regardless of whether higher bits (O_CREAT, O_TRUNC, O_APPEND, ...) are
-// set, so a `cp -c` (which uses O_WRONLY|O_CREAT|O_TRUNC = 0x601 on
-// Darwin) and a plain `cat > foo.plist` (O_WRONLY|O_CREAT|O_TRUNC) both
-// trip the check.
+// Bits 0 and 1 of the open(2) flags hold the access mode: O_RDONLY=0, O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits
+// means the file descriptor can be written. This matches the kernel's interpretation regardless of whether higher bits (O_CREAT,
+// O_TRUNC, O_APPEND, ...) are set, so a `cp -c` (which uses O_WRONLY|O_CREAT|O_TRUNC = 0x601 on Darwin) and a plain `cat > foo.plist`
+// (O_WRONLY|O_CREAT|O_TRUNC) both trip the check.
 const openAccessModeMask = 0x3
 
 type openPayload struct {
@@ -119,9 +109,8 @@ type openPayload struct {
 	Flags int    `json:"flags"`
 }
 
-// codeSigningJSON mirrors the extension's CodeSigning struct on the wire.
-// We only consume team_id + is_platform_binary; signing_id and flags
-// stay on the row but the rule doesn't read them.
+// codeSigningJSON mirrors the extension's CodeSigning struct on the wire. We only consume team_id + is_platform_binary; signing_id and
+// flags stay on the row but the rule doesn't read them.
 type codeSigningJSON struct {
 	TeamID           string `json:"team_id"`
 	IsPlatformBinary bool   `json:"is_platform_binary"`
@@ -149,8 +138,7 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	if evt.EventType != "open" {
 		return nil, nil
 	}
-	// Substring fast-path: skip the JSON decode for the overwhelming
-	// majority of opens that don't touch /Library/LaunchDaemons at all.
+	// Substring fast-path: skip the JSON decode for the overwhelming majority of opens that don't touch /Library/LaunchDaemons at all.
 	// See launchDaemonsBytes for the rationale.
 	if !bytes.Contains(evt.Payload, launchDaemonsBytes) {
 		return nil, nil
@@ -199,13 +187,10 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	}, nil
 }
 
-// allowed returns true when the writing process's code-signing identity
-// is on the operator's allowlist or is a platform binary. Both branches
-// short-circuit the finding. NullRawJSON is a json.RawMessage alias;
-// both an empty slice (DB NULL → api.NullRawJSON.Scan zeros it) and
-// the literal JSON value `null` (4 bytes) mean "no code_signing on the
-// process row" — typically an unsigned binary, which we treat as
-// in-scope so the finding fires.
+// allowed returns true when the writing process's code-signing identity is on the operator's allowlist or is a platform binary.
+// Both branches short-circuit the finding. NullRawJSON is a json.RawMessage alias; both an empty slice (DB NULL → api.NullRawJSON.Scan
+// zeros it) and the literal JSON value `null` (4 bytes) mean "no code_signing on the process row" — typically an unsigned binary,
+// which we treat as in-scope so the finding fires.
 func (r *PrivilegeLaunchdPlistWrite) allowed(raw api.NullRawJSON) bool {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return false

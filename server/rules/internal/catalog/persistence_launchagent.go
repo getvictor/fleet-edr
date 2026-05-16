@@ -24,10 +24,8 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1543.001
-// (Create or Modify System Process → Launch Agent). The rule fires on
-// `launchctl load` of user LaunchAgent plists, which is exactly this
-// sub-technique's scope.
+// Techniques returns the MITRE ATT&CK IDs this rule covers — T1543.001 (Create or Modify System Process → Launch Agent). The rule
+// fires on `launchctl load` of user LaunchAgent plists, which is exactly this sub-technique's scope.
 func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.001"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
@@ -69,9 +67,9 @@ var launchctlPaths = map[string]bool{
 	"/usr/bin/launchctl": true,
 }
 
-// launchAgentPath matches arguments that reference a plist under a LaunchAgents directory.
-// We accept both system-wide (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library)
-// locations — an attacker-planted plist at either is a persistence mechanism.
+// launchAgentPath matches arguments that reference a plist under a LaunchAgents directory. We accept both system-wide
+// (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library) locations — an attacker-planted plist at either is a persistence
+// mechanism.
 var launchAgentPath = regexp.MustCompile(`(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$`)
 
 type persistenceLaunchCtlPayload struct {
@@ -114,9 +112,8 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.allowed(plistPath) {
 		return nil, nil
 	}
-	// Look up the process row so the alert can link to the process detail view. If it's
-	// not yet materialised we skip — the next batch re-evaluates once the processor
-	// lands the row. Safer than firing an alert we can't pivot from.
+	// Look up the process row so the alert can link to the process detail view. If it's not yet materialised we skip — the next batch
+	// re-evaluates once the processor lands the row. Safer than firing an alert we can't pivot from.
 	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)

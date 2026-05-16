@@ -35,28 +35,22 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
-// DefaultAsyncQueueCap is the default channel capacity. ~8K rows of
-// cushion is enough for a multi-minute burst at expected wave-1 read
-// volumes without consuming meaningful memory (each AuditEvent is
-// well under 1 KB on the wire). Operators tune via
+// DefaultAsyncQueueCap is the default channel capacity. ~8K rows of cushion is enough for a multi-minute burst at expected
+// wave-1 read volumes without consuming meaningful memory (each AuditEvent is well under 1 KB on the wire). Operators tune via
 // EDR_AUDIT_ASYNC_QUEUE_CAP.
 const DefaultAsyncQueueCap = 8192
 
-// shutdownDrainPerEvent caps how long a single drained event spends
-// in the INSERT path. Five seconds matches sync Record's implicit
+// shutdownDrainPerEvent caps how long a single drained event spends in the INSERT path. Five seconds matches sync Record's implicit
 // ceiling under a healthy MySQL.
 const shutdownDrainPerEvent = 5 * time.Second
 
-// shutdownDrainGlobal caps the total wall-clock spent draining at
-// shutdown. With 8192 events and a 5s per-event cap, an unresponsive
-// DB could otherwise stall shutdown for ~11 hours. 30 seconds keeps
-// the server's shutdown grace window roughly bounded; rows still
+// shutdownDrainGlobal caps the total wall-clock spent draining at shutdown. With 8192 events and a 5s per-event cap, an unresponsive
+// DB could otherwise stall shutdown for ~11 hours. 30 seconds keeps the server's shutdown grace window roughly bounded; rows still
 // queued past it spill to slog as the dual-emit fallback.
 const shutdownDrainGlobal = 30 * time.Second
 
-// AsyncWriter implements api.AsyncAuditWriter. Construct via
-// NewAsyncWriter and call Run from a goroutine owned by the host
-// context's Run method.
+// AsyncWriter implements api.AsyncAuditWriter. Construct via NewAsyncWriter and call Run from a goroutine owned by the host context's
+// Run method.
 type AsyncWriter struct {
 	store   *Store
 	queue   chan api.AuditEvent
@@ -64,12 +58,9 @@ type AsyncWriter struct {
 	dropped uint64
 	dropMu  sync.Mutex
 
-	// submitMu serializes Submit (RLock) against shutdown (Lock).
-	// shutdown.Lock() blocks until every in-flight Submit has
-	// released its RLock, then sets closed=true under the write lock
-	// so subsequent Submits see the closed flag and return false
-	// without queuing. This eliminates the race where a Submit could
-	// enqueue an event after drain has already returned.
+	// submitMu serializes Submit (RLock) against shutdown (Lock). shutdown.Lock() blocks until every in-flight Submit has released its
+	// RLock, then sets closed=true under the write lock so subsequent Submits see the closed flag and return false without queuing.
+	// This eliminates the race where a Submit could enqueue an event after drain has already returned.
 	submitMu sync.RWMutex
 	closed   bool
 }
@@ -160,10 +151,8 @@ func (w *AsyncWriter) Run(ctx context.Context) error {
 	}
 }
 
-// shutdown closes the writer to new submits and drains the queue
-// under a global deadline. Holds submitMu.Lock() across the closed
-// flip so no new Submit can enqueue an event between the closure
-// and the drain (CodeRabbit + Gemini PR #120 review).
+// shutdown closes the writer to new submits and drains the queue under a global deadline. Holds submitMu.Lock() across the closed flip
+// so no new Submit can enqueue an event between the closure and the drain (CodeRabbit + Gemini PR #120 review).
 func (w *AsyncWriter) shutdown() {
 	w.submitMu.Lock()
 	w.closed = true
@@ -171,10 +160,8 @@ func (w *AsyncWriter) shutdown() {
 	w.drain()
 }
 
-// writeOne wraps Store.Record with panic recovery and a fresh bounded
-// context. An INSERT error is not a hard error for the writer loop —
-// log + continue. The chokepoint's sync path remains the durable
-// signal for failure modes where MySQL is genuinely unavailable.
+// writeOne wraps Store.Record with panic recovery and a fresh bounded context. An INSERT error is not a hard error for the writer loop
+// — log + continue. The chokepoint's sync path remains the durable signal for failure modes where MySQL is genuinely unavailable.
 func (w *AsyncWriter) writeOne(e api.AuditEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownDrainPerEvent)
 	defer cancel()
@@ -216,9 +203,8 @@ func (w *AsyncWriter) drain() {
 	}
 }
 
-// logUndrainedTail emits a slog WARN per still-queued event when the
-// global drain deadline expires. Each WARN carries the event payload
-// so post-incident log scraping can reconstruct what didn't land.
+// logUndrainedTail emits a slog WARN per still-queued event when the global drain deadline expires. Each WARN carries the event
+// payload so post-incident log scraping can reconstruct what didn't land.
 func (w *AsyncWriter) logUndrainedTail() {
 	for {
 		select {
@@ -230,12 +216,9 @@ func (w *AsyncWriter) logUndrainedTail() {
 	}
 }
 
-// logDropped emits the dual-emit slog WARN that preserves the audit
-// content when the bounded buffer cannot. reason is "queue_full" on a
-// burst, "writer_stopped" when Submit raced shutdown, or
-// "drain_deadline_exceeded" when the global drain ran out of time.
-// Attributes mirror the AuditEvent shape so a log-aggregation query
-// can pivot from the slog index back to a logical audit row.
+// logDropped emits the dual-emit slog WARN that preserves the audit content when the bounded buffer cannot. reason is "queue_full" on
+// a burst, "writer_stopped" when Submit raced shutdown, or "drain_deadline_exceeded" when the global drain ran out of time. Attributes
+// mirror the AuditEvent shape so a log-aggregation query can pivot from the slog index back to a logical audit row.
 func (w *AsyncWriter) logDropped(ctx context.Context, e api.AuditEvent, reason string) {
 	w.dropMu.Lock()
 	w.dropped++
@@ -269,8 +252,6 @@ func (w *AsyncWriter) Dropped() uint64 {
 	return w.dropped
 }
 
-// ErrAsyncStopped is returned to callers waiting on Run when the
-// writer has already shut down and they ask for state observation.
-// Today nothing does; reserved for a future readiness probe so the
-// symbol is stable.
+// ErrAsyncStopped is returned to callers waiting on Run when the writer has already shut down and they ask for state observation.
+// Today nothing does; reserved for a future readiness probe so the symbol is stable.
 var ErrAsyncStopped = errors.New("audit: async writer stopped")

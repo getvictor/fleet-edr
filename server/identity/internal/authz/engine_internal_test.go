@@ -11,11 +11,9 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
-// TestAssertActionsParity covers the runtime parity check's failure
-// branches. The happy path (matched sets) is exercised at engine
-// construction time by every other test in the package; the
-// missing-from-bundle and missing-from-go paths are not, hence the
-// dedicated table here.
+// TestAssertActionsParity covers the runtime parity check's failure branches. The happy path (matched sets) is exercised at engine
+// construction time by every other test in the package; the missing-from-bundle and missing-from-go paths are not, hence the dedicated
+// table here.
 func TestAssertActionsParity(t *testing.T) {
 	registered := api.RegisteredActions()
 	require.NotEmpty(t, registered, "RegisteredActions must be populated")
@@ -65,11 +63,9 @@ func TestAssertActionsParity(t *testing.T) {
 	})
 }
 
-// TestDecisionFromResultSet covers the result-set decoder's
-// fail-loud paths. The happy path is exercised by every Allow call
-// in engine_test.go; the malformed-shape branches need direct
-// invocation because Rego's compiled query never produces them
-// against the embedded bundle.
+// TestDecisionFromResultSet covers the result-set decoder's fail-loud paths. The happy path is exercised by every Allow call in
+// engine_test.go; the malformed-shape branches need direct invocation because Rego's compiled query never produces them against the
+// embedded bundle.
 func TestDecisionFromResultSet(t *testing.T) {
 	t.Run("empty result set is engine_error", func(t *testing.T) {
 		_, err := decisionFromResultSet(rego.ResultSet{})
@@ -130,10 +126,8 @@ func TestDecisionFromResultSet(t *testing.T) {
 	})
 }
 
-// TestAuditPayload locks the dual-emit shape every audit consumer
-// pivots on: every audit row carries exactly `allow` + `reason` so
-// the SigNoz dashboard's grouping queries don't have to handle
-// optional / tri-state fields.
+// TestAuditPayload locks the dual-emit shape every audit consumer pivots on: every audit row carries exactly `allow` + `reason` so the
+// SigNoz dashboard's grouping queries don't have to handle optional / tri-state fields.
 func TestAuditPayload(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -165,9 +159,8 @@ func TestAuditPayload(t *testing.T) {
 	}
 }
 
-// internalAudit is a minimal AuditRecorder used by tests in this
-// package (package authz). The recordingAudit in engine_test.go
-// lives in package authz_test and can't be reached from here.
+// internalAudit is a minimal AuditRecorder used by tests in this package (package authz). The recordingAudit in engine_test.go lives
+// in package authz_test and can't be reached from here.
 type internalAudit struct{ events []api.AuditEvent }
 
 func (r *internalAudit) Record(_ context.Context, e api.AuditEvent) error {
@@ -175,14 +168,10 @@ func (r *internalAudit) Record(_ context.Context, e api.AuditEvent) error {
 	return nil
 }
 
-// TestEngineErrorDecision covers the engine_error helper that both
-// Allow's Eval-failure and decode-failure branches funnel through.
-// The two production call sites are otherwise only reachable when
-// OPA itself misbehaves (a paniced PreparedEvalQuery or a malformed
-// embedded policy bundle), which is not directly fault-injectable
-// from a test against the real embedded policy. Driving the helper
-// directly pins the "deny + reason=engine_error + audit row emitted"
-// invariant the production paths rely on.
+// TestEngineErrorDecision covers the engine_error helper that both Allow's Eval-failure and decode-failure branches funnel through.
+// The two production call sites are otherwise only reachable when OPA itself misbehaves (a paniced PreparedEvalQuery or a malformed
+// embedded policy bundle), which is not directly fault-injectable from a test against the real embedded policy. Driving the helper
+// directly pins the "deny + reason=engine_error + audit row emitted" invariant the production paths rely on.
 func TestEngineErrorDecision(t *testing.T) {
 	rec := &internalAudit{}
 	e, err := New(t.Context(), rec, nil, Options{})

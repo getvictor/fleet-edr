@@ -36,11 +36,8 @@ func Open(tb testing.TB) *sqlx.DB {
 
 	dsn := testDSN(tb)
 
-	// Parse the DSN once and fail fast if it's malformed. Returning
-	// the original DSN on parse error would silently strip our
-	// "isolated test database" guarantee — the admin connection would
-	// keep the original DBName and any DDL we run would land on the
-	// shared dev DB.
+	// Parse the DSN once and fail fast if it's malformed. Returning the original DSN on parse error would silently strip our "isolated
+	// test database" guarantee — the admin connection would keep the original DBName and any DDL we run would land on the shared dev DB.
 	baseDSN, err := stripDBName(dsn)
 	if err != nil {
 		tb.Fatalf("parse EDR_TEST_DSN: %v", err)
@@ -101,10 +98,8 @@ func sanitizeDBName(testName string) string {
 	return name
 }
 
-// stripDBName clears the DBName field on a parsed DSN so the caller
-// can connect to the MySQL server without selecting a specific
-// database. Returns the parse error so callers fail fast instead of
-// silently running tests against the shared DSN's database.
+// stripDBName clears the DBName field on a parsed DSN so the caller can connect to the MySQL server without selecting a specific
+// database. Returns the parse error so callers fail fast instead of silently running tests against the shared DSN's database.
 func stripDBName(dsn string) (string, error) {
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
@@ -114,12 +109,9 @@ func stripDBName(dsn string) (string, error) {
 	return cfg.FormatDSN(), nil
 }
 
-// replaceDBName swaps the DBName field on a parsed DSN. Uses
-// go-sql-driver/mysql's ParseDSN+FormatDSN round-trip so passwords
-// containing `)/` and other DSN-flavoured punctuation don't fool
-// naive substring manipulation. Returns the parse error so callers
-// fail fast (silently falling back to the original DSN would route
-// the test to the shared database, breaking isolation).
+// replaceDBName swaps the DBName field on a parsed DSN. Uses go-sql-driver/mysql's ParseDSN+FormatDSN round-trip so passwords
+// containing `)/` and other DSN-flavoured punctuation don't fool naive substring manipulation. Returns the parse error so callers fail
+// fast (silently falling back to the original DSN would route the test to the shared database, breaking isolation).
 func replaceDBName(dsn, newDB string) (string, error) {
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {

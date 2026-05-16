@@ -18,10 +18,8 @@ type processTTLReconciler interface {
 	ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs int64) (int64, error)
 }
 
-// SetMetrics installs the metrics recorder after construction. Used
-// by Detection.SetMetrics to break the cmd/main circular-dependency
-// (metrics recorder needs detectionCtx for the OfflineHosts gauge,
-// detectionCtx's TTL runner needs the recorder).
+// SetMetrics installs the metrics recorder after construction. Used by Detection.SetMetrics to break the cmd/main circular-dependency
+// (metrics recorder needs detectionCtx for the OfflineHosts gauge, detectionCtx's TTL runner needs the recorder).
 func (r *ProcessTTLRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 
 // ProcessTTLOptions tune the runner. Zero values fall back to defaults.
@@ -86,10 +84,8 @@ func NewProcessTTL(s processTTLReconciler, opts ProcessTTLOptions) *ProcessTTLRu
 	}
 }
 
-// Loop runs reconciliation passes until ctx is done. Blocks; intended
-// for a dedicated goroutine. First pass fires immediately so a
-// just-started server doesn't wait a full interval to clean a
-// pre-existing DB.
+// Loop runs reconciliation passes until ctx is done. Blocks; intended for a dedicated goroutine. First pass fires immediately so a
+// just-started server doesn't wait a full interval to clean a pre-existing DB.
 func (r *ProcessTTLRunner) Loop(ctx context.Context) {
 	if r.maxAge == 0 {
 		r.logger.InfoContext(ctx, "process-ttl reconciliation disabled", "edr.process.ttl_seconds", 0)

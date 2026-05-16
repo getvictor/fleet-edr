@@ -93,9 +93,8 @@ func resolveSession(
 	sess, err := svc.GetSession(ctx, raw)
 	switch {
 	case errors.Is(err, api.ErrSessionNotFound):
-		// Covers both "cookie points at deleted row" (logout happened
-		// elsewhere) and "cookie points at expired row". The UI maps
-		// both to "redirect to login".
+		// Covers both "cookie points at deleted row" (logout happened elsewhere) and "cookie points at expired row". The UI maps both to
+		// "redirect to login".
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
 		return nil, nil, false
 	case err != nil:
@@ -106,12 +105,9 @@ func resolveSession(
 	return sess, raw, true
 }
 
-// resolveActor builds the per-request actor (user row + live role
-// bindings). A user-row deletion under a still-valid session
-// manifests as ErrUserNotFound; we treat it as an invalid session.
-// authMethod reads the value the session was minted with; legacy
-// sessions inserted before the column existed default to
-// "local_password".
+// resolveActor builds the per-request actor (user row + live role bindings). A user-row deletion under a still-valid session manifests
+// as ErrUserNotFound; we treat it as an invalid session. authMethod reads the value the session was minted with; legacy sessions
+// inserted before the column existed default to "local_password".
 func resolveActor(
 	ctx context.Context, w http.ResponseWriter,
 	svc api.Service, logger *slog.Logger, sess *api.Session,
@@ -120,21 +116,17 @@ func resolveActor(
 	if authMethod == "" {
 		authMethod = "local_password"
 	}
-	// Phase 5: Actor.SessionFresh is computed from the session's
-	// last_auth_at and the configured reauth window. The chokepoint
-	// reads it via input.actor.session_fresh to gate destructive
-	// actions; everywhere else the value is informational.
+	// Phase 5: Actor.SessionFresh is computed from the session's last_auth_at and the configured reauth window. The chokepoint reads it
+	// via input.actor.session_fresh to gate destructive actions; everywhere else the value is informational.
 	actor, err := svc.LoadActor(ctx, sess.UserID, authMethod, svc.IsFresh(sess))
 	switch {
 	case errors.Is(err, api.ErrUserNotFound):
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
 		return nil, false
 	case err != nil:
-		// LoadActor failure can come from the users store, the rbac
-		// store, or a future identity-context dependency.
-		// "session_store_unavailable" would be misleading here;
-		// "identity_store_unavailable" matches the failure surface so
-		// dashboards / runbooks point at the right thing.
+		// LoadActor failure can come from the users store, the rbac store, or a future identity-context dependency.
+		// "session_store_unavailable" would be misleading here; "identity_store_unavailable" matches the failure surface so dashboards /
+		// runbooks point at the right thing.
 		logger.ErrorContext(ctx, "actor build", "err", err)
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusServiceUnavailable, "identity_store_unavailable")
 		return nil, false
@@ -142,10 +134,8 @@ func resolveActor(
 	return actor, true
 }
 
-// CSRF returns the CSRF middleware. It expects to run AFTER Session has
-// pinned the session on ctx (Session(CSRF(h)) pattern). Safe methods
-// (GET, HEAD, OPTIONS) pass through without check; unsafe methods must
-// present X-Csrf-Token matching the per-session token.
+// CSRF returns the CSRF middleware. It expects to run AFTER Session has pinned the session on ctx (Session(CSRF(h)) pattern). Safe
+// methods (GET, HEAD, OPTIONS) pass through without check; unsafe methods must present X-Csrf-Token matching the per-session token.
 func CSRF(logger *slog.Logger) func(http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()

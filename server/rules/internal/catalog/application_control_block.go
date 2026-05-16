@@ -24,18 +24,14 @@ import (
 // distinct from any catalog-rule id collision.
 type ApplicationControlBlock struct{}
 
-// applicationControlBlockEventType is the well-known event_type the
-// extension emits when an AUTH_EXEC is denied. Stable wire-shape
-// string; mirrored on the Swift side in
-// `extension/edr/extension/EventSerializer.swift`.
+// applicationControlBlockEventType is the well-known event_type the extension emits when an AUTH_EXEC is denied. Stable wire-shape
+// string; mirrored on the Swift side in `extension/edr/extension/EventSerializer.swift`.
 const applicationControlBlockEventType = "application_control_block"
 
 func (r *ApplicationControlBlock) ID() string { return "application_control_block" }
 
-// Techniques returns an empty slice. App-control blocks are not
-// mapped to MITRE ATT&CK because the framework's perspective is "the
-// adversary did something" — a successful block is the absence of
-// that. Operators who want ATT&CK badging on app-control alerts can
+// Techniques returns an empty slice. App-control blocks are not mapped to MITRE ATT&CK because the framework's perspective is "the
+// adversary did something" — a successful block is the absence of that. Operators who want ATT&CK badging on app-control alerts can
 // tag the originating rule downstream.
 func (r *ApplicationControlBlock) Techniques() []string { return []string{} }
 
@@ -67,11 +63,9 @@ type applicationControlBlockPayload struct {
 	PolicyVersion int64   `json:"policy_version"`
 }
 
-// Evaluate maps each accepted block event to a Finding. Missing
-// process row → skip the event (the graph builder hasn't materialised
-// the exec yet; the next batch will see it after re-ingest). Missing
-// or malformed payload fields → skip; the validator at ingest is the
-// authoritative gate, this rule is best-effort over the residual.
+// Evaluate maps each accepted block event to a Finding. Missing process row → skip the event (the graph builder hasn't materialised
+// the exec yet; the next batch will see it after re-ingest). Missing or malformed payload fields → skip; the validator at ingest is
+// the authoritative gate, this rule is best-effort over the residual.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
 	for _, evt := range events {
@@ -128,10 +122,8 @@ func blockAlertTitle(p applicationControlBlockPayload) string {
 	return "Application blocked: " + name
 }
 
-// blockAlertDescription prefers the operator's custom message (the
-// `custom_msg` the rule was created with) so admins can author the
-// exact text that lands in the alert. Falls back to a deterministic
-// default that names the rule type + identifier when no custom
+// blockAlertDescription prefers the operator's custom message (the `custom_msg` the rule was created with) so admins can author the
+// exact text that lands in the alert. Falls back to a deterministic default that names the rule type + identifier when no custom
 // message is set, per the server-detection-rules-engine delta spec.
 func blockAlertDescription(p applicationControlBlockPayload) string {
 	if p.CustomMsg != nil && *p.CustomMsg != "" {

@@ -6,18 +6,15 @@ import (
 	"time"
 )
 
-// TimeRange is the canonical [from, to] in nanoseconds since Unix
-// epoch used by every operator endpoint that filters by time. Lives
-// in httpserver because the concept is generic and unrelated to any
-// bounded context's domain logic; detection/api re-exports it via
-// type alias so existing call sites compile unchanged.
+// TimeRange is the canonical [from, to] in nanoseconds since Unix epoch used by every operator endpoint that filters by time. Lives in
+// httpserver because the concept is generic and unrelated to any bounded context's domain logic; detection/api re-exports it via type
+// alias so existing call sites compile unchanged.
 type TimeRange struct {
 	FromNs int64
 	ToNs   int64
 }
 
-// ParseIntParam reads an int query parameter, returning defaultVal
-// when the parameter is absent or unparseable. Used by handlers that
+// ParseIntParam reads an int query parameter, returning defaultVal when the parameter is absent or unparseable. Used by handlers that
 // accept ?limit=100 / ?process_id=42 style filters.
 func ParseIntParam(r *http.Request, name string, defaultVal int) int {
 	s := r.URL.Query().Get(name)
@@ -31,9 +28,8 @@ func ParseIntParam(r *http.Request, name string, defaultVal int) int {
 	return v
 }
 
-// ParseInt64Param reads an int64 query parameter, returning defaultVal
-// when the parameter is absent or unparseable. Used for nanosecond
-// timestamps and BIGINT row IDs.
+// ParseInt64Param reads an int64 query parameter, returning defaultVal when the parameter is absent or unparseable. Used for
+// nanosecond timestamps and BIGINT row IDs.
 func ParseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
 	s := r.URL.Query().Get(name)
 	if s == "" {
@@ -46,9 +42,8 @@ func ParseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
 	return v
 }
 
-// ParseTimeRange reads ?from=<ns>&to=<ns> from the request. Defaults
-// to the last hour when either parameter is absent or unparseable so
-// the operator UI's "show recent activity" page never returns 400.
+// ParseTimeRange reads ?from=<ns>&to=<ns> from the request. Defaults to the last hour when either parameter is absent or unparseable
+// so the operator UI's "show recent activity" page never returns 400.
 func ParseTimeRange(r *http.Request) TimeRange {
 	now := time.Now().UnixNano()
 	defaultFrom := now - int64(time.Hour)

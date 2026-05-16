@@ -9,10 +9,8 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// InsertProcess inserts a new process record (typically from a fork
-// event). The caller is expected to pass the ingest timestamp of
-// the originating fork event in ForkIngestedAtNs so cross-source
-// correlation queries can anchor against a server-controlled clock;
+// InsertProcess inserts a new process record (typically from a fork event). The caller is expected to pass the ingest timestamp of
+// the originating fork event in ForkIngestedAtNs so cross-source correlation queries can anchor against a server-controlled clock;
 // nil is tolerated for back-compat with pre-migration callers.
 func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
@@ -35,8 +33,7 @@ func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error)
 	return id, nil
 }
 
-// ProcessExecUpdate carries the exec-time metadata patched onto an
-// existing process row. Grouped as a struct so callers don't pass a
+// ProcessExecUpdate carries the exec-time metadata patched onto an existing process row. Grouped as a struct so callers don't pass a
 // 10-parameter positional list.
 type ProcessExecUpdate struct {
 	HostID      string
@@ -63,15 +60,11 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 	return err
 }
 
-// UpdateProcessExit sets the exit timestamp, code, and reason for a
-// running process. exitIngestedAtNs is the server-stamped ingest
-// time of the originating exit event and anchors the upper bound of
-// correlation queries against a server-controlled clock (issue #7).
-// reason distinguishes kernel-observed exits (ExitReasonEvent: the
-// default) from agent-side reconciled ones (ExitReasonHostReconciled:
-// issue #6 client half) so the UI can render the latter with a
-// "reconciled" badge instead of pretending it was a clean observed
-// exit. An empty reason normalises to ExitReasonEvent.
+// UpdateProcessExit sets the exit timestamp, code, and reason for a running process. exitIngestedAtNs is the server-stamped ingest
+// time of the originating exit event and anchors the upper bound of correlation queries against a server-controlled clock (issue #7).
+// reason distinguishes kernel-observed exits (ExitReasonEvent: the default) from agent-side reconciled ones (ExitReasonHostReconciled:
+// issue #6 client half) so the UI can render the latter with a "reconciled" badge instead of pretending it was a clean observed exit.
+// An empty reason normalises to ExitReasonEvent.
 func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
 	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason string,
 ) error {
@@ -251,10 +244,8 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 	return chain, nil
 }
 
-// CloseStaleProcess force-closes a process record that hasn't exited
-// yet. Used to handle PID reuse: when a fork arrives for a PID that
-// already has an active (non-exited) record, close the old one
-// first. exit_reason is set to ExitReasonPIDReuse so analysts can
+// CloseStaleProcess force-closes a process record that hasn't exited yet. Used to handle PID reuse: when a fork arrives for a PID
+// that already has an active (non-exited) record, close the old one first. exit_reason is set to ExitReasonPIDReuse so analysts can
 // distinguish this synthesis path.
 func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -265,9 +256,8 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 	return err
 }
 
-// GetParentPath returns the path of the most recent process with the
-// given PID that is still alive (or was alive most recently). Used
-// for fork-without-exec to inherit the parent's path.
+// GetParentPath returns the path of the most recent process with the given PID that is still alive (or was alive most recently).
+// Used for fork-without-exec to inherit the parent's path.
 func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (string, error) {
 	var path string
 	err := s.db.GetContext(ctx, &path, `
@@ -282,10 +272,8 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 	return path, err
 }
 
-// GetProcessTree returns all processes for a host within a time
-// range. Includes any process that was alive at any point during
-// the window so long-running processes still appear in short-window
-// views.
+// GetProcessTree returns all processes for a host within a time range. Includes any process that was alive at any point during the
+// window so long-running processes still appear in short-window views.
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.Process, error) {
 	var procs []api.Process
 	err := s.db.SelectContext(ctx, &procs, `
@@ -333,8 +321,7 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	return &proc, nil
 }
 
-// GetChildProcesses returns processes whose PPID matches the given
-// PID and were forked within the given time range. Satisfies
+// GetChildProcesses returns processes whose PPID matches the given PID and were forked within the given time range. Satisfies
 // api.GraphReader.
 func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, tr api.TimeRange) ([]api.Process, error) {
 	var procs []api.Process

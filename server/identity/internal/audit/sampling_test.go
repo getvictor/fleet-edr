@@ -22,9 +22,8 @@ func TestShouldSampleRead_RateZero(t *testing.T) {
 	assert.True(t, audit.ShouldSampleRead(api.ActionAuditRead, false, 0.0))
 }
 
-// rate=1.0 includes every read action. This matches the wave-1
-// historical behavior (audit-everything) for operators who set the
-// env var explicitly.
+// rate=1.0 includes every read action. This matches the wave-1 historical behavior (audit-everything) for operators who set the env
+// var explicitly.
 func TestShouldSampleRead_RateOne(t *testing.T) {
 	for _, a := range []api.Action{
 		api.ActionHostRead,
@@ -37,10 +36,8 @@ func TestShouldSampleRead_RateOne(t *testing.T) {
 	}
 }
 
-// rate=0.5 over a large sample lands within ±5% of the expected
-// inclusion fraction. The exact test bound is generous (rand.Float64
-// is not a security RNG and we don't seed it deterministically) but
-// tight enough to catch a regression that flipped the comparison
+// rate=0.5 over a large sample lands within ±5% of the expected inclusion fraction. The exact test bound is generous (rand.Float64
+// is not a security RNG and we don't seed it deterministically) but tight enough to catch a regression that flipped the comparison
 // direction.
 func TestShouldSampleRead_RateHalf_Distribution(t *testing.T) {
 	const iters = 10_000
@@ -54,10 +51,8 @@ func TestShouldSampleRead_RateHalf_Distribution(t *testing.T) {
 	assert.InDelta(t, 5000, included, 500, "rate=0.5 inclusion fraction outside expected band")
 }
 
-// Out-of-range rates clamp rather than panic or misbehave. Negative
-// rates round to "audit nothing" (other than carve-outs); rates above
-// 1.0 round to "audit everything." Defensive: a misconfigured
-// EDR_AUDIT_READ_SAMPLING shouldn't tip the chokepoint into UB.
+// Out-of-range rates clamp rather than panic or misbehave. Negative rates round to "audit nothing" (other than carve-outs); rates
+// above 1.0 round to "audit everything." Defensive: a misconfigured EDR_AUDIT_READ_SAMPLING shouldn't tip the chokepoint into UB.
 func TestShouldSampleRead_RateOutOfRange(t *testing.T) {
 	for range 100 {
 		assert.False(t, audit.ShouldSampleRead(api.ActionHostRead, false, -0.5))

@@ -17,9 +17,8 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/middleware"
 )
 
-// fakeService is a minimal api.Service stub that lets us drive HostToken
-// middleware tests without a DB. Only VerifyToken is implemented; the
-// other methods panic so an accidental call surfaces immediately.
+// fakeService is a minimal api.Service stub that lets us drive HostToken middleware tests without a DB. Only VerifyToken is
+// implemented; the other methods panic so an accidental call surfaces immediately.
 type fakeService struct {
 	verifyToken func(ctx context.Context, token string) (string, error)
 }
@@ -158,10 +157,8 @@ func TestHostToken_InvalidToken(t *testing.T) {
 	assert.Equal(t, "invalid_token", parsed["error"])
 }
 
-// TestHostToken_VerifierUnavailable covers the 503 path: any non-
-// ErrInvalidToken error from the service surfaces as
-// verifier_unavailable so the agent doesn't burn its re-enroll throttle
-// on a transient DB blip.
+// TestHostToken_VerifierUnavailable covers the 503 path: any non- ErrInvalidToken error from the service surfaces as
+// verifier_unavailable so the agent doesn't burn its re-enroll throttle on a transient DB blip.
 func TestHostToken_VerifierUnavailable(t *testing.T) {
 	svc := fakeService{
 		verifyToken: func(context.Context, string) (string, error) {

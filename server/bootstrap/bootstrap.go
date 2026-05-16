@@ -47,13 +47,10 @@ type Options struct {
 	ServiceVersion string
 }
 
-// Init runs the daemon prelude. On any error the partial state is torn down
-// before returning so the caller only has to check err. Returns ctx first so
-// the caller's main() threads it through the rest of the program explicitly
-// (rather than reaching it through env.Ctx — a struct-stashed context is a
-// Go anti-pattern). The caller is responsible for calling env.Cancel (on
-// clean exit) and env.FlushOTel (on every exit path, ideally via defer
-// immediately after Init returns).
+// Init runs the daemon prelude. On any error the partial state is torn down before returning so the caller only has to check err.
+// Returns ctx first so the caller's main() threads it through the rest of the program explicitly (rather than reaching it through
+// env.Ctx — a struct-stashed context is a Go anti-pattern). The caller is responsible for calling env.Cancel (on clean exit) and
+// env.FlushOTel (on every exit path, ideally via defer immediately after Init returns).
 func Init(opts Options) (context.Context, *Env, error) {
 	cfg, err := config.Load()
 	if err != nil {

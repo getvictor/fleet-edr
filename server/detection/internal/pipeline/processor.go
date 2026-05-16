@@ -10,10 +10,8 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 )
 
-// Processor polls for unprocessed events and runs them through the
-// graph builder, then evaluates detection rules over the same batch.
-// Decouples event ingestion from graph materialization so the write
-// path (intake) runs independently of the processing path.
+// Processor polls for unprocessed events and runs them through the graph builder, then evaluates detection rules over the same batch.
+// Decouples event ingestion from graph materialization so the write path (intake) runs independently of the processing path.
 type Processor struct {
 	store     *mysql.Store
 	builder   *graph.Builder

@@ -27,9 +27,8 @@ func TestStateCookie_RoundTrip(t *testing.T) {
 	assert.Equal(t, "/ui/", got.Redirect)
 }
 
-// A cookie issued more than ttl ago is rejected as expired even if the
-// signature is valid. Bounds the per-flow window to the configured TTL
-// regardless of how long the browser kept the cookie.
+// A cookie issued more than ttl ago is rejected as expired even if the signature is valid. Bounds the per-flow window to the
+// configured TTL regardless of how long the browser kept the cookie.
 func TestStateCookie_Expired(t *testing.T) {
 	issued := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	cookie, err := oidc.EncodeStateClaim(testKey, "S", "N", "V", "/ui/", issued)
@@ -74,10 +73,9 @@ func TestStateCookie_WrongKey(t *testing.T) {
 	assert.ErrorIs(t, err, oidc.ErrInvalidStateCookie)
 }
 
-// A malformed cookie (no dot separator) returns the same error class.
-// The handler maps every ErrInvalidStateCookie to one wire-format 400
-// regardless of root cause, but the test pins the malformed-shape
-// branch so a regression on the parser doesn't fall through silently.
+// A malformed cookie (no dot separator) returns the same error class. The handler maps every ErrInvalidStateCookie to one wire-format
+// 400 regardless of root cause, but the test pins the malformed-shape branch so a regression on the parser doesn't fall through
+// silently.
 func TestStateCookie_Malformed(t *testing.T) {
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	_, err := oidc.DecodeStateClaim(testKey, "no-dot-here", now, 5*time.Minute)

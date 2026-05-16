@@ -1,6 +1,5 @@
-// Package attrkeys centralises OTel span + slog attribute keys that are used across
-// multiple server packages. Keeping them in one place prevents drift (one call site
-// emits `edr.user_id`, another `edr.user.id`, and SigNoz dashboards silently split).
+// Package attrkeys centralises OTel span + slog attribute keys that are used across multiple server packages. Keeping them in one
+// place prevents drift (one call site emits `edr.user_id`, another `edr.user.id`, and SigNoz dashboards silently split).
 package attrkeys
 
 const (

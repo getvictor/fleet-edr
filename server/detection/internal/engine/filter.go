@@ -7,14 +7,10 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// snapshotMarker is the field-name fast-path used to short-circuit
-// the snapshot-exec filter. The vast majority of exec events don't
-// carry the snapshot field at all, so we skip the JSON decode for
-// them. We gate on just the field name (not the value) so the filter
-// stays robust to encoder formatting differences (whitespace around
-// the colon, key reordering, pretty-printing) that would silently
-// break a byte-exact `"snapshot":true` gate. The unmarshal probe
-// below is JSON-spec aware and is the source of truth on the boolean
+// snapshotMarker is the field-name fast-path used to short-circuit the snapshot-exec filter. The vast majority of exec events don't
+// carry the snapshot field at all, so we skip the JSON decode for them. We gate on just the field name (not the value) so the filter
+// stays robust to encoder formatting differences (whitespace around the colon, key reordering, pretty-printing) that would silently
+// break a byte-exact `"snapshot":true` gate. The unmarshal probe below is JSON-spec aware and is the source of truth on the boolean
 // value.
 var snapshotMarker = []byte(`"snapshot"`)
 

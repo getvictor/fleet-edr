@@ -10,11 +10,9 @@ import (
 	"strings"
 )
 
-// DefaultConfFile is where the pkg installer drops the agent's static
-// configuration. Fleet's install-script contract writes the enroll secret +
-// server URL here before invoking `installer`; standalone deployments do the
-// same by hand. Env vars always win over conf file entries so operators can
-// override a single host without editing the file.
+// DefaultConfFile is where the pkg installer drops the agent's static configuration. Fleet's install-script contract writes the enroll
+// secret + server URL here before invoking `installer`; standalone deployments do the same by hand. Env vars always win over conf file
+// entries so operators can override a single host without editing the file.
 const DefaultConfFile = "/etc/fleet-edr.conf"
 
 // loadConfFile parses a simple KEY=VALUE configuration file. Comments (lines
@@ -83,9 +81,8 @@ func parseConfFile(r io.Reader, path string, logger *slog.Logger) map[string]str
 	return out
 }
 
-// layeredGetenv returns a getenv-shaped function that consults the real
-// environment first and falls back to the conf file map. Real env vars always
-// win so operators can override one host without editing the file.
+// layeredGetenv returns a getenv-shaped function that consults the real environment first and falls back to the conf file map.
+// Real env vars always win so operators can override one host without editing the file.
 func layeredGetenv(confMap map[string]string) func(string) string {
 	return func(key string) string {
 		if v, ok := os.LookupEnv(key); ok {

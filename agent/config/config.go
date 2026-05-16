@@ -1,7 +1,6 @@
-// Package config loads agent configuration from the environment. No flag-based fallback is
-// provided; environment variables are the only supported configuration surface. Every
-// recognised variable is validated at startup and every invalid value produces an error that
-// names the offending variable.
+// Package config loads agent configuration from the environment. No flag-based fallback is provided; environment variables are the
+// only supported configuration surface. Every recognised variable is validated at startup and every invalid value produces an error
+// that names the offending variable.
 package config
 
 import (
@@ -25,10 +24,8 @@ const (
 	// older than 24h from the local SQLite queue.
 	defaultPruneAge = 24 * time.Hour
 
-	// defaultProcessReconcileInterval is the default for
-	// EDR_PROCESS_RECONCILE_INTERVAL: how often the agent sweeps its
-	// proctable for missed exit events. 60s tracks the server's freshness
-	// reconciler but is closer to ground truth on a single host.
+	// defaultProcessReconcileInterval is the default for EDR_PROCESS_RECONCILE_INTERVAL: how often the agent sweeps its proctable for
+	// missed exit events. 60s tracks the server's freshness reconciler but is closer to ground truth on a single host.
 	defaultProcessReconcileInterval = 60 * time.Second
 
 	// defaultQueueMaxBytes is the default soft cap for the agent's SQLite
@@ -59,12 +56,10 @@ type Config struct {
 	AllowInsecure            bool
 }
 
-// Load reads configuration from the environment and validates it. The
-// environment is layered on top of /etc/fleet-edr.conf (override path via
-// EDR_CONF_FILE for dev and tests) so the MDM-managed conf file sets baseline
-// values and operator-scoped env vars override a single host without editing
-// the file. Missing or malformed entries in the conf file are logged and the
-// load continues with env-only values.
+// Load reads configuration from the environment and validates it. The environment is layered on top of /etc/fleet-edr.conf (override
+// path via EDR_CONF_FILE for dev and tests) so the MDM-managed conf file sets baseline values and operator-scoped env vars override a
+// single host without editing the file. Missing or malformed entries in the conf file are logged and the load continues with env-only
+// values.
 func Load() (*Config, error) {
 	confPath := os.Getenv("EDR_CONF_FILE")
 	if confPath == "" {
@@ -116,14 +111,11 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	// A zero or negative prune age computes a future cutoff and deletes nearly every uploaded
 	// row; outright reject.
 	envparse.PositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
-	// 0 disables the agent-side process-tree reconciliation loop entirely
-	// (issue #6 client half) — useful for narrow QA where synthetic exits
-	// would distort what a clean ESF feed looks like. Negative values are
-	// rejected.
+	// 0 disables the agent-side process-tree reconciliation loop entirely (issue #6 client half) — useful for narrow QA where synthetic
+	// exits would distort what a clean ESF feed looks like. Negative values are rejected.
 	envparse.NonNegativeDuration(getenv, "EDR_PROCESS_RECONCILE_INTERVAL", &c.ProcessReconcileInterval, &errs)
-	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB
-	// is set above and applies when the env var is unset; setting it explicitly to 0
-	// restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
+	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB is set above and applies when the env var is unset;
+	// setting it explicitly to 0 restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
 	envparse.NonNegativeInt64(getenv, "EDR_AGENT_QUEUE_MAX_BYTES", &c.QueueMaxBytes, &errs)
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {

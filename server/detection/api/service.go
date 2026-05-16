@@ -34,16 +34,12 @@ type Service interface {
 	// the threshold. Used by the OTel offline-hosts gauge.
 	CountOfflineHosts(ctx context.Context, threshold time.Duration) (int, error)
 
-	// CountUnprocessed counts events with processed != 1. Used by the
-	// OTel unprocessed-events gauge so SOC dashboards can alert on
+	// CountUnprocessed counts events with processed != 1. Used by the OTel unprocessed-events gauge so SOC dashboards can alert on
 	// stuck-processor fleets.
 	CountUnprocessed(ctx context.Context) (int64, error)
 
-	// IngestHandler returns the POST /api/events handler. Returned
-	// as an http.Handler rather than registered via a separate route
-	// method so the cmd/main split between fleet-edr-server and
-	// fleet-edr-ingest can mount the same handler under different
-	// middleware chains.
+	// IngestHandler returns the POST /api/events handler. Returned as an http.Handler rather than registered via a separate route method
+	// so the cmd/main split between fleet-edr-server and fleet-edr-ingest can mount the same handler under different middleware chains.
 	IngestHandler() http.Handler
 }
 
@@ -55,23 +51,20 @@ type Service interface {
 // The canonical definition lives here; rules/internal/catalog imports
 // it directly via detection.api.
 type GraphReader interface {
-	// GetProcessByPID returns the row whose (host, pid) bracket
-	// atTimeNs (i.e. fork_time_ns <= atTimeNs <= exit_time_ns or
-	// exit_time_ns IS NULL).
+	// GetProcessByPID returns the row whose (host, pid) bracket atTimeNs (i.e. fork_time_ns <= atTimeNs <= exit_time_ns or exit_time_ns IS
+	// NULL).
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error)
 
 	// GetChildProcesses returns all rows whose ppid matches the given
 	// parent PID and whose fork_time_ns falls inside the time range.
 	GetChildProcesses(ctx context.Context, hostID string, ppid int, tr TimeRange) ([]Process, error)
 
-	// GetExecChain walks PreviousExecID backwards from the given row
-	// to its chain root. Returns at least one element (the input
-	// row) and at most the chain length.
+	// GetExecChain walks PreviousExecID backwards from the given row to its chain root. Returns at least one element (the input row) and
+	// at most the chain length.
 	GetExecChain(ctx context.Context, current Process) ([]Process, error)
 }
 
-// MetricsRecorder is the optional OTel hook the engine + intake +
-// pipeline goroutines write to. Nil-safe: cmd/main wires the
+// MetricsRecorder is the optional OTel hook the engine + intake + pipeline goroutines write to. Nil-safe: cmd/main wires the
 // metrics.Recorder; tests pass nil.
 type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
