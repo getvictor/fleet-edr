@@ -49,9 +49,8 @@ func filterSnapshotEvents(events []api.Event) []api.Event {
 	return events
 }
 
-// isPlumbingEvent returns true for events that flow through ingest + graph but should not
-// reach rule evaluation. Centralised here so a new plumbing event type only needs one
-// switch arm rather than a guard in every rule.
+// isPlumbingEvent returns true for events that flow through ingest + graph but should not reach rule evaluation. Centralised here
+// so a new plumbing event type only needs one switch arm rather than a guard in every rule.
 func isPlumbingEvent(evt api.Event) bool {
 	switch evt.EventType {
 	case "snapshot_heartbeat":

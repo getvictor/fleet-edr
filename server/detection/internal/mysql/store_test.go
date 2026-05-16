@@ -184,9 +184,8 @@ func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
 }
 
 func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
-	// Issue #173: a snapshot row whose last_seen_ns is inside the TTL window must NOT be
-	// reconciled. The reconciler's predicate uses COALESCE(last_seen_ns, fork_time_ns) so
-	// fresh heartbeats keep the row alive even when fork_time_ns is ancient.
+	// Issue #173: a snapshot row whose last_seen_ns is inside the TTL window must NOT be reconciled. The reconciler's predicate uses
+	// COALESCE(last_seen_ns, fork_time_ns) so fresh heartbeats keep the row alive even when fork_time_ns is ancient.
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -216,9 +215,8 @@ func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
 }
 
 func TestStore_ReconcileStaleProcesses_ClosesStaleSnapshotRow(t *testing.T) {
-	// Issue #173 negative: a snapshot row with no recent heartbeats (last_seen_ns older
-	// than TTL) IS reconciled. Confirms the predicate doesn't accidentally exempt every
-	// snapshot row forever.
+	// Issue #173 negative: a snapshot row with no recent heartbeats (last_seen_ns older than TTL) IS reconciled. Confirms the
+	// predicate doesn't accidentally exempt every snapshot row forever.
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -241,25 +239,23 @@ func TestStore_ReconcileStaleProcesses_ClosesStaleSnapshotRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), reconciled, "snapshot row with last_seen older than TTL must be force-exited")
 
-	// Query at staleLastSeen so GetProcessByPID's "alive at atTimeNs" predicate matches the row
-	// (fork_time_ns <= atTimeNs && exit_time_ns >= atTimeNs). The synthesised exit is at
-	// staleLastSeen + maxAge, comfortably > atTimeNs.
+	// Query at staleLastSeen so GetProcessByPID's "alive at atTimeNs" predicate matches the row (fork_time_ns <= atTimeNs &&
+	// exit_time_ns >= atTimeNs). The synthesised exit is at staleLastSeen + maxAge, comfortably > atTimeNs.
 	got, err := s.GetProcessByPID(ctx, "h-stale", 2, staleLastSeen)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.NotNil(t, got.ExitTimeNs)
 	assert.NotNil(t, got.ExitReason)
 	assert.Equal(t, api.ExitReasonTTLReconciliation, *got.ExitReason)
-	// Synthesised exit lands at last_seen_ns + maxAge (not fork_time_ns + maxAge) because the
-	// reconciler's exit_time_ns expression also uses COALESCE — keeps the UI's "exited at"
-	// timestamp meaningful for snapshot rows whose fork_time is the extension-startup moment.
+	// Synthesised exit lands at last_seen_ns + maxAge (not fork_time_ns + maxAge) because the reconciler's exit_time_ns expression
+	// also uses COALESCE - keeps the UI's "exited at" timestamp meaningful for snapshot rows whose fork_time is the
+	// extension-startup moment.
 	assert.Equal(t, staleLastSeen+sixHours, *got.ExitTimeNs)
 }
 
 func TestStore_ReconcileStaleProcesses_ClosesStaleLiveRow_NoRegression(t *testing.T) {
-	// Issue #6 regression guard: a non-snapshot row with an ancient fork_time_ns and
-	// last_seen_ns IS NULL is still subject to TTL reconciliation. The COALESCE predicate
-	// degenerates to fork_time_ns for these rows, preserving the original #6 behaviour.
+	// Issue #6 regression guard: a non-snapshot row with an ancient fork_time_ns and last_seen_ns IS NULL is still subject to TTL
+	// reconciliation. The COALESCE predicate degenerates to fork_time_ns for these rows, preserving the original #6 behaviour.
 	s := newTestStore(t)
 	ctx := t.Context()
 

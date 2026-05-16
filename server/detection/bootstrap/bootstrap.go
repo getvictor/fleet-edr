@@ -205,9 +205,8 @@ const (
 // When the product ships, this whole function moves to a real migration runner (#115).
 func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
 	alters := []string{
-		// issue #173: snapshot-aware TTL reconciliation. is_snapshot marks rows
-		// originated by the extension's baseline pass; last_seen_ns is bumped by
-		// agent heartbeats. Index supports the heartbeat UPDATE's WHERE predicate.
+		// issue #173: snapshot-aware TTL reconciliation. is_snapshot marks rows originated by the extension's baseline pass;
+		// last_seen_ns is bumped by agent heartbeats. Index supports the heartbeat UPDATE's WHERE predicate.
 		`ALTER TABLE processes ADD COLUMN is_snapshot BOOL NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE processes ADD COLUMN last_seen_ns BIGINT NULL`,
 		`ALTER TABLE processes ADD INDEX idx_processes_snapshot_lastseen (is_snapshot, last_seen_ns)`,
@@ -223,11 +222,9 @@ func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
 	return nil
 }
 
-// isAlreadyAppliedError matches MySQL errors that mean "this ALTER is a no-op because
-// the change already exists." Uses errors.As against go-sql-driver's typed
-// *mysql.MySQLError so a future message format change can't silently break the
-// idempotency contract -- substring-matching err.Error() was brittle (per review on
-// PR #180). Mirrors the pattern in server/identity/internal/seed/admin.go.
+// isAlreadyAppliedError matches MySQL errors that mean "this ALTER is a no-op because the change already exists." Uses errors.As
+// against go-sql-driver's typed *mysql.MySQLError so a future message format change can't silently break the idempotency contract --
+// substring-matching err.Error() was brittle (per review on PR #180). Mirrors the pattern in server/identity/internal/seed/admin.go.
 func isAlreadyAppliedError(err error) bool {
 	if err == nil {
 		return false

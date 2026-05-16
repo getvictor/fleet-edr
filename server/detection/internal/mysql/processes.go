@@ -35,12 +35,10 @@ func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error)
 	return id, nil
 }
 
-// UpdateLastSeenForSnapshot bumps last_seen_ns on the live snapshot row matching (host_id, pid).
-// Only affects rows where is_snapshot=TRUE AND exit_time_ns IS NULL — non-snapshot rows and
-// already-exited rows are not touched, so a stray heartbeat for a recycled PID cannot resurrect
-// an exited row. Returns nil on success (including the no-row-affected case, which is the
-// common path when the heartbeat lands before the snapshot row arrives or after a re-exec
-// flipped is_snapshot off).
+// UpdateLastSeenForSnapshot bumps last_seen_ns on the live snapshot row matching (host_id, pid). Only affects rows where
+// is_snapshot=TRUE AND exit_time_ns IS NULL - non-snapshot rows and already-exited rows are not touched, so a stray heartbeat for a
+// recycled PID cannot resurrect an exited row. Returns nil on success (including the no-row-affected case, which is the common path
+// when the heartbeat lands before the snapshot row arrives or after a re-exec flipped is_snapshot off).
 func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET last_seen_ns = ?

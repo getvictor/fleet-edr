@@ -65,9 +65,8 @@ func TestIsSnapshotExec(t *testing.T) {
 }
 
 func TestFilterSnapshotEvents_DropsHeartbeats(t *testing.T) {
-	// Issue #173: snapshot_heartbeat events are pure liveness plumbing. They must not
-	// reach rule evaluation, otherwise rules would have to remember to skip a no-op event
-	// type that carries only a pid and a timestamp.
+	// Issue #173: snapshot_heartbeat events are pure liveness plumbing. They must not reach rule evaluation, otherwise rules would
+	// have to remember to skip a no-op event type that carries only a pid and a timestamp.
 	in := []api.Event{
 		{EventID: "fork-1", EventType: "fork", Payload: json.RawMessage(`{}`)},
 		{EventID: "hb-1", EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":1}`)},
