@@ -13,6 +13,11 @@ stale rows as exited based on a long inactivity window, but that window is too c
 local sweep gives operators near-minute-granularity convergence on busy hosts while remaining explicit about provenance:
 synthetic exits carry a distinct reason code so the UI can tell them apart from observed exits.
 
+The pass also keeps long-lived processes that pre-dated agent startup visible. Such processes are introduced into the agent's
+tracking table by the extension's startup snapshot enumeration; they emit no further kernel events of their own, so without a
+positive liveness signal the server's TTL reconciler would eventually force-close them. Each pass emits a heartbeat event for
+every still-alive snapshot-originated process, telling the server to extend its freshness window for that row.
+
 ## Requirements
 
 ### Requirement: Periodic kill-zero sweep
@@ -40,6 +45,8 @@ and treat a "no such process" response as evidence the process has exited.
 - **WHEN** the reconciliation pass probes that identifier
 - **THEN** the entry is treated as alive and no synthetic exit is emitted
 - **AND** the entry remains in the table
+- **AND** if the entry is a snapshot-originated process, the pass emits a heartbeat event the same as for a fully signallable
+  live process, because permission denied is positive proof the process exists
 
 ### Requirement: Synthetic exits are distinguishable
 
@@ -81,7 +88,8 @@ agent does not race against in-flight kernel-to-server propagation and falsely r
 ### Requirement: Per-pass cap on synthetic exits
 
 The system SHALL cap the number of synthetic exits emitted in a single reconciliation pass so a pathological gap of many
-thousands of missed exits cannot saturate the queue in one tick.
+thousands of missed exits cannot saturate the queue in one tick. The cap MUST apply only to synthetic exits; heartbeat
+emissions for live snapshot-originated processes MUST NOT be gated by the exit cap.
 
 #### Scenario: Many stale entries at once
 
@@ -89,6 +97,47 @@ thousands of missed exits cannot saturate the queue in one tick.
 - **WHEN** the pass runs
 - **THEN** the pass emits at most the configured number of synthetic exits
 - **AND** the remaining stale entries are reconciled by subsequent passes
+
+#### Scenario: Exit cap reached while live snapshot processes remain
+
+- **GIVEN** the table contains more dead snapshot-originated processes than the per-pass cap, plus other still-alive
+  snapshot-originated processes
+- **WHEN** the pass runs and the exit cap is reached partway through the table
+- **THEN** no further synthetic exits are emitted in this pass
+- **AND** heartbeat events continue to be emitted for the remaining live snapshot-originated processes in the same pass
+- **AND** the unreached dead entries are reconciled by subsequent passes
+
+### Requirement: Heartbeat emission for snapshot-originated processes
+
+The system SHALL emit a heartbeat event for every tracked process identifier that the kernel reports as live and that was
+introduced into the agent's tracking table by the extension's startup snapshot enumeration. The heartbeat MUST identify
+the process and MUST carry the host identifier so the server can attribute it correctly.
+
+#### Scenario: Live snapshot-originated process emits a heartbeat
+
+- **GIVEN** a process identifier in the tracking table that was first observed via the extension's startup snapshot, and the
+  kernel reports it as live
+- **WHEN** the reconciliation pass probes that identifier
+- **THEN** no synthetic exit is emitted for that identifier
+- **AND** the pass enqueues a heartbeat event for that identifier carrying the current host identifier
+- **AND** the entry remains in the tracking table
+
+#### Scenario: Live non-snapshot process does NOT emit a heartbeat
+
+- **GIVEN** a process identifier in the tracking table that was first observed via a kernel fork or exec event (not the
+  startup snapshot), and the kernel reports it as live
+- **WHEN** the reconciliation pass probes that identifier
+- **THEN** no event is emitted for that identifier
+- **AND** the entry remains in the tracking table
+
+#### Scenario: Dead snapshot-originated process emits a synthetic exit, not a heartbeat
+
+- **GIVEN** a process identifier in the tracking table that was first observed via the startup snapshot, and the kernel
+  reports it as gone
+- **WHEN** the reconciliation pass probes that identifier
+- **THEN** a synthetic exit event is enqueued for that identifier with the host-reconciled reason
+- **AND** no heartbeat event is enqueued for that identifier
+- **AND** the entry is removed from the tracking table
 
 ### Requirement: Skip when host identity is unknown
 

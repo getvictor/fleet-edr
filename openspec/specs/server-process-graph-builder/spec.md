@@ -118,7 +118,9 @@ the event or with a future generation that had not yet forked.
 
 The system SHALL accept `exec` events flagged as snapshot (events synthesized by the agent at startup to materialize
 processes that existed before subscription) and use them to populate the process forest, while signaling to downstream
-consumers that they describe pre-existing state rather than new activity.
+consumers that they describe pre-existing state rather than new activity. The system MUST mark the resulting process
+records as snapshot-originated and seed a freshness timestamp on them so the freshness-TTL reconciler can distinguish
+them from organic rows.
 
 #### Scenario: Extension restarts and replays the live process set
 
@@ -126,6 +128,92 @@ consumers that they describe pre-existing state rather than new activity.
 - **WHEN** the builder applies the batch
 - **THEN** the corresponding process records are created or updated so the UI can render Safari, Slack, Finder, and other
   pre-existing processes
+- **AND** each created record carries a snapshot-originated marker
+- **AND** each created record carries a freshness timestamp equal to its fork time so it is not eligible for immediate TTL
+  reconciliation on the first pass after insert
 - **AND** the snapshot flag is preserved on the underlying events so detection rules can distinguish historical state from
   newly observed activity
+
+### Requirement: Snapshot heartbeat events extend the freshness window
+
+The system SHALL accept `snapshot_heartbeat` events and, for each, update the freshness timestamp on the matching
+snapshot-originated process record. The update MUST be scoped to records that are flagged snapshot-originated AND still
+live, so a stray heartbeat for a recycled PID cannot resurrect an exited row and cannot apply to a non-snapshot row.
+
+#### Scenario: Heartbeat for a live snapshot row bumps freshness
+
+- **GIVEN** a snapshot-originated process record that has not exited
+- **WHEN** a `snapshot_heartbeat` event for the same host and PID arrives
+- **THEN** the record's freshness timestamp is updated to the heartbeat's timestamp
+
+#### Scenario: Heartbeat for an exited row is a no-op
+
+- **GIVEN** a snapshot-originated process record that has an exit timestamp set
+- **WHEN** a `snapshot_heartbeat` event for the same host and PID arrives
+- **THEN** the record's freshness timestamp is NOT updated
+- **AND** no other field on the record changes
+
+#### Scenario: Heartbeat for a non-snapshot row is a no-op
+
+- **GIVEN** a process record that originated from kernel fork/exec events rather than the startup snapshot
+- **WHEN** a `snapshot_heartbeat` event for the same host and PID arrives
+- **THEN** no field on the record changes
+
+### Requirement: TTL reconciliation respects snapshot freshness
+
+The system SHALL periodically force-close process records whose freshness window has elapsed without observed activity,
+synthesizing an exit time and marking the row with a TTL-reconciliation reason code. The freshness window MUST use the
+record's freshness timestamp when set (which the snapshot path seeds and heartbeats update) and fall back to the fork
+timestamp otherwise, so heartbeated snapshot rows are exempt while ordinary rows whose exit events went missing remain
+subject to the existing freshness-TTL safety net.
+
+#### Scenario: Snapshot row with fresh heartbeats survives TTL
+
+- **GIVEN** a snapshot-originated process record whose freshness timestamp was updated within the TTL window
+- **WHEN** the TTL reconciliation pass runs
+- **THEN** the record is NOT closed
+- **AND** the record's exit fields remain unset
+
+#### Scenario: Snapshot row without recent heartbeats is closed
+
+- **GIVEN** a snapshot-originated process record whose freshness timestamp is older than the TTL window
+- **WHEN** the TTL reconciliation pass runs
+- **THEN** the record is force-closed with the TTL-reconciliation exit reason
+- **AND** the synthesized exit timestamp lands at the freshness timestamp plus the TTL window, so the UI can render the
+  reconciled exit at a meaningful moment rather than at the extension-startup snapshot moment
+
+#### Scenario: Non-snapshot row with missing exit is closed (issue #6 regression guard)
+
+- **GIVEN** a process record that originated from a fork event, whose fork timestamp is older than the TTL window, and
+  whose freshness timestamp is unset
+- **WHEN** the TTL reconciliation pass runs
+- **THEN** the record is force-closed with the TTL-reconciliation exit reason
+- **AND** the synthesized exit timestamp lands at the fork timestamp plus the TTL window
+
+### Requirement: Exit-before-snapshot-exec race buffer
+
+The system SHALL handle the race in which a kernel-observed `exit` event for a PID is processed BEFORE the snapshot
+`exec` event for the same PID is processed. Because the snapshot exec arrives last but describes an earlier moment, the
+exit's update would otherwise find no row and the later snapshot exec would synthesize a phantom alive row that survives
+until TTL. The builder MUST buffer such unmatched exits briefly and consume them when the companion snapshot exec
+arrives, producing a single record that is born already-exited.
+
+#### Scenario: Exit arrives before its companion snapshot exec
+
+- **GIVEN** an `exit` event for a host and PID with no existing record
+- **AND** within a short bounded window the matching snapshot `exec` event for the same host and PID arrives
+- **WHEN** the builder processes both
+- **THEN** the resulting process record exists, is marked snapshot-originated, and is born with the exit timestamp, exit
+  reason, and exit code from the buffered exit
+- **AND** no phantom alive row is produced for that PID
+
+#### Scenario: Exit arrives without a matching snapshot exec within the window
+
+- **GIVEN** an `exit` event for a host and PID with no existing record
+- **AND** no matching snapshot `exec` event arrives within the bounded buffer window
+- **WHEN** the buffer window elapses
+- **THEN** the buffered exit is discarded
+- **AND** no record is synthesized for that PID
+- **AND** a much-later snapshot exec for the same PID is treated as a fresh insert without inheriting the long-expired
+  exit, so a recycled PID cannot pick up a stale exit
 

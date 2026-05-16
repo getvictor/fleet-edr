@@ -167,9 +167,10 @@ silently losing data.
 
 ### Requirement: Synthetic reconciliation events use the same queue
 
-The queue SHALL accept reconciliation events (synthetic exit events emitted by the agent and snapshot exec events
-emitted by the extension) on the same path as kernel-observed events, and MUST NOT distinguish them from organic events
-for the purposes of durability, ordering, or upload.
+The queue SHALL accept reconciliation events (synthetic exit events emitted by the agent, snapshot exec events emitted by
+the extension, and snapshot heartbeat events emitted by the agent for still-alive snapshot-originated processes) on the
+same path as kernel-observed events, and MUST NOT distinguish them from organic events for the purposes of durability,
+ordering, or upload.
 
 #### Scenario: Reconciliation exit event is queued and uploaded
 
@@ -178,3 +179,11 @@ for the purposes of durability, ordering, or upload.
 - **THEN** the queue persists it the same as any other event
 - **AND** the uploader returns it from a normal dequeue
 - **AND** the server receives the event with `exit_reason = host_reconciled` intact
+
+#### Scenario: Snapshot heartbeat event is queued and uploaded
+
+- **GIVEN** the agent has synthesized a `snapshot_heartbeat` event for a still-alive snapshot-originated process
+- **WHEN** the agent enqueues the synthetic event
+- **THEN** the queue persists it the same as any other event
+- **AND** the uploader returns it from a normal dequeue
+- **AND** the server receives the event with its `snapshot_heartbeat` event type intact

@@ -279,6 +279,19 @@ The two reconcilers are complementary: the agent closes rows within
 server's TTL is the safety net for hosts that go offline before they
 can reconcile themselves.
 
+**Long-lived processes captured at extension startup.** The extension
+enumerates the live process table when it starts so processes that
+pre-dated subscription (Safari, Slack, system daemons, login session
+processes) appear in the tree alongside organic fork/exec activity.
+These rows would otherwise be force-greyed by the 6h TTL because
+nothing further happens to them at the kernel level — they just keep
+running. To prevent that, the agent emits a periodic liveness
+heartbeat for each such process on the same `EDR_PROCESS_RECONCILE_INTERVAL`
+cadence as the kill-zero sweep; the server uses those heartbeats to
+extend the per-row freshness window. No additional configuration
+knob is exposed for the heartbeat; disabling
+`EDR_PROCESS_RECONCILE_INTERVAL` disables both behaviours together.
+
 ## Metrics and monitoring
 
 Server exports OpenTelemetry metrics via OTLP/gRPC to the endpoint in
