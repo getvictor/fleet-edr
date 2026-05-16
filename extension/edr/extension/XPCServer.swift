@@ -15,9 +15,39 @@ final class XPCServer {
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
     private let queue = DispatchQueue(label: "com.fleetdm.edr.xpcserver")
+    /// Signalled once the FIRST peer (the agent) connects post-listener-activate.
+    /// Used by the issue #11 startup snapshot pass to avoid emitting baseline
+    /// exec events into the void during the brief window between extension
+    /// restart + agent XPC reconnect. The semaphore is one-shot: callers wait
+    /// until either the first connect (or wait-timeout) and then proceed.
+    /// Subsequent peer connects/disconnects do not signal again.
+    private let firstPeerSemaphore = DispatchSemaphore(value: 0)
+    private var firstPeerSignalled = false
 
     init(serviceName: String) {
         self.serviceName = serviceName
+    }
+
+    /// waitForFirstPeer blocks the calling thread until the listener accepts a peer
+    /// connection, or `timeout` elapses, whichever comes first. Returns true if a
+    /// peer connected in time. Callers MUST NOT invoke this from a thread that is
+    /// also responsible for delivering peer events (eg the xpcserver dispatch queue);
+    /// the snapshot enumerator runs on a background utility queue specifically to
+    /// keep this constraint satisfied.
+    func waitForFirstPeer(timeout: DispatchTime) -> Bool {
+        guard firstPeerSemaphore.wait(timeout: timeout) == .success else {
+            // Timed out without ever observing the first-peer signal. Do NOT
+            // re-signal here — a spurious signal would credit a later waiter
+            // with a peer connection that never happened, violating the
+            // return contract. Snapshot enumerator handles the false return
+            // by skipping the pass for this boot.
+            return false
+        }
+        // Re-signal so any subsequent waiter also returns immediately. The
+        // semaphore is otherwise consumed by the first wait, leaving later
+        // callers to block forever if the connect never happens a second time.
+        firstPeerSemaphore.signal()
+        return true
     }
 
     func start() {
@@ -100,6 +130,13 @@ final class XPCServer {
             let peer = XPCPeer(connection: event)
             peers.insert(peer)
             logger.info("Peer connected (total: \(self.peers.count))")
+            // Unblock the issue #11 snapshot enumerator on the FIRST peer. Subsequent
+            // connects after a disconnect/reconnect cycle don't re-signal — the
+            // snapshot pass is a one-shot startup operation.
+            if !firstPeerSignalled {
+                firstPeerSignalled = true
+                firstPeerSemaphore.signal()
+            }
 
             xpc_connection_set_event_handler(event) { [weak self] peerEvent in
                 let peerType = xpc_get_type(peerEvent)

@@ -687,6 +687,50 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "exec-without-fork must materialise as a synthetic root")
 }
 
+func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
+	// Issue #11 review (Copilot): the extension's startup snapshot pass enumerates
+	// the live process table after es_subscribe completes. Any process that exec'd
+	// in the small window between subscribe and snapshot emission shows up TWICE:
+	// once as a live ESF exec (rich payload: args, code_signing, sha256) and once
+	// as a snapshot exec (sparse: snapshot=true, no args, no signing). Without
+	// special-casing, the graph builder's re-exec branch (issue #10) would close
+	// the live row and replace it with the sparse snapshot row. Verify that the
+	// live row is preserved instead.
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	insertEventsViaIngest(ctx, t, d, "h-snap-dedup", []api.Event{
+		// Live ESF: fork + exec with rich payload.
+		{EventID: "fork-live", HostID: "h-snap-dedup", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":7777,"parent_pid":1}`)},
+		{EventID: "exec-live", HostID: "h-snap-dedup", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":7777,"ppid":1,"path":"/usr/bin/live","args":["live","--flag"],` +
+				`"uid":501,"gid":20,"code_signing":{"team_id":"ABC","signing_id":"com.example.live",` +
+				`"flags":0,"is_platform_binary":false},"sha256":"deadbeef"}`)},
+		// Snapshot pass for the SAME pid, sparse payload, snapshot=true. Arrives later.
+		{EventID: "exec-snap", HostID: "h-snap-dedup", TimestampNs: now + 2, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":7777,"ppid":1,"path":"/usr/bin/live","args":[],` +
+				`"uid":501,"gid":20,"snapshot":true}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-dedup", 7777, now+5)
+		if err != nil || p == nil {
+			return false
+		}
+		// Live row must survive: sha256 set, previous_exec_id nil (NOT re-exec'd),
+		// args preserved.
+		if p.Process.SHA256 == nil || *p.Process.SHA256 != "deadbeef" {
+			return false
+		}
+		if p.Process.PreviousExecID != nil {
+			return false
+		}
+		return len(p.ReExecChain) == 0
+	}, 5*time.Second, 50*time.Millisecond, "snapshot exec must not re-exec-chain over a live row")
+}
+
 func TestGraph_SamePIDReExec(t *testing.T) {
 	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
 	// close the prior generation and link the new one via previous_exec_id.
