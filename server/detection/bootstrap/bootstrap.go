@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -180,7 +181,54 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 			return fmt.Errorf("detection schema apply: %w", err)
 		}
 	}
+	return applyAdditiveAlters(ctx, db)
+}
+
+// applyAdditiveAlters runs ALTER TABLE statements that add columns to tables already
+// populated by an earlier deployment. The product hasn't shipped (no migration story
+// yet — issue #115), but dev DBs survive across branches and we want a `task dev:server`
+// to work without a `task db:reset` after a schema bump on a feature branch.
+//
+// Each ALTER is treated as best-effort: a "Duplicate column name" / "duplicate key"
+// error from MySQL means the column was already added (either by a fresh CREATE TABLE
+// or a prior pass through this function) and is therefore not an error. Anything else
+// surfaces.
+//
+// When the product ships, this whole function moves to a real migration runner
+// (#115).
+func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
+	alters := []string{
+		// issue #173: snapshot-aware TTL reconciliation. is_snapshot marks rows
+		// originated by the extension's baseline pass; last_seen_ns is bumped by
+		// agent heartbeats.
+		`ALTER TABLE processes
+			ADD COLUMN is_snapshot BOOL NOT NULL DEFAULT FALSE,
+			ADD COLUMN last_seen_ns BIGINT NULL,
+			ADD INDEX idx_processes_snapshot_lastseen (is_snapshot, last_seen_ns)`,
+	}
+	for _, stmt := range alters {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if isAlreadyAppliedError(err) {
+				continue
+			}
+			return fmt.Errorf("detection additive alter: %w", err)
+		}
+	}
 	return nil
+}
+
+// isAlreadyAppliedError matches MySQL errors that mean "this ALTER is a no-op because
+// the change already exists." MySQL surfaces both error codes 1060 (duplicate column)
+// and 1061 (duplicate key) on a re-run; treat either as "already applied."
+func isAlreadyAppliedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Duplicate column name") ||
+		strings.Contains(msg, "Duplicate key name") ||
+		strings.Contains(msg, "Error 1060") ||
+		strings.Contains(msg, "Error 1061")
 }
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is

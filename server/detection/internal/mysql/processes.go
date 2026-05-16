@@ -17,11 +17,13 @@ func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error)
 		INSERT INTO processes
 			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-			 exit_ingested_at_ns, exit_code, previous_exec_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+			 is_snapshot, last_seen_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
 		p.CodeSigning, p.SHA256, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
-		p.ExitIngestedAtNs, p.ExitCode, p.PreviousExecID,
+		p.ExitIngestedAtNs, p.ExitReason, p.ExitCode, p.PreviousExecID,
+		p.IsSnapshot, p.LastSeenNs,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert process: %w", err)
@@ -31,6 +33,22 @@ func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error)
 		return 0, fmt.Errorf("insert process last id: %w", err)
 	}
 	return id, nil
+}
+
+// UpdateLastSeenForSnapshot bumps last_seen_ns on the live snapshot row matching (host_id, pid).
+// Only affects rows where is_snapshot=TRUE AND exit_time_ns IS NULL — non-snapshot rows and
+// already-exited rows are not touched, so a stray heartbeat for a recycled PID cannot resurrect
+// an exited row. Returns nil on success (including the no-row-affected case, which is the
+// common path when the heartbeat lands before the snapshot row arrives or after a re-exec
+// flipped is_snapshot off).
+func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE processes SET last_seen_ns = ?
+		WHERE host_id = ? AND pid = ? AND is_snapshot = TRUE AND exit_time_ns IS NULL
+		ORDER BY fork_time_ns DESC LIMIT 1`,
+		lastSeenNs, hostID, pid,
+	)
+	return err
 }
 
 // ProcessExecUpdate carries the exec-time metadata patched onto an existing process row. Grouped as a struct so callers don't pass a
@@ -67,18 +85,21 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 // An empty reason normalises to ExitReasonEvent.
 func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
 	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason string,
-) error {
+) (int64, error) {
 	if reason == "" {
 		reason = api.ExitReasonEvent
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?,
 		                    exit_reason = ?, exit_code = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
 		exitTimeNs, exitIngestedAtNs, reason, exitCode, hostID, pid,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ReconcileStaleProcesses forces an exit_time_ns on processes that
@@ -96,13 +117,22 @@ func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
 // (so the UI shows the node as having exited at roughly the TTL
 // boundary). Returns rows affected.
 func (s *Store) ReconcileStaleProcesses(ctx context.Context, cutoffNs, maxAgeNs int64) (int64, error) {
+	// Predicate uses COALESCE(last_seen_ns, fork_time_ns) instead of plain fork_time_ns so
+	// snapshot rows (issue #173) with a recent agent-emitted heartbeat are exempt from the
+	// issue #6 force-exit. Non-snapshot rows have last_seen_ns IS NULL forever, so COALESCE
+	// degenerates to fork_time_ns and the original #6 behaviour holds for them.
+	//
+	// Synthesised exit_time_ns also uses the same COALESCE so a snapshot row that DID age
+	// out (no heartbeat in 6h) lands its exit at last_seen + maxAge rather than fork + maxAge.
+	// That keeps the UI's "exited at" timestamp meaningful for snapshot rows whose
+	// fork_time_ns is the extension-startup moment rather than a real exec time.
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE processes
-		SET exit_time_ns = fork_time_ns + ?,
-		    exit_ingested_at_ns = COALESCE(fork_ingested_at_ns, fork_time_ns) + ?,
+		SET exit_time_ns = COALESCE(last_seen_ns, fork_time_ns) + ?,
+		    exit_ingested_at_ns = COALESCE(last_seen_ns, fork_ingested_at_ns, fork_time_ns) + ?,
 		    exit_reason = ?
 		WHERE exit_time_ns IS NULL
-		  AND fork_time_ns < ?`,
+		  AND COALESCE(last_seen_ns, fork_time_ns) < ?`,
 		maxAgeNs, maxAgeNs, api.ExitReasonTTLReconciliation, cutoffNs,
 	)
 	if err != nil {
@@ -218,6 +248,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 			       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+			       is_snapshot, last_seen_ns,
 			       0 AS depth
 			FROM processes
 			WHERE id = ? AND host_id = ?
@@ -226,6 +257,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 			       p.code_signing, p.sha256, p.fork_time_ns, p.fork_ingested_at_ns,
 			       p.exec_time_ns, p.exit_time_ns, p.exit_ingested_at_ns,
 			       p.exit_reason, p.exit_code, p.previous_exec_id,
+			       p.is_snapshot, p.last_seen_ns,
 			       c.depth + 1
 			FROM processes p
 			JOIN chain c ON p.id = c.previous_exec_id AND p.host_id = c.host_id
@@ -233,7 +265,8 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 		)
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		       is_snapshot, last_seen_ns
 		FROM chain
 		ORDER BY depth DESC`,
 		*current.PreviousExecID, current.HostID, maxChainLen-1,
@@ -279,7 +312,8 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		       is_snapshot, last_seen_ns
 		FROM processes
 		WHERE host_id = ?
 		  AND (
@@ -304,7 +338,8 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	err := s.db.GetContext(ctx, &proc, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		       is_snapshot, last_seen_ns
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
@@ -328,7 +363,8 @@ func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, 
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		       is_snapshot, last_seen_ns
 		FROM processes
 		WHERE host_id = ? AND ppid = ? AND fork_time_ns >= ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns`,

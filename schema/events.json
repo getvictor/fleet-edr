@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "snapshot_heartbeat"],
       "description": "Type of endpoint security event"
     },
     "payload": {
@@ -30,7 +30,8 @@
         { "$ref": "#/definitions/open_payload" },
         { "$ref": "#/definitions/network_connect_payload" },
         { "$ref": "#/definitions/dns_query_payload" },
-        { "$ref": "#/definitions/application_control_block_payload" }
+        { "$ref": "#/definitions/application_control_block_payload" },
+        { "$ref": "#/definitions/snapshot_heartbeat_payload" }
       ]
     }
   },
@@ -127,6 +128,14 @@
           "items": { "type": "string" }
         },
         "protocol": { "type": "string", "enum": ["udp", "tcp"] }
+      }
+    },
+    "snapshot_heartbeat_payload": {
+      "type": "object",
+      "required": ["pid"],
+      "description": "Periodic liveness signal emitted by the agent for PIDs that were materialised via the issue #11 ESF startup snapshot. The server's graph builder updates processes.last_seen_ns on receipt; the TTL reconciler reads COALESCE(last_seen_ns, fork_time_ns) so a snapshot row with fresh heartbeats is exempt from the 6h force-exit (issue #173).",
+      "properties": {
+        "pid": { "type": "integer" }
       }
     },
     "application_control_block_payload": {

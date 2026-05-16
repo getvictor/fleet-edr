@@ -49,12 +49,35 @@ func TestIsSnapshotExec(t *testing.T) {
 			evt:  api.Event{EventType: "exec", Payload: json.RawMessage(`{"path":"/bin/snapshot/x"}`)},
 			want: false,
 		},
+		{
+			// Negative guard — isSnapshotExec is exec-only, not the generic plumbing filter.
+			// snapshot_heartbeat events are handled by isPlumbingEvent's switch arm.
+			name: "snapshot_heartbeat is NOT a snapshot exec",
+			evt:  api.Event{EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":1}`)},
+			want: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, isSnapshotExec(tc.evt))
 		})
 	}
+}
+
+func TestFilterSnapshotEvents_DropsHeartbeats(t *testing.T) {
+	// Issue #173: snapshot_heartbeat events are pure liveness plumbing. They must not
+	// reach rule evaluation, otherwise rules would have to remember to skip a no-op event
+	// type that carries only a pid and a timestamp.
+	in := []api.Event{
+		{EventID: "fork-1", EventType: "fork", Payload: json.RawMessage(`{}`)},
+		{EventID: "hb-1", EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":1}`)},
+		{EventID: "exec-1", EventType: "exec", Payload: json.RawMessage(`{"path":"/bin/x"}`)},
+		{EventID: "hb-2", EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":2}`)},
+	}
+	out := filterSnapshotEvents(in)
+	require.Len(t, out, 2, "both heartbeats must be dropped, fork + exec kept")
+	assert.Equal(t, "fork-1", out[0].EventID)
+	assert.Equal(t, "exec-1", out[1].EventID)
 }
 
 func TestFilterSnapshotEvents_Empty(t *testing.T) {

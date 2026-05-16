@@ -687,6 +687,98 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "exec-without-fork must materialise as a synthetic root")
 }
 
+func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
+	// Issue #173: a snapshot_heartbeat event for an alive snapshot row UPDATEs
+	// processes.last_seen_ns. Subsequent TTL reconciliation reads
+	// COALESCE(last_seen_ns, fork_time_ns), so a fresh heartbeat keeps the row alive
+	// past the 6h cutoff.
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	forkTime := time.Now().UnixNano()
+	heartbeatTime := forkTime + int64(time.Hour) // fresh signal an hour after the snapshot insert
+	insertEventsViaIngest(ctx, t, d, "h-snap-heartbeat", []api.Event{
+		{EventID: "exec-snap", HostID: "h-snap-heartbeat", TimestampNs: forkTime, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":4242,"ppid":1,"path":"/usr/libexec/snap","args":[],"snapshot":true}`)},
+		{EventID: "hb-snap", HostID: "h-snap-heartbeat", TimestampNs: heartbeatTime, EventType: "snapshot_heartbeat",
+			Payload: json.RawMessage(`{"pid":4242}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-heartbeat", 4242, heartbeatTime+1)
+		if err != nil || p == nil {
+			return false
+		}
+		if !p.Process.IsSnapshot {
+			return false
+		}
+		// last_seen_ns must have advanced from fork_time_ns to heartbeat_time_ns.
+		return p.Process.LastSeenNs != nil && *p.Process.LastSeenNs == heartbeatTime
+	}, 5*time.Second, 50*time.Millisecond, "heartbeat must bump last_seen_ns")
+}
+
+func TestGraph_SnapshotInsertSeedsLastSeen(t *testing.T) {
+	// On INSERT, snapshot rows seed last_seen_ns to fork_time_ns. Without this seed, the
+	// very first TTL pass after a fresh snapshot would see last_seen_ns IS NULL → COALESCE
+	// falls back to fork_time_ns → indistinguishable from a stale row. The seed keeps the
+	// row safe from reconciliation immediately after insert.
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	insertEventsViaIngest(ctx, t, d, "h-snap-seed", []api.Event{
+		{EventID: "exec-snap", HostID: "h-snap-seed", TimestampNs: now, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":5555,"ppid":1,"path":"/usr/libexec/sd","args":[],"snapshot":true}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-seed", 5555, now+1)
+		if err != nil || p == nil {
+			return false
+		}
+		return p.Process.IsSnapshot && p.Process.LastSeenNs != nil && *p.Process.LastSeenNs == now
+	}, 5*time.Second, 50*time.Millisecond, "snapshot insert must seed last_seen_ns to fork_time_ns")
+}
+
+func TestGraph_PendingExitConsumedBySnapshotExec(t *testing.T) {
+	// Issue #176: a NOTIFY_EXIT for a snapshot-window PID can land at the server BEFORE
+	// the snapshot exec arrives (post-restart race). The server's handleExit no-ops
+	// (no row), buffers the exit in pendingExits, and the inbound snapshot exec consumes
+	// the buffer to synthesise a row that's already exited rather than a phantom alive row.
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	// Critical: exit timestamp PRECEDES exec timestamp in event terms, but both ingest in
+	// the same batch. The graph builder sorts by timestamp, so the exit gets processed
+	// first, buffers, then the snapshot exec consumes.
+	insertEventsViaIngest(ctx, t, d, "h-pending-exit", []api.Event{
+		{EventID: "exit-first", HostID: "h-pending-exit", TimestampNs: now, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":9876,"exit_code":0}`)},
+		{EventID: "exec-snap-after", HostID: "h-pending-exit", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":9876,"ppid":1,"path":"/bin/ghost","args":[],"snapshot":true}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		// Query at the exit time itself — the consumed-pending-exit path pulls fork_time
+		// back to exit_time, so the row's lifetime is zero. GetProcessByPID requires
+		// fork_time_ns <= atTimeNs AND exit_time_ns >= atTimeNs, both satisfied at exactly
+		// the exit timestamp.
+		p, err := d.Service().GetProcessDetail(ctx, "h-pending-exit", 9876, now)
+		if err != nil || p == nil {
+			return false
+		}
+		if p.Process.ExitTimeNs == nil || *p.Process.ExitTimeNs != now {
+			return false
+		}
+		if p.Process.ForkTimeNs != now {
+			return false
+		}
+		// Reason must be "event" (collapsed from the exit payload), not the TTL synthetic one.
+		return p.Process.ExitReason != nil && *p.Process.ExitReason == api.ExitReasonEvent
+	}, 5*time.Second, 50*time.Millisecond, "snapshot exec must consume pending exit and mark the row exited at insert time")
+}
+
 func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 	// Issue #11 review (Copilot): the extension's startup snapshot pass enumerates
 	// the live process table after es_subscribe completes. Any process that exec'd

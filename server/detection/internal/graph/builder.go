@@ -6,16 +6,48 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 )
+
+// pendingExitTTL caps how long an exit event hangs in the pending-exit buffer waiting for
+// its companion snapshot exec (issue #176). 30s comfortably absorbs the worst observed
+// post-restart agent reconnect + snapshot-batch upload window (~1-3s in dev QA), with a
+// 10x safety margin. Beyond 30s we'd risk binding a stale exit to a freshly-recycled PID.
+const pendingExitTTL = 30 * time.Second
+
+// pendingExitKey identifies the (host, pid) tuple a buffered exit waits for. Snapshot
+// exec ingest joins on this key.
+type pendingExitKey struct {
+	hostID string
+	pid    int
+}
+
+// pendingExit captures everything needed to mark a snapshot row exited at insert time.
+// Issue #176: when a NOTIFY_EXIT for a PID lands at the server before the snapshot exec
+// for the same PID (small race after extension restart), the exit's UPDATE is a no-op
+// (no row yet). We buffer the exit here for pendingExitTTL; the snapshot exec consumes
+// it on arrival so we don't end up with a phantom alive row.
+type pendingExit struct {
+	exitTimeNs       int64
+	exitIngestedAtNs int64
+	exitCode         int
+	exitReason       string
+	expiresAt        time.Time
+}
 
 // Builder incrementally materializes fork/exec/exit events into the
 // processes table.
 type Builder struct {
 	store  *mysql.Store
 	logger *slog.Logger
+	now    func() time.Time
+
+	pendingExitsMu sync.Mutex
+	pendingExits   map[pendingExitKey]pendingExit
 }
 
 // NewBuilder creates a graph builder backed by the given store.
@@ -23,7 +55,57 @@ func NewBuilder(s *mysql.Store, logger *slog.Logger) *Builder {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Builder{store: s, logger: logger}
+	return &Builder{
+		store:        s,
+		logger:       logger,
+		now:          time.Now,
+		pendingExits: make(map[pendingExitKey]pendingExit),
+	}
+}
+
+// bufferPendingExit records an exit event whose UPDATE found no row, so a later
+// snapshot exec for the same PID can carry the exit through to the synthesised row
+// (issue #176). Overwrites any prior pending exit for the same (host, pid) — the
+// newest exit signal is authoritative since the previous one didn't bind either.
+func (b *Builder) bufferPendingExit(hostID string, pid int, pe pendingExit) {
+	pe.expiresAt = b.now().Add(pendingExitTTL)
+	b.pendingExitsMu.Lock()
+	b.pendingExits[pendingExitKey{hostID: hostID, pid: pid}] = pe
+	b.pendingExitsMu.Unlock()
+}
+
+// consumePendingExit looks up a buffered exit for (hostID, pid). Returns the exit and
+// removes it from the buffer when found and not expired. Returns ok=false when missing
+// or expired. Expired entries are purged lazily here AND by sweepPendingExits at
+// batch boundaries; both paths matter because not every snapshot exec arrives with the
+// same lifecycle.
+func (b *Builder) consumePendingExit(hostID string, pid int) (pendingExit, bool) {
+	key := pendingExitKey{hostID: hostID, pid: pid}
+	b.pendingExitsMu.Lock()
+	defer b.pendingExitsMu.Unlock()
+	pe, ok := b.pendingExits[key]
+	if !ok {
+		return pendingExit{}, false
+	}
+	delete(b.pendingExits, key)
+	if pe.expiresAt.Before(b.now()) {
+		return pendingExit{}, false
+	}
+	return pe, true
+}
+
+// sweepPendingExits drops expired entries. Called once per ProcessBatch to keep the
+// map size bounded in steady state — pendingExitTTL is short and the map rarely has
+// more than a handful of entries on a healthy host.
+func (b *Builder) sweepPendingExits() {
+	now := b.now()
+	b.pendingExitsMu.Lock()
+	defer b.pendingExitsMu.Unlock()
+	for k, pe := range b.pendingExits {
+		if pe.expiresAt.Before(now) {
+			delete(b.pendingExits, k)
+		}
+	}
 }
 
 // ProcessBatch processes a batch of events, updating the processes table for fork, exec, and exit events. Other event types are
@@ -42,6 +124,10 @@ func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 		return 0
 	})
 
+	// Sweep expired pending exits once per batch (issue #176 buffer hygiene). Bounded-size
+	// map, called per batch is plenty.
+	b.sweepPendingExits()
+
 	var failCount int
 	for _, evt := range sorted {
 		var err error
@@ -52,6 +138,8 @@ func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 			err = b.handleExec(ctx, evt)
 		case "exit":
 			err = b.handleExit(ctx, evt)
+		case "snapshot_heartbeat":
+			err = b.handleSnapshotHeartbeat(ctx, evt)
 		}
 		if err != nil {
 			failCount++
@@ -62,6 +150,23 @@ func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 		return fmt.Errorf("graph: %d event(s) failed to process", failCount)
 	}
 	return nil
+}
+
+type snapshotHeartbeatPayload struct {
+	PID int `json:"pid"`
+}
+
+// handleSnapshotHeartbeat bumps last_seen_ns on the snapshot row for the heartbeat PID
+// so the TTL reconciler's COALESCE(last_seen_ns, fork_time_ns) predicate sees a fresh
+// timestamp and exempts the row from the issue #6 force-exit. No-ops for non-snapshot
+// rows and for snapshot rows that have already exited; the store's WHERE clause guards
+// both. Issue #173.
+func (b *Builder) handleSnapshotHeartbeat(ctx context.Context, evt api.Event) error {
+	var p snapshotHeartbeatPayload
+	if err := json.Unmarshal(evt.Payload, &p); err != nil {
+		return err
+	}
+	return b.store.UpdateLastSeenForSnapshot(ctx, evt.HostID, p.PID, evt.TimestampNs)
 }
 
 type forkPayload struct {
@@ -165,7 +270,7 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 		ppid = p.PPID
 	}
 	forkIngested := evt.IngestedAtNs
-	_, err := b.store.InsertProcess(ctx, api.Process{
+	row := api.Process{
 		HostID:           evt.HostID,
 		PID:              p.PID,
 		PPID:             ppid,
@@ -178,7 +283,41 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 		ForkTimeNs:       evt.TimestampNs,
 		ForkIngestedAtNs: &forkIngested,
 		ExecTimeNs:       &evt.TimestampNs,
-	})
+		IsSnapshot:       p.Snapshot,
+	}
+	// Issue #173: snapshot rows seed last_seen_ns at insert time so the TTL reconciler's
+	// COALESCE(last_seen_ns, fork_time_ns) predicate gives them a fresh baseline. Without
+	// this, the very first reconciliation pass after a snapshot insert would see
+	// last_seen_ns=NULL → fall back to fork_time_ns → indistinguishable from a stale row.
+	if p.Snapshot {
+		seen := evt.TimestampNs
+		row.LastSeenNs = &seen
+	}
+	// Issue #176: if a NOTIFY_EXIT for this PID arrived ahead of the snapshot exec, the
+	// graph builder buffered it in pendingExits. Consume the buffer now so the synthesised
+	// row is born exited rather than a phantom alive row that survives until TTL.
+	//
+	// Lifetime quirk: the buffered exit's timestamp is necessarily BEFORE the snapshot
+	// exec event timestamp (the kernel observed the exit first; the snapshot enumeration
+	// just happened to emit later). Inserting fork_time_ns = exec_time, exit_time_ns =
+	// buffered exit_time would produce a row with fork > exit, which GetProcessByPID's
+	// "alive at atTimeNs" predicate rejects entirely. Pull fork_time_ns back to the exit
+	// time so the row is born already-exited with a zero-length lifetime — best we can
+	// do given the snapshot exec carries no real fork time. last_seen_ns mirrors the same
+	// timestamp so the row doesn't look "fresh" to the TTL reconciler.
+	if p.Snapshot {
+		if pe, ok := b.consumePendingExit(evt.HostID, p.PID); ok {
+			row.ForkTimeNs = pe.exitTimeNs
+			row.ExecTimeNs = &pe.exitTimeNs
+			row.LastSeenNs = &pe.exitTimeNs
+			row.ExitTimeNs = &pe.exitTimeNs
+			row.ExitIngestedAtNs = &pe.exitIngestedAtNs
+			reason := pe.exitReason
+			row.ExitReason = &reason
+			row.ExitCode = &pe.exitCode
+		}
+	}
+	_, err := b.store.InsertProcess(ctx, row)
 	return err
 }
 
@@ -242,5 +381,24 @@ func (b *Builder) handleExit(ctx context.Context, evt api.Event) error {
 		reason = api.ExitReasonHostReconciled
 	}
 
-	return b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason)
+	affected, err := b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		// Issue #176: no row to update. This is the post-restart race window where the
+		// extension's snapshot enumerator saw the PID but emitted its synthetic exec AFTER
+		// the live NOTIFY_EXIT for the same PID landed at the server. Buffer the exit so
+		// the inbound snapshot exec can consume it and synthesise an already-exited row,
+		// rather than insert a phantom alive row that survives until 6h TTL reconciliation.
+		// Reason is preserved so the synthesised row's exit_reason reflects host_reconciled
+		// vs event correctly.
+		b.bufferPendingExit(evt.HostID, p.PID, pendingExit{
+			exitTimeNs:       evt.TimestampNs,
+			exitIngestedAtNs: evt.IngestedAtNs,
+			exitCode:         p.ExitCode,
+			exitReason:       reason,
+		})
+	}
+	return nil
 }
