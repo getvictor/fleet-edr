@@ -92,10 +92,13 @@ jobs:
             echo "any=$any"
           } >> "$GITHUB_OUTPUT"
 
-  # agent-test + server-test both run on macos-latest because the agent's
-  # CGo receiver links -framework Foundation with no darwin build tag, so
-  # it won't build on ubuntu. Coverage is collected here (not re-run in
-  # the Sonar job) to avoid duplicate Go test runs.
+  # agent-test runs on macos-latest because the agent's CGo receiver links
+  # -framework Foundation with no darwin build tag, so it won't build on
+  # ubuntu. server-test runs on ubuntu-latest with a mysql service container
+  # — server/ has zero darwin build tags so the platform is free, and ubuntu
+  # is ~10x cheaper minutes plus skips the 45s brew-install MySQL step.
+  # Coverage is collected here (not re-run in the Sonar job) to avoid
+  # duplicate Go test runs.
   agent-test:
     name: Agent tests
     needs: changes
@@ -135,11 +138,28 @@ jobs:
     if: >-
       !cancelled()
       && (needs.changes.result != 'success' || needs.changes.outputs.go == 'true')
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
+    # Service container avoids the 45s brew-install MySQL dance the macos
+    # runner used to pay. The image starts in parallel with checkout/setup-go
+    # and is health-checked before the first step runs. Empty root password
+    # matches the local docker-compose dev/test posture (see CLAUDE.md).
+    services:
+      mysql:
+        image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: edr_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -156,35 +176,6 @@ jobs:
         with:
           version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install MySQL 8.4
-        run: brew install mysql@8.4
-
-      - name: Initialize and start MySQL
-        run: |
-          MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
-          echo "${MYSQL_PREFIX}/bin" >> "$GITHUB_PATH"
-          "${MYSQL_PREFIX}/bin/mysqld" --initialize-insecure --datadir="${MYSQL_PREFIX}/data"
-          "${MYSQL_PREFIX}/bin/mysqld_safe" --datadir="${MYSQL_PREFIX}/data" &
-
-      - name: Wait for MySQL
-        timeout-minutes: 2
-        run: |
-          MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
-          for i in $(seq 1 60); do
-            if "${MYSQL_PREFIX}/bin/mysqladmin" ping --silent 2>/dev/null; then
-              echo "MySQL is ready after ${i}s"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "MySQL failed to start"
-          exit 1
-
-      - name: Create test database
-        run: |
-          MYSQL_PREFIX="$(brew --prefix mysql@8.4)"
-          "${MYSQL_PREFIX}/bin/mysql" -u root -e "CREATE DATABASE IF NOT EXISTS edr_test"
 
       # test:go:server:coverage reads $EDR_TEST_DSN from the environment (set
       # above) and otherwise falls back to the docker-compose port used locally.
