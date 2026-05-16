@@ -146,16 +146,19 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     // Wait for the extension's hello-ack. If it doesn't arrive within the
     // timeout the bidirectional channel is broken (issue #178): cancel and
     // return failure so the caller's reconnect loop retries against a fresh
-    // Mach port binding. The semaphore stays alive past return — ARC retains
+    // Mach port binding. The semaphore stays alive past return -- ARC retains
     // it via the block reference; the block itself is released when the
-    // connection is cancelled.
+    // connection is released below.
     dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, HELLO_ACK_TIMEOUT_NS);
     if (dispatch_semaphore_wait(hello_ack_sem, deadline) != 0) {
+        // Cancel is async, but xpc_release + dispatch_release here are the
+        // only place we drop our refcounts. Without them a reconnect loop
+        // hitting repeated timeouts (stale Mach binding, extension wedged)
+        // leaks one xpc_connection_t + one dispatch_queue_t per attempt.
+        // Mirrors xpc_bridge_disconnect's teardown order.
         xpc_connection_cancel(conn);
-        // xpc_connection_cancel is async — the cancel completes via the
-        // event handler firing CONNECTION_INVALID. We still own the slot
-        // reservation and the queue refcount, so clean those up here so a
-        // subsequent connect attempt isn't blocked.
+        xpc_release(conn);
+        dispatch_release(queue);
         pthread_mutex_lock(&g_slots_mutex);
         g_slots[handle].in_use = 0;
         pthread_mutex_unlock(&g_slots_mutex);

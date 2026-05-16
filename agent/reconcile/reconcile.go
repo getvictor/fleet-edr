@@ -154,8 +154,9 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 }
 
 // Run loops until ctx is cancelled, emitting one log line per non-zero pass. Blocks; intended for a dedicated goroutine. Per-PID
-// failures inside RunOnce are logged inline and never propagate up — one bad enqueue must not stall the whole pass — so RunOnce
-// returns just the count and Run has nothing to branch on but `n > 0`.
+// failures inside RunOnce are logged inline and never propagate up - one bad enqueue must not stall the whole pass - so RunOnce
+// returns a PassStats with per-event-kind counters and Run branches on Exits + Heartbeats both being zero to suppress noisy
+// "nothing happened" log lines on quiet hosts.
 func (r *Reconciler) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
@@ -213,13 +214,20 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 			continue
 		}
 		// kill(pid, 0) is the standard liveness probe. Three outcomes drive the per-PID decision:
-		//   nil   — pid exists and we may signal it; treat as alive. Snapshot PIDs emit a heartbeat; live PIDs no-op.
-		//   ESRCH — "no such process"; emit a synthetic exit and drop the entry.
-		//   EPERM — pid exists but we lack permission; treat as alive. The agent runs as root in production so this is rare,
-		//           but the conservative read keeps non-root dev runs from reaping entries they can't probe authoritatively.
+		//   nil   - pid exists and we may signal it; treat as alive. Snapshot PIDs emit a heartbeat; live PIDs no-op.
+		//   ESRCH - "no such process"; emit a synthetic exit and drop the entry.
+		//   EPERM - pid exists but we lack permission. The kernel only sets EPERM after confirming the pid exists, so this is
+		//           positive proof of liveness. Snapshot PIDs still emit a heartbeat so the server's TTL reconciler doesn't
+		//           prematurely close them (per review on PR #180). Non-root dev runs hit this for root-owned PIDs.
 		err := r.kill(int(pid), 0)
 		switch {
 		case errors.Is(err, syscall.ESRCH):
+			// Cap reached: keep scanning so live snapshot PIDs later in iteration still get their heartbeat. Without this,
+			// a host with > maxPerPass dead PIDs could indefinitely starve heartbeats and the server would TTL-reconcile the
+			// snapshot rows even though the agent knew they were alive (per review on PR #180).
+			if stats.Exits >= r.maxPerPass {
+				continue
+			}
 			if emitErr := r.emitSyntheticExit(ctx, hostID, pid, now); emitErr != nil {
 				r.logger.WarnContext(ctx, "enqueue synthetic exit failed",
 					"pid", pid, "err", emitErr)
@@ -229,12 +237,10 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 			// attributing to a dead PID.
 			r.pt.Remove(pid)
 			stats.Exits++
-			if stats.Exits >= r.maxPerPass {
-				return stats
-			}
-		case err == nil:
-			// PID alive. Only snapshot PIDs need a heartbeat — live PIDs are kept fresh by the natural fork/exec/exit stream and
-			// don't need a separate liveness ping.
+		case err == nil, errors.Is(err, syscall.EPERM):
+			// PID alive (either signallable or we lacked permission, which itself proves the pid exists). Only snapshot PIDs
+			// need a heartbeat - live PIDs are kept fresh by the natural fork/exec/exit stream and don't need a separate
+			// liveness ping.
 			if !info.IsSnapshot {
 				continue
 			}
@@ -245,7 +251,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 			}
 			stats.Heartbeats++
 		default:
-			// EPERM or some weird state: skip silently. Heartbeat skip is fine because a snapshot row that misses one heartbeat is
+			// Other errors (rare; bad fd, weird kernel state): skip silently. A snapshot row that misses one heartbeat is
 			// still well within the server's TTL window; the next pass will retry.
 		}
 	}

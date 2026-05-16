@@ -4,27 +4,32 @@ import os.log
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer")
 
 /// Code signing requirement that peers must satisfy to connect to the XPC service.
-/// Accepts either a binary signed with the Fleet Device Management team ID
-/// (FDG8Q7N4CC, the production case) OR an ad-hoc-signed binary (dev iteration
-/// on SIP-off VMs; the agent is built via `go build` which produces an ad-hoc
-/// signature with no team ID, so the strict team-id requirement would lock dev
-/// iteration out — observed empirically on edr-dev where the agent's hello
-/// message was rejected with "Received message forbidden due to code signing
-/// requirement"). The `cdhash` clause matches any locally-built ad-hoc binary
-/// by pinning to the *fact* of an ad-hoc signature without trusting any
-/// specific hash. Production installers carry the team-id signature and hit
-/// the first branch; dev binaries hit the second.
+/// Production: only binaries signed with the Fleet Device Management team ID
+/// (FDG8Q7N4CC) pass. Debug builds additionally accept the pinned cdhash of the
+/// locally-built ad-hoc agent so dev iteration on SIP-off VMs works -- `go build`
+/// produces an ad-hoc signature with no team ID, so the strict production
+/// requirement would lock dev iteration out (observed on edr-dev as
+/// "Received message forbidden due to code signing requirement" rejecting the
+/// agent's hello message).
+///
+/// The cdhash clause pins to ONE specific hash, not "any ad-hoc binary." A
+/// different ad-hoc-signed process cannot impersonate the agent. `#if DEBUG`
+/// excludes the entire ad-hoc branch from release builds so production binaries
+/// are team-id-only even if this constant is left in source.
+#if DEBUG
 private let peerCodeSigningRequirement = """
     (anchor apple generic and certificate leaf[subject.OU] = "FDG8Q7N4CC") or \
     cdhash H"\(adHocPeerCDHash)"
     """
 
-/// cdhash of the locally-built ad-hoc agent binary. Updated whenever the agent
-/// is rebuilt on this machine — overwrite via the dev-iteration `task
-/// build:agent` recipe. Pinning the specific cdhash (not just "ad-hoc trusted")
-/// keeps the security surface tight: a different ad-hoc-signed process cannot
-/// impersonate the agent.
+/// cdhash of the locally-built ad-hoc agent binary. Update via `task build:agent`
+/// followed by `codesign -d -r - agent/tmp/fleet-edr-agent` to read the new hash.
+/// Go's deterministic builds keep this stable across rebuilds of identical
+/// source, so the update cadence matches Go-side code changes, not every build.
 private let adHocPeerCDHash = "ef6e55d784403048aa0346e2e4bbbcf07f9c82dc"
+#else
+private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
+#endif
 
 /// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case,
 /// which is fine for an extension that already keeps ESF deadlines alive on a few-second

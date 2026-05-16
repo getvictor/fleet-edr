@@ -16,7 +16,7 @@ type ProcessInfo struct {
 	// reconcile loop emits a snapshot_heartbeat event per tick for live snapshot PIDs so
 	// the server's TTL reconciler (issue #173) keeps the row alive past the 6h cutoff.
 	// A subsequent live exec for the same PID overwrites the entry via pt.Update and
-	// IsSnapshot naturally flips back to false — no special case needed.
+	// IsSnapshot naturally flips back to false - no special case needed.
 	IsSnapshot bool
 }
 
