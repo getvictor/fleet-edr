@@ -48,11 +48,21 @@ to the peer and before any inbound message from the peer is processed.
 - **AND** the rejected peer never receives any events
 - **AND** any inbound message from that peer is discarded
 
-#### Scenario: An ad-hoc-signed peer is rejected
+#### Scenario: An ad-hoc-signed peer is rejected in production builds
 
-- **GIVEN** an extension's XPC service is listening
+- **GIVEN** a release-configured extension's XPC service is listening
 - **WHEN** a process without a chain to the Apple anchor attempts to connect
 - **THEN** the extension cancels the connection
+
+#### Scenario: An ad-hoc-signed peer is accepted in debug builds when its code-directory hash matches the pinned value
+
+- **GIVEN** a debug-configured extension's XPC service is listening, built with a pinned ad-hoc peer code-directory hash for
+  local-iteration use on a SIP-disabled developer VM
+- **WHEN** a process signed ad-hoc with that exact code-directory hash attempts to connect
+- **THEN** the connection is accepted
+- **AND** the peer is added to the broadcast set
+- **AND** this code path is excluded from release builds, so a different ad-hoc-signed process cannot impersonate the agent
+  in production
 
 #### Scenario: A correctly-signed agent is accepted
 
@@ -77,8 +87,9 @@ dictionary message containing a `data` field whose value is the raw JSON event b
 
 - **GIVEN** the extension is running and no agents are connected
 - **WHEN** the extension emits an event
-- **THEN** the extension does not buffer the event for future peers
-- **AND** the event is silently discarded from the XPC channel
+- **THEN** the extension buffers the event for delivery to the next peer that completes the hello handshake
+- **AND** the buffer is bounded; once full, the oldest buffered events are dropped to make room for new ones so a permanently
+  absent agent cannot exhaust extension memory
 
 ### Requirement: Inbound policy update
 
@@ -100,17 +111,34 @@ with the policy described by `data` and MUST persist that policy so it survives 
 - **THEN** the extension does not change the active blocklist
 - **AND** the extension continues serving events to all peers
 
-### Requirement: Hello handshake support
+### Requirement: Hello handshake and reply
 
-The extensions SHALL accept an inbound XPC dictionary message with `type = hello` and treat it as a no-op. This allows
-clients to trigger the lazy Mach port bind without side effects.
+The extensions SHALL accept an inbound XPC dictionary message with `type = hello`. On receipt the extension MUST reply
+with an outbound XPC dictionary message with `type = hello-ack` on the same peer connection, so the client can confirm
+the channel is established in both directions. The exchange exists because the underlying Mach port lookup is one-way
+silent on failure: without a reply, a client cannot distinguish a real listener from a stale port binding.
+
+On receipt of `hello` the extension MUST also flush any events buffered while no peer was connected to the peer that
+sent the hello, and only to that peer. This binds the buffer to a client that has demonstrated a working bidirectional
+channel rather than to any peer that merely passed code-signing validation, which guards against transient phantom-peer
+connections that immediately fail.
 
 #### Scenario: The agent sends a hello after connecting
 
-- **GIVEN** a validated agent connection has just been established
+- **GIVEN** a validated agent connection has just been established and the buffer of events accumulated while no peer was
+  connected is non-empty
 - **WHEN** the agent sends a message with `type = hello`
-- **THEN** the extension processes the message without changing any state
-- **AND** the extension continues to broadcast events normally
+- **THEN** the extension sends back a `hello-ack` message on the same peer connection
+- **AND** the extension delivers every buffered event to the agent in the order it was emitted
+- **AND** the buffer is cleared
+
+#### Scenario: A peer connects and disconnects without ever sending hello
+
+- **GIVEN** a transient peer connection that completes code-signing validation but disconnects before sending any inbound
+  message
+- **WHEN** the connection terminates
+- **THEN** no buffered events are delivered to that peer
+- **AND** the buffer remains intact for the next peer that completes the hello exchange
 
 ### Requirement: Forward compatibility for unknown messages
 

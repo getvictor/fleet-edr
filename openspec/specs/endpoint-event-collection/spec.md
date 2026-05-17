@@ -123,8 +123,9 @@ since the Unix epoch, and `event_type` MUST be one of the documented values (`ex
 
 The system SHALL distinguish synthesized reconciliation events from kernel-observed events. Synthetic exit events
 emitted to close out processes whose kernel exit notification was missed SHALL carry `exit_reason = host_reconciled`,
-and synthetic exec events emitted at startup to materialize processes that already existed before subscription SHALL
-carry `snapshot = true`.
+synthetic exec events emitted at startup to materialize processes that already existed before subscription SHALL carry
+`snapshot = true`, and liveness pings for those snapshot-originated processes SHALL be emitted as a distinct event type
+`snapshot_heartbeat` carrying only the process identifier in its payload.
 
 #### Scenario: Agent fills a missing exit event
 
@@ -138,6 +139,13 @@ carry `snapshot = true`.
 - **WHEN** the system enumerates processes that already existed before subscription began
 - **THEN** the system emits one `exec` event per such process with `snapshot = true`
 - **AND** detection rules ignore those events because they describe historical state
+
+#### Scenario: Snapshot-originated process is still alive on a later pass
+
+- **GIVEN** a snapshot-originated process that the kernel still reports as live
+- **WHEN** the reconciliation pass probes the process
+- **THEN** the system emits a `snapshot_heartbeat` event whose payload identifies the process
+- **AND** detection rules ignore those events because they describe liveness rather than activity
 
 ### Requirement: Capture is non-fatal on individual event errors
 
