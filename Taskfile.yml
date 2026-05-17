@@ -292,13 +292,13 @@ tasks:
       before any real lint runs.
     deps: [lint:install]
     cmds:
-      - tmp/golangci-lint-custom run ./server/... ./agent/... ./internal/... ./test/...
+      - tmp/golangci-lint-custom run ./...
 
   lint:go:fix:
     desc: golangci-lint with --fix for auto-fixable findings (auto-builds the custom binary via lint:install)
     deps: [lint:install]
     cmds:
-      - tmp/golangci-lint-custom run --fix ./server/... ./agent/... ./internal/... ./test/...
+      - tmp/golangci-lint-custom run --fix ./...
 
   lint:install:
     desc: |

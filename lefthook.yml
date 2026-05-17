@@ -124,11 +124,11 @@ pre-push:
       run: |
         mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
         if [ -x tmp/golangci-lint-custom ]; then
-          tmp/golangci-lint-custom run --fast-only ./server/... ./agent/... ./internal/... ./test/...
+          tmp/golangci-lint-custom run --fast-only ./...
         else
           echo "[lefthook] tmp/golangci-lint-custom missing; running upstream golangci-lint --no-config (no commentwrap)" >&2
           echo "[lefthook] Run 'task lint:install' once to enable the full linter set including commentwrap." >&2
-          golangci-lint run --no-config --fast-only ./server/... ./agent/... ./internal/... ./test/...
+          golangci-lint run --no-config --fast-only ./...
         fi
 
     arch-go:

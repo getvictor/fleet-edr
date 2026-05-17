@@ -22,7 +22,7 @@ After cloning, run `task install`. The first `task lint:go` auto-builds the cust
 `tmp/golangci-lint-custom` (via the `lint:install` dep) with the repo's in-tree `commentwrap` plugin baked in (see
 [`tools/comment-wrap-check/lint/`](tools/comment-wrap-check/lint/) and [`.custom-gcl.yml`](.custom-gcl.yml)); subsequent runs
 short-circuit via Taskfile's sources/generates. Editor integrations or terminal invocations of upstream `golangci-lint run`
-return "unknown linter: commentwrap" because the plugin only exists in the custom build — point your editor at
+return "unknown linter: commentwrap" because the plugin only exists in the custom build; point your editor at
 `tmp/golangci-lint-custom` (or run `task lint:install` once to materialize it).
 
 CI is the backstop, not the floor. If a check fails locally, fix it before pushing; do not push hoping CI will pass.
