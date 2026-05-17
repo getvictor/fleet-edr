@@ -113,7 +113,7 @@ describe("AddRuleModal", () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  it("rejects an upper-case hex identifier (BINARY requires lowercase)", async () => {
+  it("rejects a BINARY identifier with the wrong length", async () => {
     const createSpy = vi.spyOn(api, "createAppControlRule");
     render(
       <AddRuleModal
@@ -123,13 +123,12 @@ describe("AddRuleModal", () => {
         onCreated={() => undefined}
       />,
     );
+    // 40 hex chars is the CDHASH length, not the BINARY length (64). The validator
+    // should reject it on the length check, before the charset regex runs. We pick
+    // this shape because uppercase hex now intentionally passes (the validator
+    // lowercases via trim().toLowerCase() and the submit path normalises), so the
+    // distinct exercise is the length gate.
     fireEvent.change(screen.getByLabelText(/identifier/i), {
-      // Uppercase wouldn't even make it past the client validator
-      // (the server's BINARY rule is "64 lowercase hex"). The
-      // client normalises lowercase before POSTing, so an
-      // uppercase string passes the regex check after trim().toLowerCase().
-      // We instead test the truncated form to keep this distinct
-      // from the bad-charset case above.
       target: { value: "a".repeat(40) },
     });
     fireEvent.change(screen.getByLabelText(/reason/i), {
@@ -137,9 +136,47 @@ describe("AddRuleModal", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toMatch(/64 lowercase hex/i);
+      expect(screen.getByRole("alert").textContent).toMatch(/64 hex characters/i);
     });
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts BINARY hex with uppercase letters (lowercased before submit)", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule").mockResolvedValue({
+      id: 99,
+      policy_id: 1,
+      rule_type: "BINARY",
+      identifier: "a".repeat(64),
+      action: "BLOCK",
+      enforcement: "PROTECT",
+      enabled: true,
+      severity: "medium",
+      source: "admin",
+      created_at: "2026-05-17T00:00:00Z",
+      updated_at: "2026-05-17T00:00:00Z",
+      created_by: "operator",
+    });
+    render(
+      <AddRuleModal
+        open
+        policyID={1}
+        onClose={() => undefined}
+        onCreated={() => undefined}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/identifier/i), {
+      target: { value: "A".repeat(64) },
+    });
+    fireEvent.change(screen.getByLabelText(/reason/i), {
+      target: { value: "uppercase normalisation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalled();
+    });
+    // The submit body must carry the lowercased identifier even though the operator typed uppercase.
+    const submitted = createSpy.mock.calls[0][1] as { identifier: string };
+    expect(submitted.identifier).toBe("a".repeat(64));
   });
 
   it("rejects a non-http(s) More info URL", async () => {
@@ -267,5 +304,118 @@ describe("AddRuleModal", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a valid TEAMID identifier and submits with rule_type=TEAMID", async () => {
+    const createSpy = vi
+      .spyOn(api, "createAppControlRule")
+      .mockResolvedValue(makeRule({ rule_type: "TEAMID", identifier: "EQHXZ8M8AV" }));
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "TEAMID" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "EQHXZ8M8AV" } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block this team" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+        rule_type: "TEAMID",
+        identifier: "EQHXZ8M8AV",
+      }));
+    });
+  });
+
+  it("rejects a lowercase TEAMID identifier with a specific error", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule");
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "TEAMID" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "eqhxz8m8av" } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/TEAMID must be 10 uppercase/i);
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts a valid CDHASH identifier and submits with rule_type=CDHASH", async () => {
+    const createSpy = vi
+      .spyOn(api, "createAppControlRule")
+      .mockResolvedValue(makeRule({ rule_type: "CDHASH", identifier: "c".repeat(40) }));
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "CDHASH" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "C".repeat(40) } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block this CDHash" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      // CDHASH identifiers normalize to lowercase before submission.
+      expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+        rule_type: "CDHASH",
+        identifier: "c".repeat(40),
+      }));
+    });
+  });
+
+  it("accepts a valid SIGNINGID identifier in TeamID:bundle.id form", async () => {
+    const createSpy = vi
+      .spyOn(api, "createAppControlRule")
+      .mockResolvedValue(makeRule({ rule_type: "SIGNINGID", identifier: "EQHXZ8M8AV:com.google.Chrome" }));
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "SIGNINGID" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), {
+      target: { value: "EQHXZ8M8AV:com.google.Chrome" },
+    });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block chrome" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+        rule_type: "SIGNINGID",
+        identifier: "EQHXZ8M8AV:com.google.Chrome",
+      }));
+    });
+  });
+
+  it("accepts a SIGNINGID identifier with the platform: prefix", async () => {
+    const createSpy = vi
+      .spyOn(api, "createAppControlRule")
+      .mockResolvedValue(makeRule({ rule_type: "SIGNINGID", identifier: "platform:com.apple.curl" }));
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "SIGNINGID" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), {
+      target: { value: "platform:com.apple.curl" },
+    });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block platform curl" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+        rule_type: "SIGNINGID",
+        identifier: "platform:com.apple.curl",
+      }));
+    });
+  });
+
+  it("rejects a malformed SIGNINGID missing the colon", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule");
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "SIGNINGID" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), {
+      target: { value: "EQHXZ8M8AVcom.google.Chrome" },
+    });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/SIGNINGID must look like/i);
+    });
+    expect(createSpy).not.toHaveBeenCalled();
   });
 });

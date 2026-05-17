@@ -1,7 +1,7 @@
 //go:build integration
 
-// Per-context integration tests for the Application Control subsystem
-// (rules-context demo cut). Skipped without EDR_TEST_DSN.
+// Per-context integration tests for the Application Control subsystem.
+// Skipped without EDR_TEST_DSN.
 
 package tests
 
@@ -151,28 +151,89 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlDuplicateRule)
 }
 
-// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the demo cut's narrow validator: every non-BINARY type is rejected with the
-// "unsupported" sentinel. The schema accepts the values; the validator gates them so the REST surface is honest about what's wired
-// today.
+// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the rule_type gate after the Phase A close-out: CDHASH / SIGNINGID / TEAMID
+// are accepted (they pass through the validator and the unsupported-sentinel does not fire), while CERTIFICATE + PATH remain
+// deferred and continue to surface ErrAppControlUnsupportedRuleType so the REST surface is honest about what's wired today.
+// The Identifier per type is shape-valid so the format check passes; the test isolates the rule_type gate from the identifier gate.
 func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
-	for _, rt := range []api.RuleType{
-		api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeCertificate, api.RuleTypeTeamID, api.RuleTypePath,
+	for _, tc := range []struct {
+		rt         api.RuleType
+		identifier string
+	}{
+		{api.RuleTypeCertificate, strings.Repeat("c", 64)},
+		{api.RuleTypePath, "/usr/bin/ls"},
 	} {
-		_, err := store.CreateRule(ctx, api.CreateRuleRequest{
-			PolicyID:   p.ID,
-			RuleType:   rt,
-			Identifier: "EQHXZ8M8AV", // shape-valid for TEAMID; unsupported sentinel still fires for all types
-			Actor:      "demo-admin",
-			Reason:     "should be rejected as unsupported",
+		t.Run(string(tc.rt), func(t *testing.T) {
+			_, err := store.CreateRule(ctx, api.CreateRuleRequest{
+				PolicyID:   p.ID,
+				RuleType:   tc.rt,
+				Identifier: tc.identifier,
+				Actor:      "demo-admin",
+				Reason:     "should be rejected as unsupported",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrAppControlUnsupportedRuleType)
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, api.ErrAppControlUnsupportedRuleType, "rule_type %s", rt)
 	}
+}
+
+// TestAppControl_CreateRule_AcceptsCDHashSigningIDTeamID is the positive companion to the unsupported-types test. CDHASH /
+// SIGNINGID / TEAMID rules MUST round-trip the validator + store + schema after the Phase A close-out — a deferred enum value
+// in the schema or a regressed validator would otherwise silently break creating these rule types via the REST handler.
+func TestAppControl_CreateRule_AcceptsCDHashSigningIDTeamID(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	cases := []struct {
+		rt         api.RuleType
+		identifier string
+	}{
+		{api.RuleTypeCDHash, strings.Repeat("a", 40)},
+		{api.RuleTypeSigningID, "EQHXZ8M8AV:com.google.Chrome"},
+		{api.RuleTypeSigningID, "platform:com.apple.curl"},
+		{api.RuleTypeTeamID, "EQHXZ8M8AV"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.rt)+"/"+tc.identifier, func(t *testing.T) {
+			rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+				PolicyID:   p.ID,
+				RuleType:   tc.rt,
+				Identifier: tc.identifier,
+				Actor:      "demo-admin",
+				Reason:     "phase A acceptance",
+			})
+			require.NoError(t, err)
+			assert.NotZero(t, rule.ID)
+			assert.Equal(t, tc.rt, rule.RuleType)
+			assert.Equal(t, tc.identifier, rule.Identifier)
+			assert.Equal(t, api.ActionBlock, rule.Action)
+			assert.True(t, rule.Enabled)
+		})
+	}
+}
+
+// TestAppControl_ListHostGroupsForPolicy_SeededDefault pins the Phase A bootstrap contract: EnsureDefaultPolicy must seed a Default
+// policy AND an all-hosts host group AND an assignment between them, and ListHostGroupsForPolicy must return that group. A regression
+// in any of those three rows would otherwise silently break the fan-out path (no assignment -> no_assignments skip).
+func TestAppControl_ListHostGroupsForPolicy_SeededDefault(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	groups, err := store.ListHostGroupsForPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	require.Len(t, groups, 1, "Default policy must have exactly one seeded host-group assignment")
+	assert.Equal(t, api.DefaultHostGroupName, groups[0].Name)
+	assert.JSONEq(t, `{"type":"all"}`, string(groups[0].Criteria), "seed criteria must be the all-hosts shape")
 }
 
 // TestAppControl_CreateRule_RejectsBadBinaryIdentifier covers the negative half of the BINARY validator at the store level. The store

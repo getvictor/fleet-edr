@@ -23,37 +23,88 @@ interface AddRuleModalProps {
 
 const DIALOG_TITLE_ID = "add-rule-modal-title";
 
-// RULE_TYPES enumerates the values the schema's rule_type ENUM
-// accepts. Only BINARY is enforced in the demo cut; the others
-// render in the type selector with the disabled flag set so the
-// camera-facing UI shows the post-demo roadmap without faking it.
+// RULE_TYPES enumerates the values the schema's rule_type ENUM accepts. Phase A close-out
+// enables CDHASH, BINARY, SIGNINGID, and TEAMID. CERTIFICATE + PATH stay deferred to
+// Phase B (CERTIFICATE needs the leaf-cert cache plumbing; PATH needs Launch Services
+// indirection coverage).
 const RULE_TYPES: { value: string; label: string; available: boolean }[] = [
   { value: "BINARY", label: "BINARY (file SHA-256)", available: true },
-  { value: "CDHASH", label: "CDHASH (code-directory hash)", available: false },
-  { value: "SIGNINGID", label: "SIGNINGID (Team:bundle.id)", available: false },
+  { value: "CDHASH", label: "CDHASH (code-directory hash)", available: true },
+  { value: "SIGNINGID", label: "SIGNINGID (Team:bundle.id)", available: true },
+  { value: "TEAMID", label: "TEAMID (Apple Developer team)", available: true },
   { value: "CERTIFICATE", label: "CERTIFICATE (leaf SHA-256)", available: false },
-  { value: "TEAMID", label: "TEAMID (Apple Developer team)", available: false },
   { value: "PATH", label: "PATH (canonical absolute)", available: false },
 ];
 
 const SEVERITIES = ["low", "medium", "high", "critical"];
-const BINARY_HEX_LENGTH = 64;
-const BINARY_HEX_REGEX = /^[a-f0-9]{64}$/;
 
-// validateBinaryIdentifier mirrors the server's BINARY validator
-// (server/rules/internal/appcontrol/validate.go). Catching the
-// format error client-side gives the operator immediate feedback
-// instead of a round trip + a typed 400.
-function validateBinaryIdentifier(value: string): string | null {
-  const trimmed = value.trim().toLowerCase();
+// Server-validator mirrors. Each regex matches the canonical shape per
+// server/rules/internal/appcontrol/validate.go. Catching format errors client-side gives
+// the operator immediate feedback instead of a round trip + typed 400.
+const BINARY_HEX_LENGTH = 64;
+const CDHASH_HEX_LENGTH = 40;
+const BINARY_HEX_REGEX = /^[a-f0-9]{64}$/;
+const CDHASH_HEX_REGEX = /^[a-f0-9]{40}$/;
+const TEAM_ID_REGEX = /^[A-Z0-9]{10}$/;
+const SIGNING_ID_REGEX = /^(?:[A-Z0-9]{10}|platform):[A-Za-z0-9._-]+$/;
+
+// PLACEHOLDERS gives each rule type a hint string the identifier field renders. Helps an
+// operator pasting a value see immediately whether they grabbed the right shape. Stored as
+// a Map so the type→string lookup never trips the object-injection lint.
+const PLACEHOLDERS = new Map<string, string>([
+  ["BINARY", "64 lowercase hex characters (sha256)"],
+  ["CDHASH", "40 lowercase hex characters"],
+  ["TEAMID", "10 uppercase alphanumeric (e.g. EQHXZ8M8AV)"],
+  ["SIGNINGID", "EQHXZ8M8AV:com.google.Chrome or platform:com.apple.curl"],
+]);
+
+// validateIdentifier dispatches to the per-type regex. Returns null on success or a
+// user-facing error string on failure. Identifiers are normalized (trimmed; BINARY/CDHASH
+// lowercased; TEAMID/SIGNINGID kept case-sensitive because the server is case-sensitive).
+function validateIdentifier(ruleType: string, value: string): string | null {
+  const trimmed = value.trim();
   if (trimmed.length === 0) return "Identifier is required.";
-  if (trimmed.length !== BINARY_HEX_LENGTH) {
-    return `BINARY identifier must be ${String(BINARY_HEX_LENGTH)} lowercase hex characters (was ${String(trimmed.length)}).`;
+  switch (ruleType) {
+    case "BINARY":
+      if (trimmed.length !== BINARY_HEX_LENGTH) {
+        return `BINARY identifier must be ${String(BINARY_HEX_LENGTH)} hex characters (was ${String(trimmed.length)}).`;
+      }
+      if (!BINARY_HEX_REGEX.test(trimmed.toLowerCase())) {
+        return "BINARY identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
+      }
+      return null;
+    case "CDHASH":
+      if (trimmed.length !== CDHASH_HEX_LENGTH) {
+        return `CDHASH identifier must be ${String(CDHASH_HEX_LENGTH)} hex characters (was ${String(trimmed.length)}).`;
+      }
+      if (!CDHASH_HEX_REGEX.test(trimmed.toLowerCase())) {
+        return "CDHASH identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
+      }
+      return null;
+    case "TEAMID":
+      if (!TEAM_ID_REGEX.test(trimmed)) {
+        return "TEAMID must be 10 uppercase alphanumeric characters (e.g. EQHXZ8M8AV).";
+      }
+      return null;
+    case "SIGNINGID":
+      if (!SIGNING_ID_REGEX.test(trimmed)) {
+        return "SIGNINGID must look like <TeamID>:<bundle.id> or platform:<bundle.id>.";
+      }
+      return null;
+    default:
+      return `Rule type ${ruleType} is not accepted by this build.`;
   }
-  if (!BINARY_HEX_REGEX.test(trimmed)) {
-    return "BINARY identifier must contain only lowercase hex (0-9 a-f).";
+}
+
+// normalizeIdentifier prepares the value for submission to the server. BINARY and CDHASH
+// are lowercased (the server validator is strict on case); TEAMID and SIGNINGID stay
+// untouched because the format already constrains them.
+function normalizeIdentifier(ruleType: string, value: string): string {
+  const trimmed = value.trim();
+  if (ruleType === "BINARY" || ruleType === "CDHASH") {
+    return trimmed.toLowerCase();
   }
-  return null;
+  return trimmed;
 }
 
 // errorMessageForCode maps the server's typed application_control.*
@@ -135,12 +186,10 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
   async function handleSubmit(e: React.SyntheticEvent) {
     e.preventDefault();
     if (submitDisabled) return;
-    if (ruleType === "BINARY") {
-      const validation = validateBinaryIdentifier(identifier);
-      if (validation) {
-        setFormError(validation);
-        return;
-      }
+    const validation = validateIdentifier(ruleType, identifier);
+    if (validation) {
+      setFormError(validation);
+      return;
     }
     // The host-app modal only renders "More info" for http/https
     // URLs (BlockAlert.swift rejects other schemes so a hostile
@@ -166,7 +215,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
     try {
       const req: CreateAppControlRuleRequest = {
         rule_type: ruleType,
-        identifier: identifier.trim().toLowerCase(),
+        identifier: normalizeIdentifier(ruleType, identifier),
         severity,
         reason: reason.trim(),
       };
@@ -244,7 +293,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
             type="text"
             autoComplete="off"
             spellCheck={false}
-            placeholder={ruleType === "BINARY" ? "64 lowercase hex characters (sha256)" : ""}
+            placeholder={PLACEHOLDERS.get(ruleType) ?? ""}
             value={identifier}
             onChange={(e) => { setIdentifier(e.target.value); }}
             disabled={busy}

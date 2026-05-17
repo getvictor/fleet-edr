@@ -11,20 +11,21 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 )
 
-// TestValidateRuleType_DemoCutAccepts covers the matrix of accepted / deferred / invalid rule_type values. The demo cut accepts BINARY
-// outright and reports the other five spec'd types as ErrAppControlUnsupportedRuleType so REST callers see a precise "not yet" instead
-// of a generic "unknown" error.
-func TestValidateRuleType_DemoCutAccepts(t *testing.T) {
+// TestValidateRuleType_AcceptedAndDeferred covers the matrix of accepted / deferred / invalid rule_type values after the Phase A
+// close-out: BINARY, CDHASH, SIGNINGID, and TEAMID are accepted; CERTIFICATE and PATH remain gated as
+// ErrAppControlUnsupportedRuleType (Phase B unblocks them alongside the leaf-cert cache + Launch Services indirection); unknown /
+// empty values return ErrAppControlInvalidRuleType so REST callers can distinguish "not yet wired" from "not a real type".
+func TestValidateRuleType_AcceptedAndDeferred(t *testing.T) {
 	cases := []struct {
 		name    string
 		rt      api.RuleType
 		wantErr error
 	}{
 		{"binary accepted", api.RuleTypeBinary, nil},
-		{"cdhash deferred", api.RuleTypeCDHash, api.ErrAppControlUnsupportedRuleType},
-		{"signing id deferred", api.RuleTypeSigningID, api.ErrAppControlUnsupportedRuleType},
+		{"cdhash accepted", api.RuleTypeCDHash, nil},
+		{"signing id accepted", api.RuleTypeSigningID, nil},
+		{"team id accepted", api.RuleTypeTeamID, nil},
 		{"certificate deferred", api.RuleTypeCertificate, api.ErrAppControlUnsupportedRuleType},
-		{"team id deferred", api.RuleTypeTeamID, api.ErrAppControlUnsupportedRuleType},
 		{"path deferred", api.RuleTypePath, api.ErrAppControlUnsupportedRuleType},
 		{"unknown rejected", api.RuleType("BANANA"), api.ErrAppControlInvalidRuleType},
 		{"empty rejected", api.RuleType(""), api.ErrAppControlInvalidRuleType},
@@ -72,29 +73,54 @@ func TestValidateIdentifier_Binary(t *testing.T) {
 	}
 }
 
-// TestValidateIdentifier_DeferredTypes confirms the rest of the rule_type enum is wired through the validator. The format check for
-// the spec'd identifier fires first; on a well-formed value the validator still reports ErrAppControlUnsupportedRuleType so the REST
-// handler can return "not yet wired" rather than silently accepting the rule.
+// TestValidateIdentifier_AcceptedTypes pins the Phase A close-out additions: CDHASH, SIGNINGID, and TEAMID identifiers shaped
+// correctly return nil (the rule is created), and malformed identifiers return ErrAppControlInvalidIdentifier.
+func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
+	cases := []struct {
+		name string
+		rt   api.RuleType
+		id   string
+		ok   bool
+	}{
+		{"cdhash 40 hex accepted", api.RuleTypeCDHash, strings.Repeat("a", 40), true},
+		{"cdhash 39 chars rejected", api.RuleTypeCDHash, strings.Repeat("a", 39), false},
+		{"cdhash uppercase rejected", api.RuleTypeCDHash, strings.Repeat("A", 40), false},
+		{"team id valid accepted", api.RuleTypeTeamID, "EQHXZ8M8AV", true},
+		{"team id lowercase rejected", api.RuleTypeTeamID, "eqhxz8m8av", false},
+		{"team id 9 chars rejected", api.RuleTypeTeamID, "EQHXZ8M8A", false},
+		{"signing id team:bundle accepted", api.RuleTypeSigningID, "EQHXZ8M8AV:com.google.Chrome", true},
+		{"signing id platform:bundle accepted", api.RuleTypeSigningID, "platform:com.apple.curl", true},
+		{"signing id missing colon rejected", api.RuleTypeSigningID, "EQHXZ8M8AVcom.google.Chrome", false},
+		{"signing id empty bundle rejected", api.RuleTypeSigningID, "EQHXZ8M8AV:", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := appcontrol.ValidateIdentifier(tc.rt, tc.id)
+			if tc.ok {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrAppControlInvalidIdentifier)
+		})
+	}
+}
+
+// TestValidateIdentifier_DeferredTypes pins the remaining types (CERTIFICATE, PATH) still gated as unsupported. The format check
+// fires first; on a well-formed value the validator still reports ErrAppControlUnsupportedRuleType so the REST handler returns
+// "not yet wired" rather than silently accepting the rule. Phase B unblocks these alongside the leaf-cert cache work.
 func TestValidateIdentifier_DeferredTypes(t *testing.T) {
 	cases := []struct {
 		name        string
 		rt          api.RuleType
 		id          string
-		shapeOK     bool
 		wantErrType error
 	}{
-		{"cdhash 40 hex - unsupported", api.RuleTypeCDHash, strings.Repeat("a", 40), true, api.ErrAppControlUnsupportedRuleType},
-		{"cdhash 39 chars - format rejected", api.RuleTypeCDHash, strings.Repeat("a", 39), false, api.ErrAppControlInvalidIdentifier},
-		{"team id valid - unsupported", api.RuleTypeTeamID, "EQHXZ8M8AV", true, api.ErrAppControlUnsupportedRuleType},
-		{"team id lowercase - format rejected", api.RuleTypeTeamID, "eqhxz8m8av", false, api.ErrAppControlInvalidIdentifier},
-		{"signing id valid - unsupported", api.RuleTypeSigningID, "EQHXZ8M8AV:com.google.Chrome", true, api.ErrAppControlUnsupportedRuleType},
-		{"signing id platform - unsupported", api.RuleTypeSigningID, "platform:com.apple.curl", true, api.ErrAppControlUnsupportedRuleType},
-		{"signing id missing colon - format rejected", api.RuleTypeSigningID, "EQHXZ8M8AVcom.google.Chrome", false, api.ErrAppControlInvalidIdentifier},
-		{"certificate 64 hex - unsupported", api.RuleTypeCertificate, strings.Repeat("c", 64), true, api.ErrAppControlUnsupportedRuleType},
-		{"certificate 63 chars - format rejected", api.RuleTypeCertificate, strings.Repeat("c", 63), false, api.ErrAppControlInvalidIdentifier},
-		{"path absolute - unsupported", api.RuleTypePath, "/usr/bin/ls", true, api.ErrAppControlUnsupportedRuleType},
-		{"path relative - format rejected", api.RuleTypePath, "usr/bin/ls", false, api.ErrAppControlInvalidIdentifier},
-		{"path empty - format rejected", api.RuleTypePath, "", false, api.ErrAppControlInvalidIdentifier},
+		{"certificate 64 hex unsupported", api.RuleTypeCertificate, strings.Repeat("c", 64), api.ErrAppControlUnsupportedRuleType},
+		{"certificate 63 chars format rejected", api.RuleTypeCertificate, strings.Repeat("c", 63), api.ErrAppControlInvalidIdentifier},
+		{"path absolute unsupported", api.RuleTypePath, "/usr/bin/ls", api.ErrAppControlUnsupportedRuleType},
+		{"path relative format rejected", api.RuleTypePath, "usr/bin/ls", api.ErrAppControlInvalidIdentifier},
+		{"path empty format rejected", api.RuleTypePath, "", api.ErrAppControlInvalidIdentifier},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

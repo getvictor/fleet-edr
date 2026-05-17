@@ -148,6 +148,16 @@ type RegistryOptions struct {
 // Multi-policy support is on the post-demo backlog; for the demo cut the deployment has exactly one policy with this name.
 const DefaultPolicyName = "Default"
 
+// DefaultHostGroupName is the name of the built-in "every enrolled host" host group seeded at bootstrap. The Default policy is
+// assigned to this group by default, which is what makes the fan-out reach every enrolled host in Phase A. Editable host groups
+// arrive in Phase B; Phase A only ever has this single row.
+const DefaultHostGroupName = "all-hosts"
+
+// HostGroupCriteriaTypeAll is the discriminator value the bootstrap writes into the built-in all-hosts group's `criteria` JSON
+// document. The resolver in the fan-out path expands `{"type":"all"}` into every enrolled host. Phase B extends the discriminator
+// with `"type":"tag"`, `"type":"hostname_pattern"`, etc., without a schema change because criteria is JSON.
+const HostGroupCriteriaTypeAll = "all"
+
 // RuleType is the wire-shape identifier of an application-control rule's matching dimension. The schema's `rule_type` ENUM mirrors
 // this set. In the demo cut only BINARY is enforced; the other five values exist on the type so the column accepts them when their
 // validators come online.
@@ -314,6 +324,27 @@ func IsApplicationControlValidationError(err error) bool {
 		errors.Is(err, ErrAppControlInvalidRequest)
 }
 
+// HostGroup mirrors a row in host_groups. Phase A has exactly one row (the built-in `all-hosts` group); editable groups arrive in
+// Phase B. Criteria is a JSON document the fan-out resolver interprets: `{"type":"all"}` matches every enrolled host today; Phase B
+// adds tag / hostname-pattern / OS predicates without a schema change.
+type HostGroup struct {
+	ID          int64           `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Criteria    json.RawMessage `json:"criteria"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+// Assignment mirrors a row in app_control_assignments. Phase A has exactly one row (the seed `Default` → `all-hosts` link). Phase B
+// uses Priority for conflict resolution when overlapping groups are assigned to different policies; Phase A leaves it at 0.
+type Assignment struct {
+	PolicyID    int64     `json:"policy_id"`
+	HostGroupID int64     `json:"host_group_id"`
+	Priority    int       `json:"priority"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // ApplicationControlStore is the read+write surface the rules-context REST handler (and tests) consume. The concrete implementation
 // lives at server/rules/internal/appcontrol; this interface lets callers outside the rules tree depend on the contract without pulling
 // in the internal package (ADR-0004's bounded-context import rule).
@@ -322,6 +353,10 @@ type ApplicationControlStore interface {
 	ListPolicies(ctx context.Context) ([]ApplicationControlPolicy, error)
 	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
 	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
+	// ListHostGroupsForPolicy returns the host groups assigned to the policy, in priority order then by group name. The fan-out
+	// resolver walks the result and unions the member hosts of each group to build the set of unique hosts the rule update should
+	// reach.
+	ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]HostGroup, error)
 }
 
 // CommandTypeSetApplicationControl is the well-known command type the agent reads on every poll and routes to its application-control

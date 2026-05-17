@@ -27,19 +27,88 @@ func NewStore(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// EnsureDefaultPolicy idempotently seeds the Default policy. Safe to call on every server boot (Bootstrap does so). Uses INSERT IGNORE
-// so a manual edit of the row's description or version is not clobbered on subsequent restarts.
+// EnsureDefaultPolicy idempotently seeds the Phase A built-ins: the `Default` policy, the `all-hosts` host group, and the single
+// assignment row connecting them. Safe to call on every server boot (Bootstrap does so). Uses INSERT IGNORE for all three so a manual
+// edit of any row's description or criteria is not clobbered on subsequent restarts. The three statements run in a transaction so a
+// partial bootstrap (policy without assignment) is impossible after the first successful boot.
 func (s *Store) EnsureDefaultPolicy(ctx context.Context) error {
-	const query = `INSERT IGNORE INTO app_control_policies
-		(name, description, version, default_action, created_by, updated_by)
-		VALUES (?, ?, 1, 'NONE', 'system', 'system')`
-	if _, err := s.db.ExecContext(ctx, query,
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("appcontrol seed: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT IGNORE INTO app_control_policies (name, description, version, default_action, created_by, updated_by)
+		 VALUES (?, ?, 1, 'NONE', 'system', 'system')`,
 		api.DefaultPolicyName,
-		"Default application control policy. Add rules to block executables by SHA-256 hash.",
+		"Default application control policy. Add rules to block executables by SHA-256 hash or signing identity.",
 	); err != nil {
 		return fmt.Errorf("appcontrol seed default policy: %w", err)
 	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT IGNORE INTO host_groups (name, description, criteria) VALUES (?, ?, ?)`,
+		api.DefaultHostGroupName,
+		"Built-in host group that matches every enrolled host. Phase A's only host group; editable groups arrive in Phase B.",
+		fmt.Sprintf(`{"type":"%s"}`, api.HostGroupCriteriaTypeAll),
+	); err != nil {
+		return fmt.Errorf("appcontrol seed all-hosts group: %w", err)
+	}
+
+	// Resolve the rows we just (idempotently) inserted so we can wire the assignment. SELECT BY NAME because LAST_INSERT_ID() returns
+	// 0 on the IGNORE-suppressed path; that's the second-boot case where the rows already exist.
+	var policyID, groupID int64
+	if err := tx.QueryRowxContext(ctx,
+		`SELECT id FROM app_control_policies WHERE name = ?`, api.DefaultPolicyName,
+	).Scan(&policyID); err != nil {
+		return fmt.Errorf("appcontrol seed: resolve default policy id: %w", err)
+	}
+	if err := tx.QueryRowxContext(ctx,
+		`SELECT id FROM host_groups WHERE name = ?`, api.DefaultHostGroupName,
+	).Scan(&groupID); err != nil {
+		return fmt.Errorf("appcontrol seed: resolve all-hosts group id: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT IGNORE INTO app_control_assignments (policy_id, host_group_id, priority) VALUES (?, ?, 0)`,
+		policyID, groupID,
+	); err != nil {
+		return fmt.Errorf("appcontrol seed default assignment: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("appcontrol seed: commit: %w", err)
+	}
 	return nil
+}
+
+// ListHostGroupsForPolicy returns the host groups assigned to a policy, ordered by priority (highest first) then by group name. The
+// fan-out path walks the result and unions the member hosts of each group to build the set of unique hosts a rule update should
+// reach. Phase A always returns the single built-in `all-hosts` group; Phase B grows the result when editable assignments land.
+func (s *Store) ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]api.HostGroup, error) {
+	const query = `SELECT g.id, g.name, g.description, g.criteria, g.created_at, g.updated_at
+		FROM host_groups g
+		INNER JOIN app_control_assignments a ON a.host_group_id = g.id
+		WHERE a.policy_id = ?
+		ORDER BY a.priority DESC, g.name ASC`
+	rows, err := s.db.QueryxContext(ctx, query, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("appcontrol list host groups: %w", err)
+	}
+	defer rows.Close()
+	out := []api.HostGroup{}
+	for rows.Next() {
+		var g api.HostGroup
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.Criteria, &g.CreatedAt, &g.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("appcontrol scan host group: %w", err)
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("appcontrol iterate host groups: %w", err)
+	}
+	return out, nil
 }
 
 // GetPolicyByName loads the policy row by name. Rules are NOT populated; callers that need rules call ListRulesByPolicy explicitly.
