@@ -67,18 +67,18 @@ function validateIdentifier(ruleType: string, value: string): string | null {
   switch (ruleType) {
     case "BINARY":
       if (trimmed.length !== BINARY_HEX_LENGTH) {
-        return `BINARY identifier must be 64 lowercase hex characters (was ${String(trimmed.length)}).`;
+        return `BINARY identifier must be 64 hex characters (was ${String(trimmed.length)}).`;
       }
       if (!BINARY_HEX_REGEX.test(trimmed.toLowerCase())) {
-        return "BINARY identifier must contain only lowercase hex (0-9 a-f).";
+        return "BINARY identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
       }
       return null;
     case "CDHASH":
       if (trimmed.length !== CDHASH_HEX_LENGTH) {
-        return `CDHASH identifier must be 40 lowercase hex characters (was ${String(trimmed.length)}).`;
+        return `CDHASH identifier must be 40 hex characters (was ${String(trimmed.length)}).`;
       }
       if (!CDHASH_HEX_REGEX.test(trimmed.toLowerCase())) {
-        return "CDHASH identifier must contain only lowercase hex (0-9 a-f).";
+        return "CDHASH identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
       }
       return null;
     case "TEAMID":

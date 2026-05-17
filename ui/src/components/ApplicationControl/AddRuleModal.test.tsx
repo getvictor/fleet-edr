@@ -137,7 +137,7 @@ describe("AddRuleModal", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toMatch(/64 lowercase hex/i);
+      expect(screen.getByRole("alert").textContent).toMatch(/64 hex characters/i);
     });
     expect(createSpy).not.toHaveBeenCalled();
   });

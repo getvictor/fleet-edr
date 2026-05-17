@@ -120,7 +120,12 @@ final class ESFSubscriber: Sendable {
         if let match = walkPrecedence(tuple: tuple, snapshot: snapshot) {
             if match.rule.action == ApplicationControlAction.block,
                match.rule.enforcement == ApplicationControlEnforcement.protect {
-                logger.warning("AUTH_EXEC DENIED by application control: \(path, privacy: .public) rule_type=\(match.rule.ruleType, privacy: .public) identifier=\(match.matchedIdentifier, privacy: .public)")
+                let denyPath = path
+                let denyRuleType = match.rule.ruleType
+                let denyID = match.matchedIdentifier
+                logger.warning(
+                    "AUTH_EXEC DENIED path=\(denyPath, privacy: .public) type=\(denyRuleType, privacy: .public) id=\(denyID, privacy: .public)"
+                )
                 es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
                 emitBlockEvent(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
                 emitBlockNotification(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
@@ -200,8 +205,10 @@ final class ESFSubscriber: Sendable {
     /// BINARY → SIGNINGID → TEAMID, returning on the first match. CERTIFICATE + PATH
     /// stay deferred and are not consulted here even though their snapshot maps are
     /// populated by ApplicationControlStore — Phase B activates them alongside the
-    /// leaf-cert cache and Launch Services edge cases.
-    func walkPrecedence(tuple: AuthTuple, snapshot: ApplicationControlSnapshot) -> PrecedenceMatch? {
+    /// leaf-cert cache and Launch Services edge cases. Private because it has no
+    /// caller outside handleAuthExec and a wider visibility would surface this
+    /// walker to anything that holds a snapshot reference.
+    private func walkPrecedence(tuple: AuthTuple, snapshot: ApplicationControlSnapshot) -> PrecedenceMatch? {
         if let cdhash = tuple.cdhash, let rule = snapshot.cdhashRules[cdhash] {
             return PrecedenceMatch(rule: rule, matchedIdentifier: cdhash)
         }
@@ -386,21 +393,43 @@ final class ESFSubscriber: Sendable {
     }
 }
 
-/// CS_RUNTIME is the codesigning_flags bit set when a binary runs under Apple's Hardened Runtime. Defined here (rather than imported
-/// from <kern/cs_blobs.h>) because the Swift bridging headers do not surface the constant directly; the literal value is stable per
-/// the public macOS code-signing documentation.
-private let CS_RUNTIME: UInt32 = 0x0001_0000
+/// csRuntimeFlag is the codesigning_flags bit set when a binary runs under Apple's Hardened Runtime. Defined here (rather than
+/// imported from <kern/cs_blobs.h>) because the Swift bridging headers do not surface the constant directly; the literal value
+/// is stable per the public macOS code-signing documentation. Lowercased to satisfy SwiftLint's identifier_name rule (CS_RUNTIME
+/// would be the literal C symbol but Swift conventions reject all-caps identifiers).
+private let csRuntimeFlag: UInt32 = 0x0001_0000
 
 /// isHardenedRuntime reports whether the codesigning_flags bitfield indicates Apple's Hardened Runtime. CDHASH rules only match
 /// hardened-runtime processes because CDHash on non-hardened processes is not a reliable integrity check (page mapping is lazy and
 /// not re-verified post-load). Mirrors Santa's behavior so a migrating Santa admin's mental model carries over.
 private func isHardenedRuntime(flags: UInt32) -> Bool {
-    return (flags & CS_RUNTIME) != 0
+    return (flags & csRuntimeFlag) != 0
 }
 
-/// cdhashHexString lowercases-hex the 20-byte CDHash array from es_process_t.cdhash into the 40-char string the server's validator
-/// + the snapshot's cdhashRules map index on. Returns nil when the cdhash is all zero (es_process_t conventions: unsigned binaries
-/// report a zeroed cdhash, which is not a real identity).
+/// hexCharsPerByte is the fixed expansion ratio of a byte to its 2-char lowercase hex representation. Extracted so the capacity
+/// reserve in cdhashHexString is self-documenting (SwiftLint's no_magic_numbers rule would otherwise flag the literal `2`).
+private let hexCharsPerByte = 2
+
+/// hexDigitsLowercase is the lookup table cdhashHexString walks instead of calling String(format:"%02x", b). The format-string path
+/// bridges to Foundation and parses the format spec on every call; this matters because the helper runs inside AUTH_EXEC's
+/// kernel-deadline window. The table is private so it doesn't pollute symbol search at the module level.
+private let hexDigitsLowercase: [Character] = [
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"
+]
+
+/// hexLowNibbleMask is the bitmask used to extract the low 4 bits of a byte when looking up its hex digit in the
+/// hexDigitsLowercase table. Named so the no_magic_numbers SwiftLint rule doesn't flag the literal 0x0f.
+private let hexLowNibbleMask: UInt8 = 0x0f
+
+// swiftlint:disable large_tuple
+//
+// cdhashHexString lowercases-hex the 20-byte CDHash array from es_process_t.cdhash into the 40-char string the server's validator
+// + the snapshot's cdhashRules map index on. Returns nil when the cdhash is all zero (es_process_t conventions: unsigned binaries
+// report a zeroed cdhash, which is not a real identity).
+//
+// The parameter is a 20-element tuple because the C surface (es_process_t.cdhash) is a fixed-size array that Swift imports as a
+// homogeneous tuple. The large_tuple lint is disabled around this declaration because the shape is dictated by the ESF SDK and
+// cannot be reshaped without breaking the C bridge.
 private func cdhashHexString(from cdhash: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
                                             UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)) -> String? {
     var bytes = cdhash
@@ -411,10 +440,12 @@ private func cdhashHexString(from cdhash: (UInt8, UInt8, UInt8, UInt8, UInt8, UI
             return nil
         }
         var s = ""
-        s.reserveCapacity(raw.count * 2)
+        s.reserveCapacity(raw.count * hexCharsPerByte)
         for b in raw {
-            s.append(String(format: "%02x", b))
+            s.append(hexDigitsLowercase[Int(b >> 4)])
+            s.append(hexDigitsLowercase[Int(b & hexLowNibbleMask)])
         }
         return s
     }
 }
+// swiftlint:enable large_tuple

@@ -11,9 +11,10 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 )
 
-// TestValidateRuleType_DemoCutAccepts covers the matrix of accepted / deferred / invalid rule_type values. The demo cut accepts BINARY
-// outright and reports the other five spec'd types as ErrAppControlUnsupportedRuleType so REST callers see a precise "not yet" instead
-// of a generic "unknown" error.
+// TestValidateRuleType_AcceptedAndDeferred covers the matrix of accepted / deferred / invalid rule_type values after the Phase A
+// close-out: BINARY, CDHASH, SIGNINGID, and TEAMID are accepted; CERTIFICATE and PATH remain gated as
+// ErrAppControlUnsupportedRuleType (Phase B unblocks them alongside the leaf-cert cache + Launch Services indirection); unknown /
+// empty values return ErrAppControlInvalidRuleType so REST callers can distinguish "not yet wired" from "not a real type".
 func TestValidateRuleType_AcceptedAndDeferred(t *testing.T) {
 	cases := []struct {
 		name    string

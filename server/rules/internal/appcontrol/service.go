@@ -217,6 +217,7 @@ const (
 	fanoutSkipReasonHostLister     = "host_lister_error"
 	fanoutSkipReasonAssignmentList = "assignment_list_error"
 	fanoutSkipReasonNoAssignments  = "no_assignments"
+	fanoutSkipReasonNoHosts        = "no_hosts_resolved"
 )
 
 // fanout enqueues exactly one set_application_control command per unique host the policy's assigned host groups cover. Phase A's
@@ -228,10 +229,12 @@ const (
 // idempotent).
 //
 // A non-empty skip_reason distinguishes failure modes that would all otherwise audit as fanout_hosts=0:
-//   - `host_lister_error`: the enrolled-host lookup itself failed.
+//   - `host_lister_error`: at least one assigned host group's resolver returned an error (e.g. the HostLister itself failed).
 //   - `assignment_list_error`: resolving the policy's assigned host groups failed.
 //   - `no_assignments`: the policy has no assigned host groups (a posture admins explicitly choose by detaching all groups; alarming
 //     if it happens to the seed Default policy, expected if it happens to a quiescent custom policy).
+//   - `no_hosts_resolved`: every assigned host group resolved successfully but to zero hosts (a fresh deployment before any enroll,
+//     or a custom group whose criteria currently match nothing — *not* an infra failure).
 func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (attempted int, failed int, skipReason string) {
 	groups, err := s.store.ListHostGroupsForPolicy(ctx, policyID)
 	if err != nil {
@@ -245,11 +248,15 @@ func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (a
 
 	// Resolve every group's membership to host IDs and union them. Phase A's only criteria is `{"type":"all"}` which delegates to
 	// the HostLister and returns every enrolled host. Unknown criteria types are logged and treated as empty so a malformed criteria
-	// document doesn't silently fan out to every host.
+	// document doesn't silently fan out to every host. We track whether ANY group's resolver errored so the zero-hosts skip reason
+	// can distinguish "infra broke" from "no hosts enrolled / no matches" — both shapes were previously audited as host_lister_error
+	// which mis-paged on a fresh deployment.
 	seen := make(map[string]struct{})
+	var anyResolveErr bool
 	for _, g := range groups {
 		members, mErr := s.resolveHostGroup(ctx, g)
 		if mErr != nil {
+			anyResolveErr = true
 			s.logger.WarnContext(ctx, "appcontrol: host group resolve failed", "err", mErr, "host_group", g.Name)
 			continue
 		}
@@ -258,9 +265,10 @@ func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (a
 		}
 	}
 	if len(seen) == 0 {
-		// Every group resolved to empty membership. Phase A this can only happen if the HostLister failed under the all-hosts
-		// criteria; signal as host_lister_error so audit log surfaces the right cause.
-		return 0, 0, fanoutSkipReasonHostLister
+		if anyResolveErr {
+			return 0, 0, fanoutSkipReasonHostLister
+		}
+		return 0, 0, fanoutSkipReasonNoHosts
 	}
 	for h := range seen {
 		attempted++

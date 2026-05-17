@@ -1,7 +1,7 @@
 //go:build integration
 
-// Per-context integration tests for the Application Control subsystem
-// (rules-context demo cut). Skipped without EDR_TEST_DSN.
+// Per-context integration tests for the Application Control subsystem.
+// Skipped without EDR_TEST_DSN.
 
 package tests
 
@@ -151,27 +151,34 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlDuplicateRule)
 }
 
-// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the demo cut's narrow validator: every non-BINARY type is rejected with the
-// "unsupported" sentinel. The schema accepts the values; the validator gates them so the REST surface is honest about what's wired
-// today.
+// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the rule_type gate after the Phase A close-out: CDHASH / SIGNINGID / TEAMID
+// are accepted (they pass through the validator and the unsupported-sentinel does not fire), while CERTIFICATE + PATH remain
+// deferred and continue to surface ErrAppControlUnsupportedRuleType so the REST surface is honest about what's wired today.
+// The Identifier per type is shape-valid so the format check passes; the test isolates the rule_type gate from the identifier gate.
 func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
-	for _, rt := range []api.RuleType{
-		api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeCertificate, api.RuleTypeTeamID, api.RuleTypePath,
+	for _, tc := range []struct {
+		rt         api.RuleType
+		identifier string
+	}{
+		{api.RuleTypeCertificate, strings.Repeat("c", 64)},
+		{api.RuleTypePath, "/usr/bin/ls"},
 	} {
-		_, err := store.CreateRule(ctx, api.CreateRuleRequest{
-			PolicyID:   p.ID,
-			RuleType:   rt,
-			Identifier: "EQHXZ8M8AV", // shape-valid for TEAMID; unsupported sentinel still fires for all types
-			Actor:      "demo-admin",
-			Reason:     "should be rejected as unsupported",
+		t.Run(string(tc.rt), func(t *testing.T) {
+			_, err := store.CreateRule(ctx, api.CreateRuleRequest{
+				PolicyID:   p.ID,
+				RuleType:   tc.rt,
+				Identifier: tc.identifier,
+				Actor:      "demo-admin",
+				Reason:     "should be rejected as unsupported",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrAppControlUnsupportedRuleType)
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, api.ErrAppControlUnsupportedRuleType, "rule_type %s", rt)
 	}
 }
 
