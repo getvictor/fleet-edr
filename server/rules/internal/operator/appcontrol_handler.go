@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -46,20 +47,28 @@ func NewAppControl(svc *appcontrol.Service, authz identityapi.AuthZ, logger *slo
 	return &AppControlHandler{svc: svc, authz: authz, logger: logger}
 }
 
-// RegisterRoutes wires the demo-cut application-control routes:
+// RegisterRoutes wires the application-control admin routes:
 //
-//	GET  /api/v1/app-control/policies
-//	GET  /api/v1/app-control/policies/{id}
-//	POST /api/v1/app-control/policies/{id}/rules
+//	GET    /api/v1/app-control/policies
+//	GET    /api/v1/app-control/policies/{id}
+//	POST   /api/v1/app-control/policies
+//	PATCH  /api/v1/app-control/policies/{id}
+//	DELETE /api/v1/app-control/policies/{id}
+//	POST   /api/v1/app-control/policies/{id}/rules
+//	PATCH  /api/v1/app-control/rules/{id}
+//	DELETE /api/v1/app-control/rules/{id}
 //
-// PATCH / DELETE / bulkUpsert / host-groups / assignments are
-// post-demo and not registered here. Caller wraps the mux in identity
-// Session + CSRF middleware before mounting (the existing operator
-// pattern in cmd/main).
+// Bulk-upsert / cross-policy rule list / host-groups CRUD / assignments POST stay deferred to follow-on PRs. Caller wraps the mux
+// in identity Session + CSRF middleware before mounting (the existing operator pattern in cmd/main).
 func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/app-control/policies", h.handleListPolicies)
 	mux.HandleFunc("GET /api/v1/app-control/policies/{id}", h.handleGetPolicy)
+	mux.HandleFunc("POST /api/v1/app-control/policies", h.handleCreatePolicy)
+	mux.HandleFunc("PATCH /api/v1/app-control/policies/{id}", h.handleUpdatePolicy)
+	mux.HandleFunc("DELETE /api/v1/app-control/policies/{id}", h.handleDeletePolicy)
 	mux.HandleFunc("POST /api/v1/app-control/policies/{id}/rules", h.handleCreateRule)
+	mux.HandleFunc("PATCH /api/v1/app-control/rules/{id}", h.handleUpdateRule)
+	mux.HandleFunc("DELETE /api/v1/app-control/rules/{id}", h.handleDeleteRule)
 }
 
 func (h *AppControlHandler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +190,299 @@ func (h *AppControlHandler) writeCreateRuleError(ctx context.Context, w http.Res
 		h.logger.ErrorContext(ctx, "appcontrol create rule", "err", err, "policy_id", policyID)
 		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
 	}
+}
+
+// writeRuleMutationError centralises the rule-update + rule-delete error mapping so the two handlers stay symmetric. RuleNotFound
+// → 404; the validator + invalid-request errors → 400; duplicate-rule cannot fire on update/delete today (we never re-write the
+// identifier) but the case is included so a Phase B refactor that changes that doesn't leak a 500.
+func (h *AppControlHandler) writeRuleMutationError(ctx context.Context, w http.ResponseWriter, action string, err error, ruleID int64) {
+	switch {
+	case errors.Is(err, api.ErrAppControlRuleNotFound):
+		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.rule_not_found", "rule not found")
+	case errors.Is(err, api.ErrAppControlDuplicateRule):
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.duplicate_rule", "rule already exists for this identifier")
+	case api.IsApplicationControlValidationError(err):
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule", err.Error())
+	default:
+		h.logger.ErrorContext(ctx, "appcontrol "+action, "err", err, "rule_id", ruleID)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+	}
+}
+
+// writePolicyMutationError centralises the policy-create + policy-update + policy-delete error mapping so the three handlers stay
+// symmetric. PolicyNotFound → 404; DuplicatePolicy → 409; PolicyImmutable (DELETE on Default) → 409; validation → 400.
+func (h *AppControlHandler) writePolicyMutationError(ctx context.Context, w http.ResponseWriter, action string, err error, policyID int64) {
+	switch {
+	case errors.Is(err, api.ErrAppControlPolicyNotFound):
+		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.policy_not_found", "policy not found")
+	case errors.Is(err, api.ErrAppControlDuplicatePolicy):
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.duplicate_policy", "a policy with that name already exists")
+	case errors.Is(err, api.ErrAppControlPolicyImmutable):
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.policy_immutable", "the seed Default policy cannot be deleted")
+	case api.IsApplicationControlValidationError(err):
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy", err.Error())
+	default:
+		h.logger.ErrorContext(ctx, "appcontrol "+action, "err", err, "policy_id", policyID)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+	}
+}
+
+// updateRuleRequest is the PATCH wire shape. Every mutable field is a pointer so a JSON omit / null is distinguishable from an
+// explicit zero (e.g. clearing custom_msg by sending ""). Phase B's Detect-mode change layers an Enforcement field on top of this
+// struct; for Phase A the field is unsupported (the schema column carries it, the handler doesn't accept it).
+type updateRuleRequest struct {
+	Enabled   *bool         `json:"enabled,omitempty"`
+	Severity  *api.Severity `json:"severity,omitempty"`
+	CustomMsg *string       `json:"custom_msg,omitempty"`
+	CustomURL *string       `json:"custom_url,omitempty"`
+	Comment   *string       `json:"comment,omitempty"`
+	ExpiresAt *time.Time    `json:"expires_at,omitempty"`
+	Reason    string        `json:"reason"`
+}
+
+func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlRuleUpdate,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	ruleID, ok := parseRuleID(r)
+	if !ok {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule_id", "invalid rule id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		return
+	}
+	var req updateRuleRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		return
+	}
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "appcontrol update rule: no actor on ctx despite session middleware")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		return
+	}
+	rule, err := h.svc.UpdateRule(ctx, api.UpdateRuleRequest{
+		RuleID:    ruleID,
+		Enabled:   req.Enabled,
+		Severity:  req.Severity,
+		CustomMsg: req.CustomMsg,
+		CustomURL: req.CustomURL,
+		Comment:   req.Comment,
+		ExpiresAt: req.ExpiresAt,
+		Actor:     actorIdentifierFromContext(ctx),
+		Reason:    req.Reason,
+	}, actor)
+	if err != nil {
+		h.writeRuleMutationError(ctx, w, "update rule", err, ruleID)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, rule)
+}
+
+// deleteRuleRequest carries the audit reason. DELETE bodies are unusual in HTTP norms but JSON-RPC-style admin APIs (which this
+// is) commonly send a body to satisfy audit-required-on-mutation policies; documented in the openspec REST surface.
+type deleteRuleRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *AppControlHandler) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlRuleDelete,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	ruleID, ok := parseRuleID(r)
+	if !ok {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule_id", "invalid rule id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		return
+	}
+	var req deleteRuleRequest
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+			return
+		}
+	}
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "appcontrol delete rule: no actor on ctx despite session middleware")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		return
+	}
+	if err := h.svc.DeleteRule(ctx, api.DeleteRuleRequest{
+		RuleID: ruleID,
+		Actor:  actorIdentifierFromContext(ctx),
+		Reason: req.Reason,
+	}, actor); err != nil {
+		h.writeRuleMutationError(ctx, w, "delete rule", err, ruleID)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// createPolicyRequest is the POST /policies wire shape. Description is optional; Reason is required for audit.
+type createPolicyRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Reason      string `json:"reason"`
+}
+
+func (h *AppControlHandler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlPolicyCreate,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		return
+	}
+	var req createPolicyRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		return
+	}
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "appcontrol create policy: no actor on ctx despite session middleware")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		return
+	}
+	policy, err := h.svc.CreatePolicy(ctx, api.CreatePolicyRequest{
+		Name:        req.Name,
+		Description: req.Description,
+		Actor:       actorIdentifierFromContext(ctx),
+		Reason:      req.Reason,
+	}, actor)
+	if err != nil {
+		h.writePolicyMutationError(ctx, w, "create policy", err, 0)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusCreated, policy)
+}
+
+// updatePolicyRequest is the PATCH /policies/{id} wire shape. Both name and description are pointer-optional.
+type updatePolicyRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Reason      string  `json:"reason"`
+}
+
+func (h *AppControlHandler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlPolicyUpdate,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	policyID, ok := parsePolicyID(r)
+	if !ok {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		return
+	}
+	var req updatePolicyRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		return
+	}
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "appcontrol update policy: no actor on ctx despite session middleware")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		return
+	}
+	policy, err := h.svc.UpdatePolicy(ctx, api.UpdatePolicyRequest{
+		PolicyID:    policyID,
+		Name:        req.Name,
+		Description: req.Description,
+		Actor:       actorIdentifierFromContext(ctx),
+		Reason:      req.Reason,
+	}, actor)
+	if err != nil {
+		h.writePolicyMutationError(ctx, w, "update policy", err, policyID)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, policy)
+}
+
+// deletePolicyRequest carries the audit reason for DELETE /policies/{id}.
+type deletePolicyRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *AppControlHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlPolicyDelete,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	policyID, ok := parsePolicyID(r)
+	if !ok {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		return
+	}
+	var req deletePolicyRequest
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+			return
+		}
+	}
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, "appcontrol delete policy: no actor on ctx despite session middleware")
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		return
+	}
+	if err := h.svc.DeletePolicy(ctx, api.DeletePolicyRequest{
+		PolicyID: policyID,
+		Actor:    actorIdentifierFromContext(ctx),
+		Reason:   req.Reason,
+	}, actor); err != nil {
+		h.writePolicyMutationError(ctx, w, "delete policy", err, policyID)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseRuleID extracts the {id} path value off /rules/{id} and parses it as int64. Symmetric to parsePolicyID; kept as a separate
+// helper so a future schema change that splits rule_id namespacing from policy_id has one place to update.
+func parseRuleID(r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	if raw == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 // parsePolicyID extracts the {id} path value and parses it as int64. Reports false on missing or non-numeric values so callers respond

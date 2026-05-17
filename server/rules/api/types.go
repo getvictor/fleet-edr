@@ -280,6 +280,60 @@ type CreateRuleRequest struct {
 	Reason     string
 }
 
+// UpdateRuleRequest is the server-internal contract for PATCH /api/v1/app-control/rules/{id}. Every mutable field is a pointer so
+// "field absent" (nil) is distinguishable from "field set to zero value". Phase A allows mutating Enabled, Severity, CustomMsg,
+// CustomURL, Comment, and ExpiresAt. Phase B's Detect-mode change layers Enforcement on top; this struct does not carry it today.
+// PolicyID is set by the handler from the existing row (PATCH does not move a rule between policies), Actor and Reason are required
+// for every state-changing call so the audit row is honest.
+type UpdateRuleRequest struct {
+	RuleID    int64
+	Enabled   *bool
+	Severity  *Severity
+	CustomMsg *string
+	CustomURL *string
+	Comment   *string
+	ExpiresAt *time.Time
+	Actor     string
+	Reason    string
+}
+
+// DeleteRuleRequest is the server-internal contract for DELETE /api/v1/app-control/rules/{id}. Actor + Reason are required so the
+// audit row records who removed the rule and why; the store-layer guard fails closed if either is empty.
+type DeleteRuleRequest struct {
+	RuleID int64
+	Actor  string
+	Reason string
+}
+
+// CreatePolicyRequest is the server-internal contract for POST /api/v1/app-control/policies. Name is required and must be unique;
+// description is optional. Reason + Actor land on the audit row. The store hardcodes default_action='NONE' in Phase A (the column's
+// enum only carries that value; Lockdown extends it).
+type CreatePolicyRequest struct {
+	Name        string
+	Description string
+	Actor       string
+	Reason      string
+}
+
+// UpdatePolicyRequest is the server-internal contract for PATCH /api/v1/app-control/policies/{id}. Phase A only allows renaming and
+// editing the description. Pointer fields distinguish "absent" from "explicit zero" so a PATCH that wants to clear the description
+// (set it to "") sends `description: ""` rather than the field being omitted entirely.
+type UpdatePolicyRequest struct {
+	PolicyID    int64
+	Name        *string
+	Description *string
+	Actor       string
+	Reason      string
+}
+
+// DeletePolicyRequest is the server-internal contract for DELETE /api/v1/app-control/policies/{id}. The store-layer guard refuses
+// to delete the seed Default policy by name (ErrAppControlPolicyImmutable) so the failsafe assignment stays intact.
+type DeletePolicyRequest struct {
+	PolicyID int64
+	Actor    string
+	Reason   string
+}
+
 // Application Control validation errors. Mapped to HTTP 400 by the
 // REST handlers via IsApplicationControlValidationError.
 var (
@@ -312,6 +366,19 @@ var (
 	// ErrAppControlDuplicateRule is returned when a rule with the same (policy_id, rule_type, identifier) already exists. Mapped to HTTP
 	// 409 by the REST handlers so the client can dedup idempotent retries cleanly.
 	ErrAppControlDuplicateRule = errors.New("rules: application control rule already exists")
+
+	// ErrAppControlRuleNotFound is returned when the targeted rule row does not exist. Mapped to HTTP 404 by the REST handler so the
+	// REST client can distinguish "PATCH/DELETE on a stale id" from a server-side fault.
+	ErrAppControlRuleNotFound = errors.New("rules: application control rule not found")
+
+	// ErrAppControlDuplicatePolicy is returned when a policy with the same name already exists. Mapped to HTTP 409 by the POST policy
+	// handler so an operator typing a name collision sees a precise diagnostic rather than a generic 500.
+	ErrAppControlDuplicatePolicy = errors.New("rules: application control policy already exists")
+
+	// ErrAppControlPolicyImmutable is returned when a destructive mutation targets the seed Default policy (DELETE policy). The seed
+	// row is the failsafe that keeps the all-hosts assignment alive; an admin who wants to stop enforcing rules detaches the
+	// assignment or disables individual rules rather than deleting the policy itself.
+	ErrAppControlPolicyImmutable = errors.New("rules: application control default policy cannot be deleted")
 )
 
 // IsApplicationControlValidationError reports whether err is one of the validation errors that the REST handlers map to HTTP 400. The
@@ -353,6 +420,23 @@ type ApplicationControlStore interface {
 	ListPolicies(ctx context.Context) ([]ApplicationControlPolicy, error)
 	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
 	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)
+	// GetRuleByID returns the rule row (or ErrAppControlRuleNotFound). The REST PATCH/DELETE paths use it to look up the policy_id
+	// the row belongs to before mutating, so the snapshot fan-out targets the right policy.
+	GetRuleByID(ctx context.Context, ruleID int64) (ApplicationControlRule, error)
+	// UpdateRule applies a partial update to an existing rule + bumps the parent policy's version. Returns the post-update row.
+	// ErrAppControlRuleNotFound when the rule does not exist; ErrAppControlInvalidRequest when actor/reason are empty.
+	UpdateRule(ctx context.Context, req UpdateRuleRequest) (ApplicationControlRule, error)
+	// DeleteRule removes the rule + bumps the parent policy's version. Returns the parent policy_id so the service can compose the
+	// post-delete snapshot the agents see. ErrAppControlRuleNotFound when the rule does not exist.
+	DeleteRule(ctx context.Context, req DeleteRuleRequest) (policyID int64, err error)
+	// CreatePolicy inserts a new policy row. ErrAppControlDuplicatePolicy when the name collides.
+	CreatePolicy(ctx context.Context, req CreatePolicyRequest) (ApplicationControlPolicy, error)
+	// UpdatePolicy applies a partial update (name / description) + bumps the policy version + sets updated_by. Returns the post-update
+	// row. ErrAppControlPolicyNotFound when the id does not exist; ErrAppControlDuplicatePolicy when the new name collides.
+	UpdatePolicy(ctx context.Context, req UpdatePolicyRequest) (ApplicationControlPolicy, error)
+	// DeletePolicy removes the policy row (CASCADEs rules + assignments). Refuses the seed Default policy via
+	// ErrAppControlPolicyImmutable. ErrAppControlPolicyNotFound when the id does not exist.
+	DeletePolicy(ctx context.Context, req DeletePolicyRequest) error
 	// ListHostGroupsForPolicy returns the host groups assigned to the policy, in priority order then by group name. The fan-out
 	// resolver walks the result and unions the member hosts of each group to build the set of unique hosts the rule update should
 	// reach.

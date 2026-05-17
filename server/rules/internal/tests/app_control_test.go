@@ -351,3 +351,263 @@ func TestAppControl_CreateRule_AtomicityOnVersionBumpFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rulesList, 1)
 }
+
+// TestAppControl_UpdateRule_HappyPath confirms PATCH /rules/{id} applies the partial update and bumps the policy version. We
+// flip Enabled, change Severity, set CustomMsg + Comment, and assert the post-update row reflects every field.
+func TestAppControl_UpdateRule_HappyPath(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   p.ID,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("d", 64),
+		Severity:   api.SeverityRuleMedium,
+		Actor:      "demo-admin",
+		Reason:     "fixture for update",
+	})
+	require.NoError(t, err)
+	preVersion := p.Version + 1 // create bumped once
+
+	enabled := false
+	sev := api.SeverityRuleHigh
+	msg := "Blocked by policy v2"
+	comment := "raised severity after incident review"
+	updated, err := store.UpdateRule(ctx, api.UpdateRuleRequest{
+		RuleID:    rule.ID,
+		Enabled:   &enabled,
+		Severity:  &sev,
+		CustomMsg: &msg,
+		Comment:   &comment,
+		Actor:     "demo-admin",
+		Reason:    "PATCH coverage",
+	})
+	require.NoError(t, err)
+	assert.False(t, updated.Enabled, "enabled flips off")
+	assert.Equal(t, api.SeverityRuleHigh, updated.Severity)
+	if assert.NotNil(t, updated.CustomMsg) {
+		assert.Equal(t, msg, *updated.CustomMsg)
+	}
+	assert.Equal(t, comment, updated.Comment)
+
+	// Policy version bumped to (preVersion + 1).
+	pAfter, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	assert.Equal(t, preVersion+1, pAfter.Version)
+}
+
+// TestAppControl_UpdateRule_NotFound pins the typed sentinel for a missing rule id; the REST handler maps it to 404.
+func TestAppControl_UpdateRule_NotFound(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	enabled := false
+	_, err := store.UpdateRule(t.Context(), api.UpdateRuleRequest{
+		RuleID:  9_999_999,
+		Enabled: &enabled,
+		Actor:   "demo-admin",
+		Reason:  "should be 404",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlRuleNotFound)
+}
+
+// TestAppControl_UpdateRule_RequiresAtLeastOneField confirms a body with reason but no mutable field is rejected as
+// ErrAppControlInvalidRequest. Without this the handler would happily run an UPDATE that bumps version + updated_by with no
+// other side effect, which is a confusing no-op the audit log can't disambiguate.
+func TestAppControl_UpdateRule_RequiresAtLeastOneField(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID: p.ID, RuleType: api.RuleTypeBinary,
+		Identifier: strings.Repeat("e", 64), Actor: "demo-admin", Reason: "fixture",
+	})
+	require.NoError(t, err)
+
+	_, err = store.UpdateRule(ctx, api.UpdateRuleRequest{
+		RuleID: rule.ID, Actor: "demo-admin", Reason: "no fields",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+}
+
+// TestAppControl_DeleteRule_HappyPath pins the delete + version-bump contract: the rule is gone from ListRulesByPolicy, and
+// the returned policy_id matches the rule's parent so the service-layer fan-out targets the right policy.
+func TestAppControl_DeleteRule_HappyPath(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID: p.ID, RuleType: api.RuleTypeBinary,
+		Identifier: strings.Repeat("f", 64), Actor: "demo-admin", Reason: "fixture",
+	})
+	require.NoError(t, err)
+
+	policyID, err := store.DeleteRule(ctx, api.DeleteRuleRequest{
+		RuleID: rule.ID, Actor: "demo-admin", Reason: "remove after triage",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, p.ID, policyID)
+
+	rules, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Empty(t, rules, "rule list must be empty after delete")
+}
+
+// TestAppControl_DeleteRule_NotFound confirms the typed sentinel for a stale rule id.
+func TestAppControl_DeleteRule_NotFound(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	_, err := store.DeleteRule(t.Context(), api.DeleteRuleRequest{
+		RuleID: 9_999_999, Actor: "demo-admin", Reason: "stale id",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlRuleNotFound)
+}
+
+// TestAppControl_CreatePolicy_HappyPath confirms POST /policies inserts a new row with version=1, default_action='NONE', and the
+// supplied name + description.
+func TestAppControl_CreatePolicy_HappyPath(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	policy, err := store.CreatePolicy(t.Context(), api.CreatePolicyRequest{
+		Name:        "engineering-laptops",
+		Description: "Custom policy for the eng laptop fleet",
+		Actor:       "demo-admin",
+		Reason:      "second policy",
+	})
+	require.NoError(t, err)
+	assert.NotZero(t, policy.ID)
+	assert.Equal(t, "engineering-laptops", policy.Name)
+	assert.Equal(t, "Custom policy for the eng laptop fleet", policy.Description)
+	assert.Equal(t, int64(1), policy.Version)
+	assert.Equal(t, api.PolicyDefaultActionNone, policy.DefaultAction)
+	assert.Equal(t, "demo-admin", policy.CreatedBy)
+}
+
+// TestAppControl_CreatePolicy_DuplicateName confirms ErrAppControlDuplicatePolicy fires on a name collision. The seed Default
+// policy gives us a guaranteed collision target.
+func TestAppControl_CreatePolicy_DuplicateName(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	_, err := store.CreatePolicy(t.Context(), api.CreatePolicyRequest{
+		Name: api.DefaultPolicyName, Actor: "demo-admin", Reason: "should collide",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlDuplicatePolicy)
+}
+
+// TestAppControl_UpdatePolicy_RenameAndBumpVersion confirms PATCH /policies/{id} renames the policy AND bumps the version. The
+// version bump matters because Phase B's UI will use it as a "dirty" indicator on the agents tab.
+func TestAppControl_UpdatePolicy_RenameAndBumpVersion(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	policy, err := store.CreatePolicy(ctx, api.CreatePolicyRequest{
+		Name: "team-alpha", Actor: "demo-admin", Reason: "fixture",
+	})
+	require.NoError(t, err)
+
+	newName := "team-alpha-renamed"
+	newDescription := "team alpha rebrand"
+	updated, err := store.UpdatePolicy(ctx, api.UpdatePolicyRequest{
+		PolicyID:    policy.ID,
+		Name:        &newName,
+		Description: &newDescription,
+		Actor:       "demo-admin",
+		Reason:      "rename and edit description",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newName, updated.Name)
+	assert.Equal(t, newDescription, updated.Description)
+	assert.Equal(t, policy.Version+1, updated.Version)
+	assert.Equal(t, "demo-admin", updated.UpdatedBy)
+}
+
+// TestAppControl_UpdatePolicy_NotFound + DuplicateName lock the two error sentinels the REST handler maps to 404 and 409.
+func TestAppControl_UpdatePolicy_NotFoundAndDuplicate(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	defaultPolicy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	// Not found.
+	name := "doesnt-matter"
+	_, err = store.UpdatePolicy(ctx, api.UpdatePolicyRequest{
+		PolicyID: 9_999_999, Name: &name, Actor: "demo-admin", Reason: "404",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+
+	// Duplicate name (rename a fresh policy to the Default policy's name).
+	other, err := store.CreatePolicy(ctx, api.CreatePolicyRequest{
+		Name: "fresh", Actor: "demo-admin", Reason: "fixture",
+	})
+	require.NoError(t, err)
+	collidingName := defaultPolicy.Name
+	_, err = store.UpdatePolicy(ctx, api.UpdatePolicyRequest{
+		PolicyID: other.ID, Name: &collidingName, Actor: "demo-admin", Reason: "should 409",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlDuplicatePolicy)
+}
+
+// TestAppControl_DeletePolicy_HappyPath + TestAppControl_DeletePolicy_RefusesDefault enforce the destructive-action contract: a
+// custom policy deletes cleanly and cascades its rules; the seed Default policy is rejected with ErrAppControlPolicyImmutable.
+func TestAppControl_DeletePolicy_HappyPath(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	policy, err := store.CreatePolicy(ctx, api.CreatePolicyRequest{
+		Name: "to-be-deleted", Actor: "demo-admin", Reason: "fixture",
+	})
+	require.NoError(t, err)
+	// Add a rule so we can confirm the CASCADE.
+	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID: policy.ID, RuleType: api.RuleTypeBinary,
+		Identifier: strings.Repeat("9", 64), Actor: "demo-admin", Reason: "fixture",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.DeletePolicy(ctx, api.DeletePolicyRequest{
+		PolicyID: policy.ID, Actor: "demo-admin", Reason: "cleanup",
+	}))
+
+	// Policy is gone.
+	_, err = store.GetPolicyByName(ctx, "to-be-deleted")
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+}
+
+// TestAppControl_DeletePolicy_RefusesDefault locks the failsafe guard: an admin cannot rip the seed policy out from under the
+// agents by accident. The handler maps the typed sentinel to HTTP 409.
+func TestAppControl_DeletePolicy_RefusesDefault(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	policy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	err = store.DeletePolicy(ctx, api.DeletePolicyRequest{
+		PolicyID: policy.ID, Actor: "demo-admin", Reason: "should be blocked",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyImmutable)
+}
+
+// TestAppControl_DeletePolicy_NotFound confirms the typed sentinel for an unknown id.
+func TestAppControl_DeletePolicy_NotFound(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	err := store.DeletePolicy(t.Context(), api.DeletePolicyRequest{
+		PolicyID: 9_999_999, Actor: "demo-admin", Reason: "stale id",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+}

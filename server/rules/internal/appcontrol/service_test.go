@@ -375,3 +375,92 @@ func TestService_Fanout_PartialFailureAuditsHostListerError(t *testing.T) {
 	assert.Equal(t, "host_lister_error", payload["fanout_skipped_reason"], "any resolver error must surface even when some hosts succeed")
 	assert.EqualValues(t, 1, payload["fanout_hosts"], "successful group's hosts still get enqueued")
 }
+
+// TestService_UpdateRule_FansOutAndAudits pins the PATCH path's contract: the post-update snapshot reaches every assigned host
+// (the seeded all-hosts group) and the audit row records rule_update with the post-bump policy version + fanout counts.
+func TestService_UpdateRule_FansOutAndAudits(t *testing.T) {
+	svc, store, _, audit := newServiceWithHostsAndAudit(t, func(context.Context) ([]string, error) {
+		return []string{"host-a", "host-b"}, nil
+	})
+	ctx := t.Context()
+	policy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	rule, err := svc.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   policy.ID,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("1", 64),
+		Severity:   api.SeverityRuleMedium,
+		Actor:      "user:7",
+		Reason:     "fixture for update",
+	}, newAdmin())
+	require.NoError(t, err)
+	versionAfterCreate := policy.Version + 1 // CreateRule bumps once
+
+	enabled := false
+	updated, err := svc.UpdateRule(ctx, api.UpdateRuleRequest{
+		RuleID:  rule.ID,
+		Enabled: &enabled,
+		Actor:   "user:7",
+		Reason:  "disable rule",
+	}, newAdmin())
+	require.NoError(t, err)
+	assert.False(t, updated.Enabled)
+
+	payload := fanoutAuditPayloadFor(t, audit)
+	assert.EqualValues(t, versionAfterCreate+1, payload["policy_version"], "PATCH must bump version again")
+	assert.EqualValues(t, 2, payload["fanout_hosts"], "snapshot fans out to all hosts on update")
+}
+
+// TestService_DeleteRule_FansOutAndAudits pins the DELETE path: the rule is gone, the post-delete snapshot reaches every host so
+// agents drop the now-missing rule on their next apply, and the audit row captures the prior rule's type/identifier so the SIEM
+// query "what rule was deleted at <timestamp>" has a single source of truth.
+func TestService_DeleteRule_FansOutAndAudits(t *testing.T) {
+	svc, store, _, audit := newServiceWithHostsAndAudit(t, func(context.Context) ([]string, error) {
+		return []string{"host-a"}, nil
+	})
+	ctx := t.Context()
+	policy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	rule, err := svc.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   policy.ID,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: strings.Repeat("2", 64),
+		Severity:   api.SeverityRuleMedium,
+		Actor:      "user:7",
+		Reason:     "fixture for delete",
+	}, newAdmin())
+	require.NoError(t, err)
+	versionAfterCreate := policy.Version + 1
+
+	require.NoError(t, svc.DeleteRule(ctx, api.DeleteRuleRequest{
+		RuleID: rule.ID, Actor: "user:7", Reason: "remove after triage",
+	}, newAdmin()))
+
+	payload := fanoutAuditPayloadFor(t, audit)
+	assert.EqualValues(t, versionAfterCreate+1, payload["policy_version"], "DELETE must bump version")
+	assert.Equal(t, "BINARY", payload["rule_type"], "audit captures the prior rule type")
+	assert.Equal(t, strings.Repeat("2", 64), payload["identifier"], "audit captures the prior rule identifier")
+	assert.EqualValues(t, 1, payload["fanout_hosts"], "post-delete snapshot fans out so agents drop the removed rule")
+}
+
+// TestService_CreatePolicy_AuditsAndDoesNotFanOut confirms POST /policies records the audit with policy_create action AND that
+// no fanout runs (no rules yet, no hosts to push to). Distinct from the rule paths so the SIEM dashboard can filter "policy
+// scoped audit" cleanly.
+func TestService_CreatePolicy_AuditsAndDoesNotFanOut(t *testing.T) {
+	hostListerCalls := 0
+	svc, _, _, audit := newServiceWithHostsAndAudit(t, func(context.Context) ([]string, error) {
+		hostListerCalls++
+		return []string{"host-a"}, nil
+	})
+	policy, err := svc.CreatePolicy(t.Context(), api.CreatePolicyRequest{
+		Name: "new-policy", Description: "test", Actor: "user:7", Reason: "create",
+	}, newAdmin())
+	require.NoError(t, err)
+	assert.NotZero(t, policy.ID)
+	assert.Equal(t, 0, hostListerCalls, "POST /policies must not fan out (no rules, no assignments)")
+
+	events := audit.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, identityapi.AuditAppControlPolicyCreate, events[0].Action)
+	assert.Equal(t, "application_control_policy", events[0].TargetType)
+}

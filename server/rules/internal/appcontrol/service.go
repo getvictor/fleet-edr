@@ -386,3 +386,184 @@ func (s *Service) emitAudit(
 		s.logger.WarnContext(ctx, "appcontrol: audit record failed", "err", err, "rule_id", rule.ID)
 	}
 }
+
+// recordAudit is the low-level audit emit the per-op helpers share. It centralises the nil-audit guard and the actor-id back-fill
+// so the per-op helpers focus on the payload shape rather than the boilerplate. Failed audit emission is logged but not returned;
+// audit is best-effort relative to the mutation that already committed (same posture as emitAudit's create-rule path).
+func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, evt identityapi.AuditEvent) {
+	if s.audit == nil {
+		return
+	}
+	if actor != nil {
+		userID := actor.UserID
+		evt.UserID = &userID
+	}
+	if err := s.audit.Record(ctx, evt); err != nil {
+		s.logger.WarnContext(ctx, "appcontrol: audit record failed", "err", err, "target_id", evt.TargetID, "action", string(evt.Action))
+	}
+}
+
+// UpdateRule wires PATCH /api/v1/app-control/rules/{id}: validates the actor + reason, applies the partial update through the
+// store, recomposes the post-update snapshot, fans it out, and emits the application_control.rule_update audit row. Validation
+// errors propagate untouched so the handler can errors.Is on the shared IsApplicationControlValidationError set.
+func (s *Service) UpdateRule(ctx context.Context, req api.UpdateRuleRequest, actor *identityapi.Actor) (api.ApplicationControlRule, error) {
+	if actor == nil {
+		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+	rule, err := s.store.UpdateRule(ctx, req)
+	if err != nil {
+		return api.ApplicationControlRule{}, err
+	}
+	policy, payload, composeErr := s.buildSnapshotPayload(ctx, rule.PolicyID)
+	if composeErr != nil {
+		s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleUpdate, rule, req.Reason, 0, 0, 0, "snapshot_compose_failed")
+		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after UpdateRule failed; rule mutation persisted but agents unaware until next mutation",
+			"err", composeErr, "policy_id", rule.PolicyID, "rule_id", rule.ID)
+		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol snapshot compose: %w", composeErr)
+	}
+	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
+	s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleUpdate, rule, req.Reason, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
+	return rule, nil
+}
+
+// DeleteRule wires DELETE /api/v1/app-control/rules/{id}: looks up the rule (so the audit row records what was removed), deletes
+// it, fans out the post-delete snapshot, emits the rule_delete audit. The rule body is captured BEFORE the delete because the
+// audit payload references rule_type + identifier; reading after the DELETE would race with the cascade.
+func (s *Service) DeleteRule(ctx context.Context, req api.DeleteRuleRequest, actor *identityapi.Actor) error {
+	if actor == nil {
+		return fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+	priorRule, err := s.store.GetRuleByID(ctx, req.RuleID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.DeleteRule(ctx, req); err != nil {
+		return err
+	}
+	policy, payload, composeErr := s.buildSnapshotPayload(ctx, priorRule.PolicyID)
+	if composeErr != nil {
+		s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleDelete, priorRule, req.Reason, 0, 0, 0, "snapshot_compose_failed")
+		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after DeleteRule failed; agents still see the deleted rule until next mutation",
+			"err", composeErr, "policy_id", priorRule.PolicyID, "rule_id", priorRule.ID)
+		return fmt.Errorf("appcontrol snapshot compose: %w", composeErr)
+	}
+	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
+	s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleDelete, priorRule, req.Reason, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
+	return nil
+}
+
+// recordRuleMutationAudit is the per-op audit emitter for rule mutations (update + delete). Payload shape matches the create
+// flow's so SIEM dashboards can filter on the same key set across all three actions.
+func (s *Service) recordRuleMutationAudit(
+	ctx context.Context,
+	actor *identityapi.Actor,
+	action identityapi.AuditAction,
+	rule api.ApplicationControlRule,
+	reason string,
+	policyVersion int64,
+	fanoutHosts int,
+	fanoutFailed int,
+	fanoutSkipReason string,
+) {
+	payload := map[string]any{
+		"policy_id":      rule.PolicyID,
+		"policy_version": policyVersion,
+		"rule_type":      string(rule.RuleType),
+		"identifier":     rule.Identifier,
+		"severity":       string(rule.Severity),
+		"reason":         reason,
+		"fanout_hosts":   fanoutHosts,
+		"fanout_failed":  fanoutFailed,
+	}
+	if fanoutSkipReason != "" {
+		payload["fanout_skipped_reason"] = fanoutSkipReason
+	}
+	actorIdentifier := ""
+	if actor != nil && actor.UserID > 0 {
+		actorIdentifier = "user:" + strconv.FormatInt(actor.UserID, 10)
+	}
+	s.recordAudit(ctx, actor, identityapi.AuditEvent{
+		Action:     action,
+		TargetType: "application_control_rule",
+		TargetID:   strconv.FormatInt(rule.ID, 10),
+		ActorEmail: actorIdentifier,
+		Payload:    payload,
+	})
+}
+
+// CreatePolicy wires POST /api/v1/app-control/policies. The new policy starts at version=1 with default_action='NONE' and zero
+// rules; no fan-out runs because no host group is assigned yet (Phase B exposes the assignments endpoint). The audit row records
+// the new policy id + name so an operator can trace the creation back to the request.
+func (s *Service) CreatePolicy(ctx context.Context, req api.CreatePolicyRequest, actor *identityapi.Actor) (api.ApplicationControlPolicy, error) {
+	if actor == nil {
+		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+	policy, err := s.store.CreatePolicy(ctx, req)
+	if err != nil {
+		return api.ApplicationControlPolicy{}, err
+	}
+	s.recordPolicyMutationAudit(ctx, actor, identityapi.AuditAppControlPolicyCreate, policy, req.Reason)
+	return policy, nil
+}
+
+// UpdatePolicy wires PATCH /api/v1/app-control/policies/{id}. Renames + description edits do not change the rules snapshot the
+// agents receive, so this path does NOT fan out a new snapshot. The audit row records the post-update version + the actor-supplied
+// reason so a future "who renamed Default to corp-default" question has a single source of truth.
+func (s *Service) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest, actor *identityapi.Actor) (api.ApplicationControlPolicy, error) {
+	if actor == nil {
+		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+	policy, err := s.store.UpdatePolicy(ctx, req)
+	if err != nil {
+		return api.ApplicationControlPolicy{}, err
+	}
+	s.recordPolicyMutationAudit(ctx, actor, identityapi.AuditAppControlPolicyUpdate, policy, req.Reason)
+	return policy, nil
+}
+
+// DeletePolicy wires DELETE /api/v1/app-control/policies/{id}. Store refuses the seed Default policy (ErrAppControlPolicyImmutable);
+// non-Default policies have no assignments in Phase A so no fan-out runs (an admin who attached a custom group + rules in some
+// future code path would also need a follow-on snapshot push, but that path does not exist today). The audit captures the
+// deleted policy id + name so the deletion is reconstructable from the audit log alone.
+func (s *Service) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest, actor *identityapi.Actor) error {
+	if actor == nil {
+		return fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+	}
+	priorPolicy, err := s.findPolicyByID(ctx, req.PolicyID)
+	if err != nil {
+		return err
+	}
+	if err := s.store.DeletePolicy(ctx, req); err != nil {
+		return err
+	}
+	s.recordPolicyMutationAudit(ctx, actor, identityapi.AuditAppControlPolicyDelete, priorPolicy, req.Reason)
+	return nil
+}
+
+// recordPolicyMutationAudit is the per-op audit emitter for policy mutations (create + update + delete). Payload mirrors the
+// rule-mutation shape modulo fan-out fields (no fan-out on policy mutations in Phase A) so the dashboard query language stays
+// consistent across action types.
+func (s *Service) recordPolicyMutationAudit(
+	ctx context.Context,
+	actor *identityapi.Actor,
+	action identityapi.AuditAction,
+	policy api.ApplicationControlPolicy,
+	reason string,
+) {
+	actorIdentifier := ""
+	if actor != nil && actor.UserID > 0 {
+		actorIdentifier = "user:" + strconv.FormatInt(actor.UserID, 10)
+	}
+	s.recordAudit(ctx, actor, identityapi.AuditEvent{
+		Action:     action,
+		TargetType: "application_control_policy",
+		TargetID:   strconv.FormatInt(policy.ID, 10),
+		ActorEmail: actorIdentifier,
+		Payload: map[string]any{
+			"policy_id":      policy.ID,
+			"policy_name":    policy.Name,
+			"policy_version": policy.Version,
+			"reason":         reason,
+		},
+	})
+}

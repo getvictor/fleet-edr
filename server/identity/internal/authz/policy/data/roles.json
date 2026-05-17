@@ -21,7 +21,12 @@
         "enrollment.revoke",
         "enrollment.rotate_token",
         "application_control.read",
-        "application_control.rule_create"
+        "application_control.rule_create",
+        "application_control.rule_update",
+        "application_control.rule_delete",
+        "application_control.policy_create",
+        "application_control.policy_update",
+        "application_control.policy_delete"
       ]
     },
     "senior_analyst": {
