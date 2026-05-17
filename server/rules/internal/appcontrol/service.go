@@ -247,14 +247,15 @@ func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (a
 	}
 
 	// Resolve every group's membership to host IDs and union them. Phase A's only criteria is `{"type":"all"}` which delegates to
-	// the HostLister and returns every enrolled host. Unknown criteria types are logged and treated as empty so a malformed criteria
-	// document doesn't silently fan out to every host. We track whether ANY group's resolver errored so the zero-hosts skip reason
-	// can distinguish "infra broke" from "no hosts enrolled / no matches" — both shapes were previously audited as host_lister_error
-	// which mis-paged on a fresh deployment.
+	// the HostLister; the lookup is memoised per-fanout so a policy with N "all"-criteria groups only enumerates the host list once
+	// instead of N times (matters for Phase B custom groups that may also resolve to "all" at the leaf). We track whether ANY
+	// group's resolver errored so the audit row distinguishes infra failures from "no hosts enrolled" both when seen is empty AND
+	// when seen is partially populated (a partial-failure that drops some hosts would otherwise hide as a successful fan-out).
 	seen := make(map[string]struct{})
+	hostCache := &allHostsCache{loader: s.hosts}
 	var anyResolveErr bool
 	for _, g := range groups {
-		members, mErr := s.resolveHostGroup(ctx, g)
+		members, mErr := s.resolveHostGroup(ctx, g, hostCache)
 		if mErr != nil {
 			anyResolveErr = true
 			s.logger.WarnContext(ctx, "appcontrol: host group resolve failed", "err", mErr, "host_group", g.Name)
@@ -277,7 +278,32 @@ func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (a
 			s.logger.WarnContext(ctx, "appcontrol: command insert failed", "host_id", h, "err", err)
 		}
 	}
+	// Partial-failure surfacing: even when some hosts were enqueued, signal host_lister_error if any group's resolver failed.
+	// Otherwise an operator scanning the audit log sees a "successful" fan-out while one of the policy's assigned groups
+	// silently dropped its host set.
+	if anyResolveErr {
+		return attempted, failed, fanoutSkipReasonHostLister
+	}
 	return attempted, failed, ""
+}
+
+// allHostsCache memoises the HostLister result inside a single fanout call. The loader is invoked at most once per fanout regardless
+// of how many host groups carry `{"type":"all"}`; subsequent calls return the cached slice (and any cached error). Zero value is a
+// valid cache.
+type allHostsCache struct {
+	loader func(context.Context) ([]string, error)
+	done   bool
+	hosts  []string
+	err    error
+}
+
+func (c *allHostsCache) get(ctx context.Context) ([]string, error) {
+	if c.done {
+		return c.hosts, c.err
+	}
+	c.hosts, c.err = c.loader(ctx)
+	c.done = true
+	return c.hosts, c.err
 }
 
 // hostGroupCriteria is the discriminator-only shape the fan-out uses to route to the right resolver. Phase B grows the type set with
@@ -287,18 +313,20 @@ type hostGroupCriteria struct {
 }
 
 // resolveHostGroup parses a host group's criteria JSON and returns the resolved host IDs. Phase A only honors `{"type":"all"}`,
-// which delegates to the HostLister. Phase B adds tag / hostname / OS predicates here without changing the fan-out loop above.
-func (s *Service) resolveHostGroup(ctx context.Context, g api.HostGroup) ([]string, error) {
+// which delegates to the memoised HostLister (one enumeration per fanout call, no matter how many groups carry the same criteria).
+// Phase B adds tag / hostname / OS predicates here without changing the fan-out loop. Unknown / malformed criteria are returned as
+// resolver errors so the fanout audit surfaces the misconfiguration as host_lister_error instead of silently dropping the group's
+// host set (which would mis-attribute as no_hosts_resolved).
+func (s *Service) resolveHostGroup(ctx context.Context, g api.HostGroup, cache *allHostsCache) ([]string, error) {
 	var c hostGroupCriteria
 	if err := json.Unmarshal(g.Criteria, &c); err != nil {
 		return nil, fmt.Errorf("parse criteria for host_group=%q: %w", g.Name, err)
 	}
 	switch c.Type {
 	case api.HostGroupCriteriaTypeAll:
-		return s.hosts(ctx)
+		return cache.get(ctx)
 	default:
-		s.logger.WarnContext(ctx, "appcontrol: unknown host group criteria type; resolving as empty", "criteria_type", c.Type, "host_group", g.Name)
-		return nil, nil
+		return nil, fmt.Errorf("unknown host group criteria type %q for host_group=%q", c.Type, g.Name)
 	}
 }
 

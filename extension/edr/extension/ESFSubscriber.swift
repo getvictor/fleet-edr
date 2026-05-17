@@ -4,13 +4,25 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFSubscriber")
 
-/// Our Apple Developer Team ID. Any binary signed with this team_id is
-/// allowed through AUTH_EXEC regardless of rule match — the failsafe that
-/// prevents a misconfigured rule from blocking the agent, extension, or
-/// host app itself. Hardcoded for the application-control demo cut; Phase B
-/// of the broader change replaces this with a server-pushed failsafe list
-/// so operators can extend it without an agent re-release.
+/// Our Apple Developer Team ID. The self-allow failsafe (AUTH_EXEC) requires both
+/// this team_id AND a fleetSelfAllowSigningIDs membership; matching team_id alone
+/// would exempt every binary signed by Fleet (including any legacy or unrelated
+/// utility sharing the cert). Phase B replaces this with a server-pushed failsafe
+/// list so operators can extend it without an agent re-release.
 private let extensionTeamID = "FDG8Q7N4CC"
+
+/// fleetSelfAllowSigningIDs is the exhaustive set of Fleet EDR bundle identifiers the
+/// AUTH_EXEC failsafe exempts from app-control enforcement: the agent daemon, the two
+/// system extensions, and the host app. A binary whose signing_id is NOT on this list
+/// is subject to the precedence walker even if signed by extensionTeamID. Hardcoded
+/// for the Phase A close-out; Phase B server-pushes the same list so operators can
+/// extend it for in-house tooling without an agent re-release.
+private let fleetSelfAllowSigningIDs: Set<String> = [
+    "com.fleetdm.edr.agent",
+    "com.fleetdm.edr.securityextension",
+    "com.fleetdm.edr.networkextension",
+    "com.fleetdm.edr"
+]
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
@@ -108,29 +120,34 @@ final class ESFSubscriber: Sendable {
         let target = msg.event.exec.target.pointee
         let path = esTokenString(target.executable.pointee.path)
         let teamID = esTokenString(target.team_id)
+        let signingID = esTokenString(target.signing_id)
         let fileStat = target.executable.pointee.stat
 
-        if teamID == extensionTeamID {
+        // Self-allow failsafe: exempt the agent + extensions + host app from app-control enforcement so a misconfigured rule cannot
+        // brick the EDR itself. Match BOTH team_id and the exhaustive Fleet bundle-id set; team_id alone would exempt every binary
+        // ever signed by extensionTeamID, which is broader than intended.
+        if teamID == extensionTeamID, fleetSelfAllowSigningIDs.contains(signingID) {
             es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
             return
         }
 
         let snapshot = ApplicationControlStore.shared.currentSnapshot()
         let tuple = buildAuthTuple(target: target, fileStat: fileStat, lazyFillPath: path)
-        if let match = walkPrecedence(tuple: tuple, snapshot: snapshot) {
-            if match.rule.action == ApplicationControlAction.block,
-               match.rule.enforcement == ApplicationControlEnforcement.protect {
-                let denyPath = path
-                let denyRuleType = match.rule.ruleType
-                let denyID = match.matchedIdentifier
-                logger.warning(
-                    "AUTH_EXEC DENIED path=\(denyPath, privacy: .public) type=\(denyRuleType, privacy: .public) id=\(denyID, privacy: .public)"
-                )
-                es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
-                emitBlockEvent(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
-                emitBlockNotification(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
-                return
-            }
+        // Sonar S1066: optional binding + condition co-located in one if so the deny branch is one block. Keep `denyPath` redacted in
+        // the log (no `privacy: .public`) so PII embedded in exec paths — usernames, project tokens — doesn't leak to os.log readers;
+        // the full path still flows on the block event payload for the server-side alert.
+        if let match = walkPrecedence(tuple: tuple, snapshot: snapshot),
+           match.rule.action == ApplicationControlAction.block,
+           match.rule.enforcement == ApplicationControlEnforcement.protect {
+            let denyRuleType = match.rule.ruleType
+            let denyID = match.matchedIdentifier
+            logger.warning(
+                "AUTH_EXEC DENIED path=\(path) type=\(denyRuleType, privacy: .public) id=\(denyID, privacy: .public)"
+            )
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
+            emitBlockEvent(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
+            emitBlockNotification(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
+            return
         }
         es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
     }

@@ -113,7 +113,7 @@ describe("AddRuleModal", () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  it("rejects an upper-case hex identifier (BINARY requires lowercase)", async () => {
+  it("rejects a BINARY identifier with the wrong length", async () => {
     const createSpy = vi.spyOn(api, "createAppControlRule");
     render(
       <AddRuleModal
@@ -123,13 +123,12 @@ describe("AddRuleModal", () => {
         onCreated={() => undefined}
       />,
     );
+    // 40 hex chars is the CDHASH length, not the BINARY length (64). The validator
+    // should reject it on the length check, before the charset regex runs. We pick
+    // this shape because uppercase hex now intentionally passes (the validator
+    // lowercases via trim().toLowerCase() and the submit path normalises), so the
+    // distinct exercise is the length gate.
     fireEvent.change(screen.getByLabelText(/identifier/i), {
-      // Uppercase wouldn't even make it past the client validator
-      // (the server's BINARY rule is "64 lowercase hex"). The
-      // client normalises lowercase before POSTing, so an
-      // uppercase string passes the regex check after trim().toLowerCase().
-      // We instead test the truncated form to keep this distinct
-      // from the bad-charset case above.
       target: { value: "a".repeat(40) },
     });
     fireEvent.change(screen.getByLabelText(/reason/i), {
@@ -140,6 +139,44 @@ describe("AddRuleModal", () => {
       expect(screen.getByRole("alert").textContent).toMatch(/64 hex characters/i);
     });
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts BINARY hex with uppercase letters (lowercased before submit)", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule").mockResolvedValue({
+      id: 99,
+      policy_id: 1,
+      rule_type: "BINARY",
+      identifier: "a".repeat(64),
+      action: "BLOCK",
+      enforcement: "PROTECT",
+      enabled: true,
+      severity: "medium",
+      source: "admin",
+      created_at: "2026-05-17T00:00:00Z",
+      updated_at: "2026-05-17T00:00:00Z",
+      created_by: "operator",
+    });
+    render(
+      <AddRuleModal
+        open
+        policyID={1}
+        onClose={() => undefined}
+        onCreated={() => undefined}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/identifier/i), {
+      target: { value: "A".repeat(64) },
+    });
+    fireEvent.change(screen.getByLabelText(/reason/i), {
+      target: { value: "uppercase normalisation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalled();
+    });
+    // The submit body must carry the lowercased identifier even though the operator typed uppercase.
+    const submitted = createSpy.mock.calls[0][1] as { identifier: string };
+    expect(submitted.identifier).toBe("a".repeat(64));
   });
 
   it("rejects a non-http(s) More info URL", async () => {
