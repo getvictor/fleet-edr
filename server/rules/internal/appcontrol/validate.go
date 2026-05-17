@@ -15,14 +15,15 @@ import (
 // future rename to a structured-error shape is a one-line change.
 const wrapFmt = "%w: %s"
 
-// ValidateRuleType reports whether rt is a recognized rule type. The demo cut enforces only BINARY; the other five types are
-// recognized (so REST callers see the precise "unsupported yet" error rather than a generic "unknown" error) but the validator path
-// below short-circuits with ErrAppControlUnsupportedRuleType for them.
+// ValidateRuleType reports whether rt is a recognized rule type. Phase A close-out accepts CDHASH, BINARY, SIGNINGID, and TEAMID.
+// CERTIFICATE and PATH stay gated (CERTIFICATE needs the leaf-cert cache plumbing Phase B brings; PATH needs Launch Services
+// indirection coverage Phase B brings); both return ErrAppControlUnsupportedRuleType so the operator audit log surfaces the
+// precise "not yet wired" cause rather than a generic invalid-type error.
 func ValidateRuleType(rt api.RuleType) error {
 	switch rt {
-	case api.RuleTypeBinary:
+	case api.RuleTypeBinary, api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeTeamID:
 		return nil
-	case api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeCertificate, api.RuleTypeTeamID, api.RuleTypePath:
+	case api.RuleTypeCertificate, api.RuleTypePath:
 		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	default:
 		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidRuleType, rt)
@@ -60,7 +61,7 @@ func ValidateIdentifier(rt api.RuleType, identifier string) error {
 		if !hex40.MatchString(identifier) {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "CDHASH rule identifier must be 40 lowercase hex characters")
 		}
-		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
+		return nil
 	case api.RuleTypeCertificate:
 		if !hex64.MatchString(identifier) {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "CERTIFICATE rule identifier must be 64 lowercase hex characters")
@@ -70,12 +71,12 @@ func ValidateIdentifier(rt api.RuleType, identifier string) error {
 		if !teamID.MatchString(identifier) {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "TEAMID rule identifier must be 10 uppercase alphanumeric characters")
 		}
-		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
+		return nil
 	case api.RuleTypeSigningID:
 		if !signingID.MatchString(identifier) {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "SIGNINGID rule identifier must be <TeamID>:<bundle.id> or platform:<bundle.id>")
 		}
-		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
+		return nil
 	case api.RuleTypePath:
 		if _, err := canonicalizePath(identifier); err != nil {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, err.Error())

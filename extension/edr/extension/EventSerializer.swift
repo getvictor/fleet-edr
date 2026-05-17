@@ -30,6 +30,10 @@ struct ExecPayload: Codable, Sendable {
     let gid: gid_t
     let codeSigning: CodeSigning?
     let sha256: String?
+    /// 40-char lowercase hex of the binary's Code Directory hash. Populated only when the new process runs under Apple's
+    /// Hardened Runtime (per Phase A close-out spec). Absent for unsigned binaries and signed-but-not-hardened binaries; the
+    /// encoder below omits the key entirely in those cases so the wire shape stays compact and backwards-tolerant.
+    let cdhash: String?
     /// True only for synthetic exec events emitted by the ESF startup snapshot pass
     /// (issue #11). The custom encoder below OMITS the key entirely when false, so
     /// the wire shape for live execs stays byte-identical to the pre-#11 format.
@@ -42,12 +46,14 @@ struct ExecPayload: Codable, Sendable {
         case pid, ppid, path, args, cwd, uid, gid
         case codeSigning = "code_signing"
         case sha256
+        case cdhash
         case snapshot
     }
 
     init(
         pid: pid_t, ppid: pid_t, path: String, args: [String], cwd: String,
         uid: uid_t, gid: gid_t, codeSigning: CodeSigning?, sha256: String?,
+        cdhash: String? = nil,
         snapshot: Bool = false
     ) {
         self.pid = pid
@@ -59,6 +65,7 @@ struct ExecPayload: Codable, Sendable {
         self.gid = gid
         self.codeSigning = codeSigning
         self.sha256 = sha256
+        self.cdhash = cdhash
         self.snapshot = snapshot
     }
 
@@ -76,6 +83,7 @@ struct ExecPayload: Codable, Sendable {
         gid = try container.decode(gid_t.self, forKey: .gid)
         codeSigning = try container.decodeIfPresent(CodeSigning.self, forKey: .codeSigning)
         sha256 = try container.decodeIfPresent(String.self, forKey: .sha256)
+        cdhash = try container.decodeIfPresent(String.self, forKey: .cdhash)
         snapshot = try container.decodeIfPresent(Bool.self, forKey: .snapshot) ?? false
     }
 
@@ -90,6 +98,7 @@ struct ExecPayload: Codable, Sendable {
         try container.encode(gid, forKey: .gid)
         try container.encodeIfPresent(codeSigning, forKey: .codeSigning)
         try container.encodeIfPresent(sha256, forKey: .sha256)
+        try container.encodeIfPresent(cdhash, forKey: .cdhash)
         // Only emit snapshot when true — keeps the live-exec wire shape stable
         // and avoids tripping the server detection-engine bytes.Contains gate
         // on a `"snapshot":false` payload (false events would correctly be

@@ -5,12 +5,12 @@ package bootstrap
 // No cross-context FKs.
 //
 // Phase 1 of the add-application-control change dropped the legacy
-// `policies` singleton table. The demo cut introduces the two
-// authoritative tables of the new subsystem — `app_control_policies`
-// and `app_control_rules` — plus the `Default` policy seed.
-// `host_groups` and `app_control_assignments` (the other two tables in
-// the full spec) are deferred to follow-on work; for the demo every
-// policy implicitly targets every host in the deployment.
+// `policies` singleton table. Phase A ships four tables:
+// `app_control_policies` and `app_control_rules` carry the authoritative
+// ruleset; `host_groups` and `app_control_assignments` carry the
+// policy-to-host scoping layer the spec mandates. Phase A seeds the
+// built-in `all-hosts` group and the single `Default` → `all-hosts`
+// assignment; editable groups + multi-policy assignment land in Phase B.
 var schemaStatements = []string{
 	// app_control_policies holds a named ruleset. The product is a single-instance deployment, so policies are unique by name across the
 	// deployment. `default_action` is constrained to `NONE` in this phase; the Lockdown change extends the enum to `('NONE','BLOCK')` so a
@@ -57,5 +57,33 @@ var schemaStatements = []string{
 		INDEX idx_app_control_rules_type_id (rule_type, identifier),
 		CONSTRAINT fk_app_control_rules_policy FOREIGN KEY (policy_id)
 			REFERENCES app_control_policies(id) ON DELETE CASCADE
+	)`,
+	// host_groups is the named, deployment-wide host-membership unit. `criteria` is a JSON document the bootstrap seeds with
+	// {"type":"all"} for the built-in `all-hosts` row, and that future Phase B work extends with tag/hostname/OS predicates without a
+	// schema migration. Phase A only ever creates the seed row; user-authored groups arrive in Phase B. Name is deployment-unique so the
+	// REST surface can address groups by name without exposing the integer id.
+	`CREATE TABLE IF NOT EXISTS host_groups (
+		id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+		name        VARCHAR(64)  NOT NULL,
+		description VARCHAR(255) NOT NULL DEFAULT '',
+		criteria    JSON         NOT NULL,
+		created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		updated_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+		UNIQUE KEY uk_host_groups_name (name)
+	)`,
+	// app_control_assignments is the policy → host-group many-to-many. priority is reserved for Phase B conflict resolution when two
+	// policies are assigned to overlapping groups; Phase A only ever has one assignment row. CASCADE on both FK sides keeps an
+	// orphan-free state if either side is deleted; both FKs are intra-context so ADR-0004's no-cross-context-FK rule does not apply.
+	`CREATE TABLE IF NOT EXISTS app_control_assignments (
+		policy_id     BIGINT       NOT NULL,
+		host_group_id BIGINT       NOT NULL,
+		priority      INT          NOT NULL DEFAULT 0,
+		created_at    TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+		PRIMARY KEY (policy_id, host_group_id),
+		INDEX idx_app_control_assignments_group (host_group_id),
+		CONSTRAINT fk_app_control_assignments_policy FOREIGN KEY (policy_id)
+			REFERENCES app_control_policies(id) ON DELETE CASCADE,
+		CONSTRAINT fk_app_control_assignments_group FOREIGN KEY (host_group_id)
+			REFERENCES host_groups(id) ON DELETE CASCADE
 	)`,
 }

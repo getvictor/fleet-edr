@@ -2,6 +2,7 @@ package appcontrol
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -172,7 +173,7 @@ func (s *Service) CreateRule(
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol snapshot compose: %w", err)
 	}
 
-	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, payload)
+	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
 	s.emitAudit(ctx, actor, req, rule, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
 	return rule, nil
 }
@@ -213,32 +214,55 @@ func (s *Service) findPolicyByID(ctx context.Context, policyID int64) (api.Appli
 // fanoutSkipReason values land verbatim on the audit row when the fan-out couldn't run end-to-end. The empty string means "no skip;
 // the loop ran" and is the happy path.
 const (
-	fanoutSkipReasonHostLister = "host_lister_error"
+	fanoutSkipReasonHostLister     = "host_lister_error"
+	fanoutSkipReasonAssignmentList = "assignment_list_error"
+	fanoutSkipReasonNoAssignments  = "no_assignments"
 )
 
-// fanout enqueues exactly one set_application_control command per
-// enrolled host in the deployment. Returns (hosts_attempted,
-// hosts_failed, skip_reason). Per-host failures are logged but do NOT
-// abort the loop; the policy is already on disk and a missed host
-// will catch up on its next agent poll (the version-monotonic apply
-// in the extension is idempotent).
+// fanout enqueues exactly one set_application_control command per unique host the policy's assigned host groups cover. Phase A's
+// only host-group criteria is `{"type":"all"}` (the seed `all-hosts` group) which resolves to every enrolled host via the
+// HostLister; Phase B grows the resolver to honor tag / hostname / OS predicates without changing this loop's shape.
 //
-// A non-empty skip_reason distinguishes "host enumeration itself
-// failed" from "the deployment has zero enrolled hosts" - both would
-// otherwise audit as fanout_hosts=0 and an operator looking at the
-// dashboard could not tell them apart.
-func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, failed int, skipReason string) {
-	hosts, err := s.hosts(ctx)
+// Returns (hosts_attempted, hosts_failed, skip_reason). Per-host failures are logged but do NOT abort the loop; the policy is
+// already on disk and a missed host will catch up on its next agent poll (the version-monotonic apply in the extension is
+// idempotent).
+//
+// A non-empty skip_reason distinguishes failure modes that would all otherwise audit as fanout_hosts=0:
+//   - `host_lister_error`: the enrolled-host lookup itself failed.
+//   - `assignment_list_error`: resolving the policy's assigned host groups failed.
+//   - `no_assignments`: the policy has no assigned host groups (a posture admins explicitly choose by detaching all groups; alarming
+//     if it happens to the seed Default policy, expected if it happens to a quiescent custom policy).
+func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (attempted int, failed int, skipReason string) {
+	groups, err := s.store.ListHostGroupsForPolicy(ctx, policyID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "appcontrol: host list failed; fan-out skipped", "err", err)
-		return 0, 0, fanoutSkipReasonHostLister
+		s.logger.WarnContext(ctx, "appcontrol: assignment list failed; fan-out skipped", "err", err, "policy_id", policyID)
+		return 0, 0, fanoutSkipReasonAssignmentList
 	}
-	seen := make(map[string]struct{}, len(hosts))
-	for _, h := range hosts {
-		if _, dup := seen[h]; dup {
+	if len(groups) == 0 {
+		s.logger.WarnContext(ctx, "appcontrol: policy has no assigned host groups; fan-out skipped", "policy_id", policyID)
+		return 0, 0, fanoutSkipReasonNoAssignments
+	}
+
+	// Resolve every group's membership to host IDs and union them. Phase A's only criteria is `{"type":"all"}` which delegates to
+	// the HostLister and returns every enrolled host. Unknown criteria types are logged and treated as empty so a malformed criteria
+	// document doesn't silently fan out to every host.
+	seen := make(map[string]struct{})
+	for _, g := range groups {
+		members, mErr := s.resolveHostGroup(ctx, g)
+		if mErr != nil {
+			s.logger.WarnContext(ctx, "appcontrol: host group resolve failed", "err", mErr, "host_group", g.Name)
 			continue
 		}
-		seen[h] = struct{}{}
+		for _, h := range members {
+			seen[h] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		// Every group resolved to empty membership. Phase A this can only happen if the HostLister failed under the all-hosts
+		// criteria; signal as host_lister_error so audit log surfaces the right cause.
+		return 0, 0, fanoutSkipReasonHostLister
+	}
+	for h := range seen {
 		attempted++
 		if _, err := s.commands(ctx, h, api.CommandTypeSetApplicationControl, payload); err != nil {
 			failed++
@@ -246,6 +270,28 @@ func (s *Service) fanout(ctx context.Context, payload []byte) (attempted int, fa
 		}
 	}
 	return attempted, failed, ""
+}
+
+// hostGroupCriteria is the discriminator-only shape the fan-out uses to route to the right resolver. Phase B grows the type set with
+// criteria-specific predicate fields; we only need the type tag here.
+type hostGroupCriteria struct {
+	Type string `json:"type"`
+}
+
+// resolveHostGroup parses a host group's criteria JSON and returns the resolved host IDs. Phase A only honors `{"type":"all"}`,
+// which delegates to the HostLister. Phase B adds tag / hostname / OS predicates here without changing the fan-out loop above.
+func (s *Service) resolveHostGroup(ctx context.Context, g api.HostGroup) ([]string, error) {
+	var c hostGroupCriteria
+	if err := json.Unmarshal(g.Criteria, &c); err != nil {
+		return nil, fmt.Errorf("parse criteria for host_group=%q: %w", g.Name, err)
+	}
+	switch c.Type {
+	case api.HostGroupCriteriaTypeAll:
+		return s.hosts(ctx)
+	default:
+		s.logger.WarnContext(ctx, "appcontrol: unknown host group criteria type; resolving as empty", "criteria_type", c.Type, "host_group", g.Name)
+		return nil, nil
+	}
 }
 
 // emitAudit records the rule-create event with fanout counts on the
