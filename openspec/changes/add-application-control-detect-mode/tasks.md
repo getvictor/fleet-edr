@@ -11,13 +11,28 @@ are seeded, `cdhash` is on exec events). Each task below cites the matching spec
   in `server/rules/bootstrap/schema.go`. Existing rows keep their stored value; only new rows
   default. (spec: `server-application-control` "Default Detect on rule creation".)
 - [ ] 1.2 Add `subtype VARCHAR(32) NOT NULL DEFAULT 'block'` to the `alerts` table in the
-  detection-context bootstrap. Existing rows backfill to `'block'`. Add an index on
+  detection-context bootstrap. Existing rows backfill to `'block'`. Add a non-unique index on
   `(host_id, source, subtype)` so the alerts read API can filter without scanning. (spec:
   `server-detection-rules-engine` "Alert subtype distinguishes block from would-block".)
-- [ ] 1.3 Per-context integration test in `server/rules/internal/tests/` for the default flip:
+- [ ] 1.3 Enforce the source-dependent dedup key with a unique index (or indexes) that backs the
+  ingest UPSERT. MySQL has no partial unique indexes, so pick one of:
+  - two unique indexes — `UNIQUE (source, host_id, rule_id, process_id)` enforced only on
+    `source='detection'` rows by writing a sentinel value (e.g. `''`) into `process_id` for
+    `source='application_control'` rows, plus the natural collision check on the sentinel; OR
+  - a synthetic `dedup_discriminator` column populated at write time as `process_id` for
+    `source='detection'` and a fixed sentinel for `source='application_control'`, covered by a
+    single `UNIQUE (source, host_id, rule_id, dedup_discriminator)`.
+  Whichever shape lands, the schema integration test in 1.4 MUST exercise both
+  insert-then-update-in-place and insert-twice-rejected paths for both sources. (spec:
+  `server-detection-rules-engine` "Alert dedup key depends on source".)
+- [ ] 1.4 Per-context integration test in `server/rules/internal/tests/` for the default flip:
   a new rule created without an explicit `enforcement` lands with `DETECT`.
-- [ ] 1.4 Per-context integration test in `server/detection/internal/tests/` for the subtype
+- [ ] 1.5 Per-context integration test in `server/detection/internal/tests/` for the subtype
   backfill: a fresh schema bootstrap leaves `subtype='block'` on existing alert rows.
+- [ ] 1.6 Per-context integration test in `server/detection/internal/tests/` for the dedup-index
+  invariants: two `application_control_would_block` events with distinct `process_id` on the same
+  `(host, rule)` produce one row; two `detection`-source findings on distinct `process_id` on the
+  same `(host, rule)` produce two rows.
 
 ## 2. Extension decision engine
 
@@ -74,9 +89,12 @@ are seeded, `cdhash` is on exec events). Each task below cites the matching spec
   would-block".)
 - [ ] 5.3 Update the alerts read API filter parameters: `subtype` is a valid filter alongside
   `source`. (spec: `server-detection-rules-engine` "Alerts list filters by source and subtype".)
-- [ ] 5.4 Integration test for the dedup interaction: a would-block alert exists for
-  `(host_a, rule_X, process_42)`; a subsequent block event for the same tuple updates the existing
-  alert row to `subtype='block'` without creating a new row.
+- [ ] 5.4 Integration test for the dedup interaction across a Detect-to-Protect promotion: a
+  `would_block` alert exists for `(host_a, rule_X)` with `linked_process_id=process_42`; the rule
+  is promoted to PROTECT; a subsequent `application_control_block` event for `(host_a, rule_X)`
+  with a different `linked_process_id=process_99` (a separate exec) updates the existing alert row
+  to `subtype='block'` and replaces `linked_process_id` with `process_99` without creating a new
+  row. (Verifies the source-specific dedup key from spec "Alert dedup key depends on source".)
 - [ ] 5.5 Integration test for the alert subtype filter:
   `GET /api/v1/alerts?source=application_control&subtype=would_block` returns only the would-block
   alerts on the host.

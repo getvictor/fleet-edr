@@ -141,21 +141,52 @@ Phase B work (allow-with-warn, silent-block) extends the same subtype dimension.
 produced the alert*, and both shapes are produced by application control. Subtype is the right
 axis.
 
-### Alert dedup still keys on `(source, host_id, rule_id, process_id)` — not `(source, subtype, ...)`
+### Alert dedup key is source-dependent: `(source, host_id, rule_id)` for application_control, `(source, host_id, rule_id, process_id)` for detection
 
-A would-block alert and a subsequent block alert for the same `(host, rule, process)` triple
-collapse into one row. The alert's subtype reflects the most recent decision; older subtypes are
-implicitly overwritten (or visible in audit history, depending on follow-on work).
+Phase A's dedup key was the triple `(host_id, rule_id, process_id)`, written before application
+control existed. That key is correct for `source='detection'` (catalog rules) where a long-lived
+process is re-evaluated across batches and we want one alert per matched process. It is wrong for
+`source='application_control'`: every AUTH_EXEC is a fresh `process_id`, so including it in the
+key means a Detect-mode rule and its later Protect-mode promotion produce two unrelated rows
+instead of the one lifecycle row the operator expects.
+
+The Detect-mode change splits the dedup key by source:
+
+- `source='detection'`: `(source, host_id, rule_id, process_id)`. Unchanged from Phase A; one alert
+  per (host, rule, matched process).
+- `source='application_control'`: `(source, host_id, rule_id)`. One alert per (host, rule). The
+  alert's `linked_process_id` reflects the most recent matching exec; subtype reflects the most
+  recent decision (`would_block` flips to `block` in place when the rule is promoted).
+
+The alert's subtype is NOT part of either key. A would-block alert and a subsequent block alert
+for the same `(host, rule)` on the application_control side collapse into one row whose subtype
+moves from `would_block` to `block` in place. Older subtypes are implicitly overwritten (or
+visible in audit history, depending on follow-on work).
 
 The reasoning: when an operator promotes a Detect rule to Protect, the next exec of the same
-binary on the same host should not produce a new alert row — it should update the existing one to
+binary on the same host should not produce a new alert row. It should update the existing one to
 `subtype='block'`. The alert's lifecycle (would_block → block) matches the operator's mental
-model. Separate rows per subtype would clutter the alert list with adjacent "would have blocked"
-and "blocked" entries for the same logical incident.
+model. Separate rows per subtype, or per process_id, would clutter the alert list with adjacent
+"would have blocked" and "blocked" entries for the same logical incident.
 
-*Alternatives considered:* include subtype in the dedup key. Rejected because of the post-promotion
-clutter; Phase B simulation will need its own alert lifecycle anyway (would-allow vs would-block
-in Lockdown), and we can revisit then.
+Implementation note: MySQL does not support partial unique indexes, so a single
+`UNIQUE (source, host_id, rule_id, process_id)` cannot enforce both semantics. The dedup is
+enforced at the application layer (UPSERT keyed on the source-appropriate tuple) and backed by two
+indexes that match the source-specific keys. The exact index shape (two unique indexes vs. a
+synthetic dedup_discriminator column) is an implementation choice in the schema PR; the spec only
+mandates the logical keys above.
+
+*Alternatives considered:*
+
+- *Keep `process_id` in the key for both sources.* Rejected — the original defect this section
+  fixes. The post-promotion clutter is the user-visible failure mode.
+- *Include subtype in the dedup key.* Rejected for the same reason: would split the
+  would_block → block lifecycle into two rows. Phase B simulation (would-allow vs would-block in
+  Lockdown) will need its own alert lifecycle anyway and can revisit then.
+- *Use a single key `(source, host_id, rule_id)` for both sources.* Rejected — would collapse
+  every match of one catalog rule on a host into one row even when the rule legitimately fires on
+  distinct processes (e.g. `suspicious_exec` catching three different malware instances on the
+  same host). The detection side needs the process dimension.
 
 ### PATCH `/api/v1/app-control/rules/{id}` enforcement-only body
 
@@ -171,9 +202,10 @@ generic rule PATCH already in scope.
 ## Risks / Trade-offs
 
 - **Detect-mode noise.** A broad Detect rule on a high-frequency exec target floods the alerts
-  view. Mitigation: same as Phase A blocks — alert dedup collapses repeats per
-  `(source, host_id, rule_id, process_id)`. Operators iterating on a Detect rule see one alert per
-  unique process triple, not one per exec.
+  view. Mitigation: alert dedup collapses repeats per `(source, host_id, rule_id)` on the
+  application_control side, so an operator iterating on a Detect rule sees one alert per (host,
+  rule) regardless of how many execs of the matching binary occur. The catalog side keeps the
+  Phase A `(host_id, rule_id, process_id)` key.
 - **Default-Detect regression risk.** A migrating Santa admin pastes their existing blocklist into
   the EDR expecting it to block on apply; instead it lands in Detect and silently logs. Mitigation
   is documentation + the explicit selector in the modal (the selector is non-defaultable, so the

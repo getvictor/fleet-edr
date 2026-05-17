@@ -117,30 +117,51 @@ that catalog-rule alerts and application-control alerts populate it with the doc
 - **THEN** the resulting alert row carries the host id, rule id, severity,
   `source='application_control'`, `subtype='would_block'`, title, summary, and linked process id
 
-### Requirement: Alert dedup by (source, host, rule, process)
+### Requirement: Alert dedup key depends on source
 
-The system SHALL treat the tuple `(source, host_id, rule_id, process_id)` as the alert dedup key.
-`subtype` is NOT part of the dedup key. A would-block alert for `(host_a, rule_X, process_42)`
-followed by a block alert for the same triple SHALL update the existing row's `subtype` from
-`would_block` to `block` rather than create a new row. This reflects the operator's mental model:
-when a Detect rule is promoted to Protect and the same binary is exec'd again on the same host,
-the alert progresses through its lifecycle rather than producing two separate entries.
+The system SHALL dedup alerts using a source-specific key. `subtype` is NOT part of either key.
+The mapping is:
 
-Re-evaluating the same catalog rule against the same process on the same host in a later batch
-MUST NOT create a second alert row; the existing alert remains the single record for that
-finding. A subsequent `application_control_block` or `application_control_would_block` event for
-the same `(source, host, rule, process)` tuple MUST NOT create a second alert row either; the
-existing alert is updated in place.
+- `source='detection'`: dedup key `(source, host_id, rule_id, process_id)`. Re-evaluating the same
+  catalog rule against the same process on the same host in a later batch MUST NOT create a second
+  alert row; the existing alert remains the single record for that finding.
+- `source='application_control'`: dedup key `(source, host_id, rule_id)`. Each AUTH_EXEC produces a
+  fresh kernel `process_id`, so including it in the key would defeat the cross-execution
+  lifecycle. Subsequent `application_control_block` or `application_control_would_block` events
+  for the same `(source, host_id, rule_id)` tuple MUST NOT create a second alert row; the existing
+  alert is updated in place, the `linked_process_id` is replaced with the most recent matching
+  exec, and the `subtype` reflects the most recent decision.
 
-The change from the prior requirement clarifies the subtype update semantics on the would-block →
-block transition.
+The system SHALL enforce each key with an index that backs the in-application UPSERT used during
+event ingest. MySQL does not support partial unique indexes, so the implementation MAY use either
+two unique indexes (one per source) or a synthetic dedup_discriminator column that collapses to
+`process_id` for `detection` rows and to a fixed sentinel for `application_control` rows under a
+single unique index. The choice is an implementation detail; the spec mandates only that the
+logical keys above hold and that ingest writes them through an UPSERT path that cannot insert a
+duplicate.
+
+The change from the prior requirement is the split-by-source dedup semantics: Phase A's single
+`(host_id, rule_id, process_id)` key is preserved for `source='detection'`, and a new
+`(source, host_id, rule_id)` key is introduced for `source='application_control'` so the
+would_block → block lifecycle collapses into one row.
 
 #### Scenario: A would-block followed by a block updates the existing alert
 
 - **GIVEN** an existing alert with `source='application_control'`, `subtype='would_block'` for
-  `(host_a, rule_X, process_42)`
-- **WHEN** an `application_control_block` event arrives for the same tuple
-- **THEN** the existing alert row is updated with `subtype='block'`
+  `(host_a, rule_X)` whose `linked_process_id` is `process_42`
+- **WHEN** an `application_control_block` event arrives for `(host_a, rule_X)` with
+  `linked_process_id=process_99` after the rule is promoted from DETECT to PROTECT
+- **THEN** the existing alert row is updated with `subtype='block'` and
+  `linked_process_id=process_99`
+- **AND** no new alert row is inserted
+
+#### Scenario: Repeated would-block events on the same Detect rule collapse into one alert
+
+- **GIVEN** an `application_control_would_block` event has produced an alert for
+  `(host_a, rule_X)` with `linked_process_id=process_42`
+- **WHEN** a second `application_control_would_block` event for `(host_a, rule_X)` arrives with
+  `linked_process_id=process_43` (a separate exec of the same binary, fresh kernel PID)
+- **THEN** the existing alert row is reused with `linked_process_id` updated to `process_43`
 - **AND** no new alert row is inserted
 
 #### Scenario: A catalog rule re-fires on the same process in a later batch
@@ -148,6 +169,13 @@ block transition.
 - **GIVEN** an existing alert for a `(source='detection', host, rule, process)` tuple
 - **WHEN** a later batch causes the same rule to find the same process again
 - **THEN** the existing alert row is reused and no new alert row is inserted
+
+#### Scenario: A catalog rule fires on a different process on the same host
+
+- **GIVEN** an existing `source='detection'` alert for `(host_a, rule_X, process_42)`
+- **WHEN** the same rule fires against a different process on the same host, `process_99`
+- **THEN** a second alert row is inserted with `linked_process_id=process_99`
+- **AND** the original alert row for `process_42` is preserved
 
 #### Scenario: A catalog rule id and an app-control rule id collide on the same process
 
