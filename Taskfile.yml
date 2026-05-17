@@ -285,30 +285,20 @@ tasks:
     desc: |
       golangci-lint across the whole Go module. Runs the CUSTOM golangci-lint binary
       at tmp/golangci-lint-custom which has the repo-local commentwrap plugin compiled
-      in (see .custom-gcl.yml). `task lint:install` builds it. The upstream binary
-      cannot load the plugin, so we refuse to fall back to it: `.golangci.yml` enables
-      `commentwrap` under `linters.enable` and the upstream binary aborts with
-      "unknown linter" before any real lint runs. Better to fail loud here with
-      actionable text than silently produce a non-equivalent lint result.
+      in (see .custom-gcl.yml). The lint:install dep auto-builds it on first run and
+      short-circuits on subsequent runs via sources/generates. The upstream binary
+      cannot load the plugin, so `.golangci.yml` enables `commentwrap` under
+      `linters.enable` and the upstream binary would abort with "unknown linter"
+      before any real lint runs.
+    deps: [lint:install]
     cmds:
-      - cmd: |
-          if [ ! -x tmp/golangci-lint-custom ]; then
-            echo "tmp/golangci-lint-custom missing." >&2
-            echo "Run 'task lint:install' first to build the custom binary that bakes in the commentwrap plugin." >&2
-            echo "(The upstream golangci-lint binary cannot load the plugin, so we deliberately do NOT fall back.)" >&2
-            exit 1
-          fi
-          tmp/golangci-lint-custom run ./server/... ./agent/... ./internal/... ./test/...
+      - tmp/golangci-lint-custom run ./server/... ./agent/... ./internal/... ./test/...
 
   lint:go:fix:
-    desc: golangci-lint with --fix for auto-fixable findings (uses the custom binary built by `task lint:install`)
+    desc: golangci-lint with --fix for auto-fixable findings (auto-builds the custom binary via lint:install)
+    deps: [lint:install]
     cmds:
-      - cmd: |
-          if [ ! -x tmp/golangci-lint-custom ]; then
-            echo "tmp/golangci-lint-custom missing. Run 'task lint:install' first." >&2
-            exit 1
-          fi
-          tmp/golangci-lint-custom run --fix ./server/... ./agent/... ./internal/... ./test/...
+      - tmp/golangci-lint-custom run --fix ./server/... ./agent/... ./internal/... ./test/...
 
   lint:install:
     desc: |
