@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,33 @@ const applicationControlReadBodyLimit = 16 * 1024
 // internalErrorMessage is the human-readable body the handler writes on every 5xx response that isn't otherwise typed. Extracted to
 // one constant so the wire shape stays stable and Sonar's duplicate-literal rule (go:S1192) doesn't fire on the four call sites.
 const internalErrorMessage = "internal error"
+
+// Error-code + human-message constants shared by handler error-mapping paths. Each pair (code + msg) is duplicated 3-6x across the
+// 8 handler functions; collapsing here keeps the wire shape stable AND silences Sonar's duplicate-literal rule.
+const (
+	errCodeInvalidPolicyID = "application_control.invalid_policy_id"
+	errMsgInvalidPolicyID  = "invalid policy id"
+	errCodeInvalidRuleID   = "application_control.invalid_rule_id"
+	errMsgInvalidRuleID    = "invalid rule id"
+	errCodePolicyNotFound  = "application_control.policy_not_found"
+	errMsgPolicyNotFound   = "policy not found"
+	errCodeRuleNotFound    = "application_control.rule_not_found"
+	errMsgRuleNotFound     = "rule not found"
+	errCodeReadBody        = "application_control.read_body"
+	errMsgReadBody         = "could not read body"
+	errCodeInvalidJSON     = "application_control.invalid_json"
+	errMsgInvalidJSON      = "invalid json"
+	errCodeDuplicateRule   = "application_control.duplicate_rule"
+	errMsgDuplicateRule    = "rule already exists for this identifier"
+	errCodeInvalidRule     = "application_control.invalid_rule"
+	errCodeInvalidPolicy   = "application_control.invalid_policy"
+	errCodeDuplicatePolicy = "application_control.duplicate_policy"
+	errMsgDuplicatePolicy  = "a policy with that name already exists"
+	errCodePolicyImmutable = "application_control.policy_immutable"
+	errMsgPolicyImmutable  = "the seed Default policy cannot be deleted"
+	internalErrorCode      = "internal"
+	noActorOnContextLogMsg = "appcontrol handler: no actor on ctx despite session middleware"
+)
 
 // AppControlHandler serves the rules-context /api/v1/app-control/* admin routes. Separate from the catalog Handler because the
 // surface, the dependencies (audit + commands + hosts), and the auth gates don't overlap; folding both into one struct would force the
@@ -81,7 +109,7 @@ func (h *AppControlHandler) handleListPolicies(w http.ResponseWriter, r *http.Re
 	policies, err := h.svc.ListPolicies(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "appcontrol list policies", "err", err)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"policies": policies})
@@ -96,17 +124,17 @@ func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Reque
 	}
 	policyID, ok := parsePolicyID(r)
 	if !ok {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
 	policy, err := h.svc.GetPolicyWithRules(ctx, policyID)
 	if err != nil {
 		if errors.Is(err, api.ErrAppControlPolicyNotFound) {
-			writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.policy_not_found", "policy not found")
+			writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, errCodePolicyNotFound, errMsgPolicyNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "appcontrol get policy", "err", err, "policy_id", policyID)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, policy)
@@ -134,18 +162,18 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 	}
 	policyID, ok := parsePolicyID(r)
 	if !ok {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
 	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return
 	}
 	var req createRuleRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
 		return
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
@@ -153,8 +181,8 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		// Session middleware guarantees an actor on every request that reaches HTTPGate's allow path; an absent actor here
 		// is a wiring bug, not a user error. Surface a 500 so the regression is loud rather than silently let CreateRule fall
 		// through to a service-layer guard.
-		h.logger.ErrorContext(ctx, "appcontrol create rule: no actor on ctx despite session middleware")
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 
@@ -181,14 +209,14 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 func (h *AppControlHandler) writeCreateRuleError(ctx context.Context, w http.ResponseWriter, err error, policyID int64) {
 	switch {
 	case errors.Is(err, api.ErrAppControlPolicyNotFound):
-		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.policy_not_found", "policy not found")
+		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, errCodePolicyNotFound, errMsgPolicyNotFound)
 	case errors.Is(err, api.ErrAppControlDuplicateRule):
-		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.duplicate_rule", "rule already exists for this identifier")
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, errCodeDuplicateRule, errMsgDuplicateRule)
 	case api.IsApplicationControlValidationError(err):
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule", err.Error())
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRule, err.Error())
 	default:
 		h.logger.ErrorContext(ctx, "appcontrol create rule", "err", err, "policy_id", policyID)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 	}
 }
 
@@ -198,14 +226,14 @@ func (h *AppControlHandler) writeCreateRuleError(ctx context.Context, w http.Res
 func (h *AppControlHandler) writeRuleMutationError(ctx context.Context, w http.ResponseWriter, action string, err error, ruleID int64) {
 	switch {
 	case errors.Is(err, api.ErrAppControlRuleNotFound):
-		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.rule_not_found", "rule not found")
+		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, errCodeRuleNotFound, errMsgRuleNotFound)
 	case errors.Is(err, api.ErrAppControlDuplicateRule):
-		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.duplicate_rule", "rule already exists for this identifier")
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, errCodeDuplicateRule, errMsgDuplicateRule)
 	case api.IsApplicationControlValidationError(err):
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule", err.Error())
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRule, err.Error())
 	default:
 		h.logger.ErrorContext(ctx, "appcontrol "+action, "err", err, "rule_id", ruleID)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 	}
 }
 
@@ -214,16 +242,16 @@ func (h *AppControlHandler) writeRuleMutationError(ctx context.Context, w http.R
 func (h *AppControlHandler) writePolicyMutationError(ctx context.Context, w http.ResponseWriter, action string, err error, policyID int64) {
 	switch {
 	case errors.Is(err, api.ErrAppControlPolicyNotFound):
-		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, "application_control.policy_not_found", "policy not found")
+		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, errCodePolicyNotFound, errMsgPolicyNotFound)
 	case errors.Is(err, api.ErrAppControlDuplicatePolicy):
-		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.duplicate_policy", "a policy with that name already exists")
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, errCodeDuplicatePolicy, errMsgDuplicatePolicy)
 	case errors.Is(err, api.ErrAppControlPolicyImmutable):
-		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, "application_control.policy_immutable", "the seed Default policy cannot be deleted")
+		writeAppControlErr(ctx, h.logger, w, http.StatusConflict, errCodePolicyImmutable, errMsgPolicyImmutable)
 	case api.IsApplicationControlValidationError(err):
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy", err.Error())
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicy, err.Error())
 	default:
 		h.logger.ErrorContext(ctx, "appcontrol "+action, "err", err, "policy_id", policyID)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 	}
 }
 
@@ -249,23 +277,23 @@ func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Requ
 	}
 	ruleID, ok := parseRuleID(r)
 	if !ok {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule_id", "invalid rule id")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRuleID, errMsgInvalidRuleID)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
 	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return
 	}
 	var req updateRuleRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
 		return
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
-		h.logger.ErrorContext(ctx, "appcontrol update rule: no actor on ctx despite session middleware")
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	rule, err := h.svc.UpdateRule(ctx, api.UpdateRuleRequest{
@@ -301,25 +329,27 @@ func (h *AppControlHandler) handleDeleteRule(w http.ResponseWriter, r *http.Requ
 	}
 	ruleID, ok := parseRuleID(r)
 	if !ok {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_rule_id", "invalid rule id")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRuleID, errMsgInvalidRuleID)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
 	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return
 	}
 	var req deleteRuleRequest
-	if len(body) > 0 {
+	// Whitespace-only bodies are normalised to empty so an operator sending a body of just spaces does not get a misleading
+	// invalid_json (the typed reason-required validation should fire instead). Copilot flagged this on PR #188.
+	if len(bytes.TrimSpace(body)) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
 			return
 		}
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
-		h.logger.ErrorContext(ctx, "appcontrol delete rule: no actor on ctx despite session middleware")
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	if err := h.svc.DeleteRule(ctx, api.DeleteRuleRequest{
@@ -349,18 +379,18 @@ func (h *AppControlHandler) handleCreatePolicy(w http.ResponseWriter, r *http.Re
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
 	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return
 	}
 	var req createPolicyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
 		return
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
-		h.logger.ErrorContext(ctx, "appcontrol create policy: no actor on ctx despite session middleware")
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	policy, err := h.svc.CreatePolicy(ctx, api.CreatePolicyRequest{
@@ -392,23 +422,23 @@ func (h *AppControlHandler) handleUpdatePolicy(w http.ResponseWriter, r *http.Re
 	}
 	policyID, ok := parsePolicyID(r)
 	if !ok {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
 	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return
 	}
 	var req updatePolicyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
 		return
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
-		h.logger.ErrorContext(ctx, "appcontrol update policy: no actor on ctx despite session middleware")
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	policy, err := h.svc.UpdatePolicy(ctx, api.UpdatePolicyRequest{
@@ -439,25 +469,27 @@ func (h *AppControlHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Re
 	}
 	policyID, ok := parsePolicyID(r)
 	if !ok {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_policy_id", "invalid policy id")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
 	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.read_body", "could not read body")
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return
 	}
 	var req deletePolicyRequest
-	if len(body) > 0 {
+	// Whitespace-only bodies are normalised to empty so an operator sending a body of just spaces does not get a misleading
+	// invalid_json (the typed reason-required validation should fire instead). Copilot flagged this on PR #188.
+	if len(bytes.TrimSpace(body)) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, "application_control.invalid_json", "invalid json")
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
 			return
 		}
 	}
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
-		h.logger.ErrorContext(ctx, "appcontrol delete policy: no actor on ctx despite session middleware")
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, "internal", internalErrorMessage)
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	if err := h.svc.DeletePolicy(ctx, api.DeletePolicyRequest{
@@ -471,9 +503,10 @@ func (h *AppControlHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// parseRuleID extracts the {id} path value off /rules/{id} and parses it as int64. Symmetric to parsePolicyID; kept as a separate
-// helper so a future schema change that splits rule_id namespacing from policy_id has one place to update.
-func parseRuleID(r *http.Request) (int64, bool) {
+// parsePositiveInt64Path extracts the {id} path value and parses it as a positive int64. Used by parsePolicyID + parseRuleID — both
+// of which previously had identical implementations (Sonar S4144). The thin per-route wrappers keep call-site readability ("we're
+// pulling a policy id here") while collapsing the implementation to one source of truth.
+func parsePositiveInt64Path(r *http.Request) (int64, bool) {
 	raw := r.PathValue("id")
 	if raw == "" {
 		return 0, false
@@ -485,19 +518,13 @@ func parseRuleID(r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// parsePolicyID extracts the {id} path value and parses it as int64. Reports false on missing or non-numeric values so callers respond
-// 400 with the typed error code rather than letting strconv error strings leak into the response.
-func parsePolicyID(r *http.Request) (int64, bool) {
-	raw := r.PathValue("id")
-	if raw == "" {
-		return 0, false
-	}
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		return 0, false
-	}
-	return id, true
-}
+// parseRuleID extracts the {id} path value off /rules/{id} as a positive int64. Wrapper around parsePositiveInt64Path so the call
+// site reads as "we're pulling a rule id here" and a future schema change that splits the namespace can land on one helper.
+func parseRuleID(r *http.Request) (int64, bool) { return parsePositiveInt64Path(r) }
+
+// parsePolicyID extracts the {id} path value off /policies/{id} as a positive int64. Wrapper around parsePositiveInt64Path; see
+// parseRuleID for the rationale.
+func parsePolicyID(r *http.Request) (int64, bool) { return parsePositiveInt64Path(r) }
 
 // actorIdentifierFromContext returns a stable string identifier the store + audit row use as the "who authored this" tag. The actor's
 // email isn't on identityapi.Actor today (Actor carries UserID + Roles but not email; the audit recorder fetches the email separately

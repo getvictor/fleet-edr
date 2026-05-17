@@ -537,3 +537,403 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 func i64(v int64) string {
 	return strconv.FormatInt(v, 10)
 }
+
+// seedRule is a tiny helper that POSTs a BINARY rule and returns its id so the PATCH/DELETE tests have a fixture without
+// duplicating the create JSON 6 times. The identifier is per-test-unique so parallel runs don't collide on the (policy,
+// rule_type, identifier) unique key.
+func seedRule(t *testing.T, r *appControlRig, policyID int64, identifier string) int64 {
+	t.Helper()
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": identifier,
+			"severity":   rulesapi.SeverityRuleMedium,
+			"reason":     "seed for mutation test",
+		})
+	defer resp.Body.Close()
+	require.Equalf(t, http.StatusCreated, resp.StatusCode, "seed rule POST failed: status %d", resp.StatusCode)
+	var rule rulesapi.ApplicationControlRule
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&rule))
+	return rule.ID
+}
+
+// TestAppControlREST_UpdateRule_HappyPath_FansOutAndAudits hits PATCH /rules/{id}, asserts the response carries the updated
+// fields, that a fresh set_application_control command lands on every host, and that the rule_update audit row reflects the
+// post-bump policy_version and fanout counts.
+func TestAppControlREST_UpdateRule_HappyPath_FansOutAndAudits(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a", "host-b"})
+	policyID := r.defaultPolicyID(t)
+	ruleID := seedRule(t, r, policyID, strings.Repeat("1", 64))
+	// Capture inserter state after the seed-create so we assert on PATCH-only inserts.
+	preCount := len(r.inserter.snapshot())
+
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/"+i64(ruleID), map[string]any{
+		"enabled":  false,
+		"severity": "high",
+		"reason":   "PATCH coverage",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var updated rulesapi.ApplicationControlRule
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&updated))
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, rulesapi.SeverityRuleHigh, updated.Severity)
+
+	postCount := len(r.inserter.snapshot())
+	assert.Equal(t, 2, postCount-preCount, "PATCH must fan out one snapshot per host")
+
+	events := r.audit.snapshot()
+	require.GreaterOrEqual(t, len(events), 2)
+	last := events[len(events)-1]
+	assert.Equal(t, identityapi.AuditAppControlRuleUpdate, last.Action)
+	assert.Equal(t, "application_control_rule", last.TargetType)
+	assert.Equal(t, i64(ruleID), last.TargetID)
+	assert.Equal(t, 2, last.Payload["fanout_hosts"])
+}
+
+// TestAppControlREST_UpdateRule_NotFound: a PATCH on a missing rule maps the typed sentinel to HTTP 404 with the rule_not_found
+// error code.
+func TestAppControlREST_UpdateRule_NotFound(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/9999999", map[string]any{
+		"enabled": false, "reason": "404 path",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.rule_not_found", body.Error)
+}
+
+// TestAppControlREST_UpdateRule_NoMutableFieldIs400 confirms a body with only `reason` (no enabled/severity/etc.) is rejected
+// as 400 invalid_rule rather than silently bumping the policy version with a SET clause containing only `version`.
+func TestAppControlREST_UpdateRule_NoMutableFieldIs400(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	ruleID := seedRule(t, r, policyID, strings.Repeat("2", 64))
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/"+i64(ruleID), map[string]any{
+		"reason": "no mutable field",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestAppControlREST_UpdateRule_InvalidRuleID covers the path-parse 400. Symmetric to InvalidPolicyID on the create-rule path.
+func TestAppControlREST_UpdateRule_InvalidRuleID(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/not-an-int", map[string]any{
+		"enabled": true, "reason": "x",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.invalid_rule_id", body.Error)
+}
+
+// TestAppControlREST_UpdateRule_InvalidJSON covers the malformed-body 400 path through the handler.
+func TestAppControlREST_UpdateRule_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	ruleID := seedRule(t, r, policyID, strings.Repeat("3", 64))
+	// Build a raw HTTP request so we can send malformed JSON.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch,
+		r.srv.URL+"/api/v1/app-control/rules/"+i64(ruleID), strings.NewReader("{not-json}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestAppControlREST_DeleteRule_HappyPath_FansOutAndAudits covers the DELETE path: rule is removed, a post-delete snapshot fans
+// out so agents drop the rule, and the audit row records the prior rule's type/identifier.
+func TestAppControlREST_DeleteRule_HappyPath_FansOutAndAudits(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	ruleID := seedRule(t, r, policyID, strings.Repeat("4", 64))
+	preCount := len(r.inserter.snapshot())
+
+	resp := r.do(t, http.MethodDelete, "/api/v1/app-control/rules/"+i64(ruleID), map[string]any{
+		"reason": "DELETE coverage",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	postCount := len(r.inserter.snapshot())
+	assert.Equal(t, 1, postCount-preCount, "DELETE must fan out an empty-rules snapshot")
+
+	events := r.audit.snapshot()
+	last := events[len(events)-1]
+	assert.Equal(t, identityapi.AuditAppControlRuleDelete, last.Action)
+	assert.Equal(t, i64(ruleID), last.TargetID)
+	assert.Equal(t, "BINARY", last.Payload["rule_type"], "audit captures prior rule_type before delete")
+}
+
+// TestAppControlREST_DeleteRule_NotFound: missing rule id → 404 rule_not_found.
+func TestAppControlREST_DeleteRule_NotFound(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodDelete, "/api/v1/app-control/rules/9999999", map[string]any{
+		"reason": "404 path",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestAppControlREST_DeleteRule_EmptyAndWhitespaceBody both fall through to "reason is required" rather than invalid_json
+// (Copilot finding). Splitting into subtests so the bodies-of-various-shapes contract is one test with subtest attribution.
+func TestAppControlREST_DeleteRule_EmptyAndWhitespaceBody(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	for _, tc := range []struct {
+		name    string
+		body    string
+		seedHex string // BINARY identifiers must be hex; one unique hex char per subtest avoids the unique-key collision.
+	}{
+		{"empty body", "", "e"},
+		{"whitespace body", "   \n\t  ", "f"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ruleID := seedRule(t, r, policyID, strings.Repeat(tc.seedHex, 64))
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete,
+				r.srv.URL+"/api/v1/app-control/rules/"+i64(ruleID), strings.NewReader(tc.body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := r.srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			// Whitespace + empty bodies parse as "no reason supplied" -> service-level validation 400 (not invalid_json).
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var body struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			assert.NotEqual(t, "application_control.invalid_json", body.Error,
+				"whitespace-only body must NOT be misreported as invalid_json (Copilot finding on PR #188)")
+		})
+	}
+}
+
+// TestAppControlREST_CreatePolicy_HappyPath covers POST /policies: a new policy lands at version=1 with no rules and no fan-out
+// (no assignments yet). The audit row records policy_create + the new policy_id.
+func TestAppControlREST_CreatePolicy_HappyPath(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	preInserts := len(r.inserter.snapshot())
+
+	resp := r.do(t, http.MethodPost, "/api/v1/app-control/policies", map[string]any{
+		"name":        "engineering-laptops",
+		"description": "Custom policy for the eng laptop fleet",
+		"reason":      "POST coverage",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var policy rulesapi.ApplicationControlPolicy
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&policy))
+	assert.NotZero(t, policy.ID)
+	assert.Equal(t, "engineering-laptops", policy.Name)
+	assert.Equal(t, int64(1), policy.Version)
+
+	assert.Equal(t, preInserts, len(r.inserter.snapshot()), "POST /policies must not fan out (no assignments)")
+	events := r.audit.snapshot()
+	last := events[len(events)-1]
+	assert.Equal(t, identityapi.AuditAppControlPolicyCreate, last.Action)
+	assert.Equal(t, "application_control_policy", last.TargetType)
+}
+
+// TestAppControlREST_CreatePolicy_DuplicateName: posting a name that already exists returns 409 duplicate_policy.
+func TestAppControlREST_CreatePolicy_DuplicateName(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPost, "/api/v1/app-control/policies", map[string]any{
+		"name":   rulesapi.DefaultPolicyName, // collides with the seeded Default
+		"reason": "should collide",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.duplicate_policy", body.Error)
+}
+
+// TestAppControlREST_CreatePolicy_InvalidJSON covers the 400 invalid_json path on POST /policies.
+func TestAppControlREST_CreatePolicy_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		r.srv.URL+"/api/v1/app-control/policies", strings.NewReader("{not-json}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestAppControlREST_UpdatePolicy_HappyPath_RenamesAndBumps covers PATCH /policies/{id}.
+func TestAppControlREST_UpdatePolicy_HappyPath_RenamesAndBumps(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	// Create a custom policy so we can rename it without tripping the Default-rename guard.
+	createResp := r.do(t, http.MethodPost, "/api/v1/app-control/policies", map[string]any{
+		"name": "alpha", "reason": "fixture",
+	})
+	defer createResp.Body.Close()
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+	var p rulesapi.ApplicationControlPolicy
+	require.NoError(t, json.NewDecoder(createResp.Body).Decode(&p))
+
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/policies/"+i64(p.ID), map[string]any{
+		"name":        "alpha-renamed",
+		"description": "after the rebrand",
+		"reason":      "PATCH coverage",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var updated rulesapi.ApplicationControlPolicy
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&updated))
+	assert.Equal(t, "alpha-renamed", updated.Name)
+	assert.Equal(t, "after the rebrand", updated.Description)
+	assert.Equal(t, p.Version+1, updated.Version)
+}
+
+// TestAppControlREST_UpdatePolicy_RefusesRenameOfDefault closes the Copilot-flagged bypass: renaming Default then deleting it
+// would defeat the immutability guard. The store layer now rejects the rename with PolicyImmutable; verify it surfaces here as
+// 409 with the typed error code.
+func TestAppControlREST_UpdatePolicy_RefusesRenameOfDefault(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/policies/"+i64(policyID), map[string]any{
+		"name":   "not-default",
+		"reason": "should be refused",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.policy_immutable", body.Error,
+		"renaming the seed Default policy must be refused so the rename-then-delete bypass closes")
+}
+
+// TestAppControlREST_UpdatePolicy_DefaultDescriptionEditAllowed confirms the rename guard does NOT block a description-only
+// edit of the seed Default policy. Operators MUST still be able to amend the Default policy's metadata; only the rename is
+// gated.
+func TestAppControlREST_UpdatePolicy_DefaultDescriptionEditAllowed(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/policies/"+i64(policyID), map[string]any{
+		"description": "amended description for the seed policy",
+		"reason":      "description-only edit must pass",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestAppControlREST_UpdatePolicy_NotFound: PATCH on missing id → 404.
+func TestAppControlREST_UpdatePolicy_NotFound(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPatch, "/api/v1/app-control/policies/9999999", map[string]any{
+		"name": "x", "reason": "404 path",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestAppControlREST_DeletePolicy_HappyPath covers the destructive path on a custom policy.
+func TestAppControlREST_DeletePolicy_HappyPath(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	createResp := r.do(t, http.MethodPost, "/api/v1/app-control/policies", map[string]any{
+		"name": "to-be-deleted", "reason": "fixture",
+	})
+	defer createResp.Body.Close()
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+	var p rulesapi.ApplicationControlPolicy
+	require.NoError(t, json.NewDecoder(createResp.Body).Decode(&p))
+
+	resp := r.do(t, http.MethodDelete, "/api/v1/app-control/policies/"+i64(p.ID), map[string]any{
+		"reason": "DELETE coverage",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	events := r.audit.snapshot()
+	last := events[len(events)-1]
+	assert.Equal(t, identityapi.AuditAppControlPolicyDelete, last.Action)
+	assert.Equal(t, i64(p.ID), last.TargetID)
+}
+
+// TestAppControlREST_DeletePolicy_RefusesDefault confirms the failsafe: deleting the seed Default policy returns 409 immutable.
+func TestAppControlREST_DeletePolicy_RefusesDefault(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	resp := r.do(t, http.MethodDelete, "/api/v1/app-control/policies/"+i64(policyID), map[string]any{
+		"reason": "should be refused",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.policy_immutable", body.Error)
+}
+
+// TestAppControlREST_DeletePolicy_NotFound: missing id → 404.
+func TestAppControlREST_DeletePolicy_NotFound(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodDelete, "/api/v1/app-control/policies/9999999", map[string]any{
+		"reason": "404 path",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestAppControlREST_Mutations_InvalidPolicyID covers the path-parse 400 branch on every policy-id-bearing endpoint. Each row
+// is a parameterised subtest so the four endpoints share a single setup.
+func TestAppControlREST_Mutations_InvalidPolicyID(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	for _, tc := range []struct {
+		name   string
+		method string
+		body   map[string]any
+	}{
+		{"PATCH", http.MethodPatch, map[string]any{"name": "x", "reason": "x"}},
+		{"DELETE", http.MethodDelete, map[string]any{"reason": "x"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, tc.method, "/api/v1/app-control/policies/not-a-number", tc.body)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var body struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			assert.Equal(t, "application_control.invalid_policy_id", body.Error)
+		})
+	}
+}

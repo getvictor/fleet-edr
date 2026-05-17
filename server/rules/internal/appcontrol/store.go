@@ -12,6 +12,16 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
+// Error-message format strings shared by every state-changing store method. Extracted to constants so Sonar's duplicate-literal rule
+// (go:S1192) stays quiet AND so a wording change here propagates uniformly across CreateRule / UpdateRule / DeleteRule / CreatePolicy
+// / UpdatePolicy / DeletePolicy. Each is a fmt.Errorf format string for wrapping api.ErrAppControlInvalidRequest.
+const (
+	errActorRequiredFmt  = "%w: actor is required"
+	errReasonRequiredFmt = "%w: reason is required"
+	errBeginTxFmt        = "appcontrol begin tx: %w"
+	errCommitTxFmt       = "appcontrol commit tx: %w"
+)
+
 // Store wraps the *sqlx.DB handle for the app_control_policies + app_control_rules tables. Constructed once by the rules bootstrap and
 // shared across the REST handler, the fan-out path, and tests. Satisfies api.ApplicationControlStore.
 type Store struct {
@@ -207,10 +217,10 @@ func (s *Store) ListRulesByPolicy(ctx context.Context, policyID int64) ([]api.Ap
 // REST layer can map cleanly to HTTP 404 instead of 500).
 func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.ApplicationControlRule, error) {
 	if strings.TrimSpace(req.Actor) == "" {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlRule{}, fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if strings.TrimSpace(req.Reason) == "" {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlRule{}, fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if err := ValidateRuleType(req.RuleType); err != nil {
 		return api.ApplicationControlRule{}, err
@@ -228,7 +238,7 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol begin tx: %w", err)
+		return api.ApplicationControlRule{}, fmt.Errorf(errBeginTxFmt, err)
 	}
 	// Deferred rollback is a no-op once Commit has run; the early
 	// returns below leave the transaction to roll back here.
@@ -264,7 +274,7 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol commit tx: %w", err)
+		return api.ApplicationControlRule{}, fmt.Errorf(errCommitTxFmt, err)
 	}
 	return s.getRuleByID(ctx, ruleID)
 }
@@ -283,53 +293,20 @@ func (s *Store) GetRuleByID(ctx context.Context, id int64) (api.ApplicationContr
 	return rule, nil
 }
 
-// UpdateRule applies a partial update to one rule row and bumps the parent policy's version atomically. PolicyID is read from the
-// existing row rather than carried on the request so a PATCH cannot inadvertently move a rule between policies; the auth-gated
-// REST handler runs separately. ErrAppControlRuleNotFound when the row is missing, ErrAppControlInvalidRequest on empty
-// actor/reason, ErrAppControlInvalidSeverity when Severity is set to a bogus value.
-func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.ApplicationControlRule, error) {
-	if strings.TrimSpace(req.Actor) == "" {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
-	}
-	if strings.TrimSpace(req.Reason) == "" {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
-	}
-	if req.Severity != nil {
-		if err := ValidateSeverity(*req.Severity); err != nil {
-			return api.ApplicationControlRule{}, err
-		}
-		// ValidateSeverity accepts "" as "use default"; on UPDATE the operator must send a concrete value or omit the field.
-		if strings.TrimSpace(string(*req.Severity)) == "" {
-			return api.ApplicationControlRule{}, fmt.Errorf("%w: severity must be a non-empty enum value when present on a PATCH", api.ErrAppControlInvalidSeverity)
-		}
-	}
-
-	tx, err := s.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Look up the existing row so we know which policy to bump and so we can return a 404 instead of silently updating zero rows.
-	var policyID int64
-	if err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, req.RuleID).Scan(&policyID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return api.ApplicationControlRule{}, api.ErrAppControlRuleNotFound
-		}
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol lookup rule for update: %w", err)
-	}
-
-	// Build the SET clause from the fields the caller actually sent. The pointer-or-nil shape of UpdateRuleRequest lets us tell
-	// "omitted" apart from "explicitly cleared" (e.g. clearing custom_msg by sending an explicit empty string).
+// buildRuleUpdateSetClause renders the SET-clause fragment + args slice for the partial-update fields the caller set in req.
+// Extracted from UpdateRule so the orchestrator's cognitive complexity stays under Sonar's 15-statement threshold (S3776).
+// Returns (clauseFragment, args, ok); ok is false when the caller sent zero mutable fields — the caller maps that to
+// ErrAppControlInvalidRequest at the top level.
+func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
 	setClauses := make([]string, 0, 6)
 	args := make([]any, 0, 7)
 	if req.Enabled != nil {
 		setClauses = append(setClauses, "enabled = ?")
+		enabledInt := 0
 		if *req.Enabled {
-			args = append(args, 1)
-		} else {
-			args = append(args, 0)
+			enabledInt = 1
 		}
+		args = append(args, enabledInt)
 	}
 	if req.Severity != nil {
 		setClauses = append(setClauses, "severity = ?")
@@ -352,20 +329,85 @@ func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.
 		args = append(args, *req.ExpiresAt)
 	}
 	if len(setClauses) == 0 {
+		return "", nil, false
+	}
+	return strings.Join(setClauses, ", "), args, true
+}
+
+// validateUpdateRuleRequest covers the up-front guards: actor + reason required, severity (if present) must be a non-empty
+// enum value. Extracted so UpdateRule's body stays linear and Sonar's cognitive-complexity rule (S3776) does not fire.
+func validateUpdateRuleRequest(req api.UpdateRuleRequest) error {
+	if strings.TrimSpace(req.Actor) == "" {
+		return fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		return fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
+	}
+	if req.Severity != nil {
+		if err := ValidateSeverity(*req.Severity); err != nil {
+			return err
+		}
+		// ValidateSeverity accepts "" as "use default"; on UPDATE the operator must send a concrete value or omit the field.
+		if strings.TrimSpace(string(*req.Severity)) == "" {
+			return fmt.Errorf("%w: severity must be a non-empty enum value when present on a PATCH", api.ErrAppControlInvalidSeverity)
+		}
+	}
+	return nil
+}
+
+// UpdateRule applies a partial update to one rule row and bumps the parent policy's version atomically. PolicyID is read from the
+// existing row rather than carried on the request so a PATCH cannot inadvertently move a rule between policies; the auth-gated
+// REST handler runs separately. ErrAppControlRuleNotFound when the row is missing, ErrAppControlInvalidRequest on empty
+// actor/reason or a body with no mutable field, ErrAppControlInvalidSeverity when Severity is set to a bogus value.
+//
+// Concurrency: the UPDATE result's RowsAffected is gated to 1 so a concurrent DELETE between the SELECT and the UPDATE returns
+// ErrAppControlRuleNotFound rather than silently bumping the policy version (which would trigger a spurious snapshot fan-out).
+func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.ApplicationControlRule, error) {
+	if err := validateUpdateRuleRequest(req); err != nil {
+		return api.ApplicationControlRule{}, err
+	}
+	setFragment, args, ok := buildRuleUpdateSetClause(req)
+	if !ok {
 		return api.ApplicationControlRule{}, fmt.Errorf("%w: at least one mutable field must be set on a PATCH", api.ErrAppControlInvalidRequest)
 	}
 
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return api.ApplicationControlRule{}, fmt.Errorf(errBeginTxFmt, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Look up the existing row so we know which policy to bump and so we can return a 404 instead of silently updating zero rows.
+	var policyID int64
+	if err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, req.RuleID).Scan(&policyID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.ApplicationControlRule{}, api.ErrAppControlRuleNotFound
+		}
+		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol lookup rule for update: %w", err)
+	}
+
 	args = append(args, req.RuleID)
-	updateSQL := "UPDATE app_control_rules SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	if _, err := tx.ExecContext(ctx, updateSQL, args...); err != nil {
+	updateSQL := "UPDATE app_control_rules SET " + setFragment + " WHERE id = ?"
+	res, err := tx.ExecContext(ctx, updateSQL, args...)
+	if err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol update rule: %w", err)
+	}
+	// Concurrent delete race: the SELECT above passed but the UPDATE hit zero rows because another transaction removed the row
+	// between the two statements. Fail with ErrAppControlRuleNotFound so the caller sees a stable 404 — without this, the policy
+	// version bump below would still fire, triggering a spurious snapshot push to every agent.
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol update rule rows affected: %w", err)
+	}
+	if affected == 0 {
+		return api.ApplicationControlRule{}, api.ErrAppControlRuleNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies SET version = version + 1, updated_by = ? WHERE id = ?`,
 		req.Actor, policyID); err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version on update: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol commit tx: %w", err)
+		return api.ApplicationControlRule{}, fmt.Errorf(errCommitTxFmt, err)
 	}
 	return s.GetRuleByID(ctx, req.RuleID)
 }
@@ -374,15 +416,15 @@ func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.
 // downstream snapshot fan-out targets the right policy. ErrAppControlRuleNotFound when the row is missing.
 func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int64, error) {
 	if strings.TrimSpace(req.Actor) == "" {
-		return 0, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return 0, fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if strings.TrimSpace(req.Reason) == "" {
-		return 0, fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
+		return 0, fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("appcontrol begin tx: %w", err)
+		return 0, fmt.Errorf(errBeginTxFmt, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -393,15 +435,26 @@ func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int6
 		}
 		return 0, fmt.Errorf("appcontrol lookup rule for delete: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM app_control_rules WHERE id = ?`, req.RuleID); err != nil {
+	res, err := tx.ExecContext(ctx, `DELETE FROM app_control_rules WHERE id = ?`, req.RuleID)
+	if err != nil {
 		return 0, fmt.Errorf("appcontrol delete rule: %w", err)
+	}
+	// Concurrent delete race: same shape as UpdateRule. If another transaction removed the row between the SELECT and the DELETE,
+	// affected will be 0 — fail with ErrAppControlRuleNotFound so the policy version bump below does not fire and trigger a
+	// no-op snapshot push.
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("appcontrol delete rule rows affected: %w", err)
+	}
+	if affected == 0 {
+		return 0, api.ErrAppControlRuleNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies SET version = version + 1, updated_by = ? WHERE id = ?`,
 		req.Actor, policyID); err != nil {
 		return 0, fmt.Errorf("appcontrol bump policy version on delete: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("appcontrol commit tx: %w", err)
+		return 0, fmt.Errorf(errCommitTxFmt, err)
 	}
 	return policyID, nil
 }
@@ -410,10 +463,10 @@ func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int6
 // Phase A has no assignments wired in to a fresh policy; the operator attaches host groups via the assignments endpoint (Phase B).
 func (s *Store) CreatePolicy(ctx context.Context, req api.CreatePolicyRequest) (api.ApplicationControlPolicy, error) {
 	if strings.TrimSpace(req.Actor) == "" {
-		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if strings.TrimSpace(req.Reason) == "" {
-		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: policy name is required", api.ErrAppControlInvalidRequest)
@@ -436,14 +489,38 @@ func (s *Store) CreatePolicy(ctx context.Context, req api.CreatePolicyRequest) (
 
 // UpdatePolicy applies a partial update (name and/or description) to a policy row, bumps version, and sets updated_by. Returns
 // ErrAppControlPolicyNotFound when the id is missing; ErrAppControlDuplicatePolicy if the new name collides with another row;
-// ErrAppControlInvalidRequest when no mutable field is provided.
+// ErrAppControlInvalidRequest when no mutable field is provided; ErrAppControlPolicyImmutable if the caller tries to rename the
+// seed Default policy (closing the Copilot-flagged bypass where a rename-then-delete would defeat the immutability guard).
 func (s *Store) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest) (api.ApplicationControlPolicy, error) {
 	if strings.TrimSpace(req.Actor) == "" {
-		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if strings.TrimSpace(req.Reason) == "" {
-		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errBeginTxFmt, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Look up the existing name inside the txn so the rename guard sees a consistent view: a concurrent rename cannot squeeze
+	// between the SELECT and the UPDATE because both run under the same transaction's repeatable-read snapshot.
+	var existingName string
+	if err := tx.QueryRowxContext(ctx, `SELECT name FROM app_control_policies WHERE id = ?`, req.PolicyID).Scan(&existingName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
+		}
+		return api.ApplicationControlPolicy{}, fmt.Errorf("appcontrol lookup policy for update: %w", err)
+	}
+	// Failsafe: refuse to rename the seed Default policy. Without this, an admin could rename Default to "x" and then DELETE it,
+	// since DeletePolicy's immutability check fires on the current name. The seed policy's name is the stable anchor for the
+	// `all-hosts` assignment that every deployment inherits at boot.
+	if req.Name != nil && existingName == api.DefaultPolicyName && *req.Name != api.DefaultPolicyName {
+		return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyImmutable
+	}
+
 	setClauses := make([]string, 0, 2)
 	args := make([]any, 0, 3)
 	if req.Name != nil {
@@ -463,7 +540,7 @@ func (s *Store) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest) (
 	setClauses = append(setClauses, "version = version + 1", "updated_by = ?")
 	args = append(args, req.Actor, req.PolicyID)
 	updateSQL := "UPDATE app_control_policies SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	res, err := s.db.ExecContext(ctx, updateSQL, args...)
+	res, err := tx.ExecContext(ctx, updateSQL, args...)
 	if err != nil {
 		if isDuplicateKey(err) {
 			return api.ApplicationControlPolicy{}, api.ErrAppControlDuplicatePolicy
@@ -477,6 +554,9 @@ func (s *Store) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest) (
 	if affected == 0 {
 		return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
 	}
+	if err := tx.Commit(); err != nil {
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errCommitTxFmt, err)
+	}
 	return s.getPolicyByID(ctx, req.PolicyID)
 }
 
@@ -486,15 +566,15 @@ func (s *Store) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest) (
 // only ever has the Default policy assigned to hosts so a non-Default delete affects zero hosts in practice.
 func (s *Store) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest) error {
 	if strings.TrimSpace(req.Actor) == "" {
-		return fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	if strings.TrimSpace(req.Reason) == "" {
-		return fmt.Errorf("%w: reason is required", api.ErrAppControlInvalidRequest)
+		return fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("appcontrol begin tx: %w", err)
+		return fmt.Errorf(errBeginTxFmt, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -512,13 +592,14 @@ func (s *Store) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest) e
 		return fmt.Errorf("appcontrol delete policy: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("appcontrol commit tx: %w", err)
+		return fmt.Errorf(errCommitTxFmt, err)
 	}
 	return nil
 }
 
-// getPolicyByID is the internal lookup the create/update paths use to return the post-mutation row. Returns sql.ErrNoRows wrapped
-// directly when the id is missing; callers translate to ErrAppControlPolicyNotFound where appropriate.
+// getPolicyByID is the internal lookup the create/update paths use to return the post-mutation row. The missing-row case is
+// translated to api.ErrAppControlPolicyNotFound inside this helper (mirroring GetRuleByID's contract); callers can errors.Is
+// directly without unwrapping a driver-level sql.ErrNoRows.
 func (s *Store) getPolicyByID(ctx context.Context, id int64) (api.ApplicationControlPolicy, error) {
 	const query = `SELECT id, name, description, version, default_action, created_at, updated_at, created_by, updated_by
 		FROM app_control_policies WHERE id = ?`

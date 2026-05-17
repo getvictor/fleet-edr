@@ -12,6 +12,14 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
+// Error-message format strings shared by the state-changing service methods. Extracted to constants so Sonar's duplicate-literal
+// rule (go:S1192) stays quiet AND wording changes propagate uniformly across CreateRule / UpdateRule / DeleteRule /
+// CreatePolicy / UpdatePolicy / DeletePolicy. Each is a fmt.Errorf format string wrapping a sentinel.
+const (
+	errSvcActorRequiredFmt   = "%w: actor is required"
+	errSvcSnapshotComposeFmt = "appcontrol snapshot compose: %w"
+)
+
 // CommandInserter is the closure cmd/main supplies so the application-control fan-out can enqueue `set_application_control` commands
 // per host. Method-value shape matches response.Service.Insert so cmd/main passes `responseCtx.Service().Insert` directly without an
 // adapter.
@@ -152,7 +160,7 @@ func (s *Service) CreateRule(
 	// closed at the service layer means a future caller that bypasses the handler (a CLI tool, a background job) can't silently produce an
 	// unattributed audit row.
 	if actor == nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlRule{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 
 	rule, err := s.store.CreateRule(ctx, req)
@@ -170,7 +178,7 @@ func (s *Service) CreateRule(
 		s.emitAudit(ctx, actor, req, rule, 0, 0, 0, "snapshot_compose_failed")
 		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after CreateRule failed; rule is persisted but unenforced until next mutation",
 			"err", err, "policy_id", req.PolicyID, "rule_id", rule.ID)
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol snapshot compose: %w", err)
+		return api.ApplicationControlRule{}, fmt.Errorf(errSvcSnapshotComposeFmt, err)
 	}
 
 	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
@@ -387,16 +395,31 @@ func (s *Service) emitAudit(
 	}
 }
 
-// recordAudit is the low-level audit emit the per-op helpers share. It centralises the nil-audit guard and the actor-id back-fill
-// so the per-op helpers focus on the payload shape rather than the boilerplate. Failed audit emission is logged but not returned;
-// audit is best-effort relative to the mutation that already committed (same posture as emitAudit's create-rule path).
+// recordAudit is the low-level audit emit the per-op helpers share. It centralises the nil-audit guard, the actor-id back-fill,
+// and the ActorEmail synthesis so per-op helpers focus on the payload shape rather than the boilerplate.
+//
+// Actor-id back-fill: when actor is non-nil with a positive UserID, the event's UserID pointer is set so the audit-recorder's
+// FK to users lands cleanly. The ActorEmail in the event is preferred when the caller supplied it (matching CreateRule's
+// req.Actor pass-through); otherwise a "user:<id>" identifier is synthesised so the event still attributes to a stable subject.
+//
+// Nil-audit visibility: when s.audit is nil the call drops the row but emits a WARN log per the NewService contract. Security
+// mutations otherwise lose their audit signal silently — the operator dashboard would show a normal mutation while the audit log
+// has nothing to correlate against, which is the failure mode CodeRabbit flagged on PR #188.
+//
+// Failed audit emission is logged but not returned; audit is best-effort relative to the mutation that already committed (same
+// posture as emitAudit's create-rule path).
 func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, evt identityapi.AuditEvent) {
-	if s.audit == nil {
-		return
-	}
-	if actor != nil {
+	if actor != nil && actor.UserID > 0 {
 		userID := actor.UserID
 		evt.UserID = &userID
+		if evt.ActorEmail == "" {
+			evt.ActorEmail = "user:" + strconv.FormatInt(actor.UserID, 10)
+		}
+	}
+	if s.audit == nil {
+		s.logger.WarnContext(ctx, "appcontrol: audit recorder is nil; dropping mutation audit row",
+			"action", string(evt.Action), "target_id", evt.TargetID)
+		return
 	}
 	if err := s.audit.Record(ctx, evt); err != nil {
 		s.logger.WarnContext(ctx, "appcontrol: audit record failed", "err", err, "target_id", evt.TargetID, "action", string(evt.Action))
@@ -408,7 +431,7 @@ func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, evt
 // errors propagate untouched so the handler can errors.Is on the shared IsApplicationControlValidationError set.
 func (s *Service) UpdateRule(ctx context.Context, req api.UpdateRuleRequest, actor *identityapi.Actor) (api.ApplicationControlRule, error) {
 	if actor == nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlRule{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	rule, err := s.store.UpdateRule(ctx, req)
 	if err != nil {
@@ -416,13 +439,20 @@ func (s *Service) UpdateRule(ctx context.Context, req api.UpdateRuleRequest, act
 	}
 	policy, payload, composeErr := s.buildSnapshotPayload(ctx, rule.PolicyID)
 	if composeErr != nil {
-		s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleUpdate, rule, req.Reason, 0, 0, 0, "snapshot_compose_failed")
+		s.recordRuleMutationAudit(ctx, ruleMutationAuditArgs{
+			Action: identityapi.AuditAppControlRuleUpdate, Rule: rule, Actor: actor, ActorString: req.Actor,
+			Reason: req.Reason, FanoutSkipReason: "snapshot_compose_failed",
+		})
 		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after UpdateRule failed; rule mutation persisted but agents unaware until next mutation",
 			"err", composeErr, "policy_id", rule.PolicyID, "rule_id", rule.ID)
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol snapshot compose: %w", composeErr)
+		return api.ApplicationControlRule{}, fmt.Errorf(errSvcSnapshotComposeFmt, composeErr)
 	}
 	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
-	s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleUpdate, rule, req.Reason, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
+	s.recordRuleMutationAudit(ctx, ruleMutationAuditArgs{
+		Action: identityapi.AuditAppControlRuleUpdate, Rule: rule, Actor: actor, ActorString: req.Actor,
+		Reason: req.Reason, PolicyVersion: policy.Version,
+		FanoutHosts: fanoutHosts, FanoutFailed: fanoutFailed, FanoutSkipReason: fanoutSkipReason,
+	})
 	return rule, nil
 }
 
@@ -431,7 +461,7 @@ func (s *Service) UpdateRule(ctx context.Context, req api.UpdateRuleRequest, act
 // audit payload references rule_type + identifier; reading after the DELETE would race with the cascade.
 func (s *Service) DeleteRule(ctx context.Context, req api.DeleteRuleRequest, actor *identityapi.Actor) error {
 	if actor == nil {
-		return fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	priorRule, err := s.store.GetRuleByID(ctx, req.RuleID)
 	if err != nil {
@@ -442,51 +472,60 @@ func (s *Service) DeleteRule(ctx context.Context, req api.DeleteRuleRequest, act
 	}
 	policy, payload, composeErr := s.buildSnapshotPayload(ctx, priorRule.PolicyID)
 	if composeErr != nil {
-		s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleDelete, priorRule, req.Reason, 0, 0, 0, "snapshot_compose_failed")
+		s.recordRuleMutationAudit(ctx, ruleMutationAuditArgs{
+			Action: identityapi.AuditAppControlRuleDelete, Rule: priorRule, Actor: actor, ActorString: req.Actor,
+			Reason: req.Reason, FanoutSkipReason: "snapshot_compose_failed",
+		})
 		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after DeleteRule failed; agents still see the deleted rule until next mutation",
 			"err", composeErr, "policy_id", priorRule.PolicyID, "rule_id", priorRule.ID)
-		return fmt.Errorf("appcontrol snapshot compose: %w", composeErr)
+		return fmt.Errorf(errSvcSnapshotComposeFmt, composeErr)
 	}
 	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
-	s.recordRuleMutationAudit(ctx, actor, identityapi.AuditAppControlRuleDelete, priorRule, req.Reason, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
+	s.recordRuleMutationAudit(ctx, ruleMutationAuditArgs{
+		Action: identityapi.AuditAppControlRuleDelete, Rule: priorRule, Actor: actor, ActorString: req.Actor,
+		Reason: req.Reason, PolicyVersion: policy.Version,
+		FanoutHosts: fanoutHosts, FanoutFailed: fanoutFailed, FanoutSkipReason: fanoutSkipReason,
+	})
 	return nil
 }
 
+// ruleMutationAuditArgs bundles the per-op inputs recordRuleMutationAudit needs. Struct shape rather than positional params so
+// Sonar's S107 (max 7 args) doesn't fire and the four caller sites stay readable. Each field is required; defaults are encoded
+// at the call site, not here.
+type ruleMutationAuditArgs struct {
+	Action           identityapi.AuditAction
+	Rule             api.ApplicationControlRule
+	Actor            *identityapi.Actor
+	ActorString      string // from req.Actor for consistency with CreateRule; recordAudit falls back to "user:<id>" if empty
+	Reason           string
+	PolicyVersion    int64
+	FanoutHosts      int
+	FanoutFailed     int
+	FanoutSkipReason string
+}
+
 // recordRuleMutationAudit is the per-op audit emitter for rule mutations (update + delete). Payload shape matches the create
-// flow's so SIEM dashboards can filter on the same key set across all three actions.
-func (s *Service) recordRuleMutationAudit(
-	ctx context.Context,
-	actor *identityapi.Actor,
-	action identityapi.AuditAction,
-	rule api.ApplicationControlRule,
-	reason string,
-	policyVersion int64,
-	fanoutHosts int,
-	fanoutFailed int,
-	fanoutSkipReason string,
-) {
+// flow's so SIEM dashboards can filter on the same key set across all three actions. Takes a struct (S107) so adding new fields
+// in Phase B's Detect-mode change (e.g. enforcement_before / enforcement_after) doesn't extend a positional argument list.
+func (s *Service) recordRuleMutationAudit(ctx context.Context, args ruleMutationAuditArgs) {
 	payload := map[string]any{
-		"policy_id":      rule.PolicyID,
-		"policy_version": policyVersion,
-		"rule_type":      string(rule.RuleType),
-		"identifier":     rule.Identifier,
-		"severity":       string(rule.Severity),
-		"reason":         reason,
-		"fanout_hosts":   fanoutHosts,
-		"fanout_failed":  fanoutFailed,
+		"policy_id":      args.Rule.PolicyID,
+		"policy_version": args.PolicyVersion,
+		"rule_type":      string(args.Rule.RuleType),
+		"identifier":     args.Rule.Identifier,
+		"severity":       string(args.Rule.Severity),
+		"reason":         args.Reason,
+		"fanout_hosts":   args.FanoutHosts,
+		"fanout_failed":  args.FanoutFailed,
 	}
-	if fanoutSkipReason != "" {
-		payload["fanout_skipped_reason"] = fanoutSkipReason
+	if args.FanoutSkipReason != "" {
+		payload["fanout_skipped_reason"] = args.FanoutSkipReason
 	}
-	actorIdentifier := ""
-	if actor != nil && actor.UserID > 0 {
-		actorIdentifier = "user:" + strconv.FormatInt(actor.UserID, 10)
-	}
-	s.recordAudit(ctx, actor, identityapi.AuditEvent{
-		Action:     action,
+	s.recordAudit(ctx, args.Actor, identityapi.AuditEvent{
+		Action:     args.Action,
 		TargetType: "application_control_rule",
-		TargetID:   strconv.FormatInt(rule.ID, 10),
-		ActorEmail: actorIdentifier,
+		TargetID:   strconv.FormatInt(args.Rule.ID, 10),
+		ActorEmail: args.ActorString,
 		Payload:    payload,
 	})
 }
@@ -496,13 +535,13 @@ func (s *Service) recordRuleMutationAudit(
 // the new policy id + name so an operator can trace the creation back to the request.
 func (s *Service) CreatePolicy(ctx context.Context, req api.CreatePolicyRequest, actor *identityapi.Actor) (api.ApplicationControlPolicy, error) {
 	if actor == nil {
-		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	policy, err := s.store.CreatePolicy(ctx, req)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, err
 	}
-	s.recordPolicyMutationAudit(ctx, actor, identityapi.AuditAppControlPolicyCreate, policy, req.Reason)
+	s.recordPolicyMutationAudit(ctx, actor, req.Actor, identityapi.AuditAppControlPolicyCreate, policy, req.Reason)
 	return policy, nil
 }
 
@@ -511,13 +550,13 @@ func (s *Service) CreatePolicy(ctx context.Context, req api.CreatePolicyRequest,
 // reason so a future "who renamed Default to corp-default" question has a single source of truth.
 func (s *Service) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest, actor *identityapi.Actor) (api.ApplicationControlPolicy, error) {
 	if actor == nil {
-		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlPolicy{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	policy, err := s.store.UpdatePolicy(ctx, req)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, err
 	}
-	s.recordPolicyMutationAudit(ctx, actor, identityapi.AuditAppControlPolicyUpdate, policy, req.Reason)
+	s.recordPolicyMutationAudit(ctx, actor, req.Actor, identityapi.AuditAppControlPolicyUpdate, policy, req.Reason)
 	return policy, nil
 }
 
@@ -527,7 +566,7 @@ func (s *Service) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest,
 // deleted policy id + name so the deletion is reconstructable from the audit log alone.
 func (s *Service) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest, actor *identityapi.Actor) error {
 	if actor == nil {
-		return fmt.Errorf("%w: actor is required", api.ErrAppControlInvalidRequest)
+		return fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
 	priorPolicy, err := s.findPolicyByID(ctx, req.PolicyID)
 	if err != nil {
@@ -536,29 +575,27 @@ func (s *Service) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest,
 	if err := s.store.DeletePolicy(ctx, req); err != nil {
 		return err
 	}
-	s.recordPolicyMutationAudit(ctx, actor, identityapi.AuditAppControlPolicyDelete, priorPolicy, req.Reason)
+	s.recordPolicyMutationAudit(ctx, actor, req.Actor, identityapi.AuditAppControlPolicyDelete, priorPolicy, req.Reason)
 	return nil
 }
 
 // recordPolicyMutationAudit is the per-op audit emitter for policy mutations (create + update + delete). Payload mirrors the
 // rule-mutation shape modulo fan-out fields (no fan-out on policy mutations in Phase A) so the dashboard query language stays
-// consistent across action types.
+// consistent across action types. ActorString comes from req.Actor (matching CreateRule's pass-through); recordAudit falls back
+// to a synthesised "user:<id>" identifier when actorString is empty so the row still attributes to a stable subject.
 func (s *Service) recordPolicyMutationAudit(
 	ctx context.Context,
 	actor *identityapi.Actor,
+	actorString string,
 	action identityapi.AuditAction,
 	policy api.ApplicationControlPolicy,
 	reason string,
 ) {
-	actorIdentifier := ""
-	if actor != nil && actor.UserID > 0 {
-		actorIdentifier = "user:" + strconv.FormatInt(actor.UserID, 10)
-	}
 	s.recordAudit(ctx, actor, identityapi.AuditEvent{
 		Action:     action,
 		TargetType: "application_control_policy",
 		TargetID:   strconv.FormatInt(policy.ID, 10),
-		ActorEmail: actorIdentifier,
+		ActorEmail: actorString,
 		Payload: map[string]any{
 			"policy_id":      policy.ID,
 			"policy_name":    policy.Name,
