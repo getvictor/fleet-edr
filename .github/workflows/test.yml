@@ -458,11 +458,10 @@ jobs:
 
   codecov:
     name: Codecov upload
-    needs: [changes, agent-test, server-test, e2e-test]
-    # Codecov only consumes the agent + server flags (codecov.yml ignores
-    # ui/src/** globally — see comment further down), so this job is
-    # Go-relevant only: a UI-only PR skips it. Same `!cancelled()` +
-    # explicit failure check pattern as sonarcloud above.
+    needs: [changes, agent-test, server-test, ui-test, e2e-test]
+    # Codecov consumes the agent, server, AND ui flags. ui flag was previously E2E-only (E2E captures V8 coverage of the
+    # running React bundle) but now also receives the vitest LCOV from ui-test so unit-tested components count toward the
+    # ui patch/project gates. Same `!cancelled()` + explicit failure check pattern as sonarcloud above.
     #
     # Same Dependabot exclusion as sonarcloud: Dependabot PRs cannot read
     # repo secrets, so a CODECOV_TOKEN-gated upload would always fail.
@@ -473,6 +472,7 @@ jobs:
       && (needs.changes.result != 'success' || needs.changes.outputs.any == 'true')
       && needs.agent-test.result != 'failure'
       && needs.server-test.result != 'failure'
+      && needs.ui-test.result != 'failure'
       && needs.e2e-test.result != 'failure'
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
@@ -522,6 +522,17 @@ jobs:
           name: coverage-ui-e2e
           path: test/e2e/coverage
 
+      # The vitest LCOV from the `ui-test` job. SonarCloud was already reading this artifact (sonar.javascript.lcov.reportPaths
+      # picks it up), but codecov had no upload step for it — so PRs that only added vitest tests showed near-zero UI patch
+      # coverage to codecov even when Sonar saw the lines as covered. Uploading under the same `ui` flag the Playwright LCOV
+      # uses; codecov takes the union of LCOVs per flag so the two cover-paths (unit + E2E) merge cleanly.
+      - name: Download UI vitest coverage
+        if: needs.ui-test.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-ui
+          path: ui/coverage
+
       # disable_search: true -- codecov-action otherwise auto-searches
       # the workspace for *.out / lcov.info files in addition to the
       # explicit `files:` argument, so a stray coverage file landing in
@@ -570,6 +581,21 @@ jobs:
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           files: test/e2e/coverage/lcov-e2e.info
+          flags: ui
+          disable_search: true
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      # Upload the vitest LCOV under the same `ui` flag. codecov takes the union with the Playwright-derived LCOV above so
+      # a line that's hit by either the unit suite or the E2E suite counts as covered. Closes the gap where vitest-only tests
+      # showed up as 0% UI coverage to codecov (issue surfaced on PR #192 where the entire new PasteManyModal showed 2.3%
+      # patch coverage despite the vitest tests exercising 91%+ of its statements).
+      - name: Upload UI vitest coverage
+        if: needs.ui-test.result == 'success'
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          files: ui/coverage/lcov.info
           flags: ui
           disable_search: true
           fail_ci_if_error: false

@@ -89,3 +89,101 @@
   gap: $pad-small;
   margin-top: $pad-medium;
 }
+
+// PasteManyModal phases. The paste textarea is wider than the other dialog inputs and the preview table needs its own
+// scroll container so a 500-row paste doesn't expand the dialog past the viewport.
+
+.app-control-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-control-dialog__label {
+  font-size: $xx-small;
+  color: $core-vibrant-blue;
+}
+
+.app-control-dialog__textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: $xx-small;
+  min-height: 220px;
+  padding: $pad-xsmall;
+  border: 1px solid $ui-fleet-black-25;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.app-control-dialog__paste-preview {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid $ui-fleet-black-25;
+  border-radius: 4px;
+}
+
+.app-control-dialog__paste-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: $xx-small;
+
+  th,
+  td {
+    padding: $pad-xsmall;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid $ui-fleet-black-25;
+  }
+
+  th {
+    background: $ui-off-white;
+    position: sticky;
+    top: 0;
+  }
+}
+
+.app-control-dialog__paste-notes {
+  color: $core-vibrant-blue;
+  font-size: $xx-small;
+
+  span {
+    display: block;
+  }
+}
+
+.app-control-dialog__paste-remove {
+  background: transparent;
+  border: none;
+  color: $ui-fleet-black-50;
+  cursor: pointer;
+  font-size: $large;
+  line-height: 1;
+  padding: 0 $pad-xsmall;
+
+  &:hover {
+    color: $ui-error;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+.app-control-dialog__paste-back {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: $core-vibrant-blue;
+  cursor: pointer;
+  font-size: $xx-small;
+  padding: 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}

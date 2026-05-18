@@ -13,6 +13,7 @@ import { Badge, type BadgeVariant } from "../ui/Badge";
 import { AddRuleModal } from "./AddRuleModal";
 import { EditRuleModal } from "./EditRuleModal";
 import { ConfirmActionModal } from "./ConfirmActionModal";
+import { PasteManyModal } from "./PasteManyModal";
 import "./ApplicationControl.scss";
 
 // ActiveModal is the union that captures which per-row modal is currently open. Encoding mutual exclusion in the type closes
@@ -22,6 +23,7 @@ import "./ApplicationControl.scss";
 type ActiveModal =
   | { kind: "none" }
   | { kind: "add" }
+  | { kind: "paste-many" }
   | { kind: "edit"; rule: ApplicationControlRule }
   | { kind: "confirm-delete"; rule: ApplicationControlRule }
   | { kind: "confirm-toggle"; rule: ApplicationControlRule };
@@ -124,13 +126,22 @@ export function PolicyDetail() {
   );
 
   const actions = (
-    <Button
-      variant="primary"
-      onClick={() => { setActiveModal({ kind: "add" }); }}
-      disabled={!policy}
-    >
-      Add rule
-    </Button>
+    <>
+      <Button
+        variant="inverse"
+        onClick={() => { setActiveModal({ kind: "paste-many" }); }}
+        disabled={!policy}
+      >
+        Paste many
+      </Button>
+      <Button
+        variant="primary"
+        onClick={() => { setActiveModal({ kind: "add" }); }}
+        disabled={!policy}
+      >
+        Add rule
+      </Button>
+    </>
   );
 
   const rules = policy?.rules ?? [];
@@ -175,6 +186,17 @@ export function PolicyDetail() {
           policyID={policy.id}
           onClose={closeModal}
           onCreated={() => {
+            closeModal();
+            refresh();
+          }}
+        />
+      )}
+      {policy && (
+        <PasteManyModal
+          open={activeModal.kind === "paste-many"}
+          policyID={policy.id}
+          onClose={closeModal}
+          onUpserted={() => {
             closeModal();
             refresh();
           }}
