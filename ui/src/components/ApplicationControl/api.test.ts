@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  bulkUpsertAppControlRules,
   createAppControlRule,
   deleteAppControlRule,
   listAppControlPolicies,
@@ -198,6 +199,71 @@ describe("deleteAppControlRule", () => {
     mockFetch({}, 401);
     await expect(
       deleteAppControlRule(1, { reason: "x" }),
+    ).rejects.toBeInstanceOf(Unauthorized401Error);
+  });
+});
+
+describe("bulkUpsertAppControlRules", () => {
+  it("returns inserted/updated counts and rule rows on the happy path", async () => {
+    setCsrfToken("FAKE_CSRF_TOKEN");
+    const fakeResult = {
+      inserted: 2,
+      updated: 1,
+      rules: [
+        { id: 1, identifier: "a".repeat(64) },
+        { id: 2, identifier: "b".repeat(64) },
+        { id: 3, identifier: "EQHXZ8M8AV" },
+      ],
+    };
+    const fetchMock = mockFetch(fakeResult, 200);
+    const got = await bulkUpsertAppControlRules(7, {
+      rules: [
+        { rule_type: "BINARY", identifier: "a".repeat(64) },
+        { rule_type: "BINARY", identifier: "b".repeat(64) },
+        { rule_type: "TEAMID", identifier: "EQHXZ8M8AV" },
+      ],
+      reason: "import from spreadsheet",
+    });
+    expect(got.inserted).toBe(2);
+    expect(got.updated).toBe(1);
+    expect(got.rules).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [target, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(target.pathname).toMatch(/policies\/7\/rules:bulkUpsert$/);
+    expect(init.method).toBe("POST");
+  });
+
+  it("surfaces typed AppControlApiError when the server rejects an item", async () => {
+    setCsrfToken("FAKE_CSRF_TOKEN");
+    mockFetch(
+      {
+        error: "application_control.invalid_rule",
+        message: "bulk item 1: identifier failed validation",
+      },
+      400,
+    );
+    try {
+      await bulkUpsertAppControlRules(1, {
+        rules: [
+          { rule_type: "BINARY", identifier: "not-hex" },
+        ],
+        reason: "x",
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AppControlApiError);
+      if (err instanceof AppControlApiError) {
+        expect(err.code).toBe("application_control.invalid_rule");
+        expect(err.message).toMatch(/bulk item 1/);
+      }
+    }
+  });
+
+  it("throws Unauthorized401Error on a 401", async () => {
+    setCsrfToken("FAKE_CSRF_TOKEN");
+    mockFetch({}, 401);
+    await expect(
+      bulkUpsertAppControlRules(1, { rules: [], reason: "x" }),
     ).rejects.toBeInstanceOf(Unauthorized401Error);
   });
 });

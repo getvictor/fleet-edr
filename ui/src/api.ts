@@ -441,38 +441,12 @@ export async function createAppControlRule(
   policyID: number,
   req: CreateAppControlRuleRequest,
 ): Promise<ApplicationControlRule> {
-  // The handler writes typed error bodies on 4xx; intercept here so
-  // form components can switch on the code rather than parse a
-  // free-form message.
-  const path = `/v1/app-control/policies/${String(policyID)}/rules`;
-  assertSafeAPIPath(path);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  attachCsrfHeader(headers, "POST");
-  const target = new URL(API_BASE + path, globalThis.location.origin);
-  const res = await fetch(target, {
-    method: "POST",
-    credentials: "include",
-    headers,
-    body: JSON.stringify(req),
-  });
-  if (res.status === HTTP_STATUS_UNAUTHORIZED) {
-    clearCsrfToken();
-    throw new Unauthorized401Error();
-  }
-  if (res.status === HTTP_STATUS_FORBIDDEN) {
-    const reauth = await readReauthChallenge(res);
-    if (reauth) throw new ReauthRequiredError(reauth);
-  }
-  if (!res.ok) {
-    const body = (await res.clone().json().catch((): null => null)) as AppControlErrorBody | null;
-    if (body?.error) {
-      throw new AppControlApiError(body.error, body.message ?? body.error, res.status);
-    }
-    throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
-  }
-  return res.json() as Promise<ApplicationControlRule>;
+  return appControlMutationEndpoint(
+    "POST",
+    `/v1/app-control/policies/${String(policyID)}/rules`,
+    req,
+    (res) => res.json() as Promise<ApplicationControlRule>,
+  );
 }
 
 // UpdateAppControlRuleRequest is the JSON body the PATCH endpoint accepts. Mirrors updateRuleRequest in
@@ -494,10 +468,12 @@ export interface DeleteAppControlRuleRequest {
   reason: string;
 }
 
-// patchAppControlEndpoint is the shared body of updateAppControlRule + deleteAppControlRule. The two endpoints have the same
-// auth + reauth + typed-error handling as createAppControlRule; centralising here keeps the three calls in lockstep.
-async function patchAppControlEndpoint<T>(
-  method: "PATCH" | "DELETE",
+// appControlMutationEndpoint is the shared body of every state-changing app-control endpoint (POST + PATCH + DELETE). All
+// four endpoints have the same auth + reauth + typed-error handling; centralising here keeps the per-verb wrappers thin and
+// avoids the duplicate-function-body trap Sonar's S4144 fires on parallel implementations. Method-widening from
+// "PATCH" | "DELETE" to include "POST" is the only change versus the prior signature.
+async function appControlMutationEndpoint<T>(
+  method: "POST" | "PATCH" | "DELETE",
   path: string,
   body: unknown,
   parseResponse: (res: Response) => Promise<T>,
@@ -534,7 +510,7 @@ export async function updateAppControlRule(
   ruleID: number,
   req: UpdateAppControlRuleRequest,
 ): Promise<ApplicationControlRule> {
-  return patchAppControlEndpoint(
+  return appControlMutationEndpoint(
     "PATCH",
     `/v1/app-control/rules/${String(ruleID)}`,
     req,
@@ -546,12 +522,55 @@ export async function deleteAppControlRule(
   ruleID: number,
   req: DeleteAppControlRuleRequest,
 ): Promise<void> {
-  await patchAppControlEndpoint(
+  await appControlMutationEndpoint(
     "DELETE",
     `/v1/app-control/rules/${String(ruleID)}`,
     req,
     // DELETE returns 204 No Content; resolve to undefined without parsing.
     () => Promise.resolve(undefined),
+  );
+}
+
+// BulkUpsertAppControlRuleItem is one row in the bulk-upsert request body. Mirrors bulkUpsertItem in
+// server/rules/internal/operator/appcontrol_handler.go. custom_msg + custom_url are optional pointer-shape fields server-side
+// so the empty-string vs. missing distinction round-trips; UI senders can always include them.
+export interface BulkUpsertAppControlRuleItem {
+  rule_type: string;
+  identifier: string;
+  severity?: string;
+  custom_msg?: string;
+  custom_url?: string;
+  comment?: string;
+}
+
+// BulkUpsertAppControlRulesRequest is the wire envelope. PolicyID rides in the URL path; the body carries the items + the
+// shared audit reason that lands on the single audit row regardless of how many items were in the batch.
+export interface BulkUpsertAppControlRulesRequest {
+  rules: BulkUpsertAppControlRuleItem[];
+  reason: string;
+}
+
+// BulkUpsertAppControlResult mirrors server/rules/api.BulkUpsertResult. inserted + updated are the per-row outcome counts,
+// rules is the post-upsert row set in request order so the UI can render the result without an extra round trip.
+export interface BulkUpsertAppControlResult {
+  inserted: number;
+  updated: number;
+  rules: ApplicationControlRule[];
+}
+
+// MAX_BULK_UPSERT_ITEMS mirrors server/rules/api.MaxBulkUpsertItems. The server returns a typed 400 above this; the modal
+// pre-validates so a 500-item paste fails locally before traversing the network round trip.
+export const MAX_BULK_UPSERT_ITEMS = 500;
+
+export async function bulkUpsertAppControlRules(
+  policyID: number,
+  req: BulkUpsertAppControlRulesRequest,
+): Promise<BulkUpsertAppControlResult> {
+  return appControlMutationEndpoint(
+    "POST",
+    `/v1/app-control/policies/${String(policyID)}/rules:bulkUpsert`,
+    req,
+    (res) => res.json() as Promise<BulkUpsertAppControlResult>,
   );
 }
 
