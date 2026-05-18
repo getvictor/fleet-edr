@@ -47,9 +47,15 @@ const (
 	AuditAuthBreakglassFailure   AuditAction = "auth.breakglass.failure"
 
 	// Application Control mutations (rules context). The payload records actor reason, rule type / identifier, policy version post-bump,
-	// and fan-out counts (fanout_hosts / fanout_failed) so SIEM dashboards can trace which hosts received the rule. Stable wire string
-	// mirrored by AuthZ Action of the same name.
-	AuditAppControlRuleCreate AuditAction = "application_control.rule_create"
+	// and fan-out counts (fanout_hosts / fanout_failed) so SIEM dashboards can trace which hosts received the rule. Stable wire strings
+	// mirrored by AuthZ Actions of the same names. The five non-create actions are added by the Phase A close-out follow-on (PR-1b)
+	// that wires the full PATCH/DELETE/POST REST surface.
+	AuditAppControlRuleCreate   AuditAction = "application_control.rule_create"
+	AuditAppControlRuleUpdate   AuditAction = "application_control.rule_update"
+	AuditAppControlRuleDelete   AuditAction = "application_control.rule_delete"
+	AuditAppControlPolicyCreate AuditAction = "application_control.policy_create"
+	AuditAppControlPolicyUpdate AuditAction = "application_control.policy_update"
+	AuditAppControlPolicyDelete AuditAction = "application_control.policy_delete"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller

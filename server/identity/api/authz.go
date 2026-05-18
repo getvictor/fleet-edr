@@ -63,10 +63,15 @@ const (
 	ActionAuditRead Action = "audit.read"
 
 	// Application Control. The admin surface manages the policies and rules that the extension consults on every AUTH_EXEC. Read covers
-	// the list + detail views; RuleCreate gates the POST that fans a `set_application_control` command out to every enrolled host.
-	// Other verbs (rule update / delete, bulk upsert) are post-demo; constants land as they ship.
-	ActionAppControlRead       Action = "application_control.read"
-	ActionAppControlRuleCreate Action = "application_control.rule_create"
+	// the list + detail views; the five mutation verbs each gate a corresponding POST/PATCH/DELETE handler that fans a fresh
+	// `set_application_control` command out to every enrolled host on the affected policy. Bulk upsert + host-groups CRUD stay deferred.
+	ActionAppControlRead         Action = "application_control.read"
+	ActionAppControlRuleCreate   Action = "application_control.rule_create"
+	ActionAppControlRuleUpdate   Action = "application_control.rule_update"
+	ActionAppControlRuleDelete   Action = "application_control.rule_delete"
+	ActionAppControlPolicyCreate Action = "application_control.policy_create"
+	ActionAppControlPolicyUpdate Action = "application_control.policy_update"
+	ActionAppControlPolicyDelete Action = "application_control.policy_delete"
 )
 
 // RegisteredActions returns the set of every Action constant declared
@@ -86,7 +91,9 @@ func RegisteredActions() []Action {
 		ActionEnrollmentRead, ActionEnrollmentRevoke, ActionEnrollmentRotateToken,
 		ActionUserRead, ActionUserInvite,
 		ActionAuditRead,
-		ActionAppControlRead, ActionAppControlRuleCreate,
+		ActionAppControlRead,
+		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete,
+		ActionAppControlPolicyCreate, ActionAppControlPolicyUpdate, ActionAppControlPolicyDelete,
 	}
 }
 
