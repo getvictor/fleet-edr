@@ -4,8 +4,9 @@ import type { ApplicationControlRule } from "../../types";
 // free-text search over identifier and comment". Each dimension is independent: the empty / "all" value for a dimension means
 // it doesn't constrain. A rule passes the filter iff every dimension's predicate accepts it (logical AND across dimensions).
 export interface RulesFilter {
-  // search is matched as a case-insensitive substring against the identifier AND the comment. An empty string disables the
-  // search dimension entirely (every rule passes); a non-empty string passes a rule iff it appears in either field.
+  // search is matched as a case-insensitive substring against the identifier OR the comment. An empty string disables the
+  // search dimension entirely (every rule passes); a non-empty string passes a rule iff it appears in EITHER field (not
+  // both).
   readonly search: string;
   // ruleType matches the rule's rule_type EXACTLY. The empty string means "any type"; otherwise the rule must equal this
   // value (BINARY / CDHASH / SIGNINGID / TEAMID / CERTIFICATE / PATH).

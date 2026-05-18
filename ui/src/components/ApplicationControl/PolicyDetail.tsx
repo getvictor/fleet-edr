@@ -88,6 +88,13 @@ export function PolicyDetail() {
   const [filter, setFilter] = useState<RulesFilter>(EMPTY_RULES_FILTER);
   const clearFilter = useCallback(() => { setFilter(EMPTY_RULES_FILTER); }, []);
 
+  // Reset the filter whenever the operator navigates between policies. React Router reuses the same PolicyDetail instance
+  // when only the :id path param changes, so without this effect the previous policy's filter values (including type /
+  // source values that may not exist on the new policy) would carry over. Closes a Copilot finding on PR #193.
+  useEffect(() => {
+    setFilter(EMPTY_RULES_FILTER); // eslint-disable-line react-hooks/set-state-in-effect -- reset on prop change
+  }, [policyID]);
+
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
     let cancelled = false;

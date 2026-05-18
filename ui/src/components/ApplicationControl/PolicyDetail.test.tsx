@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
@@ -360,5 +361,40 @@ describe("PolicyDetail", () => {
       target: { value: "aaaa" },
     });
     expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
+  });
+
+  it("resets the filter when the operator navigates to a different policy", async () => {
+    // PolicyDetail reuses the same component instance across :id changes via React Router. Without the policyID-keyed
+    // reset effect, the previous policy's filter would persist (Copilot finding on PR #193). Render under a parent that
+    // can swap the :id at runtime and assert the filter clears when policyID changes.
+    const getSpy = vi.spyOn(api, "getAppControlPolicy");
+    getSpy.mockImplementation((id: number) => {
+      if (id === 7) return Promise.resolve(makePolicy({ id: 7, rules: makeFilterFixture() }));
+      return Promise.resolve(makePolicy({ id: 8, name: "Other", rules: [makeRule({ id: 99, rule_type: "BINARY", identifier: "z".repeat(64) })] }));
+    });
+
+    function Parent() {
+      const [path, setPath] = React.useState("/app-control/policies/7");
+      return (
+        <MemoryRouter initialEntries={[path]} key={path}>
+          <button type="button" onClick={() => { setPath("/app-control/policies/8"); }}>switch</button>
+          <Routes>
+            <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+          </Routes>
+        </MemoryRouter>
+      );
+    }
+    render(<Parent />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    // Activate the filter on policy 7.
+    fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), { target: { value: "platform" } });
+    expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
+    // Switch to policy 8.
+    fireEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Other" })).toBeInTheDocument());
+    // Filter is back to defaults: no summary line; search input is empty.
+    expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
+    const searchInput = screen.getByLabelText(/search rules by identifier or comment/i);
+    expect(searchInput).toHaveProperty("value", "");
   });
 });
