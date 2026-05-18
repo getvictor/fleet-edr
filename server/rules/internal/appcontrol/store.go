@@ -125,6 +125,76 @@ func (s *Store) ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]
 	return out, nil
 }
 
+// ListHostGroups returns every host_group row in alphabetical name order. Phase A always returns the single seed `all-hosts`
+// group; Phase B grows the result when editable groups land. Distinct from ListHostGroupsForPolicy: that one filters by an
+// assignment link to a specific policy; this one returns every group regardless of assignment state.
+func (s *Store) ListHostGroups(ctx context.Context) ([]api.HostGroup, error) {
+	const query = `SELECT id, name, description, criteria, created_at, updated_at
+		FROM host_groups ORDER BY name ASC`
+	rows, err := s.db.QueryxContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("appcontrol list host groups: %w", err)
+	}
+	defer rows.Close()
+	out := []api.HostGroup{}
+	for rows.Next() {
+		var g api.HostGroup
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.Criteria, &g.CreatedAt, &g.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("appcontrol scan host group: %w", err)
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("appcontrol iterate host groups: %w", err)
+	}
+	return out, nil
+}
+
+// GetHostGroupByID loads a single host_group row by primary key. Returns ErrAppControlHostGroupNotFound when the row does not
+// exist so the REST handler maps to HTTP 404; other driver errors propagate as-is for the handler to translate to 500.
+func (s *Store) GetHostGroupByID(ctx context.Context, hostGroupID int64) (api.HostGroup, error) {
+	const query = `SELECT id, name, description, criteria, created_at, updated_at
+		FROM host_groups WHERE id = ?`
+	row := s.db.QueryRowxContext(ctx, query, hostGroupID)
+	var g api.HostGroup
+	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.Criteria, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.HostGroup{}, api.ErrAppControlHostGroupNotFound
+		}
+		return api.HostGroup{}, fmt.Errorf("appcontrol get host group by id: %w", err)
+	}
+	return g, nil
+}
+
+// ListAssignmentsForPolicy returns the raw assignment rows linking a policy to its host groups in (priority ASC, host_group_id
+// ASC) order. Distinct from ListHostGroupsForPolicy which returns the joined group metadata; this returns the assignment
+// linkage so a future UI can render priority + ordering without re-deriving from the group rows. No 404 on unknown policy:
+// the caller checks policy existence separately when needed (returning [] is the correct shape for "policy has no
+// assignments", which is a valid Phase B state).
+func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([]api.Assignment, error) {
+	const query = `SELECT policy_id, host_group_id, priority, created_at
+		FROM app_control_assignments
+		WHERE policy_id = ?
+		ORDER BY priority ASC, host_group_id ASC`
+	rows, err := s.db.QueryxContext(ctx, query, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("appcontrol list assignments: %w", err)
+	}
+	defer rows.Close()
+	out := []api.Assignment{}
+	for rows.Next() {
+		var a api.Assignment
+		if err := rows.Scan(&a.PolicyID, &a.HostGroupID, &a.Priority, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("appcontrol scan assignment: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("appcontrol iterate assignments: %w", err)
+	}
+	return out, nil
+}
+
 // GetPolicyByName loads the policy row by name. Rules are NOT populated; callers that need rules call ListRulesByPolicy explicitly.
 // A future GetPolicyWithRules helper can join the two queries when an endpoint shows up that needs both in one round trip; today's
 // REST surface fetches them separately.

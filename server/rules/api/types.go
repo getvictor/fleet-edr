@@ -439,6 +439,10 @@ var (
 	// row is the failsafe that keeps the all-hosts assignment alive; an admin who wants to stop enforcing rules detaches the
 	// assignment or disables individual rules rather than deleting the policy itself.
 	ErrAppControlPolicyImmutable = errors.New("rules: application control default policy cannot be deleted")
+
+	// ErrAppControlHostGroupNotFound is returned when the targeted host_group row does not exist. Mapped to HTTP 404 by the REST
+	// handler so an operator hitting a stale id sees a typed signal rather than a generic 500.
+	ErrAppControlHostGroupNotFound = errors.New("rules: application control host group not found")
 )
 
 // IsApplicationControlValidationError reports whether err is one of the validation errors that the REST handlers map to HTTP 400. The
@@ -509,6 +513,16 @@ type ApplicationControlStore interface {
 	// resolver walks the result and unions the member hosts of each group to build the set of unique hosts the rule update should
 	// reach.
 	ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]HostGroup, error)
+	// ListHostGroups returns every host_group row in alphabetical name order. Phase A always returns the single seed `all-hosts`
+	// group; Phase B grows the result when editable groups land. Pure read; no fan-out, no audit.
+	ListHostGroups(ctx context.Context) ([]HostGroup, error)
+	// GetHostGroupByID loads one host_group row. ErrAppControlHostGroupNotFound when the row does not exist; the REST handler
+	// maps that to HTTP 404.
+	GetHostGroupByID(ctx context.Context, hostGroupID int64) (HostGroup, error)
+	// ListAssignmentsForPolicy returns the raw assignment rows (policy_id, host_group_id, priority, created_at) for the policy
+	// in (priority ASC, host_group_id ASC) order. Distinct from ListHostGroupsForPolicy: this returns the join-table rows
+	// themselves so a future UI can render the priority + linkage independent of the group metadata.
+	ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([]Assignment, error)
 	// ListRulesAcrossPolicies returns rules matching the filter across every policy. Powers the cross-policy GET /rules endpoint
 	// that integration callers (audit export, compliance reports) need. Pagination is mandatory: Limit caps the page size and
 	// Offset cursors through the result. Returns the page rows + the total count so the caller can render "Showing N of M".
