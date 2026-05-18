@@ -87,11 +87,17 @@ describe("PolicyDetail", () => {
     expect(screen.getByRole("button", { name: "Delete" })).not.toBeDisabled();
   });
 
-  // PolicyDetail mounts three modals at once (Add, Edit, Confirm) — each is a <dialog> that renders its inner DOM even when
-  // closed in JSDOM. RTL queries against `screen` find labels in all three; scope to the modal addressed by its accessible
-  // name to disambiguate.
+  // PolicyDetail mounts the modals as siblings. Each modal renders a <dialog> that, even when closed in JSDOM, keeps its
+  // children in the DOM — so RTL queries against `screen` match labels in closed dialogs too. Scope to the dialog addressed by
+  // its accessible name AND require its `open` attribute to be set so a test that fires the action but doesn't actually open
+  // the dialog (e.g. a regression in the wiring) fails loudly instead of false-passing on the closed dialog. Addresses the
+  // Copilot finding on PR #189.
   function openModal(name: RegExp): HTMLElement {
-    return screen.getByRole("dialog", { name });
+    const dialog = screen.getByRole("dialog", { name });
+    if (!(dialog as HTMLDialogElement).open) {
+      throw new Error(`expected dialog matching ${String(name)} to be open, but its .open attribute is false`);
+    }
+    return dialog;
   }
 
   it("opens the disable-confirm modal, fires PATCH with reason + enabled=false, refreshes the policy", async () => {

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AppControlApiError, ReauthRequiredError } from "../../api";
+import { useEffect, useState } from "react";
 import { useReauthRetry } from "../../hooks/useReauthRetry";
 import { ReauthModal } from "../ReauthModal";
-import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
+import { AppControlDialogShell } from "./AppControlDialogShell";
+import { applyAppControlSubmitError } from "./dialogErrors";
 import "./ApplicationControl.scss";
 
 // ConfirmActionModal asks the operator to type a reason before a destructive or visible action goes through. Used by the
@@ -48,12 +48,12 @@ export function ConfirmActionModal({
   onClose,
   onConfirm,
 }: ConfirmActionModalProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Reset on every open so the previous attempt's reason doesn't leak across actions.
+  // Reset on every open so the previous attempt's reason doesn't leak across actions. The parent also re-mounts this component
+  // via a key on each new pending action (PolicyDetail.tsx) so this effect's reset is a defense-in-depth path.
   useEffect(() => {
     if (!open) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset tied to the open prop transition
@@ -62,36 +62,7 @@ export function ConfirmActionModal({
     setFormError(null);
   }, [open]);
 
-  useEffect(() => {
-    const dlg = dialogRef.current;
-    if (!dlg) return;
-    if (open && !dlg.open) {
-      dlg.showModal();
-    } else if (!open && dlg.open) {
-      dlg.close();
-    }
-  }, [open]);
-
-  const handleCancel = useCallback((e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.preventDefault();
-    onClose();
-  }, [onClose]);
-
-  useEffect(() => {
-    const dlg = dialogRef.current;
-    if (!dlg) return undefined;
-    const onBackdrop = (e: MouseEvent) => {
-      if (e.target === dlg) onClose();
-    };
-    dlg.addEventListener("click", onBackdrop);
-    return () => { dlg.removeEventListener("click", onBackdrop); };
-  }, [onClose]);
-
-  const wrappedConfirm = useCallback(
-    (trimmedReason: string) => onConfirm(trimmedReason),
-    [onConfirm],
-  );
-  const { call: callConfirm, modal: reauthModal } = useReauthRetry(wrappedConfirm);
+  const { call: callConfirm, modal: reauthModal } = useReauthRetry(onConfirm);
 
   const trimmedReason = reason.trim();
   const submitDisabled = busy || trimmedReason.length === 0;
@@ -106,17 +77,8 @@ export function ConfirmActionModal({
       // Caller is responsible for closing the modal in response to onConfirm resolving;
       // staying open here lets a multi-step parent flow render an in-place success state if it wants.
     } catch (err) {
-      if (err instanceof ReauthRequiredError) {
-        // useReauthRetry's modal is mounted at the bottom of this component; the user finishes the reauth and the original call
-        // retries on its own. No UI work to do here.
-        return;
-      }
-      if (err instanceof AppControlApiError) {
-        setFormError(errorMessageByCode.get(err.code) ?? err.message);
-      } else if (err instanceof Error) {
-        setFormError(err.message);
-      } else {
-        setFormError("Action failed.");
+      if (applyAppControlSubmitError(err, setFormError, errorMessageByCode, "Action failed.")) {
+        return; // ReauthRequiredError — useReauthRetry's modal handles the rest.
       }
     } finally {
       setBusy(false);
@@ -124,60 +86,30 @@ export function ConfirmActionModal({
   }
 
   return (
-    <>
-      <dialog
-        ref={dialogRef}
-        className="app-control-dialog"
-        aria-labelledby={DIALOG_TITLE_ID}
-        onCancel={handleCancel}
-      >
-        <div className="app-control-dialog__header">
-          <h2 id={DIALOG_TITLE_ID} className="app-control-dialog__title">{title}</h2>
-          <p className="app-control-dialog__subtitle">{description}</p>
-        </div>
-
-        {formError && (
-          <div className="app-control-dialog__error" role="alert">
-            {formError}
-          </div>
-        )}
-
-        <form
-          onSubmit={(e) => { void handleSubmit(e); }}
-          className="app-control-dialog__form"
-        >
-          <Input
-            id="confirm-action-reason"
-            label="Reason (required for audit log)"
-            type="text"
-            placeholder={reasonPlaceholder ?? "Why are you making this change?"}
-            value={reason}
-            onChange={(e) => { setReason(e.target.value); }}
-            disabled={busy}
-            autoFocus
-          />
-
-          <div className="app-control-dialog__actions">
-            <Button
-              type="button"
-              variant="text-link"
-              onClick={onClose}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant={confirmVariant}
-              disabled={submitDisabled}
-              isLoading={busy}
-            >
-              {busy ? "Saving…" : confirmLabel}
-            </Button>
-          </div>
-        </form>
-      </dialog>
-      <ReauthModal {...reauthModal} />
-    </>
+    <AppControlDialogShell
+      open={open}
+      onClose={onClose}
+      titleId={DIALOG_TITLE_ID}
+      title={title}
+      subtitle={description}
+      formError={formError}
+      busy={busy}
+      submitDisabled={submitDisabled}
+      submitLabel={confirmLabel}
+      submitVariant={confirmVariant}
+      onSubmit={(e) => { void handleSubmit(e); }}
+      reauthModal={<ReauthModal {...reauthModal} />}
+    >
+      <Input
+        id="confirm-action-reason"
+        label="Reason (required for audit log)"
+        type="text"
+        placeholder={reasonPlaceholder ?? "Why are you making this change?"}
+        value={reason}
+        onChange={(e) => { setReason(e.target.value); }}
+        disabled={busy}
+        autoFocus
+      />
+    </AppControlDialogShell>
   );
 }

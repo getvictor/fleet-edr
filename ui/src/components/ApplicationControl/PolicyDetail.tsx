@@ -15,12 +15,16 @@ import { EditRuleModal } from "./EditRuleModal";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import "./ApplicationControl.scss";
 
-// pendingConfirm captures which per-row action the operator clicked + the row it targets, so the shared ConfirmActionModal can
-// render the right copy and dispatch the right API call when the operator submits a reason. The kind discriminator drives both
-// the modal labels AND the onConfirm side-effect.
-type PendingConfirm =
-  | { kind: "delete"; rule: ApplicationControlRule }
-  | { kind: "toggle"; rule: ApplicationControlRule };
+// ActiveModal is the union that captures which per-row modal is currently open. Encoding mutual exclusion in the type closes
+// the Copilot finding on PR #189 — the previous shape kept two independent `useState` slots and relied on call-site discipline
+// to avoid opening two modals at once. Now `add`, `edit`, `confirm-delete`, and `confirm-toggle` are exclusive by construction
+// and a future helper that forgets to clear the previous state is a type error rather than a UX bug.
+type ActiveModal =
+  | { kind: "none" }
+  | { kind: "add" }
+  | { kind: "edit"; rule: ApplicationControlRule }
+  | { kind: "confirm-delete"; rule: ApplicationControlRule }
+  | { kind: "confirm-toggle"; rule: ApplicationControlRule };
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
   critical: "critical",
@@ -54,11 +58,10 @@ export function PolicyDetail() {
   const [policy, setPolicy] = useState<ApplicationControlPolicy | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
-  // editingRule + pendingConfirm own the per-row modal state. Only one of the two is ever populated at a time; the modals close
-  // when their target is set to null. Defined here so the rules table inside RulesTable can fire the open callbacks via props.
-  const [editingRule, setEditingRule] = useState<ApplicationControlRule | null>(null);
-  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  // activeModal is the union of every possible per-row modal state. Mutually exclusive by construction; opening a new modal
+  // implicitly closes whichever was previously active because there's exactly one state slot.
+  const [activeModal, setActiveModal] = useState<ActiveModal>({ kind: "none" });
+  const closeModal = useCallback(() => { setActiveModal({ kind: "none" }); }, []);
 
   // refreshKey bumps to force a re-fetch (e.g. after Save in the
   // modal). useEffect below owns the actual fetch lifecycle so the
@@ -123,7 +126,7 @@ export function PolicyDetail() {
   const actions = (
     <Button
       variant="primary"
-      onClick={() => { setAddOpen(true); }}
+      onClick={() => { setActiveModal({ kind: "add" }); }}
       disabled={!policy}
     >
       Add rule
@@ -131,6 +134,15 @@ export function PolicyDetail() {
   );
 
   const rules = policy?.rules ?? [];
+
+  // confirmRule extracts the rule from a confirm-* modal kind so the JSX below stays terse; returns null for non-confirm
+  // modals (the ConfirmActionModal won't render its content in that case).
+  const confirmKind = activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle"
+    ? activeModal.kind
+    : null;
+  const confirmRule = activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle"
+    ? activeModal.rule
+    : null;
 
   return (
     <>
@@ -150,52 +162,59 @@ export function PolicyDetail() {
           ) : (
             <RulesTable
               rules={rules}
-              onEdit={(rule) => { setEditingRule(rule); }}
-              onToggle={(rule) => { setPendingConfirm({ kind: "toggle", rule }); }}
-              onDelete={(rule) => { setPendingConfirm({ kind: "delete", rule }); }}
+              onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
+              onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
+              onDelete={(rule) => { setActiveModal({ kind: "confirm-delete", rule }); }}
             />
           )}
         </>
       )}
       {policy && (
         <AddRuleModal
-          open={addOpen}
+          open={activeModal.kind === "add"}
           policyID={policy.id}
-          onClose={() => { setAddOpen(false); }}
+          onClose={closeModal}
           onCreated={() => {
-            setAddOpen(false);
+            closeModal();
             refresh();
           }}
         />
       )}
+      {/*
+        key={editKey}: forces React to remount EditRuleModal when the target rule changes (Gemini finding on PR #189).
+        Without it, the autoFocus on the severity Select would only fire on the very first open of this component instance.
+        Keyed by rule id so re-opening on the same row replays initialState; switching rows replays with the new row.
+      */}
       <EditRuleModal
-        open={editingRule !== null}
-        rule={editingRule}
-        onClose={() => { setEditingRule(null); }}
+        key={activeModal.kind === "edit" ? `edit-${String(activeModal.rule.id)}` : "edit-closed"}
+        open={activeModal.kind === "edit"}
+        rule={activeModal.kind === "edit" ? activeModal.rule : null}
+        onClose={closeModal}
         onSaved={() => {
-          setEditingRule(null);
+          closeModal();
           refresh();
         }}
       />
       <ConfirmActionModal
-        open={pendingConfirm !== null}
-        title={confirmTitleFor(pendingConfirm)}
-        description={confirmDescriptionFor(pendingConfirm)}
-        confirmLabel={confirmLabelFor(pendingConfirm)}
-        confirmVariant={pendingConfirm?.kind === "delete" ? "alert" : "primary"}
-        reasonPlaceholder={confirmReasonPlaceholderFor(pendingConfirm)}
-        onClose={() => { setPendingConfirm(null); }}
+        key={confirmRule ? `confirm-${String(confirmKind)}-${String(confirmRule.id)}` : "confirm-closed"}
+        open={confirmRule !== null}
+        title={confirmTitleFor(activeModal)}
+        description={confirmDescriptionFor(activeModal)}
+        confirmLabel={confirmLabelFor(activeModal)}
+        confirmVariant={activeModal.kind === "confirm-delete" ? "alert" : "primary"}
+        reasonPlaceholder={confirmReasonPlaceholderFor(activeModal)}
+        onClose={closeModal}
         onConfirm={async (reason) => {
-          if (!pendingConfirm) return;
-          if (pendingConfirm.kind === "delete") {
-            await deleteAppControlRule(pendingConfirm.rule.id, { reason });
-          } else {
-            await updateAppControlRule(pendingConfirm.rule.id, {
-              enabled: !pendingConfirm.rule.enabled,
+          if (!confirmRule) return;
+          if (activeModal.kind === "confirm-delete") {
+            await deleteAppControlRule(confirmRule.id, { reason });
+          } else if (activeModal.kind === "confirm-toggle") {
+            await updateAppControlRule(confirmRule.id, {
+              enabled: !confirmRule.enabled,
               reason,
             });
           }
-          setPendingConfirm(null);
+          closeModal();
           refresh();
         }}
       />
@@ -205,16 +224,16 @@ export function PolicyDetail() {
 
 // confirmTitleFor + the three sibling helpers shape the per-action copy passed into the shared ConfirmActionModal. Keeping the
 // switch outside the component body so the modal can stay generic and the per-action vocabulary lives next to the dispatch.
-function confirmTitleFor(pending: PendingConfirm | null): string {
-  if (!pending) return "";
-  if (pending.kind === "delete") return "Delete rule";
-  return pending.rule.enabled ? "Disable rule" : "Enable rule";
+function confirmTitleFor(active: ActiveModal): string {
+  if (active.kind === "confirm-delete") return "Delete rule";
+  if (active.kind === "confirm-toggle") return active.rule.enabled ? "Disable rule" : "Enable rule";
+  return "";
 }
 
-function confirmDescriptionFor(pending: PendingConfirm | null): React.ReactNode {
-  if (!pending) return "";
-  const ident = pending.rule.identifier;
-  if (pending.kind === "delete") {
+function confirmDescriptionFor(active: ActiveModal): React.ReactNode {
+  if (active.kind !== "confirm-delete" && active.kind !== "confirm-toggle") return "";
+  const ident = active.rule.identifier;
+  if (active.kind === "confirm-delete") {
     return (
       <>
         The rule for <code>{ident}</code> will be removed and the policy version
@@ -222,7 +241,7 @@ function confirmDescriptionFor(pending: PendingConfirm | null): React.ReactNode 
       </>
     );
   }
-  if (pending.rule.enabled) {
+  if (active.rule.enabled) {
     return (
       <>
         Disabling pauses enforcement for <code>{ident}</code>. The rule stays
@@ -239,18 +258,20 @@ function confirmDescriptionFor(pending: PendingConfirm | null): React.ReactNode 
   );
 }
 
-function confirmLabelFor(pending: PendingConfirm | null): string {
-  if (!pending) return "Confirm";
-  if (pending.kind === "delete") return "Delete rule";
-  return pending.rule.enabled ? "Disable rule" : "Enable rule";
+function confirmLabelFor(active: ActiveModal): string {
+  if (active.kind === "confirm-delete") return "Delete rule";
+  if (active.kind === "confirm-toggle") return active.rule.enabled ? "Disable rule" : "Enable rule";
+  return "Confirm";
 }
 
-function confirmReasonPlaceholderFor(pending: PendingConfirm | null): string {
-  if (!pending) return "";
-  if (pending.kind === "delete") return "Why are you deleting this rule?";
-  return pending.rule.enabled
-    ? "Why are you disabling this rule?"
-    : "Why are you re-enabling this rule?";
+function confirmReasonPlaceholderFor(active: ActiveModal): string {
+  if (active.kind === "confirm-delete") return "Why are you deleting this rule?";
+  if (active.kind === "confirm-toggle") {
+    return active.rule.enabled
+      ? "Why are you disabling this rule?"
+      : "Why are you re-enabling this rule?";
+  }
+  return "";
 }
 
 interface RulesTableProps {

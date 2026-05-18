@@ -1,14 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   createAppControlRule,
-  AppControlApiError,
-  ReauthRequiredError,
   type CreateAppControlRuleRequest,
 } from "../../api";
 import { useReauthRetry } from "../../hooks/useReauthRetry";
 import { ReauthModal } from "../ReauthModal";
-import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
+import { AppControlDialogShell } from "./AppControlDialogShell";
+import { applyAppControlSubmitError } from "./dialogErrors";
 import "./ApplicationControl.scss";
 
 // AddRuleModalProps is the parent contract. open drives showModal() /
@@ -120,7 +119,6 @@ const errorMessageByCode = new Map<string, string>([
 ]);
 
 export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModalProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const [ruleType, setRuleType] = useState("BINARY");
   const [identifier, setIdentifier] = useState("");
   const [severity, setSeverity] = useState("medium");
@@ -130,9 +128,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Reset the form whenever the dialog opens. Otherwise a Cancel +
-  // re-open would surface the previous attempt's values, which is
-  // confusing for the demo recording (and for real operators).
+  // Reset the form whenever the dialog opens. Otherwise a Cancel + re-open would surface the previous attempt's values.
   useEffect(() => {
     if (!open) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset tied to the open prop transition
@@ -145,35 +141,6 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
     setBusy(false);
     setFormError(null);
   }, [open]);
-
-  // Open / close the native <dialog>. showModal() is what gives us
-  // backdrop, focus trap, and Escape-to-cancel for free; the
-  // declarative `open` attribute would render non-modal.
-  useEffect(() => {
-    const dlg = dialogRef.current;
-    if (!dlg) return;
-    if (open && !dlg.open) {
-      dlg.showModal();
-    } else if (!open && dlg.open) {
-      dlg.close();
-    }
-  }, [open]);
-
-  // Escape and backdrop click both route through onClose so the
-  // parent's open-state is the single source of truth.
-  const handleCancel = useCallback((e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.preventDefault();
-    onClose();
-  }, [onClose]);
-  useEffect(() => {
-    const dlg = dialogRef.current;
-    if (!dlg) return undefined;
-    const onBackdrop = (e: MouseEvent) => {
-      if (e.target === dlg) onClose();
-    };
-    dlg.addEventListener("click", onBackdrop);
-    return () => { dlg.removeEventListener("click", onBackdrop); };
-  }, [onClose]);
 
   const submitCreate = useCallback(
     (req: CreateAppControlRuleRequest) => createAppControlRule(policyID, req),
@@ -191,12 +158,8 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
       setFormError(validation);
       return;
     }
-    // The host-app modal only renders "More info" for http/https
-    // URLs (BlockAlert.swift rejects other schemes so a hostile
-    // rule author can't trigger arbitrary URL handlers from a
-    // single click). Enforce the same posture client-side so the
-    // operator sees the rejection at the form instead of saving
-    // a rule whose link will never appear in the modal.
+    // The host-app modal only renders "More info" for http/https URLs (BlockAlert.swift rejects other schemes so a hostile rule
+    // author can't trigger arbitrary URL handlers from a single click). Enforce the same posture client-side.
     const trimmedURL = customURL.trim();
     if (trimmedURL.length > 0) {
       try {
@@ -224,18 +187,8 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
       await callCreate(req);
       onCreated();
     } catch (err) {
-      if (err instanceof ReauthRequiredError) {
-        // useReauthRetry's modal is mounted at the bottom of this
-        // component; the user finishes the reauth and the original
-        // call retries on its own. No UI work to do here.
+      if (applyAppControlSubmitError(err, setFormError, errorMessageByCode, "Failed to create rule.")) {
         return;
-      }
-      if (err instanceof AppControlApiError) {
-        setFormError(errorMessageByCode.get(err.code) ?? err.message);
-      } else if (err instanceof Error) {
-        setFormError(err.message);
-      } else {
-        setFormError("Failed to create rule.");
       }
     } finally {
       setBusy(false);
@@ -243,122 +196,93 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
   }
 
   return (
-    <>
-      <dialog
-        ref={dialogRef}
-        className="app-control-dialog"
-        aria-labelledby={DIALOG_TITLE_ID}
-        onCancel={handleCancel}
+    <AppControlDialogShell
+      open={open}
+      onClose={onClose}
+      titleId={DIALOG_TITLE_ID}
+      title="Add rule"
+      subtitle="Block an executable on every assigned host. The rule fans out to enrolled agents on save."
+      formError={formError}
+      busy={busy}
+      submitDisabled={submitDisabled}
+      submitLabel="Save rule"
+      onSubmit={(e) => { void handleSubmit(e); }}
+      reauthModal={<ReauthModal {...reauthModal} />}
+    >
+      <Select
+        id="rule-type"
+        label="Type"
+        inline={false}
+        value={ruleType}
+        onChange={(e) => { setRuleType(e.target.value); }}
+        disabled={busy}
       >
-        <div className="app-control-dialog__header">
-          <h2 id={DIALOG_TITLE_ID} className="app-control-dialog__title">Add rule</h2>
-          <p className="app-control-dialog__subtitle">
-            Block an executable on every assigned host. The rule fans
-            out to enrolled agents on save.
-          </p>
-        </div>
-
-        {formError && (
-          <div className="app-control-dialog__error" role="alert">
-            {formError}
-          </div>
-        )}
-
-        <form
-          onSubmit={(e) => { void handleSubmit(e); }}
-          className="app-control-dialog__form"
-        >
-          <Select
-            id="rule-type"
-            label="Type"
-            inline={false}
-            value={ruleType}
-            onChange={(e) => { setRuleType(e.target.value); }}
-            disabled={busy}
+        {RULE_TYPES.map((t) => (
+          <option
+            key={t.value}
+            value={t.value}
+            disabled={!t.available}
           >
-            {RULE_TYPES.map((t) => (
-              <option
-                key={t.value}
-                value={t.value}
-                disabled={!t.available}
-              >
-                {t.label}{t.available ? "" : " (coming soon)"}
-              </option>
-            ))}
-          </Select>
+            {t.label}{t.available ? "" : " (coming soon)"}
+          </option>
+        ))}
+      </Select>
 
-          <Input
-            id="rule-identifier"
-            label="Identifier"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={PLACEHOLDERS.get(ruleType) ?? ""}
-            value={identifier}
-            onChange={(e) => { setIdentifier(e.target.value); }}
-            disabled={busy}
-            autoFocus
-          />
+      <Input
+        id="rule-identifier"
+        label="Identifier"
+        type="text"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={PLACEHOLDERS.get(ruleType) ?? ""}
+        value={identifier}
+        onChange={(e) => { setIdentifier(e.target.value); }}
+        disabled={busy}
+        autoFocus
+      />
 
-          <Select
-            id="rule-severity"
-            label="Severity"
-            inline={false}
-            value={severity}
-            onChange={(e) => { setSeverity(e.target.value); }}
-            disabled={busy}
-          >
-            {SEVERITIES.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </Select>
+      <Select
+        id="rule-severity"
+        label="Severity"
+        inline={false}
+        value={severity}
+        onChange={(e) => { setSeverity(e.target.value); }}
+        disabled={busy}
+      >
+        {SEVERITIES.map((s) => (
+          <option key={s} value={s}>{s}</option>
+        ))}
+      </Select>
 
-          <Input
-            id="rule-custom-msg"
-            label="Custom message (optional)"
-            type="text"
-            placeholder="Blocked by corporate policy"
-            value={customMsg}
-            onChange={(e) => { setCustomMsg(e.target.value); }}
-            disabled={busy}
-          />
+      <Input
+        id="rule-custom-msg"
+        label="Custom message (optional)"
+        type="text"
+        placeholder="Blocked by corporate policy"
+        value={customMsg}
+        onChange={(e) => { setCustomMsg(e.target.value); }}
+        disabled={busy}
+      />
 
-          <Input
-            id="rule-custom-url"
-            label="More info URL (optional, http/https only)"
-            type="url"
-            placeholder="https://help.example.com/blocked"
-            value={customURL}
-            onChange={(e) => { setCustomURL(e.target.value); }}
-            disabled={busy}
-          />
+      <Input
+        id="rule-custom-url"
+        label="More info URL (optional, http/https only)"
+        type="url"
+        placeholder="https://help.example.com/blocked"
+        value={customURL}
+        onChange={(e) => { setCustomURL(e.target.value); }}
+        disabled={busy}
+      />
 
-          <Input
-            id="rule-reason"
-            label="Reason (required for audit log)"
-            type="text"
-            placeholder="Why are you authoring this rule?"
-            value={reason}
-            onChange={(e) => { setReason(e.target.value); }}
-            disabled={busy}
-          />
-
-          <div className="app-control-dialog__actions">
-            <Button
-              type="button"
-              variant="text-link"
-              onClick={onClose}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={submitDisabled} isLoading={busy}>
-              {busy ? "Saving…" : "Save rule"}
-            </Button>
-          </div>
-        </form>
-      </dialog>
-      <ReauthModal {...reauthModal} />
-    </>
+      <Input
+        id="rule-reason"
+        label="Reason (required for audit log)"
+        type="text"
+        placeholder="Why are you authoring this rule?"
+        value={reason}
+        onChange={(e) => { setReason(e.target.value); }}
+        disabled={busy}
+      />
+    </AppControlDialogShell>
   );
 }
