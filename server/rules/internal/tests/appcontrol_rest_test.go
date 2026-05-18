@@ -1094,3 +1094,169 @@ func TestAppControlREST_BulkUpsertRules_Idempotent(t *testing.T) {
 	assert.Equal(t, 0, events[1].Payload["rules_inserted"])
 	assert.Equal(t, 1, events[1].Payload["rules_updated"])
 }
+
+// TestAppControlREST_ListRulesAcrossPolicies_HappyPath pins the REST wire shape the cross-policy GET endpoint emits: a
+// {rules, total, limit, offset} envelope. The default policy gets two rules seeded so the empty filter returns >=2 rows.
+func TestAppControlREST_ListRulesAcrossPolicies_HappyPath(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	for i, ident := range []string{strings.Repeat("a", 64), strings.Repeat("b", 64)} {
+		create := r.do(t, http.MethodPost,
+			"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+			map[string]any{
+				"rule_type":  rulesapi.RuleTypeBinary,
+				"identifier": ident,
+				"severity":   rulesapi.SeverityRuleHigh,
+				"reason":     "seed " + i64(int64(i)),
+			})
+		require.Equal(t, http.StatusCreated, create.StatusCode)
+		create.Body.Close()
+	}
+
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Rules  []rulesapi.ApplicationControlRule `json:"rules"`
+		Total  int                               `json:"total"`
+		Limit  int                               `json:"limit"`
+		Offset int                               `json:"offset"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.GreaterOrEqual(t, body.Total, 2)
+	assert.Len(t, body.Rules, body.Total)
+	assert.Equal(t, rulesapi.DefaultListRulesAcrossPoliciesLimit, body.Limit, "limit defaults to DefaultListRulesAcrossPoliciesLimit")
+	assert.Equal(t, 0, body.Offset)
+}
+
+// TestAppControlREST_ListRulesAcrossPolicies_Filters covers each query-param dimension narrowing the result correctly. Two
+// rules of different types seed the policy so a rule_type filter has something to narrow on.
+func TestAppControlREST_ListRulesAcrossPolicies_Filters(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	// Seed: one BINARY high + one CDHASH medium so each filter dimension has a unique target.
+	for _, body := range []map[string]any{
+		{"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("a", 64), "severity": rulesapi.SeverityRuleHigh, "reason": "binary seed"},
+		{"rule_type": rulesapi.RuleTypeCDHash, "identifier": strings.Repeat("c", 40), "severity": rulesapi.SeverityRuleMedium, "reason": "cdhash seed"},
+	} {
+		create := r.do(t, http.MethodPost, "/api/v1/app-control/policies/"+i64(policyID)+"/rules", body)
+		require.Equal(t, http.StatusCreated, create.StatusCode)
+		create.Body.Close()
+	}
+
+	cases := []struct {
+		name        string
+		query       string
+		wantType    rulesapi.RuleType
+		expectAtMin int
+	}{
+		{name: "filter by rule_type=BINARY", query: "?rule_type=BINARY", wantType: rulesapi.RuleTypeBinary, expectAtMin: 1},
+		{name: "filter by rule_type=CDHASH", query: "?rule_type=CDHASH", wantType: rulesapi.RuleTypeCDHash, expectAtMin: 1},
+		{name: "filter by severity=high", query: "?severity=high", expectAtMin: 1},
+		{name: "filter by policy_id", query: "?policy_id=" + i64(policyID), expectAtMin: 2},
+		{name: "limit=1 caps page size; Total ignores limit", query: "?limit=1", expectAtMin: 1},
+		{name: "intersection: BINARY + policy_id", query: "?rule_type=BINARY&policy_id=" + i64(policyID), wantType: rulesapi.RuleTypeBinary, expectAtMin: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules"+tc.query, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var body struct {
+				Rules []rulesapi.ApplicationControlRule `json:"rules"`
+				Total int                               `json:"total"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			assert.GreaterOrEqual(t, body.Total, tc.expectAtMin)
+			if tc.wantType != "" {
+				for _, row := range body.Rules {
+					assert.Equal(t, tc.wantType, row.RuleType, "every row must match the rule_type filter")
+				}
+			}
+		})
+	}
+}
+
+// TestAppControlREST_ListRulesAcrossPolicies_RejectsInvalidQuery covers the typed 400 paths every malformed query param
+// surfaces. Each case returns application_control.invalid_query — no result data leaks even on bad input.
+func TestAppControlREST_ListRulesAcrossPolicies_RejectsInvalidQuery(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{name: "non-numeric policy_id", query: "?policy_id=abc"},
+		{name: "non-positive policy_id", query: "?policy_id=0"},
+		{name: "unknown rule_type", query: "?rule_type=GIBBERISH"},
+		{name: "unknown severity", query: "?severity=urgent"},
+		{name: "non-boolean enabled", query: "?enabled=maybe"},
+		{name: "limit too large", query: "?limit=99999"},
+		{name: "limit negative", query: "?limit=-1"},
+		{name: "limit zero", query: "?limit=0"},
+		{name: "non-numeric limit", query: "?limit=abc"},
+		{name: "negative offset", query: "?offset=-5"},
+		{name: "non-numeric offset", query: "?offset=xyz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules"+tc.query, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var body struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			assert.Equal(t, "application_control.invalid_query", body.Error)
+		})
+	}
+}
+
+// TestAppControlREST_ListRulesAcrossPolicies_Pagination pins the offset+limit contract: page 1 + page 2 cover the full set
+// without overlap; Total is constant across pages.
+func TestAppControlREST_ListRulesAcrossPolicies_Pagination(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	for _, ident := range []string{
+		strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64),
+	} {
+		create := r.do(t, http.MethodPost,
+			"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+			map[string]any{
+				"rule_type": rulesapi.RuleTypeBinary, "identifier": ident,
+				"severity": rulesapi.SeverityRuleHigh, "reason": "pagination seed",
+			})
+		require.Equal(t, http.StatusCreated, create.StatusCode)
+		create.Body.Close()
+	}
+
+	page1Resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules?limit=2&offset=0", nil)
+	defer page1Resp.Body.Close()
+	var page1 struct {
+		Rules []rulesapi.ApplicationControlRule `json:"rules"`
+		Total int                               `json:"total"`
+	}
+	require.NoError(t, json.NewDecoder(page1Resp.Body).Decode(&page1))
+	assert.Len(t, page1.Rules, 2)
+
+	page2Resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules?limit=2&offset=2", nil)
+	defer page2Resp.Body.Close()
+	var page2 struct {
+		Rules []rulesapi.ApplicationControlRule `json:"rules"`
+		Total int                               `json:"total"`
+	}
+	require.NoError(t, json.NewDecoder(page2Resp.Body).Decode(&page2))
+	assert.Equal(t, page1.Total, page2.Total, "Total stays constant across pages")
+	// Page 1 + page 2 must not share rule IDs (deterministic ordering by id).
+	seen := map[int64]bool{}
+	for _, r := range page1.Rules {
+		seen[r.ID] = true
+	}
+	for _, r := range page2.Rules {
+		assert.False(t, seen[r.ID], "page 2 must not repeat any row from page 1")
+	}
+}

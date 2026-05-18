@@ -680,7 +680,13 @@ func (h *AppControlHandler) handleListRulesAcrossPolicies(w http.ResponseWriter,
 		req.PolicyID = &id
 	}
 	if raw := q.Get("rule_type"); raw != "" {
-		req.RuleType = api.RuleType(raw)
+		rt := api.RuleType(raw)
+		if !api.IsValidRuleType(rt) {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery,
+				"invalid rule_type query parameter (one of: BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH)")
+			return
+		}
+		req.RuleType = rt
 	}
 	if raw := q.Get("enabled"); raw != "" {
 		b, err := strconv.ParseBool(raw)
@@ -691,7 +697,13 @@ func (h *AppControlHandler) handleListRulesAcrossPolicies(w http.ResponseWriter,
 		req.Enabled = &b
 	}
 	if raw := q.Get("severity"); raw != "" {
-		req.Severity = api.Severity(raw)
+		sev := api.Severity(raw)
+		if !api.IsValidSeverity(sev) {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery,
+				"invalid severity query parameter (one of: low, medium, high, critical)")
+			return
+		}
+		req.Severity = sev
 	}
 	req.Source = q.Get("source")
 	if raw := q.Get("limit"); raw != "" {

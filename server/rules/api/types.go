@@ -183,6 +183,17 @@ const (
 	RuleTypePath RuleType = "PATH"
 )
 
+// IsValidRuleType returns true for every defined RuleType value. Used at REST handler boundaries to validate untrusted query
+// parameters before they reach the Store (which would otherwise silently produce an empty result set for unknown values
+// instead of a typed 400). Mirrors the spec's enumerable RuleType set.
+func IsValidRuleType(rt RuleType) bool {
+	switch rt {
+	case RuleTypeCDHash, RuleTypeBinary, RuleTypeSigningID, RuleTypeCertificate, RuleTypeTeamID, RuleTypePath:
+		return true
+	}
+	return false
+}
+
 // Action is the verb a matched rule applies. The demo cut and the rest of Phase A constrain this to BLOCK; ALLOW and SILENT_BLOCK
 // arrive with the Lockdown change. Stable wire-shape string; renaming is a contract break.
 type Action string
@@ -210,6 +221,16 @@ const (
 	SeverityRuleHigh     Severity = "high"
 	SeverityRuleCritical Severity = "critical"
 )
+
+// IsValidSeverity returns true for every defined Severity value. Used at REST handler boundaries to validate untrusted
+// query parameters before they reach the Store.
+func IsValidSeverity(s Severity) bool {
+	switch s {
+	case SeverityRuleLow, SeverityRuleMedium, SeverityRuleHigh, SeverityRuleCritical:
+		return true
+	}
+	return false
+}
 
 // Source records where a rule came from. `admin` is the human-edited case the demo exercises; `imported` is a Santa StaticRules import
 // (post-demo); `intel` is a threat-intel feed entry (post-demo).

@@ -30,11 +30,26 @@ const makeRule = (over: Partial<ApplicationControlRule>): ApplicationControlRule
 });
 
 const rules: ApplicationControlRule[] = [
-  makeRule({ id: 1, rule_type: "BINARY",    identifier: "a".repeat(64), source: "admin",  enabled: true,  comment: "blocked by IT" }),
-  makeRule({ id: 2, rule_type: "CDHASH",    identifier: "b".repeat(40), source: "import", enabled: false, comment: "legacy entry" }),
-  makeRule({ id: 3, rule_type: "TEAMID",    identifier: "EQHXZ8M8AV",   source: "admin",  enabled: true,  comment: "" }),
-  makeRule({ id: 4, rule_type: "SIGNINGID", identifier: "platform:com.apple.curl", source: "import", enabled: true }),
-  makeRule({ id: 5, rule_type: "BINARY",    identifier: "c".repeat(64), source: "api",    enabled: false, comment: "rolled back" }),
+  makeRule({
+    id: 1, rule_type: "BINARY", identifier: "a".repeat(64),
+    source: "admin", enabled: true, comment: "blocked by IT",
+  }),
+  makeRule({
+    id: 2, rule_type: "CDHASH", identifier: "b".repeat(40),
+    source: "import", enabled: false, comment: "legacy entry",
+  }),
+  makeRule({
+    id: 3, rule_type: "TEAMID", identifier: "EQHXZ8M8AV",
+    source: "admin", enabled: true, comment: "",
+  }),
+  makeRule({
+    id: 4, rule_type: "SIGNINGID", identifier: "platform:com.apple.curl",
+    source: "import", enabled: true,
+  }),
+  makeRule({
+    id: 5, rule_type: "BINARY", identifier: "c".repeat(64),
+    source: "api", enabled: false, comment: "rolled back",
+  }),
 ];
 
 describe("applyRulesFilter", () => {

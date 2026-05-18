@@ -131,19 +131,20 @@ func TestAppControl_ListRulesAcrossPolicies_FilterDimensions(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Every seeded rule is enabled=true by CreateRule's default; the enabled tri-state filter is exercised by the sibling
+	// TestAppControl_ListRulesAcrossPolicies_EnabledTriState test which calls UpdateRule to flip a row.
 	rulesToSeed := []struct {
 		policyID   int64
 		ruleType   api.RuleType
 		identifier string
 		severity   api.Severity
-		enabled    bool
 	}{
-		{defaultPolicy.ID, api.RuleTypeBinary, strings.Repeat("a", 64), api.SeverityRuleHigh, true},
-		{defaultPolicy.ID, api.RuleTypeBinary, strings.Repeat("b", 64), api.SeverityRuleMedium, true},
-		{defaultPolicy.ID, api.RuleTypeCDHash, strings.Repeat("c", 40), api.SeverityRuleHigh, true},
-		{defaultPolicy.ID, api.RuleTypeTeamID, "EQHXZ8M8AV", api.SeverityRuleMedium, true},
-		{otherPolicy.ID, api.RuleTypeBinary, strings.Repeat("d", 64), api.SeverityRuleCritical, true},
-		{otherPolicy.ID, api.RuleTypeCDHash, strings.Repeat("e", 40), api.SeverityRuleLow, true},
+		{defaultPolicy.ID, api.RuleTypeBinary, strings.Repeat("a", 64), api.SeverityRuleHigh},
+		{defaultPolicy.ID, api.RuleTypeBinary, strings.Repeat("b", 64), api.SeverityRuleMedium},
+		{defaultPolicy.ID, api.RuleTypeCDHash, strings.Repeat("c", 40), api.SeverityRuleHigh},
+		{defaultPolicy.ID, api.RuleTypeTeamID, "EQHXZ8M8AV", api.SeverityRuleMedium},
+		{otherPolicy.ID, api.RuleTypeBinary, strings.Repeat("d", 64), api.SeverityRuleCritical},
+		{otherPolicy.ID, api.RuleTypeCDHash, strings.Repeat("e", 40), api.SeverityRuleLow},
 	}
 	for _, r := range rulesToSeed {
 		_, err := store.CreateRule(ctx, api.CreateRuleRequest{
@@ -198,7 +199,9 @@ func TestAppControl_ListRulesAcrossPolicies_FilterDimensions(t *testing.T) {
 	defaultLimit, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{Limit: 0})
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(defaultLimit.Rules), api.DefaultListRulesAcrossPoliciesLimit)
-	overLimit, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{Limit: api.MaxListRulesAcrossPoliciesLimit + 1000})
+	overLimit, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{
+		Limit: api.MaxListRulesAcrossPoliciesLimit + 1000,
+	})
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(overLimit.Rules), api.MaxListRulesAcrossPoliciesLimit)
 }

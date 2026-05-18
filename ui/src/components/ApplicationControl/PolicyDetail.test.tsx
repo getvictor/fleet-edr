@@ -1,7 +1,6 @@
-import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { Link, MemoryRouter, Routes, Route } from "react-router-dom";
 import { PolicyDetail } from "./PolicyDetail";
 import * as api from "../../api";
 import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";
@@ -229,10 +228,22 @@ describe("PolicyDetail", () => {
   // dimensions and the empty-state behavior when no rule matches.
 
   const makeFilterFixture = (): ApplicationControlRule[] => [
-    makeRule({ id: 1, rule_type: "BINARY",    identifier: "aaaa1111".repeat(8), source: "admin",  enabled: true,  custom_msg: "blocked by IT" }),
-    makeRule({ id: 2, rule_type: "CDHASH",    identifier: "bbbb2222".repeat(5), source: "import", enabled: false, comment: "legacy paste", custom_msg: undefined }),
-    makeRule({ id: 3, rule_type: "TEAMID",    identifier: "ABCDE12345",         source: "admin",  enabled: true,  custom_msg: undefined }),
-    makeRule({ id: 4, rule_type: "SIGNINGID", identifier: "platform:com.apple.curl", source: "import", enabled: true, custom_msg: undefined }),
+    makeRule({
+      id: 1, rule_type: "BINARY", identifier: "aaaa1111".repeat(8),
+      source: "admin", enabled: true, custom_msg: "blocked by IT",
+    }),
+    makeRule({
+      id: 2, rule_type: "CDHASH", identifier: "bbbb2222".repeat(5),
+      source: "import", enabled: false, comment: "legacy paste", custom_msg: undefined,
+    }),
+    makeRule({
+      id: 3, rule_type: "TEAMID", identifier: "ABCDE12345",
+      source: "admin", enabled: true, custom_msg: undefined,
+    }),
+    makeRule({
+      id: 4, rule_type: "SIGNINGID", identifier: "platform:com.apple.curl",
+      source: "import", enabled: true, custom_msg: undefined,
+    }),
   ];
 
   function identifiersInTable(): string[] {
@@ -370,27 +381,32 @@ describe("PolicyDetail", () => {
     const getSpy = vi.spyOn(api, "getAppControlPolicy");
     getSpy.mockImplementation((id: number) => {
       if (id === 7) return Promise.resolve(makePolicy({ id: 7, rules: makeFilterFixture() }));
-      return Promise.resolve(makePolicy({ id: 8, name: "Other", rules: [makeRule({ id: 99, rule_type: "BINARY", identifier: "z".repeat(64) })] }));
+      const otherRule = makeRule({ id: 99, rule_type: "BINARY", identifier: "z".repeat(64) });
+      return Promise.resolve(makePolicy({ id: 8, name: "Other", rules: [otherRule] }));
     });
 
-    function Parent() {
-      const [path, setPath] = React.useState("/app-control/policies/7");
-      return (
-        <MemoryRouter initialEntries={[path]} key={path}>
-          <button type="button" onClick={() => { setPath("/app-control/policies/8"); }}>switch</button>
-          <Routes>
-            <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
-          </Routes>
-        </MemoryRouter>
-      );
+    // Production-shape harness: a single MemoryRouter (NO `key` prop so it stays mounted across navigation) plus a
+    // "switch policy" link that triggers a route change via React Router's <Link>. This exercises the actual production
+    // path where the same <Routes> resolves both URLs to a re-rendered PolicyDetail with a fresh policyID prop —
+    // forcing the policyID-keyed reset effect to be what clears the filter. An earlier shape used a `key={path}`
+    // remount which would pass even with the reset effect removed (Copilot finding on PR #194).
+    function SwitchToOther() {
+      return <Link to="/app-control/policies/8">switch</Link>;
     }
-    render(<Parent />);
+    render(
+      <MemoryRouter initialEntries={["/app-control/policies/7"]}>
+        <SwitchToOther />
+        <Routes>
+          <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     // Activate the filter on policy 7.
     fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), { target: { value: "platform" } });
     expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
-    // Switch to policy 8.
-    fireEvent.click(screen.getByRole("button", { name: /switch/i }));
+    // Switch to policy 8 via in-router navigation (no router remount).
+    fireEvent.click(screen.getByRole("link", { name: /switch/i }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Other" })).toBeInTheDocument());
     // Filter is back to defaults: no summary line; search input is empty.
     expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
