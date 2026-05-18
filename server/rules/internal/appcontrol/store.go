@@ -148,23 +148,10 @@ func (s *Store) GetPolicyByName(ctx context.Context, name string) (api.Applicati
 
 // GetPolicyByID loads the policy row by primary key. Rules are NOT populated; callers that need rules call ListRulesByPolicy
 // explicitly. Used by the service-layer snapshot composer and the policy-delete audit path which both need a single policy by
-// id without paying for a full ListPolicies scan.
+// id without paying for a full ListPolicies scan. Delegates to the existing private getPolicyByID helper (mirroring the
+// GetRuleByID / getRuleByID delegation pattern) so the SELECT + scan + ErrNoRows mapping lives in one place.
 func (s *Store) GetPolicyByID(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
-	const query = `SELECT id, name, description, version, default_action,
-		created_at, updated_at, created_by, updated_by
-		FROM app_control_policies WHERE id = ?`
-	row := s.db.QueryRowxContext(ctx, query, policyID)
-	var p api.ApplicationControlPolicy
-	if err := row.Scan(
-		&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
-		}
-		return api.ApplicationControlPolicy{}, fmt.Errorf("appcontrol get policy by id: %w", err)
-	}
-	return p, nil
+	return s.getPolicyByID(ctx, policyID)
 }
 
 // ListPolicies returns every policy in name order. Rules are NOT populated; the list view shows the rule count only, which the REST

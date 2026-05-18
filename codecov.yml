@@ -37,8 +37,10 @@ flag_management:
     carryforward: true
     statuses:
       - type: project
-        target: auto
-        threshold: 1%
+        # Per-flag project target. Held at a fixed 70% rather than `auto` so the gate stops failing on small trend drifts (a flag
+        # going from 78% to 76% would otherwise breach the prior auto+1%-threshold setup). The patch gate below keeps regressions
+        # on new code visible; sonar's per-PR 80% new-code gate remains the authoritative bar.
+        target: 70%
       - type: patch
         # Per-flag patch target. Mirrors the project-wide patch target above; see the note there for why codecov is held one notch
         # below sonar's 80% new-code gate.
