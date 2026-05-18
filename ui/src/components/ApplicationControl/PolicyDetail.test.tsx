@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
@@ -222,5 +223,178 @@ describe("PolicyDetail", () => {
     await waitFor(() => {
       expect(screen.getByText(/error: nope/i)).toBeInTheDocument();
     });
+  });
+
+  // Filter tests. Per spec task 8.7 + the web-ui spec's filterable-rules-table requirement, these pin the four filter
+  // dimensions and the empty-state behavior when no rule matches.
+
+  const makeFilterFixture = (): ApplicationControlRule[] => [
+    makeRule({ id: 1, rule_type: "BINARY",    identifier: "aaaa1111".repeat(8), source: "admin",  enabled: true,  custom_msg: "blocked by IT" }),
+    makeRule({ id: 2, rule_type: "CDHASH",    identifier: "bbbb2222".repeat(5), source: "import", enabled: false, comment: "legacy paste", custom_msg: undefined }),
+    makeRule({ id: 3, rule_type: "TEAMID",    identifier: "ABCDE12345",         source: "admin",  enabled: true,  custom_msg: undefined }),
+    makeRule({ id: 4, rule_type: "SIGNINGID", identifier: "platform:com.apple.curl", source: "import", enabled: true, custom_msg: undefined }),
+  ];
+
+  function identifiersInTable(): string[] {
+    const table = screen.getByRole("table");
+    return within(table).getAllByRole("row").slice(1).map((row) => {
+      const cells = within(row).getAllByRole("cell");
+      // Identifier is the second column; its full value is on the title attribute (the cell text is truncated).
+      return cells[1].getAttribute("title") ?? "";
+    });
+  }
+
+  it("renders the filter bar with adaptive type + source dropdowns", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => {
+      expect(screen.getByRole("search")).toBeInTheDocument();
+    });
+    const typeSelect = screen.getByLabelText(/filter by rule type/i);
+    const sourceSelect = screen.getByLabelText(/filter by source/i);
+    expect(Array.from((typeSelect as HTMLSelectElement).options).map((o) => o.value))
+      .toEqual(["", "BINARY", "CDHASH", "SIGNINGID", "TEAMID"]);
+    expect(Array.from((sourceSelect as HTMLSelectElement).options).map((o) => o.value))
+      .toEqual(["", "admin", "import"]);
+  });
+
+  it("filters by free-text search over identifier", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), {
+      target: { value: "platform" },
+    });
+    expect(identifiersInTable()).toEqual(["platform:com.apple.curl"]);
+    expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
+  });
+
+  it("filters by free-text search over comment", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), {
+      target: { value: "LEGACY" },
+    });
+    // CDHASH rule's comment is "legacy paste" — case-insensitive match should surface only it.
+    expect(identifiersInTable().map((id) => id.slice(0, 8))).toEqual(["bbbb2222"]);
+  });
+
+  it("filters by exact rule_type", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/filter by rule type/i), { target: { value: "TEAMID" } });
+    expect(identifiersInTable()).toEqual(["ABCDE12345"]);
+  });
+
+  it("filters by enabled tri-state (Enabled then Disabled)", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const statusSelect = screen.getByLabelText(/filter by status/i);
+    fireEvent.change(statusSelect, { target: { value: "enabled" } });
+    expect(identifiersInTable()).toHaveLength(3);
+    fireEvent.change(statusSelect, { target: { value: "disabled" } });
+    expect(identifiersInTable().map((id) => id.slice(0, 8))).toEqual(["bbbb2222"]);
+  });
+
+  it("filters by source", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/filter by source/i), { target: { value: "import" } });
+    const ids = identifiersInTable();
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain("platform:com.apple.curl");
+  });
+
+  it("intersects multiple filter dimensions (BINARY + enabled)", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/filter by rule type/i), { target: { value: "BINARY" } });
+    fireEvent.change(screen.getByLabelText(/filter by status/i), { target: { value: "enabled" } });
+    expect(identifiersInTable()).toHaveLength(1);
+    expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
+  });
+
+  it("shows the no-match empty state when filters exclude every rule, with a working Clear link", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/filter by rule type/i), { target: { value: "TEAMID" } });
+    fireEvent.change(screen.getByLabelText(/filter by source/i), { target: { value: "import" } });
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.getByText(/no rules match the current filter/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /clear filters/i }));
+    // After clear, every rule is visible again.
+    expect(identifiersInTable()).toHaveLength(4);
+  });
+
+  it("hides the filter summary when no filter is active and shows it when one is", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({ rules: makeFilterFixture() }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    // No filter applied -> no summary line.
+    expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
+    // Type something into the search to activate the filter.
+    fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), {
+      target: { value: "aaaa" },
+    });
+    expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
+  });
+
+  it("resets the filter when the operator navigates to a different policy", async () => {
+    // PolicyDetail reuses the same component instance across :id changes via React Router. Without the policyID-keyed
+    // reset effect, the previous policy's filter would persist (Copilot finding on PR #193). Render under a parent that
+    // can swap the :id at runtime and assert the filter clears when policyID changes.
+    const getSpy = vi.spyOn(api, "getAppControlPolicy");
+    getSpy.mockImplementation((id: number) => {
+      if (id === 7) return Promise.resolve(makePolicy({ id: 7, rules: makeFilterFixture() }));
+      return Promise.resolve(makePolicy({ id: 8, name: "Other", rules: [makeRule({ id: 99, rule_type: "BINARY", identifier: "z".repeat(64) })] }));
+    });
+
+    function Parent() {
+      const [path, setPath] = React.useState("/app-control/policies/7");
+      return (
+        <MemoryRouter initialEntries={[path]} key={path}>
+          <button type="button" onClick={() => { setPath("/app-control/policies/8"); }}>switch</button>
+          <Routes>
+            <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+          </Routes>
+        </MemoryRouter>
+      );
+    }
+    render(<Parent />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    // Activate the filter on policy 7.
+    fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), { target: { value: "platform" } });
+    expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
+    // Switch to policy 8.
+    fireEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Other" })).toBeInTheDocument());
+    // Filter is back to defaults: no summary line; search input is empty.
+    expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
+    const searchInput = screen.getByLabelText(/search rules by identifier or comment/i);
+    expect(searchInput).toHaveProperty("value", "");
   });
 });
