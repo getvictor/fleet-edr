@@ -35,6 +35,55 @@
   font-size: $xx-small;
 }
 
+// Rules-table filter bar. Flex row that wraps on narrow viewports so the four controls don't squeeze the search input. The
+// summary line ("Showing N of M rules · Clear filters") only renders when filterIsActive, so it lays out as a separate flex
+// child that drops to its own line when the controls take the full width.
+.app-control__filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $pad-small;
+  margin-bottom: $pad-medium;
+}
+
+.app-control__filter-search {
+  flex: 1 1 240px;
+  min-width: 200px;
+  padding: $pad-xsmall $pad-small;
+  border: 1px solid $ui-fleet-black-25;
+  border-radius: 4px;
+  font-size: $xx-small;
+}
+
+.app-control__filter-select {
+  padding: $pad-xsmall $pad-small;
+  border: 1px solid $ui-fleet-black-25;
+  border-radius: 4px;
+  font-size: $xx-small;
+  background: white;
+}
+
+.app-control__filter-summary {
+  flex-basis: 100%;
+  color: $ui-fleet-black-50;
+  font-size: $xx-small;
+}
+
+// Inline-link-shaped button for the "Clear filters" action inside the summary + the empty-state copy. Matches the visual
+// language of the existing link-button class on the policy-detail back-to-policies link without coupling to its CSS.
+.app-control__link-button {
+  background: transparent;
+  border: none;
+  color: $core-vibrant-blue;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .app-control__row-actions {
   display: flex;
   gap: $pad-xsmall;

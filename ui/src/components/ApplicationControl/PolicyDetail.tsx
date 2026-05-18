@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   getAppControlPolicy,
@@ -14,6 +14,14 @@ import { AddRuleModal } from "./AddRuleModal";
 import { EditRuleModal } from "./EditRuleModal";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { PasteManyModal } from "./PasteManyModal";
+import {
+  applyRulesFilter,
+  distinctRuleTypes,
+  distinctSources,
+  EMPTY_RULES_FILTER,
+  filterIsActive,
+  type RulesFilter,
+} from "./rulesFilter";
 import "./ApplicationControl.scss";
 
 // ActiveModal is the union that captures which per-row modal is currently open. Encoding mutual exclusion in the type closes
@@ -74,6 +82,12 @@ export function PolicyDetail() {
     setRefreshKey((k) => k + 1);
   }, []);
 
+  // Rules-table filter state. Stays component-local (no URL persistence in this PR) and intentionally survives a refresh
+  // bump so an operator who edited a rule mid-filter doesn't lose their place. Each dimension matches the web-ui spec's
+  // four filter axes: rule_type, enabled, source, free-text over identifier + comment.
+  const [filter, setFilter] = useState<RulesFilter>(EMPTY_RULES_FILTER);
+  const clearFilter = useCallback(() => { setFilter(EMPTY_RULES_FILTER); }, []);
+
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
     let cancelled = false;
@@ -91,6 +105,15 @@ export function PolicyDetail() {
       });
     return () => { cancelled = true; };
   }, [policyID, refreshKey]);
+
+  // Memoised filter result + adaptive dropdown option sets. Called BEFORE any early return so React hook order stays stable
+  // (react-hooks/rules-of-hooks). `rules` is wrapped in its own useMemo so the dependency arrays below don't see a fresh []
+  // literal every render when policy is null.
+  const rules = useMemo(() => policy?.rules ?? [], [policy]);
+  const visibleRules = useMemo(() => applyRulesFilter(rules, filter), [rules, filter]);
+  const availableTypes = useMemo(() => distinctRuleTypes(rules), [rules]);
+  const availableSources = useMemo(() => distinctSources(rules), [rules]);
+  const isFiltering = filterIsActive(filter);
 
   if (!Number.isFinite(policyID)) {
     return (
@@ -144,7 +167,6 @@ export function PolicyDetail() {
     </>
   );
 
-  const rules = policy?.rules ?? [];
 
   // confirmRule extracts the rule from a confirm-* modal kind so the JSX below stays terse; returns null for non-confirm
   // modals (the ConfirmActionModal won't render its content in that case).
@@ -171,12 +193,38 @@ export function PolicyDetail() {
               author the first one.
             </EmptyState>
           ) : (
-            <RulesTable
-              rules={rules}
-              onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
-              onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
-              onDelete={(rule) => { setActiveModal({ kind: "confirm-delete", rule }); }}
-            />
+            <>
+              <RulesFilterBar
+                filter={filter}
+                onChange={setFilter}
+                availableTypes={availableTypes}
+                availableSources={availableSources}
+                visibleCount={visibleRules.length}
+                totalCount={rules.length}
+                onClear={clearFilter}
+                isFiltering={isFiltering}
+              />
+              {visibleRules.length === 0 ? (
+                <EmptyState>
+                  No rules match the current filter.{" "}
+                  <button
+                    type="button"
+                    className="app-control__link-button"
+                    onClick={clearFilter}
+                  >
+                    Clear filters
+                  </button>
+                  {" "}to see all {String(rules.length)} rule{rules.length === 1 ? "" : "s"}.
+                </EmptyState>
+              ) : (
+                <RulesTable
+                  rules={visibleRules}
+                  onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
+                  onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
+                  onDelete={(rule) => { setActiveModal({ kind: "confirm-delete", rule }); }}
+                />
+              )}
+            </>
           )}
         </>
       )}
@@ -362,5 +410,90 @@ function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
         ))}
       </tbody>
     </Table>
+  );
+}
+
+interface RulesFilterBarProps {
+  readonly filter: RulesFilter;
+  readonly onChange: (next: RulesFilter) => void;
+  readonly availableTypes: readonly string[];
+  readonly availableSources: readonly string[];
+  readonly visibleCount: number;
+  readonly totalCount: number;
+  readonly onClear: () => void;
+  readonly isFiltering: boolean;
+}
+
+// RulesFilterBar renders the four filter dimensions the spec calls out (rule_type, enabled, source, free-text) above the
+// rules table. Pure presentational: state lives in PolicyDetail so a refresh after a mutation doesn't wipe the operator's
+// filter mid-edit. The "Showing X of Y" + "Clear filters" treatment only renders when at least one dimension is active so
+// the bar stays unobtrusive on policies with no filter applied.
+function RulesFilterBar({
+  filter,
+  onChange,
+  availableTypes,
+  availableSources,
+  visibleCount,
+  totalCount,
+  onClear,
+  isFiltering,
+}: RulesFilterBarProps) {
+  const ruleSuffix = totalCount === 1 ? "" : "s";
+  return (
+    <div className="app-control__filter-bar" role="search" aria-label="Filter rules">
+      <input
+        type="search"
+        className="app-control__filter-search"
+        placeholder="Search identifier or comment"
+        aria-label="Search rules by identifier or comment"
+        value={filter.search}
+        onChange={(e) => { onChange({ ...filter, search: e.target.value }); }}
+      />
+      <select
+        className="app-control__filter-select"
+        aria-label="Filter by rule type"
+        value={filter.ruleType}
+        onChange={(e) => { onChange({ ...filter, ruleType: e.target.value }); }}
+      >
+        <option value="">All types</option>
+        {availableTypes.map((t) => (
+          <option key={t} value={t}>{t}</option>
+        ))}
+      </select>
+      <select
+        className="app-control__filter-select"
+        aria-label="Filter by status"
+        value={filter.enabled}
+        onChange={(e) => { onChange({ ...filter, enabled: e.target.value as RulesFilter["enabled"] }); }}
+      >
+        <option value="all">All statuses</option>
+        <option value="enabled">Enabled</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <select
+        className="app-control__filter-select"
+        aria-label="Filter by source"
+        value={filter.source}
+        onChange={(e) => { onChange({ ...filter, source: e.target.value }); }}
+      >
+        <option value="">All sources</option>
+        {availableSources.map((s) => (
+          <option key={s} value={s}>{s}</option>
+        ))}
+      </select>
+      {isFiltering && visibleCount > 0 && (
+        <div className="app-control__filter-summary">
+          Showing {String(visibleCount)} of {String(totalCount)} rule{ruleSuffix}
+          {" "}<span className="app-control__divider">·</span>{" "}
+          <button
+            type="button"
+            className="app-control__link-button"
+            onClick={onClear}
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
