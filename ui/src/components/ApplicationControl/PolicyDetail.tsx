@@ -1,13 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getAppControlPolicy } from "../../api";
+import {
+  getAppControlPolicy,
+  deleteAppControlRule,
+  updateAppControlRule,
+} from "../../api";
 import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
 import { Badge, type BadgeVariant } from "../ui/Badge";
 import { AddRuleModal } from "./AddRuleModal";
+import { EditRuleModal } from "./EditRuleModal";
+import { ConfirmActionModal } from "./ConfirmActionModal";
 import "./ApplicationControl.scss";
+
+// pendingConfirm captures which per-row action the operator clicked + the row it targets, so the shared ConfirmActionModal can
+// render the right copy and dispatch the right API call when the operator submits a reason. The kind discriminator drives both
+// the modal labels AND the onConfirm side-effect.
+type PendingConfirm =
+  | { kind: "delete"; rule: ApplicationControlRule }
+  | { kind: "toggle"; rule: ApplicationControlRule };
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
   critical: "critical",
@@ -42,6 +55,10 @@ export function PolicyDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  // editingRule + pendingConfirm own the per-row modal state. Only one of the two is ever populated at a time; the modals close
+  // when their target is set to null. Defined here so the rules table inside RulesTable can fire the open callbacks via props.
+  const [editingRule, setEditingRule] = useState<ApplicationControlRule | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
   // refreshKey bumps to force a re-fetch (e.g. after Save in the
   // modal). useEffect below owns the actual fetch lifecycle so the
@@ -131,7 +148,12 @@ export function PolicyDetail() {
               author the first one.
             </EmptyState>
           ) : (
-            <RulesTable rules={rules} />
+            <RulesTable
+              rules={rules}
+              onEdit={(rule) => { setEditingRule(rule); }}
+              onToggle={(rule) => { setPendingConfirm({ kind: "toggle", rule }); }}
+              onDelete={(rule) => { setPendingConfirm({ kind: "delete", rule }); }}
+            />
           )}
         </>
       )}
@@ -146,15 +168,99 @@ export function PolicyDetail() {
           }}
         />
       )}
+      <EditRuleModal
+        open={editingRule !== null}
+        rule={editingRule}
+        onClose={() => { setEditingRule(null); }}
+        onSaved={() => {
+          setEditingRule(null);
+          refresh();
+        }}
+      />
+      <ConfirmActionModal
+        open={pendingConfirm !== null}
+        title={confirmTitleFor(pendingConfirm)}
+        description={confirmDescriptionFor(pendingConfirm)}
+        confirmLabel={confirmLabelFor(pendingConfirm)}
+        confirmVariant={pendingConfirm?.kind === "delete" ? "alert" : "primary"}
+        reasonPlaceholder={confirmReasonPlaceholderFor(pendingConfirm)}
+        onClose={() => { setPendingConfirm(null); }}
+        onConfirm={async (reason) => {
+          if (!pendingConfirm) return;
+          if (pendingConfirm.kind === "delete") {
+            await deleteAppControlRule(pendingConfirm.rule.id, { reason });
+          } else {
+            await updateAppControlRule(pendingConfirm.rule.id, {
+              enabled: !pendingConfirm.rule.enabled,
+              reason,
+            });
+          }
+          setPendingConfirm(null);
+          refresh();
+        }}
+      />
     </>
   );
 }
 
-interface RulesTableProps {
-  readonly rules: ApplicationControlRule[];
+// confirmTitleFor + the three sibling helpers shape the per-action copy passed into the shared ConfirmActionModal. Keeping the
+// switch outside the component body so the modal can stay generic and the per-action vocabulary lives next to the dispatch.
+function confirmTitleFor(pending: PendingConfirm | null): string {
+  if (!pending) return "";
+  if (pending.kind === "delete") return "Delete rule";
+  return pending.rule.enabled ? "Disable rule" : "Enable rule";
 }
 
-function RulesTable({ rules }: RulesTableProps) {
+function confirmDescriptionFor(pending: PendingConfirm | null): React.ReactNode {
+  if (!pending) return "";
+  const ident = pending.rule.identifier;
+  if (pending.kind === "delete") {
+    return (
+      <>
+        The rule for <code>{ident}</code> will be removed and the policy version
+        will bump so every agent drops it on the next snapshot.
+      </>
+    );
+  }
+  if (pending.rule.enabled) {
+    return (
+      <>
+        Disabling pauses enforcement for <code>{ident}</code>. The rule stays
+        on the policy and the agents drop it on the next snapshot until you
+        re-enable.
+      </>
+    );
+  }
+  return (
+    <>
+      Re-enabling resumes enforcement for <code>{ident}</code>. The agents
+      pick it up on the next snapshot.
+    </>
+  );
+}
+
+function confirmLabelFor(pending: PendingConfirm | null): string {
+  if (!pending) return "Confirm";
+  if (pending.kind === "delete") return "Delete rule";
+  return pending.rule.enabled ? "Disable rule" : "Enable rule";
+}
+
+function confirmReasonPlaceholderFor(pending: PendingConfirm | null): string {
+  if (!pending) return "";
+  if (pending.kind === "delete") return "Why are you deleting this rule?";
+  return pending.rule.enabled
+    ? "Why are you disabling this rule?"
+    : "Why are you re-enabling this rule?";
+}
+
+interface RulesTableProps {
+  readonly rules: ApplicationControlRule[];
+  readonly onEdit: (rule: ApplicationControlRule) => void;
+  readonly onToggle: (rule: ApplicationControlRule) => void;
+  readonly onDelete: (rule: ApplicationControlRule) => void;
+}
+
+function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
   return (
     <Table>
       <thead>
@@ -184,30 +290,27 @@ function RulesTable({ rules }: RulesTableProps) {
             <td>{rule.custom_msg ?? <span className="app-control__muted">—</span>}</td>
             <td>{new Date(rule.updated_at).toLocaleString()}</td>
             <td className="app-control__row-actions">
-              {/* Edit / Disable / Delete are scaffolding only in
-                  the demo cut. The disabled state + tooltip make
-                  the roadmap visible without faking behaviour. */}
+              {/* Edit / Disable / Delete each open a modal that prompts for an audit reason before firing the PATCH / DELETE
+                  endpoint server-side. The handlers live on PolicyDetail so refresh-on-success is wired in one place. */}
               <Button
                 variant="text-link"
                 size="small"
-                disabled
-                title="Editing rules is coming in the next release"
+                onClick={() => { onEdit(rule); }}
               >
                 Edit
               </Button>
               <Button
                 variant="text-link"
                 size="small"
-                disabled
-                title={rule.enabled ? "Disabling rules is coming in the next release" : "Enabling rules is coming in the next release"}
+                onClick={() => { onToggle(rule); }}
+                title={rule.enabled ? "Pause enforcement for this rule" : "Resume enforcement for this rule"}
               >
                 {rule.enabled ? "Disable" : "Enable"}
               </Button>
               <Button
                 variant="text-link"
                 size="small"
-                disabled
-                title="Deleting rules is coming in the next release"
+                onClick={() => { onDelete(rule); }}
               >
                 Delete
               </Button>

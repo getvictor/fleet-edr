@@ -475,6 +475,86 @@ export async function createAppControlRule(
   return res.json() as Promise<ApplicationControlRule>;
 }
 
+// UpdateAppControlRuleRequest is the JSON body the PATCH endpoint accepts. Mirrors updateRuleRequest in
+// server/rules/internal/operator/appcontrol_handler.go. Every mutable field is optional so a body that flips only `enabled`
+// still validates; `reason` is required for the audit trail. Phase B's Detect-mode change will layer an `enforcement` field
+// on top of this shape.
+export interface UpdateAppControlRuleRequest {
+  enabled?: boolean;
+  severity?: string;
+  custom_msg?: string;
+  custom_url?: string;
+  comment?: string;
+  expires_at?: string;
+  reason: string;
+}
+
+// DeleteAppControlRuleRequest carries the audit reason for DELETE /rules/{id}.
+export interface DeleteAppControlRuleRequest {
+  reason: string;
+}
+
+// patchAppControlEndpoint is the shared body of updateAppControlRule + deleteAppControlRule. The two endpoints have the same
+// auth + reauth + typed-error handling as createAppControlRule; centralising here keeps the three calls in lockstep.
+async function patchAppControlEndpoint<T>(
+  method: "PATCH" | "DELETE",
+  path: string,
+  body: unknown,
+  parseResponse: (res: Response) => Promise<T>,
+): Promise<T> {
+  assertSafeAPIPath(path);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  attachCsrfHeader(headers, method);
+  const target = new URL(API_BASE + path, globalThis.location.origin);
+  const res = await fetch(target, {
+    method,
+    credentials: "include",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (res.status === HTTP_STATUS_UNAUTHORIZED) {
+    clearCsrfToken();
+    throw new Unauthorized401Error();
+  }
+  if (res.status === HTTP_STATUS_FORBIDDEN) {
+    const reauth = await readReauthChallenge(res);
+    if (reauth) throw new ReauthRequiredError(reauth);
+  }
+  if (!res.ok) {
+    const errBody = (await res.clone().json().catch((): null => null)) as AppControlErrorBody | null;
+    if (errBody?.error) {
+      throw new AppControlApiError(errBody.error, errBody.message ?? errBody.error, res.status);
+    }
+    throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
+  }
+  return parseResponse(res);
+}
+
+export async function updateAppControlRule(
+  ruleID: number,
+  req: UpdateAppControlRuleRequest,
+): Promise<ApplicationControlRule> {
+  return patchAppControlEndpoint(
+    "PATCH",
+    `/v1/app-control/rules/${String(ruleID)}`,
+    req,
+    (res) => res.json() as Promise<ApplicationControlRule>,
+  );
+}
+
+export async function deleteAppControlRule(
+  ruleID: number,
+  req: DeleteAppControlRuleRequest,
+): Promise<void> {
+  await patchAppControlEndpoint(
+    "DELETE",
+    `/v1/app-control/rules/${String(ruleID)}`,
+    req,
+    // DELETE returns 204 No Content; resolve to undefined without parsing.
+    () => Promise.resolve(undefined),
+  );
+}
+
 export async function createCommand(hostId: string, commandType: string, payload: Record<string, unknown>): Promise<{ id: number }> {
   return fetchJSON<{ id: number }>("/commands", {
     method: "POST",
