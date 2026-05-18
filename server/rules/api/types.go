@@ -183,6 +183,17 @@ const (
 	RuleTypePath RuleType = "PATH"
 )
 
+// IsValidRuleType returns true for every defined RuleType value. Used at REST handler boundaries to validate untrusted query
+// parameters before they reach the Store (which would otherwise silently produce an empty result set for unknown values
+// instead of a typed 400). Mirrors the spec's enumerable RuleType set.
+func IsValidRuleType(rt RuleType) bool {
+	switch rt {
+	case RuleTypeCDHash, RuleTypeBinary, RuleTypeSigningID, RuleTypeCertificate, RuleTypeTeamID, RuleTypePath:
+		return true
+	}
+	return false
+}
+
 // Action is the verb a matched rule applies. The demo cut and the rest of Phase A constrain this to BLOCK; ALLOW and SILENT_BLOCK
 // arrive with the Lockdown change. Stable wire-shape string; renaming is a contract break.
 type Action string
@@ -210,6 +221,16 @@ const (
 	SeverityRuleHigh     Severity = "high"
 	SeverityRuleCritical Severity = "critical"
 )
+
+// IsValidSeverity returns true for every defined Severity value. Used at REST handler boundaries to validate untrusted
+// query parameters before they reach the Store.
+func IsValidSeverity(s Severity) bool {
+	switch s {
+	case SeverityRuleLow, SeverityRuleMedium, SeverityRuleHigh, SeverityRuleCritical:
+		return true
+	}
+	return false
+}
 
 // Source records where a rule came from. `admin` is the human-edited case the demo exercises; `imported` is a Santa StaticRules import
 // (post-demo); `intel` is a threat-intel feed entry (post-demo).
@@ -488,7 +509,40 @@ type ApplicationControlStore interface {
 	// resolver walks the result and unions the member hosts of each group to build the set of unique hosts the rule update should
 	// reach.
 	ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]HostGroup, error)
+	// ListRulesAcrossPolicies returns rules matching the filter across every policy. Powers the cross-policy GET /rules endpoint
+	// that integration callers (audit export, compliance reports) need. Pagination is mandatory: Limit caps the page size and
+	// Offset cursors through the result. Returns the page rows + the total count so the caller can render "Showing N of M".
+	ListRulesAcrossPolicies(ctx context.Context, req ListRulesAcrossPoliciesRequest) (ListRulesAcrossPoliciesResult, error)
 }
+
+// ListRulesAcrossPoliciesRequest is the filter envelope for the cross-policy rules list. Every field is optional except Limit;
+// the empty / nil / zero value for any dimension means "no constraint on this dimension" (logical AND across set dimensions).
+// PolicyID acts as a single-policy filter (=== ListRulesByPolicy when set); the cross-policy use case leaves it nil.
+type ListRulesAcrossPoliciesRequest struct {
+	PolicyID *int64   // nil = every policy
+	RuleType RuleType // empty = any type
+	Enabled  *bool    // nil = any state
+	Severity Severity // empty = any severity
+	Source   string   // empty = any source
+	Limit    int      // 1..MaxListRulesAcrossPoliciesLimit; 0 falls through to DefaultListRulesAcrossPoliciesLimit at the handler boundary
+	Offset   int      // 0-based; combine with Limit for pagination
+}
+
+// ListRulesAcrossPoliciesResult is the page returned by ListRulesAcrossPolicies. Rules is the page rows in (policy_id, rule_type,
+// identifier) order so pagination is deterministic. Total is the unfiltered-by-page count (matching the filter, ignoring
+// Limit + Offset) so callers can render a "Showing N of M" counter without a second round trip.
+type ListRulesAcrossPoliciesResult struct {
+	Rules []ApplicationControlRule `json:"rules"`
+	Total int                      `json:"total"`
+}
+
+// DefaultListRulesAcrossPoliciesLimit + MaxListRulesAcrossPoliciesLimit pin the pagination contract. The default trades against
+// "operator scrolling through a few hundred rules" being one round trip vs. the page-size taking forever to render; the max
+// caps the JSON-payload size at roughly 200 KiB at 400 bytes per rule.
+const (
+	DefaultListRulesAcrossPoliciesLimit = 100
+	MaxListRulesAcrossPoliciesLimit     = 500
+)
 
 // CommandTypeSetApplicationControl is the well-known command type the agent reads on every poll and routes to its application-control
 // snapshot dispatcher. Stable wire-shape string; renaming is a contract break for every deployed agent.

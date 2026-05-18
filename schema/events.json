@@ -62,6 +62,11 @@
         "gid": { "type": "integer" },
         "code_signing": { "$ref": "#/definitions/code_signing" },
         "sha256": { "type": "string" },
+        "cdhash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "Code-directory hash (sha1 of the CDDirectory blob) the agent extracts on Hardened-Runtime binaries (issue #68). Optional: NULL for non-HR processes since the ESF target tuple lacks a meaningful cdhash for them. 40 lowercase hex characters when present."
+        },
         "snapshot": {
           "type": "boolean",
           "description": "True for synthetic exec events emitted at extension startup to materialise processes that existed before ESF subscription (issue #11). Detection rules skip snapshot events because they describe historical state, not new attacker activity."

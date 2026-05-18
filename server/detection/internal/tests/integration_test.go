@@ -687,6 +687,108 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "exit event must stamp exit_time_ns")
 }
 
+// TestGraph_ExecPayloadCDHashRoundTrips pins the wire-shape contract for the optional cdhash on exec_payload (task 11.3.2 +
+// 11.3.3). The Swift extension (PR #185 / EventSerializer.swift) extracts cdhash only for Hardened-Runtime binaries; the
+// server-side decoder must accept the field and persist it onto the `processes` row so incident-response queries can
+// correlate by cdhash alongside sha256. Tolerant of absence: omitting cdhash leaves the persisted column NULL.
+func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	// Two exec-without-fork events on the same host: one with cdhash (Hardened-Runtime binary; 40 lowercase hex), one without.
+	// Both must land on processes rows. The no-cdhash row stays NULL — proves the decoder treats the field as optional. This
+	// path exercises insertExecWithoutFork; fork+exec + re-exec are covered by the sibling tests below.
+	cdhash := "0123456789abcdef0123456789abcdef01234567"
+	insertEventsViaIngest(ctx, t, d, "h-cdh", []api.Event{
+		{EventID: "exec-hr", HostID: "h-cdh", TimestampNs: now, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1001,"ppid":1,"path":"/usr/bin/safari","args":["safari"],"cdhash":"` + cdhash + `","sha256":"deadbeef"}`)},
+		{EventID: "exec-no-hr", HostID: "h-cdh", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1002,"ppid":1,"path":"/usr/bin/legacy","args":["legacy"],"sha256":"cafef00d"}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhash
+	}, 5*time.Second, 50*time.Millisecond, "HR exec must persist cdhash on the processes row")
+
+	hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+	require.NoError(t, err)
+	require.NotNil(t, hr.Process.CDHash)
+	assert.Equal(t, cdhash, *hr.Process.CDHash)
+
+	nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2)
+	require.NoError(t, err)
+	require.NotNil(t, nonHR, "GetProcessDetail must return the non-HR row even when cdhash is absent")
+	assert.Nil(t, nonHR.Process.CDHash, "non-HR exec without cdhash must persist NULL")
+}
+
+// TestGraph_ExecPayloadCDHashOnForkThenExec covers the UpdateProcessExec branch: a fork creates a row with no exec metadata,
+// then the matching exec event rewrites path/args/sha256/cdhash on the existing row. Without cdhash on the UPDATE clause the
+// row would scan back as CDHash=NULL even though the exec payload carried a value.
+func TestGraph_ExecPayloadCDHashOnForkThenExec(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	cdhash := "fedcba9876543210fedcba9876543210fedcba98"
+	insertEventsViaIngest(ctx, t, d, "h-fork-cdh", []api.Event{
+		{EventID: "fork-fexec", HostID: "h-fork-cdh", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":2001,"parent_pid":1}`)},
+		{EventID: "exec-fexec", HostID: "h-fork-cdh", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":2001,"ppid":1,"path":"/usr/bin/hardened","args":["hardened"],"cdhash":"` + cdhash + `","sha256":"feedface"}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-fork-cdh", 2001, now+2)
+		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhash
+	}, 5*time.Second, 50*time.Millisecond, "fork+exec must persist cdhash via UpdateProcessExec")
+
+	p, err := d.Service().GetProcessDetail(ctx, "h-fork-cdh", 2001, now+2)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.NotNil(t, p.Process.CDHash)
+	assert.Equal(t, cdhash, *p.Process.CDHash)
+	assert.Equal(t, "/usr/bin/hardened", p.Process.Path, "path also propagates so we know the UPDATE actually ran (not the snapshot dedup path)")
+}
+
+// TestGraph_ExecPayloadCDHashOnReExec covers the insertReExec branch: same PID exec'd a second time. The new generation
+// must record its own cdhash (Process A may be HR with one cdhash, Process B after exec may be a different HR binary with
+// a different cdhash, or non-HR with no cdhash at all).
+func TestGraph_ExecPayloadCDHashOnReExec(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	cdhashA := "1111111111111111111111111111111111111111"
+	cdhashB := "2222222222222222222222222222222222222222"
+	insertEventsViaIngest(ctx, t, d, "h-reexec-cdh", []api.Event{
+		{EventID: "fork-r", HostID: "h-reexec-cdh", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":3001,"parent_pid":1}`)},
+		{EventID: "exec-r-a", HostID: "h-reexec-cdh", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":3001,"ppid":1,"path":"/bin/sh","args":["sh"],"cdhash":"` + cdhashA + `"}`)},
+		{EventID: "exec-r-b", HostID: "h-reexec-cdh", TimestampNs: now + 2, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":3001,"ppid":1,"path":"/tmp/payload","args":["payload"],"cdhash":"` + cdhashB + `"}`)},
+	})
+
+	// After the re-exec, the live row at now+3 must have cdhashB (the new generation), not cdhashA (the prior generation
+	// which insertReExec closed by stamping exit_time_ns).
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-reexec-cdh", 3001, now+3)
+		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhashB && p.Process.Path == "/tmp/payload"
+	}, 5*time.Second, 50*time.Millisecond, "re-exec must record the NEW generation's cdhash on the new row")
+
+	live, err := d.Service().GetProcessDetail(ctx, "h-reexec-cdh", 3001, now+3)
+	require.NoError(t, err)
+	require.NotNil(t, live)
+	require.NotNil(t, live.Process.CDHash)
+	assert.Equal(t, cdhashB, *live.Process.CDHash)
+	assert.NotNil(t, live.Process.PreviousExecID, "re-exec row must link back to the prior generation")
+}
+
 func TestGraph_ExecWithoutFork(t *testing.T) {
 	t.Parallel()
 	// Issue #7 / boot sequence: agent restart can deliver an exec without the originating fork (we missed it). The builder synthesizes a

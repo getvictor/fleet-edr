@@ -528,7 +528,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		// path enumerated here so requests reach the session-protected wrapper instead of falling through to the `/` catchall
 		// and 302 → /ui/. Surfaced by the step-8 dry-run on PR #158 — the list-policies API returned the SPA's index.html,
 		// which the UI fetch parsed as JSON and errored with "Unexpected token '<'". The Phase A close-out follow-on adds the
-		// five mutation routes; bulk upsert + cross-policy GET + host-groups CRUD + assignments POST stay deferred to
+		// five mutation routes + bulk upsert + cross-policy GET; host-groups CRUD + assignments POST stay deferred to
 		// follow-on PRs and land in this list when their handlers do.
 		"GET /api/v1/app-control/policies",
 		"GET /api/v1/app-control/policies/{id}",
@@ -539,6 +539,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"POST /api/v1/app-control/policies/{id}/rules:bulkUpsert",
 		"PATCH /api/v1/app-control/rules/{id}",
 		"DELETE /api/v1/app-control/rules/{id}",
+		"GET /api/v1/app-control/rules",
 		// Break-glass reauth ceremony. The handlers are mounted on apiMux via identityCtx.RegisterAuthedRoutes, but the outer
 		// router needs each path enumerated here so the session-protected wrapper actually serves them — otherwise requests
 		// fall through to the `/` catchall and 302 → /ui/, silently breaking the destructive-action reauth path.

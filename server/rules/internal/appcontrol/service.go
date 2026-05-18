@@ -100,6 +100,15 @@ func (s *Service) ListPolicies(ctx context.Context) ([]api.ApplicationControlPol
 	return s.store.ListPolicies(ctx)
 }
 
+// ListRulesAcrossPolicies is the cross-policy GET /rules endpoint's backend. Pass-through to the store; the orchestrator layer
+// catches a future need for read-side decoration (per-policy rule-count, ACL filtering for limited operators) without changing
+// the handler's contract.
+func (s *Service) ListRulesAcrossPolicies(
+	ctx context.Context, req api.ListRulesAcrossPoliciesRequest,
+) (api.ListRulesAcrossPoliciesResult, error) {
+	return s.store.ListRulesAcrossPolicies(ctx, req)
+}
+
 // GetPolicyWithRules returns the policy row plus its rules in one call so the policy-detail page can render without an extra round
 // trip. Returns ErrAppControlPolicyNotFound when the policy is absent; the handler maps that to HTTP 404.
 func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {

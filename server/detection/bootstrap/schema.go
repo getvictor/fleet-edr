@@ -38,6 +38,7 @@ var schemaStatements = []string{
 		gid                  INT,
 		code_signing         JSON,
 		sha256               VARCHAR(64),
+		cdhash               VARCHAR(40),
 		fork_time_ns         BIGINT       NOT NULL,
 		fork_ingested_at_ns  BIGINT,
 		exec_time_ns         BIGINT,

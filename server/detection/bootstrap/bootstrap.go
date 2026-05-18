@@ -210,6 +210,10 @@ func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
 		`ALTER TABLE processes ADD COLUMN is_snapshot BOOL NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE processes ADD COLUMN last_seen_ns BIGINT NULL`,
 		`ALTER TABLE processes ADD INDEX idx_processes_snapshot_lastseen (is_snapshot, last_seen_ns)`,
+		// task 11.3.2: cdhash on every exec event. 40 hex chars (sha1 of the CDDirectory blob) when the binary is Hardened
+		// Runtime; NULL otherwise. The agent only emits cdhash for HR processes (issue #68 / PR #185) so non-HR rows skip
+		// it. Persisted alongside sha256 so incident response can correlate by either hash.
+		`ALTER TABLE processes ADD COLUMN cdhash VARCHAR(40) NULL`,
 	}
 	for _, stmt := range alters {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

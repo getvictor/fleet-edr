@@ -203,6 +203,9 @@ type execPayload struct {
 	GID         *int            `json:"gid"`
 	CodeSigning api.NullRawJSON `json:"code_signing"`
 	SHA256      *string         `json:"sha256"`
+	// CDHash is the 40-hex code-directory hash; agent emits it only for Hardened-Runtime binaries (issue #68 / PR #185). Decoder
+	// tolerates absence: non-HR rows + pre-cdhash agents simply leave the field nil and the persisted column stays NULL.
+	CDHash *string `json:"cdhash"`
 	// Snapshot is true for synthetic exec events emitted by the ESF startup baseline pass (issue #11). The graph builder uses this
 	// to avoid clobbering a richer live-event row with a sparse synthetic one when the snapshot pass and an early-startup live exec
 	// both arrive for the same PID.
@@ -242,7 +245,7 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 			HostID: evt.HostID, PID: p.PID, ExecTimeNs: evt.TimestampNs,
 			Path: p.Path, Args: p.Args,
 			UID: p.UID, GID: p.GID,
-			CodeSigning: p.CodeSigning, SHA256: p.SHA256,
+			CodeSigning: p.CodeSigning, SHA256: p.SHA256, CDHash: p.CDHash,
 		})
 	}
 	return b.insertReExec(ctx, evt, p, current)
@@ -266,6 +269,7 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 		GID:              p.GID,
 		CodeSigning:      p.CodeSigning,
 		SHA256:           p.SHA256,
+		CDHash:           p.CDHash,
 		ForkTimeNs:       evt.TimestampNs,
 		ForkIngestedAtNs: &forkIngested,
 		ExecTimeNs:       &evt.TimestampNs,
@@ -322,6 +326,7 @@ func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload
 		GID:              p.GID,
 		CodeSigning:      p.CodeSigning,
 		SHA256:           p.SHA256,
+		CDHash:           p.CDHash,
 		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
 		ForkIngestedAtNs: prior.ForkIngestedAtNs,
 		ExecTimeNs:       &evt.TimestampNs,

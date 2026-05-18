@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,6 +110,153 @@ func TestAppControl_GetPolicyByID_NotFound(t *testing.T) {
 	_, err := store.GetPolicyByID(t.Context(), 99_999_999)
 	require.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
 }
+
+// TestAppControl_ListRulesAcrossPolicies_FilterDimensions seeds two policies with mixed rules and pins the
+// cross-policy GET /rules contract per filter dimension + the intersection + pagination edges. Drives the Store-level method
+// directly; the REST handler's query-param parsing is covered separately by appcontrol_rest_test.go.
+func TestAppControl_ListRulesAcrossPolicies_FilterDimensions(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+
+	defaultPolicy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	// Two extra policies + a mix of rule_types / severities / enabled states across all three so each filter dimension
+	// has something to narrow on.
+	otherName := fmt.Sprintf("other-policy-%d", time.Now().UnixNano())
+	otherPolicy, err := store.CreatePolicy(ctx, api.CreatePolicyRequest{
+		Name: otherName, Description: "secondary policy for cross-policy list test",
+		Actor: "demo-admin", Reason: "integration test setup",
+	})
+	require.NoError(t, err)
+
+	// Every seeded rule is enabled=true by CreateRule's default; the enabled tri-state filter is exercised by the sibling
+	// TestAppControl_ListRulesAcrossPolicies_EnabledTriState test which calls UpdateRule to flip a row.
+	rulesToSeed := []struct {
+		policyID   int64
+		ruleType   api.RuleType
+		identifier string
+		severity   api.Severity
+	}{
+		{defaultPolicy.ID, api.RuleTypeBinary, strings.Repeat("a", 64), api.SeverityRuleHigh},
+		{defaultPolicy.ID, api.RuleTypeBinary, strings.Repeat("b", 64), api.SeverityRuleMedium},
+		{defaultPolicy.ID, api.RuleTypeCDHash, strings.Repeat("c", 40), api.SeverityRuleHigh},
+		{defaultPolicy.ID, api.RuleTypeTeamID, "EQHXZ8M8AV", api.SeverityRuleMedium},
+		{otherPolicy.ID, api.RuleTypeBinary, strings.Repeat("d", 64), api.SeverityRuleCritical},
+		{otherPolicy.ID, api.RuleTypeCDHash, strings.Repeat("e", 40), api.SeverityRuleLow},
+	}
+	for _, r := range rulesToSeed {
+		_, err := store.CreateRule(ctx, api.CreateRuleRequest{
+			PolicyID: r.policyID, RuleType: r.ruleType, Identifier: r.identifier,
+			Severity: r.severity, Actor: "demo-admin", Reason: "seed",
+		})
+		require.NoError(t, err)
+	}
+
+	// Empty filter -> every seeded rule (6) plus any rules already on the seed Default. Total is at least 6.
+	all, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{})
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, all.Total, 6, "empty filter must surface every seeded rule")
+
+	// PolicyID narrows to one policy.
+	byPolicy, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{PolicyID: &otherPolicy.ID})
+	require.NoError(t, err)
+	assert.Equal(t, 2, byPolicy.Total)
+	for _, r := range byPolicy.Rules {
+		assert.Equal(t, otherPolicy.ID, r.PolicyID)
+	}
+
+	// RuleType=BINARY across all policies surfaces 3 rules (2 Default + 1 other).
+	byType, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{RuleType: api.RuleTypeBinary})
+	require.NoError(t, err)
+	assert.Equal(t, 3, byType.Total)
+	for _, r := range byType.Rules {
+		assert.Equal(t, api.RuleTypeBinary, r.RuleType)
+	}
+
+	// Severity=high narrows to 2 rules (Default's BINARY high + Default's CDHASH high).
+	bySev, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{Severity: api.SeverityRuleHigh})
+	require.NoError(t, err)
+	assert.Equal(t, 2, bySev.Total)
+
+	// Intersection: policy + type narrows to exactly 1 (otherPolicy's single BINARY rule).
+	both, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{
+		PolicyID: &otherPolicy.ID, RuleType: api.RuleTypeBinary,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, both.Total)
+	assert.Equal(t, otherPolicy.ID, both.Rules[0].PolicyID)
+	assert.Equal(t, api.RuleTypeBinary, both.Rules[0].RuleType)
+
+	// Pagination: Limit=2 returns 2 rows but Total still reflects the unfiltered count.
+	page, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{Limit: 2})
+	require.NoError(t, err)
+	assert.Equal(t, all.Total, page.Total, "Total must ignore Limit/Offset")
+	assert.Len(t, page.Rules, 2)
+
+	// Limit auto-clamped to default when 0; auto-clamped to max when oversized.
+	defaultLimit, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{Limit: 0})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(defaultLimit.Rules), api.DefaultListRulesAcrossPoliciesLimit)
+	overLimit, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{
+		Limit: api.MaxListRulesAcrossPoliciesLimit + 1000,
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(overLimit.Rules), api.MaxListRulesAcrossPoliciesLimit)
+}
+
+// TestAppControl_ListRulesAcrossPolicies_EnabledTriState pins the bool-pointer semantics: nil = both states, &true = only
+// enabled, &false = only disabled. A regression that defaults Enabled=true would silently filter out half the result set.
+func TestAppControl_ListRulesAcrossPolicies_EnabledTriState(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	defaultPolicy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	enabledRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID: defaultPolicy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("f", 64),
+		Severity: api.SeverityRuleHigh, Actor: "demo-admin", Reason: "seed enabled",
+	})
+	require.NoError(t, err)
+	disabledRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID: defaultPolicy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("9", 64),
+		Severity: api.SeverityRuleHigh, Actor: "demo-admin", Reason: "seed disabled",
+	})
+	require.NoError(t, err)
+	// Flip disabledRule to disabled via UpdateRule (CreateRule always inserts enabled=true).
+	disabledFlag := false
+	_, err = store.UpdateRule(ctx, api.UpdateRuleRequest{
+		RuleID: disabledRule.ID, Enabled: &disabledFlag,
+		Actor: "demo-admin", Reason: "disable for filter test",
+	})
+	require.NoError(t, err)
+
+	enabledOnly, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{
+		PolicyID: &defaultPolicy.ID, Enabled: ptrBool(true),
+	})
+	require.NoError(t, err)
+	for _, r := range enabledOnly.Rules {
+		assert.True(t, r.Enabled, "Enabled=&true must filter to enabled rules only")
+	}
+	ids := make([]int64, 0, len(enabledOnly.Rules))
+	for _, r := range enabledOnly.Rules {
+		ids = append(ids, r.ID)
+	}
+	assert.Contains(t, ids, enabledRule.ID)
+	assert.NotContains(t, ids, disabledRule.ID)
+
+	disabledOnly, err := store.ListRulesAcrossPolicies(ctx, api.ListRulesAcrossPoliciesRequest{
+		PolicyID: &defaultPolicy.ID, Enabled: ptrBool(false),
+	})
+	require.NoError(t, err)
+	for _, r := range disabledOnly.Rules {
+		assert.False(t, r.Enabled, "Enabled=&false must filter to disabled rules only")
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
 
 // TestAppControl_CreateRule_BinaryHappyPath exercises the demo's critical write: an admin creates a BINARY rule, the row persists,
 // the policy version bumps so the next agent poll picks up the change.
