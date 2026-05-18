@@ -971,7 +971,8 @@ func TestAppControlREST_BulkUpsertRules_HappyPath(t *testing.T) {
 
 	// Exactly one audit row regardless of batch size.
 	events := r.audit.snapshot()
-	last := events[len(events)-1]
+	require.Len(t, events, 1, "bulk upsert must emit exactly one audit event regardless of batch size")
+	last := events[0]
 	assert.Equal(t, identityapi.AuditAppControlRuleBulkUpsert, last.Action)
 	assert.Equal(t, "application_control_policy", last.TargetType)
 	assert.Equal(t, 3, last.Payload["rules_inserted"])
@@ -1004,6 +1005,11 @@ func TestAppControlREST_BulkUpsertRules_BadItem(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "application_control.invalid_rule", body.Error)
 	assert.Contains(t, body.Message, "bulk item 1", "the operator-facing message names the offending row index")
+	// Side-effect assertions (CodeRabbit on PR #190): a failed batch must NOT enqueue any fan-out commands and must NOT emit
+	// an audit row. Without these the all-or-nothing contract could regress silently into a partial-success mode that the
+	// happy-path test wouldn't notice.
+	assert.Empty(t, r.inserter.snapshot(), "failed bulk upsert must not enqueue commands")
+	assert.Empty(t, r.audit.snapshot(), "failed bulk upsert must not emit an audit event")
 }
 
 // TestAppControlREST_BulkUpsertRules_UnknownPolicy maps the stale-policy FK violation to 404 policy_not_found.
@@ -1020,6 +1026,11 @@ func TestAppControlREST_BulkUpsertRules_UnknownPolicy(t *testing.T) {
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.policy_not_found", body.Error)
 }
 
 // TestAppControlREST_BulkUpsertRules_InvalidPolicyID covers the path-parse 400.
@@ -1036,10 +1047,17 @@ func TestAppControlREST_BulkUpsertRules_InvalidPolicyID(t *testing.T) {
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.invalid_policy_id", body.Error)
 }
 
 // TestAppControlREST_BulkUpsertRules_Idempotent confirms re-posting the same payload yields 0 inserted + N updated and the
-// audit log has TWO bulk_upsert rows. The policy version bumps twice (once per call) even though no field changed.
+// audit log has TWO bulk_upsert rows (one per call). The policy version bumps twice even though no field changed — bulk
+// upsert always treats the request as a fresh logical operation, which keeps the audit history honest about who re-imported
+// what at which time.
 func TestAppControlREST_BulkUpsertRules_Idempotent(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
@@ -1064,4 +1082,15 @@ func TestAppControlREST_BulkUpsertRules_Idempotent(t *testing.T) {
 	require.NoError(t, json.NewDecoder(second.Body).Decode(&result))
 	assert.Equal(t, 0, result.Inserted)
 	assert.Equal(t, 1, result.Updated)
+
+	// Audit cardinality (CodeRabbit on PR #190): each bulk-upsert call emits exactly one row regardless of the in-batch
+	// count, so the comment's "TWO bulk_upsert rows after two re-posts" claim has to be backed by an assertion. The events
+	// snapshot here covers the whole rig's lifetime so both calls' rows show up.
+	events := r.audit.snapshot()
+	require.Len(t, events, 2, "two bulk-upsert calls must emit two audit rows")
+	assert.Equal(t, identityapi.AuditAppControlRuleBulkUpsert, events[0].Action)
+	assert.Equal(t, identityapi.AuditAppControlRuleBulkUpsert, events[1].Action)
+	assert.Equal(t, 1, events[0].Payload["rules_inserted"])
+	assert.Equal(t, 0, events[1].Payload["rules_inserted"])
+	assert.Equal(t, 1, events[1].Payload["rules_updated"])
 }

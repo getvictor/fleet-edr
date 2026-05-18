@@ -359,17 +359,17 @@ type BulkUpsertRulesRequest struct {
 }
 
 // BulkUpsertResult is the wire shape returned to a successful bulk-upsert. Inserted + Updated are the per-row outcome counts
-// (an item that matched the existing row exactly counts as Updated even if no field actually changed; MySQL's
-// ROW_COUNT() distinguishes "no row touched" from "matched and overwritten"). Rules is the full post-upsert row set in the
-// order the request supplied so a UI can render the final state without an extra round trip.
+// classified by snapshotting the existing (policy_id, rule_type, identifier) keys inside the same SELECT ... FOR UPDATE that
+// serialises the batch — items whose key was already present count as Updated, the rest as Inserted. Rules is the full
+// post-upsert row set in the order the request supplied so a UI can render the final state without an extra round trip.
 type BulkUpsertResult struct {
 	Inserted int                      `json:"inserted"`
 	Updated  int                      `json:"updated"`
 	Rules    []ApplicationControlRule `json:"rules"`
 }
 
-// MaxBulkUpsertItems caps a single bulk-upsert batch. The handler's 16 KiB body limit imposes a practical ceiling but we also
-// gate on item count so a 1000-row paste that happens to fit under the byte cap doesn't tie up the txn for minutes. 500
+// MaxBulkUpsertItems caps a single bulk-upsert batch. The handler's 256 KiB body limit imposes a practical byte ceiling, but we
+// also gate on item count so a 1000-row paste that happens to fit under the byte cap doesn't tie up the txn for minutes. 500
 // matches the Phase A demo deployment's expected import size with headroom; Phase B can grow this when paste-many lands.
 const MaxBulkUpsertItems = 500
 

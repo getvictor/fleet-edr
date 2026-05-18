@@ -624,13 +624,18 @@ func (s *Service) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRe
 	}
 	policy, payload, composeErr := s.buildSnapshotPayload(ctx, req.PolicyID)
 	if composeErr != nil {
-		s.recordBulkUpsertAudit(ctx, actor, req, result, 0, 0, 0, "snapshot_compose_failed")
+		s.recordBulkUpsertAudit(ctx, bulkUpsertAuditArgs{
+			Actor: actor, Req: req, Result: result, FanoutSkipReason: "snapshot_compose_failed",
+		})
 		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after BulkUpsertRules failed; rules persisted but agents unaware until next mutation",
 			"err", composeErr, "policy_id", req.PolicyID, "rules_total", len(result.Rules))
 		return api.BulkUpsertResult{}, fmt.Errorf(errSvcSnapshotComposeFmt, composeErr)
 	}
 	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
-	s.recordBulkUpsertAudit(ctx, actor, req, result, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
+	s.recordBulkUpsertAudit(ctx, bulkUpsertAuditArgs{
+		Actor: actor, Req: req, Result: result, PolicyVersion: policy.Version,
+		FanoutHosts: fanoutHosts, FanoutFailed: fanoutFailed, FanoutSkipReason: fanoutSkipReason,
+	})
 	if fanoutSkipReason != "" {
 		s.logger.InfoContext(ctx, "appcontrol bulk upsert fan-out skipped",
 			"reason", fanoutSkipReason, "policy_id", req.PolicyID, "rules_total", len(result.Rules))
@@ -638,37 +643,41 @@ func (s *Service) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRe
 	return result, nil
 }
 
+// bulkUpsertAuditArgs bundles the per-call inputs recordBulkUpsertAudit needs. Struct shape rather than positional params so
+// Sonar's S107 (max 7 args) doesn't fire; the previous 8-param signature was flagged on PR #190. New fields (Phase B's
+// Detect-mode enforcement deltas, e.g.) extend the struct rather than the positional list.
+type bulkUpsertAuditArgs struct {
+	Actor            *identityapi.Actor
+	Req              api.BulkUpsertRulesRequest
+	Result           api.BulkUpsertResult
+	PolicyVersion    int64
+	FanoutHosts      int
+	FanoutFailed     int
+	FanoutSkipReason string
+}
+
 // recordBulkUpsertAudit emits the single audit row for one BulkUpsertRules call regardless of how many items the batch
 // contained. Payload shape adds rules_inserted + rules_updated + rules_total alongside the fan-out fields so the SIEM can
 // answer "how many rules did this import affect" without per-row joins.
-func (s *Service) recordBulkUpsertAudit(
-	ctx context.Context,
-	actor *identityapi.Actor,
-	req api.BulkUpsertRulesRequest,
-	result api.BulkUpsertResult,
-	policyVersion int64,
-	fanoutHosts int,
-	fanoutFailed int,
-	fanoutSkipReason string,
-) {
+func (s *Service) recordBulkUpsertAudit(ctx context.Context, args bulkUpsertAuditArgs) {
 	payload := map[string]any{
-		"policy_id":      req.PolicyID,
-		"policy_version": policyVersion,
-		"rules_inserted": result.Inserted,
-		"rules_updated":  result.Updated,
-		"rules_total":    len(result.Rules),
-		"reason":         req.Reason,
-		"fanout_hosts":   fanoutHosts,
-		"fanout_failed":  fanoutFailed,
+		"policy_id":      args.Req.PolicyID,
+		"policy_version": args.PolicyVersion,
+		"rules_inserted": args.Result.Inserted,
+		"rules_updated":  args.Result.Updated,
+		"rules_total":    len(args.Result.Rules),
+		"reason":         args.Req.Reason,
+		"fanout_hosts":   args.FanoutHosts,
+		"fanout_failed":  args.FanoutFailed,
 	}
-	if fanoutSkipReason != "" {
-		payload["fanout_skipped_reason"] = fanoutSkipReason
+	if args.FanoutSkipReason != "" {
+		payload["fanout_skipped_reason"] = args.FanoutSkipReason
 	}
-	s.recordAudit(ctx, actor, identityapi.AuditEvent{
+	s.recordAudit(ctx, args.Actor, identityapi.AuditEvent{
 		Action:     identityapi.AuditAppControlRuleBulkUpsert,
 		TargetType: "application_control_policy",
-		TargetID:   strconv.FormatInt(req.PolicyID, 10),
-		ActorEmail: req.Actor,
+		TargetID:   strconv.FormatInt(args.Req.PolicyID, 10),
+		ActorEmail: args.Req.Actor,
 		Payload:    payload,
 	})
 }

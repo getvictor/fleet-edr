@@ -723,16 +723,49 @@ func TestAppControl_BulkUpsertRules_BadItemRejectsBatch(t *testing.T) {
 
 // TestAppControl_BulkUpsertRules_EmptyBatchRejected covers the empty-input guard. An empty Items slice is operator confusion
 // (paste with no content); reject as ErrAppControlInvalidRequest so the REST handler returns 400 instead of silently no-op'ing.
+// Both shapes pinned: a nil slice AND an empty non-nil slice (CodeRabbit on PR #190 — Go treats them differently for some
+// reflection paths, so locking both keeps the contract honest).
 func TestAppControl_BulkUpsertRules_EmptyBatchRejected(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
 	p, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
 	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		items []api.BulkUpsertRuleItem
+	}{
+		{"nil slice", nil},
+		{"empty slice", []api.BulkUpsertRuleItem{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
+				PolicyID: p.ID, Items: tc.items, Actor: "demo-admin", Reason: "empty",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+		})
+	}
+}
+
+// TestAppControl_BulkUpsertRules_DuplicateKeyInBatch rejects a batch with the same (rule_type, identifier) twice. Without this
+// guard, the second occurrence would be classified as Insert (it's not in the pre-batch state) which corrupts the audit row's
+// rules_inserted count. CodeRabbit on PR #190 surfaced this as a real correctness bug.
+func TestAppControl_BulkUpsertRules_DuplicateKeyInBatch(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	p, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
+	require.NoError(t, err)
 	_, err = store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
-		PolicyID: p.ID, Items: nil, Actor: "demo-admin", Reason: "empty",
+		PolicyID: p.ID,
+		Items: []api.BulkUpsertRuleItem{
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleHigh},
+		},
+		Actor: "demo-admin", Reason: "should reject the duplicate",
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+	assert.Contains(t, err.Error(), "duplicates the (rule_type, identifier) of item 0")
 }
 
 // TestAppControl_BulkUpsertRules_BatchSizeCap confirms MaxBulkUpsertItems is enforced. 501 items must be rejected before any
