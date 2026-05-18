@@ -6,6 +6,7 @@
 package tests
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -607,6 +608,199 @@ func TestAppControl_DeletePolicy_NotFound(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	err := store.DeletePolicy(t.Context(), api.DeletePolicyRequest{
 		PolicyID: 9_999_999, Actor: "demo-admin", Reason: "stale id",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+}
+
+// TestAppControl_BulkUpsertRules_HappyPath_MixedInsertAndUpdate covers the canonical batch flow: 2 brand-new rules + 1 row that
+// already exists on the policy + a different identifier shape per type. The result counts must reflect insert vs update
+// correctly; the post-upsert row set must reflect the overwritten severity on the pre-existing row.
+func TestAppControl_BulkUpsertRules_HappyPath_MixedInsertAndUpdate(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	// Seed one BINARY rule with severity=medium so we can verify the upsert overwrites to high in the batch below.
+	preSeed, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID: p.ID, RuleType: api.RuleTypeBinary,
+		Identifier: strings.Repeat("a", 64), Severity: api.SeverityRuleMedium,
+		Actor: "demo-admin", Reason: "pre-seed",
+	})
+	require.NoError(t, err)
+	preVersion, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	result, err := store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
+		PolicyID: p.ID,
+		Items: []api.BulkUpsertRuleItem{
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("a", 64), Severity: api.SeverityRuleHigh},
+			{RuleType: api.RuleTypeCDHash, Identifier: strings.Repeat("b", 40), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeTeamID, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
+		},
+		Actor:  "demo-admin",
+		Reason: "Q1 intel feed import",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Inserted, "CDHASH + TEAMID are brand-new")
+	assert.Equal(t, 1, result.Updated, "BINARY row pre-existed; severity gets overwritten")
+	require.Len(t, result.Rules, 3, "result carries the post-upsert row for every requested item")
+
+	// The pre-existing BINARY row keeps its id but the severity is overwritten.
+	assert.Equal(t, preSeed.ID, result.Rules[0].ID)
+	assert.Equal(t, api.SeverityRuleHigh, result.Rules[0].Severity)
+
+	// Policy version bumps exactly once for the whole batch.
+	pAfter, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	assert.Equal(t, preVersion.Version+1, pAfter.Version, "bulk upsert bumps policy version exactly once")
+}
+
+// TestAppControl_BulkUpsertRules_Idempotent confirms a re-run with the same payload produces 0 inserts + N updates and the
+// same final row set. The audit log would show two separate bulk_upsert rows but each with the same post-upsert state.
+func TestAppControl_BulkUpsertRules_Idempotent(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	batch := api.BulkUpsertRulesRequest{
+		PolicyID: p.ID,
+		Items: []api.BulkUpsertRuleItem{
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("c", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeCDHash, Identifier: strings.Repeat("d", 40), Severity: api.SeverityRuleMedium},
+		},
+		Actor: "demo-admin", Reason: "first import",
+	}
+
+	first, err := store.BulkUpsertRules(ctx, batch)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.Inserted)
+	assert.Equal(t, 0, first.Updated)
+
+	batch.Reason = "re-running, expect idempotent"
+	second, err := store.BulkUpsertRules(ctx, batch)
+	require.NoError(t, err)
+	assert.Equal(t, 0, second.Inserted)
+	assert.Equal(t, 2, second.Updated, "every key already existed; the upsert overwrites without changing fields")
+	// Row ids stay the same across the two upserts.
+	assert.Equal(t, first.Rules[0].ID, second.Rules[0].ID)
+	assert.Equal(t, first.Rules[1].ID, second.Rules[1].ID)
+}
+
+// TestAppControl_BulkUpsertRules_BadItemRejectsBatch confirms the all-or-nothing contract: one bad rule rejects the whole
+// batch and NO rows are persisted. Without this contract, a paste-many of 100 lines with one typo would leave the operator
+// with a half-imported state.
+func TestAppControl_BulkUpsertRules_BadItemRejectsBatch(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	preRules, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	preCount := len(preRules)
+
+	_, err = store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
+		PolicyID: p.ID,
+		Items: []api.BulkUpsertRuleItem{
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("e", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Identifier: "TOO-SHORT", Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeTeamID, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
+		},
+		Actor: "demo-admin", Reason: "should fail atomically",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidIdentifier)
+	assert.True(t, api.IsApplicationControlValidationError(err), "the wrapped error must still match the validation sentinel set")
+
+	// No rows from the batch landed.
+	postRules, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, preCount, len(postRules), "all-or-nothing: the valid rules in the batch must NOT have persisted")
+}
+
+// TestAppControl_BulkUpsertRules_EmptyBatchRejected covers the empty-input guard. An empty Items slice is operator confusion
+// (paste with no content); reject as ErrAppControlInvalidRequest so the REST handler returns 400 instead of silently no-op'ing.
+// Both shapes pinned: a nil slice AND an empty non-nil slice (CodeRabbit on PR #190 — Go treats them differently for some
+// reflection paths, so locking both keeps the contract honest).
+func TestAppControl_BulkUpsertRules_EmptyBatchRejected(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	p, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		items []api.BulkUpsertRuleItem
+	}{
+		{"nil slice", nil},
+		{"empty slice", []api.BulkUpsertRuleItem{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
+				PolicyID: p.ID, Items: tc.items, Actor: "demo-admin", Reason: "empty",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+		})
+	}
+}
+
+// TestAppControl_BulkUpsertRules_DuplicateKeyInBatch rejects a batch with the same (rule_type, identifier) twice. Without this
+// guard, the second occurrence would be classified as Insert (it's not in the pre-batch state) which corrupts the audit row's
+// rules_inserted count. CodeRabbit on PR #190 surfaced this as a real correctness bug.
+func TestAppControl_BulkUpsertRules_DuplicateKeyInBatch(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	p, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
+	require.NoError(t, err)
+	_, err = store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
+		PolicyID: p.ID,
+		Items: []api.BulkUpsertRuleItem{
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleHigh},
+		},
+		Actor: "demo-admin", Reason: "should reject the duplicate",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+	assert.Contains(t, err.Error(), "duplicates the (rule_type, identifier) of item 0")
+}
+
+// TestAppControl_BulkUpsertRules_BatchSizeCap confirms MaxBulkUpsertItems is enforced. 501 items must be rejected before any
+// db round-trip so a hostile or buggy client can't tie up the txn for minutes.
+func TestAppControl_BulkUpsertRules_BatchSizeCap(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	p, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
+	require.NoError(t, err)
+	items := make([]api.BulkUpsertRuleItem, api.MaxBulkUpsertItems+1)
+	for i := range items {
+		items[i] = api.BulkUpsertRuleItem{
+			RuleType:   api.RuleTypeBinary,
+			Identifier: strings.Repeat("0", 60) + fmt.Sprintf("%04d", i),
+			Severity:   api.SeverityRuleMedium,
+		}
+	}
+	_, err = store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
+		PolicyID: p.ID, Items: items, Actor: "demo-admin", Reason: "oversized",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
+}
+
+// TestAppControl_BulkUpsertRules_UnknownPolicyMapsToNotFound exercises the FK violation path: a bulk-upsert against a stale
+// policy id must surface ErrAppControlPolicyNotFound so the REST handler maps to 404 instead of leaking a generic 500.
+func TestAppControl_BulkUpsertRules_UnknownPolicyMapsToNotFound(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	_, err := store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
+		PolicyID: 9_999_999,
+		Items: []api.BulkUpsertRuleItem{
+			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("f", 64), Severity: api.SeverityRuleMedium},
+		},
+		Actor: "demo-admin", Reason: "stale policy id",
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)

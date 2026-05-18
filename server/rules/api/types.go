@@ -334,6 +334,45 @@ type DeletePolicyRequest struct {
 	Reason   string
 }
 
+// BulkUpsertRuleItem is one row in a BulkUpsertRulesRequest. Mirrors the wire shape POST /policies/{id}/rules:bulkUpsert
+// consumes per element. Idempotency key is (policy_id, rule_type, identifier) per the openspec; severity / custom_msg /
+// custom_url / comment overwrite the existing row when the key collides. PolicyID is supplied by the request envelope, not by
+// each item, so the operator cannot accidentally mix policies inside one batch.
+type BulkUpsertRuleItem struct {
+	RuleType   RuleType
+	Identifier string
+	Severity   Severity
+	CustomMsg  *string
+	CustomURL  *string
+	Comment    string
+}
+
+// BulkUpsertRulesRequest is the server-internal contract for POST /policies/{id}/rules:bulkUpsert. All-or-nothing semantics:
+// any item that fails validation rejects the whole batch (the partial-commit alternative would leave the operator with a
+// half-imported state that's hard to reconcile). Actor + Reason land on the single audit row that fires for the logical
+// operation regardless of how many items the batch contained.
+type BulkUpsertRulesRequest struct {
+	PolicyID int64
+	Items    []BulkUpsertRuleItem
+	Actor    string
+	Reason   string
+}
+
+// BulkUpsertResult is the wire shape returned to a successful bulk-upsert. Inserted + Updated are the per-row outcome counts
+// classified by snapshotting the existing (policy_id, rule_type, identifier) keys inside the same SELECT ... FOR UPDATE that
+// serialises the batch — items whose key was already present count as Updated, the rest as Inserted. Rules is the full
+// post-upsert row set in the order the request supplied so a UI can render the final state without an extra round trip.
+type BulkUpsertResult struct {
+	Inserted int                      `json:"inserted"`
+	Updated  int                      `json:"updated"`
+	Rules    []ApplicationControlRule `json:"rules"`
+}
+
+// MaxBulkUpsertItems caps a single bulk-upsert batch. The handler's 256 KiB body limit imposes a practical byte ceiling, but we
+// also gate on item count so a 1000-row paste that happens to fit under the byte cap doesn't tie up the txn for minutes. 500
+// matches the Phase A demo deployment's expected import size with headroom; Phase B can grow this when paste-many lands.
+const MaxBulkUpsertItems = 500
+
 // Application Control validation errors. Mapped to HTTP 400 by the
 // REST handlers via IsApplicationControlValidationError.
 var (
@@ -437,6 +476,11 @@ type ApplicationControlStore interface {
 	// DeletePolicy removes the policy row (CASCADEs rules + assignments). Refuses the seed Default policy via
 	// ErrAppControlPolicyImmutable. ErrAppControlPolicyNotFound when the id does not exist.
 	DeletePolicy(ctx context.Context, req DeletePolicyRequest) error
+	// BulkUpsertRules applies an idempotent upsert across the request's items, bumps the parent policy version once, and
+	// returns the post-upsert rows + insert/update counts. All-or-nothing: any item failing validation rejects the whole
+	// batch. ErrAppControlPolicyNotFound when policy_id is missing; the per-item validator errors propagate untouched so the
+	// REST handler can errors.Is on the shared IsApplicationControlValidationError set.
+	BulkUpsertRules(ctx context.Context, req BulkUpsertRulesRequest) (BulkUpsertResult, error)
 	// ListHostGroupsForPolicy returns the host groups assigned to the policy, in priority order then by group name. The fan-out
 	// resolver walks the result and unions the member hosts of each group to build the set of unique hosts the rule update should
 	// reach.

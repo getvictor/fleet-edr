@@ -536,6 +536,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"PATCH /api/v1/app-control/policies/{id}",
 		"DELETE /api/v1/app-control/policies/{id}",
 		"POST /api/v1/app-control/policies/{id}/rules",
+		"POST /api/v1/app-control/policies/{id}/rules:bulkUpsert",
 		"PATCH /api/v1/app-control/rules/{id}",
 		"DELETE /api/v1/app-control/rules/{id}",
 		// Break-glass reauth ceremony. The handlers are mounted on apiMux via identityCtx.RegisterAuthedRoutes, but the outer
