@@ -83,11 +83,12 @@ func NewAppControl(svc *appcontrol.Service, authz identityapi.AuthZ, logger *slo
 //	PATCH  /api/v1/app-control/policies/{id}
 //	DELETE /api/v1/app-control/policies/{id}
 //	POST   /api/v1/app-control/policies/{id}/rules
+//	POST   /api/v1/app-control/policies/{id}/rules:bulkUpsert
 //	PATCH  /api/v1/app-control/rules/{id}
 //	DELETE /api/v1/app-control/rules/{id}
 //
-// Bulk-upsert / cross-policy rule list / host-groups CRUD / assignments POST stay deferred to follow-on PRs. Caller wraps the mux
-// in identity Session + CSRF middleware before mounting (the existing operator pattern in cmd/main).
+// Cross-policy rule list / host-groups CRUD / assignments POST stay deferred to follow-on PRs. Caller wraps the mux in identity
+// Session + CSRF middleware before mounting (the existing operator pattern in cmd/main).
 func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/app-control/policies", h.handleListPolicies)
 	mux.HandleFunc("GET /api/v1/app-control/policies/{id}", h.handleGetPolicy)
@@ -95,6 +96,7 @@ func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/app-control/policies/{id}", h.handleUpdatePolicy)
 	mux.HandleFunc("DELETE /api/v1/app-control/policies/{id}", h.handleDeletePolicy)
 	mux.HandleFunc("POST /api/v1/app-control/policies/{id}/rules", h.handleCreateRule)
+	mux.HandleFunc("POST /api/v1/app-control/policies/{id}/rules:bulkUpsert", h.handleBulkUpsertRules)
 	mux.HandleFunc("PATCH /api/v1/app-control/rules/{id}", h.handleUpdateRule)
 	mux.HandleFunc("DELETE /api/v1/app-control/rules/{id}", h.handleDeleteRule)
 }
@@ -525,6 +527,96 @@ func parseRuleID(r *http.Request) (int64, bool) { return parsePositiveInt64Path(
 // parsePolicyID extracts the {id} path value off /policies/{id} as a positive int64. Wrapper around parsePositiveInt64Path; see
 // parseRuleID for the rationale.
 func parsePolicyID(r *http.Request) (int64, bool) { return parsePositiveInt64Path(r) }
+
+// bulkUpsertItem is one row in the POST /policies/{id}/rules:bulkUpsert wire shape. CustomMsg + CustomURL stay as pointer
+// fields so the operator can explicitly clear them by sending an empty string (the JSON shape that maps to *string is
+// distinguishable from "field omitted").
+type bulkUpsertItem struct {
+	RuleType   api.RuleType `json:"rule_type"`
+	Identifier string       `json:"identifier"`
+	Severity   api.Severity `json:"severity,omitempty"`
+	CustomMsg  *string      `json:"custom_msg,omitempty"`
+	CustomURL  *string      `json:"custom_url,omitempty"`
+	Comment    string       `json:"comment,omitempty"`
+}
+
+// bulkUpsertRulesRequest is the POST /rules:bulkUpsert envelope. Reason is required for the audit row that fires once
+// regardless of how many items the batch contained.
+type bulkUpsertRulesRequest struct {
+	Rules  []bulkUpsertItem `json:"rules"`
+	Reason string           `json:"reason"`
+}
+
+// handleBulkUpsertRules serves POST /api/v1/app-control/policies/{id}/rules:bulkUpsert. Body limit is bigger than the per-rule
+// endpoints because a paste-many of 500 items at ~150 bytes each lands around 80 KiB; we lift the cap for this route only.
+const bulkUpsertReadBodyLimit = 256 * 1024
+
+func (h *AppControlHandler) handleBulkUpsertRules(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlRuleBulkUpsert,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	policyID, ok := parsePolicyID(r)
+	if !ok {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, bulkUpsertReadBodyLimit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+		return
+	}
+	var req bulkUpsertRulesRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+		return
+	}
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
+		return
+	}
+	items := make([]api.BulkUpsertRuleItem, 0, len(req.Rules))
+	for _, raw := range req.Rules {
+		items = append(items, api.BulkUpsertRuleItem{
+			RuleType:   raw.RuleType,
+			Identifier: raw.Identifier,
+			Severity:   raw.Severity,
+			CustomMsg:  raw.CustomMsg,
+			CustomURL:  raw.CustomURL,
+			Comment:    raw.Comment,
+		})
+	}
+	result, err := h.svc.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
+		PolicyID: policyID,
+		Items:    items,
+		Actor:    actorIdentifierFromContext(ctx),
+		Reason:   req.Reason,
+	}, actor)
+	if err != nil {
+		h.writeBulkUpsertError(ctx, w, err, policyID)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, result)
+}
+
+// writeBulkUpsertError maps BulkUpsertRules errors onto the HTTP wire shape. Per-item validation errors come back wrapped with
+// a "bulk item N:" prefix from the store; IsApplicationControlValidationError still recognises the underlying sentinel via
+// errors.Is so the handler can return 400 with the full operator-facing message intact.
+func (h *AppControlHandler) writeBulkUpsertError(ctx context.Context, w http.ResponseWriter, err error, policyID int64) {
+	switch {
+	case errors.Is(err, api.ErrAppControlPolicyNotFound):
+		writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, errCodePolicyNotFound, errMsgPolicyNotFound)
+	case api.IsApplicationControlValidationError(err):
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRule, err.Error())
+	default:
+		h.logger.ErrorContext(ctx, "appcontrol bulk upsert", "err", err, "policy_id", policyID)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
+	}
+}
 
 // actorIdentifierFromContext returns a stable string identifier the store + audit row use as the "who authored this" tag. The actor's
 // email isn't on identityapi.Actor today (Actor carries UserID + Roles but not email; the audit recorder fetches the email separately

@@ -50,12 +50,13 @@ const (
 	// and fan-out counts (fanout_hosts / fanout_failed) so SIEM dashboards can trace which hosts received the rule. Stable wire strings
 	// mirrored by AuthZ Actions of the same names. The five non-create actions are added by the Phase A close-out follow-on (PR-1b)
 	// that wires the full PATCH/DELETE/POST REST surface.
-	AuditAppControlRuleCreate   AuditAction = "application_control.rule_create"
-	AuditAppControlRuleUpdate   AuditAction = "application_control.rule_update"
-	AuditAppControlRuleDelete   AuditAction = "application_control.rule_delete"
-	AuditAppControlPolicyCreate AuditAction = "application_control.policy_create"
-	AuditAppControlPolicyUpdate AuditAction = "application_control.policy_update"
-	AuditAppControlPolicyDelete AuditAction = "application_control.policy_delete"
+	AuditAppControlRuleCreate     AuditAction = "application_control.rule_create"
+	AuditAppControlRuleUpdate     AuditAction = "application_control.rule_update"
+	AuditAppControlRuleDelete     AuditAction = "application_control.rule_delete"
+	AuditAppControlRuleBulkUpsert AuditAction = "application_control.rule_bulk_upsert"
+	AuditAppControlPolicyCreate   AuditAction = "application_control.policy_create"
+	AuditAppControlPolicyUpdate   AuditAction = "application_control.policy_update"
+	AuditAppControlPolicyDelete   AuditAction = "application_control.policy_delete"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller

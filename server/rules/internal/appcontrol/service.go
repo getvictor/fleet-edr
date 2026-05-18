@@ -604,3 +604,71 @@ func (s *Service) recordPolicyMutationAudit(
 		},
 	})
 }
+
+// BulkUpsertRules wires POST /api/v1/app-control/policies/{id}/rules:bulkUpsert. Sequence mirrors CreateRule's chokepoint
+// pattern modulo the per-item bulk shape: validate actor, hand the all-or-nothing upsert to the store (which validates each
+// item + runs the upserts in one txn + bumps the policy version once), compose the post-upsert snapshot, fan it out, emit a
+// single audit row for the logical operation.
+//
+// The audit payload differs from the per-rule mutation shape: rules_inserted + rules_updated + rules_total replace the
+// rule_type / identifier / severity fields so a SIEM query "show me bulk imports that touched more than 50 rules" works
+// without joining per-rule audit rows. Fan-out fields stay the same so the agent reach is queryable consistently across
+// every mutation type.
+func (s *Service) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequest, actor *identityapi.Actor) (api.BulkUpsertResult, error) {
+	if actor == nil {
+		return api.BulkUpsertResult{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
+	}
+	result, err := s.store.BulkUpsertRules(ctx, req)
+	if err != nil {
+		return api.BulkUpsertResult{}, err
+	}
+	policy, payload, composeErr := s.buildSnapshotPayload(ctx, req.PolicyID)
+	if composeErr != nil {
+		s.recordBulkUpsertAudit(ctx, actor, req, result, 0, 0, 0, "snapshot_compose_failed")
+		s.logger.ErrorContext(ctx, "appcontrol: snapshot compose after BulkUpsertRules failed; rules persisted but agents unaware until next mutation",
+			"err", composeErr, "policy_id", req.PolicyID, "rules_total", len(result.Rules))
+		return api.BulkUpsertResult{}, fmt.Errorf(errSvcSnapshotComposeFmt, composeErr)
+	}
+	fanoutHosts, fanoutFailed, fanoutSkipReason := s.fanout(ctx, policy.ID, payload)
+	s.recordBulkUpsertAudit(ctx, actor, req, result, policy.Version, fanoutHosts, fanoutFailed, fanoutSkipReason)
+	if fanoutSkipReason != "" {
+		s.logger.InfoContext(ctx, "appcontrol bulk upsert fan-out skipped",
+			"reason", fanoutSkipReason, "policy_id", req.PolicyID, "rules_total", len(result.Rules))
+	}
+	return result, nil
+}
+
+// recordBulkUpsertAudit emits the single audit row for one BulkUpsertRules call regardless of how many items the batch
+// contained. Payload shape adds rules_inserted + rules_updated + rules_total alongside the fan-out fields so the SIEM can
+// answer "how many rules did this import affect" without per-row joins.
+func (s *Service) recordBulkUpsertAudit(
+	ctx context.Context,
+	actor *identityapi.Actor,
+	req api.BulkUpsertRulesRequest,
+	result api.BulkUpsertResult,
+	policyVersion int64,
+	fanoutHosts int,
+	fanoutFailed int,
+	fanoutSkipReason string,
+) {
+	payload := map[string]any{
+		"policy_id":      req.PolicyID,
+		"policy_version": policyVersion,
+		"rules_inserted": result.Inserted,
+		"rules_updated":  result.Updated,
+		"rules_total":    len(result.Rules),
+		"reason":         req.Reason,
+		"fanout_hosts":   fanoutHosts,
+		"fanout_failed":  fanoutFailed,
+	}
+	if fanoutSkipReason != "" {
+		payload["fanout_skipped_reason"] = fanoutSkipReason
+	}
+	s.recordAudit(ctx, actor, identityapi.AuditEvent{
+		Action:     identityapi.AuditAppControlRuleBulkUpsert,
+		TargetType: "application_control_policy",
+		TargetID:   strconv.FormatInt(req.PolicyID, 10),
+		ActorEmail: req.Actor,
+		Payload:    payload,
+	})
+}

@@ -674,3 +674,132 @@ func errStringContains(err error, substr string) bool {
 	}
 	return strings.Contains(err.Error(), substr)
 }
+
+// BulkUpsertRules inserts or overwrites each row in req.Items inside one transaction, bumps the parent policy version once, and
+// returns the post-upsert rows + insert/update counts. Idempotency key is (policy_id, rule_type, identifier) per the openspec;
+// severity / custom_msg / custom_url / comment overwrite when the key collides. All-or-nothing: a per-item validator error
+// (rule_type, identifier shape, severity) rejects the whole batch before any UPDATE fires. Returns ErrAppControlPolicyNotFound
+// when the policy_id is missing (FK violation on the first INSERT surfaces it).
+//
+// Per-item counts use MySQL's "INSERT ... ON DUPLICATE KEY UPDATE" affected-row convention: 1 for a fresh insert, 2 for an
+// existing row that was overwritten. We translate by counting 1+2 totals and inferring insert vs update from a pre-query that
+// resolves existing ids; this is simpler than parsing the per-statement affected_rows.
+func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequest) (api.BulkUpsertResult, error) {
+	if strings.TrimSpace(req.Actor) == "" {
+		return api.BulkUpsertResult{}, fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		return api.BulkUpsertResult{}, fmt.Errorf(errReasonRequiredFmt, api.ErrAppControlInvalidRequest)
+	}
+	if len(req.Items) == 0 {
+		return api.BulkUpsertResult{}, fmt.Errorf("%w: bulk upsert requires at least one rule", api.ErrAppControlInvalidRequest)
+	}
+	if len(req.Items) > api.MaxBulkUpsertItems {
+		return api.BulkUpsertResult{}, fmt.Errorf("%w: batch size %d exceeds limit %d",
+			api.ErrAppControlInvalidRequest, len(req.Items), api.MaxBulkUpsertItems)
+	}
+
+	// Validate every item up-front so the all-or-nothing contract holds. The error wrapping preserves the original sentinel
+	// (ErrAppControlInvalidRuleType / ErrAppControlInvalidIdentifier / ErrAppControlInvalidSeverity) so the handler's
+	// IsApplicationControlValidationError check still works; we add the batch index so an operator pasting 100 lines knows
+	// which row tripped the validator.
+	for i, item := range req.Items {
+		if err := ValidateRuleType(item.RuleType); err != nil {
+			return api.BulkUpsertResult{}, fmt.Errorf("bulk item %d: %w", i, err)
+		}
+		if err := ValidateIdentifier(item.RuleType, item.Identifier); err != nil {
+			return api.BulkUpsertResult{}, fmt.Errorf("bulk item %d: %w", i, err)
+		}
+		if err := ValidateSeverity(item.Severity); err != nil {
+			return api.BulkUpsertResult{}, fmt.Errorf("bulk item %d: %w", i, err)
+		}
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return api.BulkUpsertResult{}, fmt.Errorf(errBeginTxFmt, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Snapshot pre-upsert id set so we can count inserts vs updates after the upsert lands. Reading inside the txn keeps the
+	// count consistent with the rows written.
+	preIDs := map[string]struct{}{}
+	for _, item := range req.Items {
+		key := string(item.RuleType) + "\x1f" + item.Identifier
+		var existingID int64
+		err := tx.QueryRowxContext(ctx,
+			`SELECT id FROM app_control_rules WHERE policy_id = ? AND rule_type = ? AND identifier = ?`,
+			req.PolicyID, item.RuleType, item.Identifier,
+		).Scan(&existingID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// row absent; will be an insert
+		case err != nil:
+			return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk preflight: %w", err)
+		default:
+			preIDs[key] = struct{}{}
+		}
+	}
+
+	const upsert = `INSERT INTO app_control_rules
+		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
+		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			severity = VALUES(severity),
+			custom_msg = VALUES(custom_msg),
+			custom_url = VALUES(custom_url),
+			comment = VALUES(comment)`
+	inserted := 0
+	updated := 0
+	for _, item := range req.Items {
+		severity := item.Severity
+		if severity == "" {
+			severity = api.SeverityRuleMedium
+		}
+		if _, err := tx.ExecContext(ctx, upsert,
+			req.PolicyID, item.RuleType, item.Identifier, severity,
+			item.CustomMsg, item.CustomURL, item.Comment, req.Actor,
+		); err != nil {
+			if isForeignKeyViolation(err) {
+				return api.BulkUpsertResult{}, api.ErrAppControlPolicyNotFound
+			}
+			return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert item: %w", err)
+		}
+		key := string(item.RuleType) + "\x1f" + item.Identifier
+		if _, existed := preIDs[key]; existed {
+			updated++
+		} else {
+			inserted++
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies SET version = version + 1, updated_by = ? WHERE id = ?`,
+		req.Actor, req.PolicyID); err != nil {
+		return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: bump policy version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return api.BulkUpsertResult{}, fmt.Errorf(errCommitTxFmt, err)
+	}
+
+	// Re-fetch the rows in request order so the caller sees the canonical post-upsert state. One round-trip per row keeps the
+	// query simple; the 500-item cap on the batch keeps the cost bounded.
+	rules := make([]api.ApplicationControlRule, 0, len(req.Items))
+	for _, item := range req.Items {
+		var rule api.ApplicationControlRule
+		var enabled int
+		const sel = `SELECT id, policy_id, rule_type, identifier, action, enforcement, enabled,
+			severity, source, source_ref, custom_msg, custom_url, comment, expires_at,
+			created_at, updated_at, created_by
+			FROM app_control_rules WHERE policy_id = ? AND rule_type = ? AND identifier = ?`
+		if err := s.db.QueryRowxContext(ctx, sel, req.PolicyID, item.RuleType, item.Identifier).Scan(
+			&rule.ID, &rule.PolicyID, &rule.RuleType, &rule.Identifier, &rule.Action, &rule.Enforcement, &enabled,
+			&rule.Severity, &rule.Source, &rule.SourceRef, &rule.CustomMsg, &rule.CustomURL, &rule.Comment, &rule.ExpiresAt,
+			&rule.CreatedAt, &rule.UpdatedAt, &rule.CreatedBy,
+		); err != nil {
+			return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: refetch: %w", err)
+		}
+		rule.Enabled = enabled != 0
+		rules = append(rules, rule)
+	}
+	return api.BulkUpsertResult{Inserted: inserted, Updated: updated, Rules: rules}, nil
+}

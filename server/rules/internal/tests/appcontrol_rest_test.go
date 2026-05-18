@@ -937,3 +937,131 @@ func TestAppControlREST_Mutations_InvalidPolicyID(t *testing.T) {
 		})
 	}
 }
+
+// TestAppControlREST_BulkUpsertRules_HappyPath confirms POST /policies/{id}/rules:bulkUpsert lands a mixed insert+update batch,
+// returns the post-upsert row set + insert/update counts, bumps the policy version exactly once, fans out exactly once to every
+// host, and emits a single rule_bulk_upsert audit event.
+func TestAppControlREST_BulkUpsertRules_HappyPath(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a", "host-b"})
+	policyID := r.defaultPolicyID(t)
+	preCount := len(r.inserter.snapshot())
+
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules:bulkUpsert",
+		map[string]any{
+			"rules": []map[string]any{
+				{"rule_type": "BINARY", "identifier": strings.Repeat("1", 64), "severity": "medium"},
+				{"rule_type": "CDHASH", "identifier": strings.Repeat("2", 40), "severity": "medium"},
+				{"rule_type": "TEAMID", "identifier": "EQHXZ8M8AV", "severity": "high"},
+			},
+			"reason": "bulk REST test",
+		})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var result rulesapi.BulkUpsertResult
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, 3, result.Inserted)
+	assert.Equal(t, 0, result.Updated)
+	require.Len(t, result.Rules, 3)
+
+	// One fan-out cycle, two hosts → two enqueued commands beyond the seed baseline.
+	postCount := len(r.inserter.snapshot())
+	assert.Equal(t, 2, postCount-preCount, "bulk upsert fans out exactly one snapshot per host")
+
+	// Exactly one audit row regardless of batch size.
+	events := r.audit.snapshot()
+	last := events[len(events)-1]
+	assert.Equal(t, identityapi.AuditAppControlRuleBulkUpsert, last.Action)
+	assert.Equal(t, "application_control_policy", last.TargetType)
+	assert.Equal(t, 3, last.Payload["rules_inserted"])
+	assert.Equal(t, 0, last.Payload["rules_updated"])
+	assert.Equal(t, 3, last.Payload["rules_total"])
+	assert.Equal(t, 2, last.Payload["fanout_hosts"])
+}
+
+// TestAppControlREST_BulkUpsertRules_BadItem confirms a per-item validation failure rejects the whole batch with 400
+// invalid_rule and the operator-facing message identifies the offending row.
+func TestAppControlREST_BulkUpsertRules_BadItem(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules:bulkUpsert",
+		map[string]any{
+			"rules": []map[string]any{
+				{"rule_type": "BINARY", "identifier": strings.Repeat("3", 64), "severity": "medium"},
+				{"rule_type": "BINARY", "identifier": "too-short", "severity": "medium"},
+			},
+			"reason": "should fail atomically",
+		})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var body struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "application_control.invalid_rule", body.Error)
+	assert.Contains(t, body.Message, "bulk item 1", "the operator-facing message names the offending row index")
+}
+
+// TestAppControlREST_BulkUpsertRules_UnknownPolicy maps the stale-policy FK violation to 404 policy_not_found.
+func TestAppControlREST_BulkUpsertRules_UnknownPolicy(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/9999999/rules:bulkUpsert",
+		map[string]any{
+			"rules": []map[string]any{
+				{"rule_type": "BINARY", "identifier": strings.Repeat("4", 64), "severity": "medium"},
+			},
+			"reason": "should be 404",
+		})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestAppControlREST_BulkUpsertRules_InvalidPolicyID covers the path-parse 400.
+func TestAppControlREST_BulkUpsertRules_InvalidPolicyID(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/not-a-number/rules:bulkUpsert",
+		map[string]any{
+			"rules": []map[string]any{
+				{"rule_type": "BINARY", "identifier": strings.Repeat("5", 64), "severity": "medium"},
+			},
+			"reason": "x",
+		})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestAppControlREST_BulkUpsertRules_Idempotent confirms re-posting the same payload yields 0 inserted + N updated and the
+// audit log has TWO bulk_upsert rows. The policy version bumps twice (once per call) even though no field changed.
+func TestAppControlREST_BulkUpsertRules_Idempotent(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	batch := map[string]any{
+		"rules": []map[string]any{
+			{"rule_type": "BINARY", "identifier": strings.Repeat("6", 64), "severity": "medium"},
+		},
+		"reason": "first import",
+	}
+	first := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules:bulkUpsert", batch)
+	first.Body.Close()
+	require.Equal(t, http.StatusOK, first.StatusCode)
+
+	batch["reason"] = "re-import"
+	second := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules:bulkUpsert", batch)
+	defer second.Body.Close()
+	require.Equal(t, http.StatusOK, second.StatusCode)
+	var result rulesapi.BulkUpsertResult
+	require.NoError(t, json.NewDecoder(second.Body).Decode(&result))
+	assert.Equal(t, 0, result.Inserted)
+	assert.Equal(t, 1, result.Updated)
+}
