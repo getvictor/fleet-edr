@@ -456,6 +456,9 @@ type Assignment struct {
 // in the internal package (ADR-0004's bounded-context import rule).
 type ApplicationControlStore interface {
 	GetPolicyByName(ctx context.Context, name string) (ApplicationControlPolicy, error)
+	// GetPolicyByID loads the policy row by primary key. Used by the service-layer snapshot composer and the policy-delete audit
+	// path; replaces the prior practice of walking ListPolicies in memory to locate a single row by id.
+	GetPolicyByID(ctx context.Context, policyID int64) (ApplicationControlPolicy, error)
 	ListPolicies(ctx context.Context) ([]ApplicationControlPolicy, error)
 	ListRulesByPolicy(ctx context.Context, policyID int64) ([]ApplicationControlRule, error)
 	CreateRule(ctx context.Context, req CreateRuleRequest) (ApplicationControlRule, error)

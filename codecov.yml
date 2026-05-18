@@ -22,8 +22,10 @@ coverage:
         only_pulls: false
     patch:
       default:
-        # Matches sonar's "Coverage on New Code" quality gate (80%).
-        target: 80%
+        # Sonar's per-PR "Coverage on New Code" gate is 80%, but codecov's patch coverage tends to be stricter in practice (the
+        # uploaded LCOV is per-language and per-flag, and codecov's branch-counting differs from sonar's). Held at 70% so codecov
+        # doesn't gate-out PRs that sonar already accepts; sonar remains the authoritative new-code bar.
+        target: 70%
         threshold: 0%
         if_ci_failed: error
 
@@ -38,7 +40,9 @@ flag_management:
         target: auto
         threshold: 1%
       - type: patch
-        target: 80%
+        # Per-flag patch target. Mirrors the project-wide patch target above; see the note there for why codecov is held one notch
+        # below sonar's 80% new-code gate.
+        target: 70%
   individual_flags:
     - name: agent
       paths:

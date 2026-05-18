@@ -79,6 +79,37 @@ func TestAppControl_GetPolicy_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
 }
 
+// TestAppControl_GetPolicyByID_ReturnsSeededDefault locks the by-id lookup contract: the seeded Default policy is reachable by
+// its primary key with the same row shape GetPolicyByName returns. The snapshot composer + DeletePolicy paths both depend on
+// this returning the row without a ListPolicies scan.
+func TestAppControl_GetPolicyByID_ReturnsSeededDefault(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+
+	byName, err := store.GetPolicyByName(t.Context(), api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	byID, err := store.GetPolicyByID(t.Context(), byName.ID)
+	require.NoError(t, err)
+	assert.Equal(t, byName.ID, byID.ID)
+	assert.Equal(t, byName.Name, byID.Name)
+	assert.Equal(t, byName.Version, byID.Version)
+	assert.Equal(t, byName.DefaultAction, byID.DefaultAction)
+	assert.Equal(t, byName.CreatedBy, byID.CreatedBy)
+	assert.Equal(t, byName.UpdatedBy, byID.UpdatedBy)
+	assert.Empty(t, byID.Rules, "GetPolicyByID must not populate rules; callers fetch them separately")
+}
+
+// TestAppControl_GetPolicyByID_NotFound surfaces the typed sentinel for the snapshot composer + DeletePolicy lookup paths so
+// the REST handler maps a missing policy id to HTTP 404 rather than a generic 500.
+func TestAppControl_GetPolicyByID_NotFound(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+
+	_, err := store.GetPolicyByID(t.Context(), 99_999_999)
+	require.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
+}
+
 // TestAppControl_CreateRule_BinaryHappyPath exercises the demo's critical write: an admin creates a BINARY rule, the row persists,
 // the policy version bumps so the next agent poll picks up the change.
 func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
