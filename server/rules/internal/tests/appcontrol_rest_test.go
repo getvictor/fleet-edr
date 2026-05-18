@@ -1311,6 +1311,34 @@ func TestAppControlREST_GetHostGroup_NotFound(t *testing.T) {
 	assert.Equal(t, "application_control.host_group_not_found", errBody.Error)
 }
 
+// TestAppControlREST_GetHostGroup_InvalidID pins the typed 400 contract for malformed path ids (non-numeric, zero, negative).
+// CodeRabbit on PR #195 noted the missing coverage: the handler parses {id} via parsePositiveInt64Path which short-circuits
+// these shapes to errCodeInvalidQuery, and the test surface should exercise that branch directly.
+func TestAppControlREST_GetHostGroup_InvalidID(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"non-numeric id", "/api/v1/app-control/host-groups/abc"},
+		{"zero id", "/api/v1/app-control/host-groups/0"},
+		{"negative id", "/api/v1/app-control/host-groups/-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, tc.path, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errBody struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+			assert.Equal(t, "application_control.invalid_query", errBody.Error)
+		})
+	}
+}
+
 // TestAppControlREST_ListAssignments_SurfacesSeedRow: the seed Default policy has exactly one assignment row pointing at
 // the all-hosts group. Pinning the wire shape so a Phase B regression that drops the assignment is caught.
 func TestAppControlREST_ListAssignments_SurfacesSeedRow(t *testing.T) {
@@ -1386,6 +1414,8 @@ func TestAppControlREST_HostGroupMutations_ReadOnlyInPhaseA(t *testing.T) {
 			assert.Equal(t, "application_control.read_only_in_phase_a", body.Error)
 			if tc.expectAllowGET {
 				assert.Equal(t, "GET", resp.Header.Get("Allow"))
+			} else {
+				assert.Empty(t, resp.Header.Get("Allow"), "leaf route with no GET surface must emit empty Allow")
 			}
 		})
 	}

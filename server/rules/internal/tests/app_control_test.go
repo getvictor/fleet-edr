@@ -1004,7 +1004,10 @@ func TestAppControl_GetHostGroupByID_ReturnsSeedRow(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	groups, err := store.ListHostGroups(t.Context())
 	require.NoError(t, err)
-	require.NotEmpty(t, groups)
+	// Pin the Phase A cardinality contract: exactly one seeded host group (all-hosts). A future regression that ships
+	// additional seed groups would surface here, not via a brittle groups[0] dereference (CodeRabbit on PR #195).
+	require.Len(t, groups, 1)
+	assert.Equal(t, api.DefaultHostGroupName, groups[0].Name)
 
 	byID, err := store.GetHostGroupByID(t.Context(), groups[0].ID)
 	require.NoError(t, err)
@@ -1020,7 +1023,7 @@ func TestAppControl_GetHostGroupByID_NotFound(t *testing.T) {
 }
 
 // TestAppControl_ListAssignmentsForPolicy_SurfacesSeedAssignment: the bootstrap seeds the Default policy + the
-// Default → all-hosts assignment. ListAssignmentsForPolicy on the seed policy returns exactly one row pointing at the seed
+// Default -> all-hosts assignment. ListAssignmentsForPolicy on the seed policy returns exactly one row pointing at the seed
 // host group with priority 0. Tests the raw-rows shape the REST handler emits (distinct from ListHostGroupsForPolicy which
 // returns the joined group metadata).
 func TestAppControl_ListAssignmentsForPolicy_SurfacesSeedAssignment(t *testing.T) {
@@ -1030,18 +1033,19 @@ func TestAppControl_ListAssignmentsForPolicy_SurfacesSeedAssignment(t *testing.T
 	require.NoError(t, err)
 	groups, err := store.ListHostGroups(t.Context())
 	require.NoError(t, err)
-	require.NotEmpty(t, groups)
+	require.Len(t, groups, 1)
+	assert.Equal(t, api.DefaultHostGroupName, groups[0].Name)
 
 	assignments, err := store.ListAssignmentsForPolicy(t.Context(), defaultPolicy.ID)
 	require.NoError(t, err)
-	require.Len(t, assignments, 1, "seed bootstrap creates exactly one assignment row (Default → all-hosts)")
+	require.Len(t, assignments, 1, "seed bootstrap creates exactly one assignment row (Default -> all-hosts)")
 	assert.Equal(t, defaultPolicy.ID, assignments[0].PolicyID)
 	assert.Equal(t, groups[0].ID, assignments[0].HostGroupID)
 	assert.Equal(t, 0, assignments[0].Priority)
 }
 
 // TestAppControl_ListAssignmentsForPolicy_UnknownPolicyReturnsEmpty: returning [] for a policy that does not exist is the
-// correct shape — the handler should not 404 on the assignments collection endpoint. Phase A's seed always has its
+// correct shape - the handler should not 404 on the assignments collection endpoint. Phase A's seed always has its
 // assignment so this dimension only surfaces for synthetic ids; pinning the contract makes Phase B's editable assignments
 // land without changing the response shape on an empty result.
 func TestAppControl_ListAssignmentsForPolicy_UnknownPolicyReturnsEmpty(t *testing.T) {

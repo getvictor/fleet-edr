@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -693,63 +694,11 @@ func (h *AppControlHandler) handleListRulesAcrossPolicies(w http.ResponseWriter,
 		identityapi.Resource{Type: "application_control"}) {
 		return
 	}
-	q := r.URL.Query()
-	req := api.ListRulesAcrossPoliciesRequest{}
-	if raw := q.Get("policy_id"); raw != "" {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid policy_id query parameter")
-			return
-		}
-		req.PolicyID = &id
+	req, errMsg := parseListRulesAcrossPoliciesQuery(r.URL.Query())
+	if errMsg != "" {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, errMsg)
+		return
 	}
-	if raw := q.Get("rule_type"); raw != "" {
-		rt := api.RuleType(raw)
-		if !api.IsValidRuleType(rt) {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery,
-				"invalid rule_type query parameter (one of: BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH)")
-			return
-		}
-		req.RuleType = rt
-	}
-	if raw := q.Get("enabled"); raw != "" {
-		b, err := strconv.ParseBool(raw)
-		if err != nil {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid enabled query parameter (use true/false)")
-			return
-		}
-		req.Enabled = &b
-	}
-	if raw := q.Get("severity"); raw != "" {
-		sev := api.Severity(raw)
-		if !api.IsValidSeverity(sev) {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery,
-				"invalid severity query parameter (one of: low, medium, high, critical)")
-			return
-		}
-		req.Severity = sev
-	}
-	req.Source = q.Get("source")
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > api.MaxListRulesAcrossPoliciesLimit {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery,
-				"invalid limit query parameter (1.."+strconv.Itoa(api.MaxListRulesAcrossPoliciesLimit)+")")
-			return
-		}
-		req.Limit = n
-	} else {
-		req.Limit = api.DefaultListRulesAcrossPoliciesLimit
-	}
-	if raw := q.Get("offset"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid offset query parameter (>= 0)")
-			return
-		}
-		req.Offset = n
-	}
-
 	result, err := h.svc.ListRulesAcrossPolicies(ctx, req)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "appcontrol list rules across policies", "err", err)
@@ -762,6 +711,79 @@ func (h *AppControlHandler) handleListRulesAcrossPolicies(w http.ResponseWriter,
 		Limit:  req.Limit,
 		Offset: req.Offset,
 	})
+}
+
+// parseListRulesAcrossPoliciesQuery parses the query string for GET /api/v1/app-control/rules into the typed request the
+// Store consumes. Returns (req, "") on success; (zero req, errMsg) on the first malformed value. Extracted from
+// handleListRulesAcrossPolicies to keep the handler under Sonar's S3776 cognitive-complexity threshold; the helper itself
+// further delegates filter + pagination parsing to two sub-helpers so each function stays under the threshold individually.
+func parseListRulesAcrossPoliciesQuery(q url.Values) (api.ListRulesAcrossPoliciesRequest, string) {
+	req := api.ListRulesAcrossPoliciesRequest{}
+	if msg := parseListRulesFilterParams(q, &req); msg != "" {
+		return api.ListRulesAcrossPoliciesRequest{}, msg
+	}
+	if msg := parseListRulesPaginationParams(q, &req); msg != "" {
+		return api.ListRulesAcrossPoliciesRequest{}, msg
+	}
+	return req, ""
+}
+
+// parseListRulesFilterParams handles the per-dimension filter parameters (policy_id, rule_type, enabled, severity, source).
+// Returns an error message string on the first invalid value; empty string on success. Mutates *req in place.
+func parseListRulesFilterParams(q url.Values, req *api.ListRulesAcrossPoliciesRequest) string {
+	if raw := q.Get("policy_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			return "invalid policy_id query parameter"
+		}
+		req.PolicyID = &id
+	}
+	if raw := q.Get("rule_type"); raw != "" {
+		rt := api.RuleType(raw)
+		if !api.IsValidRuleType(rt) {
+			return "invalid rule_type query parameter (one of: BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH)"
+		}
+		req.RuleType = rt
+	}
+	if raw := q.Get("enabled"); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return "invalid enabled query parameter (use true/false)"
+		}
+		req.Enabled = &b
+	}
+	if raw := q.Get("severity"); raw != "" {
+		sev := api.Severity(raw)
+		if !api.IsValidSeverity(sev) {
+			return "invalid severity query parameter (one of: low, medium, high, critical)"
+		}
+		req.Severity = sev
+	}
+	req.Source = q.Get("source")
+	return ""
+}
+
+// parseListRulesPaginationParams handles the limit + offset query parameters. Limit defaults to DefaultListRulesAcrossPoliciesLimit
+// when absent and is clamped at [1, MaxListRulesAcrossPoliciesLimit]; offset defaults to 0 and rejects negatives. Returns an
+// error message on the first malformed value; empty string on success. Mutates *req in place.
+func parseListRulesPaginationParams(q url.Values, req *api.ListRulesAcrossPoliciesRequest) string {
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > api.MaxListRulesAcrossPoliciesLimit {
+			return "invalid limit query parameter (1.." + strconv.Itoa(api.MaxListRulesAcrossPoliciesLimit) + ")"
+		}
+		req.Limit = n
+	} else {
+		req.Limit = api.DefaultListRulesAcrossPoliciesLimit
+	}
+	if raw := q.Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return "invalid offset query parameter (>= 0)"
+		}
+		req.Offset = n
+	}
+	return ""
 }
 
 // hostGroupResponse is the JSON wire shape the GET /host-groups list endpoint emits. Wraps the slice so future pagination
@@ -822,7 +844,7 @@ type assignmentsResponse struct {
 }
 
 // handleListAssignments serves GET /api/v1/app-control/policies/{id}/assignments. Returns the raw assignment rows for the
-// policy in (priority, host_group_id) order. Returns [] for a policy with no assignments — does NOT 404 on unknown policy
+// policy in (priority, host_group_id) order. Returns [] for a policy with no assignments: does NOT 404 on unknown policy
 // id (returning an empty list is the correct shape for "policy exists but is unassigned", a valid Phase B state).
 func (h *AppControlHandler) handleListAssignments(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -850,12 +872,19 @@ func (h *AppControlHandler) handleListAssignments(w http.ResponseWriter, r *http
 // B's editable host-group + assignment mutations replace this with real handlers; until then any non-GET request returns
 // 405 with the typed application_control.read_only_in_phase_a code + an Allow header naming the read methods that DO work.
 //
-// Authz is intentionally NOT gated here: returning 405 to unauth callers is fine (no information leak — the route exists
-// independent of the caller's permissions, and the wire-shape test surface should be exercisable without a credential to
-// keep CI scaffolding lean).
+// Authz gates on ActionAppControlRead (CodeRabbit finding on PR #195): every route here is wired through the outer-mux
+// session-protected allowlist already, so callers ARE authenticated. Without the gate, an authenticated session lacking
+// app-control read permission would still receive the typed 405 + Allow header, leaking the API contract shape. Gating
+// on Read aligns with the GET endpoints on the same resource so the permission story is uniform across host-groups.
 func (h *AppControlHandler) handlePhaseAImmutable(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlRead,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
 	w.Header().Set("Allow", phaseAImmutableAllowHeader(r.URL.Path))
-	writeAppControlErr(r.Context(), h.logger, w, http.StatusMethodNotAllowed, errCodeReadOnlyPhaseA, errMsgReadOnlyPhaseA)
+	writeAppControlErr(ctx, h.logger, w, http.StatusMethodNotAllowed, errCodeReadOnlyPhaseA, errMsgReadOnlyPhaseA)
 }
 
 // phaseAImmutableAllowHeader returns the Allow header value the 405 response carries. Per RFC 9110 §15.5.6 a 405 MUST include
