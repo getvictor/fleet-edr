@@ -1,13 +1,30 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getAppControlPolicy } from "../../api";
+import {
+  getAppControlPolicy,
+  deleteAppControlRule,
+  updateAppControlRule,
+} from "../../api";
 import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
 import { Badge, type BadgeVariant } from "../ui/Badge";
 import { AddRuleModal } from "./AddRuleModal";
+import { EditRuleModal } from "./EditRuleModal";
+import { ConfirmActionModal } from "./ConfirmActionModal";
 import "./ApplicationControl.scss";
+
+// ActiveModal is the union that captures which per-row modal is currently open. Encoding mutual exclusion in the type closes
+// the Copilot finding on PR #189 — the previous shape kept two independent `useState` slots and relied on call-site discipline
+// to avoid opening two modals at once. Now `add`, `edit`, `confirm-delete`, and `confirm-toggle` are exclusive by construction
+// and a future helper that forgets to clear the previous state is a type error rather than a UX bug.
+type ActiveModal =
+  | { kind: "none" }
+  | { kind: "add" }
+  | { kind: "edit"; rule: ApplicationControlRule }
+  | { kind: "confirm-delete"; rule: ApplicationControlRule }
+  | { kind: "confirm-toggle"; rule: ApplicationControlRule };
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
   critical: "critical",
@@ -41,7 +58,10 @@ export function PolicyDetail() {
   const [policy, setPolicy] = useState<ApplicationControlPolicy | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
+  // activeModal is the union of every possible per-row modal state. Mutually exclusive by construction; opening a new modal
+  // implicitly closes whichever was previously active because there's exactly one state slot.
+  const [activeModal, setActiveModal] = useState<ActiveModal>({ kind: "none" });
+  const closeModal = useCallback(() => { setActiveModal({ kind: "none" }); }, []);
 
   // refreshKey bumps to force a re-fetch (e.g. after Save in the
   // modal). useEffect below owns the actual fetch lifecycle so the
@@ -106,7 +126,7 @@ export function PolicyDetail() {
   const actions = (
     <Button
       variant="primary"
-      onClick={() => { setAddOpen(true); }}
+      onClick={() => { setActiveModal({ kind: "add" }); }}
       disabled={!policy}
     >
       Add rule
@@ -114,6 +134,15 @@ export function PolicyDetail() {
   );
 
   const rules = policy?.rules ?? [];
+
+  // confirmRule extracts the rule from a confirm-* modal kind so the JSX below stays terse; returns null for non-confirm
+  // modals (the ConfirmActionModal won't render its content in that case).
+  const confirmKind = activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle"
+    ? activeModal.kind
+    : null;
+  const confirmRule = activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle"
+    ? activeModal.rule
+    : null;
 
   return (
     <>
@@ -131,30 +160,128 @@ export function PolicyDetail() {
               author the first one.
             </EmptyState>
           ) : (
-            <RulesTable rules={rules} />
+            <RulesTable
+              rules={rules}
+              onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
+              onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
+              onDelete={(rule) => { setActiveModal({ kind: "confirm-delete", rule }); }}
+            />
           )}
         </>
       )}
       {policy && (
         <AddRuleModal
-          open={addOpen}
+          open={activeModal.kind === "add"}
           policyID={policy.id}
-          onClose={() => { setAddOpen(false); }}
+          onClose={closeModal}
           onCreated={() => {
-            setAddOpen(false);
+            closeModal();
             refresh();
           }}
         />
       )}
+      {/*
+        key={editKey}: forces React to remount EditRuleModal when the target rule changes (Gemini finding on PR #189).
+        Without it, the autoFocus on the severity Select would only fire on the very first open of this component instance.
+        Keyed by rule id so re-opening on the same row replays initialState; switching rows replays with the new row.
+      */}
+      <EditRuleModal
+        key={activeModal.kind === "edit" ? `edit-${String(activeModal.rule.id)}` : "edit-closed"}
+        open={activeModal.kind === "edit"}
+        rule={activeModal.kind === "edit" ? activeModal.rule : null}
+        onClose={closeModal}
+        onSaved={() => {
+          closeModal();
+          refresh();
+        }}
+      />
+      <ConfirmActionModal
+        key={confirmRule ? `confirm-${String(confirmKind)}-${String(confirmRule.id)}` : "confirm-closed"}
+        open={confirmRule !== null}
+        title={confirmTitleFor(activeModal)}
+        description={confirmDescriptionFor(activeModal)}
+        confirmLabel={confirmLabelFor(activeModal)}
+        confirmVariant={activeModal.kind === "confirm-delete" ? "alert" : "primary"}
+        reasonPlaceholder={confirmReasonPlaceholderFor(activeModal)}
+        onClose={closeModal}
+        onConfirm={async (reason) => {
+          if (!confirmRule) return;
+          if (activeModal.kind === "confirm-delete") {
+            await deleteAppControlRule(confirmRule.id, { reason });
+          } else if (activeModal.kind === "confirm-toggle") {
+            await updateAppControlRule(confirmRule.id, {
+              enabled: !confirmRule.enabled,
+              reason,
+            });
+          }
+          closeModal();
+          refresh();
+        }}
+      />
     </>
   );
 }
 
-interface RulesTableProps {
-  readonly rules: ApplicationControlRule[];
+// confirmTitleFor + the three sibling helpers shape the per-action copy passed into the shared ConfirmActionModal. Keeping the
+// switch outside the component body so the modal can stay generic and the per-action vocabulary lives next to the dispatch.
+function confirmTitleFor(active: ActiveModal): string {
+  if (active.kind === "confirm-delete") return "Delete rule";
+  if (active.kind === "confirm-toggle") return active.rule.enabled ? "Disable rule" : "Enable rule";
+  return "";
 }
 
-function RulesTable({ rules }: RulesTableProps) {
+function confirmDescriptionFor(active: ActiveModal): React.ReactNode {
+  if (active.kind !== "confirm-delete" && active.kind !== "confirm-toggle") return "";
+  const ident = active.rule.identifier;
+  if (active.kind === "confirm-delete") {
+    return (
+      <>
+        The rule for <code>{ident}</code> will be removed and the policy version
+        will bump so every agent drops it on the next snapshot.
+      </>
+    );
+  }
+  if (active.rule.enabled) {
+    return (
+      <>
+        Disabling pauses enforcement for <code>{ident}</code>. The rule stays
+        on the policy and the agents drop it on the next snapshot until you
+        re-enable.
+      </>
+    );
+  }
+  return (
+    <>
+      Re-enabling resumes enforcement for <code>{ident}</code>. The agents
+      pick it up on the next snapshot.
+    </>
+  );
+}
+
+function confirmLabelFor(active: ActiveModal): string {
+  if (active.kind === "confirm-delete") return "Delete rule";
+  if (active.kind === "confirm-toggle") return active.rule.enabled ? "Disable rule" : "Enable rule";
+  return "Confirm";
+}
+
+function confirmReasonPlaceholderFor(active: ActiveModal): string {
+  if (active.kind === "confirm-delete") return "Why are you deleting this rule?";
+  if (active.kind === "confirm-toggle") {
+    return active.rule.enabled
+      ? "Why are you disabling this rule?"
+      : "Why are you re-enabling this rule?";
+  }
+  return "";
+}
+
+interface RulesTableProps {
+  readonly rules: ApplicationControlRule[];
+  readonly onEdit: (rule: ApplicationControlRule) => void;
+  readonly onToggle: (rule: ApplicationControlRule) => void;
+  readonly onDelete: (rule: ApplicationControlRule) => void;
+}
+
+function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
   return (
     <Table>
       <thead>
@@ -184,30 +311,27 @@ function RulesTable({ rules }: RulesTableProps) {
             <td>{rule.custom_msg ?? <span className="app-control__muted">—</span>}</td>
             <td>{new Date(rule.updated_at).toLocaleString()}</td>
             <td className="app-control__row-actions">
-              {/* Edit / Disable / Delete are scaffolding only in
-                  the demo cut. The disabled state + tooltip make
-                  the roadmap visible without faking behaviour. */}
+              {/* Edit / Disable / Delete each open a modal that prompts for an audit reason before firing the PATCH / DELETE
+                  endpoint server-side. The handlers live on PolicyDetail so refresh-on-success is wired in one place. */}
               <Button
                 variant="text-link"
                 size="small"
-                disabled
-                title="Editing rules is coming in the next release"
+                onClick={() => { onEdit(rule); }}
               >
                 Edit
               </Button>
               <Button
                 variant="text-link"
                 size="small"
-                disabled
-                title={rule.enabled ? "Disabling rules is coming in the next release" : "Enabling rules is coming in the next release"}
+                onClick={() => { onToggle(rule); }}
+                title={rule.enabled ? "Pause enforcement for this rule" : "Resume enforcement for this rule"}
               >
                 {rule.enabled ? "Disable" : "Enable"}
               </Button>
               <Button
                 variant="text-link"
                 size="small"
-                disabled
-                title="Deleting rules is coming in the next release"
+                onClick={() => { onDelete(rule); }}
               >
                 Delete
               </Button>
