@@ -103,21 +103,16 @@ func (s *Service) ListPolicies(ctx context.Context) ([]api.ApplicationControlPol
 // GetPolicyWithRules returns the policy row plus its rules in one call so the policy-detail page can render without an extra round
 // trip. Returns ErrAppControlPolicyNotFound when the policy is absent; the handler maps that to HTTP 404.
 func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
-	policies, err := s.store.ListPolicies(ctx)
+	policy, err := s.store.GetPolicyByID(ctx, policyID)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, err
 	}
-	for _, p := range policies {
-		if p.ID == policyID {
-			rules, err := s.store.ListRulesByPolicy(ctx, policyID)
-			if err != nil {
-				return api.ApplicationControlPolicy{}, err
-			}
-			p.Rules = rules
-			return p, nil
-		}
+	rules, err := s.store.ListRulesByPolicy(ctx, policyID)
+	if err != nil {
+		return api.ApplicationControlPolicy{}, err
 	}
-	return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
+	policy.Rules = rules
+	return policy, nil
 }
 
 // CreateRule is the state-changing entry point. Sequence:
@@ -189,7 +184,7 @@ func (s *Service) CreateRule(
 // buildSnapshotPayload re-reads the policy + rules after a mutation and renders the wire shape the agent's command codec consumes.
 // Separated so the CreateRule path stays linear and the lookup + marshal failure cases have one place to fail.
 func (s *Service) buildSnapshotPayload(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, []byte, error) {
-	policy, err := s.findPolicyByID(ctx, policyID)
+	policy, err := s.store.GetPolicyByID(ctx, policyID)
 	if err != nil {
 		return api.ApplicationControlPolicy{}, nil, err
 	}
@@ -202,21 +197,6 @@ func (s *Service) buildSnapshotPayload(ctx context.Context, policyID int64) (api
 		return api.ApplicationControlPolicy{}, nil, fmt.Errorf("appcontrol marshal snapshot: %w", err)
 	}
 	return policy, raw, nil
-}
-
-// findPolicyByID is the policy lookup the snapshot composer needs. Store doesn't expose a GetPolicyByID (intentionally: the demo cut
-// indexes policies by name), so we walk the list. Cheap for the demo's single-policy shape.
-func (s *Service) findPolicyByID(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
-	policies, err := s.store.ListPolicies(ctx)
-	if err != nil {
-		return api.ApplicationControlPolicy{}, err
-	}
-	for _, p := range policies {
-		if p.ID == policyID {
-			return p, nil
-		}
-	}
-	return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
 }
 
 // fanoutSkipReason values land verbatim on the audit row when the fan-out couldn't run end-to-end. The empty string means "no skip;
@@ -568,7 +548,7 @@ func (s *Service) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest,
 	if actor == nil {
 		return fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
-	priorPolicy, err := s.findPolicyByID(ctx, req.PolicyID)
+	priorPolicy, err := s.store.GetPolicyByID(ctx, req.PolicyID)
 	if err != nil {
 		return err
 	}
