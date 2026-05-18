@@ -73,7 +73,7 @@ export function parsePasteInput(input: string): PasteInference[] {
       raw,
       identifier,
       ruleType: inference.ruleType,
-      ...(inference.hint !== undefined ? { hint: inference.hint } : {}),
+      ...(inference.hint ? { hint: inference.hint } : {}),
     });
   }
   return out;

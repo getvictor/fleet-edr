@@ -112,6 +112,8 @@ describe("PasteManyModal", () => {
   });
 
   it("surfaces a typed AppControlApiError message inline without firing onUpserted", async () => {
+    // For invalid_rule, the modal intentionally falls through to the server's per-item message (e.g. "bulk item 1: ...")
+    // rather than overriding with generic copy — the row index is strictly more useful to the operator than any UI string.
     vi.spyOn(api, "bulkUpsertAppControlRules").mockRejectedValue(
       new api.AppControlApiError(
         "application_control.invalid_rule",
@@ -128,7 +130,7 @@ describe("PasteManyModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "import" } });
     fireEvent.click(screen.getByRole("button", { name: /save 1 rule/i }));
     await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toMatch(/server-side validation/i);
+      expect(screen.getByRole("alert").textContent).toMatch(/bulk item 1: identifier failed validation/);
     });
     expect(onUpserted).not.toHaveBeenCalled();
   });

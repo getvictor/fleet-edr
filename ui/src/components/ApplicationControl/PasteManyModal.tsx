@@ -39,18 +39,28 @@ const PLACEHOLDER_TEXTAREA = "a".repeat(PLACEHOLDER_BINARY_LENGTH) + "\nEQHXZ8M8
 // the gate here in lockstep with AddRuleModal so both UI surfaces agree on what the server validators accept today.
 const AVAILABLE_RULE_TYPES = new Set(["BINARY", "CDHASH", "SIGNINGID", "TEAMID"]);
 
+// errorMessageByCode maps server-typed application_control.* codes to operator-friendly copy. `invalid_rule` is intentionally
+// absent: the server's per-item message ("bulk item 1: identifier failed validation") names the offending row index, which is
+// strictly more useful than any generic UI copy could be, so applyAppControlSubmitError falls through to err.message verbatim
+// for that code.
 const errorMessageByCode = new Map<string, string>([
-  ["application_control.invalid_rule", "One of the pasted rows didn't pass server-side validation."],
   ["application_control.duplicate_rule", "Duplicate identifiers found in the batch."],
   ["application_control.policy_not_found", "The policy was deleted before the batch could be saved."],
   ["application_control.invalid_policy_id", "Invalid policy id."],
   ["application_control.invalid_json", "The request body was not valid JSON."],
 ]);
 
+// nextRowId is the module-level counter that mints a stable id per parsed row. React keys built from row index would shift
+// when a middle row is removed (Gemini finding on PR #192) and force every later row to unmount + remount, dropping any
+// in-flight select / focus state along the way. The counter survives across modal opens — collisions don't matter because
+// keys only need to be unique within a single React list reconciliation, not globally.
+let nextRowId = 0;
+
 // PasteRow is the modal's working copy of a parsed line: identifier + the inferrer's verdict + the operator's override
 // (initially equal to the inference). The unavailable flag short-circuits submit so we don't ship a CERTIFICATE/PATH
 // row the server will refuse anyway.
 interface PasteRow {
+  readonly id: number;
   readonly identifier: string;
   readonly raw: string;
   readonly inferredType: string | null;
@@ -59,13 +69,17 @@ interface PasteRow {
 }
 
 function rowsFromParse(parsed: PasteInference[]): PasteRow[] {
-  return parsed.map((p) => ({
-    identifier: p.identifier,
-    raw: p.raw,
-    inferredType: p.ruleType,
-    ruleType: p.ruleType,
-    ...(p.hint !== undefined ? { hint: p.hint } : {}),
-  }));
+  return parsed.map((p) => {
+    nextRowId += 1;
+    return {
+      id: nextRowId,
+      identifier: p.identifier,
+      raw: p.raw,
+      inferredType: p.ruleType,
+      ruleType: p.ruleType,
+      ...(p.hint ? { hint: p.hint } : {}),
+    };
+  });
 }
 
 export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteManyModalProps) {
@@ -164,10 +178,15 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
     }
   }
 
+  // Pluralisation kept as a separate helper so the subtitle + submitLabel ternaries above don't nest one inside the other
+  // (Sonar S3358 — nested ternaries are unreadable). pluralSuffix returns "" or "s" only; the caller composes the noun.
+  const pluralSuffix = rows.length === 1 ? "" : "s";
+  const previewSubtitle = `${String(rows.length)} row${pluralSuffix} ready. Override any inferred type before saving.`;
+  const previewSubmitLabel = `Save ${String(rows.length)} rule${pluralSuffix}`;
   const subtitle = phase === "paste"
     ? "Paste one identifier per line. The next step infers the rule type per line and lets you override it before saving."
-    : `${String(rows.length)} row${rows.length === 1 ? "" : "s"} ready. Override any inferred type before saving.`;
-  const submitLabel = phase === "paste" ? "Parse" : `Save ${String(rows.length)} rule${rows.length === 1 ? "" : "s"}`;
+    : previewSubtitle;
+  const submitLabel = phase === "paste" ? "Parse" : previewSubmitLabel;
 
   return (
     <AppControlDialogShell
@@ -220,7 +239,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                 {rows.map((row, index) => {
                   const typeUnavailable = row.ruleType !== null && !AVAILABLE_RULE_TYPES.has(row.ruleType);
                   return (
-                    <tr key={`${String(index)}-${row.identifier}`}>
+                    <tr key={row.id}>
                       <td className="app-control__identifier" title={row.identifier}>
                         {row.identifier}
                       </td>
