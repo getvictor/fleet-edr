@@ -46,23 +46,27 @@ type Event struct {
 // Process represents a materialized process record built from
 // fork/exec/exit events. Wire shape preserved from server/store.Process.
 type Process struct {
-	ID               int64       `db:"id" json:"id"`
-	HostID           string      `db:"host_id" json:"host_id"`
-	PID              int         `db:"pid" json:"pid"`
-	PPID             int         `db:"ppid" json:"ppid"`
-	Path             string      `db:"path" json:"path"`
-	Args             NullRawJSON `db:"args" json:"args,omitempty"`
-	UID              *int        `db:"uid" json:"uid,omitempty"`
-	GID              *int        `db:"gid" json:"gid,omitempty"`
-	CodeSigning      NullRawJSON `db:"code_signing" json:"code_signing,omitempty"`
-	SHA256           *string     `db:"sha256" json:"sha256,omitempty"`
-	ForkTimeNs       int64       `db:"fork_time_ns" json:"fork_time_ns"`
-	ForkIngestedAtNs *int64      `db:"fork_ingested_at_ns" json:"fork_ingested_at_ns,omitempty"`
-	ExecTimeNs       *int64      `db:"exec_time_ns" json:"exec_time_ns,omitempty"`
-	ExitTimeNs       *int64      `db:"exit_time_ns" json:"exit_time_ns,omitempty"`
-	ExitIngestedAtNs *int64      `db:"exit_ingested_at_ns" json:"exit_ingested_at_ns,omitempty"`
-	ExitReason       *string     `db:"exit_reason" json:"exit_reason,omitempty"`
-	ExitCode         *int        `db:"exit_code" json:"exit_code,omitempty"`
+	ID          int64       `db:"id" json:"id"`
+	HostID      string      `db:"host_id" json:"host_id"`
+	PID         int         `db:"pid" json:"pid"`
+	PPID        int         `db:"ppid" json:"ppid"`
+	Path        string      `db:"path" json:"path"`
+	Args        NullRawJSON `db:"args" json:"args,omitempty"`
+	UID         *int        `db:"uid" json:"uid,omitempty"`
+	GID         *int        `db:"gid" json:"gid,omitempty"`
+	CodeSigning NullRawJSON `db:"code_signing" json:"code_signing,omitempty"`
+	SHA256      *string     `db:"sha256" json:"sha256,omitempty"`
+	// CDHash is the 40-hex code-directory hash (sha1 of the CDDirectory blob) the agent extracts on Hardened-Runtime processes
+	// (issue #68 / PR #185). NULL for non-HR binaries since the ESF target tuple lacks a meaningful cdhash for them. Persisted
+	// alongside sha256 so incident response can correlate by either hash and so app-control's CDHASH rule matches replay nicely.
+	CDHash           *string `db:"cdhash" json:"cdhash,omitempty"`
+	ForkTimeNs       int64   `db:"fork_time_ns" json:"fork_time_ns"`
+	ForkIngestedAtNs *int64  `db:"fork_ingested_at_ns" json:"fork_ingested_at_ns,omitempty"`
+	ExecTimeNs       *int64  `db:"exec_time_ns" json:"exec_time_ns,omitempty"`
+	ExitTimeNs       *int64  `db:"exit_time_ns" json:"exit_time_ns,omitempty"`
+	ExitIngestedAtNs *int64  `db:"exit_ingested_at_ns" json:"exit_ingested_at_ns,omitempty"`
+	ExitReason       *string `db:"exit_reason" json:"exit_reason,omitempty"`
+	ExitCode         *int    `db:"exit_code" json:"exit_code,omitempty"`
 	// PreviousExecID points at the row representing the prior generation in a same-PID re-exec chain (issue #10). The first exec after a
 	// fork has PreviousExecID == nil; that's the chain root.
 	PreviousExecID *int64 `db:"previous_exec_id" json:"previous_exec_id,omitempty"`

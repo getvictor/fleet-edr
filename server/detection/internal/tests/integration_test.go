@@ -687,6 +687,41 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "exit event must stamp exit_time_ns")
 }
 
+// TestGraph_ExecPayloadCDHashRoundTrips pins the wire-shape contract for the optional cdhash on exec_payload (task 11.3.2 +
+// 11.3.3). The Swift extension (PR #185 / EventSerializer.swift) extracts cdhash only for Hardened-Runtime binaries; the
+// server-side decoder must accept the field and persist it onto the `processes` row so incident-response queries can
+// correlate by cdhash alongside sha256. Tolerant of absence: omitting cdhash leaves the persisted column NULL.
+func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	// Two exec events on the same host: one with cdhash (Hardened-Runtime binary; 40 lowercase hex), one without. Both must
+	// land on processes rows. The no-cdhash row stays NULL — proves the decoder treats the field as optional.
+	cdhash := "0123456789abcdef0123456789abcdef01234567"
+	insertEventsViaIngest(ctx, t, d, "h-cdh", []api.Event{
+		{EventID: "exec-hr", HostID: "h-cdh", TimestampNs: now, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1001,"ppid":1,"path":"/usr/bin/safari","args":["safari"],"cdhash":"` + cdhash + `","sha256":"deadbeef"}`)},
+		{EventID: "exec-no-hr", HostID: "h-cdh", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":1002,"ppid":1,"path":"/usr/bin/legacy","args":["legacy"],"sha256":"cafef00d"}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhash
+	}, 5*time.Second, 50*time.Millisecond, "HR exec must persist cdhash on the processes row")
+
+	hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+	require.NoError(t, err)
+	require.NotNil(t, hr.Process.CDHash)
+	assert.Equal(t, cdhash, *hr.Process.CDHash)
+
+	nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2)
+	require.NoError(t, err)
+	assert.Nil(t, nonHR.Process.CDHash, "non-HR exec without cdhash must persist NULL")
+}
+
 func TestGraph_ExecWithoutFork(t *testing.T) {
 	t.Parallel()
 	// Issue #7 / boot sequence: agent restart can deliver an exec without the originating fork (we missed it). The builder synthesizes a

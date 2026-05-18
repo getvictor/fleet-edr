@@ -86,9 +86,10 @@ func NewAppControl(svc *appcontrol.Service, authz identityapi.AuthZ, logger *slo
 //	POST   /api/v1/app-control/policies/{id}/rules:bulkUpsert
 //	PATCH  /api/v1/app-control/rules/{id}
 //	DELETE /api/v1/app-control/rules/{id}
+//	GET    /api/v1/app-control/rules
 //
-// Cross-policy rule list / host-groups CRUD / assignments POST stay deferred to follow-on PRs. Caller wraps the mux in identity
-// Session + CSRF middleware before mounting (the existing operator pattern in cmd/main).
+// host-groups CRUD / assignments POST stay deferred to follow-on PRs. Caller wraps the mux in identity Session + CSRF
+// middleware before mounting (the existing operator pattern in cmd/main).
 func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/app-control/policies", h.handleListPolicies)
 	mux.HandleFunc("GET /api/v1/app-control/policies/{id}", h.handleGetPolicy)
@@ -99,6 +100,7 @@ func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/app-control/policies/{id}/rules:bulkUpsert", h.handleBulkUpsertRules)
 	mux.HandleFunc("PATCH /api/v1/app-control/rules/{id}", h.handleUpdateRule)
 	mux.HandleFunc("DELETE /api/v1/app-control/rules/{id}", h.handleDeleteRule)
+	mux.HandleFunc("GET /api/v1/app-control/rules", h.handleListRulesAcrossPolicies)
 }
 
 func (h *AppControlHandler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
@@ -632,6 +634,98 @@ func actorIdentifierFromContext(ctx context.Context) string {
 		return "user:" + strconv.FormatInt(a.UserID, 10)
 	}
 	return ""
+}
+
+// errCodeInvalidQuery is the typed code the cross-policy list handler uses to flag a malformed query parameter (negative
+// limit, non-numeric policy_id, etc). The corresponding message includes the offending parameter name so the operator can
+// fix the URL without trial-and-error.
+const errCodeInvalidQuery = "application_control.invalid_query"
+
+// listRulesAcrossPoliciesResponse is the JSON wire shape the cross-policy GET /rules endpoint emits. Mirrors
+// api.ListRulesAcrossPoliciesResult but renamed for clarity at the boundary; Limit + Offset are echoed back so the operator
+// can see the effective pagination the server applied (defaults / clamps may differ from the URL's values).
+type listRulesAcrossPoliciesResponse struct {
+	Rules  []api.ApplicationControlRule `json:"rules"`
+	Total  int                          `json:"total"`
+	Limit  int                          `json:"limit"`
+	Offset int                          `json:"offset"`
+}
+
+// handleListRulesAcrossPolicies serves GET /api/v1/app-control/rules. Query parameters drive the filter:
+//   - policy_id (int64): narrow to one policy
+//   - rule_type (BINARY/CDHASH/SIGNINGID/TEAMID/CERTIFICATE/PATH): exact match
+//   - enabled (true/false): boolean filter
+//   - severity (low/medium/high/critical): exact match
+//   - source (string): exact match
+//   - limit (int, 1..api.MaxListRulesAcrossPoliciesLimit; default api.DefaultListRulesAcrossPoliciesLimit)
+//   - offset (int, >= 0): pagination cursor
+//
+// Each filter is independent and combines via logical AND. Empty / absent values disable the dimension.
+// Returns 400 with errCodeInvalidQuery on a malformed parameter; 500 otherwise.
+func (h *AppControlHandler) handleListRulesAcrossPolicies(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlRead,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	q := r.URL.Query()
+	req := api.ListRulesAcrossPoliciesRequest{}
+	if raw := q.Get("policy_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid policy_id query parameter")
+			return
+		}
+		req.PolicyID = &id
+	}
+	if raw := q.Get("rule_type"); raw != "" {
+		req.RuleType = api.RuleType(raw)
+	}
+	if raw := q.Get("enabled"); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid enabled query parameter (use true/false)")
+			return
+		}
+		req.Enabled = &b
+	}
+	if raw := q.Get("severity"); raw != "" {
+		req.Severity = api.Severity(raw)
+	}
+	req.Source = q.Get("source")
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > api.MaxListRulesAcrossPoliciesLimit {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery,
+				"invalid limit query parameter (1.."+strconv.Itoa(api.MaxListRulesAcrossPoliciesLimit)+")")
+			return
+		}
+		req.Limit = n
+	} else {
+		req.Limit = api.DefaultListRulesAcrossPoliciesLimit
+	}
+	if raw := q.Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid offset query parameter (>= 0)")
+			return
+		}
+		req.Offset = n
+	}
+
+	result, err := h.svc.ListRulesAcrossPolicies(ctx, req)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "appcontrol list rules across policies", "err", err)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, listRulesAcrossPoliciesResponse{
+		Rules:  result.Rules,
+		Total:  result.Total,
+		Limit:  req.Limit,
+		Offset: req.Offset,
+	})
 }
 
 // writeAppControlErr emits the typed ErrorResponse shape every other operator handler in the codebase uses. Code is the

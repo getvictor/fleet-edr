@@ -15,13 +15,13 @@ import (
 func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO processes
-			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			 exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 			 is_snapshot, last_seen_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
-		p.CodeSigning, p.SHA256, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
+		p.CodeSigning, p.SHA256, p.CDHash, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
 		p.ExitIngestedAtNs, p.ExitReason, p.ExitCode, p.PreviousExecID,
 		p.IsSnapshot, p.LastSeenNs,
 	)
@@ -61,16 +61,17 @@ type ProcessExecUpdate struct {
 	GID         *int
 	CodeSigning api.NullRawJSON
 	SHA256      *string
+	CDHash      *string
 }
 
 // UpdateProcessExec updates an existing process record with exec-time
 // metadata.
 func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, exec_time_ns = ?
+		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, cdhash = ?, exec_time_ns = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
-		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.ExecTimeNs,
+		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.CDHash, u.ExecTimeNs,
 		u.HostID, u.PID,
 	)
 	return err
@@ -194,12 +195,12 @@ func (s *Store) ReExec(
 
 	ins, err := tx.ExecContext(ctx, `
 		INSERT INTO processes
-			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			 exit_ingested_at_ns, exit_code, previous_exec_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newRow.HostID, newRow.PID, newRow.PPID, newRow.Path, newRow.Args, newRow.UID, newRow.GID,
-		newRow.CodeSigning, newRow.SHA256, newRow.ForkTimeNs, newRow.ForkIngestedAtNs,
+		newRow.CodeSigning, newRow.SHA256, newRow.CDHash, newRow.ForkTimeNs, newRow.ForkIngestedAtNs,
 		newRow.ExecTimeNs, newRow.ExitTimeNs, newRow.ExitIngestedAtNs, newRow.ExitCode,
 		newRow.PreviousExecID,
 	)
@@ -243,7 +244,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 	var chain []api.Process
 	err := s.db.SelectContext(ctx, &chain, `
 		WITH RECURSIVE chain AS (
-			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 			       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 			       is_snapshot, last_seen_ns,
@@ -252,7 +253,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 			WHERE id = ? AND host_id = ?
 			UNION ALL
 			SELECT p.id, p.host_id, p.pid, p.ppid, p.path, p.args, p.uid, p.gid,
-			       p.code_signing, p.sha256, p.fork_time_ns, p.fork_ingested_at_ns,
+			       p.code_signing, p.sha256, p.cdhash, p.fork_time_ns, p.fork_ingested_at_ns,
 			       p.exec_time_ns, p.exit_time_ns, p.exit_ingested_at_ns,
 			       p.exit_reason, p.exit_code, p.previous_exec_id,
 			       p.is_snapshot, p.last_seen_ns,
@@ -261,7 +262,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 			JOIN chain c ON p.id = c.previous_exec_id AND p.host_id = c.host_id
 			WHERE c.depth < ?
 		)
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
@@ -308,7 +309,7 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.Process, error) {
 	var procs []api.Process
 	err := s.db.SelectContext(ctx, &procs, `
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
@@ -334,7 +335,7 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
@@ -359,7 +360,7 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, tr api.TimeRange) ([]api.Process, error) {
 	var procs []api.Process
 	err := s.db.SelectContext(ctx, &procs, `
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns

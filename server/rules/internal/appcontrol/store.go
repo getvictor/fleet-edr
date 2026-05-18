@@ -182,6 +182,89 @@ func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolic
 	return out, nil
 }
 
+// ListRulesAcrossPolicies returns rules matching the filter across every policy (or one, when req.PolicyID is set). Powers the
+// cross-policy GET /rules endpoint that integration callers + audit exports need. Two queries: one count, one page. The page
+// is ordered by (policy_id, rule_type, identifier, id) so pagination is deterministic across sibling rows with identical
+// (rule_type, identifier) keys in different policies.
+func (s *Store) ListRulesAcrossPolicies(
+	ctx context.Context, req api.ListRulesAcrossPoliciesRequest,
+) (api.ListRulesAcrossPoliciesResult, error) {
+	limit := req.Limit
+	if limit <= 0 {
+		limit = api.DefaultListRulesAcrossPoliciesLimit
+	}
+	if limit > api.MaxListRulesAcrossPoliciesLimit {
+		limit = api.MaxListRulesAcrossPoliciesLimit
+	}
+	offset := max(req.Offset, 0)
+
+	// Build the dynamic WHERE clause from the set dimensions. Each branch appends its placeholder + arg in lockstep so the
+	// SQL stays parameterised end-to-end (no string concatenation of operator input). Empty filter -> WHERE 1=1, full scan.
+	clauses := []string{"1=1"}
+	args := []any{}
+	if req.PolicyID != nil {
+		clauses = append(clauses, "policy_id = ?")
+		args = append(args, *req.PolicyID)
+	}
+	if req.RuleType != "" {
+		clauses = append(clauses, "rule_type = ?")
+		args = append(args, req.RuleType)
+	}
+	if req.Enabled != nil {
+		clauses = append(clauses, "enabled = ?")
+		if *req.Enabled {
+			args = append(args, 1)
+		} else {
+			args = append(args, 0)
+		}
+	}
+	if req.Severity != "" {
+		clauses = append(clauses, "severity = ?")
+		args = append(args, req.Severity)
+	}
+	if req.Source != "" {
+		clauses = append(clauses, "source = ?")
+		args = append(args, req.Source)
+	}
+	where := strings.Join(clauses, " AND ")
+
+	// Count first so the wire response can render "Showing N of M" without a second client-side round trip.
+	var total int
+	if err := s.db.GetContext(ctx, &total, `SELECT COUNT(*) FROM app_control_rules WHERE `+where, args...); err != nil {
+		return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules count: %w", err)
+	}
+
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	const pageSelect = `SELECT id, policy_id, rule_type, identifier, action, enforcement, enabled,
+		severity, source, source_ref, custom_msg, custom_url, comment, expires_at,
+		created_at, updated_at, created_by
+		FROM app_control_rules WHERE `
+	const pageTail = ` ORDER BY policy_id, rule_type, identifier, id LIMIT ? OFFSET ?`
+	rows, err := s.db.QueryxContext(ctx, pageSelect+where+pageTail, pageArgs...)
+	if err != nil {
+		return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules page: %w", err)
+	}
+	defer rows.Close()
+	out := []api.ApplicationControlRule{}
+	for rows.Next() {
+		var r api.ApplicationControlRule
+		var enabled int
+		if err := rows.Scan(
+			&r.ID, &r.PolicyID, &r.RuleType, &r.Identifier, &r.Action, &r.Enforcement, &enabled,
+			&r.Severity, &r.Source, &r.SourceRef, &r.CustomMsg, &r.CustomURL, &r.Comment, &r.ExpiresAt,
+			&r.CreatedAt, &r.UpdatedAt, &r.CreatedBy,
+		); err != nil {
+			return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules scan: %w", err)
+		}
+		r.Enabled = enabled != 0
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules rows: %w", err)
+	}
+	return api.ListRulesAcrossPoliciesResult{Rules: out, Total: total}, nil
+}
+
 // ListRulesByPolicy returns every rule belonging to the policy in (rule_type, identifier) order so the response is deterministic and
 // snapshot-testable.
 func (s *Store) ListRulesByPolicy(ctx context.Context, policyID int64) ([]api.ApplicationControlRule, error) {
