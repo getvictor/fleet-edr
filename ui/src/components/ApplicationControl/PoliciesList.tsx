@@ -43,6 +43,15 @@ export function PoliciesList() {
   const ruleCount = (p: ApplicationControlPolicy): string =>
     p.rules ? String(p.rules.length) : "—";
 
+  // assignmentLabel formats the assignment_count column. The seed Default policy renders "1 host group" because its only
+  // assignment row connects it to all-hosts; policies created without assignments render "no host groups" (an admin posture,
+  // not a wire-shape error) and multi-group counts render with the plural form. Singular at exactly count == 1.
+  const assignmentLabel = (count: number): string => {
+    if (count === 0) return "no host groups";
+    if (count === 1) return "1 host group";
+    return `${String(count)} host groups`;
+  };
+
   const newPolicyAction = (
     <Button
       variant="primary"
@@ -95,11 +104,12 @@ export function PoliciesList() {
                 <td>{p.version}</td>
                 <td>{new Date(p.updated_at).toLocaleString()}</td>
                 <td>
-                  {/* Assignments are hardcoded "all-hosts" in the
-                      demo cut; host-group editing is post-demo so
-                      this column shows the literal value without an
-                      action link. */}
-                  <span className="app-control__assignment">all hosts</span>
+                  {/* assignment_count is server-decorated via a correlated COUNT subquery on
+                      app_control_assignments. The seed Default policy ships with 1 (its assignment
+                      to all-hosts); policies created via the create endpoint land at 0 until an
+                      assignment is added, and Phase B's multi-group editing grows the value.
+                      Singular / plural / zero handled inline so an unwired policy reads sensibly. */}
+                  <span className="app-control__assignment">{assignmentLabel(p.assignment_count)}</span>
                 </td>
               </tr>
             ))}

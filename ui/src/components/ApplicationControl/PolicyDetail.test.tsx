@@ -32,6 +32,7 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
   updated_at: "2026-05-14T00:00:00Z",
   created_by: "system",
   updated_by: "user:1",
+  assignment_count: 1,
   ...over,
 });
 

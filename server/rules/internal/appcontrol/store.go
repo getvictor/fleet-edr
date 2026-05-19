@@ -197,19 +197,38 @@ func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([
 	return out, nil
 }
 
+// policySelectWithAssignmentCount is the SELECT-list + FROM-clause every policy fetch uses. The correlated subquery in the
+// SELECT list computes the assignment count for each output row; MySQL's planner can use the (policy_id, host_group_id)
+// composite PK index on app_control_assignments to count without scanning the table. Cheaper than a LEFT JOIN against an
+// aggregate subquery for single-row PK lookups (GetPolicyByName, getPolicyByID) where that join would materialize counts for
+// every policy in the table; ListPolicies pays the per-row subquery cost N times but each one is the indexed COUNT(*) above.
+// Centralised so GetPolicyByName / getPolicyByID / ListPolicies stay structurally identical and the scan order they all share
+// is one source of truth.
+const policySelectWithAssignmentCount = `SELECT p.id, p.name, p.description, p.version, p.default_action,
+	p.created_at, p.updated_at, p.created_by, p.updated_by,
+	(SELECT COUNT(*) FROM app_control_assignments a WHERE a.policy_id = p.id) AS assignment_count
+	FROM app_control_policies p`
+
+// scanPolicyRow consumes one row from a query built atop policySelectWithAssignmentCount. The column order is fixed by the
+// SELECT list above and reused unchanged across GetPolicyByName / getPolicyByID / ListPolicies; a regression that reorders
+// either side surfaces as a typed scan error rather than a silent field swap. Returns the row's typed shape and the scan
+// error verbatim; callers translate sql.ErrNoRows themselves because the surrounding error wrapping varies per call site.
+func scanPolicyRow(scanner interface{ Scan(...any) error }) (api.ApplicationControlPolicy, error) {
+	var p api.ApplicationControlPolicy
+	err := scanner.Scan(
+		&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
+		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy, &p.AssignmentCount,
+	)
+	return p, err
+}
+
 // GetPolicyByName loads the policy row by name. Rules are NOT populated; callers that need rules call ListRulesByPolicy explicitly.
 // A future GetPolicyWithRules helper can join the two queries when an endpoint shows up that needs both in one round trip; today's
-// REST surface fetches them separately.
+// REST surface fetches them separately. AssignmentCount IS populated via the shared policySelectWithAssignmentCount join.
 func (s *Store) GetPolicyByName(ctx context.Context, name string) (api.ApplicationControlPolicy, error) {
-	const query = `SELECT id, name, description, version, default_action,
-		created_at, updated_at, created_by, updated_by
-		FROM app_control_policies WHERE name = ?`
-	row := s.db.QueryRowxContext(ctx, query, name)
-	var p api.ApplicationControlPolicy
-	if err := row.Scan(
-		&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy,
-	); err != nil {
+	row := s.db.QueryRowxContext(ctx, policySelectWithAssignmentCount+` WHERE p.name = ?`, name)
+	p, err := scanPolicyRow(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
 		}
@@ -226,25 +245,23 @@ func (s *Store) GetPolicyByID(ctx context.Context, policyID int64) (api.Applicat
 	return s.getPolicyByID(ctx, policyID)
 }
 
-// ListPolicies returns every policy in name order. Rules are NOT populated; the list view shows the rule count only, which the REST
-// handler computes via a separate aggregate query when it needs it.
+// ListPolicies returns every policy in name order, each decorated with its assignment_count via the shared
+// policySelectWithAssignmentCount subquery. The policies-list UI renders the count in the assignments column: the seeded
+// Default policy ships with count=1 (its assignment to the seed all-hosts group), policies created via CreatePolicy land at 0
+// until an assignment row is inserted, and Phase B multi-group editing grows the value without a wire-shape change. Rules
+// are NOT populated; the list view shows the rule count only, which the REST handler computes via a separate aggregate query
+// when it needs it.
 func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolicy, error) {
-	const query = `SELECT id, name, description, version, default_action,
-		created_at, updated_at, created_by, updated_by
-		FROM app_control_policies ORDER BY name ASC`
-	rows, err := s.db.QueryxContext(ctx, query)
+	rows, err := s.db.QueryxContext(ctx, policySelectWithAssignmentCount+` ORDER BY p.name ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol list policies: %w", err)
 	}
 	defer rows.Close()
 	out := []api.ApplicationControlPolicy{}
 	for rows.Next() {
-		var p api.ApplicationControlPolicy
-		if err := rows.Scan(
-			&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
-			&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy,
-		); err != nil {
-			return nil, fmt.Errorf("appcontrol list policies scan: %w", err)
+		p, scanErr := scanPolicyRow(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("appcontrol list policies scan: %w", scanErr)
 		}
 		out = append(out, p)
 	}
@@ -772,16 +789,12 @@ func (s *Store) DeletePolicy(ctx context.Context, req api.DeletePolicyRequest) e
 
 // getPolicyByID is the internal lookup the create/update paths use to return the post-mutation row. The missing-row case is
 // translated to api.ErrAppControlPolicyNotFound inside this helper (mirroring GetRuleByID's contract); callers can errors.Is
-// directly without unwrapping a driver-level sql.ErrNoRows.
+// directly without unwrapping a driver-level sql.ErrNoRows. Uses the shared policySelectWithAssignmentCount join so
+// AssignmentCount is populated consistently with ListPolicies + GetPolicyByName.
 func (s *Store) getPolicyByID(ctx context.Context, id int64) (api.ApplicationControlPolicy, error) {
-	const query = `SELECT id, name, description, version, default_action, created_at, updated_at, created_by, updated_by
-		FROM app_control_policies WHERE id = ?`
-	row := s.db.QueryRowxContext(ctx, query, id)
-	var p api.ApplicationControlPolicy
-	if err := row.Scan(
-		&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy,
-	); err != nil {
+	row := s.db.QueryRowxContext(ctx, policySelectWithAssignmentCount+` WHERE p.id = ?`, id)
+	p, err := scanPolicyRow(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return api.ApplicationControlPolicy{}, api.ErrAppControlPolicyNotFound
 		}
