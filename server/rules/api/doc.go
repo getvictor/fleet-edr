@@ -1,14 +1,13 @@
 // Package api is the public surface of the rules bounded context.
 //
-// rules owns the server-driven blocklist policy (policies table) and the
-// detection rule catalog (eight Go-coded matchers + ATT&CK metadata +
-// per-rule documentation). Cross-context callers consume rules through
-// three interfaces:
+// rules owns the detection rule catalog (Go-coded matchers + ATT&CK metadata
+// + per-rule documentation) and the application-control policy/rule store.
+// Cross-context callers consume rules through three interfaces:
 //
-//   - PolicyService: GET/UPDATE the active blocklist policy (operator) +
-//     ActiveCommandPayload pre-marshaled for agent fan-out (endpoint).
 //   - Lister: enumerate rule metadata for /api/rules and /api/attack-coverage.
 //   - RuleProvider: load executable rules into the detection engine.
+//   - ApplicationControlStore: read/write app-control policies, rules, host
+//     groups, and assignments (consumed by rules' own REST handler and tests).
 //
 // Per ADR-0004, rules/api re-exports detection/api types
 // (Event/Process/TimeRange/GraphReader/Finding/NullRawJSON) as type

@@ -37,7 +37,6 @@ dependenciesRules:
         - "**.attrkeys"
         - "**.httpserver"
         - "**.identity.api"  # identity.api.AuditRecorder for enrollment.revoke audit
-        - "**.rules.api"   # rules.api.PolicyService satisfies endpoint's PolicyProvider
         - "**.testdb"
 
   # rules context internals. Cross-context test allowance is

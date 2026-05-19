@@ -11,7 +11,6 @@
 //   - LoadActive(rulesapi.RuleProvider) to register the active rule
 //     set with the engine after rulesCtx exists.
 //
-// ActiveHostsLister and CommandInserter are unrelated to detection;
 // detection's only outbound closure is UserExists, which cmd/main
 // supplies from identity.api.Service.UserExists. UserExists is the
 // cross-context guard that replaces a FK from alerts.updated_by to
