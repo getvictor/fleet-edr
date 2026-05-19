@@ -1,6 +1,6 @@
 import Foundation
 import Security
-import os.log
+import os
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "SigningInfoFallback")
 
@@ -29,12 +29,15 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 final class SigningInfoFallback {
     static let shared = SigningInfoFallback()
 
-    /// CacheKey pins a cached signing-info entry to a specific (inode, mtime) pair so a binary swap that
-    /// preserves the path but changes the contents is observed as a cache miss. Mirrors FileHashCache's
-    /// invalidation contract.
+    /// CacheKey pins a cached signing-info entry to a specific (inode, mtime) tuple so a binary swap that
+    /// preserves the path but changes the contents is observed as a cache miss. Stores mtime as separate
+    /// sec / nsec fields to mirror FileHashCache.swift's CacheKey exactly: same invalidation contract,
+    /// same shape, and no scalar multiplication that would trip SwiftLint's no_magic_numbers rule on the
+    /// nanoseconds-per-second constant.
     struct CacheKey: Hashable {
         let inode: UInt64
-        let mtimeNs: Int64
+        let mtimeSec: Int64
+        let mtimeNsec: Int64
     }
 
     private let lock = OSAllocatedUnfairLock(initialState: [CacheKey: String?]())
@@ -46,7 +49,11 @@ final class SigningInfoFallback {
     /// The first two are real "no Team ID" outcomes; the third should not happen in practice but is
     /// handled defensively. Caches the result keyed on (inode, mtime).
     func teamID(forPath path: String, fileStat: stat) -> String? {
-        let key = CacheKey(inode: fileStat.st_ino, mtimeNs: stMtimeNs(fileStat))
+        let key = CacheKey(
+            inode: fileStat.st_ino,
+            mtimeSec: Int64(fileStat.st_mtimespec.tv_sec),
+            mtimeNsec: Int64(fileStat.st_mtimespec.tv_nsec),
+        )
         if let cached = lock.withLock({ $0[key] }) {
             // Non-nil cached means we have read this file before; the value (which itself may be a real
             // String or nil) is the canonical answer. The outer optional pattern lets us distinguish
@@ -64,7 +71,7 @@ final class SigningInfoFallback {
         var staticCode: SecStaticCode?
         let createStatus = SecStaticCodeCreateWithPath(url, [], &staticCode)
         guard createStatus == errSecSuccess, let code = staticCode else {
-            logger.debug("SecStaticCodeCreateWithPath failed for \(path, privacy: .public): \(createStatus)")
+            logger.debug("SecStaticCodeCreateWithPath failed for \(path, privacy: .private): \(createStatus)")
             return nil
         }
         var infoDict: CFDictionary?
@@ -75,7 +82,7 @@ final class SigningInfoFallback {
         // keeps the binding stable across SDK versions where the symbol's import name has drifted.
         let infoStatus = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &infoDict)
         guard infoStatus == errSecSuccess, let info = infoDict as? [String: Any] else {
-            logger.debug("SecCodeCopySigningInformation failed for \(path, privacy: .public): \(infoStatus)")
+            logger.debug("SecCodeCopySigningInformation failed for \(path, privacy: .private): \(infoStatus)")
             return nil
         }
         // The Sec framework spells this key "kSecCodeInfoTeamIdentifier" in its public header. Reference it
@@ -86,12 +93,4 @@ final class SigningInfoFallback {
         }
         return teamID
     }
-}
-
-/// stMtimeNs flattens the platform's stat mtimespec into a single Int64 nanosecond value so the cache key
-/// is uniform across the various stat layouts macOS uses. Mirrors the conversion FileHashCache does.
-private func stMtimeNs(_ fileStat: stat) -> Int64 {
-    let secNs = Int64(fileStat.st_mtimespec.tv_sec) * 1_000_000_000
-    let frac = Int64(fileStat.st_mtimespec.tv_nsec)
-    return secNs + frac
 }

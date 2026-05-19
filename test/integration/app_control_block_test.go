@@ -295,12 +295,7 @@ func TestAppControlBlock_EachRuleType_BecomesAlert(t *testing.T) {
 	// Per-type fixtures: the identifier matches the canonical shape the server-side validators accept for that rule_type
 	// (CDHASH = 40 lowercase hex, BINARY = 64 lowercase hex, SIGNINGID = platform:bundle OR <TID>:bundle, TEAMID = 10
 	// uppercase alphanumeric). Distinct rule_ids so each subtest's alert lands as its own row regardless of dedup.
-	cases := []struct {
-		name       string
-		ruleType   string
-		identifier string
-		ruleID     string
-	}{
+	cases := []appControlPerTypeCase{
 		{"CDHASH", "CDHASH", "cccccccccccccccccccccccccccccccccccccccc", "app_control:101"},
 		{"BINARY", "BINARY", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "app_control:102"},
 		{"SIGNINGID", "SIGNINGID", "platform:com.apple.curl", "app_control:103"},
@@ -308,58 +303,88 @@ func TestAppControlBlock_EachRuleType_BecomesAlert(t *testing.T) {
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			postEvents(t, stack, hostToken, []detectionapi.Event{{
-				EventID:     fmt.Sprintf("ac-perpath-block-%d", i),
-				HostID:      hostID,
-				TimestampNs: now + 2 + int64(i),
-				EventType:   "application_control_block",
-				Payload: blockPayload(t, blockPayloadInput{
-					PID:           blockPID,
-					Path:          "/usr/local/bin/target",
-					RuleID:        tc.ruleID,
-					RuleType:      tc.ruleType,
-					Identifier:    tc.identifier,
-					Severity:      "high",
-					PolicyID:      11,
-					PolicyVersion: 3,
-				}),
-			}})
-
-			require.Eventually(t, func() bool {
-				alerts, err := stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
-					HostID: hostID,
-					Source: detectionapi.AlertSourceApplicationControl,
-				})
-				if err != nil {
-					return false
-				}
-				for _, a := range alerts {
-					if a.RuleID == tc.ruleID {
-						return true
-					}
-				}
-				return false
-			}, 5*time.Second, 50*time.Millisecond, "block event with rule_type=%s must surface as an alert", tc.ruleType)
-
-			// Pin the alert's shape so a regression that drops rule_type from the wire payload, or that mis-maps the
-			// default-description fallback for one type, surfaces here rather than at demo time.
-			alerts, err := stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
-				HostID: hostID,
-				Source: detectionapi.AlertSourceApplicationControl,
-			})
-			require.NoError(t, err)
-			var got *detectionapi.Alert
-			for i := range alerts {
-				if alerts[i].RuleID == tc.ruleID {
-					got = &alerts[i]
-					break
-				}
-			}
-			require.NotNil(t, got, "alert for rule_id=%s should exist after Eventually returned true", tc.ruleID)
-			assert.Equal(t, detectionapi.AlertSourceApplicationControl, got.Source)
-			assert.Equal(t, "high", got.Severity)
-			assert.Equal(t, "Blocked "+tc.ruleType+" rule for "+tc.identifier, got.Description,
-				"default description for this rule_type must include the identifier")
+			postBlockEvent(t, stack, hostToken, hostID, blockPID, now+2+int64(i), i, tc)
+			waitForAlertByRuleID(t, stack, hostID, tc.ruleID, tc.ruleType)
+			assertAlertShape(t, stack, hostID, tc)
 		})
 	}
+}
+
+// postBlockEvent posts a single application_control_block event keyed for the per-rule-type subtest. Extracted
+// from the subtest body to keep TestAppControlBlock_EachRuleType_BecomesAlert under Sonar's S3776 cognitive
+// complexity threshold; the test's intent is one block-event per rule type and the three helpers spell that
+// out without adding meaningful branching inside the subtest closure.
+func postBlockEvent(t *testing.T, stack *Stack, hostToken string, hostID string, blockPID int, ts int64, i int,
+	tc appControlPerTypeCase,
+) {
+	t.Helper()
+	postEvents(t, stack, hostToken, []detectionapi.Event{{
+		EventID:     fmt.Sprintf("ac-perpath-block-%d", i),
+		HostID:      hostID,
+		TimestampNs: ts,
+		EventType:   "application_control_block",
+		Payload: blockPayload(t, blockPayloadInput{
+			PID:           blockPID,
+			Path:          "/usr/local/bin/target",
+			RuleID:        tc.ruleID,
+			RuleType:      tc.ruleType,
+			Identifier:    tc.identifier,
+			Severity:      "high",
+			PolicyID:      11,
+			PolicyVersion: 3,
+		}),
+	}})
+}
+
+// waitForAlertByRuleID polls until an alert with the given rule_id appears for the host. Holds the inner range
+// + per-row predicate that otherwise inflates the subtest's cognitive complexity.
+func waitForAlertByRuleID(t *testing.T, stack *Stack, hostID string, ruleID string, ruleType string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		alerts, err := stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
+			HostID: hostID,
+			Source: detectionapi.AlertSourceApplicationControl,
+		})
+		if err != nil {
+			return false
+		}
+		return findAlertByRuleID(alerts, ruleID) != nil
+	}, 5*time.Second, 50*time.Millisecond, "block event with rule_type=%s must surface as an alert", ruleType)
+}
+
+// assertAlertShape pins source / severity / default-description so a regression that drops rule_type from the
+// wire payload or mis-maps the default-description fallback surfaces here rather than at demo time.
+func assertAlertShape(t *testing.T, stack *Stack, hostID string, tc appControlPerTypeCase) {
+	t.Helper()
+	alerts, err := stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
+		HostID: hostID,
+		Source: detectionapi.AlertSourceApplicationControl,
+	})
+	require.NoError(t, err)
+	got := findAlertByRuleID(alerts, tc.ruleID)
+	require.NotNil(t, got, "alert for rule_id=%s should exist after Eventually returned true", tc.ruleID)
+	assert.Equal(t, detectionapi.AlertSourceApplicationControl, got.Source)
+	assert.Equal(t, "high", got.Severity)
+	assert.Equal(t, "Blocked "+tc.ruleType+" rule for "+tc.identifier, got.Description,
+		"default description for this rule_type must include the identifier")
+}
+
+// findAlertByRuleID returns the first alert in the slice whose RuleID matches, or nil. Centralises the linear
+// scan so the test helpers don't repeat the indexed-range pattern.
+func findAlertByRuleID(alerts []detectionapi.Alert, ruleID string) *detectionapi.Alert {
+	for i := range alerts {
+		if alerts[i].RuleID == ruleID {
+			return &alerts[i]
+		}
+	}
+	return nil
+}
+
+// appControlPerTypeCase is the per-subtest fixture shape shared across the helpers above. Kept as a named
+// type rather than an anonymous struct so the helper signatures stay readable.
+type appControlPerTypeCase struct {
+	name       string
+	ruleType   string
+	identifier string
+	ruleID     string
 }
