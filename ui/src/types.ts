@@ -147,6 +147,10 @@ export interface ApplicationControlPolicy {
   updated_at: string;
   created_by: string;
   updated_by: string;
+  // assignment_count is the number of host_groups the policy is assigned to. Server-decorated via a LEFT JOIN on
+  // app_control_assignments so the PoliciesList view can render "N host groups" without an N+1 round trip. Always 1 in
+  // Phase A (the seed Default policy assigned to all-hosts); grows as Phase B opens up multi-group assignment editing.
+  assignment_count: number;
   rules?: ApplicationControlRule[];
 }
 

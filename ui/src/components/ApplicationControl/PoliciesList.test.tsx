@@ -15,6 +15,8 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
   updated_at: "2026-05-14T00:00:00Z",
   created_by: "system",
   updated_by: "user:1",
+  // Default fixture mirrors the Phase A seed: Default policy assigned to all-hosts is exactly 1 assignment.
+  assignment_count: 1,
   ...over,
 });
 
@@ -88,5 +90,28 @@ describe("PoliciesList", () => {
     });
     // The "Rules" column should render the em dash placeholder.
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("renders assignment_count with the appropriate singular / plural / zero label", async () => {
+    (api.listAppControlPolicies as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePolicy({ id: 1, name: "SeedDefault", assignment_count: 1 }),
+      makePolicy({ id: 2, name: "MultiAssigned", assignment_count: 3 }),
+      makePolicy({ id: 3, name: "Unwired", assignment_count: 0 }),
+    ]);
+    render(
+      <MemoryRouter>
+        <PoliciesList />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("SeedDefault")).toBeInTheDocument();
+    });
+    // The Phase A "always 1" seed case renders as "1 host group". The plural form switches at 2+; the zero state renders
+    // "no host groups" (an admin posture, not a wire-shape error). The previous hardcoded "all hosts" placeholder must
+    // not appear anywhere -- if it does, the wiring regressed back to the demo-cut shape.
+    expect(screen.getByText("1 host group")).toBeInTheDocument();
+    expect(screen.getByText("3 host groups")).toBeInTheDocument();
+    expect(screen.getByText("no host groups")).toBeInTheDocument();
+    expect(screen.queryByText(/^all hosts$/)).not.toBeInTheDocument();
   });
 });

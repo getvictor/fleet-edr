@@ -43,6 +43,15 @@ export function PoliciesList() {
   const ruleCount = (p: ApplicationControlPolicy): string =>
     p.rules ? String(p.rules.length) : "—";
 
+  // assignmentLabel formats the assignment_count column. Phase A's seed always renders "1 host group" because the only
+  // assignment row is Default -> all-hosts; zero indicates an unwired policy (an admin posture, not a wire-shape error)
+  // and reads as "no host groups". Plural form switches at exactly count == 1.
+  const assignmentLabel = (count: number): string => {
+    if (count === 0) return "no host groups";
+    if (count === 1) return "1 host group";
+    return `${String(count)} host groups`;
+  };
+
   const newPolicyAction = (
     <Button
       variant="primary"
@@ -95,11 +104,11 @@ export function PoliciesList() {
                 <td>{p.version}</td>
                 <td>{new Date(p.updated_at).toLocaleString()}</td>
                 <td>
-                  {/* Assignments are hardcoded "all-hosts" in the
-                      demo cut; host-group editing is post-demo so
-                      this column shows the literal value without an
-                      action link. */}
-                  <span className="app-control__assignment">all hosts</span>
+                  {/* assignment_count is server-decorated via a LEFT JOIN on app_control_assignments.
+                      Phase A always shows 1 (the seed Default -> all-hosts row); Phase B grows the
+                      count as editable groups land. Singular/plural handled inline so a zero state
+                      ("no host groups", which would indicate an unwired policy) reads sensibly too. */}
+                  <span className="app-control__assignment">{assignmentLabel(p.assignment_count)}</span>
                 </td>
               </tr>
             ))}

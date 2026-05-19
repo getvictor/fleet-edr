@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -103,6 +104,7 @@ type appControlRig struct {
 	audit    *recordingAudit
 	hosts    []string
 	actor    *identityapi.Actor
+	db       *sqlx.DB
 }
 
 // newAppControlRig wires a rules bootstrap with the demo-cut REST surface live. Hosts are a fixed []string the recordingInserter
@@ -143,7 +145,7 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 	})
 	srv := httptest.NewServer(withActor)
 	t.Cleanup(srv.Close)
-	return &appControlRig{rules: rules, srv: srv, inserter: inserter, audit: audit, hosts: hostList, actor: actor}
+	return &appControlRig{rules: rules, srv: srv, inserter: inserter, audit: audit, hosts: hostList, actor: actor, db: db}
 }
 
 // defaultPolicyID returns the seeded Default policy's row id.
@@ -187,6 +189,10 @@ func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	require.Len(t, body.Policies, 1)
 	assert.Equal(t, rulesapi.DefaultPolicyName, body.Policies[0].Name)
+	// AssignmentCount on the seed Default policy is 1 because EnsureDefaultPolicy creates the all-hosts group + the single
+	// assignment connecting Default to it. The field exists so the policies-list UI can render "N host groups" without an
+	// N+1 round trip; the value is always 1 in Phase A and grows as Phase B opens up multi-group assignment editing.
+	assert.Equal(t, 1, body.Policies[0].AssignmentCount, "seed Default policy is assigned to all-hosts (count=1)")
 }
 
 // TestAppControl_GetPolicy_IncludesRules: a freshly-seeded policy has zero rules; after a POST the GET path should include the new
@@ -202,6 +208,7 @@ func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 	var policy rulesapi.ApplicationControlPolicy
 	require.NoError(t, json.NewDecoder(get.Body).Decode(&policy))
 	assert.Empty(t, policy.Rules)
+	assert.Equal(t, 1, policy.AssignmentCount, "single-policy GET decorates assignment_count consistently with the list view")
 
 	create := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
@@ -271,6 +278,72 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	assert.Equal(t, int64(42), *ev.UserID, "audit row carries the actor user_id")
 	assert.Equal(t, 3, ev.Payload["fanout_hosts"], "fanout_hosts must reflect unique host count")
 	assert.Equal(t, 0, ev.Payload["fanout_failed"], "no failures expected on the happy path")
+}
+
+// TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments: closes openspec task 11.1.5. The Phase A walker
+// resolves hosts via the assignments -> host_groups walk in service.fanout; when a policy is assigned to two host groups
+// whose criteria resolve to overlapping host sets, each unique host must receive exactly ONE set_application_control
+// command. The pre-existing dedup test only exercises HostLister-side duplicates inside one group; this one wires a second
+// host_group with the same {"type":"all"} criteria and a second assignment row directly via SQL so the fan-out's
+// across-groups dedup invariant is exercised. Without this test, a regression that drops the seen-set or skips the
+// across-groups union would still pass the existing suite.
+func TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments(t *testing.T) {
+	t.Parallel()
+	hosts := []string{"host-a", "host-b", "host-c"}
+	r := newAppControlRig(t, hosts)
+	policyID := r.defaultPolicyID(t)
+
+	// Insert a second "all"-criteria host group + a second assignment to the Default policy. Phase A's REST surface gates
+	// non-all-hosts host_group mutations behind 405 (the policy-spec keeps editable groups in Phase B), so we go through
+	// the raw DB. The fan-out walker reads both rows, resolves each to the same host set via allHostsCache, and unions the
+	// results into a single seen-map -- N hosts must enqueue N commands, not 2N.
+	res, err := r.db.ExecContext(t.Context(),
+		`INSERT INTO host_groups (name, description, criteria) VALUES (?, ?, ?)`,
+		"secondary-all-hosts", "test overlap with all-hosts", `{"type":"all"}`)
+	require.NoError(t, err)
+	secondaryGroupID, err := res.LastInsertId()
+	require.NoError(t, err)
+	_, err = r.db.ExecContext(t.Context(),
+		`INSERT INTO app_control_assignments (policy_id, host_group_id, priority) VALUES (?, ?, ?)`,
+		policyID, secondaryGroupID, 0)
+	require.NoError(t, err)
+
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"severity":   rulesapi.SeverityRuleHigh,
+			"reason":     "overlap fan-out coverage",
+		})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	calls := r.inserter.snapshot()
+	require.Len(t, calls, len(hosts),
+		"two assignments to overlapping {\"type\":\"all\"} groups must dedup to one command per unique host")
+	seenHostIDs := map[string]int{}
+	for _, c := range calls {
+		seenHostIDs[c.HostID]++
+	}
+	for _, host := range hosts {
+		assert.Equal(t, 1, seenHostIDs[host],
+			"host %q must receive exactly one command even though it is reachable via two assignments", host)
+	}
+
+	events := r.audit.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, len(hosts), events[0].Payload["fanout_hosts"],
+		"fanout_hosts on the audit row reflects unique hosts, not assignment-fan crosses")
+	assert.Equal(t, 0, events[0].Payload["fanout_failed"])
+
+	// AssignmentCount on the post-mutation policy should reflect both assignments. Fetch via the public REST path the UI uses
+	// so the round-trip exercises the same JSON shape the policies-list view consumes.
+	get := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+i64(policyID), nil)
+	defer get.Body.Close()
+	var fetched rulesapi.ApplicationControlPolicy
+	require.NoError(t, json.NewDecoder(get.Body).Decode(&fetched))
+	assert.Equal(t, 2, fetched.AssignmentCount, "two assignment rows must show as count=2")
 }
 
 // TestAppControl_CreateRule_RecordsFanoutFailures: a per-host CommandInserter failure must not abort the loop AND must surface on the
