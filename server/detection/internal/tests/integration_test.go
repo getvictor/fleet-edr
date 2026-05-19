@@ -708,10 +708,18 @@ func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
 			Payload: json.RawMessage(`{"pid":1002,"ppid":1,"path":"/usr/bin/legacy","args":["legacy"],"sha256":"cafef00d"}`)},
 	})
 
+	// Wait until BOTH rows have landed before asserting either one's shape. The processor is async and the two exec events
+	// are not guaranteed to materialise in the order they were posted; without this combined wait, a CI run that races the
+	// 1001 Eventually-pass against the 1002 row commit would return nil for nonHR even though both are inflight (issue
+	// caught in the PR #197 CI run where 1001 landed first and 1002 was still queued when the test asserted).
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
-		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhash
-	}, 5*time.Second, 50*time.Millisecond, "HR exec must persist cdhash on the processes row")
+		hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+		if err != nil || hr == nil || hr.Process.CDHash == nil || *hr.Process.CDHash != cdhash {
+			return false
+		}
+		nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2)
+		return err == nil && nonHR != nil
+	}, 5*time.Second, 50*time.Millisecond, "both HR + non-HR exec rows must materialise before the shape assertions")
 
 	hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
 	require.NoError(t, err)
