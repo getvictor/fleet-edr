@@ -260,3 +260,106 @@ func waitForProcess(t *testing.T, stack *Stack, hostID string, pid int) {
 		return err == nil && p != nil
 	}, 5*time.Second, 50*time.Millisecond, "processor must materialise the seed process row")
 }
+
+// TestAppControlBlock_EachRuleType_BecomesAlert is the per-rule-type closure for openspec task 11.2.9. The Swift extension's
+// decision walker (extension/edr/extension/ApplicationControl/) honours CDHASH, BINARY, SIGNINGID, and TEAMID in Phase A;
+// each can produce an application_control_block event. The cross-context pipeline (catalog rule -> engine -> alert insert)
+// must turn every shape into a persisted alert without per-type special-casing. A regression where the catalog rule's
+// rule_type switch dropped one of the four types (e.g. a missing case label) would silently break detection for that type
+// while the existing BINARY-only test stayed green.
+//
+// One host, one process: the (rule_type, identifier, rule_id) triple varies per subtest so each row has a unique dedup
+// key and the alerts table accumulates four independent rows.
+func TestAppControlBlock_EachRuleType_BecomesAlert(t *testing.T) {
+	t.Parallel()
+	stack := Setup(t)
+
+	const hostID = "EEEE1111-2222-3333-4444-555566667777"
+	const blockPID = 7373
+	hostToken := stepEnroll(t, stack, hostID)
+
+	now := time.Now().UnixNano()
+	postEvents(t, stack, hostToken, []detectionapi.Event{
+		{
+			EventID: "ac-perpath-fork", HostID: hostID, TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(fmt.Sprintf(`{"child_pid":%d,"parent_pid":1}`, blockPID)),
+		},
+		{
+			EventID: "ac-perpath-exec", HostID: hostID, TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(fmt.Sprintf(
+				`{"pid":%d,"ppid":1,"path":"/usr/local/bin/target","args":["target"]}`, blockPID)),
+		},
+	})
+	waitForProcess(t, stack, hostID, blockPID)
+
+	// Per-type fixtures: the identifier matches the canonical shape the server-side validators accept for that rule_type
+	// (CDHASH = 40 lowercase hex, BINARY = 64 lowercase hex, SIGNINGID = platform:bundle OR <TID>:bundle, TEAMID = 10
+	// uppercase alphanumeric). Distinct rule_ids so each subtest's alert lands as its own row regardless of dedup.
+	cases := []struct {
+		name       string
+		ruleType   string
+		identifier string
+		ruleID     string
+	}{
+		{"CDHASH", "CDHASH", "cccccccccccccccccccccccccccccccccccccccc", "app_control:101"},
+		{"BINARY", "BINARY", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "app_control:102"},
+		{"SIGNINGID", "SIGNINGID", "platform:com.apple.curl", "app_control:103"},
+		{"TEAMID", "TEAMID", "EQHXZ8M8AV", "app_control:104"},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			postEvents(t, stack, hostToken, []detectionapi.Event{{
+				EventID:     fmt.Sprintf("ac-perpath-block-%d", i),
+				HostID:      hostID,
+				TimestampNs: now + 2 + int64(i),
+				EventType:   "application_control_block",
+				Payload: blockPayload(t, blockPayloadInput{
+					PID:           blockPID,
+					Path:          "/usr/local/bin/target",
+					RuleID:        tc.ruleID,
+					RuleType:      tc.ruleType,
+					Identifier:    tc.identifier,
+					Severity:      "high",
+					PolicyID:      11,
+					PolicyVersion: 3,
+				}),
+			}})
+
+			require.Eventually(t, func() bool {
+				alerts, err := stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
+					HostID: hostID,
+					Source: detectionapi.AlertSourceApplicationControl,
+				})
+				if err != nil {
+					return false
+				}
+				for _, a := range alerts {
+					if a.RuleID == tc.ruleID {
+						return true
+					}
+				}
+				return false
+			}, 5*time.Second, 50*time.Millisecond, "block event with rule_type=%s must surface as an alert", tc.ruleType)
+
+			// Pin the alert's shape so a regression that drops rule_type from the wire payload, or that mis-maps the
+			// default-description fallback for one type, surfaces here rather than at demo time.
+			alerts, err := stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
+				HostID: hostID,
+				Source: detectionapi.AlertSourceApplicationControl,
+			})
+			require.NoError(t, err)
+			var got *detectionapi.Alert
+			for i := range alerts {
+				if alerts[i].RuleID == tc.ruleID {
+					got = &alerts[i]
+					break
+				}
+			}
+			require.NotNil(t, got, "alert for rule_id=%s should exist after Eventually returned true", tc.ruleID)
+			assert.Equal(t, detectionapi.AlertSourceApplicationControl, got.Source)
+			assert.Equal(t, "high", got.Severity)
+			assert.Equal(t, "Blocked "+tc.ruleType+" rule for "+tc.identifier, got.Description,
+				"default description for this rule_type must include the identifier")
+		})
+	}
+}
