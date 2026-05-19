@@ -120,7 +120,9 @@ async function main() {
   console.log(`wrote ${outPath} (${s.size} bytes)`);
 }
 
-main().catch((err) => {
+try {
+  await main();
+} catch (err) {
   console.error("coverage-to-lcov failed:", err);
   process.exit(1);
-});
+}
