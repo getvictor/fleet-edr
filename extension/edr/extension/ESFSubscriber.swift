@@ -191,17 +191,19 @@ final class ESFSubscriber: Sendable {
         // non-hardened binary silently no-op for this exec.
         let cdhash: String? = isHardenedRuntime(flags: target.codesigning_flags) ? cdhashHexString(from: target.cdhash) : nil
 
-        // Resolve the canonical TeamID. On notarised release hosts target.team_id is the truth and the
-        // fallback is never consulted. On the edr-dev VM the extension itself is ad-hoc-signed
-        // (`codesign -d` reports `adhoc, linker-signed`); ESF responds by redacting target.team_id="" and
-        // forcing target.is_platform_binary=true for EVERY exec the client sees -- a per-client policy on
-        // ESF clients whose host extension is not Developer-ID-signed + notarised, not a per-binary
-        // CS_PLATFORM_BINARY classification. Quantified on a fresh queue: 393/393 exec events redacted (see
-        // issue #187). Without a fallback every TEAMID rule on edr-dev is effectively dead and every
-        // SIGNINGID rule degrades to the `platform:<bundle.id>` shape regardless of who actually signed the
-        // binary. SigningInfoFallback reads the binary via SecCodeCopySigningInformation -- the same path
-        // `codesign -dvv` walks -- and caches the result per (inode, mtime). The fix on a real release host
-        // is to notarise the extension; until then the fallback keeps edr-dev usable for end-to-end QA.
+        // Resolve the canonical TeamID. For Developer-ID-signed targets on notarized release hosts ESF
+        // reports the real team_id and the fallback branch is skipped; the fallback still fires for
+        // ad-hoc-signed or unsigned targets even there and correctly returns nil. On the edr-dev VM the
+        // extension itself is ad-hoc-signed (`codesign -d` reports `adhoc, linker-signed`); ESF responds
+        // by redacting target.team_id="" and forcing target.is_platform_binary=true for EVERY exec the
+        // client sees -- a per-client policy on ESF clients whose host extension is not Developer-ID-signed
+        // + notarized, not a per-binary CS_PLATFORM_BINARY classification. Quantified on a fresh queue:
+        // 393/393 exec events redacted (see issue #187). Without a fallback every TEAMID rule on edr-dev
+        // is effectively dead and every SIGNINGID rule degrades to the `platform:<bundle.id>` shape
+        // regardless of who actually signed the binary. SigningInfoFallback reads the binary via
+        // SecCodeCopySigningInformation -- the same path `codesign -dvv` walks -- and caches the result
+        // per (inode, mtime). The fix on a real release host is to notarize the extension; until then the
+        // fallback keeps edr-dev usable for end-to-end QA.
         let teamID: String
         if !esTeamID.isEmpty {
             teamID = esTeamID

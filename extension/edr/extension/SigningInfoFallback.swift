@@ -7,14 +7,14 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// SigningInfoFallback fills in the canonical Team ID for a binary when ESF returns an empty `target.team_id`.
 ///
 /// Why this exists: ESF redacts `target.team_id=""` and forces `target.is_platform_binary=true` for every
-/// exec the client sees when the ESF host extension itself is not Developer-ID-signed + notarised. This is
+/// exec the client sees when the ESF host extension itself is not Developer-ID-signed + notarized. This is
 /// a documented per-client policy, not a per-binary CS_PLATFORM_BINARY classification: the redaction hits
 /// every exec, including unambiguously third-party Developer-ID-signed binaries (issue #187 quantified
 /// 393/393 exec events redacted on edr-dev). The edr-dev VM ships the extension ad-hoc-signed
 /// (`codesign -d` reports `adhoc, linker-signed`), which trips the redaction; AUTH_EXEC's TEAMID rule
 /// branch then has nothing to match against -- it cannot block a binary by `8VBZ3948LU` if ESF says
-/// team_id="". On notarised release hosts ESF reports the real team_id and this fallback is a no-op.
-/// The proper long-term fix is to notarise the extension (tracked separately); this fallback keeps the
+/// team_id="". On notarized release hosts ESF reports the real team_id and this fallback is a no-op.
+/// The proper long-term fix is to notarize the extension (tracked separately); this fallback keeps the
 /// dev VM usable for end-to-end QA of TEAMID + SIGNINGID rule flows in the meantime.
 ///
 /// The fallback reads the binary on disk via SecStaticCode + SecCodeCopySigningInformation and returns the

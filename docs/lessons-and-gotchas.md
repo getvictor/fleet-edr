@@ -154,7 +154,7 @@ Path strings and other dynamic values show as `<private>` in log output. Use
 
 ### Ad-hoc-signed host extension causes ESF to redact team_id + force is_platform_binary
 
-When the ESF host extension itself is not Developer-ID-signed + notarised, ESF
+When the ESF host extension itself is not Developer-ID-signed + notarized, ESF
 applies a per-client redaction: `target.team_id` returns `""` and
 `target.is_platform_binary` returns `true` for **every** exec the client sees,
 including unambiguously third-party Developer ID-signed binaries (issue #187
@@ -181,7 +181,7 @@ recover on edr-dev.
 
 Reproducer (after a fresh agent queue):
 
-```
+```bash
 curl -sL 'https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_macOS_arm64.zip' -o gh.zip
 unzip -q gh.zip && sudo install -m 0755 gh_2.62.0_macOS_arm64/bin/gh /usr/local/bin/gh
 # push a TEAMID rule for VEKTX9H2N7 from the server, then:
@@ -189,7 +189,7 @@ unzip -q gh.zip && sudo install -m 0755 gh_2.62.0_macOS_arm64/bin/gh /usr/local/
 # AUTH_EXEC DENIED in the extension log; application_control_block event on the wire.
 ```
 
-Long-term fix: notarise the extension on a release / QA channel; the fallback
+Long-term fix: notarize the extension on a release / QA channel; the fallback
 becomes a no-op once ESF stops redacting.
 
 ## Code signing and certificates
