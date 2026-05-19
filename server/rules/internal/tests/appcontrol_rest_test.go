@@ -341,6 +341,7 @@ func TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments(t *t
 	// so the round-trip exercises the same JSON shape the policies-list view consumes.
 	get := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+i64(policyID), nil)
 	defer get.Body.Close()
+	require.Equal(t, http.StatusOK, get.StatusCode, "GET must return 200 before we trust the decoded body")
 	var fetched rulesapi.ApplicationControlPolicy
 	require.NoError(t, json.NewDecoder(get.Body).Decode(&fetched))
 	assert.Equal(t, 2, fetched.AssignmentCount, "two assignment rows must show as count=2")

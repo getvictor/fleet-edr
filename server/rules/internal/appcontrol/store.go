@@ -197,18 +197,17 @@ func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([
 	return out, nil
 }
 
-// policySelectWithAssignmentCount is the SELECT-list + FROM-clause every policy fetch uses. The LEFT JOIN against the
-// assignments aggregate populates the derived AssignmentCount field in a single round trip; COALESCE turns the LEFT-JOIN NULL
-// for policies with zero assignments into the integer zero scan target expects. The aggregate sub-query groups by policy_id so
-// each parent row joins to exactly one summary row regardless of how many host groups the policy has assigned. Centralised so
-// GetPolicyByName / getPolicyByID / ListPolicies stay structurally identical and the scan order they all share is one source
-// of truth.
+// policySelectWithAssignmentCount is the SELECT-list + FROM-clause every policy fetch uses. The correlated subquery in the
+// SELECT list computes the assignment count for each output row; MySQL's planner can use the (policy_id, host_group_id)
+// composite PK index on app_control_assignments to count without scanning the table. Cheaper than a LEFT JOIN against an
+// aggregate subquery for single-row PK lookups (GetPolicyByName, getPolicyByID) where that join would materialize counts for
+// every policy in the table; ListPolicies pays the per-row subquery cost N times but each one is the indexed COUNT(*) above.
+// Centralised so GetPolicyByName / getPolicyByID / ListPolicies stay structurally identical and the scan order they all share
+// is one source of truth.
 const policySelectWithAssignmentCount = `SELECT p.id, p.name, p.description, p.version, p.default_action,
-	p.created_at, p.updated_at, p.created_by, p.updated_by, COALESCE(a.cnt, 0) AS assignment_count
-	FROM app_control_policies p
-	LEFT JOIN (
-		SELECT policy_id, COUNT(*) AS cnt FROM app_control_assignments GROUP BY policy_id
-	) a ON a.policy_id = p.id`
+	p.created_at, p.updated_at, p.created_by, p.updated_by,
+	(SELECT COUNT(*) FROM app_control_assignments a WHERE a.policy_id = p.id) AS assignment_count
+	FROM app_control_policies p`
 
 // scanPolicyRow consumes one row from a query built atop policySelectWithAssignmentCount. The column order is fixed by the
 // SELECT list above and reused unchanged across GetPolicyByName / getPolicyByID / ListPolicies; a regression that reorders
@@ -247,10 +246,11 @@ func (s *Store) GetPolicyByID(ctx context.Context, policyID int64) (api.Applicat
 }
 
 // ListPolicies returns every policy in name order, each decorated with its assignment_count via the shared
-// policySelectWithAssignmentCount join. The policies-list UI renders the count in the assignments column so the spec's
-// "always 1 in Phase A" wiring is exercised end-to-end; Phase B's multi-group flows return non-1 values without a wire-shape
-// change. Rules are NOT populated; the list view shows the rule count only, which the REST handler computes via a separate
-// aggregate query when it needs it.
+// policySelectWithAssignmentCount subquery. The policies-list UI renders the count in the assignments column: the seeded
+// Default policy ships with count=1 (its assignment to the seed all-hosts group), policies created via CreatePolicy land at 0
+// until an assignment row is inserted, and Phase B multi-group editing grows the value without a wire-shape change. Rules
+// are NOT populated; the list view shows the rule count only, which the REST handler computes via a separate aggregate query
+// when it needs it.
 func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolicy, error) {
 	rows, err := s.db.QueryxContext(ctx, policySelectWithAssignmentCount+` ORDER BY p.name ASC`)
 	if err != nil {

@@ -43,9 +43,9 @@ export function PoliciesList() {
   const ruleCount = (p: ApplicationControlPolicy): string =>
     p.rules ? String(p.rules.length) : "—";
 
-  // assignmentLabel formats the assignment_count column. Phase A's seed always renders "1 host group" because the only
-  // assignment row is Default -> all-hosts; zero indicates an unwired policy (an admin posture, not a wire-shape error)
-  // and reads as "no host groups". Plural form switches at exactly count == 1.
+  // assignmentLabel formats the assignment_count column. The seed Default policy renders "1 host group" because its only
+  // assignment row connects it to all-hosts; policies created without assignments render "no host groups" (an admin posture,
+  // not a wire-shape error) and multi-group counts render with the plural form. Singular at exactly count == 1.
   const assignmentLabel = (count: number): string => {
     if (count === 0) return "no host groups";
     if (count === 1) return "1 host group";
@@ -104,10 +104,11 @@ export function PoliciesList() {
                 <td>{p.version}</td>
                 <td>{new Date(p.updated_at).toLocaleString()}</td>
                 <td>
-                  {/* assignment_count is server-decorated via a LEFT JOIN on app_control_assignments.
-                      Phase A always shows 1 (the seed Default -> all-hosts row); Phase B grows the
-                      count as editable groups land. Singular/plural handled inline so a zero state
-                      ("no host groups", which would indicate an unwired policy) reads sensibly too. */}
+                  {/* assignment_count is server-decorated via a correlated COUNT subquery on
+                      app_control_assignments. The seed Default policy ships with 1 (its assignment
+                      to all-hosts); policies created via the create endpoint land at 0 until an
+                      assignment is added, and Phase B's multi-group editing grows the value.
+                      Singular / plural / zero handled inline so an unwired policy reads sensibly. */}
                   <span className="app-control__assignment">{assignmentLabel(p.assignment_count)}</span>
                 </td>
               </tr>

@@ -252,9 +252,11 @@ const (
 
 // ApplicationControlPolicy mirrors a row in app_control_policies. Used by the REST surface for list/get responses and by the fan-out
 // code when constructing the `set_application_control` agent command. Rules is populated by GetWithRules and the rule listing
-// endpoints; bare Get omits it. AssignmentCount is a derived field: ListPolicies and GetPolicyByID populate it via a LEFT JOIN
-// against the assignments aggregate so the UI's policies-list view can render "N host groups" without an N+1 round trip. Other
+// endpoints; bare Get omits it. AssignmentCount is a derived field every policy fetch path populates (GetPolicyByName,
+// GetPolicyByID, ListPolicies) so the UI's policies-list view can render "N host groups" without an N+1 round trip. Other
 // internal callers (create/update audit paths) get a populated count they may ignore; the field is always authoritative.
+// The seeded Default policy starts at 1 (its assignment to the seed all-hosts group); policies created via CreatePolicy start
+// at 0 and grow when Phase B opens up assignment editing.
 type ApplicationControlPolicy struct {
 	ID              int64                    `json:"id"`
 	Name            string                   `json:"name"`
