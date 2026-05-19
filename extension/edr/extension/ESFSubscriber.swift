@@ -181,7 +181,7 @@ final class ESFSubscriber: Sendable {
     /// precedence walker reads. Side effect: when the file SHA-256 cache misses, kicks
     /// the async lazy fill so the next exec of the same (inode, mtime) hits.
     private func buildAuthTuple(target: es_process_t, fileStat: stat, lazyFillPath: String) -> AuthTuple {
-        let teamID = esTokenString(target.team_id)
+        let esTeamID = esTokenString(target.team_id)
         let signingID = esTokenString(target.signing_id)
 
         // CDHASH is a 20-byte raw array on es_process_t. Gate on Apple's Hardened Runtime
@@ -191,16 +191,34 @@ final class ESFSubscriber: Sendable {
         // non-hardened binary silently no-op for this exec.
         let cdhash: String? = isHardenedRuntime(flags: target.codesigning_flags) ? cdhashHexString(from: target.cdhash) : nil
 
+        // Resolve the canonical TeamID. On SIP-on production environments target.team_id is the truth and the
+        // fallback is never consulted. On SIP-off dev VMs the kernel can flag a developer-signed binary as
+        // CS_PLATFORM_BINARY (flags bit 0x04000000); ESF then reports is_platform_binary=true and team_id=""
+        // because platform binaries are Apple's by convention. Without a fallback, every TEAMID rule on a
+        // SIP-off VM is effectively dead even when the binary's signing block declares a TeamIdentifier.
+        // SigningInfoFallback reads the binary via SecCodeCopySigningInformation -- the same path
+        // `codesign -dvv` walks -- and caches the result per (inode, mtime).
+        let teamID: String
+        if !esTeamID.isEmpty {
+            teamID = esTeamID
+        } else {
+            teamID = SigningInfoFallback.shared.teamID(forPath: lazyFillPath, fileStat: fileStat) ?? ""
+        }
+
         // SIGNINGID is prefixed: "<TeamID>:<bundle.id>" for third-party signed binaries,
         // "platform:<bundle.id>" for Apple platform binaries (those whose
-        // is_platform_binary flag is set). The server's validator accepts both shapes.
+        // is_platform_binary flag is set). The server's validator accepts both shapes. When the kernel
+        // mis-classifies a dev-signed binary as platform (SIP-off CS_PLATFORM_BINARY case above), the
+        // fallback team_id distinguishes a genuine Apple platform binary (real platform: prefix) from a
+        // dev-signed one that should carry the "<TeamID>:<bundle.id>" prefix -- otherwise the SIGNINGID
+        // walk on SIP-off VMs would also lose its discriminator alongside the TEAMID walk.
         let signingIDPrefixed: String?
         if signingID.isEmpty {
             signingIDPrefixed = nil
-        } else if target.is_platform_binary {
-            signingIDPrefixed = "platform:\(signingID)"
         } else if !teamID.isEmpty {
             signingIDPrefixed = "\(teamID):\(signingID)"
+        } else if target.is_platform_binary {
+            signingIDPrefixed = "platform:\(signingID)"
         } else {
             signingIDPrefixed = nil
         }

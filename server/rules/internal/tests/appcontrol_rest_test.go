@@ -1196,7 +1196,6 @@ func TestAppControlREST_ListRulesAcrossPolicies_RejectsInvalidQuery(t *testing.T
 		{name: "non-boolean enabled", query: "?enabled=maybe"},
 		{name: "limit too large", query: "?limit=99999"},
 		{name: "limit negative", query: "?limit=-1"},
-		{name: "limit zero", query: "?limit=0"},
 		{name: "non-numeric limit", query: "?limit=abc"},
 		{name: "negative offset", query: "?offset=-5"},
 		{name: "non-numeric offset", query: "?offset=xyz"},
@@ -1259,6 +1258,24 @@ func TestAppControlREST_ListRulesAcrossPolicies_Pagination(t *testing.T) {
 	for _, r := range page2.Rules {
 		assert.False(t, seen[r.ID], "page 2 must not repeat any row from page 1")
 	}
+}
+
+// TestAppControlREST_ListRulesAcrossPolicies_LimitZeroFallsThroughToDefault pins the documented contract on
+// ListRulesAcrossPoliciesRequest.Limit: an explicit ?limit=0 produces the same effective limit as omitting the parameter.
+// Without this, the handler accepting 0 silently would still pass the no-default-applied tests, and the documentation
+// would be a lie at the wire boundary.
+func TestAppControlREST_ListRulesAcrossPolicies_LimitZeroFallsThroughToDefault(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules?limit=0", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Limit int `json:"limit"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, rulesapi.DefaultListRulesAcrossPoliciesLimit, body.Limit,
+		"limit=0 must echo back DefaultListRulesAcrossPoliciesLimit, matching the documented fall-through")
 }
 
 // TestAppControlREST_ListHostGroups_HappyPath: GET /host-groups returns the seed `all-hosts` row in a {host_groups: [...]}

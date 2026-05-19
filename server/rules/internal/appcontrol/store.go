@@ -166,16 +166,18 @@ func (s *Store) GetHostGroupByID(ctx context.Context, hostGroupID int64) (api.Ho
 	return g, nil
 }
 
-// ListAssignmentsForPolicy returns the raw assignment rows linking a policy to its host groups in (priority ASC, host_group_id
-// ASC) order. Distinct from ListHostGroupsForPolicy which returns the joined group metadata; this returns the assignment
-// linkage so a future UI can render priority + ordering without re-deriving from the group rows. No 404 on unknown policy:
-// the caller checks policy existence separately when needed (returning [] is the correct shape for "policy has no
-// assignments", which is a valid Phase B state).
+// ListAssignmentsForPolicy returns the raw assignment rows linking a policy to its host groups in (priority DESC,
+// host_group_id ASC) order, matching ListHostGroupsForPolicy. The enforcement walker treats highest priority first, so the
+// REST surface returns the same shape to keep "what does the enforcer see" and "what does the UI see" identical. Distinct
+// from ListHostGroupsForPolicy which returns the joined group metadata; this returns the assignment linkage so a future UI
+// can render priority + ordering without re-deriving from the group rows. No 404 on unknown policy: the caller checks
+// policy existence separately when needed (returning [] is the correct shape for "policy has no assignments", which is a
+// valid Phase B state).
 func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([]api.Assignment, error) {
 	const query = `SELECT policy_id, host_group_id, priority, created_at
 		FROM app_control_assignments
 		WHERE policy_id = ?
-		ORDER BY priority ASC, host_group_id ASC`
+		ORDER BY priority DESC, host_group_id ASC`
 	rows, err := s.db.QueryxContext(ctx, query, policyID)
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol list assignments: %w", err)

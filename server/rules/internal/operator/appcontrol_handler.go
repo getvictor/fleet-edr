@@ -763,16 +763,22 @@ func parseListRulesFilterParams(q url.Values, req *api.ListRulesAcrossPoliciesRe
 	return ""
 }
 
-// parseListRulesPaginationParams handles the limit + offset query parameters. Limit defaults to DefaultListRulesAcrossPoliciesLimit
-// when absent and is clamped at [1, MaxListRulesAcrossPoliciesLimit]; offset defaults to 0 and rejects negatives. Returns an
-// error message on the first malformed value; empty string on success. Mutates *req in place.
+// parseListRulesPaginationParams handles the limit + offset query parameters. Limit accepts 0 (falls through to
+// DefaultListRulesAcrossPoliciesLimit) or a value in [1, MaxListRulesAcrossPoliciesLimit]; absent ?limit= also defaults.
+// The 0-falls-through shape matches the request envelope's documented contract on ListRulesAcrossPoliciesRequest.Limit so
+// "limit=0" and an omitted query param produce the same effective limit. Offset defaults to 0 and rejects negatives.
+// Returns an error message on the first malformed value; empty string on success. Mutates *req in place.
 func parseListRulesPaginationParams(q url.Values, req *api.ListRulesAcrossPoliciesRequest) string {
 	if raw := q.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > api.MaxListRulesAcrossPoliciesLimit {
-			return "invalid limit query parameter (1.." + strconv.Itoa(api.MaxListRulesAcrossPoliciesLimit) + ")"
+		if err != nil || n < 0 || n > api.MaxListRulesAcrossPoliciesLimit {
+			return "invalid limit query parameter (0.." + strconv.Itoa(api.MaxListRulesAcrossPoliciesLimit) + ")"
 		}
-		req.Limit = n
+		if n == 0 {
+			req.Limit = api.DefaultListRulesAcrossPoliciesLimit
+		} else {
+			req.Limit = n
+		}
 	} else {
 		req.Limit = api.DefaultListRulesAcrossPoliciesLimit
 	}
