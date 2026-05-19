@@ -125,6 +125,76 @@ func (s *Store) ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]
 	return out, nil
 }
 
+// ListHostGroups returns every host_group row in alphabetical name order. Phase A always returns the single seed `all-hosts`
+// group; Phase B grows the result when editable groups land. Distinct from ListHostGroupsForPolicy: that one filters by an
+// assignment link to a specific policy; this one returns every group regardless of assignment state.
+func (s *Store) ListHostGroups(ctx context.Context) ([]api.HostGroup, error) {
+	const query = `SELECT id, name, description, criteria, created_at, updated_at
+		FROM host_groups ORDER BY name ASC`
+	rows, err := s.db.QueryxContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("appcontrol list host groups: %w", err)
+	}
+	defer rows.Close()
+	out := []api.HostGroup{}
+	for rows.Next() {
+		var g api.HostGroup
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.Criteria, &g.CreatedAt, &g.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("appcontrol scan host group: %w", err)
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("appcontrol iterate host groups: %w", err)
+	}
+	return out, nil
+}
+
+// GetHostGroupByID loads a single host_group row by primary key. Returns ErrAppControlHostGroupNotFound when the row does not
+// exist so the REST handler maps to HTTP 404; other driver errors propagate as-is for the handler to translate to 500.
+func (s *Store) GetHostGroupByID(ctx context.Context, hostGroupID int64) (api.HostGroup, error) {
+	const query = `SELECT id, name, description, criteria, created_at, updated_at
+		FROM host_groups WHERE id = ?`
+	row := s.db.QueryRowxContext(ctx, query, hostGroupID)
+	var g api.HostGroup
+	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.Criteria, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.HostGroup{}, api.ErrAppControlHostGroupNotFound
+		}
+		return api.HostGroup{}, fmt.Errorf("appcontrol get host group by id: %w", err)
+	}
+	return g, nil
+}
+
+// ListAssignmentsForPolicy returns the raw assignment rows linking a policy to its host groups in (priority ASC, host_group_id
+// ASC) order. Distinct from ListHostGroupsForPolicy which returns the joined group metadata; this returns the assignment
+// linkage so a future UI can render priority + ordering without re-deriving from the group rows. No 404 on unknown policy:
+// the caller checks policy existence separately when needed (returning [] is the correct shape for "policy has no
+// assignments", which is a valid Phase B state).
+func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([]api.Assignment, error) {
+	const query = `SELECT policy_id, host_group_id, priority, created_at
+		FROM app_control_assignments
+		WHERE policy_id = ?
+		ORDER BY priority ASC, host_group_id ASC`
+	rows, err := s.db.QueryxContext(ctx, query, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("appcontrol list assignments: %w", err)
+	}
+	defer rows.Close()
+	out := []api.Assignment{}
+	for rows.Next() {
+		var a api.Assignment
+		if err := rows.Scan(&a.PolicyID, &a.HostGroupID, &a.Priority, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("appcontrol scan assignment: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("appcontrol iterate assignments: %w", err)
+	}
+	return out, nil
+}
+
 // GetPolicyByName loads the policy row by name. Rules are NOT populated; callers that need rules call ListRulesByPolicy explicitly.
 // A future GetPolicyWithRules helper can join the two queries when an endpoint shows up that needs both in one round trip; today's
 // REST surface fetches them separately.
@@ -182,6 +252,40 @@ func (s *Store) ListPolicies(ctx context.Context) ([]api.ApplicationControlPolic
 	return out, nil
 }
 
+// buildListRulesAcrossPoliciesWhere assembles the parameterised WHERE clause + args slice from the set filter dimensions on
+// req. Each dimension appends its placeholder + arg in lockstep so the SQL stays parameterised end-to-end (no string
+// concatenation of operator input). Empty filter returns "1=1" + empty args so the caller can splice unconditionally.
+// Extracted from ListRulesAcrossPolicies to keep that method under Sonar's S3776 cognitive-complexity threshold.
+func buildListRulesAcrossPoliciesWhere(req api.ListRulesAcrossPoliciesRequest) (string, []any) {
+	clauses := []string{"1=1"}
+	args := []any{}
+	if req.PolicyID != nil {
+		clauses = append(clauses, "policy_id = ?")
+		args = append(args, *req.PolicyID)
+	}
+	if req.RuleType != "" {
+		clauses = append(clauses, "rule_type = ?")
+		args = append(args, req.RuleType)
+	}
+	if req.Enabled != nil {
+		clauses = append(clauses, "enabled = ?")
+		enabledArg := 0
+		if *req.Enabled {
+			enabledArg = 1
+		}
+		args = append(args, enabledArg)
+	}
+	if req.Severity != "" {
+		clauses = append(clauses, "severity = ?")
+		args = append(args, req.Severity)
+	}
+	if req.Source != "" {
+		clauses = append(clauses, "source = ?")
+		args = append(args, req.Source)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
 // ListRulesAcrossPolicies returns rules matching the filter across every policy (or one, when req.PolicyID is set). Powers the
 // cross-policy GET /rules endpoint that integration callers + audit exports need. Two queries: one count, one page. The page
 // is ordered by (policy_id, rule_type, identifier, id) so pagination is deterministic across sibling rows with identical
@@ -198,35 +302,7 @@ func (s *Store) ListRulesAcrossPolicies(
 	}
 	offset := max(req.Offset, 0)
 
-	// Build the dynamic WHERE clause from the set dimensions. Each branch appends its placeholder + arg in lockstep so the
-	// SQL stays parameterised end-to-end (no string concatenation of operator input). Empty filter -> WHERE 1=1, full scan.
-	clauses := []string{"1=1"}
-	args := []any{}
-	if req.PolicyID != nil {
-		clauses = append(clauses, "policy_id = ?")
-		args = append(args, *req.PolicyID)
-	}
-	if req.RuleType != "" {
-		clauses = append(clauses, "rule_type = ?")
-		args = append(args, req.RuleType)
-	}
-	if req.Enabled != nil {
-		clauses = append(clauses, "enabled = ?")
-		if *req.Enabled {
-			args = append(args, 1)
-		} else {
-			args = append(args, 0)
-		}
-	}
-	if req.Severity != "" {
-		clauses = append(clauses, "severity = ?")
-		args = append(args, req.Severity)
-	}
-	if req.Source != "" {
-		clauses = append(clauses, "source = ?")
-		args = append(args, req.Source)
-	}
-	where := strings.Join(clauses, " AND ")
+	where, args := buildListRulesAcrossPoliciesWhere(req)
 
 	// Count first so the wire response can render "Showing N of M" without a second client-side round trip.
 	var total int

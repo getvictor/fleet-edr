@@ -1260,3 +1260,163 @@ func TestAppControlREST_ListRulesAcrossPolicies_Pagination(t *testing.T) {
 		assert.False(t, seen[r.ID], "page 2 must not repeat any row from page 1")
 	}
 }
+
+// TestAppControlREST_ListHostGroups_HappyPath: GET /host-groups returns the seed `all-hosts` row in a {host_groups: [...]}
+// envelope. Phase A always has this single row.
+func TestAppControlREST_ListHostGroups_HappyPath(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/host-groups", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		HostGroups []rulesapi.HostGroup `json:"host_groups"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Len(t, body.HostGroups, 1)
+	assert.Equal(t, rulesapi.DefaultHostGroupName, body.HostGroups[0].Name)
+}
+
+// TestAppControlREST_GetHostGroup_HappyPath + NotFound + InvalidID round-trips the single-row read.
+func TestAppControlREST_GetHostGroup_HappyPath(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	list := r.do(t, http.MethodGet, "/api/v1/app-control/host-groups", nil)
+	var body struct {
+		HostGroups []rulesapi.HostGroup `json:"host_groups"`
+	}
+	require.NoError(t, json.NewDecoder(list.Body).Decode(&body))
+	list.Body.Close()
+	require.NotEmpty(t, body.HostGroups)
+
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/host-groups/"+i64(body.HostGroups[0].ID), nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got rulesapi.HostGroup
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	assert.Equal(t, body.HostGroups[0].ID, got.ID)
+	assert.Equal(t, rulesapi.DefaultHostGroupName, got.Name)
+}
+
+func TestAppControlREST_GetHostGroup_NotFound(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/host-groups/99999999", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+	assert.Equal(t, "application_control.host_group_not_found", errBody.Error)
+}
+
+// TestAppControlREST_GetHostGroup_InvalidID pins the typed 400 contract for malformed path ids (non-numeric, zero, negative).
+// CodeRabbit on PR #195 noted the missing coverage: the handler parses {id} via parsePositiveInt64Path which short-circuits
+// these shapes to errCodeInvalidQuery, and the test surface should exercise that branch directly.
+func TestAppControlREST_GetHostGroup_InvalidID(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"non-numeric id", "/api/v1/app-control/host-groups/abc"},
+		{"zero id", "/api/v1/app-control/host-groups/0"},
+		{"negative id", "/api/v1/app-control/host-groups/-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, tc.path, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errBody struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+			assert.Equal(t, "application_control.invalid_query", errBody.Error)
+		})
+	}
+}
+
+// TestAppControlREST_ListAssignments_SurfacesSeedRow: the seed Default policy has exactly one assignment row pointing at
+// the all-hosts group. Pinning the wire shape so a Phase B regression that drops the assignment is caught.
+func TestAppControlREST_ListAssignments_SurfacesSeedRow(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+i64(policyID)+"/assignments", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Assignments []rulesapi.Assignment `json:"assignments"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Len(t, body.Assignments, 1)
+	assert.Equal(t, policyID, body.Assignments[0].PolicyID)
+	assert.NotZero(t, body.Assignments[0].HostGroupID)
+	assert.Equal(t, 0, body.Assignments[0].Priority)
+}
+
+// TestAppControlREST_ListAssignments_UnknownPolicyReturnsEmpty: the assignments endpoint does NOT 404 on a stale policy id;
+// returning [] is the correct shape. Pinning that contract here so a Phase B regression that adds a 404 check is caught.
+func TestAppControlREST_ListAssignments_UnknownPolicyReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies/99999999/assignments", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Assignments []rulesapi.Assignment `json:"assignments"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Empty(t, body.Assignments)
+}
+
+// TestAppControlREST_HostGroupMutations_ReadOnlyInPhaseA pins the 405 + typed error contract for every host-group +
+// assignment mutation route. Each case asserts the status code, the typed application_control.read_only_in_phase_a code,
+// and (for non-leaf paths) the Allow: GET header per RFC 9110.
+func TestAppControlREST_HostGroupMutations_ReadOnlyInPhaseA(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	list := r.do(t, http.MethodGet, "/api/v1/app-control/host-groups", nil)
+	var listBody struct {
+		HostGroups []rulesapi.HostGroup `json:"host_groups"`
+	}
+	require.NoError(t, json.NewDecoder(list.Body).Decode(&listBody))
+	list.Body.Close()
+	require.NotEmpty(t, listBody.HostGroups)
+	groupID := listBody.HostGroups[0].ID
+
+	cases := []struct {
+		name           string
+		method         string
+		path           string
+		expectAllowGET bool
+	}{
+		{"POST /host-groups", http.MethodPost, "/api/v1/app-control/host-groups", true},
+		{"PATCH /host-groups/{id}", http.MethodPatch, "/api/v1/app-control/host-groups/" + i64(groupID), true},
+		{"DELETE /host-groups/{id}", http.MethodDelete, "/api/v1/app-control/host-groups/" + i64(groupID), true},
+		{"POST /policies/{id}/assignments", http.MethodPost, "/api/v1/app-control/policies/" + i64(policyID) + "/assignments", true},
+		// The /assignments/{group_id} leaf has no GET surface today; Allow header is empty.
+		{"DELETE /assignments/{group_id}", http.MethodDelete, "/api/v1/app-control/policies/" + i64(policyID) + "/assignments/" + i64(groupID), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, tc.method, tc.path, map[string]any{"placeholder": "phase A test"})
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+			var body struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			assert.Equal(t, "application_control.read_only_in_phase_a", body.Error)
+			if tc.expectAllowGET {
+				assert.Equal(t, "GET", resp.Header.Get("Allow"))
+			} else {
+				assert.Empty(t, resp.Header.Get("Allow"), "leaf route with no GET surface must emit empty Allow")
+			}
+		})
+	}
+}

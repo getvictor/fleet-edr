@@ -109,6 +109,24 @@ func (s *Service) ListRulesAcrossPolicies(
 	return s.store.ListRulesAcrossPolicies(ctx, req)
 }
 
+// ListHostGroups is the GET /host-groups endpoint's backend; pure pass-through, leaves room for future read-side decoration
+// (member-count rollup, assignment summary) at the orchestrator layer without touching the handler.
+func (s *Service) ListHostGroups(ctx context.Context) ([]api.HostGroup, error) {
+	return s.store.ListHostGroups(ctx)
+}
+
+// GetHostGroupByID is the GET /host-groups/{id} endpoint's backend. Returns ErrAppControlHostGroupNotFound when the row does
+// not exist so the handler maps to HTTP 404.
+func (s *Service) GetHostGroupByID(ctx context.Context, hostGroupID int64) (api.HostGroup, error) {
+	return s.store.GetHostGroupByID(ctx, hostGroupID)
+}
+
+// ListAssignmentsForPolicy is the GET /policies/{id}/assignments endpoint's backend. Pass-through; returns the raw assignment
+// rows so a future UI can render priority + ordering independent of the group metadata.
+func (s *Service) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([]api.Assignment, error) {
+	return s.store.ListAssignmentsForPolicy(ctx, policyID)
+}
+
 // GetPolicyWithRules returns the policy row plus its rules in one call so the policy-detail page can render without an extra round
 // trip. Returns ErrAppControlPolicyNotFound when the policy is absent; the handler maps that to HTTP 404.
 func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
