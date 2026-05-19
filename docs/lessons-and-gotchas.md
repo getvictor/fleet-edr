@@ -152,6 +152,46 @@ disabled. Apply it via `codesign --entitlements`.
 Path strings and other dynamic values show as `<private>` in log output. Use
 `.public` privacy level in development, `.private(mask: .hash)` in production.
 
+### Ad-hoc-signed host extension causes ESF to redact team_id + force is_platform_binary
+
+When the ESF host extension itself is not Developer-ID-signed + notarized, ESF
+applies a per-client redaction: `target.team_id` returns `""` and
+`target.is_platform_binary` returns `true` for **every** exec the client sees,
+including unambiguously third-party Developer ID-signed binaries (issue #187
+quantified 393/393 exec events redacted on edr-dev). It is NOT a per-binary
+`CS_PLATFORM_BINARY` classification. The dev VM extension is ad-hoc-signed
+(`codesign -d` reports `adhoc, linker-signed`), which trips the redaction.
+
+Effect on app-control rules:
+
+- **TEAMID rules** cannot fire by `team_id` alone — the field is always empty.
+- **SIGNINGID rules** degrade from `<TeamID>:<bundle.id>` to
+  `platform:<bundle.id>` for every target, regardless of who actually signed
+  the binary.
+- **CDHASH** and **BINARY** rules are unaffected; the kernel still reports the
+  real `cdhash` and the binary's bytes are unchanged.
+
+Workaround (in tree):
+[`SigningInfoFallback`](../extension/edr/extension/SigningInfoFallback.swift)
+reads the binary's signing block via `SecCodeCopySigningInformation` — the
+same path `codesign -dvv` walks — and caches the result per (inode, mtime).
+`ESFSubscriber.buildAuthTuple` consults it whenever `target.team_id` is
+empty, so TEAMID matches and the SIGNINGID `<TeamID>:<bundle.id>` shape both
+recover on edr-dev.
+
+Reproducer (after a fresh agent queue):
+
+```bash
+curl -sL 'https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_macOS_arm64.zip' -o gh.zip
+unzip -q gh.zip && sudo install -m 0755 gh_2.62.0_macOS_arm64/bin/gh /usr/local/bin/gh
+# push a TEAMID rule for VEKTX9H2N7 from the server, then:
+/usr/local/bin/gh --version
+# AUTH_EXEC DENIED in the extension log; application_control_block event on the wire.
+```
+
+Long-term fix: notarize the extension on a release / QA channel; the fallback
+becomes a no-op once ESF stops redacting.
+
 ## Code signing and certificates
 
 ### Team ID is public, not a secret

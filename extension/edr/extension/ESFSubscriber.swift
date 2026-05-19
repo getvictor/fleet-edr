@@ -191,13 +191,19 @@ final class ESFSubscriber: Sendable {
         // non-hardened binary silently no-op for this exec.
         let cdhash: String? = isHardenedRuntime(flags: target.codesigning_flags) ? cdhashHexString(from: target.cdhash) : nil
 
-        // Resolve the canonical TeamID. On SIP-on production environments target.team_id is the truth and the
-        // fallback is never consulted. On SIP-off dev VMs the kernel can flag a developer-signed binary as
-        // CS_PLATFORM_BINARY (flags bit 0x04000000); ESF then reports is_platform_binary=true and team_id=""
-        // because platform binaries are Apple's by convention. Without a fallback, every TEAMID rule on a
-        // SIP-off VM is effectively dead even when the binary's signing block declares a TeamIdentifier.
-        // SigningInfoFallback reads the binary via SecCodeCopySigningInformation -- the same path
-        // `codesign -dvv` walks -- and caches the result per (inode, mtime).
+        // Resolve the canonical TeamID. For Developer-ID-signed targets on notarized release hosts ESF
+        // reports the real team_id and the fallback branch is skipped; the fallback still fires for
+        // ad-hoc-signed or unsigned targets even there and correctly returns nil. On the edr-dev VM the
+        // extension itself is ad-hoc-signed (`codesign -d` reports `adhoc, linker-signed`); ESF responds
+        // by redacting target.team_id="" and forcing target.is_platform_binary=true for EVERY exec the
+        // client sees -- a per-client policy on ESF clients whose host extension is not Developer-ID-signed
+        // + notarized, not a per-binary CS_PLATFORM_BINARY classification. Quantified on a fresh queue:
+        // 393/393 exec events redacted (see issue #187). Without a fallback every TEAMID rule on edr-dev
+        // is effectively dead and every SIGNINGID rule degrades to the `platform:<bundle.id>` shape
+        // regardless of who actually signed the binary. SigningInfoFallback reads the binary via
+        // SecCodeCopySigningInformation -- the same path `codesign -dvv` walks -- and caches the result
+        // per (inode, mtime). The fix on a real release host is to notarize the extension; until then the
+        // fallback keeps edr-dev usable for end-to-end QA.
         let teamID: String
         if !esTeamID.isEmpty {
             teamID = esTeamID
@@ -206,12 +212,13 @@ final class ESFSubscriber: Sendable {
         }
 
         // SIGNINGID is prefixed: "<TeamID>:<bundle.id>" for third-party signed binaries,
-        // "platform:<bundle.id>" for Apple platform binaries (those whose
-        // is_platform_binary flag is set). The server's validator accepts both shapes. When the kernel
-        // mis-classifies a dev-signed binary as platform (SIP-off CS_PLATFORM_BINARY case above), the
-        // fallback team_id distinguishes a genuine Apple platform binary (real platform: prefix) from a
-        // dev-signed one that should carry the "<TeamID>:<bundle.id>" prefix -- otherwise the SIGNINGID
-        // walk on SIP-off VMs would also lose its discriminator alongside the TEAMID walk.
+        // "platform:<bundle.id>" for Apple platform binaries (those whose is_platform_binary flag is set).
+        // The server's validator accepts both shapes. Under the ad-hoc-extension redaction described above
+        // ESF reports is_platform_binary=true even for unambiguously third-party binaries (Developer ID
+        // signed `gh` was the issue #187 reproducer); the fallback team_id is what separates a genuine
+        // Apple platform binary (real `platform:` prefix) from a third-party one that should carry the
+        // "<TeamID>:<bundle.id>" prefix. Without that branch the SIGNINGID walk on edr-dev would lose its
+        // discriminator alongside TEAMID.
         let signingIDPrefixed: String?
         if signingID.isEmpty {
             signingIDPrefixed = nil
