@@ -22,10 +22,15 @@
 // stalled agent reconnects within a single reconcile interval.
 #define HELLO_ACK_TIMEOUT_NS (5LL * NSEC_PER_SEC)
 
-// Per-connection state.
+// Per-connection state. hello_ack_sem is signalled once for every inbound
+// "hello-ack" dictionary the extension sends; both the connect-time
+// handshake and xpc_bridge_ping wait on it. The slot retains one reference;
+// the connection's event handler captures the same semaphore for the lifetime
+// of the connection. See xpc_bridge_disconnect for the teardown ordering.
 typedef struct {
     xpc_connection_t connection;
     dispatch_queue_t queue;
+    dispatch_semaphore_t hello_ack_sem;
     int in_use;
 } xpc_bridge_slot;
 
@@ -77,11 +82,20 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     xpc_bridge_error_fn error_cb = on_error;
 
     // hello-ack synchronisation (issue #178). The block below signals this
-    // semaphore on the FIRST inbound hello-ack message; xpc_bridge_connect
-    // waits on it after sending hello so a stale Mach port binding surfaces
-    // as a clean connect failure rather than a silent one-way channel.
+    // semaphore on every inbound hello-ack message; xpc_bridge_connect waits
+    // on it once after sending the initial hello, and xpc_bridge_ping waits
+    // on it again for each subsequent heartbeat. A stale Mach port binding or
+    // a mid-session channel break therefore surfaces as a wait timeout rather
+    // than as a silent one-way channel.
     dispatch_semaphore_t hello_ack_sem = dispatch_semaphore_create(0);
-    __block int got_hello_ack = 0;
+    if (hello_ack_sem == NULL) {
+        xpc_release(conn);
+        dispatch_release(queue);
+        pthread_mutex_lock(&g_slots_mutex);
+        g_slots[handle].in_use = 0;
+        pthread_mutex_unlock(&g_slots_mutex);
+        return -1;
+    }
 
     xpc_connection_set_event_handler(conn, ^(xpc_object_t event) {
       xpc_type_t type = xpc_get_type(event);
@@ -104,18 +118,14 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
       }
 
       if (type == XPC_TYPE_DICTIONARY) {
-          // Hello-ack short-circuit: the extension replies to our hello with
-          // a "type":"hello-ack" message. Signal the connect-time semaphore
-          // exactly once; subsequent acks (the extension may send more if
-          // we send more hellos in the future) are ignored. The check runs
-          // on every inbound dictionary, but the cost is one strcmp per
-          // event — negligible against the JSON decode that comes after.
+          // Hello-ack short-circuit: the extension replies to every "hello"
+          // with a "type":"hello-ack" message (initial handshake and every
+          // heartbeat). Signal the slot's semaphore so the matching waiter
+          // (connect or ping) wakes up. The cost is one strcmp per inbound
+          // dictionary, negligible against the JSON decode that follows.
           const char *msg_type = xpc_dictionary_get_string(event, "type");
           if (msg_type != NULL && strcmp(msg_type, "hello-ack") == 0) {
-              if (!got_hello_ack) {
-                  got_hello_ack = 1;
-                  dispatch_semaphore_signal(hello_ack_sem);
-              }
+              dispatch_semaphore_signal(hello_ack_sem);
               return;
           }
           // The extension sends events as a dictionary with a "data" key
@@ -146,33 +156,34 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     // Wait for the extension's hello-ack. If it doesn't arrive within the
     // timeout the bidirectional channel is broken (issue #178): cancel and
     // return failure so the caller's reconnect loop retries against a fresh
-    // Mach port binding. The semaphore stays alive past return -- ARC retains
-    // it via the block reference; the block itself is released when the
-    // connection is released below.
+    // Mach port binding.
     dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, HELLO_ACK_TIMEOUT_NS);
     if (dispatch_semaphore_wait(hello_ack_sem, deadline) != 0) {
         // Cancel is async, but xpc_release + dispatch_release here are the
         // only place we drop our refcounts. Without them a reconnect loop
         // hitting repeated timeouts (stale Mach binding, extension wedged)
-        // leaks one xpc_connection_t + one dispatch_queue_t per attempt.
-        // Mirrors xpc_bridge_disconnect's teardown order.
+        // leaks one xpc_connection_t + one dispatch_queue_t + one semaphore
+        // per attempt. Mirrors xpc_bridge_disconnect's teardown order.
         xpc_connection_cancel(conn);
         xpc_release(conn);
         dispatch_release(queue);
+        dispatch_release(hello_ack_sem);
         pthread_mutex_lock(&g_slots_mutex);
         g_slots[handle].in_use = 0;
         pthread_mutex_unlock(&g_slots_mutex);
         return -1;
     }
 
-    // Publish the conn + queue under the slots mutex so a concurrent
-    // xpc_bridge_send_application_control cannot observe (in_use=1, connection=NULL).
-    // The earlier reservation marked in_use=1 outside this critical section
-    // for liveness; this second critical section commits the actual handles
-    // atomically with respect to send/disconnect.
+    // Publish the conn + queue + semaphore under the slots mutex so a
+    // concurrent xpc_bridge_send_application_control or xpc_bridge_ping
+    // cannot observe (in_use=1, connection=NULL). The earlier reservation
+    // marked in_use=1 outside this critical section for liveness; this
+    // second critical section commits the actual handles atomically with
+    // respect to send/ping/disconnect.
     pthread_mutex_lock(&g_slots_mutex);
     g_slots[handle].connection = conn;
     g_slots[handle].queue = queue;
+    g_slots[handle].hello_ack_sem = hello_ack_sem;
     pthread_mutex_unlock(&g_slots_mutex);
 
     return handle;
@@ -210,6 +221,52 @@ int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t 
     return 0;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int xpc_bridge_ping(int handle, uint64_t timeout_ns) {
+    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS) {
+        return -1;
+    }
+
+    // Snapshot the slot's connection + semaphore under the mutex and retain
+    // both so a concurrent disconnect cannot free them out from under us
+    // while we are waiting. Pairing release happens at the end of this
+    // function regardless of success or timeout.
+    pthread_mutex_lock(&g_slots_mutex);
+    if (!g_slots[handle].in_use) {
+        pthread_mutex_unlock(&g_slots_mutex);
+        return -1;
+    }
+    xpc_connection_t conn = g_slots[handle].connection;
+    dispatch_semaphore_t sem = g_slots[handle].hello_ack_sem;
+    if (conn == NULL || sem == NULL) {
+        pthread_mutex_unlock(&g_slots_mutex);
+        return -1;
+    }
+    xpc_retain(conn);
+    dispatch_retain(sem);
+    pthread_mutex_unlock(&g_slots_mutex);
+
+    // Drain any pending signals so the semaphore count starts at zero. The
+    // initial connect handshake consumes the first signal already, but a
+    // prior ping with a slow ack could leave a stale signal that would let
+    // the next wait return immediately without the extension actually being
+    // alive (e.g. ack arrived after our previous timeout fired).
+    while (dispatch_semaphore_wait(sem, DISPATCH_TIME_NOW) == 0) {
+    }
+
+    xpc_object_t hello = xpc_dictionary_create_empty();
+    xpc_dictionary_set_string(hello, "type", "hello");
+    xpc_connection_send_message(conn, hello);
+    xpc_release(hello);
+
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_ns);
+    int result = (dispatch_semaphore_wait(sem, deadline) == 0) ? 0 : -1;
+
+    xpc_release(conn);
+    dispatch_release(sem);
+    return result;
+}
+
 void xpc_bridge_disconnect(int handle) {
     if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS) {
         return;
@@ -223,8 +280,10 @@ void xpc_bridge_disconnect(int handle) {
 
     xpc_connection_t conn = g_slots[handle].connection;
     dispatch_queue_t queue = g_slots[handle].queue;
+    dispatch_semaphore_t sem = g_slots[handle].hello_ack_sem;
     g_slots[handle].connection = NULL;
     g_slots[handle].queue = NULL;
+    g_slots[handle].hello_ack_sem = NULL;
     g_slots[handle].in_use = 0;
     pthread_mutex_unlock(&g_slots_mutex);
 
@@ -234,5 +293,13 @@ void xpc_bridge_disconnect(int handle) {
     }
     if (queue != NULL) {
         dispatch_release(queue);
+    }
+    if (sem != NULL) {
+        // The connection's event handler block still holds its captured
+        // reference to this semaphore. That ref dies when the connection
+        // finishes cancellation and releases its event handler. Concurrent
+        // pings already observed in_use=0 above and bailed out before
+        // touching the slot, so dropping the slot's ref here is safe.
+        dispatch_release(sem);
     }
 }

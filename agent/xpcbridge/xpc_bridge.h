@@ -36,4 +36,14 @@ void xpc_bridge_disconnect(int handle);
 // received it.
 int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t len);
 
+// Send a "hello" handshake message and synchronously wait for the extension's
+// "hello-ack" reply. timeout_ns caps the wait. Returns 0 if the ack arrived
+// within the window, -1 on timeout or if the handle/connection is invalid.
+// Used as a periodic liveness probe (issue #178): macOS XPC can route an
+// agent's open connection to a stale Mach port after a system-extension
+// respawn, with no error event ever surfacing. A ping timeout is the agent's
+// positive signal that the channel has gone dark and a reconnect is needed.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int xpc_bridge_ping(int handle, uint64_t timeout_ns);
+
 #endif

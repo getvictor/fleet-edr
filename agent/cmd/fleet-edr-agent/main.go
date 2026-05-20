@@ -63,6 +63,13 @@ const (
 	// receiverEventBuffer is the channel buffer between the XPC reader goroutine
 	// and the agent's enqueue loop. 4 KiB events is one ring of slow-drain margin.
 	receiverEventBuffer = 4096
+
+	// xpcHeartbeatInterval is the cadence at which the agent sends a "hello" ping to the extension over XPC to detect a silently-dead
+	// channel (issue #178). 10s + xpcHeartbeatPingTimeout = ≤15s detection window, safely under the issue's ≤30s acceptance bound.
+	xpcHeartbeatInterval = 10 * time.Second
+	// xpcHeartbeatPingTimeout is how long the agent waits for a "hello-ack" per heartbeat. 5s matches HELLO_ACK_TIMEOUT_NS in
+	// xpc_bridge.c and is comfortably above the observed round-trip latency (1-3 ms on edr-dev).
+	xpcHeartbeatPingTimeout = 5 * time.Second
 )
 
 func main() {
@@ -405,7 +412,7 @@ func runReceiverOnce(
 	if dispatcher != nil {
 		dispatcher.set(recv)
 	}
-	reconnect = pipeEvents(ctx, logger, recv, q, pt, updateTable)
+	reconnect = pipeEvents(ctx, logger, recv, xpcService, q, pt, updateTable)
 	if dispatcher != nil {
 		dispatcher.clear()
 	}
@@ -414,11 +421,32 @@ func runReceiverOnce(
 }
 
 // pipeEvents reads from the receiver and enqueues events until ctx is cancelled or XPC errors.
-func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receiver, q *queue.Queue, pt *proctable.Table, updateTable bool) bool {
+//
+// A background heartbeat goroutine sends a periodic "hello" XPC ping (issue #178). The macOS
+// XPC kernel side does not surface a "channel routed to a stale Mach port after sysextd
+// respawned the extension" failure as an error event — the agent's connection appears
+// healthy but every send goes to a dead port. The heartbeat probe forces a positive round
+// trip; on timeout we treat the channel as broken and reconnect, restoring event flow within
+// the ≤30s acceptance window.
+func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receiver, xpcService string, q *queue.Queue,
+	pt *proctable.Table, updateTable bool,
+) bool {
+	heartbeatDone := make(chan struct{})
+	heartbeatFailed := make(chan struct{}, 1)
+	go runXPCHeartbeat(ctx, logger, recv, xpcService, xpcHeartbeatInterval, xpcHeartbeatPingTimeout,
+		heartbeatDone, heartbeatFailed)
+	defer close(heartbeatDone)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-heartbeatFailed:
+			// Heartbeat ping did not get a "hello-ack" within the timeout window; the XPC channel is one-way dead even though no error
+			// event arrived. Returning reconnect=true sends us back through runReceiverLoop which rebuilds the connection against a
+			// fresh Mach port binding.
+			logger.WarnContext(ctx, "xpc heartbeat failed, reconnecting", "service", xpcService)
+			return true
 		case evt := <-recv.Events():
 			if updateTable {
 				updateProcTable(pt, evt.Data)
@@ -434,6 +462,45 @@ func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receive
 					errCode == receiver.ErrorConnectionInterrupted ||
 					errCode == receiver.ErrorTerminated)
 			return true
+		}
+	}
+}
+
+// xpcPinger is the subset of *receiver.Receiver the heartbeat loop touches. Defined as a local interface so the loop can be exercised
+// in unit tests without standing up a real XPC connection.
+type xpcPinger interface {
+	Ping(timeout time.Duration) error
+}
+
+// runXPCHeartbeat periodically pings the XPC peer to detect a silently-dead channel. On ping failure or context cancellation the
+// goroutine exits; on failure it also signals failed once so pipeEvents can trigger a reconnect. The done channel is closed by
+// pipeEvents when it returns, ensuring the heartbeat goroutine does not outlive its receiver.
+func runXPCHeartbeat(
+	ctx context.Context,
+	logger *slog.Logger,
+	pinger xpcPinger,
+	xpcService string,
+	interval, timeout time.Duration,
+	done <-chan struct{},
+	failed chan<- struct{},
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			if err := pinger.Ping(timeout); err != nil {
+				logger.WarnContext(ctx, "xpc heartbeat ping failed", "service", xpcService, "err", err)
+				select {
+				case failed <- struct{}{}:
+				default:
+				}
+				return
+			}
 		}
 	}
 }
