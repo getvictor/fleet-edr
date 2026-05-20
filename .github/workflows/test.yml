@@ -129,6 +129,13 @@ jobs:
         # platform-portable. See docs/testing-strategy.md.
         run: task build:agent:linux
 
+      - name: Build headless agent binary (UAT plan M2 acceptance)
+        # The headless binary wires the same agent pipeline as production but
+        # with the stub receiver, and exposes a unix-socket control plane so
+        # test scenarios can inject events. Verifying it builds keeps the M3
+        # integration job unblocked.
+        run: task build:agent:headless
+
       - name: Run agent tests with coverage
         run: task test:go:agent:coverage
 

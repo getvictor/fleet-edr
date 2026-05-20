@@ -69,15 +69,20 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 
 ### Headless agent + server (L3)
 
-- The Go core of the agent (queue, uploader, commander, reconciler, enrolment) runs in CI against the real server, on
-  Linux, with the macOS extension dependency stubbed out behind a build tag.
-- Lives in `test/integration/agentserver/` (binary plus tests).
-- The macOS-only packages (`agent/receiver`, `agent/xpcbridge`) are split: `//go:build darwin` for the CGo
-  implementation, `//go:build !darwin` for a stub receiver that exposes an `Inject` entry point. Both implement the
-  same `Receiver` interface so the rest of the agent code is platform-agnostic.
-- A headless binary at `cmd/fleet-edr-agent-headless` wires the same agent packages as production with the stub
-  receiver, and exposes a small local control plane (unix socket) that tests use to inject scenarios. See "Reusable
-  artefacts" below.
+- The Go core of the agent (queue, uploader, enrolment) runs in CI against the real server, on Linux, with the macOS
+  extension dependency stubbed out behind build tags.
+- The macOS-only packages (`agent/receiver`, `agent/xpcbridge`) are split with build tags: `//go:build darwin && cgo`
+  for the CGo XPC implementation, `//go:build !darwin || !cgo` for the stub receiver. The stub exposes an `Inject`
+  entry point so the headless binary and tests can deliver events as if they had arrived from the XPC peer. The
+  production agent's call sites use `*receiver.Receiver` directly; the build tags select the right struct per
+  platform without an interface. UAT plan milestone **M1** delivered this split; the linux compile invariant is
+  enforced by `task build:agent:linux` in CI (`agent-test` job).
+- The headless binary `agent/cmd/fleet-edr-agent-headless` wires the same `queue + uploader + enrollment` pipeline as
+  production but with the stub receiver, and exposes a small local control plane on a unix socket:
+  - `POST /event`: inject one JSON event into the stub receiver's events channel.
+  - `GET /state`: return `{events_injected, inject_errors, last_inject_at_unix, queue_depth}`.
+  Built by `task build:agent:headless` (also gated in CI). UAT plan milestone **M2** delivered this binary; the L3
+  end-to-end CI job that drives it with a YAML scenario corpus lands in **M3** at `test/integration/agentserver/`.
 
 ### Browser E2E with the fake agent (L4)
 

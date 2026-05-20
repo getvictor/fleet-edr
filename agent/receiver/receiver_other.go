@@ -64,3 +64,23 @@ func (r *Receiver) Ping(timeout time.Duration) error { return ErrUnsupported }
 func (r *Receiver) Disconnect() {
 	// Intentionally empty: stub has no resources to release. See Connect above for the platform-support rationale.
 }
+
+// Inject pushes a raw JSON event onto the receiver's Events() channel as if it had arrived from the XPC peer. Only the non-darwin / no-cgo
+// stub exposes this entry point; the production XPC receiver receives events from the kernel via the system extension and has no
+// in-process injection surface. The headless agent binary (agent/cmd/fleet-edr-agent-headless) uses Inject from its control-plane HTTP
+// handler so test scenarios can drive the queue + uploader pipeline without a real ESF extension.
+//
+// Non-blocking by design: if the events buffer is full (the Receiver was constructed with a fixed buffer in New), Inject returns
+// ErrBufferFull immediately rather than blocking the HTTP handler. A test scenario that legitimately needs higher throughput should
+// either size the buffer up at construction time or pace its injections.
+func (r *Receiver) Inject(b []byte) error {
+	select {
+	case r.events <- Event{Data: b}:
+		return nil
+	default:
+		return ErrBufferFull
+	}
+}
+
+// ErrBufferFull is returned by Inject when the events buffer is at capacity.
+var ErrBufferFull = errors.New("receiver: event buffer full")

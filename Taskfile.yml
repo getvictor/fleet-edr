@@ -68,6 +68,22 @@ tasks:
     cmds:
       - go build ./agent/...
 
+  build:agent:headless:
+    desc: |
+      Build the headless agent binary (UAT plan M2) for linux/amd64 into
+      agent/tmp/fleet-edr-agent-headless. The headless binary wires the same
+      enrollment + queue + uploader pipeline as the production agent but uses
+      the non-darwin stub receiver and exposes a unix-socket control plane so
+      test scenarios can inject events directly. Used by the future L3
+      headless-agent + server integration job; today this target's primary
+      consumer is local development and the CI compile-invariant check.
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: 0
+    cmds:
+      - go build -o agent/tmp/fleet-edr-agent-headless ./agent/cmd/fleet-edr-agent-headless
+
   ui:setup:
     desc: |
       Install UI npm dependencies. Wired as a dep of build:ui and dev:ui so a fresh clone
@@ -144,18 +160,39 @@ tasks:
       Run Go tests with race detector for agent + shared code only. No DB
       required. Use from CI's agent-test job so the server tests don't run
       on a runner that doesn't have MySQL.
+
+      Second invocation: the headless agent's tests (UAT plan M2) live behind
+      `//go:build !darwin || !cgo` and are skipped by the first invocation
+      under the default CGO_ENABLED=1. Run them with cgo disabled so they
+      execute on every PR.
     cmds:
       - go test -race -count=1 -timeout=10m ./agent/... ./internal/...
+      - CGO_ENABLED=0 go test -count=1 -timeout=10m ./agent/cmd/fleet-edr-agent-headless/...
 
   test:go:agent:coverage:
     desc: |
       Agent + shared coverage flavor of test:go:agent. Emits coverage-agent.out
       which CI uploads as an artifact for the Sonar scan job.
+
+      Two test runs: the default cgo + race run for the production agent, then
+      a CGO_ENABLED=0 run for the headless binary (UAT plan M2). The headless
+      package's files carry `//go:build !darwin || !cgo` and are excluded from
+      the first run; the second run picks them up. The two profiles are merged
+      by concatenation because each profile records a disjoint set of files
+      (the build-tag split guarantees no overlap), so there are no per-line
+      conflicts to resolve.
     cmds:
       # See comment on test:go:server:coverage. Same -coverpkg fix so agent
       # tests that exercise shared internal/ packages (observability, envparse)
       # contribute to those packages' coverage on Sonar.
       - go test -race -count=1 -timeout=10m -coverpkg=./agent/...,./internal/... -coverprofile=coverage-agent.out -covermode=atomic ./agent/... ./internal/...
+      # CGO_ENABLED=0 run for the headless package. -race is dropped because the race detector requires cgo; the headless integration
+      # test is single-process so its absence is acceptable.
+      - CGO_ENABLED=0 go test -count=1 -timeout=10m -coverpkg=./agent/...,./internal/... -coverprofile=coverage-agent-headless.out -covermode=atomic ./agent/cmd/fleet-edr-agent-headless/...
+      # Append the headless profile to coverage-agent.out, stripping its mode header. Profiles cover disjoint files (build-tag split),
+      # so concatenation yields a valid merged profile that Sonar consumes as a single Go coverage report.
+      - tail -n +2 coverage-agent-headless.out >> coverage-agent.out
+      - rm -f coverage-agent-headless.out
       - go tool cover -func=coverage-agent.out | tail -1
 
   test:go:server:
