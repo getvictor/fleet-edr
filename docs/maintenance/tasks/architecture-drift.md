@@ -85,7 +85,7 @@ deserves an ADR amendment, not silence.
 
 ## Prompt template
 
-```
+```text
 Run the architecture-drift audit defined in docs/maintenance/tasks/architecture-drift.md.
 
 Step 1 - re-read docs/adr/0004-modular-monolith-bounded-contexts.md.

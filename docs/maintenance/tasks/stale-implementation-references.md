@@ -87,7 +87,7 @@ A PR. If no findings, append `YYYY-MM-DD: stale-implementation-references - no f
 
 ## Prompt template
 
-```
+```text
 Run the stale-implementation-references sweep defined in
 docs/maintenance/tasks/stale-implementation-references.md.
 

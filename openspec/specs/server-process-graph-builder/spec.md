@@ -216,4 +216,3 @@ arrives, producing a single record that is born already-exited.
 - **AND** no record is synthesized for that PID
 - **AND** a much-later snapshot exec for the same PID is treated as a fresh insert without inheriting the long-expired
   exit, so a recycled PID cannot pick up a stale exit
-

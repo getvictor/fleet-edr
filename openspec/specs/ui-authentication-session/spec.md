@@ -241,4 +241,3 @@ session identifier and a cross-site form submission cannot silently authenticate
 - **THEN** the cookie carries HttpOnly
 - **AND** the cookie carries SameSite=Lax
 - **AND** the cookie carries Secure when the server is configured for TLS
-

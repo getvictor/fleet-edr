@@ -23,6 +23,7 @@ Excludes: `claude/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g
 1. Find all comments matching `TODO|FIXME|XXX|HACK|DEPRECATED` across the full scope (case-sensitive in code; the patterns below
    match both line comments `//` and block comments `/* ... */`, accepting some noise from string literals that contain the
    marker words):
+
    ```bash
    # Go
    grep -rnE '(\/\/|\/\*).*\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' server agent internal test tools scripts schema
@@ -34,6 +35,7 @@ Excludes: `claude/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g
    grep -rnE '\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b' Taskfile.yml lefthook.yml docker-compose*.yml
    git ls-files '*.md' | xargs grep -nE '\b(TODO|FIXME|XXX|HACK|DEPRECATED)\b'
    ```
+
 2. For each hit, decide:
 
    | Verdict | Action |
@@ -53,7 +55,7 @@ to `docs/maintenance/log.md`.
 
 ## Prompt template
 
-```
+```text
 Run the TODO/FIXME sweep defined in docs/maintenance/tasks/todo-fixme-sweep.md.
 
 Find every TODO/FIXME/XXX/HACK/DEPRECATED in committed source (server/, agent/, internal/, ui/src,

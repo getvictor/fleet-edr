@@ -131,7 +131,7 @@ sudo installer -pkg ~/Downloads/fleet-edr-v0.1.0.pkg -target /
 
 Expect:
 
-```
+```text
 installer: Package name is Fleet EDR
 installer: Installing at base path /
 installer: The install was successful.

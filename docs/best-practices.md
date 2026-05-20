@@ -315,7 +315,7 @@ floor for any project that wants enterprise adoption.
   lacks shrinking. PBT does NOT replace example-based tests for wire-format
   pinning, security-critical regressions, or named bug repros — those still
   want explicit values. See the detection bounded context's `internal/tests/`
-  + `api/api_test.go` for the canonical patterns.
+  - `api/api_test.go` for the canonical patterns.
 - [ ] **Snapshot tests** for the React process-tree D3 layout
 - [ ] **Visual-regression tests** (Playwright screenshots or Chromatic) on UI components
 - [ ] **Accessibility (a11y) tests**: `@axe-core/react` in component tests + `pa11y` on
@@ -372,7 +372,8 @@ genuine differentiator versus most competitors.
 
 ## 8. API and protocol design
 
-- [x] Stable API URL prefix (`/api/`); evolve in place rather than bumping a URL version, since v1 → v2 transitions rarely happen and are the wrong layer for protocol versioning when they do
+- [x] Stable API URL prefix (`/api/`); evolve in place rather than bumping a URL version, since v1 → v2 transitions
+  rarely happen and are the wrong layer for protocol versioning when they do
 - [x] JSON event schema (`schema/events.json` -- consumed by both agent and server)
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration
@@ -478,7 +479,7 @@ genuine differentiator versus most competitors.
 - [x] **Apple Hardened Runtime** with the minimum entitlement set audited.
   `packaging/pkg/build.sh` re-signs the agent, system extension, network
   extension, and the outer `Fleet EDR.app` bundle with `--options runtime`
-  + `--timestamp` and per-binary entitlements files. Each entitlements
+  - `--timestamp` and per-binary entitlements files. Each entitlements
   plist carries only what the OS requires for that component to function:
   `endpoint-security.client` on the sysext;
   `networking.networkextension` + an app-group on the netext;

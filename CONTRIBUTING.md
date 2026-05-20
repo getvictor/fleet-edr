@@ -36,7 +36,7 @@ CI is the backstop, not the floor. If a check fails locally, fix it before pushi
 | Swift | [`.swiftlint.yml`](.swiftlint.yml) (run with `--strict`) |
 | C bridge | [`.clang-tidy`](.clang-tidy), [`.clang-format`](.clang-format) |
 | GitHub Actions | `actionlint` + `zizmor` (security audit) |
-| Markdown / prose | Sentence case headings, wrap at 140 chars, no em-dashes |
+| Markdown / prose | [`.markdownlint-cli2.yaml`](.markdownlint-cli2.yaml) (run with `task lint:md`); sentence case headings, wrap at 140 chars, no em-dashes |
 | Commits | Imperative mood, focused scope, one logical change per commit |
 
 If a linter disagrees with a specific change, prefer fixing the code over disabling the rule. Suppression with a `nolint` /
@@ -49,6 +49,11 @@ in Go. Integration tests hit a real MySQL on port 3317; do not mock the database
 
 Coverage is measured by SonarCloud; the new-code coverage gate is 80%. PRs that add code without adding tests will fail the
 gate.
+
+For the full picture (the seven-layer test pyramid, the fake-agent / headless-agent integration layer, the captured ESF
+event corpus, the detection-efficacy corpus, and spec-to-test traceability), see
+[`docs/testing-strategy.md`](docs/testing-strategy.md). Read it before adding a new detection rule, touching the agent / server
+wire format, changing anything in `extension/edr/`, or modifying a SHALL / MUST scenario under `openspec/specs/`.
 
 ## Pull requests
 

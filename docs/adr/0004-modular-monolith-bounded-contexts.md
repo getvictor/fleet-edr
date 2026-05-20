@@ -25,9 +25,9 @@ identity, and an admin API surface. Today most of these packages share a
 single `server/store/` god-package that owns six of the seven core tables
 (`events`, `processes`, `hosts`, `alerts`, `alert_events`, `commands`); a
 `server/api/` god-package serves hosts, alerts, and commands endpoints from
-one `Handler`; and `server/admin/` straddles enrollment + policy + commands
-+ detection-rule routes. Sixteen files under `server/` import `server/store`
-directly.
+one `Handler`; and `server/admin/` straddles enrollment, policy, commands,
+and detection-rule routes. Sixteen files under `server/` import
+`server/store` directly.
 
 The product ambition (per the project's positioning notes) is to compete
 with CrowdStrike Falcon and SentinelOne on detection latency, throughput,

@@ -47,7 +47,7 @@ touched, write a brief note in `docs/maintenance/log.md` with date and "no findi
 
 ## Prompt template
 
-```
+```text
 Run the doc accuracy sweep defined in docs/maintenance/tasks/doc-accuracy-sweep.md.
 
 Scope: every committed Markdown file outside claude/, tmp/, node_modules/, .git/. List them with

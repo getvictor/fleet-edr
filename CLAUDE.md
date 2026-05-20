@@ -52,6 +52,22 @@ Use `t.Run` subtests + a `cases := []struct{...}` slice. Keep test names
 descriptive (`whitespace hostID`, `pending->completed must ack first`),
 not numbered (`case3`).
 
+## UAT and integration test layers
+
+Full strategy: `docs/testing-strategy.md`. Seven test layers from unit tests up to detection-efficacy runs, with
+reusable artefacts (fake agent library, headless agent binary on Linux, captured ESF corpus) and spec-to-test
+traceability.
+
+Minimum requirements per PR:
+
+- New wire-format struct or event field: PBT round-trip (`Marshal . Unmarshal == identity`).
+- New detection rule under `server/rules/internal/catalog/`: ship `test/efficacy/corpus/T<MITRE-id>/scenario.yaml`
+  plus `expected.yaml`. Add `attack.sh` when system / VM coverage is needed.
+- Agent or extension change touching ESF, XPC, or the event wire format: must be exercised on a live macOS VM
+  (the system / VM layer) before RC. Flag in the PR description.
+- New or modified SHALL / MUST scenario in `openspec/specs/`: at least one test must reference the canonical
+  scenario ID. ID scheme and marker forms in `docs/testing-strategy.md`; gated by `tools/spectrace`.
+
 ## Bounded contexts
 
 ADR-0004 carved `server/` into five bounded contexts: `identity`, `endpoint`,

@@ -89,6 +89,7 @@ Use any existing task file as a template. Update the cadence calendar above and 
 ## Task index
 
 ### Documentation hygiene
+
 - [`doc-accuracy-sweep`](tasks/doc-accuracy-sweep.md) - prose-vs-code drift across `docs/`, `README.md`, `CONTRIBUTING.md`
 - [`stale-implementation-references`](tasks/stale-implementation-references.md) - phase numbers, dead branch names, removed files,
   broken URLs in committed docs
@@ -96,17 +97,21 @@ Use any existing task file as a template. Update the cadence calendar above and 
 - [`best-practices-refresh`](tasks/best-practices-refresh.md) - industry-delta refresh of `docs/best-practices.md`
 
 ### Codebase health
+
 - [`todo-fixme-sweep`](tasks/todo-fixme-sweep.md) - fix, file an issue, or delete; never let TODOs accumulate
 - [`dead-code-sweep`](tasks/dead-code-sweep.md) - orphan packages, unused exports, dead UI components, abandoned migrations
 - [`test-suite-health`](tasks/test-suite-health.md) - flaky, skipped, slow, semantically thin
 - [`architecture-drift`](tasks/architecture-drift.md) - semantic boundary violations beyond what `arch-go` catches
 
 ### AI tooling hygiene (new domain)
+
 - [`claude-config-audit`](tasks/claude-config-audit.md) - `.claude/settings*.json`, hooks, slash commands, skills
 - [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md) - `~/.claude/projects/.../MEMORY.md` + `CLAUDE.md` accuracy
-- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md) - `.coderabbit.yaml` + future Copilot/Gemini/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
+- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md) - `.coderabbit.yaml` + future Copilot/Gemini/Qodo
+  configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
 
 ### Product / cross-cutting
+
 - [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md) - threat model + security boundaries vs current
   data plane
 - [`observability-review`](tasks/observability-review.md) - OTel coverage, dashboard usefulness, alert noise

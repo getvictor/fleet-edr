@@ -39,11 +39,13 @@ workflow's header comment.
 
 1. Edit the JSON in this directory.
 2. Apply the change to GitHub via the API or UI:
+
    ```sh
    gh api -X PUT \
      /repos/getvictor/fleet-edr/rulesets/<id> \
      --input .github/rulesets/main.json
    ```
+
    Look up the ruleset id with
    `gh api /repos/getvictor/fleet-edr/rulesets`.
 3. Open a PR with the JSON change. If `RULESETS_READ_PAT` is configured,

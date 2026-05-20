@@ -81,7 +81,7 @@ team genuinely wants to revisit the decision).
 
 ## Prompt template
 
-```
+```text
 Run the observability review defined in docs/maintenance/tasks/observability-review.md.
 
 Use mcp__signoz__* tools, not browser screenshots, per MEMORY guidance. Do NOT propose adding a

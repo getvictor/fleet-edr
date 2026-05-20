@@ -12,7 +12,7 @@ price.
 `/Applications/` (or a subfolder) and developer mode is off. The error in
 `sysextd` logs is:
 
-```
+```text
 Failing to realize <bundleID> as the app requesting activation
 isn't in the /Applications folder and developer/groundhog mode isn't on
 ```
@@ -127,6 +127,7 @@ the host app from a GUI Terminal on the VM, or use a configuration profile.
 
 `NEDNSProxyProvider` is a full DNS proxy. If your forwarding code fails, ALL
 DNS on the endpoint breaks. Safety practices:
+
 - Use `Network.NWConnection` to forward to the original destination (the system
   excludes extension's own connections from the proxy chain)
 - Never block or drop datagrams due to parse failures
