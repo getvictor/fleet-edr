@@ -1,0 +1,61 @@
+# A 4-level-deep process tree: launchd -> shell -> python -> child -> grandchild. Exercises the agent's process-graph builder under
+# more than the trivial depth of exec-fork-exit.yaml, and gives the L3 + L4 tests a non-trivial tree shape to assert against. The
+# tree is fully built before any process exits so the graph at scenario end contains five live processes plus their fork+exec edges.
+name: "Deep process tree (4 levels)"
+host:
+  id: AAAA0004-0000-0000-0000-000000000004
+  hostname: lab-mac.local
+  os: macOS 14.4
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 6001
+    parent_pid: 1
+  - at: 1ms
+    type: exec
+    pid: 6001
+    ppid: 1
+    path: /bin/zsh
+    args: ["zsh"]
+    cwd: /Users/victor
+    uid: 501
+    gid: 20
+  - at: 5ms
+    type: fork
+    child_pid: 6002
+    parent_pid: 6001
+  - at: 6ms
+    type: exec
+    pid: 6002
+    ppid: 6001
+    path: /usr/bin/python3
+    args: ["python3", "build.py"]
+    cwd: /Users/victor/project
+    uid: 501
+    gid: 20
+  - at: 10ms
+    type: fork
+    child_pid: 6003
+    parent_pid: 6002
+  - at: 11ms
+    type: exec
+    pid: 6003
+    ppid: 6002
+    path: /usr/bin/make
+    args: ["make", "test"]
+    cwd: /Users/victor/project
+    uid: 501
+    gid: 20
+  - at: 15ms
+    type: fork
+    child_pid: 6004
+    parent_pid: 6003
+  - at: 16ms
+    type: exec
+    pid: 6004
+    ppid: 6003
+    path: /usr/bin/go
+    args: ["go", "test", "./..."]
+    cwd: /Users/victor/project
+    uid: 501
+    gid: 20

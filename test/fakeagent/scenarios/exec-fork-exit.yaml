@@ -4,7 +4,7 @@
 # pipeline reorders by timestamp - and is covered by a dedicated future scenario, not by reordering this one.
 name: "Baseline process-graph: ls -la"
 host:
-  id: exec-fork-exit-host
+  id: AAAA0002-0000-0000-0000-000000000002
   hostname: lab-mac.local
   os: macOS 14.4
 timeline:

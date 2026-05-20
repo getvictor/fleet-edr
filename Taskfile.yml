@@ -231,6 +231,23 @@ tasks:
     cmds:
       - task: test:go:server:integration
 
+  test:integration:agent-server:
+    desc: |
+      Run just the UAT plan L3 (M4) agent-server integration test:
+      test/integration/agentserver/. This is the headless agent + real server
+      + 5-scenario starter-corpus pipeline check. Sets CGO_ENABLED=0 so the
+      test runs on darwin dev machines too (the test code imports the headless
+      package which is tagged `//go:build !darwin || !cgo`).
+
+      Requires a real MySQL via $EDR_TEST_DSN. CI does not call this directly;
+      the same tests are picked up automatically by test:go:server:integration
+      under the recursive ./test/integration/... glob on the ubuntu runner.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      CGO_ENABLED: 0
+    cmds:
+      - go test -count=1 -timeout=5m -tags=integration ./test/integration/agentserver/...
+
   test:go:server:coverage:
     desc: |
       Server + shared coverage flavor of test:go:server. Emits coverage-server.out

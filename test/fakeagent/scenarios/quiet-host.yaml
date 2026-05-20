@@ -2,7 +2,7 @@
 # (M10): every rule that fires on a quiet host is by definition a false positive.
 name: "Quiet host"
 host:
-  id: quiet-host-1
+  id: AAAA0001-0000-0000-0000-000000000001
   hostname: quiet.lab.local
   os: macOS 14.4
 timeline:

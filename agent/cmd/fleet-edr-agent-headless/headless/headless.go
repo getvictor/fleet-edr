@@ -1,10 +1,11 @@
 //go:build !darwin || !cgo
 
-// Package main is the headless agent: a development + test build of the agent's Go core that runs on linux (or on darwin with CGO
-// disabled) without the macOS XPC system extension. It wires the same enrollment + queue + uploader pipeline as the production agent,
-// substitutes the non-darwin stub receiver for the XPC bridge, and exposes a local unix-socket control plane so tests can inject
-// events directly into the receiver. Used by UAT plan layer L3 (headless agent + server integration). See docs/testing-strategy.md.
-package main
+// Package headless is the development + test build of the agent's Go core that runs on linux (or on darwin with CGO disabled) without
+// the macOS XPC system extension. It wires the same enrollment + queue + uploader pipeline as the production agent, substitutes the
+// non-darwin stub receiver for the XPC bridge, and exposes a local unix-socket control plane so tests can inject events directly into
+// the receiver. The fleet-edr-agent-headless binary (main.go alongside this package) is a thin entrypoint that calls Run; the L3
+// integration tests at test/integration/agentserver import Run directly. See docs/testing-strategy.md for the M2 + M4 design.
+package headless
 
 import (
 	"context"

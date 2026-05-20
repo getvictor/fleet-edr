@@ -81,8 +81,14 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
   production but with the stub receiver, and exposes a small local control plane on a unix socket:
   - `POST /event`: inject one JSON event into the stub receiver's events channel.
   - `GET /state`: return `{events_injected, inject_errors, last_inject_at_unix, queue_depth}`.
-  Built by `task build:agent:headless` (also gated in CI). UAT plan milestone **M2** delivered this binary; the L3
-  end-to-end CI job that drives it with a YAML scenario corpus lands in **M3** at `test/integration/agentserver/`.
+  Built by `task build:agent:headless` (also gated in CI). UAT plan milestone **M2** delivered this binary; **M3**
+  shipped the `test/fakeagent` library that loads YAML scenarios and feeds the control plane.
+- The L3 end-to-end test at `test/integration/agentserver/` is UAT plan milestone **M4**. It boots the real server
+  via `test/integration.Setup` (full Stack + real MySQL + processor goroutines), runs the M2 headless agent's
+  `Run` in-process, drives each scenario from the M3 fakeagent starter corpus via `FeedControlPlane`, and asserts
+  on the detection service's `ListHosts` event counts. Gated by the existing `server-test` CI job via the
+  recursive `./test/integration/...` glob; local devs run with `task test:integration:agent-server`. Scenarios
+  use canonical UUID host ids so they pass the enrollment endpoint's `hardware_uuid` regex.
 
 ### Browser E2E with the fake agent (L4)
 
