@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin || !cgo
 
 package receiver
 
@@ -59,5 +59,8 @@ func (r *Receiver) SendApplicationControl(payload []byte) error { return ErrUnsu
 // the heartbeat loop in main.go compile.
 func (r *Receiver) Ping(timeout time.Duration) error { return ErrUnsupported }
 
-// Disconnect is a no-op on non-darwin platforms.
-func (r *Receiver) Disconnect() {}
+// Disconnect is a no-op on non-darwin platforms. The stub never connects (Connect always returns ErrUnsupported) so there is no XPC
+// connection to tear down; Disconnect exists only to satisfy the darwin Receiver's public surface.
+func (r *Receiver) Disconnect() {
+	// Intentionally empty: stub has no resources to release. See Connect above for the platform-support rationale.
+}

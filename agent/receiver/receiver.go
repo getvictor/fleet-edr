@@ -1,7 +1,9 @@
-//go:build darwin
+//go:build darwin && cgo
 
 // This file contains the production XPC-backed Receiver. Shared identifiers (Event, Error* constants, logger plumbing) live in common.go
-// so the non-darwin stub in receiver_other.go can reuse them without duplication.
+// so the non-darwin stub in receiver_other.go can reuse them without duplication. The `cgo` build constraint pairs with the stub's
+// `!darwin || !cgo` so a `GOOS=darwin CGO_ENABLED=0` build still resolves the Receiver type via the stub instead of failing with
+// missing symbols.
 package receiver
 
 /*
