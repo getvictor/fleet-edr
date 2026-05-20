@@ -50,6 +50,20 @@ tasks:
     cmds:
       - go build -o {{.AGENT_BIN}} {{.AGENT_PKG}}
 
+  build:agent:linux:
+    desc: |
+      Cross-compile the agent for linux/amd64. Exercises the build-tag split in
+      agent/receiver (UAT plan M1): the darwin-only CGo XPC bridge is excluded
+      and the non-darwin stub is selected so the agent module compiles cleanly
+      on a non-macOS host. This is a compile-only check; the resulting binary
+      does not run usefully on linux. CI calls this from the agent-test job to
+      keep the platform-portability invariant green.
+    env:
+      GOOS: linux
+      GOARCH: amd64
+    cmds:
+      - go build ./agent/...
+
   ui:setup:
     desc: |
       Install UI npm dependencies. Wired as a dep of build:ui and dev:ui so a fresh clone

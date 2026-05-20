@@ -1,3 +1,5 @@
+//go:build darwin
+
 package receiver
 
 // This file contains the //export functions that CGo exposes to C.
