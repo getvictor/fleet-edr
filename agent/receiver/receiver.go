@@ -1,5 +1,9 @@
-// Package receiver connects to XPC Mach services (ESF extension, network extension)
-// and delivers raw JSON event bytes to Go channels.
+//go:build darwin && cgo
+
+// This file contains the production XPC-backed Receiver. Shared identifiers (Event, Error* constants, logger plumbing) live in common.go
+// so the non-darwin stub in receiver_other.go can reuse them without duplication. The `cgo` build constraint pairs with the stub's
+// `!darwin || !cgo` so a `GOOS=darwin CGO_ENABLED=0` build still resolves the Receiver type via the stub instead of failing with
+// missing symbols.
 package receiver
 
 /*
@@ -20,39 +24,15 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
-
-// logger is the package-level logger used from CGo callbacks where passing a per-request logger
-// would be impractical. Callers can override it via SetLogger; the default is slog.Default().
-var logger atomic.Pointer[slog.Logger]
-
-// SetLogger installs a logger for diagnostic output from CGo callbacks. Safe to call concurrently.
-func SetLogger(l *slog.Logger) {
-	if l != nil {
-		logger.Store(l)
-	}
-}
 
 func getLogger() *slog.Logger {
 	if l := logger.Load(); l != nil {
 		return l
 	}
 	return slog.Default()
-}
-
-// Error codes matching xpc_bridge.h constants.
-const (
-	ErrorConnectionInvalid     = 1
-	ErrorConnectionInterrupted = 2
-	ErrorTerminated            = 3
-)
-
-// Event is a raw JSON event received from an XPC extension.
-type Event struct {
-	Data []byte
 }
 
 // Receiver manages a single XPC connection and delivers events.

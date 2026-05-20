@@ -122,6 +122,13 @@ jobs:
           version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cross-build agent for linux (UAT plan M1 invariant)
+        # The agent's Go core must compile on linux so the headless integration
+        # job (UAT plan M3) and developer Linux machines can build it. The
+        # darwin-only XPC bridge is selected by build tags; everything else is
+        # platform-portable. See docs/testing-strategy.md.
+        run: task build:agent:linux
+
       - name: Run agent tests with coverage
         run: task test:go:agent:coverage
 

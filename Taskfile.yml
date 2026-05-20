@@ -50,6 +50,24 @@ tasks:
     cmds:
       - go build -o {{.AGENT_BIN}} {{.AGENT_PKG}}
 
+  build:agent:linux:
+    desc: |
+      Cross-compile the agent for linux/amd64 as a compile-only invariant check
+      (no binary is produced because the package pattern targets multiple
+      packages; `go build ./agent/...` reports compile errors but writes no
+      output). Exercises the build-tag split in agent/receiver (UAT plan M1):
+      the darwin-only CGo XPC bridge is excluded and the non-darwin stub is
+      selected so the agent module compiles cleanly on a non-macOS host.
+      CGO_ENABLED=0 keeps this check from accidentally depending on a local C
+      cross-toolchain when run on a native linux host. CI calls this from the
+      agent-test job to keep the platform-portability invariant green.
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: 0
+    cmds:
+      - go build ./agent/...
+
   ui:setup:
     desc: |
       Install UI npm dependencies. Wired as a dep of build:ui and dev:ui so a fresh clone
