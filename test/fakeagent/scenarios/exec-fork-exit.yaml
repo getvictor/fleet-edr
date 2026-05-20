@@ -1,0 +1,27 @@
+# A baseline process-graph scenario: launchd forks a child, the child execs into /bin/ls, the child exits. Exercises the three core
+# process-graph events (fork, exec, exit) in chronological order. Every detection rule that walks the process tree relies on this
+# shape, so the scenario doubles as a smoke test for the rule engine. Out-of-order delivery is a separate concern - the agent's
+# pipeline reorders by timestamp - and is covered by a dedicated future scenario, not by reordering this one.
+name: "Baseline process-graph: ls -la"
+host:
+  id: exec-fork-exit-host
+  hostname: lab-mac.local
+  os: macOS 14.4
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4001
+    parent_pid: 1
+  - at: 2ms
+    type: exec
+    pid: 4001
+    ppid: 1
+    path: /bin/ls
+    args: ["ls", "-la", "/tmp"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+  - at: 25ms
+    type: exit
+    pid: 4001
+    exit_code: 0

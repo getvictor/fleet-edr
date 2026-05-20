@@ -157,16 +157,16 @@ tasks:
 
   test:go:agent:
     desc: |
-      Run Go tests with race detector for agent + shared code only. No DB
-      required. Use from CI's agent-test job so the server tests don't run
-      on a runner that doesn't have MySQL.
+      Run Go tests with race detector for agent + shared code + the M3
+      fakeagent library. No DB required. Use from CI's agent-test job so the
+      server tests don't run on a runner that doesn't have MySQL.
 
       Second invocation: the headless agent's tests (UAT plan M2) live behind
       `//go:build !darwin || !cgo` and are skipped by the first invocation
       under the default CGO_ENABLED=1. Run them with cgo disabled so they
       execute on every PR.
     cmds:
-      - go test -race -count=1 -timeout=10m ./agent/... ./internal/...
+      - go test -race -count=1 -timeout=10m ./agent/... ./internal/... ./test/fakeagent/...
       - CGO_ENABLED=0 go test -count=1 -timeout=10m ./agent/cmd/fleet-edr-agent-headless/...
 
   test:go:agent:coverage:
@@ -190,7 +190,7 @@ tasks:
       # See comment on test:go:server:coverage. Same -coverpkg fix so agent
       # tests that exercise shared internal/ packages (observability, envparse)
       # contribute to those packages' coverage on Sonar.
-      - go test -race -count=1 -timeout=10m -coverpkg=./agent/...,./internal/... -coverprofile=coverage-agent.out -covermode=atomic ./agent/... ./internal/...
+      - go test -race -count=1 -timeout=10m -coverpkg=./agent/...,./internal/...,./test/fakeagent/... -coverprofile=coverage-agent.out -covermode=atomic ./agent/... ./internal/... ./test/fakeagent/...
       # CGO_ENABLED=0 run for the headless package. -race is dropped because the race detector requires cgo. -coverpkg is narrowed to
       # just the M2-new packages so the profile is essentially disjoint from the first run; see the desc above for the common.go
       # caveat.
