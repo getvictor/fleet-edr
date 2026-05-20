@@ -141,8 +141,8 @@ func Run(ctx context.Context, opts Options) error {
 
 	cnt := &counters{}
 
-	// pumpEvents bridges the stub receiver into the queue, mirroring the production agent's pipeEvents goroutine. A short timeout
-	// per-enqueue caps how long a single hung Enqueue can block the pump.
+	// pumpEvents bridges the stub receiver into the queue, mirroring the production agent's pipeEvents goroutine. q.Enqueue is called
+	// with the outer ctx; cancellation on shutdown propagates and Enqueue returns context.Canceled rather than blocking.
 	go pumpEvents(ctx, recv, q, logger)
 
 	// runUploader runs the uploader's main loop until ctx is done. The uploader returns nil on ctx cancellation; we log a non-nil
@@ -153,19 +153,26 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}()
 
-	// Control plane: optional. When SocketPath is non-empty, start the server in a goroutine and shut it down on ctx cancel.
+	// Control plane: optional. When SocketPath is non-empty, start the server in a goroutine. Capture shutdown so we can call it
+	// explicitly between ctx.Done() and drainOnShutdown (see below); also keep a deferred call as a safety net in case Run returns
+	// before ctx.Done() fires. http.Server.Shutdown is idempotent so the double-call is safe.
+	shutdownControlPlane := func() {}
 	if opts.SocketPath != "" {
 		shutdown, err := startControlPlane(ctx, opts.SocketPath, recv, q, cnt, logger)
 		if err != nil {
 			return fmt.Errorf("start control plane: %w", err)
 		}
-		defer shutdown()
+		shutdownControlPlane = shutdown
+		defer shutdownControlPlane()
 	}
 
 	logger.InfoContext(ctx, "headless agent ready",
 		"server_url", opts.ServerURL, "queue_path", opts.QueuePath, "socket_path", opts.SocketPath)
 
 	<-ctx.Done()
+	// Stop accepting new POST /event requests BEFORE the final drain. Otherwise a late injection between ctx.Done() and the
+	// deferred shutdown lands in recv.events with pumpEvents already exited; the event would be silently dropped at process exit.
+	shutdownControlPlane()
 	drainOnShutdown(up, logger)
 	return nil
 }

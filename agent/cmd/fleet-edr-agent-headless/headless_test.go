@@ -244,7 +244,12 @@ func TestControlPlaneErrorPaths(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 
 	cancel()
-	<-runErrCh
+	select {
+	case err := <-runErrCh:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not exit within 10s of ctx cancel")
+	}
 }
 
 // unixHTTPGet performs an HTTP GET over a unix socket. Used by the test to talk to the control plane.

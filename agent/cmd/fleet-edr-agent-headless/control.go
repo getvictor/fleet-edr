@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/fleetdm/edr/agent/queue"
@@ -29,6 +30,10 @@ const (
 	controlWriteTimeout    = 5 * time.Second
 	controlShutdownTimeout = 2 * time.Second
 
+	// queueDepthTimeout caps a single q.Depth call from blocking GET /state. The HTTP write timeout is the outer safety net but only
+	// fires after the response starts streaming; an explicit per-call timeout bounds the DB query itself.
+	queueDepthTimeout = 500 * time.Millisecond
+
 	// controlSocketMode locks the unix socket to the running user only. The headless binary is single-user dev/test tooling; a more
 	// permissive mode would let any process on the host inject events.
 	controlSocketMode os.FileMode = 0o600
@@ -39,8 +44,16 @@ const (
 func startControlPlane(
 	ctx context.Context, socketPath string, recv *receiver.Receiver, q *queue.Queue, cnt *counters, logger *slog.Logger,
 ) (func(), error) {
-	// Remove any stale socket from a previous run that didn't clean up. Otherwise net.Listen errors with "address already in use".
-	_ = os.Remove(socketPath)
+	// Remove a stale socket from a previous run; net.Listen would otherwise error with "address already in use". Guard with Lstat to
+	// refuse to delete a non-socket path so a misconfigured --control-socket pointed at a regular file does not nuke that file.
+	if info, err := os.Lstat(socketPath); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("refusing to remove non-socket %s; pass a fresh path", socketPath)
+		}
+		if err := os.Remove(socketPath); err != nil {
+			return nil, fmt.Errorf("remove stale socket %s: %w", socketPath, err)
+		}
+	}
 
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -70,17 +83,24 @@ func startControlPlane(
 	go func() { serveErrCh <- srv.Serve(listener) }()
 	logger.InfoContext(ctx, "control plane listening", "socket", socketPath)
 
+	// The shutdown closure is idempotent via sync.Once. Run calls it explicitly between ctx.Done() and drainOnShutdown so the
+	// control plane stops accepting new POSTs before the final drain, and ALSO defers it as a safety net for early-return paths
+	// (e.g. an unexpected error after this function succeeds). Without Once, the second invocation would block forever waiting
+	// for a serveErrCh that the first invocation already consumed.
+	var once sync.Once
 	shutdown := func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), controlShutdownTimeout)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.WarnContext(shutdownCtx, "control plane shutdown", "err", err)
-		}
-		_ = os.Remove(socketPath)
-		// Drain the serve goroutine so it doesn't outlive the shutdown call.
-		if err := <-serveErrCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.WarnContext(shutdownCtx, "control plane serve", "err", err)
-		}
+		once.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), controlShutdownTimeout)
+			defer cancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				logger.WarnContext(shutdownCtx, "control plane shutdown", "err", err)
+			}
+			_ = os.Remove(socketPath)
+			// Drain the serve goroutine so it doesn't outlive the shutdown call.
+			if err := <-serveErrCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.WarnContext(shutdownCtx, "control plane serve", "err", err)
+			}
+		})
 	}
 	return shutdown, nil
 }
@@ -131,12 +151,14 @@ type stateResponse struct {
 	QueueDepth       int64 `json:"queue_depth"`
 }
 
-// handleGetState reports control-plane and queue observability state. Queue depth is queried under the request's context so a slow
-// or hung DB query is bounded by the HTTP write timeout above.
+// handleGetState reports control-plane and queue observability state. Queue depth runs under an explicit short timeout so a stuck DB
+// query cannot block the response past queueDepthTimeout; -1 is reported on timeout / error so the in-memory counters still surface.
 func handleGetState(
 	w http.ResponseWriter, r *http.Request, q *queue.Queue, cnt *counters, logger *slog.Logger,
 ) {
-	depth, err := q.Depth(r.Context())
+	depthCtx, cancel := context.WithTimeout(r.Context(), queueDepthTimeout)
+	defer cancel()
+	depth, err := q.Depth(depthCtx)
 	if err != nil {
 		logger.WarnContext(r.Context(), "queue depth", "err", err)
 		// Report -1 instead of failing the whole call: the in-memory counters are still useful and the client can decide what to do.

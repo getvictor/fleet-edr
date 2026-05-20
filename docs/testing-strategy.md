@@ -134,7 +134,7 @@ The same library serves multiple consumers, so the wire contract is exercised en
 
 - `test/fakeagent/`: Go library. Loads YAML scenarios, feeds events into a `Receiver` (in-process) or posts envelopes
   directly to a server URL.
-- `cmd/fleet-edr-agent-headless`: production agent built with the stub receiver, plus an opt-in unix-socket control
+- `agent/cmd/fleet-edr-agent-headless`: production agent built with the stub receiver, plus an opt-in unix-socket control
   plane for tests. Doubles as the load generator.
 - `test/fakeagent/scenarios/`: YAML files describing event timelines, host metadata, and (where applicable) detection
   assertions.
