@@ -50,6 +50,11 @@ in Go. Integration tests hit a real MySQL on port 3317; do not mock the database
 Coverage is measured by SonarCloud; the new-code coverage gate is 80%. PRs that add code without adding tests will fail the
 gate.
 
+For the full picture (the seven-layer test pyramid, the fake-agent / headless-agent integration layer, the captured ESF
+event corpus, the detection-efficacy corpus, and spec-to-test traceability), see
+[`docs/testing-strategy.md`](docs/testing-strategy.md). Read it before adding a new detection rule, touching the agent / server
+wire format, changing anything in `extension/edr/`, or modifying a SHALL / MUST scenario under `openspec/specs/`.
+
 ## Pull requests
 
 - Branch off `main`. Keep the diff focused; large refactors should be split into reviewable chunks.
