@@ -166,9 +166,15 @@ func TestPostDirect_RoundTrip(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		seenAuthHeader = r.Header.Get("Authorization")
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// Lock around BOTH writes - go test -race reports the unsynchronised seenAuthHeader write otherwise.
 		mu.Lock()
+		seenAuthHeader = r.Header.Get("Authorization")
 		received = append(received, body)
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
@@ -179,13 +185,15 @@ func TestPostDirect_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.PostDirect(t.Context(), srv.URL, "test-token", WithBatchSize(10)))
 
-	assert.Equal(t, "Bearer test-token", seenAuthHeader)
 	mu.Lock()
+	gotAuth := seenAuthHeader
 	require.Len(t, received, 1, "BatchSize=10 should fit both events in one POST")
+	firstBody := append([]byte(nil), received[0]...)
 	mu.Unlock()
+	assert.Equal(t, "Bearer test-token", gotAuth)
 
 	var batch []Envelope
-	require.NoError(t, json.Unmarshal(received[0], &batch))
+	require.NoError(t, json.Unmarshal(firstBody, &batch))
 	require.Len(t, batch, 2)
 	assert.Equal(t, "dns_query", batch[0].EventType)
 	assert.Equal(t, "network_connect", batch[1].EventType)

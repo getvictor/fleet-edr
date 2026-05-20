@@ -149,6 +149,10 @@ const (
 // unixSocketHTTPClient builds an http.Client whose transport dials the given unix socket regardless of the URL host. The
 // "http://unix" host in the URL is a placeholder net/http requires; the actual connection goes to socketPath. The dialer is a
 // per-call net.Dialer so the outer request's context cancellation propagates to the connect attempt.
+//
+// Proxy is intentionally left at its zero value (nil) so the transport never consults HTTP_PROXY/HTTPS_PROXY env vars. Unlike
+// http.DefaultTransport (which sets Proxy=ProxyFromEnvironment), a Transport literal with Proxy unset bypasses all proxies, which
+// is what we want for unix-socket dialing.
 func unixSocketHTTPClient(socketPath string) *http.Client {
 	return &http.Client{
 		Timeout: unixSocketHTTPTimeout,

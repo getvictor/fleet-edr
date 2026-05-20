@@ -1,6 +1,7 @@
 # A baseline process-graph scenario: launchd forks a child, the child execs into /bin/ls, the child exits. Exercises the three core
-# process-graph events (fork, exec, exit) plus the agent's tendency to receive them slightly out of order due to ESF batching. Every
-# detection rule that walks the process tree relies on this shape, so the scenario doubles as a smoke test for the rule engine.
+# process-graph events (fork, exec, exit) in chronological order. Every detection rule that walks the process tree relies on this
+# shape, so the scenario doubles as a smoke test for the rule engine. Out-of-order delivery is a separate concern - the agent's
+# pipeline reorders by timestamp - and is covered by a dedicated future scenario, not by reordering this one.
 name: "Baseline process-graph: ls -la"
 host:
   id: exec-fork-exit-host

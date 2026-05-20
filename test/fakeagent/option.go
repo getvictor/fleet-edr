@@ -30,19 +30,32 @@ func WithHostID(id string) Option { return func(c *runConfig) { c.hostIDOverride
 
 // WithSpeed sets the playback speed. 0 (the default) fires every event immediately, ignoring the timeline's At offsets entirely;
 // the wire timestamps still reflect At but the feeder doesn't sleep. 1.0 plays at real time. Higher values compress the timeline
-// (e.g. 10.0 means a 1s scenario takes 100ms). Negative values panic at run-time.
+// (e.g. 10.0 means a 1s scenario takes 100ms). Negative or zero values are treated as 0 (fire immediately).
 func WithSpeed(multiplier float64) Option {
 	return func(c *runConfig) { c.speedMultiplier = multiplier }
 }
 
 // WithBatchSize controls how many envelopes PostDirect bundles into a single /api/events POST. Default 100. Has no effect on
 // FeedControlPlane, which posts one envelope per /event call by design (the headless binary's control plane mirrors the production
-// receiver's one-event-at-a-time semantics).
-func WithBatchSize(n int) Option { return func(c *runConfig) { c.batchSize = n } }
+// receiver's one-event-at-a-time semantics). Panics on n <= 0 because PostDirect's `for start += cfg.batchSize` loop would either
+// never advance (n=0, infinite loop) or run backwards (n<0) - neither is a recoverable state, and the panic gives the test author
+// a clear stack to the misconfiguration rather than a hanging or unbounded test run.
+func WithBatchSize(n int) Option {
+	if n <= 0 {
+		panic("fakeagent: WithBatchSize requires n > 0")
+	}
+	return func(c *runConfig) { c.batchSize = n }
+}
 
 // WithIDGenerator overrides the function used to derive each envelope's event_id. The default produces a 32-hex-char random ID per
-// envelope; tests pass a deterministic generator to make golden comparisons reproducible.
-func WithIDGenerator(f func() string) Option { return func(c *runConfig) { c.idGenerator = f } }
+// envelope; tests pass a deterministic generator to make golden comparisons reproducible. Panics on a nil function so the failure
+// surfaces at the WithIDGenerator(nil) call site rather than later in Envelopes when cfg.idGenerator() dereferences nil.
+func WithIDGenerator(f func() string) Option {
+	if f == nil {
+		panic("fakeagent: WithIDGenerator requires a non-nil function")
+	}
+	return func(c *runConfig) { c.idGenerator = f }
+}
 
 // newRunConfig builds the resolved config, applies any options, then returns it.
 func newRunConfig(opts []Option) *runConfig {

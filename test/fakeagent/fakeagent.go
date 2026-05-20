@@ -14,6 +14,7 @@
 package fakeagent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -109,10 +110,18 @@ type Assertion struct {
 type Duration time.Duration
 
 // UnmarshalJSON accepts either a JSON string ("10ms", "5s") or a JSON number (nanoseconds). The string form is what scenario
-// authors write; the number form lets test code round-trip Envelopes back through encoding/json without losing precision.
+// authors write; the number form lets test code round-trip Envelopes back through encoding/json without losing precision. Both
+// branches delegate to encoding/json so escape sequences, overflow, and malformed-quoting cases are all handled by the stdlib's
+// well-fuzzed parser rather than a hand-rolled byte loop.
 func (d *Duration) UnmarshalJSON(data []byte) error {
-	if len(data) > 0 && data[0] == '"' {
-		s := string(data[1 : len(data)-1])
+	if len(data) == 0 {
+		return errors.New("duration: empty input")
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return fmt.Errorf("duration: invalid quoted value: %w", err)
+		}
 		parsed, err := time.ParseDuration(s)
 		if err != nil {
 			return fmt.Errorf("duration %q: %w", s, err)
@@ -120,13 +129,10 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 		*d = Duration(parsed)
 		return nil
 	}
-	// Bare number: nanoseconds.
+	// Bare number: nanoseconds. json.Unmarshal into int64 rejects floats, overflow, and non-numeric tokens with a typed error.
 	var ns int64
-	for _, c := range data {
-		if c < '0' || c > '9' {
-			return fmt.Errorf("duration: expected string or integer nanoseconds, got %q", data)
-		}
-		ns = ns*10 + int64(c-'0')
+	if err := json.Unmarshal(data, &ns); err != nil {
+		return fmt.Errorf("duration: expected string or integer nanoseconds, got %q: %w", data, err)
 	}
 	*d = Duration(ns)
 	return nil
