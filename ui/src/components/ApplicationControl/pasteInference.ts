@@ -89,5 +89,3 @@ export const PASTE_MANY_RULE_TYPES = [
   RULE_TYPE_CERTIFICATE,
   RULE_TYPE_PATH,
 ] as const;
-
-export type PasteManyRuleType = (typeof PASTE_MANY_RULE_TYPES)[number];
