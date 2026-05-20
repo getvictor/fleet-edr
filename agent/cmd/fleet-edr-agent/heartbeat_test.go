@@ -45,7 +45,13 @@ func TestRunXPCHeartbeat(t *testing.T) {
 		// Use a long interval so no tick fires; we rely on done to exit.
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, "svc", time.Hour, time.Second, done, failed)
+			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
+				XPCService:  "svc",
+				Interval:    time.Hour,
+				PingTimeout: time.Second,
+				Done:        done,
+				Failed:      failed,
+			})
 			close(doneCh)
 		}()
 
@@ -70,7 +76,13 @@ func TestRunXPCHeartbeat(t *testing.T) {
 
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, "svc", time.Hour, time.Second, done, failed)
+			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
+				XPCService:  "svc",
+				Interval:    time.Hour,
+				PingTimeout: time.Second,
+				Done:        done,
+				Failed:      failed,
+			})
 			close(doneCh)
 		}()
 
@@ -94,7 +106,13 @@ func TestRunXPCHeartbeat(t *testing.T) {
 		// Short interval so several ticks fire before we close done.
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, "svc", 10*time.Millisecond, time.Second, done, failed)
+			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
+				XPCService:  "svc",
+				Interval:    10 * time.Millisecond,
+				PingTimeout: time.Second,
+				Done:        done,
+				Failed:      failed,
+			})
 			close(doneCh)
 		}()
 
@@ -119,7 +137,13 @@ func TestRunXPCHeartbeat(t *testing.T) {
 
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, "svc", 10*time.Millisecond, time.Second, done, failed)
+			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
+				XPCService:  "svc",
+				Interval:    10 * time.Millisecond,
+				PingTimeout: time.Second,
+				Done:        done,
+				Failed:      failed,
+			})
 			close(doneCh)
 		}()
 
@@ -148,7 +172,13 @@ func TestRunXPCHeartbeat(t *testing.T) {
 
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, "svc", 10*time.Millisecond, time.Second, done, failed)
+			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
+				XPCService:  "svc",
+				Interval:    10 * time.Millisecond,
+				PingTimeout: time.Second,
+				Done:        done,
+				Failed:      failed,
+			})
 			close(doneCh)
 		}()
 

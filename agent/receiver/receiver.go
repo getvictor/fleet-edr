@@ -190,7 +190,14 @@ func (r *Receiver) Ping(timeout time.Duration) error {
 	}
 	rc := int(C.xpc_bridge_ping(C.int(handle), C.uint64_t(timeout.Nanoseconds())))
 	if rc != 0 {
-		return fmt.Errorf("xpc_bridge_ping returned %d", rc)
+		// The C bridge collapses "timeout waiting for hello-ack" and "slot
+		// torn down concurrently" into a single -1 — the caller's response
+		// (force a reconnect) is the same either way, so distinguishing the
+		// two doesn't change behaviour. The error string names the service
+		// and timeout so the warning log lines that wrap this error are
+		// actionable on their own, without the reader having to cross-
+		// reference the receiver instance.
+		return fmt.Errorf("xpc ping to %q timed out or connection torn down (timeout %s)", r.serviceName, timeout)
 	}
 	return nil
 }

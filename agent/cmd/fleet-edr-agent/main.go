@@ -433,8 +433,13 @@ func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receive
 ) bool {
 	heartbeatDone := make(chan struct{})
 	heartbeatFailed := make(chan struct{}, 1)
-	go runXPCHeartbeat(ctx, logger, recv, xpcService, xpcHeartbeatInterval, xpcHeartbeatPingTimeout,
-		heartbeatDone, heartbeatFailed)
+	go runXPCHeartbeat(ctx, logger, recv, xpcHeartbeatConfig{
+		XPCService:  xpcService,
+		Interval:    xpcHeartbeatInterval,
+		PingTimeout: xpcHeartbeatPingTimeout,
+		Done:        heartbeatDone,
+		Failed:      heartbeatFailed,
+	})
 	defer close(heartbeatDone)
 
 	for {
@@ -472,31 +477,33 @@ type xpcPinger interface {
 	Ping(timeout time.Duration) error
 }
 
+// xpcHeartbeatConfig groups the heartbeat loop's tunables and channels. Bundled into a struct rather than passed as positional args
+// because the loop has both timing knobs and lifecycle channels, and Sonar's go:S107 (>7 parameters) tripped on the flat form.
+type xpcHeartbeatConfig struct {
+	XPCService  string
+	Interval    time.Duration
+	PingTimeout time.Duration
+	Done        <-chan struct{}
+	Failed      chan<- struct{}
+}
+
 // runXPCHeartbeat periodically pings the XPC peer to detect a silently-dead channel. On ping failure or context cancellation the
-// goroutine exits; on failure it also signals failed once so pipeEvents can trigger a reconnect. The done channel is closed by
+// goroutine exits; on failure it also signals failed once so pipeEvents can trigger a reconnect. The Done channel is closed by
 // pipeEvents when it returns, ensuring the heartbeat goroutine does not outlive its receiver.
-func runXPCHeartbeat(
-	ctx context.Context,
-	logger *slog.Logger,
-	pinger xpcPinger,
-	xpcService string,
-	interval, timeout time.Duration,
-	done <-chan struct{},
-	failed chan<- struct{},
-) {
-	ticker := time.NewTicker(interval)
+func runXPCHeartbeat(ctx context.Context, logger *slog.Logger, pinger xpcPinger, cfg xpcHeartbeatConfig) {
+	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-done:
+		case <-cfg.Done:
 			return
 		case <-ticker.C:
-			if err := pinger.Ping(timeout); err != nil {
-				logger.WarnContext(ctx, "xpc heartbeat ping failed", "service", xpcService, "err", err)
+			if err := pinger.Ping(cfg.PingTimeout); err != nil {
+				logger.WarnContext(ctx, "xpc heartbeat ping failed", "service", cfg.XPCService, "err", err)
 				select {
-				case failed <- struct{}{}:
+				case cfg.Failed <- struct{}{}:
 				default:
 				}
 				return
