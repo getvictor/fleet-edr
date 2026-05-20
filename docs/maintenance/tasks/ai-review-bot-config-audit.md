@@ -138,7 +138,7 @@ Either a PR (when changes land) or a log entry (when no changes).
 
 ## Prompt template
 
-```
+```text
 Run the AI review-bot config audit defined in
 docs/maintenance/tasks/ai-review-bot-config-audit.md.
 

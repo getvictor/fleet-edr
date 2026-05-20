@@ -36,7 +36,7 @@ CI is the backstop, not the floor. If a check fails locally, fix it before pushi
 | Swift | [`.swiftlint.yml`](.swiftlint.yml) (run with `--strict`) |
 | C bridge | [`.clang-tidy`](.clang-tidy), [`.clang-format`](.clang-format) |
 | GitHub Actions | `actionlint` + `zizmor` (security audit) |
-| Markdown / prose | Sentence case headings, wrap at 140 chars, no em-dashes |
+| Markdown / prose | [`.markdownlint-cli2.yaml`](.markdownlint-cli2.yaml) (run with `task lint:md`); sentence case headings, wrap at 140 chars, no em-dashes |
 | Commits | Imperative mood, focused scope, one logical change per commit |
 
 If a linter disagrees with a specific change, prefer fixing the code over disabling the rule. Suppression with a `nolint` /

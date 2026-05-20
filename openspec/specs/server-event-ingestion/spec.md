@@ -139,4 +139,3 @@ MUST NOT acknowledge a batch that was not durably persisted.
 - **WHEN** the database write for an otherwise valid batch fails
 - **THEN** the system responds with HTTP 5xx and an opaque error code
 - **AND** the agent is expected to retry the batch later
-

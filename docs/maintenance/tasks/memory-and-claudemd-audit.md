@@ -65,7 +65,7 @@ the index. Detail belongs in the per-topic files it points to.
 
 ## Prompt template
 
-```
+```text
 Run the MEMORY/CLAUDE audit defined in docs/maintenance/tasks/memory-and-claudemd-audit.md.
 
 Step 1 - read CLAUDE.md at the repo root. For each rule, verify it's still true (cross-check

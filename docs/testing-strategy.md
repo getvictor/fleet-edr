@@ -22,7 +22,7 @@ Small / Medium / Large test sizes). The compact `L0` to `L6` labels below are a 
 about "all lower layers must be green first" without listing them; the descriptive name is the canonical name and is
 preferred in prose, PR descriptions, and commit messages.
 
-```
+```text
                        ____ Detection efficacy   (L6, nightly + RC)
                       /____ System / VM E2E      (L5, RC + scheduled)
                      /_____ Browser E2E + fake agent  (L4, per PR)
@@ -96,8 +96,8 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 - The VM mirrors the pilot-customer environment: stock macOS, no Xcode, no Homebrew, no developer tools beyond what a
   signed PKG install actually delivers. Snapshots revert to a known-good "clean-pre-install" state for each run so
   signing, notarization, and extension activation are exercised every time.
-- Driven by `scripts/uat/system-test.sh` (or equivalent). The script `ssh`s into the VM, installs the candidate
-  signed PKG, waits for extension activation and agent enrolment, runs an attack scenario from
+- Driven by `scripts/uat/system-test.sh` (or equivalent). The script uses `ssh` to connect to the VM, installs the
+  candidate signed PKG, waits for extension activation and agent enrolment, runs an attack scenario from
   `test/efficacy/corpus/<technique>/attack.sh`, and asserts on server state via REST.
 - Runs on a self-hosted runner (the GitHub-hosted macOS runners do not allow nested virtualisation or expose the ESF
   entitlement). Schedule + RC tag, never per PR.
@@ -174,7 +174,7 @@ Spec scenarios in `openspec/specs/**/spec.md` are linked to tests by canonical I
 
 Mechanical, derived from heading text:
 
-```
+```text
 openspec/specs/server-event-ingestion/spec.md
   ### Requirement: Authenticated batch event submission
   #### Scenario: A valid agent posts a batch
@@ -182,7 +182,7 @@ openspec/specs/server-event-ingestion/spec.md
 
 becomes
 
-```
+```text
 server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch
 ```
 
@@ -262,7 +262,7 @@ These are the rules a contributor follows when adding code. They are enforced pa
    (the system / VM layer) before the release-candidate tag. Flag the change in the PR description so a reviewer can
    confirm the VM run happened.
 4. **New or modified SHALL / MUST scenario in `openspec/specs/`**: at least one test must reference the canonical
-   scenario ID. `spectrace --list-ids` prints the IDs; pick one of the marker forms above.
+   scenario ID. `tools/spectrace --list-ids` prints the IDs; pick one of the marker forms above.
 5. **Symbol deletion**: scrub every doc comment, IPC dispatcher reference, and adjacent doc that still names the
    deleted symbol. Stale comments in IPC-adjacent code are a recurring class of footgun (see `CLAUDE.md`).
 
@@ -284,7 +284,7 @@ relevant inputs change.
 |---|---|---|
 | Unit (Go) | `go test -coverpkg=./server/...,./agent/...,./internal/...` | Sonar 80% on new code |
 | Unit (TS) | `vitest --coverage` (V8) | Sonar 80% on new code |
-| Unit (Swift) | `xcodebuild test -enableCodeCoverage YES` | Sonar 70% on new code (raise as the suite matures) |
+| Unit (Swift) | `xcodebuild test -enableCodeCoverage YES` | Sonar 80% on new code (same unified gate as Go and TS) |
 | Integration layers (per-context, cross-context, headless) | wide `-coverpkg`, merged via `go tool covdata textfmt` | feeds the same Sonar Go gate |
 | Browser E2E | monocart V8 coverage, merged into `lcov-e2e.info` | feeds the Sonar TS gate |
 | System / VM | per-scenario pass/fail; no line coverage | green/red checklist in the workflow run |

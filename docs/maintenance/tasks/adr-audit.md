@@ -69,7 +69,7 @@ Update `docs/adr/README.md` if any ADR changed status. The index should always b
 
 ## Prompt template
 
-```
+```text
 Run the ADR audit defined in docs/maintenance/tasks/adr-audit.md.
 
 Scope: docs/adr/*.md and any committed file that references "ADR-NNNN".

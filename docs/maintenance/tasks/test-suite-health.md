@@ -88,7 +88,7 @@ thinness findings (don't bundle).
 
 ## Prompt template
 
-```
+```text
 Run the test-suite health audit defined in docs/maintenance/tasks/test-suite-health.md.
 
 Step 1 - find all skipped tests (grep for t.Skip, it.skip, describe.skip, XCTSkip). Triage each.

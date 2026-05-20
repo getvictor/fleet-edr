@@ -3,6 +3,7 @@
 Playwright-based E2E tests that drive Chrome against a running EDR
 server. Sister to `test/integration/` (Go cross-context) and
 `test/arch/` (architecture invariants); covers everything in between
+
 - the UI + server wire shapes + the network-attached auth flows that
 Go integration tests skip because they need a real browser.
 

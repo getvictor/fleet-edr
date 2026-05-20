@@ -162,4 +162,3 @@ be used for every 4xx and 5xx response defined in this capability.
 - **GIVEN** any successful call to an endpoint defined in this capability
 - **WHEN** the response body is non-empty
 - **THEN** the `Content-Type` is `application/json` and the body parses as valid JSON
-

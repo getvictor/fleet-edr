@@ -136,4 +136,3 @@ evaluate against any batch and MUST NOT produce alerts until it is re-enabled.
 - **THEN** the disabled rule does not evaluate
 - **AND** no alerts are produced for that rule
 - **AND** the remaining rules continue to evaluate normally
-

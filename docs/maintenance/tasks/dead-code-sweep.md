@@ -24,6 +24,7 @@ thing where only one is wired".
 ## Steps
 
 1. Run the appropriate dead-code tools per language:
+
    ```bash
    go install honnef.co/go/tools/cmd/staticcheck@latest
    staticcheck -checks=U1000 ./server/... ./agent/... ./internal/...
@@ -31,6 +32,7 @@ thing where only one is wired".
    cd ui && npx ts-prune
    # or: npx knip
    ```
+
 2. Cross-check Go suspects manually - the `internal/`-only convention plus reflection-based wiring (e.g. handler registration)
    means staticcheck false-positives are common. Confirm by `grep -r '<Symbol>' --include='*.go' | grep -v '_test.go'`.
 3. For each true positive, decide: **delete** / **wire it up** (was the export added speculatively?) / **keep with a comment**
@@ -46,7 +48,7 @@ output before the change so the diff reviewer can verify the deletions are well-
 
 ## Prompt template
 
-```
+```text
 Run the dead-code sweep defined in docs/maintenance/tasks/dead-code-sweep.md.
 
 Step 1 - Go: install staticcheck if missing, run `staticcheck -checks=U1000 ./server/... ./agent/...

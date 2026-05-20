@@ -283,7 +283,7 @@ Intel Mac scoped into the deployment. Narrow the scope by model type.
 
 **Install script writes the conf file but the agent still fails to
 enroll.**
-The install script probably ran AFTER the pkg. Most MDMs run scripts + 
+The install script probably ran AFTER the pkg. Most MDMs run scripts +
 pkgs in parallel by default. Force "script first" via your MDM's
 ordering controls (see vendor notes above).
 

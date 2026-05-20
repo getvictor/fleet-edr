@@ -10,7 +10,7 @@ process lifecycle events and network connections in real time, builds a
 per-host process graph, runs behavioral detection rules against the graph,
 and presents findings through a web UI with response capabilities.
 
-```
+```text
 ┌─────────────────── macOS endpoint ───────────────────┐
 │                                                       │
 │  ┌──────────────┐  ┌──────────────┐                  │
@@ -77,6 +77,7 @@ Events are serialized as JSON (canonical envelope with `event_id`, `host_id`,
 via an XPC Mach service registered through `NSEndpointSecurityMachServiceName`.
 
 Key files:
+
 - `ESFSubscriber.swift` -- ES client, event handlers
 - `EventSerializer.swift` -- JSON serialization, payload types
 - `XPCServer.swift` -- Mach service listener, peer management
@@ -89,6 +90,7 @@ connection monitoring. Captures outbound TCP/UDP socket flows with process
 attribution via audit tokens.
 
 Events produced:
+
 - `network_connect` -- remote address/port, local address/port, protocol,
   direction, hostname (from SNI), process path and PID
 
@@ -102,6 +104,7 @@ dict in Info.plist (`group.com.fleetdm.edr.networkextension`), which
 nesessionmanager registers in the global bootstrap namespace.
 
 Key files:
+
 - `NetworkFilter.swift` -- content filter, flow handling
 - `DNSProxyProvider.swift` -- DNS proxy, query forwarding
 - `DNSParser.swift` -- RFC 1035 packet parser
@@ -115,7 +118,7 @@ A background-only macOS app that manages system extension lifecycle. It
 submits activation/deactivation requests via `OSSystemExtensionRequest` and
 configures the content filter via `NEFilterManager`. CLI interface:
 
-```
+```console
 edr activate           # activate both extensions + enable content filter
 edr deactivate         # deactivate both extensions
 edr enable-filter      # enable content filter only
@@ -129,7 +132,7 @@ edr disable-dns-proxy  # disable DNS proxy
 A daemon that bridges the system extensions to the cloud server. Written in
 Go with a C bridge for XPC communication.
 
-```
+```text
 agent/
 ├── cmd/fleet-edr-agent/   # entry point, goroutine orchestration
 ├── receiver/              # XPC client (C bridge to Go channels)
@@ -191,6 +194,7 @@ type Rule interface {
 ```
 
 Current rules:
+
 - **suspicious_exec** -- detects when a non-shell process spawns a shell and
   either (a) a child executes from a suspicious path (`/tmp/`, `/var/tmp/`,
   `/private/tmp/`, `/dev/shm/`, or path traversal), or (b) the shell or its
@@ -237,6 +241,7 @@ server restart. Production builds leave `EDR_UI_LIVE_DIR` unset and serve the
 embedded bundle.
 
 Pages:
+
 - **Login** -- API key entry (stored in sessionStorage)
 - **Host list** -- table of enrolled hosts with event counts
 - **Process tree** -- D3 hierarchical tree with click-to-select, alert badges
@@ -246,7 +251,7 @@ Pages:
 
 ## Data flow
 
-```
+```text
 ESF/NE Extension  ──XPC──►  Agent  ──HTTP──►  Ingest  ──►  MySQL
                                                               │
                                                Processor ◄───┘

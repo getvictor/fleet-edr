@@ -71,7 +71,7 @@ A PR titled `Best-practices refresh YYYY-Q\d`. PR body summarises:
 
 ## Prompt template
 
-```
+```text
 Run the best-practices refresh defined in docs/maintenance/tasks/best-practices-refresh.md.
 
 Step 1 - re-verify every [x] item in docs/best-practices.md against the current code. Demote any

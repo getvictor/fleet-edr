@@ -64,7 +64,7 @@ Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):
 
 ## Components
 
-```
+```text
 extension/edr/       Swift system extension + network extension (Xcode project)
 agent/               Go agent daemon (XPC receiver, SQLite queue, uploader)
 server/              Go server (ingestion, processor, detection, REST API)
@@ -161,6 +161,7 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
 On each agent host the MDM pushes:
+
 - `edr-system-extension.mobileconfig` (pre-approves the ES sysext)
 - `edr-tcc-fda.mobileconfig` (grants Full Disk Access)
 - `fleet-edr-<version>.pkg` (the agent + host app + sysext)

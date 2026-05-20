@@ -87,7 +87,7 @@ A PR titled `Threat model refresh YYYY-Q\d`. Body must include:
 
 ## Prompt template
 
-```
+```text
 Run the threat model and security refresh defined in
 docs/maintenance/tasks/threat-model-and-security-refresh.md.
 

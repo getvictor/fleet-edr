@@ -279,7 +279,7 @@ tasks:
       Run every fast linter. Does NOT include lint:nilaway (inter-procedural
       analysis, ~tens of seconds) or lint:vulncheck (network-bound; queries
       the vulnerability DB); run those explicitly when needed.
-    deps: [lint:go, lint:ui, lint:swift, lint:actions]
+    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md]
 
   lint:go:
     desc: |
@@ -382,6 +382,16 @@ tasks:
       gitignored tmp/ scratch area never gates lint runs.
     cmds:
       - go tool nilaway -include-pkgs="github.com/fleetdm/edr" ./server/... ./agent/... ./internal/... ./test/...
+
+  lint:md:
+    desc: markdownlint-cli2 across all committed markdown (config in .markdownlint-cli2.yaml).
+    cmds:
+      - npx -y -p markdownlint-cli2@0.18.1 markdownlint-cli2
+
+  lint:md:fix:
+    desc: markdownlint-cli2 with --fix to auto-repair the rules it knows how to fix.
+    cmds:
+      - npx -y -p markdownlint-cli2@0.18.1 markdownlint-cli2 --fix
 
   # -------- dev loops --------
 

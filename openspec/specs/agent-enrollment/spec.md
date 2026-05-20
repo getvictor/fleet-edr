@@ -142,4 +142,3 @@ cannot exhaust the server, and so that brute-force attempts on the deployment se
 - **WHEN** the IP issues another enroll attempt
 - **THEN** the server returns 429 with a Retry-After header
 - **AND** no enrollment row is created or modified
-

@@ -139,4 +139,3 @@ holds get a last chance to reach the server before the process exits.
 - **WHEN** the uploader's run loop observes the cancellation
 - **THEN** the uploader executes one more upload attempt before returning
 - **AND** any events that succeed in that attempt are marked uploaded before exit
-

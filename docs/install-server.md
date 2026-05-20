@@ -80,7 +80,7 @@ chmod 0600 tls/privkey.pem
 
 In your `.env` (next step), set:
 
-```
+```text
 EDR_TLS_CERT_FILE=/tls/fullchain.pem
 EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
@@ -169,7 +169,7 @@ docker compose -f docker-compose.prod.yml --env-file .env logs server \
 
 Expected output:
 
-```
+```text
 ================================================================
 SEEDED ADMIN USER (captured once — save the password now)
   Email:    admin@fleet-edr.local

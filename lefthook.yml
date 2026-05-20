@@ -52,6 +52,19 @@ pre-commit:
         fi
       stage_fixed: true
 
+    markdownlint:
+      # Lint staged markdown via markdownlint-cli2 (config in .markdownlint-cli2.yaml).
+      # Uses --fix for the safe rules; what cannot be auto-fixed (MD040 language tags,
+      # MD013 long lines) still surfaces and blocks the commit.
+      #
+      # npx caches the package after the first download, so steady-state cost is ~1s.
+      glob: "**/*.md"
+      run: |
+        if command -v npx >/dev/null 2>&1; then
+          npx -y -p markdownlint-cli2@0.18.1 markdownlint-cli2 --fix {staged_files}
+        fi
+      stage_fixed: true
+
     # Catch secrets before they land. `git secrets` or `trufflehog` could
     # fit here later. For now, a minimal regex guard against the obvious
     # patterns that shouldn't be in source.

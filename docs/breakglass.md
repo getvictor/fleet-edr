@@ -94,15 +94,18 @@ bootstrap token via SQL and walk the redemption flow against the
 already-redeemed account:
 
 1. Generate the plaintext + hash:
+
    ```bash
    PLAINTEXT=$(openssl rand -base64 32 | tr -d '=' | tr '/+' '_-')
    echo -n "$PLAINTEXT" | sha256sum
    ```
+
    The first command produces the URL-safe base64 plaintext; the
    second emits the hex of its SHA-256. Convert the hex to the
    `VARBINARY(32)` MySQL needs - see the SQL below.
 
 2. Insert the bootstrap token row:
+
    ```sql
    INSERT INTO bootstrap_tokens (token_hash, user_id, kind, expires_at)
    VALUES (
@@ -139,6 +142,7 @@ can mint a recovery URL.
 1. SSH to the host running the EDR server.
 
 2. Connect to MySQL:
+
    ```bash
    mysql -h 127.0.0.1 -P 3306 -u edr edr
    ```
@@ -147,6 +151,7 @@ can mint a recovery URL.
    the page presents is current. NOT required - a credential the
    operator no longer holds can't sign anyway - but it cleans up
    the audit footprint:
+
    ```sql
    DELETE FROM webauthn_credentials
    WHERE user_id = (SELECT id FROM users WHERE email = 'admin@fleet-edr.local');

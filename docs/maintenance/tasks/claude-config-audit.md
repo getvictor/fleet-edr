@@ -79,7 +79,7 @@ A PR titled `Claude config audit YYYY-Q\d`. PR body lists every change with one-
 
 ## Prompt template
 
-```
+```text
 Run the Claude config audit defined in docs/maintenance/tasks/claude-config-audit.md.
 
 Step 1 - read .claude/settings.local.json. For each allow rule, decide: keep / tighten scope / remove.

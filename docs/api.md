@@ -31,7 +31,7 @@ The scheme is always `https://`: the server has no plaintext-HTTP mode
 
 ## Base URL
 
-```
+```text
 https://<your-server>/
 ```
 
@@ -54,7 +54,7 @@ An agent POSTs `/api/enroll` once with the shared enroll secret and
 its hardware UUID. It receives an opaque `host_token`, stored in
 `/var/db/fleet-edr/enrolled.plist`. Every subsequent request carries:
 
-```
+```text
 Authorization: Bearer <host_token>
 ```
 
@@ -63,6 +63,7 @@ commands or post events with `host_id=B`. Revoking an enrollment via
 the admin UI invalidates the token immediately.
 
 Endpoints that require a host token:
+
 - `POST /api/events`
 - `GET  /api/commands` (returns only the authenticated host's queue)
 - `PUT  /api/commands/{id}` (only commands owned by the host)
@@ -74,7 +75,7 @@ response sets `edr_session` (HttpOnly, Secure, SameSite=Lax) and
 returns a `csrf_token` the UI stores client-side. Subsequent unsafe
 requests (`POST`, `PUT`, `DELETE`) carry:
 
-```
+```text
 Cookie: edr_session=<opaque>
 X-CSRF-Token: <csrf_token>
 ```
@@ -82,6 +83,7 @@ X-CSRF-Token: <csrf_token>
 GET requests only need the cookie. Logout is `DELETE /api/session`.
 
 Endpoints that require the session cookie:
+
 - `GET /api/hosts`, `/api/hosts/{host_id}/tree`,
   `/api/hosts/{host_id}/processes/{pid}`
 - `GET /api/alerts`, `/api/alerts/{id}`; `PUT /api/alerts/{id}`

@@ -149,4 +149,3 @@ can refresh its host token without operator intervention.
 - **WHEN** the server returns 401
 - **THEN** the executor invokes the registered authentication-failure callback
 - **AND** the same status update remains the executor's responsibility on the next cycle
-
