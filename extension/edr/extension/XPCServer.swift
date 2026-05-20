@@ -26,7 +26,7 @@ private let peerCodeSigningRequirement = """
 /// followed by `codesign -d -r - agent/tmp/fleet-edr-agent` to read the new hash.
 /// Go's deterministic builds keep this stable across rebuilds of identical
 /// source, so the update cadence matches Go-side code changes, not every build.
-private let adHocPeerCDHash = "ef6e55d784403048aa0346e2e4bbbcf07f9c82dc"
+private let adHocPeerCDHash = "b854184cd523298f078a3281c721ed715c3fe626"
 #else
 private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
 #endif

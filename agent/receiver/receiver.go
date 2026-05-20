@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -156,6 +157,47 @@ func (r *Receiver) SendApplicationControl(payload []byte) error {
 	rc := int(C.xpc_bridge_send_application_control(C.int(r.handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
 	if rc != 0 {
 		return fmt.Errorf("xpc_bridge_send_application_control returned %d", rc)
+	}
+	return nil
+}
+
+// Ping sends a "hello" handshake message to the peer and blocks until the
+// peer's "hello-ack" reply arrives or the timeout fires. Returns nil on a
+// successful round-trip and an error on timeout or connection teardown.
+//
+// Issue #178: macOS XPC can silently route an open connection to a stale
+// Mach port after a system-extension respawn, with no error event ever
+// surfacing. Ping is the agent's positive liveness probe — call it
+// periodically; a failure is the signal to reconnect.
+//
+// We snapshot the handle under r.mu but release the lock before calling
+// into the C bridge so a long ping cannot block Disconnect or SendApplicationControl.
+// The C side retains the connection + semaphore for the duration of the wait,
+// so a concurrent Disconnect cannot free them out from under us. A Disconnect
+// that races with this call will cause the in-flight ping to return -1 (the
+// slot snapshot will observe in_use=0 on the next attempt; in-flight waits
+// fall through cleanly on cancellation).
+func (r *Receiver) Ping(timeout time.Duration) error {
+	r.mu.Lock()
+	handle := r.handle
+	connected := r.connected
+	r.mu.Unlock()
+	if !connected || handle < 0 {
+		return errors.New("receiver not connected")
+	}
+	if timeout <= 0 {
+		return errors.New("ping timeout must be positive")
+	}
+	rc := int(C.xpc_bridge_ping(C.int(handle), C.uint64_t(timeout.Nanoseconds())))
+	if rc != 0 {
+		// The C bridge collapses "timeout waiting for hello-ack" and "slot
+		// torn down concurrently" into a single -1 — the caller's response
+		// (force a reconnect) is the same either way, so distinguishing the
+		// two doesn't change behaviour. The error string names the service
+		// and timeout so the warning log lines that wrap this error are
+		// actionable on their own, without the reader having to cross-
+		// reference the receiver instance.
+		return fmt.Errorf("xpc ping to %q timed out or connection torn down (timeout %s)", r.serviceName, timeout)
 	}
 	return nil
 }
