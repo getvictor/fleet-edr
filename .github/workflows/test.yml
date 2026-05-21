@@ -4,7 +4,14 @@ name: Tests
 # list and emits one boolean per language plus an `any` summary. Each test
 # job is skipped via `if:` when its files weren't touched, so a doc-only PR
 # pays nothing here, and a Go-only PR doesn't wait on UI tests (or vice
-# versa). Sonar + Codecov still run for any-source PRs and tolerate missing
+# versa). An extension-only PR (Swift sources under `extension/`) is the
+# third common shape: its swift-test + swift-lint workflows live in their
+# own files, but Sonar + Codecov in THIS file should still run so the
+# unified "Coverage on New Code" + reliability/security gates apply --
+# `extension/**` therefore feeds `outputs.any` (via ANY_EXTRA_PATTERN), and
+# `e2e-test`'s narrower gate is `outputs.go || outputs.ui` so the macOS
+# extension's PRs don't trigger an irrelevant Playwright run.
+# Sonar + Codecov still run for any-source PRs and tolerate missing
 # coverage artifacts when their producing job was skipped. A skipped
 # required check is treated as success by branch protection, so the gate
 # names (`Agent tests`, `Server tests`, `UI tests`, `SonarCloud scan`,
@@ -66,9 +73,13 @@ jobs:
           # because either could change how any test job runs. The "any extra"
           # pattern catches changes that should still trigger Sonar/Codecov
           # even when no language gate fires (e.g. sonar-project.properties).
+          # `^extension/` is in ANY_EXTRA (not in GO_PATTERN/UI_PATTERN) on
+          # purpose: extension-only PRs should land in Sonar+Codecov so the
+          # Swift sources go through reliability/security/maintainability
+          # gates, but should NOT fire the server/UI test jobs or Playwright.
           GO_PATTERN='\.go$|(^|/)go\.(mod|sum)$|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
           UI_PATTERN='^ui/|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
-          ANY_EXTRA_PATTERN='^sonar-project\.properties$|^\.github/workflows/test\.yml$'
+          ANY_EXTRA_PATTERN='^sonar-project\.properties$|^\.github/workflows/test\.yml$|^extension/'
           go=false; ui=false; any=false
           if echo "$files" | grep -qE "$GO_PATTERN"; then
             go=true; any=true
@@ -286,9 +297,18 @@ jobs:
   e2e-test:
     name: E2E tests with coverage
     needs: changes
+    # E2E exercises the server + UI bundle end-to-end. An extension-only PR
+    # has nothing for Playwright to drive (the macOS system extension does
+    # not run in this job at all -- the agent fixture under test/e2e/fixtures
+    # stands in for it), so the gate is `go || ui` rather than the broader
+    # `any` Sonar+Codecov use. Failsafe `result != 'success'` mirrors the
+    # other gates: a flaky `changes` job runs E2E unconditionally rather
+    # than letting a required check pass via SKIPPED.
     if: >-
       !cancelled()
-      && (needs.changes.result != 'success' || needs.changes.outputs.any == 'true')
+      && (needs.changes.result != 'success'
+          || needs.changes.outputs.go == 'true'
+          || needs.changes.outputs.ui == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
