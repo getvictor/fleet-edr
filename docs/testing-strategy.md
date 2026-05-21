@@ -131,12 +131,15 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 - Driven by `scripts/uat/system-test.sh`: SSHs into the VM, optionally installs the candidate PKG and waits up to 60s
   for system-extension activation, polls the server's `/api/hosts` for the new host to enrol within 30s, runs the
   scenario's `attack.sh`, then polls `/api/alerts` for each rule_id listed in the scenario's `expected.yaml`
-  within the per-rule SLA. UAT plan milestone **M9** delivered the driver + two starter scenarios under
-  `scripts/uat/scenarios/`: `attack-runbook` (asserts six rule_ids fire from the dogfood runbook) and
-  `policy-roundtrip` (asserts blocklist push -> agent ack -> AUTH_EXEC deny). The scenarios are thin wrappers around
-  the existing `scripts/qa/*.sh` dogfood scripts; the dogfood scripts stay the interactive demo, M9 just adds the
-  asserted automation layer on top. Driver supports `--dry-run` for orchestration smoke-tests without driving real
-  infrastructure. See `scripts/uat/README.md` for the schema + capture procedure.
+  within the per-rule SLA. UAT plan milestone **M9** delivered the driver plus one starter scenario,
+  `attack-runbook`, which asserts six rule_ids fire from the dogfood runbook. The scenario is a thin wrapper
+  around `scripts/qa/attack-runbook.sh`; the dogfood script stays the interactive demo, M9 adds the asserted
+  automation layer on top. (A `policy-roundtrip` scenario was originally planned but dropped: its inner
+  `scripts/qa/e2-policy-roundtrip.sh` exercised the legacy `/api/policy` blocklist endpoint, which the server
+  no longer wires -- the replacement is the per-policy `/api/v1/app-control/*` surface, a fundamentally
+  different shape that warrants a fresh scenario tracked separately.) Driver supports `--dry-run` for
+  orchestration smoke-tests without driving real infrastructure. See `scripts/uat/README.md` for the schema
+  - capture procedure.
 - Runs on a self-hosted runner (the GitHub-hosted macOS runners do not allow nested virtualisation or expose the ESF
   entitlement). Schedule + RC tag, never per PR. The self-hosted runner integration itself is UAT plan milestone
   **M11** (not yet landed); until then, the harness runs manually against `edr-qa` (192.168.64.7) and the

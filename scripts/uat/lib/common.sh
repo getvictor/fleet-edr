@@ -190,10 +190,17 @@ uat_server_get() {
 # pair created at-or-after since_unix. Returns 0 on first match, 1 if the
 # deadline expires.
 #
-# The endpoint is /api/alerts -- no `since` query parameter exists on the
-# server, so we filter client-side via jq on `created_at >= since_unix`. The
-# since gate guards against false positives from alerts emitted on the same
-# host_id by a previous scenario run.
+# Server-side filter is host_id only -- /api/alerts's AlertFilter
+# (server/detection/api/types.go) accepts host_id, status, severity, source,
+# process_id, limit. There is no rule_id filter, no `since` filter. We push
+# the host_id filter to the server (cheap to evaluate, narrows the response)
+# and filter client-side by rule_id + created_at via jq.
+#
+# Response shape: the handler writes []api.Alert directly to the body, so it
+# is a TOP-LEVEL JSON array -- NOT wrapped in `{alerts: [...]}`. jq must
+# iterate `.[]?` at the root. The Alert struct's CreatedAt is a Go time.Time
+# (json:"created_at") which serializes as an RFC3339 string; we compare via
+# `date -j -f %Y-%m-%dT%H:%M:%S` to a unix epoch on macOS.
 uat_poll_alerts() {
   local host_id="$1" rule_id="$2" within="$3" since_unix="$4"
   # Dry-run short-circuit: log what we WOULD poll for and return success.
@@ -203,7 +210,7 @@ uat_poll_alerts() {
   if [[ "${UAT_DRY_RUN:-0}" == "1" ]]; then
     local body
     body="${UAT_TMPDIR:-/tmp}/alerts-$rule_id.json"
-    uat_server_get "/api/alerts?host_id=$host_id&rule_id=$rule_id&limit=50" "$body" >/dev/null
+    uat_server_get "/api/alerts?host_id=$host_id&limit=100" "$body" >/dev/null
     return 0
   fi
   local deadline
@@ -211,12 +218,27 @@ uat_poll_alerts() {
   local body
   body="${UAT_TMPDIR:-/tmp}/alerts-$rule_id.json"
   while (( $(date +%s) < deadline )); do
-    if uat_server_get "/api/alerts?host_id=$host_id&rule_id=$rule_id&limit=50" "$body"; then
-      local fresh_count
-      fresh_count=$(jq -r --arg since "$since_unix" \
-        '[.alerts[]? | select((.created_at_unix // 0) >= ($since | tonumber))] | length' \
-        "$body" 2>/dev/null || echo 0)
-      if [[ "$fresh_count" -gt 0 ]]; then
+    if uat_server_get "/api/alerts?host_id=$host_id&limit=100" "$body"; then
+      # Client-side filter: rule_id match + created_at parses to a unix
+      # epoch >= since_unix. `date -j -f` is macOS-portable (vs GNU `date
+      # -d` which the dogfood scripts already avoid); the format strips
+      # the "Z" / fractional seconds with a sed pass before parsing.
+      local matched=0
+      while IFS= read -r created_at; do
+        [[ -z "$created_at" ]] && continue
+        local trimmed alert_unix
+        trimmed=$(printf '%s' "$created_at" | sed -E 's/\.[0-9]+//;s/Z$//;s/([+-][0-9]{2}):?([0-9]{2})$//')
+        alert_unix=$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$trimmed" '+%s' 2>/dev/null || echo 0)
+        if [[ "$alert_unix" -ge "$since_unix" ]]; then
+          matched=1
+          break
+        fi
+      done < <(
+        jq -r --arg rid "$rule_id" \
+          '.[]? | select(.rule_id == $rid) | .created_at' \
+          "$body" 2>/dev/null
+      )
+      if [[ "$matched" -eq 1 ]]; then
         return 0
       fi
     fi
@@ -254,6 +276,11 @@ uat_wait_for_extension() {
 # UUID) appears. The driver uses this after PKG install to make sure the
 # agent actually enrolled rather than silently failing on a bad
 # enroll_secret. Returns the host's UUID on success via stdout.
+#
+# Response shape: /api/hosts writes []api.HostSummary directly to the body
+# (per server/detection/internal/operator/handler.go handleListHosts), so
+# the JSON root is a TOP-LEVEL array, NOT `{hosts: [...]}`. jq iterates
+# `.[]?` at the root.
 uat_wait_for_host_enrolment() {
   local hostname="$1" within="$2"
   local deadline
@@ -261,10 +288,10 @@ uat_wait_for_host_enrolment() {
   local body
   body="${UAT_TMPDIR:-/tmp}/hosts.json"
   while (( $(date +%s) < deadline )); do
-    if uat_server_get "/api/hosts?limit=100" "$body"; then
+    if uat_server_get "/api/hosts" "$body"; then
       local host_id
       host_id=$(jq -r --arg h "$hostname" \
-        '.hosts[]? | select(.hostname == $h) | .host_id' \
+        '.[]? | select(.hostname == $h) | .host_id' \
         "$body" | head -1)
       if [[ -n "$host_id" && "$host_id" != "null" ]]; then
         echo "$host_id"

@@ -24,10 +24,14 @@
 #
 # Usage from this workstation:
 #   EDR_SERVER_URL=https://edr.local:8088 \
-#   EDR_ADMIN_EMAIL=admin@fleet-edr.local \
-#   EDR_ADMIN_PASSWORD=<paste> \
+#   EDR_SESSION_COOKIE=<paste edr_session cookie value from browser devtools> \
 #   VM_SSH_TARGET=victor@192.168.64.5 \
 #   bash scripts/qa/e4-uninstall.sh
+#
+# EDR_SESSION_COOKIE: the server has no password-based POST /api/session;
+# login is OIDC or break-glass WebAuthn. Do one browser login, copy the
+# `edr_session` cookie value from devtools, export it, reuse until the
+# session expires.
 #
 # Add --reinstall PATH/TO/fleet-edr-vX.Y.Z.pkg to also exercise the
 # re-install half. The pkg path is the local file on this workstation
@@ -46,7 +50,7 @@ require_env() {
   done
   return 0
 }
-require_env EDR_SERVER_URL EDR_ADMIN_EMAIL EDR_ADMIN_PASSWORD VM_SSH_TARGET
+require_env EDR_SERVER_URL EDR_SESSION_COOKIE VM_SSH_TARGET
 
 # Constant for the SSH stdin-driver argument used on every remote-bash
 # block below — Sonar S1192 flags `'bash -s'` four times; one constant
@@ -63,11 +67,11 @@ case "${1:-}" in
   *) ;;
 esac
 
-# Private workdir: cookie jar + login response carry an admin session.
+# Private workdir.
 umask 077
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/edr-e4-uninstall.XXXXXX")
 chmod 700 "$WORKDIR"
-COOKIE_JAR="$WORKDIR/cookies"
+COOKIE_HEADER="Cookie: edr_session=$EDR_SESSION_COOKIE"
 
 hr() {
   printf '\n%s\n' '────────────────────────────────────────────────────────'
@@ -150,26 +154,26 @@ EOF
 # we give 6 min plus a poll cadence to be confident.
 hr
 echo "[e4] step 4: wait ≤6 min for server to mark host offline"
-http_code=$(curl -sS -o "$WORKDIR/login.json" -w '%{http_code}' \
-  -c "$COOKIE_JAR" \
-  -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg e "$EDR_ADMIN_EMAIL" --arg p "$EDR_ADMIN_PASSWORD" '{email:$e,password:$p}')" \
-  "$EDR_SERVER_URL/api/v1/session" || echo "000")
-if [[ "$http_code" != "200" ]]; then
-  echo "[e4] login HTTP $http_code; offline check skipped"
+# Validate the session cookie up front so a 401 / bad-cookie surfaces here,
+# not 6 minutes later mid-poll.
+session_code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H "$COOKIE_HEADER" \
+  "$EDR_SERVER_URL/api/session" || echo "000")
+if [[ "$session_code" != "200" ]]; then
+  echo "[e4] GET /api/session HTTP $session_code (EDR_SESSION_COOKIE expired or invalid?); offline check skipped"
 else
-  # /api/v1/hosts returns a top-level JSON array of HostSummary objects
-  # per the OpenAPI spec — not an object with a `.hosts` field. Iterate
-  # the array root.
+  # /api/hosts returns a top-level JSON array of HostSummary objects
+  # per the operator handler shape (server/detection/internal/operator/handler.go).
+  # Iterate the array root, not a wrapping object.
   deadline=$(( $(date +%s) + 360 ))
   last_seen=""
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
-    last_seen=$(curl -sS -b "$COOKIE_JAR" \
-      "$EDR_SERVER_URL/api/v1/hosts" 2>/dev/null \
+    last_seen=$(curl -sS -H "$COOKIE_HEADER" \
+      "$EDR_SERVER_URL/api/hosts" \
       | jq -r --arg id "$HOST_ID" '.[]? | select(.host_id==$id) | .last_seen_ns // ""' \
       | tr -d '[:space:]')
     if [[ -z "$last_seen" ]]; then
-      echo "[e4] host no longer in /api/v1/hosts list (or offline filter applied)"
+      echo "[e4] host no longer in /api/hosts list (or offline filter applied)"
       break
     fi
     age_s=$(( $(date +%s) - last_seen / 1000000000 ))

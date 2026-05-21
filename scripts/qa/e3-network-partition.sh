@@ -32,11 +32,17 @@
 #
 # Usage from this workstation:
 #   EDR_SERVER_URL=https://edr.local:8088 \
-#   EDR_ADMIN_EMAIL=admin@fleet-edr.local \
-#   EDR_ADMIN_PASSWORD=<paste> \
+#   EDR_SESSION_COOKIE=<paste edr_session cookie value from browser devtools> \
 #   VM_SSH_TARGET=victor@192.168.64.5 \
 #   EDR_SERVER_IP=192.168.64.1 \
 #   bash scripts/qa/e3-network-partition.sh
+#
+# EDR_SESSION_COOKIE: the server has no password-based POST /api/session;
+# login is OIDC (browser redirect) or break-glass WebAuthn (passkey-only),
+# neither of which is shell-scriptable. Do one browser login, open
+# devtools (Application → Cookies), copy the `edr_session` cookie value,
+# and export it before running this script. Reuse across many runs
+# until the session expires.
 #
 # EDR_SERVER_IP is the IP the agent on the VM uses to reach the
 # server — typically the host's bridge address. We block at the IP
@@ -57,7 +63,7 @@ require_env() {
   done
   return 0
 }
-require_env EDR_SERVER_URL EDR_ADMIN_EMAIL EDR_ADMIN_PASSWORD VM_SSH_TARGET EDR_SERVER_IP
+require_env EDR_SERVER_URL EDR_SESSION_COOKIE VM_SSH_TARGET EDR_SERVER_IP
 
 # Constant for the SSH stdin-driver argument used on every remote-bash
 # block below. Sonar's S1192 (de-duplicate string literals) flags
@@ -71,11 +77,10 @@ case "${1:-}" in
   *) ;;
 esac
 
-# Private workdir: cookie jar holds an admin session.
+# Private workdir.
 umask 077
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/edr-e3-partition.XXXXXX")
 chmod 700 "$WORKDIR"
-COOKIE_JAR="$WORKDIR/cookies"
 PF_ANCHOR="com.fleetdm.edr.e3"
 # Captured before we touch pf so the cleanup trap can roll back to the
 # operator's original PF state instead of leaving it enabled.
@@ -105,18 +110,20 @@ EOF
 }
 trap cleanup_pf EXIT
 
-# Authenticate so we can query alerts + the host's event count
-# afterwards. The PUT to admin/policy isn't needed in this scenario
-# but we still need a session to read /api/v1/alerts.
+# Validate the supplied session cookie via GET /api/session before running
+# the partition. A bad cookie surfaces here cheaply rather than 12 minutes
+# later when step 8 tries to list alerts. The cookie header is reused on
+# every subsequent curl call.
 hr
-echo "[e3] step 1: authenticate"
-http_code=$(curl -sS -o "$WORKDIR/login.json" -w '%{http_code}' \
-  -c "$COOKIE_JAR" \
-  -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg e "$EDR_ADMIN_EMAIL" --arg p "$EDR_ADMIN_PASSWORD" \
-       '{email:$e,password:$p}')" \
-  "$EDR_SERVER_URL/api/v1/session" || echo "000")
-[[ "$http_code" = "200" ]] || { echo "[e3] login failed HTTP $http_code"; exit 1; }
+echo "[e3] step 1: validate session cookie"
+COOKIE_HEADER="Cookie: edr_session=$EDR_SESSION_COOKIE"
+http_code=$(curl -sS -o "$WORKDIR/session.json" -w '%{http_code}' \
+  -H "$COOKIE_HEADER" \
+  "$EDR_SERVER_URL/api/session" || echo "000")
+if [[ "$http_code" != "200" ]]; then
+  echo "[e3] GET /api/session failed HTTP $http_code (EDR_SESSION_COOKIE expired or invalid?)"
+  exit 1
+fi
 HOST_ID=$(ssh -o BatchMode=yes "$VM_SSH_TARGET" \
   "sudo /usr/bin/plutil -extract host_id raw -o - /var/db/fleet-edr/enrolled.plist" \
   | tr -d '[:space:]')
@@ -206,15 +213,15 @@ if [[ "$final_queue" -gt "$baseline_queue" ]]; then
   echo "[e3] FAIL: queue still has $final_queue events (baseline was $baseline_queue)"
 fi
 
-# Server-side: count events for this host since the test started, and
-# look for duplicate event_ids — both queries use admin endpoints that
-# require the session cookie from step 1.
+# Server-side: count open alerts for this host. /api/alerts returns a
+# top-level array of api.Alert objects (not an object with a `.alerts`
+# field), so jq's `length` runs on the array root directly.
 hr
 echo "[e3] step 8: server-side sanity"
-echo "[e3] event count for host $HOST_ID:"
-curl -sS -b "$COOKIE_JAR" \
-  "$EDR_SERVER_URL/api/v1/alerts?host_id=$HOST_ID&status=open" | \
-  jq '{open_alerts_count: (.alerts // [] | length)}' || true
+echo "[e3] open alerts count for host $HOST_ID:"
+curl -sS -H "$COOKIE_HEADER" \
+  "$EDR_SERVER_URL/api/alerts?host_id=$HOST_ID&status=open" | \
+  jq '{open_alerts_count: length}' || true
 echo "[e3] (no per-host event-count endpoint today; query via DB if you need exact numbers)"
 
 hr

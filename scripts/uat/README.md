@@ -40,10 +40,12 @@ M9's assertion layer picks the change up automatically.
           README.md
           attack.sh
           expected.yaml
-        policy-roundtrip/    -- blocklist push -> blocked exec
-          README.md
-          attack.sh
-          expected.yaml
+
+A blocklist policy-roundtrip scenario used to live here; it has been
+dropped because the underlying server endpoint (`/api/policy`) is gone --
+the replacement is the per-policy app-control admin surface at
+`/api/v1/app-control/*`. A fresh scenario over the new API is tracked
+separately.
 
 ## Running
 
@@ -76,7 +78,6 @@ the browser login.
 Run one scenario:
 
     scripts/uat/system-test.sh attack-runbook
-    scripts/uat/system-test.sh policy-roundtrip
 
 Options:
 
