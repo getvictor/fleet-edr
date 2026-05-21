@@ -8,6 +8,11 @@ xcuserdata/
 DerivedData/
 build/
 
+# SwiftPM (extension/edr/Package.swift, used for `swift test` on extension Swift sources)
+.build/
+.swiftpm/
+Package.resolved
+
 # IDEs
 .idea/
 

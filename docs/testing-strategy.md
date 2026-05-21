@@ -50,7 +50,16 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 
 - Per-package Go tests, co-located with the code.
 - Vitest + V8 coverage for `ui/`.
-- XCTest for Swift code in `extension/edr/` that does not require ESF or Network Extension framework objects.
+- XCTest for Swift code in `extension/edr/` that does not require ESF or Network Extension framework objects. Driven
+  by a SwiftPM package at `extension/edr/Package.swift` (sibling to `edr.xcodeproj`) that references the existing
+  Swift sources via explicit `sources:` paths, with tests under `extension/edr/Tests/EDRExtensionLogicTests/`. CI runs
+  `swift test --enable-code-coverage` on `macos-latest` via `.github/workflows/swift-test.yml`, gated by the same
+  `extension/**` path filter as `swift-lint.yml`. UAT plan milestone **M7** delivered the package + initial test
+  suites for `DNSParser`, `EventSerializer`'s payload + envelope structs, `BlockNotification`, `ApplicationControlStore`,
+  and `FileHashCache`; `SigningInfoFallback` is deferred until a reliably-signed test fixture binary is in tree
+  (it walks SecStaticCode against a real Mach-O on disk). The Xcode project remains the production build path for the
+  signed system extension, network extension, and host app bundles -- main.swift, XPCServer, ESFClient and friends
+  are deliberately NOT in the package's `sources:` list and only build inside their respective Xcode targets.
 - Style guide: see `## Testing` in `CLAUDE.md` and `docs/go-conventions.md`. Table-driven by default, property-based
   via `pgregory.net/rapid` for invariants, `go test -fuzz` for untrusted input parsers.
 
@@ -314,7 +323,7 @@ relevant inputs change.
 |---|---|---|
 | Unit (Go) | `go test -coverpkg=./server/...,./agent/...,./internal/...` | Sonar 80% on new code |
 | Unit (TS) | `vitest --coverage` (V8) | Sonar 80% on new code |
-| Unit (Swift) | `xcodebuild test -enableCodeCoverage YES` | Sonar 80% on new code (same unified gate as Go and TS) |
+| Unit (Swift) | `swift test --enable-code-coverage` via `extension/edr/Package.swift` | Sonar 80% on new code (same unified gate as Go and TS) |
 | Integration layers (per-context, cross-context, headless) | wide `-coverpkg`, merged via `go tool covdata textfmt` | feeds the same Sonar Go gate |
 | Browser E2E | monocart V8 coverage, merged into `lcov-e2e.info` | feeds the Sonar TS gate |
 | System / VM | per-scenario pass/fail; no line coverage | green/red checklist in the workflow run |
