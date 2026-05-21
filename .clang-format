@@ -1,3 +1,7 @@
 BasedOnStyle: LLVM
 IndentWidth: 4
 ColumnLimit: 120
+# Treat Go build-constraint comments (`//go:build ...`) as pragmas so clang-format leaves them alone. Without this, clang-format flags
+# the missing space after `//` as a style violation, but Go's toolchain requires the exact `//go:build` syntax with no space (per
+# Go's build-constraint spec); the two style rules are non-negotiable, so we exempt the directive. See agent/receiver/bridge.c.
+CommentPragmas: '^go:build'
