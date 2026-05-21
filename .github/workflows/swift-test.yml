@@ -41,6 +41,11 @@ jobs:
   swift-test:
     name: Swift unit tests
     runs-on: macos-latest
+    # Bound the wall clock so a deadlocked XCTestExpectation, a stuck `swift test`
+    # linker, or an Apple-side toolchain regression cannot consume the default
+    # 360-minute per-job budget on a billing-multiplier runner. The whole job
+    # historically runs in well under 5 minutes; 20 is a generous ceiling.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
