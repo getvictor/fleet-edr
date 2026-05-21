@@ -4,9 +4,9 @@
 // the production agent, substitutes the non-darwin stub receiver for the XPC bridge, and exposes a unix-socket control plane so test
 // scenarios can inject events. See UAT plan layer L3 in docs/testing-strategy.md.
 //
-// This file is the entrypoint only; the actual wiring lives in headless.go (Run) and control.go (HTTP handlers) so the logic stays
-// covered by the integration test in headless_test.go. main.go is excluded from Sonar's new-code coverage gate via the
-// **/cmd/**/main.go rule in sonar-project.properties.
+// This file is the entrypoint only. All wiring lives in the headless sub-package so the L3 integration tests at
+// test/integration/agentserver can import the same Run / Options surface the binary calls. main.go is excluded from Sonar's new-code
+// coverage gate via the **/cmd/**/main.go rule in sonar-project.properties.
 package main
 
 import (
@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/fleetdm/edr/agent/cmd/fleet-edr-agent-headless/headless"
 	"github.com/fleetdm/edr/agent/config"
 	"github.com/fleetdm/edr/agent/enrollment"
 )
@@ -63,7 +64,7 @@ func mainErr() error {
 		return fmt.Errorf("enrollment: %w", err)
 	}
 
-	return Run(ctx, Options{
+	return headless.Run(ctx, headless.Options{
 		ServerURL:      cfg.ServerURL,
 		HostID:         tokenProvider.HostID(),
 		QueuePath:      cfg.QueueDBPath,

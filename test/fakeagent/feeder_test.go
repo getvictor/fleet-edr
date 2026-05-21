@@ -98,7 +98,7 @@ func TestFeedControlPlane_RoundTrip(t *testing.T) {
 	var first Envelope
 	require.NoError(t, json.Unmarshal(bodies[0], &first))
 	assert.Equal(t, "fork", first.EventType)
-	assert.Equal(t, "exec-fork-exit-host", first.HostID)
+	assert.Equal(t, "AAAA0002-0000-0000-0000-000000000002", first.HostID)
 	assert.Equal(t, "e-0", first.EventID)
 	assert.Equal(t, start.UnixNano(), first.TimestampNs)
 

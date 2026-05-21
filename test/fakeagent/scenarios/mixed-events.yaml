@@ -1,0 +1,45 @@
+# Mixed-event scenario: a process forks, execs, opens a file, resolves a hostname, opens an outbound TCP connection, then exits.
+# Exercises five of the seven event types in a single timeline so the integration test covers every payload-shape branch in
+# fakeagent.buildPayload from one fixture. Remote IP is RFC 5737 TEST-NET-3 so the scenario reads as obviously synthetic.
+name: "Mixed events: one process touches the file, DNS, network paths"
+host:
+  id: AAAA0005-0000-0000-0000-000000000005
+  hostname: lab-mac.local
+  os: macOS 14.4
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 7001
+    parent_pid: 1
+  - at: 2ms
+    type: exec
+    pid: 7001
+    ppid: 1
+    path: /usr/bin/curl
+    args: ["curl", "https://api.example.com/heartbeat"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+  - at: 5ms
+    type: open
+    pid: 7001
+    path: /etc/resolv.conf
+    flags: 0
+  - at: 8ms
+    type: dns_query
+    pid: 7001
+    query_name: api.example.com
+    query_type: A
+    response_addresses: ["203.0.113.99"]
+    protocol: udp
+  - at: 20ms
+    type: network_connect
+    pid: 7001
+    protocol: tcp
+    direction: outbound
+    remote_address: 203.0.113.99
+    remote_port: 443
+  - at: 150ms
+    type: exit
+    pid: 7001
+    exit_code: 0

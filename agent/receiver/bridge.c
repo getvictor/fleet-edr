@@ -1,3 +1,10 @@
+// Build constraint must match the sibling Go files (receiver.go, callbacks.go) so this C source is excluded under
+// linux + cgo=1 and darwin + cgo=0 alike. Without it, a `go build` under cgo finds bridge.c with no companion Go
+// file `import "C"`-ing on the matching platform and errors with "C source files not allowed when not using cgo
+// or SWIG". Plain `//go:build` directives are honoured by go/build for .c sources in cgo packages.
+//
+//go:build darwin && cgo
+
 #include "_cgo_export.h"
 #include "xpc_bridge.c"
 #include "xpc_bridge.h"

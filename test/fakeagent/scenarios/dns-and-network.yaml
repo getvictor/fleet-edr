@@ -4,7 +4,7 @@
 name: "DNS then outbound TCP"
 mitre: T1071.004
 host:
-  id: dns-net-host
+  id: AAAA0003-0000-0000-0000-000000000003
   hostname: lab-mac.local
   os: macOS 14.4
 timeline:
