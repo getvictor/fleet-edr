@@ -107,10 +107,39 @@ export interface AgentScenarioOptions {
   startTime?: Date;
 }
 
+export interface BatchEnrollOptions {
+  /**
+   * Scenario YAML name (e.g. "quiet-host.yaml") whose timeline is replayed for every host in the batch. Defaults to
+   * "quiet-host.yaml" so each host materialises with a single snapshot_heartbeat event - enough to appear in the host list but
+   * cheap to ingest. Specs that want per-host event variety (e.g. host-list-event-count) override this.
+   */
+  scenarioFile?: string;
+  /**
+   * Optional prefix on the host_id pattern. The fixture mints `${prefix}-${i}-${crypto.randomUUID()}` shaped IDs (using a UUID
+   * suffix to satisfy the endpoint service's hardware_uuid regex). Default prefix is empty so the IDs are plain UUIDs.
+   */
+  hostnamePrefix?: string;
+}
+
+export interface BatchEnrollResult {
+  hostId: string;
+  hostToken: string;
+  eventsPosted: number;
+}
+
 export interface AgentFixtures {
   agent: {
     /** Load + post one scenario in one call. Returns once /api/events returns 200 for every envelope. */
     runScenario(name: string, opts?: AgentScenarioOptions): Promise<AgentScenarioResult>;
+    /**
+     * Enrol `count` hosts in parallel and feed each one through the configured scenario. Returns an array of results in
+     * deterministic order (i.e. result[i] corresponds to the i-th host). Used by the host-list pagination + multi-host specs
+     * that need to populate enough rows to exercise the UI's listing behaviour.
+     *
+     * Parallelism is bounded by the dev server's concurrency (sufficient for batches of tens; for hundreds, the caller should
+     * chunk explicitly). Each host gets a unique UUID, a unique hostname (prefix + index), and an independent scenario run.
+     */
+    enrollHostsBatch(count: number, opts?: BatchEnrollOptions): Promise<BatchEnrollResult[]>;
   };
 }
 
@@ -123,23 +152,46 @@ export const test = base.extend<AgentFixtures>({
     }
     const ctx = await playwrightRequest.newContext({ baseURL, ignoreHTTPSErrors: true });
     try {
+      const runScenario = async (name: string, opts?: AgentScenarioOptions): Promise<AgentScenarioResult> => {
+        const scenario = await loadScenario(name);
+        const hostId = opts?.hostIdOverride ?? scenario.host.id;
+        const hostname = scenario.host.hostname ?? "playwright.lab.local";
+        const hostToken = await enrollHost(ctx, hostId, hostname);
+        const envelopes = generateEnvelopes(scenario, hostId, opts?.startTime ?? new Date());
+        // stringifyEnvelopes serialises BigInt timestamp_ns as an unquoted JSON number. ctx.post's `data` field would JSON-encode
+        // via Object.prototype.toString on a BigInt, which throws; passing `body` skips that path.
+        const resp = await ctx.post("/api/events", {
+          data: stringifyEnvelopes(envelopes),
+          headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" },
+        });
+        if (!resp.ok()) {
+          const body = await resp.text();
+          throw new Error(`POST /api/events for ${hostId}: HTTP ${resp.status()}: ${body}`);
+        }
+        return { hostId, eventsPosted: envelopes.length, hostToken };
+      };
+
       await use({
-        async runScenario(name: string, opts?: AgentScenarioOptions): Promise<AgentScenarioResult> {
-          const scenario = await loadScenario(name);
-          const hostId = opts?.hostIdOverride ?? scenario.host.id;
-          const hostToken = await enrollHost(ctx, hostId, scenario.host.hostname ?? "playwright.lab.local");
-          const envelopes = generateEnvelopes(scenario, hostId, opts?.startTime ?? new Date());
-          // stringifyEnvelopes serialises BigInt timestamp_ns as an unquoted JSON number. ctx.post's `data` field would JSON-encode
-          // via Object.prototype.toString on a BigInt, which throws; passing `body` skips that path.
-          const resp = await ctx.post("/api/events", {
-            data: stringifyEnvelopes(envelopes),
-            headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" },
-          });
-          if (!resp.ok()) {
-            const body = await resp.text();
-            throw new Error(`POST /api/events for ${hostId}: HTTP ${resp.status()}: ${body}`);
+        runScenario,
+        async enrollHostsBatch(count: number, opts?: BatchEnrollOptions): Promise<BatchEnrollResult[]> {
+          if (count <= 0) {
+            throw new Error(`enrollHostsBatch: count must be > 0, got ${count}`);
           }
-          return { hostId, eventsPosted: envelopes.length, hostToken };
+          const scenarioFile = opts?.scenarioFile ?? "quiet-host.yaml";
+          // Each host gets a fresh UUID. Running in parallel via Promise.all keeps wall time bounded; the dev server handles
+          // tens of concurrent enrolments comfortably (the existing rate limit is 1000/min via integration.Setup's
+          // EnrollRatePerMinute, and dev's default is similarly generous).
+          //
+          // The hostnamePrefix option is reserved for the future variant of this helper that varies hostname per host (when
+          // tests want to assert on specific rows by name). Today every host gets the scenario's default hostname; the host_id
+          // is still unique so listings + DB queries can still pick rows apart.
+          void opts?.hostnamePrefix;
+          const tasks = Array.from({ length: count }, async () => {
+            const hostId = crypto.randomUUID();
+            const r = await runScenario(scenarioFile, { hostIdOverride: hostId });
+            return { hostId: r.hostId, hostToken: r.hostToken, eventsPosted: r.eventsPosted };
+          });
+          return Promise.all(tasks);
         },
       });
     } finally {
