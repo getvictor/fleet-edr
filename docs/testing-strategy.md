@@ -89,7 +89,12 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 - Playwright tests live in `test/e2e/`. Real server + real MySQL + real UI; tests start the server via the
   `webServer` block in `playwright.config.ts`.
 - For tests that need realistic agent data (process trees, alerts, app-control flow, host list), the spec drives the
-  fake-agent control plane to inject a scenario, waits for the events to land, then drives the UI.
+  M5 fixture at `test/e2e/fixtures/agent.ts`: it reads the same YAML scenarios as the Go fakeagent library
+  (`test/fakeagent/scenarios/`), enrolls a per-test host via `/api/enroll`, generates wire envelopes matching
+  `schema/events.json`, then POSTs them to `/api/events` with the minted bearer token. The smoke spec at
+  `test/e2e/tests/qa/agent-events-flow.spec.ts` proves the wire end-to-end across the starter corpus. The fixture
+  bypasses the headless agent binary intentionally - the queue + uploader path is already L3-covered (M4); L4 is
+  about UI behavior under realistic data.
 - For pure auth/RBAC/session tests, direct SQL fixtures under `test/e2e/fixtures/db.ts` remain the right tool; they
   are faster and the data they seed is not exercised through the ingestion path.
 - CI runs Playwright in phases (`scripts/test-e2e-coverage.sh`) so env-isolation tests (rate limits, short session
