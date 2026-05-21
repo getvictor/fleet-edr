@@ -129,8 +129,8 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
   signed PKG install actually delivers. Snapshots revert to a known-good "clean-pre-install" state for each run so
   signing, notarization, and extension activation are exercised every time.
 - Driven by `scripts/uat/system-test.sh`: SSHs into the VM, optionally installs the candidate PKG and waits up to 60s
-  for system-extension activation, polls the server's `/api/v1/hosts` for the new host to enrol within 30s, runs the
-  scenario's `attack.sh`, then polls `/api/v1/alerts` for each rule_id listed in the scenario's `expected.yaml`
+  for system-extension activation, polls the server's `/api/hosts` for the new host to enrol within 30s, runs the
+  scenario's `attack.sh`, then polls `/api/alerts` for each rule_id listed in the scenario's `expected.yaml`
   within the per-rule SLA. UAT plan milestone **M9** delivered the driver + two starter scenarios under
   `scripts/uat/scenarios/`: `attack-runbook` (asserts six rule_ids fire from the dogfood runbook) and
   `policy-roundtrip` (asserts blocklist push -> agent ack -> AUTH_EXEC deny). The scenarios are thin wrappers around

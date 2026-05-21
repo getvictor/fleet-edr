@@ -20,13 +20,15 @@
 #   UAT_HOST_ID         the VM's host_id on the server
 #   UAT_SCRIPT_DIR      scripts/uat/ absolute path
 
-set -uEo pipefail
+# `set -e` so a non-zero exit from the inner e2-policy-roundtrip.sh aborts
+# this wrapper immediately. Without -e, the final `uat_log "inner script
+# completed"` would run regardless of the inner script's exit code AND
+# would itself exit 0, producing a false PASS to the system-test driver.
+set -eEuo pipefail
 
 : "${UAT_VM_SSH_TARGET:?driver did not set UAT_VM_SSH_TARGET}"
 : "${UAT_SCRIPT_DIR:?driver did not set UAT_SCRIPT_DIR}"
 : "${EDR_SERVER_URL:?missing required env}"
-: "${EDR_ADMIN_EMAIL:?missing required env}"
-: "${EDR_ADMIN_PASSWORD:?missing required env}"
 
 # shellcheck disable=SC1091  # sourced path computed from UAT_SCRIPT_DIR; shellcheck cannot follow
 . "$UAT_SCRIPT_DIR/lib/common.sh"
@@ -39,16 +41,26 @@ if [[ ! -f "$INNER_SCRIPT" ]]; then
   exit 1
 fi
 
+# NOTE: scripts/qa/e2-policy-roundtrip.sh currently POSTs to /api/v1/session
+# for password-based login, an endpoint the server no longer exposes (login
+# is OIDC or break-glass WebAuthn). The inner script will fail on its
+# auth step until that drift is fixed upstream -- tracked separately.
+# Until then this wrapper's role is shape-validation: the driver still
+# verifies the (asserted scenario directory layout, attack.sh executable
+# bit, expected.yaml schema) contract, and the inner script's eventual
+# fix lands without changing this wrapper.
+
 uat_log policy-roundtrip "delegating to $INNER_SCRIPT"
 
 # e2-policy-roundtrip.sh reads EDR_SERVER_URL / EDR_ADMIN_* / VM_SSH_TARGET
-# from the environment. The driver has already exported those by the time we
-# get here, so just re-export VM_SSH_TARGET under the name the inner script
-# expects (we use UAT_VM_SSH_TARGET to namespace driver-internal state).
+# from the environment. The driver has already exported the first two; we
+# re-export VM_SSH_TARGET under the name the inner script expects (we use
+# UAT_VM_SSH_TARGET to namespace driver-internal state). EDR_ADMIN_EMAIL /
+# _PASSWORD are passed through directly when the operator has set them.
 VM_SSH_TARGET="$UAT_VM_SSH_TARGET" \
 EDR_SERVER_URL="$EDR_SERVER_URL" \
-EDR_ADMIN_EMAIL="$EDR_ADMIN_EMAIL" \
-EDR_ADMIN_PASSWORD="$EDR_ADMIN_PASSWORD" \
+EDR_ADMIN_EMAIL="${EDR_ADMIN_EMAIL:-}" \
+EDR_ADMIN_PASSWORD="${EDR_ADMIN_PASSWORD:-}" \
   bash "$INNER_SCRIPT"
 
 uat_log policy-roundtrip "inner script completed"

@@ -49,10 +49,29 @@ M9's assertion layer picks the change up automatically.
 
 Required environment:
 
-    EDR_SERVER_URL=https://edr.local:8088    # no trailing slash
+    EDR_SERVER_URL=https://edr.local:8088     # no trailing slash
+    EDR_SESSION_COOKIE=<paste from devtools>  # see "Auth flow" below
+    VM_SSH_TARGET=victor@192.168.64.7         # edr-qa, SIP on. NOT edr-dev.
+
+Optional environment (only consumed by inner `scripts/qa/*.sh` wrappers that
+still print these in their per-step summary; the driver itself does not need
+them):
+
     EDR_ADMIN_EMAIL=admin@fleet-edr.local
     EDR_ADMIN_PASSWORD=<paste from server boot log>
-    VM_SSH_TARGET=victor@192.168.64.7        # edr-qa, SIP on. NOT edr-dev.
+
+### Auth flow
+
+The server has no password-based `POST /api/session` route; login is OIDC
+(browser redirect to dex / IdP) or break-glass WebAuthn (passkey, browser-
+only). Neither is shell-scriptable. The realistic L5 mechanic is to do ONE
+browser login, copy the `edr_session` cookie value from devtools
+(Application → Cookies → `edr_session`), export it as `EDR_SESSION_COOKIE`,
+and reuse it across many scenario runs until the session expires.
+
+The driver verifies the cookie up front by calling `GET /api/session`. If
+that returns 401, the cookie is expired and the driver fails fast — repeat
+the browser login.
 
 Run one scenario:
 
@@ -82,8 +101,9 @@ L5 must validate against.
 `edr-dev` (192.168.64.5) runs with SIP disabled for fast iteration.
 Running L5 there would catch nothing extra over L0/L4 and would
 contaminate `edr-qa`'s "clean-pre-install" snapshot if we cross-wired
-them. See `~/.claude/projects/-Users-victor-work-edr/memory/vm_layout.md`
-in the maintainer's notes for the full rationale.
+them. The VM environment requirements (SIP enabled, Gatekeeper enabled,
+snapshot-restored per run, no Xcode / Homebrew) are spelled out in the
+L5 section of `docs/testing-strategy.md`.
 
 ## Adding a new scenario
 
@@ -93,8 +113,9 @@ in the maintainer's notes for the full rationale.
    - `UAT_HOST_ID` -- the VM's host_id on the server
    - `UAT_SCRIPT_DIR` -- scripts/uat/ absolute path (for sourcing lib/common.sh)
    It should exit 0 on its own assertions passing, non-zero otherwise.
-3. Drop in an `expected.yaml`. Schema (indented as YAML; the file itself
-   has no comments):
+3. Drop in an `expected.yaml`. Schema (indented as YAML; `# comments` are
+   tolerated on any line — the driver's awk parser strips inline comments
+   before extracting values):
 
        scenario_id: <name>
        description: <one line for operator logs>

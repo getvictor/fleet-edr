@@ -16,7 +16,11 @@
 #   UAT_HOST_ID         the VM's host_id on the server
 #   UAT_SCRIPT_DIR      scripts/uat/ absolute path
 
-set -uEo pipefail
+# `set -e` so a failing SCP / SSH aborts the wrapper immediately and the
+# system-test driver picks up the non-zero exit code (mapped to scenario
+# FAIL). Without -e the script would log "runbook complete" and exit 0
+# even after a failed remote command, producing a false PASS.
+set -eEuo pipefail
 
 : "${UAT_VM_SSH_TARGET:?driver did not set UAT_VM_SSH_TARGET}"
 : "${UAT_SCRIPT_DIR:?driver did not set UAT_SCRIPT_DIR}"

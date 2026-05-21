@@ -20,7 +20,7 @@ import XCTest
 
 /// CorpusEventHeader peeks at `event_type` so the harness can dispatch to the right
 /// `EventEnvelope<P>` specialization. Declared at file scope (not nested in CorpusReplayTests)
-/// to keep the CodingKeys enum at swiftlint's `nesting` depth limit; the type is `fileprivate`
+/// to keep the CodingKeys enum at swiftlint's `nesting` depth limit; the type is `private` at file scope
 /// so nothing outside this test file can see it.
 private struct CorpusEventHeader: Decodable {
     let eventType: String
