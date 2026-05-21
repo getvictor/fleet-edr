@@ -30,10 +30,13 @@
 //	integration               -- the existing test/integration gate.
 //	!darwin || !cgo           -- the receiver-stub gate; this test
 //	                              doesn't link the receiver but mirrors the
-//	                              constraint so CI's server-test job picks
-//	                              it up automatically via the
-//	                              ./test/integration/... + ./test/efficacy/...
-//	                              glob.
+//	                              constraint so CI runs it on ubuntu-latest
+//	                              under CGO_ENABLED=0 in the dedicated
+//	                              `Detection efficacy` workflow
+//	                              (.github/workflows/efficacy.yml). The
+//	                              per-PR server-test job does NOT pick this
+//	                              up -- L6 runs on the nightly cadence, not
+//	                              every PR.
 package efficacy_test
 
 import (
@@ -44,7 +47,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -180,9 +182,10 @@ func loadCorpus(t *testing.T, root string, isNoise bool) []scenarioEntry {
 		return loadNoiseCorpus(t, root)
 	}
 
+	// os.ReadDir returns entries sorted by filename per the Go docs; no
+	// explicit sort needed.
 	entries, err := os.ReadDir(root)
 	require.NoErrorf(t, err, "read %s", root)
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	out := make([]scenarioEntry, 0, len(entries))
 	for _, e := range entries {
@@ -208,9 +211,9 @@ func loadNoiseCorpus(t *testing.T, root string) []scenarioEntry {
 	expected, err := loadExpected(filepath.Join(root, "expected.yaml"))
 	require.NoErrorf(t, err, "load %s/expected.yaml", root)
 
+	// os.ReadDir is sorted; no explicit sort needed (same as loadCorpus).
 	entries, err := os.ReadDir(root)
 	require.NoErrorf(t, err, "read %s", root)
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	out := make([]scenarioEntry, 0, len(entries))
 	for _, e := range entries {
@@ -240,18 +243,27 @@ func loadExpected(path string) (expectedAssertion, error) {
 	return exp, nil
 }
 
-// runAttack drives one attack scenario and returns whether the expected
-// rule fired. Errors in the wiring path (enroll failure, POST 5xx, etc.)
-// produce t.Errorf + a failed result so they show up in BOTH the per-
-// scenario subtest report AND the aggregate gate computation.
+// runAttack drives one attack scenario and returns whether EVERY expected
+// rule in the scenario's expected.yaml fired within the SLA. Errors in the
+// wiring path (enroll failure, POST 5xx, etc.) produce t.Errorf + a failed
+// result so they show up in BOTH the per-scenario subtest report AND the
+// aggregate gate computation; critically the function NEVER calls
+// t.FailNow / require.NoError, because that would abort the subtest before
+// the parent test could append the result to `results` and the scenario
+// would silently drop out of the aggregate denominator.
 func runAttack(t *testing.T, stack *integration.Stack, entry scenarioEntry) result {
 	t.Helper()
 	res := result{Name: entry.Name, Kind: "attack"}
 
 	hostID := entry.Scenario.Host.ID
-	token := enroll(t, stack, hostID, entry.Name)
-
 	ctx := t.Context()
+	token, err := enroll(ctx, stack, hostID, entry.Name)
+	if err != nil {
+		t.Errorf("enroll: %v", err)
+		res.Reason = err.Error()
+		return res
+	}
+
 	if err := entry.Scenario.PostDirect(ctx, stack.Server.URL, token); err != nil {
 		t.Errorf("PostDirect: %v", err)
 		res.Reason = err.Error()
@@ -271,46 +283,64 @@ func runAttack(t *testing.T, stack *integration.Stack, entry scenarioEntry) resu
 		deadline = time.Duration(entry.Expected.WithinSeconds) * time.Second
 	}
 
-	expected := entry.Expected.Rules[0]
-	ok, err := waitForAlert(ctx, stack, hostID, expected.RuleID, expected.Severity, deadline)
-	if err != nil {
-		t.Errorf("waitForAlert(%s): %v", expected.RuleID, err)
-		res.Reason = err.Error()
-		return res
-	}
-	res.Passed = ok
-	if !ok {
-		t.Errorf("expected rule %s did not fire on host %s within %s",
-			expected.RuleID, hostID, deadline)
-		res.Reason = "rule did not fire within SLA"
+	// Iterate every expected rule; the scenario passes only if all of them
+	// fire. Multi-rule expectations (a scenario tripping more than one
+	// catalog rule) would otherwise have N-1 silently-ignored assertions.
+	res.Passed = true
+	for _, expected := range entry.Expected.Rules {
+		ok, err := waitForAlert(ctx, stack, hostID, expected.RuleID, expected.Severity, deadline)
+		if err != nil {
+			t.Errorf("waitForAlert(%s): %v", expected.RuleID, err)
+			res.Reason = err.Error()
+			res.Passed = false
+			return res
+		}
+		if !ok {
+			t.Errorf("expected rule %s did not fire on host %s within %s",
+				expected.RuleID, hostID, deadline)
+			res.Reason = "rule did not fire within SLA: " + expected.RuleID
+			res.Passed = false
+			return res
+		}
 	}
 	return res
 }
 
 // runNoise drives one noise scenario and returns whether the host stayed
-// alert-free. The noiseSettle wait after the last POST gives the
-// detection processor a chance to run; a non-zero alert count at the end
-// is a false positive.
+// alert-free across the entire `within_seconds` window declared in
+// noise/expected.yaml. The window is used (rather than a fixed short
+// settle) because a slow-firing rule that produces an FP at second 25
+// would otherwise sneak past a 2-second settle and inflate efficacy.
 func runNoise(t *testing.T, stack *integration.Stack, entry scenarioEntry) result {
 	t.Helper()
 	res := result{Name: entry.Name, Kind: "noise"}
 
 	hostID := entry.Scenario.Host.ID
-	token := enroll(t, stack, hostID, entry.Name)
-
 	ctx := t.Context()
+	token, err := enroll(ctx, stack, hostID, entry.Name)
+	if err != nil {
+		t.Errorf("enroll: %v", err)
+		res.Reason = err.Error()
+		return res
+	}
+
 	if err := entry.Scenario.PostDirect(ctx, stack.Server.URL, token); err != nil {
 		t.Errorf("PostDirect: %v", err)
 		res.Reason = err.Error()
 		return res
 	}
 
-	// Wait briefly for the detection processor to flush, then check that
-	// no alerts landed for this host. Without the settle window a fast
-	// runner would race the processor and report a false negative-noise
-	// (i.e. think the rule didn't fire when it actually did).
+	// Honor the scenario's declared no-alert window. expected.yaml's
+	// within_seconds is the budget for "if a rule WERE going to fire, it
+	// would have by now"; settling for less defeats the gate. Fall back
+	// to the short noiseSettle ceiling if a noise scenario forgot to
+	// declare within_seconds (still useful for orchestration smoke).
+	wait := noiseSettle
+	if entry.Expected.WithinSeconds > 0 {
+		wait = time.Duration(entry.Expected.WithinSeconds) * time.Second
+	}
 	select {
-	case <-time.After(noiseSettle):
+	case <-time.After(wait):
 	case <-ctx.Done():
 		res.Reason = ctx.Err().Error()
 		return res
@@ -363,10 +393,17 @@ func waitForAlert(ctx context.Context, stack *integration.Stack, hostID, ruleID,
 }
 
 // enroll posts to /api/enroll with integration.EnrollSecret and returns the
-// issued host token. Mirrors the M4 helper verbatim; lifted here rather
-// than imported because integration's enroll is a test-internal helper.
-func enroll(t *testing.T, stack *integration.Stack, hostID, scenarioName string) string {
-	t.Helper()
+// issued host token on success. Returns (token, "") on success; on any
+// failure returns ("", err) so the caller can record a per-scenario
+// failure result and let the parent test append it to the aggregate.
+//
+// Note this deliberately does NOT use require.NoError / require.Equal:
+// those call t.FailNow internally, which aborts the subtest goroutine
+// BEFORE the parent's appendResultM runs, leaving the scenario missing
+// from the aggregate denominator. A missing scenario inflates the
+// detection rate by reducing the denominator -- the harness would silently
+// claim "100% detection" even when half the scenarios failed to enrol.
+func enroll(ctx context.Context, stack *integration.Stack, hostID, scenarioName string) (string, error) {
 	body, err := json.Marshal(map[string]string{
 		"enroll_secret": integration.EnrollSecret,
 		"hardware_uuid": hostID,
@@ -374,22 +411,36 @@ func enroll(t *testing.T, stack *integration.Stack, hostID, scenarioName string)
 		"agent_version": "l6-efficacy-test",
 		"os_version":    "macOS 26.0",
 	})
-	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+	if err != nil {
+		return "", fmt.Errorf("marshal enroll body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		stack.Server.URL+"/api/enroll", bytes.NewReader(body))
-	require.NoError(t, err)
+	if err != nil {
+		return "", fmt.Errorf("build enroll request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := stack.Server.Client().Do(req)
-	require.NoError(t, err)
+	if err != nil {
+		return "", fmt.Errorf("POST /api/enroll: %w", err)
+	}
 	defer resp.Body.Close()
-	require.Equalf(t, http.StatusOK, resp.StatusCode, "POST /api/enroll status for %s", hostID)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("POST /api/enroll for %s: HTTP %d", hostID, resp.StatusCode)
+	}
 
 	var er struct {
 		HostID    string `json:"host_id"`
 		HostToken string `json:"host_token"`
 	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&er))
-	require.Equal(t, hostID, er.HostID)
-	require.NotEmpty(t, er.HostToken, "enroll response must carry host_token")
-	return er.HostToken
+	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+		return "", fmt.Errorf("decode enroll response: %w", err)
+	}
+	if er.HostID != hostID {
+		return "", fmt.Errorf("enroll response host_id=%q != requested %q", er.HostID, hostID)
+	}
+	if er.HostToken == "" {
+		return "", fmt.Errorf("enroll response missing host_token")
+	}
+	return er.HostToken, nil
 }

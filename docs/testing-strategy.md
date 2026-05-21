@@ -169,9 +169,10 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
   noise. Per-scenario failures show up as the scenario's own `t.Run` line; the aggregate gate fires at the
   end of the parent test so a single regression and a "the whole layer broke" pattern are visually distinct
   in the test report.
-- Runs on the new `Detection efficacy` workflow: nightly cron + on demand via `workflow_dispatch`, plus an
-  `extension/efficacy/**` path filter on pushes so a catalog edit triggers it immediately. NOT wired per
-  PR -- L0..L4 catch per-PR drift; L6 catches catalog-wide regression.
+- Runs on the new `Detection efficacy` workflow: nightly cron + on demand via `workflow_dispatch`, plus path
+  filters for `server/rules/internal/catalog/**`, `server/detection/**`, `test/efficacy/**`, `test/fakeagent/**`,
+  `test/integration/setup.go` and the workflow file itself so a catalog edit triggers it immediately. NOT
+  wired per PR -- L0..L4 catch per-PR drift; L6 catches catalog-wide regression.
 
 ### Soak, scale, chaos (out of scope for per-PR CI)
 

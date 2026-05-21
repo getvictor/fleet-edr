@@ -3,7 +3,8 @@
 # Synthetic attacker execs a binary with DYLD_INSERT_LIBRARIES injected into
 # the environment. The dyld_insert rule scans the exec event's args for
 # `DYLD_INSERT_LIBRARIES=...` (typically delivered via /usr/bin/env or a
-# direct exec with the env block populated), fires a medium severity alert.
+# direct exec with the env block populated), fires a high severity alert
+# (matches expected.yaml's severity pin).
 # The wire format the agent emits puts injected env vars into the args
 # array on macOS, mirroring how ESF surfaces them via es_event_exec_t.
 name: "T1574.006 dyld injection via env DYLD_INSERT_LIBRARIES=..."
