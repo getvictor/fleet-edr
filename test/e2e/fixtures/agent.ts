@@ -12,8 +12,13 @@
 //     isolated state.
 //
 // Why not port the Go fakeagent library to TypeScript? The YAML scenarios are the single source of truth shared between Go and TS;
-// the envelope-shaping logic is small and stable (six event types covered here, same as the Go side). Duplicating ~80 LOC of mapping
-// code is cheaper than maintaining a Go/Node FFI bridge.
+// the envelope-shaping logic is small and stable (seven event types: exec, fork, exit, open, network_connect, dns_query,
+// snapshot_heartbeat - same set as the Go side). Duplicating ~80 LOC of mapping is cheaper than a Go/Node FFI bridge.
+//
+// Wire-precision note: timestamp_ns is computed with BigInt so the value matches schema/events.json's integer type at full int64
+// precision, then emitted as an unquoted JSON number via a custom serialiser below. Plain `Number(epochMs) * 1e6` would silently
+// lose ~3 lower digits for current-epoch timestamps (epoch_ns ~1.8e18 > MAX_SAFE_INTEGER 9e15), drifting from the Go path's int64
+// arithmetic. event_id is `crypto.randomUUID()` to satisfy schema/events.json's `format: uuid` constraint.
 
 import { test as base, request as playwrightRequest, APIRequestContext } from "@playwright/test";
 import * as fs from "node:fs/promises";
@@ -49,6 +54,7 @@ export interface ScenarioEvent {
   args?: string[];
   cwd?: string;
   exit_code?: number;
+  exit_reason?: string; // schema/events.json exit_payload.exit_reason - matches the Go ScenarioEvent struct.
   flags?: number;
   protocol?: string;
   direction?: string;
@@ -73,7 +79,12 @@ export interface Scenario {
 export interface Envelope {
   event_id: string;
   host_id: string;
-  timestamp_ns: number;
+  /**
+   * Nanoseconds since Unix epoch. Stored as BigInt so values past JS's MAX_SAFE_INTEGER (9e15) - which every current-epoch
+   * nanosecond timestamp exceeds - retain int64 precision. Serialised to JSON as an unquoted number via the BigInt-aware
+   * stringify helper below.
+   */
+  timestamp_ns: bigint;
   event_type: string;
   payload: Record<string, unknown>;
 }
@@ -118,8 +129,10 @@ export const test = base.extend<AgentFixtures>({
           const hostId = opts?.hostIdOverride ?? scenario.host.id;
           const hostToken = await enrollHost(ctx, hostId, scenario.host.hostname ?? "playwright.lab.local");
           const envelopes = generateEnvelopes(scenario, hostId, opts?.startTime ?? new Date());
+          // stringifyEnvelopes serialises BigInt timestamp_ns as an unquoted JSON number. ctx.post's `data` field would JSON-encode
+          // via Object.prototype.toString on a BigInt, which throws; passing `body` skips that path.
           const resp = await ctx.post("/api/events", {
-            data: envelopes,
+            data: stringifyEnvelopes(envelopes),
             headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" },
           });
           if (!resp.ok()) {
@@ -176,16 +189,31 @@ async function enrollHost(ctx: APIRequestContext, hostId: string, hostname: stri
 }
 
 // generateEnvelopes materialises a scenario's timeline into wire envelopes. The shape matches schema/events.json and the Go
-// fakeagent.Envelopes function so the two paths can't drift. event_id is a 32-char hex random; timestamp_ns is startTime + at offset.
+// fakeagent.Envelopes function so the two paths can't drift. event_id is a canonical (lowercase, hyphenated) UUID per the schema's
+// `format: uuid` constraint. timestamp_ns is computed with BigInt because every current-epoch nanosecond timestamp exceeds JS's
+// Number.MAX_SAFE_INTEGER; storing as a plain Number would silently round and diverge from Go's int64.
 export function generateEnvelopes(scenario: Scenario, hostId: string, startTime: Date): Envelope[] {
-  const startNs = startTime.getTime() * 1_000_000;
+  const startNs = BigInt(startTime.getTime()) * 1_000_000n;
   return scenario.timeline.map((ev) => ({
-    event_id: randomHex32(),
+    event_id: crypto.randomUUID(),
     host_id: hostId,
     timestamp_ns: startNs + parseGoDuration(ev.at),
     event_type: ev.type,
     payload: buildPayload(ev),
   }));
+}
+
+// stringifyEnvelopes serialises a batch of envelopes to a JSON string with BigInt timestamp_ns emitted as an UNQUOTED JSON number,
+// matching the integer type schema/events.json declares. A sentinel + post-process regex is the only zero-dep path; the alternative
+// (JSON.stringify replacer returning a number) doesn't help because JS converts BigInt to Number at the toJSON boundary, losing the
+// precision we went to BigInt to preserve. The sentinel chars are chosen to be both regex-safe and JSON-impossible so the regex
+// can't accidentally match real payload content.
+export function stringifyEnvelopes(envelopes: Envelope[]): string {
+  const sentinel = "@@BIGINT@@";
+  const raw = JSON.stringify(envelopes, (_k, v) =>
+    typeof v === "bigint" ? `${sentinel}${v.toString()}${sentinel}` : v,
+  );
+  return raw.replace(/"@@BIGINT@@(\d+)@@BIGINT@@"/g, "$1");
 }
 
 // buildPayload picks the right field subset for each event_type and emits exactly the schema/events.json-required shape. Order +
@@ -206,6 +234,9 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
       return { child_pid: ev.child_pid ?? 0, parent_pid: ev.parent_pid ?? 0 };
     case "exit": {
       const p: Record<string, unknown> = { pid: ev.pid ?? 0, exit_code: ev.exit_code ?? 0 };
+      // exit_reason is schema/events.json's optional discriminator between "event" (kernel-observed) and "host_reconciled" (synthetic).
+      // Only emit when the scenario set it so consumers see schema/events.json's "absent" semantics for default scenarios.
+      if (ev.exit_reason) p.exit_reason = ev.exit_reason;
       return p;
     }
     case "open":
@@ -219,7 +250,9 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
         remote_port: ev.remote_port ?? 0,
       };
       if (ev.local_address) p.local_address = ev.local_address;
-      if (ev.local_port) p.local_port = ev.local_port;
+      // !== undefined so an explicitly-provided local_port: 0 isn't dropped by JS truthy semantics. Same shape for the address
+      // wouldn't matter (empty string is falsy + meaningless), so the local_address truthy check stays.
+      if (ev.local_port !== undefined) p.local_port = ev.local_port;
       return p;
     }
     case "dns_query": {
@@ -239,30 +272,32 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
   }
 }
 
-// parseGoDuration accepts the Go time.Duration string form ("10ms", "5s", "1h", "100us"). Returns nanoseconds. Supports the unit
-// suffixes the M3 fakeagent + the rest of the EDR codebase actually use; rejects everything else with a clear error so a typo in a
-// scenario file surfaces immediately rather than silently producing 0.
-function parseGoDuration(input: string): number {
-  const match = /^(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)$/.exec(input);
+// parseGoDuration accepts the Go time.Duration string form ("10ms", "5s", "1h", "100us"). Returns nanoseconds as a BigInt so the
+// caller can add the value to a BigInt epoch without precision loss. Fractional input is rounded to the nearest nanosecond (via
+// integer-domain math, no float intermediates) so a value like "1.5s" yields exactly 1_500_000_000n.
+function parseGoDuration(input: string): bigint {
+  const match = /^(\d+)(?:\.(\d+))?(ns|us|µs|ms|s|m|h)$/.exec(input);
   if (!match) {
     throw new Error(`parseGoDuration: cannot parse ${JSON.stringify(input)}`);
   }
-  const value = parseFloat(match[1]);
-  const unitNs: Record<string, number> = {
-    ns: 1,
-    us: 1_000,
-    "µs": 1_000,
-    ms: 1_000_000,
-    s: 1_000_000_000,
-    m: 60 * 1_000_000_000,
-    h: 3600 * 1_000_000_000,
+  const unitNs: Record<string, bigint> = {
+    ns: 1n,
+    us: 1_000n,
+    "µs": 1_000n,
+    ms: 1_000_000n,
+    s: 1_000_000_000n,
+    m: 60n * 1_000_000_000n,
+    h: 3600n * 1_000_000_000n,
   };
-  return Math.round(value * unitNs[match[2]]);
-}
-
-// randomHex32 returns a 32-character lowercase hex string. Matches the Go fakeagent's default event_id generator.
-function randomHex32(): string {
-  return crypto.randomBytes(16).toString("hex");
+  const factor = unitNs[match[3]];
+  const wholeNs = BigInt(match[1]) * factor;
+  if (!match[2]) {
+    return wholeNs;
+  }
+  // Fractional part: "1.5s" -> wholeNs=1e9, fracDigits="5", scale 10^1=10. Add (5 * factor) / 10 in integer arithmetic.
+  const fracDigits = match[2];
+  const scale = 10n ** BigInt(fracDigits.length);
+  return wholeNs + (BigInt(fracDigits) * factor) / scale;
 }
 
 export { expect } from "@playwright/test";
