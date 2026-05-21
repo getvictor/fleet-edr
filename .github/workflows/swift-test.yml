@@ -1,0 +1,83 @@
+name: Swift tests
+
+# XCTest layer for the pure-logic Swift sources under extension/edr/ that have
+# no ESF / NetworkExtension framework dependency (DNSParser, EventSerializer
+# payload structs, BlockNotification, ApplicationControlStore, FileHashCache,
+# SigningInfoFallback). SwiftPM at extension/edr/Package.swift references these
+# files via explicit `sources:` paths so the package builds with `swift test`
+# while the Xcode project remains the production build path for the signed
+# system extension + network extension + host app bundles. See M7 in
+# docs/testing-strategy.md.
+#
+# The workflow follows the same path-filter shape as swift-lint.yml: only
+# extension/** and Taskfile / workflow changes trigger it, so doc-only PRs
+# don't pay for a macOS runner. Pushes to main and workflow_dispatch run
+# unconditionally.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extension/**"
+      - "Taskfile.yml"
+      - ".github/workflows/swift-test.yml"
+  pull_request:
+    paths:
+      - "extension/**"
+      - "Taskfile.yml"
+      - ".github/workflows/swift-test.yml"
+  workflow_dispatch:
+
+# Top-level token has no permissions; each job grants the exact scopes it
+# needs (satisfies Scorecard Token-Permissions, Sonar githubactions:S8264,
+# zizmor excessive-permissions).
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-test:
+    name: Swift unit tests
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Swift toolchain version
+        # Log the toolchain so a future Apple update that breaks the build
+        # surfaces a clean before/after rather than a cryptic compile error.
+        run: |
+          swift --version
+          xcrun --show-sdk-path
+
+      - name: Run swift test with coverage
+        # --enable-code-coverage produces an .profdata file under
+        # .build/<triple>/debug/codecov; we don't yet wire it into Sonar
+        # (Swift coverage on SonarCloud needs the `sonar.swift.coverage.reportPaths`
+        # property + an llvm-cov export pass), but the file is preserved
+        # below as a workflow artifact so the upload step is a one-line
+        # change when M8 turns Swift coverage on.
+        run: |
+          swift test --package-path extension/edr --enable-code-coverage
+
+      - name: Locate coverage data
+        # The path swift-test writes to depends on the host triple. Log it
+        # so the artifact-upload step's input path is auditable.
+        run: |
+          find extension/edr/.build -name '*.profdata' -type f -print || true
+          find extension/edr/.build -name 'EDRExtensionLogicPackageTests.xctest' -type d -print || true
+
+      - name: Upload coverage profdata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: swift-coverage-profdata
+          # If the locator above found no file the upload step would fail;
+          # `if-no-files-found: warn` keeps the job green while still
+          # logging the absence so a regression is visible.
+          if-no-files-found: warn
+          path: extension/edr/.build/**/codecov/*.profdata
