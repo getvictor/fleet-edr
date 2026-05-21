@@ -21,9 +21,9 @@ import { openDB } from "../../fixtures/db";
 import { VirtualAuthenticator } from "../../fixtures/webauthn";
 
 test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
-  let ctx: BrowserContext;
-  let page: Page;
-  let va: VirtualAuthenticator;
+  let ctx: BrowserContext | undefined;
+  let page: Page | undefined;
+  let va: VirtualAuthenticator | undefined;
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     ctx = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -43,35 +43,60 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
   });
 
   test.afterAll(async () => {
-    await uninstallVirtualAuthenticator(va);
-    await ctx.close();
+    // Guard every teardown step so a beforeAll failure (e.g. break-glass-setup rate-limited) doesn't mask the original error with a
+    // "cannot read properties of undefined" while uninstalling a VA that was never installed.
+    if (va) {
+      try {
+        await uninstallVirtualAuthenticator(va);
+      } catch (err) {
+        console.warn("uninstallVirtualAuthenticator failed in afterAll:", err);
+      }
+    }
+    if (ctx) {
+      try {
+        await ctx.close();
+      } catch (err) {
+        console.warn("ctx.close failed in afterAll:", err);
+      }
+    }
   });
 
+  // requirePage asserts beforeAll set `page` so each test gets a properly-typed non-undefined Page reference. If beforeAll failed,
+  // this test would be skipped by Playwright before reaching here anyway; the assertion is for TypeScript's benefit + a clear
+  // diagnostic if Playwright's behavior ever changes.
+  function requirePage(): Page {
+    if (!page) throw new Error("beforeAll did not initialize the shared page");
+    return page;
+  }
+
   test("empty state: signed-in admin with no hosts sees the empty-state copy", async () => {
-    await page.goto("/ui/");
+    const p = requirePage();
+    await p.goto("/ui/");
     // The HostList component renders an EmptyState with this exact text when hosts.length === 0. Asserting on the literal copy
     // means a future operator-visible copy edit surfaces here too.
-    await expect(page.getByText("No hosts reporting yet.")).toBeVisible({ timeout: 10_000 });
+    await expect(p.getByText("No hosts reporting yet.")).toBeVisible({ timeout: 10_000 });
     // Sanity: the hosts table is absent on the empty path.
-    await expect(page.locator("table")).toHaveCount(0);
+    await expect(p.locator("table")).toHaveCount(0);
   });
 
   test("many hosts: enrol 25 hosts via enrollHostsBatch -> all render in <tr>", async ({ agent }) => {
+    const p = requirePage();
     const BATCH_SIZE = 25;
     const hosts = await agent.enrollHostsBatch(BATCH_SIZE);
     expect(hosts).toHaveLength(BATCH_SIZE);
 
-    await page.goto("/ui/");
+    await p.goto("/ui/");
     // Wait on row count rather than a specific selector so layout tweaks (e.g. row className changes) don't break the assertion.
     await expect
-      .poll(() => page.locator("tbody tr").count(), { timeout: 10_000, message: "host list never reached expected row count" })
+      .poll(() => p.locator("tbody tr").count(), { timeout: 10_000, message: "host list never reached expected row count" })
       .toBe(BATCH_SIZE);
 
     // Spot-check one enrolled host_id appears in a cell - proves we're rendering THESE rows, not a leftover from a prior run.
-    await expect(page.getByRole("cell", { name: hosts[0].hostId, exact: true })).toBeVisible();
+    await expect(p.getByRole("cell", { name: hosts[0].hostId, exact: true })).toBeVisible();
   });
 
   test("event count: hosts.event_count column shows the per-scenario timeline length", async ({ agent }) => {
+    const p = requirePage();
     interface Driven {
       hostId: string;
       expected: number;
@@ -90,13 +115,13 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
       }),
     );
 
-    // Wait for the processor to roll events into hosts.event_count via DB direct query - skips UI render lag for the wait itself
-    // so the per-row UI assertion below has a clear target.
-    await expect
-      .poll(
-        async () => {
-          const db = await openDB();
-          try {
+    // One DB connection for the whole expect.poll - prior version opened+closed per iteration which churned through connections
+    // (poll runs every 100ms by default) and could hit MySQL's max_connections under suite-wide parallelism.
+    const db = await openDB();
+    try {
+      await expect
+        .poll(
+          async () => {
             const ids = driven.map((d) => d.hostId);
             const ph = ids.map(() => "?").join(",");
             const [rows] = (await db.query(
@@ -107,54 +132,57 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
               .map((r) => `${r.host_id}=${String(r.event_count)}`)
               .sort()
               .join(",");
-          } finally {
-            await db.end();
-          }
-        },
-        { timeout: 10_000, message: "hosts.event_count never converged to expected per-scenario counts" },
-      )
-      .toBe(
-        driven
-          .map((d) => `${d.hostId}=${String(d.expected)}`)
-          .sort()
-          .join(","),
-      );
+          },
+          { timeout: 10_000, message: "hosts.event_count never converged to expected per-scenario counts" },
+        )
+        .toBe(
+          driven
+            .map((d) => `${d.hostId}=${String(d.expected)}`)
+            .sort()
+            .join(","),
+        );
+    } finally {
+      await db.end();
+    }
 
-    await page.goto("/ui/");
+    await p.goto("/ui/");
     for (const d of driven) {
-      const row = page.locator("tr").filter({ has: page.getByText(d.hostId, { exact: true }) });
+      const row = p.locator("tr").filter({ has: p.getByText(d.hostId, { exact: true }) });
       await expect(row).toBeVisible({ timeout: 10_000 });
       // Events column is the 3rd <td> (0-indexed 2): Host ID | Status | Events | Last seen.
-      await expect(row.locator("td").nth(2)).toHaveText(String(d.expected));
+      // HostList.tsx renders event_count via .toLocaleString() so counts >= 1000 get locale separators ("1,000" not "1000").
+      // Mirror that here so the assertion stays correct if the scenario count ever crosses that threshold.
+      await expect(row.locator("td").nth(2)).toHaveText(d.expected.toLocaleString());
     }
   });
 
   test("process tree: process-tree-deep -> /ui/hosts/<id> renders the host page", async ({ agent }) => {
+    const p = requirePage();
     const hostId = crypto.randomUUID();
     const r = await agent.runScenario("process-tree-deep.yaml", { hostIdOverride: hostId });
     expect(r.hostId).toBe(hostId);
 
-    // Wait for the processor to materialise process rows (fork+exec -> processes table). process-tree-deep has 4 fork+exec pairs.
-    await expect
-      .poll(
-        async () => {
-          const db = await openDB();
-          try {
+    // One DB connection for the whole poll; see note in the event-count test.
+    const db = await openDB();
+    try {
+      await expect
+        .poll(
+          async () => {
             const [rows] = (await db.query(
               "SELECT COUNT(*) AS n FROM processes WHERE host_id = ?",
               [hostId],
             )) as [Array<{ n: number | string }>, unknown];
             return Number(rows[0].n);
-          } finally {
-            await db.end();
-          }
-        },
-        { timeout: 10_000, message: "processor never materialised process rows for process-tree-deep" },
-      )
-      .toBeGreaterThanOrEqual(4);
+          },
+          { timeout: 10_000, message: "processor never materialised process rows for process-tree-deep" },
+        )
+        .toBeGreaterThanOrEqual(4);
+    } finally {
+      await db.end();
+    }
 
-    await page.goto(`/ui/hosts/${encodeURIComponent(hostId)}`);
+    await p.goto(`/ui/hosts/${encodeURIComponent(hostId)}`);
     // PageHeader renders the host_id; asserting on the text avoids depending on D3 SVG selectors (those are layout-tuning-fragile).
-    await expect(page.getByText(hostId)).toBeVisible({ timeout: 15_000 });
+    await expect(p.getByText(hostId)).toBeVisible({ timeout: 15_000 });
   });
 });

@@ -17,7 +17,7 @@ timeline:
     ppid: 1
     path: /bin/zsh
     args: ["zsh"]
-    cwd: /Users/victor
+    cwd: /Users/test
     uid: 501
     gid: 20
   - at: 5ms
@@ -30,7 +30,7 @@ timeline:
     ppid: 6001
     path: /usr/bin/python3
     args: ["python3", "build.py"]
-    cwd: /Users/victor/project
+    cwd: /Users/test/project
     uid: 501
     gid: 20
   - at: 10ms
@@ -43,7 +43,7 @@ timeline:
     ppid: 6002
     path: /usr/bin/make
     args: ["make", "test"]
-    cwd: /Users/victor/project
+    cwd: /Users/test/project
     uid: 501
     gid: 20
   - at: 15ms
@@ -56,6 +56,6 @@ timeline:
     ppid: 6003
     path: /usr/bin/go
     args: ["go", "test", "./..."]
-    cwd: /Users/victor/project
+    cwd: /Users/test/project
     uid: 501
     gid: 20
