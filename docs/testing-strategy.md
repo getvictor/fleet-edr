@@ -106,10 +106,17 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 - For tests that need realistic agent data (process trees, alerts, app-control flow, host list), the spec drives the
   M5 fixture at `test/e2e/fixtures/agent.ts`: it reads the same YAML scenarios as the Go fakeagent library
   (`test/fakeagent/scenarios/`), enrolls a per-test host via `/api/enroll`, generates wire envelopes matching
-  `schema/events.json`, then POSTs them to `/api/events` with the minted bearer token. The smoke spec at
-  `test/e2e/tests/qa/agent-events-flow.spec.ts` proves the wire end-to-end across the starter corpus. The fixture
-  bypasses the headless agent binary intentionally - the queue + uploader path is already L3-covered (M4); L4 is
-  about UI behavior under realistic data.
+  `schema/events.json`, then POSTs them to `/api/events` with the minted bearer token. The wire smoke spec at
+  `test/e2e/tests/qa/agent-events-flow.spec.ts` (M5) proves the path end-to-end across the starter corpus; the
+  UI smoke spec at `test/e2e/tests/qa/host-list-and-process-tree.spec.ts` (M6) signs in via break-glass and
+  asserts on host list + process tree page rendering. M6 also adds `enrollHostsBatch(count)` to the agent fixture
+  (for the 25-host visible-row case) plus `resetHostData(db)` in `fixtures/auth.ts` that wipes agent-side tables
+  without touching the sessions / WebAuthn rows that hold the spec's auth state. The fixture bypasses the headless
+  agent binary intentionally - the queue + uploader path is already L3-covered (M4); L4 is about UI behavior under
+  realistic data.
+- M6 covers the host-list + process-tree categories from the L4 wishlist. Alert detail per shipped rule, app-control
+  rule push (UI + agent ack), and the realistic-alert reauth flow are deferred until M10 ships rule-firing scenarios
+  the alerts can be derived from.
 - For pure auth/RBAC/session tests, direct SQL fixtures under `test/e2e/fixtures/db.ts` remain the right tool; they
   are faster and the data they seed is not exercised through the ingestion path.
 - CI runs Playwright in phases (`scripts/test-e2e-coverage.sh`) so env-isolation tests (rate limits, short session

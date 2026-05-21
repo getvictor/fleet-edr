@@ -107,10 +107,36 @@ export interface AgentScenarioOptions {
   startTime?: Date;
 }
 
+export interface BatchEnrollOptions {
+  /**
+   * Scenario YAML name (e.g. "quiet-host.yaml") whose timeline is replayed for every host in the batch. Defaults to
+   * "quiet-host.yaml" so each host materialises with a single snapshot_heartbeat event - enough to appear in the host list but
+   * cheap to ingest. Specs that want per-host event variety (e.g. host-list-event-count) override this.
+   */
+  scenarioFile?: string;
+}
+
+export interface BatchEnrollResult {
+  hostId: string;
+  hostToken: string;
+  eventsPosted: number;
+}
+
 export interface AgentFixtures {
   agent: {
     /** Load + post one scenario in one call. Returns once /api/events returns 200 for every envelope. */
     runScenario(name: string, opts?: AgentScenarioOptions): Promise<AgentScenarioResult>;
+    /**
+     * Enrol `count` hosts in parallel and feed each one through the configured scenario. Returns an array of results in
+     * deterministic order (i.e. result[i] corresponds to the i-th host). Used by the host-list pagination + multi-host specs
+     * that need to populate enough rows to exercise the UI's listing behaviour.
+     *
+     * Parallelism is bounded by the dev server's concurrency (sufficient for batches of tens; for hundreds, the caller should
+     * chunk explicitly). Each host gets a fresh `crypto.randomUUID()` host_id and the scenario's default hostname (the
+     * /api/enroll endpoint validates hardware_uuid against a strict UUID regex, so the host_id has to stay shaped that way -
+     * if a future spec needs per-host hostname variation, that knob lands in BatchEnrollOptions then).
+     */
+    enrollHostsBatch(count: number, opts?: BatchEnrollOptions): Promise<BatchEnrollResult[]>;
   };
 }
 
@@ -123,23 +149,42 @@ export const test = base.extend<AgentFixtures>({
     }
     const ctx = await playwrightRequest.newContext({ baseURL, ignoreHTTPSErrors: true });
     try {
+      const runScenario = async (name: string, opts?: AgentScenarioOptions): Promise<AgentScenarioResult> => {
+        const scenario = await loadScenario(name);
+        const hostId = opts?.hostIdOverride ?? scenario.host.id;
+        const hostname = scenario.host.hostname ?? "playwright.lab.local";
+        const hostToken = await enrollHost(ctx, hostId, hostname);
+        const envelopes = generateEnvelopes(scenario, hostId, opts?.startTime ?? new Date());
+        // stringifyEnvelopes serialises BigInt timestamp_ns as an unquoted JSON number. Passing a pre-serialised string to ctx.post's
+        // `data` field means Playwright sends it verbatim instead of running it through its own JSON.stringify (which would call
+        // .toString() on the BigInt and throw, or produce a string-quoted timestamp_ns that the server would then reject).
+        const resp = await ctx.post("/api/events", {
+          data: stringifyEnvelopes(envelopes),
+          headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" },
+        });
+        if (!resp.ok()) {
+          const body = await resp.text();
+          throw new Error(`POST /api/events for ${hostId}: HTTP ${resp.status()}: ${body}`);
+        }
+        return { hostId, eventsPosted: envelopes.length, hostToken };
+      };
+
       await use({
-        async runScenario(name: string, opts?: AgentScenarioOptions): Promise<AgentScenarioResult> {
-          const scenario = await loadScenario(name);
-          const hostId = opts?.hostIdOverride ?? scenario.host.id;
-          const hostToken = await enrollHost(ctx, hostId, scenario.host.hostname ?? "playwright.lab.local");
-          const envelopes = generateEnvelopes(scenario, hostId, opts?.startTime ?? new Date());
-          // stringifyEnvelopes serialises BigInt timestamp_ns as an unquoted JSON number. ctx.post's `data` field would JSON-encode
-          // via Object.prototype.toString on a BigInt, which throws; passing `body` skips that path.
-          const resp = await ctx.post("/api/events", {
-            data: stringifyEnvelopes(envelopes),
-            headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" },
-          });
-          if (!resp.ok()) {
-            const body = await resp.text();
-            throw new Error(`POST /api/events for ${hostId}: HTTP ${resp.status()}: ${body}`);
+        runScenario,
+        async enrollHostsBatch(count: number, opts?: BatchEnrollOptions): Promise<BatchEnrollResult[]> {
+          if (count <= 0) {
+            throw new Error(`enrollHostsBatch: count must be > 0, got ${count}`);
           }
-          return { hostId, eventsPosted: envelopes.length, hostToken };
+          const scenarioFile = opts?.scenarioFile ?? "quiet-host.yaml";
+          // Each host gets a fresh UUID. Running in parallel via Promise.all keeps wall time bounded; the dev server handles
+          // tens of concurrent enrolments comfortably (the existing rate limit is 1000/min via integration.Setup's
+          // EnrollRatePerMinute, and dev's default is similarly generous).
+          const tasks = Array.from({ length: count }, async () => {
+            const hostId = crypto.randomUUID();
+            const r = await runScenario(scenarioFile, { hostIdOverride: hostId });
+            return { hostId: r.hostId, hostToken: r.hostToken, eventsPosted: r.eventsPosted };
+          });
+          return Promise.all(tasks);
         },
       });
     } finally {
@@ -273,8 +318,10 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
 }
 
 // parseGoDuration accepts the Go time.Duration string form ("10ms", "5s", "1h", "100us"). Returns nanoseconds as a BigInt so the
-// caller can add the value to a BigInt epoch without precision loss. Fractional input is rounded to the nearest nanosecond (via
-// integer-domain math, no float intermediates) so a value like "1.5s" yields exactly 1_500_000_000n.
+// caller can add the value to a BigInt epoch without precision loss. Fractional input is TRUNCATED toward zero at the nanosecond
+// boundary via integer division (no float intermediates), so "1.5s" yields exactly 1_500_000_000n and "0.1234567899ns" yields 0n.
+// Scenarios written today only use round numbers of ns/us/ms/s, so the truncation never bites - if a scenario ever needs sub-ns
+// rounding, that's a separate change to add an explicit round-half-up step.
 function parseGoDuration(input: string): bigint {
   const match = /^(\d+)(?:\.(\d+))?(ns|us|µs|ms|s|m|h)$/.exec(input);
   if (!match) {
