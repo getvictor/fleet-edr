@@ -1,0 +1,28 @@
+# Expected outcome for the policy-roundtrip scenario.
+#
+# Intentionally has NO `rules:` block. The scenario's value proposition is
+# "the AUTH_EXEC callback in the system extension denies the exec when the
+# blocklist policy reaches the agent." That outcome is verified inside
+# attack.sh (the shell sees `Operation not permitted` / non-zero exit on the
+# blocked path). No matching `blocked_exec` detection rule ships in the v0.1
+# pack, so polling /api/v1/alerts would only produce a false-negative; see
+# scripts/qa/README.md "Known gaps."
+#
+# When such a rule lands (tracked separately), append a `rules:` block here
+# with the new rule_id and the system-test driver will start asserting on
+# the alert side too -- no code change in system-test.sh required.
+
+scenario_id: policy-roundtrip
+description: |
+  Pushes a blocklist policy via the admin REST API, waits for the agent on
+  the VM to pick up the policy, attempts to exec the blocked path, expects
+  ES_AUTH_RESULT_DENY (non-zero exit / "Operation not permitted") from the
+  extension's AUTH callback.
+within_seconds: 180
+asserts:
+  - kind: attack_sh_exit_zero
+    description: |
+      scripts/qa/e2-policy-roundtrip.sh already encodes the full assertion
+      chain end-to-end -- if any step (policy push, agent ack, exec block,
+      policy restore) breaks, it exits non-zero. The system-test driver
+      treats that exit code as the scenario's pass / fail signal.

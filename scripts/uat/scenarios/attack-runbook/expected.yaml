@@ -1,0 +1,47 @@
+# Expected detections for the attack-runbook scenario.
+#
+# Each rule_id maps onto one step in scripts/qa/attack-runbook.sh (which this
+# scenario's attack.sh wraps). The runbook's steps are reverse-engineered from
+# the positive-trigger logic in server/rules/internal/catalog/*; renaming a
+# rule_id in catalog without updating this file is a contract break the
+# system-test driver surfaces as a "miss".
+#
+# Two rules from the runbook are intentionally omitted:
+#   - shell_from_office: the runbook hard-skips it (no Office on the VM), so
+#     asserting on it would always fail.
+#   - blocked_exec: the runbook doesn't fire it; the related rule isn't in
+#     the v0.1 detection pack (see scripts/qa/README.md "Known gaps").
+#
+# within_seconds is the per-rule SLA. The runbook's seven attacks fire over
+# ~30 seconds; events flow through agent queue + uploader + server ingest +
+# detection engine within ~10 seconds on a healthy stack, so 120s leaves
+# generous headroom for a slow VM without masking real regressions.
+
+scenario_id: attack-runbook
+description: Fires every shipped detection rule via scripts/qa/attack-runbook.sh and asserts each rule_id produced an alert.
+within_seconds: 120
+rules:
+  - rule_id: suspicious_exec
+    severity: high
+    expect: alert
+    description: python3 -c reading /tmp dropper then exec'ing /bin/sh
+  - rule_id: persistence_launchagent
+    severity: high
+    expect: alert
+    description: launchctl load of a synthetic LaunchAgent plist
+  - rule_id: dyld_insert
+    severity: medium
+    expect: alert
+    description: env DYLD_INSERT_LIBRARIES=... /usr/bin/true
+  - rule_id: osascript_network_exec
+    severity: high
+    expect: alert
+    description: osascript chained to curl + payload exec
+  - rule_id: credential_keychain_dump
+    severity: critical
+    expect: alert
+    description: /usr/bin/security dump-keychain
+  - rule_id: privilege_launchd_plist_write
+    severity: critical
+    expect: alert
+    description: synthetic non-platform-binary writes /Library/LaunchDaemons/*.plist
