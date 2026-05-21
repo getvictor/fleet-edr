@@ -248,6 +248,55 @@ tasks:
     cmds:
       - go test -count=1 -timeout=5m -tags=integration ./test/integration/agentserver/...
 
+  test:efficacy:
+    desc: |
+      Run the UAT plan L6 detection-efficacy harness at test/efficacy/.
+      Walks every test/efficacy/corpus/T*/ scenario through a real in-process
+      EDR stack (test/integration.Setup) via fakeagent's PostDirect, asserts
+      every rule_id in expected.yaml fires within the SLA, and walks the
+      ambient-noise lane to enforce the false-positive gate. Aggregate gate:
+      detection rate >= 95%, FP rate <= 1%.
+
+      Requires a real MySQL via $EDR_TEST_DSN. Wall clock is dominated by the
+      noise lane's per-scenario `within_seconds` settle (30s default each);
+      ~60s on a 2-noise-scenario corpus, scaling linearly with noise count.
+
+      Nightly CI runs this via .github/workflows/efficacy.yml; this task is
+      for local iteration.
+    env:
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      CGO_ENABLED: 0
+    cmds:
+      - go test -count=1 -timeout=5m -tags=integration ./test/efficacy/...
+
+  uat:l5:
+    desc: |
+      Run the UAT plan L5 system-test driver against a local edr-qa VM (M11
+      milestone, local-execution flavour). Thin wrapper around
+      `scripts/uat/system-test.sh` that forwards every CLI arg through. The
+      operator picks the scenario explicitly because the harness will grow
+      past one scenario and a hardcoded default would silently mask the
+      growing corpus.
+
+      Required env (see scripts/uat/README.md "Auth flow"):
+        EDR_SERVER_URL      e.g. https://edr.local:8088 (no trailing slash)
+        EDR_SESSION_COOKIE  pre-minted edr_session cookie value from one browser
+                            break-glass / OIDC login; reuse until it expires
+        VM_SSH_TARGET       defaults to victor@192.168.64.7 (edr-qa)
+
+      Common forms:
+        task uat:l5 -- attack-runbook --dry-run        # orchestration smoke
+        task uat:l5 -- attack-runbook --skip-install   # already-enrolled VM
+        task uat:l5 -- attack-runbook \
+                       --pkg-path=dist/fleet-edr-v1.0.0.pkg
+                                                       # full install path
+
+      Running L5 from a self-hosted GitHub Actions runner (so the cron lane
+      and release tags fire automatically) is tracked as a follow-up; this
+      task is the local-only flavour today.
+    cmds:
+      - scripts/uat/system-test.sh {{.CLI_ARGS}}
+
   test:go:server:coverage:
     desc: |
       Server + shared coverage flavor of test:go:server. Emits coverage-server.out
