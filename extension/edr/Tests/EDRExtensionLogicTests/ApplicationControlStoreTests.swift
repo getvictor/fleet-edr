@@ -1,11 +1,21 @@
 // ApplicationControlStore tests: exercise the snapshot-decode + per-rule-type
-// routing + monotonic-version gate that the AUTH_EXEC decision engine relies on.
-// ApplicationControlStore.shared is a singleton with a persistQueue.async that
-// writes to /var/db/com.fleetdm.edr/application-control.json -- the test user
-// has no write permission there, so the persist fails with a logged error and no
-// real-world side effect. Each test below uses a UNIQUE policy_id high enough to
-// not collide with anything any production / dev install would use, and an
-// always-increasing version, so test method ordering does not matter.
+// routing + monotonic-version gate + persist/load round-trip the AUTH_EXEC
+// decision engine relies on.
+//
+// Each test builds its OWN ApplicationControlStore via makeStore() with a temp
+// storagePath under FileManager.default.temporaryDirectory. That gives every
+// test method:
+//
+//   1. A fresh ApplicationControlSnapshot.empty starting state -- no cross-test
+//      contamination via the process-global .shared singleton.
+//   2. An isolated on-disk policy file that addTeardownBlock removes when the
+//      test finishes, so the async persist no longer writes against (or fails
+//      against) /var/db/com.fleetdm.edr/application-control.json.
+//
+// The unique-policy-id-per-test gymnastics the previous revision needed are
+// gone. Policy IDs can be 1, 2, 3 -- whatever reads cleanly -- because each
+// store starts empty. ApplicationControlStore.shared is NOT touched by any of
+// these tests.
 
 import Foundation
 @testable import EDRExtensionLogic
@@ -21,6 +31,38 @@ final class ApplicationControlStoreTests: XCTestCase {
         let type: String
         let identifier: String
         let ruleID: String
+    }
+
+    /// makeStore returns a fresh ApplicationControlStore with a temp on-disk
+    /// policy path. The path is unique per call so concurrent / parallelized
+    /// test runs cannot stomp each other's persist files. The teardown block
+    /// removes the file (and any parent directory the persist code created).
+    private func makeStore() -> ApplicationControlStore {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppControlTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("application-control.json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+        return ApplicationControlStore(storagePath: url.path)
+    }
+
+    /// waitForFile polls for the file at `path` to exist within `deadline`. The
+    /// store's persistQueue is private, so we cannot synchronize on it directly;
+    /// the file-exists predicate is what the apply→persist→load round-trip test
+    /// needs to gate on before loading the snapshot back from disk. 2s is the
+    /// same budget testStartLazyFillPopulatesCacheEventually uses for the same
+    /// pattern.
+    @discardableResult
+    private func waitForFile(at path: String, deadline: TimeInterval = 2) -> Bool {
+        let stop = Date().addingTimeInterval(deadline)
+        while Date() < stop {
+            if FileManager.default.fileExists(atPath: path) {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return FileManager.default.fileExists(atPath: path)
     }
 
     /// document builds an ApplicationControlDocument as on-the-wire JSON bytes.
@@ -69,11 +111,9 @@ final class ApplicationControlStoreTests: XCTestCase {
     // MARK: - apply: per-rule-type routing
 
     func testApplyRoutesEveryRuleTypeIntoItsOwnMap() {
-        // Send one rule per type and verify each lands in the matching map. Uses a
-        // policy_id (100001) far from any production value plus a high version so
-        // the monotonic gate accepts even if a previous test set the same id.
+        let store = makeStore()
         let payload = document(
-            policyID: 100001, version: 1000,
+            policyID: 1, version: 1,
             rules: [
                 RuleSpec(type: "BINARY", identifier: "binary-hex", ruleID: "r1"),
                 RuleSpec(type: "CDHASH", identifier: "cdhash-hex", ruleID: "r2"),
@@ -83,14 +123,10 @@ final class ApplicationControlStoreTests: XCTestCase {
                 RuleSpec(type: "PATH", identifier: "/usr/local/bin/foo", ruleID: "r6")
             ]
         )
-        ApplicationControlStore.shared.apply(rawJSON: payload)
-        let snapshot = ApplicationControlStore.shared.currentSnapshot()
-        // The store is a process-global singleton; assert policyID + policyVersion EXPLICITLY rather
-        // than letting a wrong-state read silently fall through to no-op assertions. If a later test
-        // ever leaves a higher version under this same policyID the monotonic gate would silently
-        // reject this apply -- this XCTAssertEqual surfaces that as a loud failure instead.
-        XCTAssertEqual(snapshot.policyID, 100001)
-        XCTAssertEqual(snapshot.policyVersion, 1000)
+        store.apply(rawJSON: payload)
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 1)
+        XCTAssertEqual(snapshot.policyVersion, 1)
         XCTAssertEqual(snapshot.binaryRules["binary-hex"]?.ruleID, "r1")
         XCTAssertEqual(snapshot.cdhashRules["cdhash-hex"]?.ruleID, "r2")
         XCTAssertEqual(snapshot.signingIDRules["FDG8Q7N4CC:com.fleetdm.edr"]?.ruleID, "r3")
@@ -102,43 +138,41 @@ final class ApplicationControlStoreTests: XCTestCase {
     // MARK: - apply: monotonic-version gate
 
     func testApplyHonorsMonotonicVersionGate() {
-        // Seed a baseline. Subsequent applies at policy_id 100002 with version <=
-        // baseline must NOT regress the snapshot.
-        let baseline = document(
-            policyID: 100002, version: 500,
+        let store = makeStore()
+
+        // Baseline at version 500.
+        store.apply(rawJSON: document(
+            policyID: 1, version: 500,
             rules: [RuleSpec(type: "BINARY", identifier: "baseline", ruleID: "baseline-rule")]
-        )
-        ApplicationControlStore.shared.apply(rawJSON: baseline)
+        ))
 
-        // Same id, older version -> rejected; the snapshot must keep the baseline.
-        let older = document(
-            policyID: 100002, version: 100,
+        // Same id, older version -> rejected; the baseline must survive.
+        store.apply(rawJSON: document(
+            policyID: 1, version: 100,
             rules: [RuleSpec(type: "BINARY", identifier: "older", ruleID: "older-rule")]
-        )
-        ApplicationControlStore.shared.apply(rawJSON: older)
-
-        var snapshot = ApplicationControlStore.shared.currentSnapshot()
-        // After the rejected apply the baseline doc must still be the active snapshot. Pin
-        // both: the older rule did NOT land AND the baseline rule still survives, so a future
-        // bug where the older payload partially leaks (e.g. apply forgets to short-circuit
-        // before swapping) would fail loudly here.
-        XCTAssertEqual(snapshot.policyID, 100002)
-        XCTAssertEqual(snapshot.policyVersion, 500)
+        ))
+        var snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 1)
+        XCTAssertEqual(snapshot.policyVersion, 500, "older-version apply must not advance policyVersion")
         XCTAssertNil(snapshot.binaryRules["older"], "stale apply must not introduce its rules")
         XCTAssertNotNil(snapshot.binaryRules["baseline"], "baseline rule must survive rejected apply")
 
+        // Same id, equal version -> rejected (gate is strictly greater).
+        store.apply(rawJSON: document(
+            policyID: 1, version: 500,
+            rules: [RuleSpec(type: "BINARY", identifier: "equal", ruleID: "equal-rule")]
+        ))
+        snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyVersion, 500, "equal-version apply must be a no-op")
+        XCTAssertNil(snapshot.binaryRules["equal"])
+        XCTAssertNotNil(snapshot.binaryRules["baseline"])
+
         // Same id, newer version -> accepted; the snapshot now reflects the new doc.
-        let newer = document(
-            policyID: 100002, version: 600,
+        store.apply(rawJSON: document(
+            policyID: 1, version: 600,
             rules: [RuleSpec(type: "BINARY", identifier: "newer", ruleID: "newer-rule")]
-        )
-        ApplicationControlStore.shared.apply(rawJSON: newer)
-        snapshot = ApplicationControlStore.shared.currentSnapshot()
-        // Assert the policyID explicitly rather than hiding the rest of the assertions behind an
-        // `if` guard -- a process-wide singleton means a different test's apply could land between
-        // this `apply` and `currentSnapshot()`, and an `if`-gated block would silently no-op
-        // through the failure. XCTAssertEqual surfaces it.
-        XCTAssertEqual(snapshot.policyID, 100002)
+        ))
+        snapshot = store.currentSnapshot()
         XCTAssertEqual(snapshot.policyVersion, 600)
         XCTAssertEqual(snapshot.binaryRules["newer"]?.ruleID, "newer-rule")
         // Wholesale replace: the baseline's rule is gone because the new doc's
@@ -147,17 +181,45 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.binaryRules["baseline"], "newer doc must replace, not merge")
     }
 
+    // MARK: - apply: cross-policy regression accepted
+
+    func testApplyAcceptsDifferentPolicyEvenAtLowerVersion() {
+        // The monotonic gate is keyed on policyID -- a different policy can land at any version
+        // because it is, by construction, a fresh policy stream. Pin this so a future
+        // tightening of the gate (e.g. comparing version globally) doesn't accidentally start
+        // rejecting legitimate policy swaps.
+        let store = makeStore()
+        store.apply(rawJSON: document(
+            policyID: 1, version: 100,
+            rules: [RuleSpec(type: "BINARY", identifier: "old-policy-rule", ruleID: "old")]
+        ))
+        store.apply(rawJSON: document(
+            policyID: 2, version: 1,
+            rules: [RuleSpec(type: "BINARY", identifier: "new-policy-rule", ruleID: "new")]
+        ))
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 2)
+        XCTAssertEqual(snapshot.policyVersion, 1)
+        XCTAssertEqual(snapshot.binaryRules["new-policy-rule"]?.ruleID, "new")
+        XCTAssertNil(snapshot.binaryRules["old-policy-rule"])
+    }
+
     // MARK: - apply: malformed input
 
     func testApplyIgnoresMalformedJSON() {
-        // Snapshot the policyVersion before the bad apply so we can confirm it
-        // doesn't change. Using a sentinel policy_id keeps us insulated from other
-        // tests' state.
-        let beforeVersion = ApplicationControlStore.shared.currentSnapshot().policyVersion
-        ApplicationControlStore.shared.apply(rawJSON: Data("{not json}".utf8))
-        ApplicationControlStore.shared.apply(rawJSON: Data())
-        let afterVersion = ApplicationControlStore.shared.currentSnapshot().policyVersion
-        XCTAssertEqual(afterVersion, beforeVersion, "malformed JSON must not mutate snapshot state")
+        let store = makeStore()
+        // Seed a real snapshot first; malformed input must NOT regress that state.
+        store.apply(rawJSON: document(
+            policyID: 1, version: 10,
+            rules: [RuleSpec(type: "BINARY", identifier: "good", ruleID: "good-rule")]
+        ))
+        store.apply(rawJSON: Data("{not json}".utf8))
+        store.apply(rawJSON: Data())
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 1)
+        XCTAssertEqual(snapshot.policyVersion, 10)
+        XCTAssertEqual(snapshot.binaryRules["good"]?.ruleID, "good-rule",
+                       "malformed JSON must not regress previously-applied snapshot")
     }
 
     // MARK: - apply: unknown rule_type
@@ -166,19 +228,16 @@ final class ApplicationControlStoreTests: XCTestCase {
         // FRUITCAKE is not a defined rule_type. The store logs a warning and skips
         // that entry but accepts the rest of the document, so a server-side
         // tagging mistake on a single rule does not break the entire snapshot.
-        let payload = document(
-            policyID: 100003, version: 1000,
+        let store = makeStore()
+        store.apply(rawJSON: document(
+            policyID: 1, version: 1,
             rules: [
                 RuleSpec(type: "BINARY", identifier: "good-binary", ruleID: "good"),
                 RuleSpec(type: "FRUITCAKE", identifier: "weird", ruleID: "weird")
             ]
-        )
-        ApplicationControlStore.shared.apply(rawJSON: payload)
-        let snapshot = ApplicationControlStore.shared.currentSnapshot()
-        // Same explicit-policyID-assertion rationale as testApplyRoutesEveryRuleTypeIntoItsOwnMap:
-        // do not let a wrong-state singleton silently skip every check via an `if` guard.
-        XCTAssertEqual(snapshot.policyID, 100003)
-        XCTAssertEqual(snapshot.policyVersion, 1000)
+        ))
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 1)
         XCTAssertEqual(snapshot.binaryRules["good-binary"]?.ruleID, "good")
         // No bucket exists for FRUITCAKE; the weird identifier must not have
         // leaked into any of the six known maps.
@@ -188,6 +247,77 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.certificateRules["weird"])
         XCTAssertNil(snapshot.teamIDRules["weird"])
         XCTAssertNil(snapshot.pathRules["weird"])
+    }
+
+    // MARK: - persist + loadFromDisk round-trip
+
+    func testApplyPersistsToDiskAndFreshInstanceLoadsItBack() {
+        // The injectable storagePath unlocks a real end-to-end test: apply on one store writes
+        // the snapshot to disk; a fresh store with the same path can loadFromDisk and observe the
+        // identical snapshot. Previously this was untestable because the persist target was a
+        // production /var/db path no test could write to.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppControlPersist-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("application-control.json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+
+        let writer = ApplicationControlStore(storagePath: url.path)
+        writer.apply(rawJSON: document(
+            policyID: 42, version: 7,
+            rules: [
+                RuleSpec(type: "BINARY", identifier: "hash-hex", ruleID: "r1"),
+                RuleSpec(type: "TEAMID", identifier: "FDG8Q7N4CC", ruleID: "r2")
+            ]
+        ))
+        XCTAssertTrue(waitForFile(at: url.path), "apply() must persist to disk within deadline")
+
+        // A fresh store reading the same path must see the same snapshot.
+        let reader = ApplicationControlStore(storagePath: url.path)
+        reader.loadFromDisk()
+        let snapshot = reader.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 42)
+        XCTAssertEqual(snapshot.policyVersion, 7)
+        XCTAssertEqual(snapshot.binaryRules["hash-hex"]?.ruleID, "r1")
+        XCTAssertEqual(snapshot.teamIDRules["FDG8Q7N4CC"]?.ruleID, "r2")
+    }
+
+    // MARK: - loadFromDisk: cold start
+
+    func testLoadFromDiskWithMissingFileLeavesSnapshotEmpty() {
+        // Cold start path: no persisted file at the expected path. The store logs an info-level
+        // "no persisted snapshot at startup" and falls back to the empty snapshot rather than
+        // crashing. The agent will push the current snapshot on its next command poll.
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("does-not-exist-\(UUID().uuidString).json").path
+        let store = ApplicationControlStore(storagePath: missing)
+        store.loadFromDisk()
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 0)
+        XCTAssertEqual(snapshot.policyVersion, 0)
+        XCTAssertTrue(snapshot.binaryRules.isEmpty)
+    }
+
+    // MARK: - loadFromDisk: corrupt file
+
+    func testLoadFromDiskWithMalformedFileLeavesSnapshotEmpty() {
+        // Corruption path: the persisted JSON is unparseable (truncated write, manual edit, etc).
+        // The store fails open with the empty snapshot rather than crashing or carrying stale
+        // bytes -- the agent will push a fresh snapshot on the next poll cycle.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppControlCorrupt-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("application-control.json")
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("{not json}".utf8).write(to: url)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+        let store = ApplicationControlStore(storagePath: url.path)
+        store.loadFromDisk()
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyID, 0)
+        XCTAssertEqual(snapshot.policyVersion, 0)
     }
 
     // MARK: - empty snapshot constant

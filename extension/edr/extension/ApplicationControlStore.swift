@@ -117,11 +117,26 @@ enum ApplicationControlEnforcement {
 ///  - The disk write uses Data.write(to:options:.atomic), which writes a
 ///    temporary file and renames it atomically.
 final class ApplicationControlStore {
+    /// Singleton entry point used by every production callsite. The AUTH_EXEC handler, the XPC
+    /// dispatcher and the extension's boot path all go through `.shared`. Tests should NOT use
+    /// `.shared` because it persists to `/var/db/com.fleetdm.edr/application-control.json`, which
+    /// is both global state and a real production file. Construct a per-test instance with
+    /// `ApplicationControlStore(storagePath: tempFile)` instead so each test gets an empty
+    /// snapshot AND the async persist lands in a temp directory the test cleans up.
     static let shared = ApplicationControlStore()
 
     private let lock = OSAllocatedUnfairLock(initialState: ApplicationControlSnapshot.empty)
     private let persistQueue = DispatchQueue(label: "com.fleetdm.edr.appcontrol.persist", qos: .utility)
-    private let storagePath = "/var/db/com.fleetdm.edr/application-control.json"
+    private let storagePath: String
+
+    /// The `storagePath` argument exists for XCTest isolation -- production code uses `.shared`
+    /// which initializes via the default value (the real on-disk policy file under /var/db).
+    /// The init is internal (not private) because @testable code in the SwiftPM Tests target
+    /// needs to call it; the doc comment on `.shared` discourages new production callers from
+    /// bypassing the singleton.
+    init(storagePath: String = "/var/db/com.fleetdm.edr/application-control.json") {
+        self.storagePath = storagePath
+    }
 
     /// currentSnapshot returns the active snapshot. The AUTH_EXEC handler
     /// calls this on every exec, so the critical section is constant time
