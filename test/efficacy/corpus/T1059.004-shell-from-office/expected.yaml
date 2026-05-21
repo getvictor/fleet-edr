@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1059.004-shell-from-office technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1059.004-shell-from-office
+mitre: T1566.001 + T1059.004
+within_seconds: 30
+rules:
+  - rule_id: shell_from_office
+    severity: high
+    expect: alert

@@ -1,0 +1,27 @@
+# T1574.006 Hijack Execution Flow: Dynamic Linker Hijacking.
+#
+# Synthetic attacker execs a binary with DYLD_INSERT_LIBRARIES injected into
+# the environment. The dyld_insert rule scans the exec event's args for
+# `DYLD_INSERT_LIBRARIES=...` (typically delivered via /usr/bin/env or a
+# direct exec with the env block populated), fires a medium severity alert.
+# The wire format the agent emits puts injected env vars into the args
+# array on macOS, mirroring how ESF surfaces them via es_event_exec_t.
+name: "T1574.006 dyld injection via env DYLD_INSERT_LIBRARIES=..."
+host:
+  id: AAAA1574-0006-0000-0000-000000000006
+  hostname: efficacy-t1574-006.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4574
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4574
+    ppid: 1
+    path: /usr/bin/env
+    args: ["env", "DYLD_INSERT_LIBRARIES=/tmp/payload.dylib", "/usr/bin/true"]
+    cwd: /tmp
+    uid: 501
+    gid: 20

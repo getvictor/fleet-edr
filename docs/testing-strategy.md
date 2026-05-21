@@ -150,12 +150,28 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 
 ### Detection efficacy (L6)
 
-- `test/efficacy/corpus/T<MITRE-id>/` per attack technique. Each folder ships:
-  - `scenario.yaml`: a fake-agent scenario (consumed by the headless and browser E2E layers).
-  - `attack.sh`: a shell driver that runs the technique on a live VM (consumed by the system / VM layer).
-  - `expected.yaml`: the detection assertions (which rule fires, within what SLA, severity). Shared between modes.
-- The test runner ranges over the corpus and produces a per-technique pass/fail report.
-- Hard gate: per-technique detection rate >= 95%, false-positive rate on ambient-noise scenarios <= 1%.
+- `test/efficacy/corpus/T<MITRE-id>-<slug>/` per attack technique. Each folder ships:
+  - `scenario.yaml`: a fake-agent scenario (consumed by `test/efficacy/efficacy_test.go` and reusable by the
+    headless and browser E2E layers).
+  - `attack.sh`: a shell driver that runs the technique on a live VM (consumed by the M11 self-hosted runner
+    when it lands; placeholder content today).
+  - `expected.yaml`: the detection assertions (which rule fires, within what SLA, severity). Shared between
+    modes.
+- `test/efficacy/noise/*.yaml` plus one shared `expected.yaml` (with `rules: []`) form the ambient-noise lane
+  -- every benign scenario must produce zero alerts.
+- UAT plan milestone **M10** delivered the harness `test/efficacy/efficacy_test.go` plus 8 attack scenarios
+  (one per shipped catalog rule with a MITRE mapping: `T1059`, `T1059.002`, `T1059.004` / `T1566.001`,
+  `T1543.001`, `T1543.004`, `T1548.003`, `T1555.001`, `T1574.006`) and 2 starter noise scenarios. The runner
+  composes `test/integration.Setup` (real MySQL + processor goroutines) and uses `PostDirect` from the M3
+  fakeagent library to POST events to `/api/events` directly, bypassing the M2 agent (the agent path is
+  already L3-covered by M4; L6's signal is specifically about rule firings on the canonical event sequences).
+- Aggregate gates from the runner: detection rate >= 95% across attacks, false-positive rate <= 1% across
+  noise. Per-scenario failures show up as the scenario's own `t.Run` line; the aggregate gate fires at the
+  end of the parent test so a single regression and a "the whole layer broke" pattern are visually distinct
+  in the test report.
+- Runs on the new `Detection efficacy` workflow: nightly cron + on demand via `workflow_dispatch`, plus an
+  `extension/efficacy/**` path filter on pushes so a catalog edit triggers it immediately. NOT wired per
+  PR -- L0..L4 catch per-PR drift; L6 catches catalog-wide regression.
 
 ### Soak, scale, chaos (out of scope for per-PR CI)
 

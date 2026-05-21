@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1574.006-dyld-insert technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1574.006-dyld-insert
+mitre: T1574.006
+within_seconds: 30
+rules:
+  - rule_id: dyld_insert
+    severity: high
+    expect: alert

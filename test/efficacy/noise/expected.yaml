@@ -1,0 +1,8 @@
+# Expected outcome for the ambient-noise lane: every benign scenario under
+# this directory must produce ZERO alerts. The L6 runner enforces this as a
+# false-positive gate -- the FP rate across all noise scenarios must stay
+# under 1% (currently 0 / 2 noise scenarios). A miss here is a sign that a
+# catalog rule has gotten greedy and is matching legitimate user activity.
+scenario_id: noise-ambient
+within_seconds: 30
+rules: []

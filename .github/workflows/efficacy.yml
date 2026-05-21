@@ -1,0 +1,96 @@
+name: Detection efficacy
+
+# UAT plan L6: runs the detection-efficacy harness under test/efficacy/
+# nightly on `main` + on manual `workflow_dispatch`. Asserts the
+# aggregate gates from docs/testing-strategy.md (detection rate >= 95%,
+# false-positive rate <= 1%) across the in-tree corpus + noise scenarios.
+#
+# Per-PR NOT wired: the corpus is intentionally extensible and the
+# rule catalog matures faster than a per-PR cycle can absorb regressions.
+# Per-PR drift is caught by L0..L4 (unit + integration + browser E2E).
+# L6 catches "the catalog as a whole regressed."
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/rules/internal/catalog/**"
+      - "server/detection/**"
+      - "test/efficacy/**"
+      - "test/fakeagent/**"
+      - "test/integration/setup.go"
+      - ".github/workflows/efficacy.yml"
+  pull_request:
+    paths:
+      - "test/efficacy/**"
+      - ".github/workflows/efficacy.yml"
+  schedule:
+    # 05:00 UTC daily. Matches the L5/L6 wall-time tier in
+    # docs/testing-strategy.md ("nightly + RC") and lands the report
+    # before US morning standups.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+# Top-level token has no permissions; each job grants the exact scopes it
+# needs (satisfies Scorecard Token-Permissions, Sonar githubactions:S8264,
+# zizmor excessive-permissions).
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  efficacy:
+    name: L6 detection efficacy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The harness is bounded by the per-scenario SLA (30s default) times
+    # ~10 scenarios -- ~5 min wall. 15 is a generous ceiling that catches
+    # a wedged MySQL service container without burning runner minutes.
+    timeout-minutes: 15
+    env:
+      EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
+    # Same MySQL service container test.yml's server-test job uses --
+    # the harness composes test/integration.Setup which depends on a
+    # real MySQL via testdb/full.Open.
+    services:
+      mysql:
+        image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: edr_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      # Same connection-budget bump server-test uses. Without it, ~10
+      # scenarios sharing a single Stack still fit comfortably but a
+      # wider corpus would start hitting the 151 default.
+      - name: Raise MySQL max_connections
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -e "SET GLOBAL max_connections = 500"
+
+      - name: Run L6 detection efficacy
+        # CGO_ENABLED=0 selects the !cgo half of the receiver build-tag
+        # split (the test file is gated by `(!darwin || !cgo)`). On
+        # ubuntu-latest the !darwin branch already holds so this is
+        # belt-and-braces; explicit so a future runner switch to a
+        # darwin image doesn't quietly skip the L6 lane.
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go test -tags integration -v -count=1 ./test/efficacy/...

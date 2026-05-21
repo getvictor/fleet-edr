@@ -1,0 +1,61 @@
+# Ambient noise: Homebrew running its `brew update` + `brew upgrade` cycle.
+# Touches /tmp briefly (brew's git working tree) and execs git + curl, both
+# of which are stock platform binaries, but the access shapes do NOT match
+# any catalog rule. Expected zero alerts.
+#
+# brew's actual binary is a Ruby script under /opt/homebrew/Library; the
+# exec is on /opt/homebrew/bin/brew which is the user-facing symlink.
+name: "noise: brew update + brew upgrade"
+host:
+  id: BBBB0002-0000-0000-0000-000000000002
+  hostname: efficacy-noise-brew.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 9001
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 9001
+    ppid: 1
+    path: /opt/homebrew/bin/brew
+    args: ["brew", "update"]
+    cwd: /Users/dev
+    uid: 501
+    gid: 20
+
+  # brew exec'ing git to refresh the formula taps.
+  - at: 100ms
+    type: fork
+    child_pid: 9002
+    parent_pid: 9001
+  - at: 110ms
+    type: exec
+    pid: 9002
+    ppid: 9001
+    path: /opt/homebrew/bin/git
+    args: ["git", "-C", "/opt/homebrew/Library/Taps/homebrew/homebrew-core", "pull"]
+    cwd: /opt/homebrew/Library/Taps/homebrew/homebrew-core
+    uid: 501
+    gid: 20
+
+  # brew exec'ing curl to fetch a bottle.
+  - at: 500ms
+    type: fork
+    child_pid: 9003
+    parent_pid: 9001
+  - at: 510ms
+    type: exec
+    pid: 9003
+    ppid: 9001
+    path: /usr/bin/curl
+    args:
+      - curl
+      - -fsSL
+      - -o
+      - /Users/dev/Library/Caches/Homebrew/jq-1.7.bottle.tar.gz
+      - https://example.test/bottles/jq-1.7.bottle.tar.gz
+    cwd: /Users/dev
+    uid: 501
+    gid: 20

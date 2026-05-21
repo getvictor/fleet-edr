@@ -1,0 +1,32 @@
+# T1548.003 Abuse Elevation Control Mechanism: Sudo and Sudo Caching.
+#
+# Synthetic attacker overwrites /etc/sudoers via `cp /tmp/evil /etc/sudoers`.
+# The sudoers_tamper rule triggers on an `open` event for the sudoers path
+# with write-mode flags. Mirrors the positive_cp_overwrite fixture.
+# Flags 1537 = O_WRONLY | O_CREAT | O_TRUNC, which sudoers_tamper's
+# intent-mask gate accepts as a real write rather than sudo's own flock
+# pattern.
+name: "T1548.003 sudoers tamper via cp /tmp/evil /etc/sudoers"
+host:
+  id: AAAA1548-0003-0000-0000-000000000003
+  hostname: efficacy-t1548-003.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4548
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4548
+    ppid: 1
+    path: /bin/cp
+    args: ["cp", "/tmp/evil", "/etc/sudoers"]
+    cwd: /tmp
+    uid: 0
+    gid: 0
+  - at: 20ms
+    type: open
+    pid: 4548
+    path: /etc/sudoers
+    flags: 1537
