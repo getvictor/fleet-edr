@@ -49,10 +49,16 @@ The M8 starter set is hand-seeded with sentinel `host_id` (`AAAAAAAA-0000-0000-0
 and `timestamp_ns` (`1700000000000000000`, 2023-11-14 00:00:00 UTC), sufficient for wire-shape
 regression coverage but not for documenting realistic payload shapes per attack scenario.
 
-A follow-up captures real ESF emissions on the SIP-enabled `edr-qa` VM
-(`192.168.64.7`, see `~/.claude/projects/-Users-victor-work-edr/memory/vm_layout.md`)
-and commits those under scenario-named subdirectories such as
-`macOS-26/attack-curl-bash-pipe/exec.json`. The harness needs no change to pick them up;
-the directory walk in `assertEveryGoldenRoundTrips(rootedAt:)` skips only the baseline
-directory (the seed-driven loop covers that one), and exercises every other `.json`
-encountered under `corpus/`.
+A follow-up captures real ESF emissions on a SIP-enabled macOS VM running a current build of the
+extension and commits those under scenario-named subdirectories such as
+`macOS-26/attack-curl-bash-pipe/exec.json`. The capture procedure is to attach to the running
+extension's `os_log` stream (`log stream --process <extension-pid> --info --debug`) and tee the
+JSON envelope each `EventSerializer.serialize` emits into a per-event file, sanitizing
+`host_id` and `timestamp_ns` to the sentinel values above before committing so the goldens stay
+reproducible across machines. See `docs/testing-strategy.md` (L5 system / VM end-to-end) for the
+VM environment requirements.
+
+The harness needs no change to pick captured files up: the directory walk in
+`assertEveryGoldenRoundTrips(rootedAt:skipping:)` skips only the baseline directory (the
+seed-driven loop covers that one), and exercises every other `.json` encountered under
+`corpus/`.

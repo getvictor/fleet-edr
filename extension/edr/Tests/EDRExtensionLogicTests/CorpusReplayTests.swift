@@ -79,10 +79,20 @@ final class CorpusReplayTests: XCTestCase {
 
     func testEveryCorpusFileRoundTripsByteStable() throws {
         let regenerate = ProcessInfo.processInfo.environment["EDR_CORPUS_REGENERATE"] == "1"
-        let baselineDir = Self.corpusDirectory()
+        let corpusRoot = Self.corpusDirectory()
+        let baselineDir = corpusRoot
             .appendingPathComponent(Self.macOSVersionDir, isDirectory: true)
             .appendingPathComponent(Self.scenarioDir, isDirectory: true)
         let fileManager = FileManager.default
+
+        // Top-level sanity check: if the corpus directory has been deleted or moved, fail loudly
+        // up front rather than letting the seed-driven loop emit one error per missing seed.
+        // The seed-driven loop's per-file XCTFail still runs underneath; this just gives a single
+        // clean diagnostic when the whole tree is gone.
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: corpusRoot.path) || regenerate,
+            "corpus root missing at \(corpusRoot.path) -- did the directory get deleted?"
+        )
 
         if regenerate {
             // Clean slate for the baseline scenario so a removed seeder leaves no stale golden.
@@ -110,7 +120,7 @@ final class CorpusReplayTests: XCTestCase {
         // Walk EVERY *.json under the corpus root (across macOS versions and scenarios) so
         // captured corpora that arrive in follow-up PRs are exercised as soon as they land, with
         // no harness change required.
-        try assertEveryGoldenRoundTrips(rootedAt: Self.corpusDirectory(), skipping: baselineDir)
+        try assertEveryGoldenRoundTrips(rootedAt: corpusRoot, skipping: baselineDir)
     }
 
     // MARK: - Helpers
@@ -124,12 +134,17 @@ final class CorpusReplayTests: XCTestCase {
         guard let enumerator = fileManager.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else {
             return
         }
-        let skipPath = skipDir.standardizedFileURL.path
+        // Append a path separator so the prefix check matches the directory boundary exactly.
+        // Without it, a hand-curated sibling scenario whose name starts with the same characters
+        // (`baseline-extended/`, `baseline2/`) would be silently skipped and the wire-shape
+        // gate would go quiet on that data without anyone noticing.
+        let skipBase = skipDir.standardizedFileURL.path
+        let skipPrefix = skipBase.hasSuffix("/") ? skipBase : skipBase + "/"
         for case let url as URL in enumerator {
             guard url.pathExtension == "json" else { continue }
             // The baseline directory is already covered by the seed-driven loop in the main test;
             // walking it twice would only burn cycles.
-            if url.standardizedFileURL.path.hasPrefix(skipPath) { continue }
+            if url.standardizedFileURL.path.hasPrefix(skipPrefix) { continue }
             try assertRoundTripStable(at: url)
         }
     }
@@ -138,7 +153,15 @@ final class CorpusReplayTests: XCTestCase {
         let bytes = try Data(contentsOf: url)
         let header = try JSONDecoder().decode(CorpusEventHeader.self, from: bytes)
         let reencoded = try roundTrip(eventType: header.eventType, bytes: bytes)
-        XCTAssertEqual(reencoded, bytes, "corpus drift at \(url.lastPathComponent)")
+        // Compare UTF-8 strings rather than raw Data: XCTest renders a Data mismatch as opaque
+        // hex dumps, but the wire bytes are by construction UTF-8 JSON, so comparing strings
+        // produces a readable diff that points at the exact field or formatting change that
+        // caused the drift.
+        XCTAssertEqual(
+            String(data: reencoded, encoding: .utf8),
+            String(data: bytes, encoding: .utf8),
+            "corpus drift at \(url.lastPathComponent)"
+        )
     }
 
     /// roundTrip dispatches on event_type because EventEnvelope is generic over payload type and
