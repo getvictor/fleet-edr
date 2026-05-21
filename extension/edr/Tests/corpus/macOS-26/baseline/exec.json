@@ -1,0 +1,1 @@
+{"event_id":"11111111-1111-1111-1111-111111111111","event_type":"exec","host_id":"AAAAAAAA-0000-0000-0000-000000000000","payload":{"args":["sh","-c","echo hello"],"cwd":"\/Users\/test","gid":20,"path":"\/bin\/sh","pid":4242,"ppid":1,"uid":501},"timestamp_ns":1700000000000000000}

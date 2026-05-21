@@ -1,0 +1,1 @@
+{"event_id":"33333333-3333-3333-3333-333333333333","event_type":"exec","host_id":"AAAAAAAA-0000-0000-0000-000000000000","payload":{"args":["cron"],"cwd":"\/","gid":0,"path":"\/usr\/sbin\/cron","pid":99,"ppid":1,"snapshot":true,"uid":0},"timestamp_ns":1700000000000000000}

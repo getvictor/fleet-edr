@@ -195,8 +195,16 @@ single-host repro in CI or as a 100-host fleet for the scale baseline.
 
 `EventSerializer` in the system extension consumes opaque `es_message_t` instances; we cannot construct those in user
 space. Instead, captured serializer outputs are committed under `extension/edr/Tests/corpus/<macOS-version>/<scenario>/`
-as gzipped JSON. An XCTest replays them through the real `EventSerializer` and asserts on the emitted JSON. When the
-wire format changes intentionally, the goldens are regenerated and the diff is reviewed in the PR.
+as JSON (compression-ready but currently plain so PR diffs stay reviewable). `CorpusReplayTests` walks every file,
+decodes via the matching typed `EventEnvelope<P>`, re-encodes via the production `.sortedKeys` `JSONEncoder`, and
+asserts the bytes are byte-stable; a rename in `CodingKeys`, a change to encoder settings, or a flip in an optional
+field's encode-when policy will land as a red gate instead of a silent change shipped to agents. UAT plan
+milestone **M8** delivered the harness plus a starter seed under `macOS-26/baseline/` covering live exec, signed
+exec, snapshot exec, fork, exit, open, and `application_control_block`; a follow-up replaces the hand-seeded
+sentinels with real captures from the SIP-enabled `edr-qa` VM. When the wire format intentionally changes the
+goldens are regenerated with `EDR_CORPUS_REGENERATE=1 swift test --package-path extension/edr --filter
+CorpusReplayTests` and the diff is reviewed in the PR; see `extension/edr/Tests/corpus/README.md` for the
+regeneration + capture procedures.
 
 ## Spec-to-test traceability
 
