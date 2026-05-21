@@ -62,7 +62,7 @@ let package = Package(
                 "networkextension/NetworkFilter.swift",
                 "networkextension/ProcessInfo.swift",
                 "networkextension/XPCServer.swift",
-                "com.fleetdm.edr.notify.plist",
+                "com.fleetdm.edr.notify.plist"
             ],
             sources: [
                 "extension/ApplicationControlStore.swift",
@@ -70,13 +70,13 @@ let package = Package(
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
-                "networkextension/DNSParser.swift",
+                "networkextension/DNSParser.swift"
             ]
         ),
         .testTarget(
             name: "EDRExtensionLogicTests",
             dependencies: ["EDRExtensionLogic"],
             path: "Tests/EDRExtensionLogicTests"
-        ),
+        )
     ]
 )

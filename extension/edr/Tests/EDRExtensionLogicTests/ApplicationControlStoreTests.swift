@@ -14,8 +14,17 @@ import XCTest
 final class ApplicationControlStoreTests: XCTestCase {
     // MARK: - Helpers
 
+    /// RuleSpec is a named record for the document() helper's `rules` argument.
+    /// A 3-tuple would trip SwiftLint's large_tuple rule (max 2 members); a struct
+    /// also reads better at the call sites and lets us name the field at use.
+    private struct RuleSpec {
+        let type: String
+        let identifier: String
+        let ruleID: String
+    }
+
     /// document builds an ApplicationControlDocument as on-the-wire JSON bytes.
-    private func document(policyID: Int64, version: Int64, rules: [(type: String, identifier: String, ruleID: String)]) -> Data {
+    private func document(policyID: Int64, version: Int64, rules: [RuleSpec]) -> Data {
         let ruleObjects = rules.map { rule in
             """
             {
@@ -45,8 +54,8 @@ final class ApplicationControlStoreTests: XCTestCase {
         let data = document(
             policyID: 7, version: 12,
             rules: [
-                (type: "BINARY", identifier: String(repeating: "a", count: 64), ruleID: "r1"),
-                (type: "TEAMID", identifier: "FDG8Q7N4CC", ruleID: "r2"),
+                RuleSpec(type: "BINARY", identifier: String(repeating: "a", count: 64), ruleID: "r1"),
+                RuleSpec(type: "TEAMID", identifier: "FDG8Q7N4CC", ruleID: "r2")
             ]
         )
         let decoded = try JSONDecoder().decode(ApplicationControlDocument.self, from: data)
@@ -66,17 +75,22 @@ final class ApplicationControlStoreTests: XCTestCase {
         let payload = document(
             policyID: 100001, version: 1000,
             rules: [
-                (type: "BINARY", identifier: "binary-hex", ruleID: "r1"),
-                (type: "CDHASH", identifier: "cdhash-hex", ruleID: "r2"),
-                (type: "SIGNINGID", identifier: "FDG8Q7N4CC:com.fleetdm.edr", ruleID: "r3"),
-                (type: "CERTIFICATE", identifier: "cert-hex", ruleID: "r4"),
-                (type: "TEAMID", identifier: "FDG8Q7N4CC", ruleID: "r5"),
-                (type: "PATH", identifier: "/usr/local/bin/foo", ruleID: "r6"),
+                RuleSpec(type: "BINARY", identifier: "binary-hex", ruleID: "r1"),
+                RuleSpec(type: "CDHASH", identifier: "cdhash-hex", ruleID: "r2"),
+                RuleSpec(type: "SIGNINGID", identifier: "FDG8Q7N4CC:com.fleetdm.edr", ruleID: "r3"),
+                RuleSpec(type: "CERTIFICATE", identifier: "cert-hex", ruleID: "r4"),
+                RuleSpec(type: "TEAMID", identifier: "FDG8Q7N4CC", ruleID: "r5"),
+                RuleSpec(type: "PATH", identifier: "/usr/local/bin/foo", ruleID: "r6")
             ]
         )
         ApplicationControlStore.shared.apply(rawJSON: payload)
         let snapshot = ApplicationControlStore.shared.currentSnapshot()
-        XCTAssertGreaterThanOrEqual(snapshot.policyVersion, 1000)
+        // The store is a process-global singleton; assert policyID + policyVersion EXPLICITLY rather
+        // than letting a wrong-state read silently fall through to no-op assertions. If a later test
+        // ever leaves a higher version under this same policyID the monotonic gate would silently
+        // reject this apply -- this XCTAssertEqual surfaces that as a loud failure instead.
+        XCTAssertEqual(snapshot.policyID, 100001)
+        XCTAssertEqual(snapshot.policyVersion, 1000)
         XCTAssertEqual(snapshot.binaryRules["binary-hex"]?.ruleID, "r1")
         XCTAssertEqual(snapshot.cdhashRules["cdhash-hex"]?.ruleID, "r2")
         XCTAssertEqual(snapshot.signingIDRules["FDG8Q7N4CC:com.fleetdm.edr"]?.ruleID, "r3")
@@ -92,38 +106,45 @@ final class ApplicationControlStoreTests: XCTestCase {
         // baseline must NOT regress the snapshot.
         let baseline = document(
             policyID: 100002, version: 500,
-            rules: [(type: "BINARY", identifier: "baseline", ruleID: "baseline-rule")]
+            rules: [RuleSpec(type: "BINARY", identifier: "baseline", ruleID: "baseline-rule")]
         )
         ApplicationControlStore.shared.apply(rawJSON: baseline)
 
         // Same id, older version -> rejected; the snapshot must keep the baseline.
         let older = document(
             policyID: 100002, version: 100,
-            rules: [(type: "BINARY", identifier: "older", ruleID: "older-rule")]
+            rules: [RuleSpec(type: "BINARY", identifier: "older", ruleID: "older-rule")]
         )
         ApplicationControlStore.shared.apply(rawJSON: older)
 
         var snapshot = ApplicationControlStore.shared.currentSnapshot()
-        // The baseline rule survives; the older payload's rule did NOT land.
-        // We assert via the new identifier being absent rather than reading
-        // policyVersion -- a different test may have bumped the version with a
-        // different policy_id after this one ran.
+        // After the rejected apply the baseline doc must still be the active snapshot. Pin
+        // both: the older rule did NOT land AND the baseline rule still survives, so a future
+        // bug where the older payload partially leaks (e.g. apply forgets to short-circuit
+        // before swapping) would fail loudly here.
+        XCTAssertEqual(snapshot.policyID, 100002)
+        XCTAssertEqual(snapshot.policyVersion, 500)
         XCTAssertNil(snapshot.binaryRules["older"], "stale apply must not introduce its rules")
+        XCTAssertNotNil(snapshot.binaryRules["baseline"], "baseline rule must survive rejected apply")
 
         // Same id, newer version -> accepted; the snapshot now reflects the new doc.
         let newer = document(
             policyID: 100002, version: 600,
-            rules: [(type: "BINARY", identifier: "newer", ruleID: "newer-rule")]
+            rules: [RuleSpec(type: "BINARY", identifier: "newer", ruleID: "newer-rule")]
         )
         ApplicationControlStore.shared.apply(rawJSON: newer)
         snapshot = ApplicationControlStore.shared.currentSnapshot()
-        if snapshot.policyID == 100002 {
-            XCTAssertEqual(snapshot.binaryRules["newer"]?.ruleID, "newer-rule")
-            // Wholesale replace: the baseline's rule is gone because the new doc's
-            // rule list does not include it. Pinning this prevents a future bug
-            // where apply() accidentally merges rather than replacing.
-            XCTAssertNil(snapshot.binaryRules["baseline"], "newer doc must replace, not merge")
-        }
+        // Assert the policyID explicitly rather than hiding the rest of the assertions behind an
+        // `if` guard -- a process-wide singleton means a different test's apply could land between
+        // this `apply` and `currentSnapshot()`, and an `if`-gated block would silently no-op
+        // through the failure. XCTAssertEqual surfaces it.
+        XCTAssertEqual(snapshot.policyID, 100002)
+        XCTAssertEqual(snapshot.policyVersion, 600)
+        XCTAssertEqual(snapshot.binaryRules["newer"]?.ruleID, "newer-rule")
+        // Wholesale replace: the baseline's rule is gone because the new doc's
+        // rule list does not include it. Pinning this prevents a future bug
+        // where apply() accidentally merges rather than replacing.
+        XCTAssertNil(snapshot.binaryRules["baseline"], "newer doc must replace, not merge")
     }
 
     // MARK: - apply: malformed input
@@ -148,23 +169,25 @@ final class ApplicationControlStoreTests: XCTestCase {
         let payload = document(
             policyID: 100003, version: 1000,
             rules: [
-                (type: "BINARY", identifier: "good-binary", ruleID: "good"),
-                (type: "FRUITCAKE", identifier: "weird", ruleID: "weird"),
+                RuleSpec(type: "BINARY", identifier: "good-binary", ruleID: "good"),
+                RuleSpec(type: "FRUITCAKE", identifier: "weird", ruleID: "weird")
             ]
         )
         ApplicationControlStore.shared.apply(rawJSON: payload)
         let snapshot = ApplicationControlStore.shared.currentSnapshot()
-        if snapshot.policyID == 100003 {
-            XCTAssertEqual(snapshot.binaryRules["good-binary"]?.ruleID, "good")
-            // No bucket exists for FRUITCAKE; the weird identifier must not have
-            // leaked into any of the six known maps.
-            XCTAssertNil(snapshot.binaryRules["weird"])
-            XCTAssertNil(snapshot.cdhashRules["weird"])
-            XCTAssertNil(snapshot.signingIDRules["weird"])
-            XCTAssertNil(snapshot.certificateRules["weird"])
-            XCTAssertNil(snapshot.teamIDRules["weird"])
-            XCTAssertNil(snapshot.pathRules["weird"])
-        }
+        // Same explicit-policyID-assertion rationale as testApplyRoutesEveryRuleTypeIntoItsOwnMap:
+        // do not let a wrong-state singleton silently skip every check via an `if` guard.
+        XCTAssertEqual(snapshot.policyID, 100003)
+        XCTAssertEqual(snapshot.policyVersion, 1000)
+        XCTAssertEqual(snapshot.binaryRules["good-binary"]?.ruleID, "good")
+        // No bucket exists for FRUITCAKE; the weird identifier must not have
+        // leaked into any of the six known maps.
+        XCTAssertNil(snapshot.binaryRules["weird"])
+        XCTAssertNil(snapshot.cdhashRules["weird"])
+        XCTAssertNil(snapshot.signingIDRules["weird"])
+        XCTAssertNil(snapshot.certificateRules["weird"])
+        XCTAssertNil(snapshot.teamIDRules["weird"])
+        XCTAssertNil(snapshot.pathRules["weird"])
     }
 
     // MARK: - empty snapshot constant

@@ -120,7 +120,7 @@ final class DNSParserTests: XCTestCase {
             (16, "TXT"),
             (28, "AAAA"),
             (33, "SRV"),
-            (255, "ANY"),
+            (255, "ANY")
         ]
         for testCase in cases {
             var packet = header(id: 0x1234, qdcount: 1, ancount: 0)
@@ -170,7 +170,7 @@ final class DNSParserTests: XCTestCase {
         // 2001:db8::1 = 2001:0db8:0000:0000:0000:0000:0000:0001 = 16 bytes packed.
         let ipv6Bytes: [UInt8] = [
             0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
         ]
         var packet = header(id: 0x1234, qdcount: 1, ancount: 1)
         packet.append(question(name: "example.com", qtype: 28))

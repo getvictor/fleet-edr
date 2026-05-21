@@ -88,6 +88,11 @@ final class FileHashCacheTests: XCTestCase {
         // AUTH and read." Real value is whatever fstat would return; we offset.
         bogus.st_ino = file.stat.st_ino &+ 9999
         XCTAssertNil(FileHashCache.shared.lookupOrCompute(path: file.path, stat: bogus))
+        // A failed compute must NOT cache anything under the forged key -- if it did, the next
+        // AUTH_EXEC presenting that bogus (dev, ino, mtime) tuple would happily get served a wrong
+        // hash via a plain `lookup()`. Pin the negative so a future regression that quietly stores
+        // nil-or-stale-hash entries fails loudly.
+        XCTAssertNil(FileHashCache.shared.lookup(stat: bogus))
         // The honest stat still produces the hash.
         let honest = FileHashCache.shared.lookupOrCompute(path: file.path, stat: file.stat)
         XCTAssertEqual(honest, expectedSHA256(of: Data("real-content".utf8)))
