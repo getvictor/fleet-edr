@@ -328,16 +328,20 @@ func test_spec_extension_xpc_server_peer_validation_signing_required() throws { 
 ### The linter
 
 `tools/spectrace check` walks `openspec/specs/**/spec.md`, computes canonical IDs for every `#### Scenario:` under a
-`### Requirement:` whose body contains SHALL or MUST, then walks the codebase for matching markers. It fails when:
+`### Requirement:` whose body contains SHALL or MUST, then walks the codebase for matching markers. By default the
+check exits 0 unless a reference points to a non-existent canonical ID (which catches drift after a spec rename); with
+`--strict` it also fails when a SHALL / MUST scenario has zero references. The CI workflow at
+`.github/workflows/spectrace.yml` ships in advisory mode (no `--strict`); flip the gate when the marker backlog is
+closed. `tools/spectrace list-ids [--normative-only]` prints every canonical scenario ID so contributors can copy a
+marker without typing the slug.
 
-- A SHALL / MUST scenario has zero references.
-- A reference points to an ID that does not exist (catches drift after a spec rename).
+`tools/spectrace report --format=md` (a Markdown coverage matrix with one row per scenario and one column per layer)
+is deferred to a follow-up: it is a presentation layer over the same data `check` already collects, and the M13 budget
+was the linter itself. The same applies to per-layer breakdown in the gap output.
 
-`tools/spectrace report --format=md` produces a coverage matrix with one row per scenario and one column per layer,
-linking to the test that covers it.
-
-Rollout is phased so the gate never goes red on day one: advisory first, then "new code" gate (every scenario added or
-modified in a PR must be covered), then full gate. The same "new code" framing that SonarCloud uses.
+Rollout is phased so the gate never goes red on day one: advisory first (M13 v1 today), then "new code" gate (every
+scenario added or modified in a PR must be covered), then full gate via `--strict`. The same "new code" framing that
+SonarCloud uses.
 
 ## Minimum requirements per PR
 

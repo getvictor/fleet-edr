@@ -1,0 +1,93 @@
+name: Spec traceability
+
+# spectrace ties scenarios in openspec/specs/<dir>/spec.md to tests via the canonical-ID marker contract documented in
+# docs/testing-strategy.md. UAT plan milestone M13 phased rollout: invalid references fail the build today (catches typos
+# and stale renames at zero backlog cost), but uncovered SHALL/MUST scenarios are advisory until the marker backlog is
+# closed and the gate flips to --strict.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.go"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.swift"
+      - "openspec/specs/**"
+      - "tools/spectrace/**"
+      - ".github/workflows/spectrace.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect spectrace inputs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='\.go$|\.ts$|\.tsx$|\.swift$|^openspec/specs/|^tools/spectrace/|^\.github/workflows/spectrace\.yml$'
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by $EVENT_NAME; running unconditionally."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes:"
+            echo "$files" | grep -E "$PATTERN"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; skipping spectrace."
+          fi
+
+  spectrace:
+    name: spectrace check (advisory)
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      # The check exits 0 when there are no invalid references, even if there are uncovered SHALL/MUST scenarios; that is
+      # the documented phased-rollout shape. Invalid references DO fail the build because they almost always indicate a
+      # typo or a rename that hasn't propagated, and the cost to fix one is trivial.
+      - name: Run spectrace check
+        run: go run ./tools/spectrace check
+
+      # The advisory uncovered-scenarios list is printed to the job output but does not gate. Flip the gate to --strict
+      # in this workflow once the marker backlog is closed.
+      - name: Advisory: count uncovered SHALL/MUST scenarios
+        run: |
+          set -euo pipefail
+          total_normative=$(go run ./tools/spectrace list-ids --normative-only | wc -l)
+          # `check` already prints the per-scenario gap list; this step echoes the headline numbers to make the rollout
+          # progress visible in the job log without scrolling through every entry.
+          echo "spectrace: total normative scenarios = $total_normative"
+          echo "spectrace: phased rollout, --strict not yet enforced; see docs/testing-strategy.md"
