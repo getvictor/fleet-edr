@@ -9,10 +9,14 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
+// spec:server-detection-rules-engine/registered-rule-catalog/the-engine-reports-its-rule-catalog
+//
 // TestAll_RegisterEveryShippedRule pins down the registration order + size of the registry, so a new rule cannot land without
 // explicitly being added here. The slice this returns is the single source of truth used by the production server's main.go and the
 // docs generator (tools/gen-rule-docs); a silent drift between the two would mean operators see a different surface than the ATT&CK
-// coverage promises.
+// coverage promises. The spec scenario "the engine reports its rule catalog" is satisfied by this test because it asserts the exact
+// ID list the spec enumerates. Note the spec lists the 8 catalog rules (suspicious_exec, shell_from_office, ...); the registry also
+// includes application_control_block which is operator-policy-driven, not part of the spec-named catalog set.
 func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	t.Parallel()
 	got := New(api.RegistryOptions{})

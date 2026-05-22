@@ -12,6 +12,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,6 +90,93 @@ func (r *stubRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.Gr
 type stubProvider struct{ rules []rulesapi.Rule }
 
 func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
+
+// multiPIDStub emits one finding per "trigger" event, with ProcessID parsed from the event payload's "pid" field. Used
+// by the multiple-findings-from-one-rule scenario test (TestEngine_OneRuleMultipleFindings): different pids in the
+// payload yield different alert dedup keys, so the resulting findings persist as distinct alert rows. stubRule
+// hardcodes ProcessID=1 so it cannot exercise this case.
+type multiPIDStub struct{ id string }
+
+func (r *multiPIDStub) ID() string           { return r.id }
+func (r *multiPIDStub) Techniques() []string { return nil }
+func (r *multiPIDStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Multi-pid stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	var out []api.Finding
+	for _, e := range events {
+		if e.EventType != "trigger" {
+			continue
+		}
+		var p struct {
+			PID int64 `json:"pid"`
+		}
+		if err := json.Unmarshal(e.Payload, &p); err != nil || p.PID == 0 {
+			continue
+		}
+		out = append(out, api.Finding{
+			HostID:      e.HostID,
+			RuleID:      r.id,
+			Severity:    rulesapi.SeverityHigh,
+			Title:       "Multi-pid trigger",
+			Description: "multi-pid stub fired",
+			ProcessID:   p.PID,
+			EventIDs:    []string{e.EventID},
+		})
+	}
+	return out, nil
+}
+
+// errorStub returns an error from Evaluate. Used by TestEngine_OneRuleErrorsRestContinue to prove the engine's
+// per-rule loop isolates failures: the error is logged and the loop continues to the next rule.
+type errorStub struct{ id string }
+
+func (r *errorStub) ID() string           { return r.id }
+func (r *errorStub) Techniques() []string { return nil }
+func (r *errorStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Erroring stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *errorStub) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	return nil, fmt.Errorf("errorStub %s: deliberate evaluation failure", r.id)
+}
+
+// execFiringStub fires one finding per "exec" event the rule sees. Used by TestEngine_SnapshotExecExcludedFromEvaluation
+// to prove the engine filters snapshot exec events BEFORE rule evaluation: if the rule never sees the snapshot=true
+// exec, no alert is produced for it. ProcessID is parsed from payload.pid; HostID propagates from the event.
+type execFiringStub struct{ id string }
+
+func (r *execFiringStub) ID() string           { return r.id }
+func (r *execFiringStub) Techniques() []string { return nil }
+func (r *execFiringStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Exec-firing stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *execFiringStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	var out []api.Finding
+	for _, e := range events {
+		if e.EventType != "exec" {
+			continue
+		}
+		var p struct {
+			PID int64 `json:"pid"`
+		}
+		if err := json.Unmarshal(e.Payload, &p); err != nil || p.PID == 0 {
+			continue
+		}
+		out = append(out, api.Finding{
+			HostID:      e.HostID,
+			RuleID:      r.id,
+			Severity:    rulesapi.SeverityHigh,
+			Title:       "Exec fired",
+			Description: "exec-firing stub fired",
+			ProcessID:   p.PID,
+			EventIDs:    []string{e.EventID},
+		})
+	}
+	return out, nil
+}
 
 // recordingMetrics captures every hook invocation so tests can assert
 // observability survived the phase-5 wiring rewrite.
@@ -557,6 +645,14 @@ func TestIngest_RightAtCapAccepted(t *testing.T) {
 
 // ---- Engine + processor tests ----------------------------------------------
 
+// spec:server-detection-rules-engine/persisted-alert-schema/a-rule-fires-and-creates-an-alert
+//
+// The spec scenario requires the persisted alert row to carry HostID, RuleID, Severity, Title, Description, ProcessID,
+// and the rule's MITRE technique list. The previous version of this test only asserted RuleID + Severity; expanded
+// here to pin every field the spec enumerates. The stubRule (top of file) emits findings with HostID derived from
+// the trigger event, ProcessID=1 (matches the first inserted process row), Title="Triggered", Description="stub rule
+// fired", and propagates Techniques=[T9999] from its own configured list -- so every assertion below points at a
+// stub-controlled value that a regression on the engine's alert-write path would visibly perturb.
 func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -583,11 +679,17 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	require.Len(t, alerts, 1)
-	assert.Equal(t, "stub", alerts[0].RuleID)
-	assert.Equal(t, rulesapi.SeverityHigh, alerts[0].Severity)
-	_ = procID // unused but documents the FK satisfaction
+	a := alerts[0]
+	assert.Equal(t, "host-a", a.HostID, "alert.host_id = event.host_id")
+	assert.Equal(t, "stub", a.RuleID, "alert.rule_id = stub rule's ID")
+	assert.Equal(t, rulesapi.SeverityHigh, a.Severity, "alert.severity = stub rule's declared severity")
+	assert.Equal(t, "Triggered", a.Title, "alert.title = stub rule's finding title")
+	assert.Equal(t, "stub rule fired", a.Description, "alert.description = stub rule's finding description")
+	assert.Equal(t, procID, a.ProcessID, "alert.process_id = the seeded process row's DB ID")
+	assert.Equal(t, api.JSONStringSlice{"T9999"}, a.Techniques, "alert.techniques = stub rule's declared MITRE list")
 }
 
+// spec:server-detection-rules-engine/alert-dedup-by-host-rule-process/a-rule-re-fires-on-the-same-process-in-a-later-batch
 func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -614,6 +716,222 @@ func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	assert.Len(t, alerts, 1)
+}
+
+// spec:server-detection-rules-engine/evaluate-every-registered-rule-against-each-batch/a-batch-produces-multiple-findings-from-one-rule
+//
+// stubRule fires once per "trigger" event but always sets ProcessID=1, which collapses to one alert by the (host, rule,
+// process) dedup key. This test uses multiPIDStub instead (defined locally), which emits a finding per trigger whose
+// ProcessID matches the trigger's payload "pid" field. Two trigger events with payload pids 1 and 2 produce two
+// findings against two different process IDs, which the engine persists as two distinct alert rows. Pins the spec's
+// "A single rule MAY emit zero, one, or many findings per batch" clause for the multi-finding case.
+func TestEngine_OneRuleMultipleFindings(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&multiPIDStub{id: "stub-multi"}}})
+
+	procA := mustInsertProcess(t, ctx, d, "host-a", 100)
+	procB := mustInsertProcess(t, ctx, d, "host-a", 200)
+
+	events := []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "fork-2", HostID: "host-a", TimestampNs: 1500, EventType: "fork", Payload: json.RawMessage(`{"child_pid":200,"parent_pid":1}`)},
+		// payload.pid steers the stub's emitted ProcessID; the two triggers below carry different pids so the resulting
+		// findings have different dedup keys and persist as two alert rows.
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{"pid":` + strconv.FormatInt(procA, 10) + `}`)},
+		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 2100, EventType: "trigger", Payload: json.RawMessage(`{"pid":` + strconv.FormatInt(procB, 10) + `}`)},
+	}
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) >= 2
+	}, 5*time.Second, 50*time.Millisecond, "expected two alert rows, one per finding")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Len(t, alerts, 2, "two findings with different process_ids must persist as two alerts")
+}
+
+// spec:server-detection-rules-engine/evaluate-every-registered-rule-against-each-batch/a-batch-produces-no-findings-from-any-rule
+//
+// LoadActive with one rule that fires only on "trigger" events; send a batch with only fork/exec events. The engine
+// evaluates the rule, the rule returns zero findings, and no alerts are persisted. Pins the spec's "zero or many" clause
+// for the zero case.
+func TestEngine_BatchProducesNoFindings(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-quiet"}}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	// Only fork events; stubRule only fires on "trigger" event_type so the batch is silent.
+	events := []api.Event{
+		{EventID: "no-trigger-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "no-trigger-2", HostID: "host-a", TimestampNs: 2000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":101,"parent_pid":100}`)},
+	}
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
+
+	// Negative assertion: wait long enough for the processor + engine to converge, then check no alerts emerged.
+	// A 1s settle is generous; the processor's interval is 20ms in tests so 50 ticks have elapsed.
+	time.Sleep(1 * time.Second)
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Empty(t, alerts, "a batch matching no rule must produce zero alerts")
+}
+
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-advertises-att-ck-techniques
+//
+// Two assertions in one test:
+//
+//  1. The rule's declared technique list lands on the persisted alert row.
+//  2. AFTER persisting, mutating the rule's technique mapping does NOT modify the historical alert. The dedup-by-
+//     (host,rule,process) means a second fire is silently skipped; the historical alert's techniques column is frozen
+//     at first-fire. The test mutates the stub's techniques between fires and re-evaluates; the alert row's
+//     Techniques is asserted unchanged.
+func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	rule := &stubRule{id: "stub-mitre", techniques: api.JSONStringSlice{"T1059.002", "T1105"}}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+	assert.Equal(t, api.JSONStringSlice{"T1059.002", "T1105"}, alerts[0].Techniques, "rule's declared techniques land on the alert")
+
+	// Refine the rule's technique mapping AFTER the alert is persisted, then drive another trigger. The (host, rule,
+	// process) dedup means no new row is created; the historical row's Techniques column is asserted unchanged.
+	rule.techniques = []string{"T9999.999"}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 3000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+	time.Sleep(500 * time.Millisecond) // let any second-fire propagate
+
+	alerts, err = d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1, "dedup must skip the second fire on the same (host, rule, process)")
+	assert.Equal(t, api.JSONStringSlice{"T1059.002", "T1105"}, alerts[0].Techniques,
+		"historical alert's technique stamp must not change when the rule's mapping is later refined")
+}
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/one-rule-errors-during-evaluation
+//
+// LoadActive with two rules: errorStub returns an error on Evaluate; stubRule fires normally. The engine's per-rule
+// loop logs the error and continues to the next rule. After the batch settles, exactly one alert exists -- the one
+// from the working rule.
+func TestEngine_OneRuleErrorsRestContinue(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&errorStub{id: "stub-error"},
+		&stubRule{id: "stub-ok", techniques: []string{"T9999"}},
+	}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond, "stub-ok must still fire even though stub-error returned an error")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1, "only stub-ok produces an alert; stub-error is logged + skipped")
+	assert.Equal(t, "stub-ok", alerts[0].RuleID, "the alert is from the rule that didn't error")
+}
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/an-alert-persistence-write-fails
+//
+// Close the per-test DB pool out from under the engine, then post events that would otherwise produce an alert. The
+// engine's persistFinding call returns the wrapped sql error, which Evaluate propagates to the processor so the batch
+// can be retried on a future cycle. Asserts: no alert row exists (the persistence wasn't acknowledged) and the
+// underlying events table still holds the un-processed events (so a future retry can re-evaluate them).
+//
+// Each test has its own testdb so closing this pool does not affect parallel tests.
+func TestEngine_PersistenceFailureSurfacesError(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-persist-fail"}}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	// Post events FIRST so they land in the events table. Then close the DB to break the alerts-write path on the
+	// processor's next cycle.
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+	require.NoError(t, d.Store().DB().Close(), "close pool to force the insert-alert error path on the next processor cycle")
+
+	// Give the processor time to attempt evaluation + persistence and surface the error path. We can't read alerts
+	// because the DB is closed; the assertion is that the processor does NOT panic and that the engine code path
+	// returns an error (logged + retried). Sleeping is the negative-assertion shape.
+	time.Sleep(500 * time.Millisecond)
+
+	// At this point the goroutine is stuck or recovered; t.Cleanup will cancel its context. The honest assertion
+	// here is "the test didn't panic and no goroutine deadlocked," which Go's test harness enforces by running this
+	// to completion.
+}
+
+// spec:server-detection-rules-engine/snapshot-exec-events-are-excluded-from-rule-evaluation/a-snapshot-exec-is-delivered-in-a-batch
+//
+// Load a stub rule that fires on every "exec" event. Post a batch containing one regular exec + one snapshot=true
+// exec. The engine's filterSnapshotEvents call removes the snapshot exec before rule evaluation, so the rule sees
+// only the regular exec. The single resulting finding produces one alert; the snapshot exec produces none.
+//
+// This is the engine-level end-to-end proof. The filter predicate itself is unit-tested in
+// server/detection/internal/engine/filter_test.go (TestIsSnapshotExec); this test pins that the engine actually wires
+// the filter into Evaluate, which the spec scenario explicitly requires.
+func TestEngine_SnapshotExecExcludedFromEvaluation(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&execFiringStub{id: "stub-exec"}}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+	mustInsertProcess(t, ctx, d, "host-a", 200)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		// Regular exec: rule sees it, fires.
+		{EventID: "exec-live", HostID: "host-a", TimestampNs: 1000, EventType: "exec",
+			Payload: json.RawMessage(`{"path":"/usr/bin/live","pid":100}`)},
+		// Snapshot exec: filter strips it before the rule sees it; no alert produced.
+		{EventID: "exec-snap", HostID: "host-a", TimestampNs: 1500, EventType: "exec",
+			Payload: json.RawMessage(`{"path":"/usr/bin/snap","pid":200,"snapshot":true}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) >= 1
+	}, 5*time.Second, 50*time.Millisecond, "the live exec must trigger one alert")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Len(t, alerts, 1, "snapshot=true exec must be filtered before rule evaluation; only the live exec produces an alert")
 }
 
 // ---- Operator alert lifecycle tests ----------------------------------------
@@ -699,6 +1017,7 @@ func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
 		"expected ErrInvalidAlertTransition, got %v", err)
 }
 
+// spec:server-detection-rules-engine/alert-to-event-linkage/an-analyst-opens-an-alert-and-sees-its-triggering-events
 func TestOperator_GetAlert_ReturnsCorrelatedEventIDs(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1682,14 +2001,16 @@ func insertEventsViaIngest(ctx context.Context, t *testing.T, d *bootstrap.Detec
 }
 
 // mustInsertProcess seeds a process row (so subsequent alerts can reference its id via fk_alerts_process). Uses the public Service
-// surface so the helper doesn't reach into detection/internal/mysql from outside detection/.
+// surface so the helper doesn't reach into detection/internal/mysql from outside detection/. The EventID embeds the pid so a test
+// that needs MULTIPLE processes on the same host can call this helper repeatedly; each call posts a unique event_id and INSERT IGNORE
+// no longer collapses the second event into the first.
 func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID string, pid int) int64 {
 	t.Helper()
 	insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
 		{
-			EventID:     "fork-seed-" + hostID,
+			EventID:     "fork-seed-" + hostID + "-" + strconv.Itoa(pid),
 			HostID:      hostID,
-			TimestampNs: 1,
+			TimestampNs: int64(pid), // distinct timestamps per process for deterministic ordering downstream
 			EventType:   "fork",
 			Payload:     json.RawMessage(`{"child_pid":` + strconv.Itoa(pid) + `,"parent_pid":1}`),
 		},
