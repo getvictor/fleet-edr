@@ -3,6 +3,7 @@ package intake
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
 )
+
+// MaxIngestBodyBytes is the per-request body cap on POST /api/events. The contract is documented in openspec/specs/
+// server-event-ingestion/spec.md (Body size limit requirement); see the comment on handleIngest for the enforcement shape.
+// Exported for tests that need to compose right-at-cap and over-cap bodies without duplicating the magic number.
+const MaxIngestBodyBytes = 10 * 1024 * 1024
 
 // BuildInfo is injected at startup so the readiness endpoint
 // advertises version + commit.
@@ -74,8 +80,30 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024)) // 10 MB limit
+	// Body-size enforcement happens in two stages to match the top-EDR shape and the openspec contract:
+	//
+	//  1. Content-Length fast-path. If the client advertised a length beyond the cap, reject with HTTP 413 BEFORE
+	//     allocating any buffer. This is the cheap defence against a malicious or misconfigured caller that would
+	//     otherwise trigger a 100+ MB allocation per request.
+	//  2. Streaming enforce. For chunked transfer-encoding (no Content-Length) or a lying Content-Length header, wrap
+	//     r.Body in http.MaxBytesReader which returns a typed *http.MaxBytesError once the cap is crossed mid-stream.
+	//     The previous shape used io.LimitReader, which silently truncates: a truncated body would then fail
+	//     json.Unmarshal and surface as `invalid_json`, hiding the real cause. MaxBytesReader's distinguished error is
+	//     what makes the 413-vs-400 split honest.
+	//
+	// 413 (RFC 9110 §15.5.14) is the canonical status; matches Elastic Fleet, Datadog, Splunk HEC, CrowdStrike Falcon.
+	if r.ContentLength > MaxIngestBodyBytes {
+		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxIngestBodyBytes)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
+			return
+		}
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "read_body")
 		return
 	}

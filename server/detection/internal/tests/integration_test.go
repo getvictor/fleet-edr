@@ -12,6 +12,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
+	"github.com/fleetdm/edr/server/detection/internal/intake"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -440,6 +442,100 @@ func TestIngest_DBErrorReturns5xx(t *testing.T) {
 	defer resp.Body.Close()
 	assert.GreaterOrEqual(t, resp.StatusCode, 500, "DB failure must surface as a 5xx so the agent retries")
 	assert.Less(t, resp.StatusCode, 600)
+}
+
+// spec:server-event-ingestion/body-size-limit/an-oversized-request-body-is-rejected
+//
+// Two over-cap shapes are exercised so the test pins both enforcement stages of the handler:
+//
+//   - Content-Length fast-path: send a body whose declared Content-Length exceeds MaxIngestBodyBytes. The handler must
+//     reject with 413 BEFORE reading any of the body.
+//   - Streaming MaxBytesReader path: send a chunked body that crosses the cap mid-read. The previous io.LimitReader
+//     shape silently truncated and surfaced as `invalid_json`; this case is the regression test for that bug.
+//
+// Pass: 413 + JSON body {"error":"body_too_large"}. No host appears in ListHosts because no events were persisted.
+func TestIngest_OversizedBodyRejected(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		chunked bool
+	}{
+		{"content-length advertises oversize", false},
+		{"chunked body crosses cap mid-stream", true},
+	}
+	// One event with a 12 MB payload field; the array brackets + envelope overhead push the total over the 10 MB cap.
+	bigPayload := strings.Repeat("A", 12*1024*1024)
+	body := `[{"event_id":"e-big","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{"data":"` +
+		bigPayload + `"}}]`
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+			ctx := t.Context()
+			srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+			t.Cleanup(srv.Close)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			if tc.chunked {
+				// Forcing chunked encoding requires the client to NOT know the body length up front. http.NewRequest
+				// computes ContentLength from the strings.Reader; setting it to -1 makes Go's transport switch to
+				// Transfer-Encoding: chunked, which is exactly the path MaxBytesReader catches.
+				req.ContentLength = -1
+				req.Header.Set("Transfer-Encoding", "chunked")
+			}
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode, "413 per RFC 9110 §15.5.14")
+			respBody, _ := io.ReadAll(resp.Body)
+			var parsed map[string]string
+			require.NoError(t, json.Unmarshal(respBody, &parsed))
+			assert.Equal(t, "body_too_large", parsed["error"], "typed diagnostic per the spec")
+
+			hosts, err := d.Service().ListHosts(ctx)
+			require.NoError(t, err)
+			assert.Empty(t, hosts, "no events persisted when the body is rejected")
+		})
+	}
+}
+
+// spec:server-event-ingestion/body-size-limit/a-right-at-cap-body-is-accepted
+//
+// Boundary test: construct a body whose serialized length is just under MaxIngestBodyBytes and assert the handler reads
+// the entire payload, validates every event, and returns 200. The test pads ONE event's payload field with ASCII bytes
+// to drive the total body length close to the cap; the JSON wrapper overhead means the actual payload string is the
+// cap minus the envelope shape. Wall-clock cost is ~100ms for the 10 MB allocation + parse + insert; well under
+// suite-wide test budgets.
+func TestIngest_RightAtCapAccepted(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	// Compute the maximum payload-data length that keeps the total body at or below the cap. The envelope structure is
+	// fixed; everything beyond the data string is constant overhead we can subtract from the cap.
+	envelope := `[{"event_id":"e-cap","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{"data":""}}]`
+	overhead := len(envelope)
+	dataLen := intake.MaxIngestBodyBytes - overhead - 32 // 32-byte safety margin for JSON escaping / encoding
+	body := `[{"event_id":"e-cap","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{"data":"` +
+		strings.Repeat("A", dataLen) + `"}}]`
+	require.LessOrEqual(t, len(body), intake.MaxIngestBodyBytes, "test fixture must fit under the cap")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "right-at-cap body must be accepted")
+
+	count, err := d.Store().CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count, "the single right-at-cap event was persisted")
 }
 
 // ---- Engine + processor tests ----------------------------------------------

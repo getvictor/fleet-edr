@@ -3,6 +3,9 @@ package mysql_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -111,6 +114,88 @@ func TestStore_InsertEvents_ClosedDBReturnsError(t *testing.T) {
 	err := s.InsertEvents(t.Context(), events)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "begin tx", "begin tx failures must propagate, not be swallowed by the retry loop")
+}
+
+// spec:server-event-ingestion/horizontally-scalable-ingestion-service/two-ingestion-replicas-run-against-the-same-database
+//
+// Concurrent-InsertEvents stress test. Spawns N goroutines that each call InsertEvents with overlapping batches against
+// the SAME *mysql.Store (which models two ingestion replicas pointing at one shared MySQL backend, since the handler is
+// stateless apart from its store handle and both replicas would dial the same DB). Half the batches share event_ids
+// with each other and with the other half, exercising both the INSERT IGNORE deduplication path and the M10 deadlock-
+// retry wrapper under contention.
+//
+// Assertions:
+//
+//   - Every goroutine completes without error. The M10 retry budget is 5 attempts; if a deadlock window cannot resolve
+//     in that budget, the goroutine returns the wrapped 1213 and the test fails loudly rather than silently dropping
+//     events.
+//   - The events table's final cardinality equals the count of distinct event_ids across all batches (not the SUM of
+//     batch lengths). This pins both the dedup semantic AND the "no spurious deletes / rollbacks" property — a buggy
+//     concurrent path that lost rows would show up as a low cardinality count here.
+//
+// The architectural property being pinned is the spec's "Multiple replicas of the ingestion service MUST be able to
+// accept agent traffic concurrently against the same database without coordinating with each other." A literal two-
+// process test (two scaledriver binaries against one server) belongs at the M12 scale layer (#232); this in-process
+// stress test pins the wire-level concurrency-safety property that makes the multi-process shape work.
+func TestStore_InsertEvents_ConcurrentReplicaShape(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	const goroutines = 16
+	const eventsPerBatch = 20
+	const sharedEventCount = 8 // first 8 events overlap across every batch; remaining 12 are unique per goroutine
+
+	// Build the shared (overlap) event slice once. Every goroutine reuses these event_ids, so concurrent inserts of the
+	// same row exercise INSERT IGNORE under contention. Their host_ids match across goroutines too because in
+	// production multiple replicas commonly receive batches from the same host on different connections.
+	shared := make([]api.Event, sharedEventCount)
+	for i := range shared {
+		shared[i] = api.Event{
+			EventID:     "shared-" + strconv.Itoa(i),
+			HostID:      "host-shared",
+			TimestampNs: int64(i + 1),
+			EventType:   "fork",
+			Payload:     json.RawMessage(`{}`),
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+	for g := range goroutines {
+		wg.Add(1)
+		go func(replicaIdx int) {
+			defer wg.Done()
+			batch := append([]api.Event(nil), shared...)
+			for i := sharedEventCount; i < eventsPerBatch; i++ {
+				batch = append(batch, api.Event{
+					EventID:     "rep-" + strconv.Itoa(replicaIdx) + "-evt-" + strconv.Itoa(i),
+					HostID:      "host-rep-" + strconv.Itoa(replicaIdx),
+					TimestampNs: int64(i + 1),
+					EventType:   "fork",
+					Payload:     json.RawMessage(`{}`),
+				})
+			}
+			if err := s.InsertEvents(ctx, batch); err != nil {
+				errs <- fmt.Errorf("replica %d: %w", replicaIdx, err)
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+
+	var collected []error
+	for err := range errs {
+		collected = append(collected, err)
+	}
+	require.Empty(t, collected, "no replica goroutine may surface an unretried deadlock or insert error")
+
+	got, err := s.CountEvents(ctx)
+	require.NoError(t, err)
+	// Distinct event_ids = sharedEventCount + (eventsPerBatch - sharedEventCount) * goroutines.
+	wantDistinct := int64(sharedEventCount + (eventsPerBatch-sharedEventCount)*goroutines)
+	assert.Equal(t, wantDistinct, got,
+		"final events table cardinality must equal the distinct-event-id union across replicas")
 }
 
 func TestStore_FetchUnprocessedAndUnclaim(t *testing.T) {
