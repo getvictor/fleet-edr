@@ -276,10 +276,12 @@ func TestIngest_RequiresHostContext(t *testing.T) {
 // spec:server-event-ingestion/required-field-validation/a-batch-contains-an-event-with-a-missing-field
 //
 // Table-driven across the four required fields. Each subtest omits exactly one (event_id, host_id, event_type,
-// timestamp_ns) on an otherwise valid envelope, posts the batch, asserts HTTP 400 with a diagnostic identifying
-// the failing field's position, and confirms ListHosts is empty so the spec's "no events from that batch are
-// persisted" clause holds. The handler's validation lives at server/detection/internal/intake/handler.go's
-// per-event loop; a regression that drops the check on any one field would surface here.
+// timestamp_ns) on an otherwise valid envelope, posts the batch, asserts HTTP 400 with the typed
+// `missing_fields_at_<index>` error code identifying the failing field's position, and confirms ListHosts is empty
+// so the spec's "no events from that batch are persisted" clause holds. The handler's validation lives at
+// server/detection/internal/intake/handler.go's per-event loop; a regression that drops the check on any one field
+// would surface here. Pinning the error code (not just the status) also prevents a regression where the handler
+// returns 400 with a generic body and contributors silently accept it.
 func TestIngest_MissingFieldRejected(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -307,6 +309,15 @@ func TestIngest_MissingFieldRejected(t *testing.T) {
 			defer resp.Body.Close()
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "missing field must return 400")
 
+			respBody, _ := io.ReadAll(resp.Body)
+			var parsed map[string]string
+			require.NoError(t, json.Unmarshal(respBody, &parsed))
+			// The handler emits `missing_fields_at_<idx>` where idx is the position of the offending event in the
+			// batch. Every fixture above has the bad event at index 0, so we pin the exact code rather than just
+			// the prefix.
+			assert.Equal(t, "missing_fields_at_0", parsed["error"],
+				"typed diagnostic identifying the failing event's position")
+
 			hosts, err := d.Service().ListHosts(ctx)
 			require.NoError(t, err)
 			assert.Empty(t, hosts, "no events persisted when validation fails")
@@ -317,9 +328,10 @@ func TestIngest_MissingFieldRejected(t *testing.T) {
 // spec:server-event-ingestion/required-field-validation/a-batch-body-is-not-valid-json
 //
 // The handler runs io.ReadAll on the body then json.Unmarshal into []api.Event. A non-array body (here, a JSON
-// object) fails Unmarshal and the handler returns 400 with `invalid_json`. The spec's "no events persisted"
-// clause is satisfied trivially because we never reach the insert path; the test still asserts ListHosts is
-// empty to pin the behaviour against a future refactor that might short-circuit differently.
+// object) fails Unmarshal and the handler returns 400 with the typed `invalid_json` error code. The spec's "no
+// events persisted" clause is satisfied trivially because we never reach the insert path; the test still asserts
+// ListHosts is empty to pin the behaviour against a future refactor that might short-circuit differently. Pinning
+// the typed error code (not just the status) prevents a regression where the handler returns a generic 400.
 func TestIngest_InvalidJSONRejected(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -334,6 +346,11 @@ func TestIngest_InvalidJSONRejected(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var parsed map[string]string
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	assert.Equal(t, "invalid_json", parsed["error"], "typed diagnostic per the spec")
 
 	hosts, err := d.Service().ListHosts(ctx)
 	require.NoError(t, err)
