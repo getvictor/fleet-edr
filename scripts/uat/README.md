@@ -8,9 +8,12 @@ API for the expected detections.
 
 This is the L5 layer of the testing pyramid (per `docs/testing-strategy.md`
 and `ai/uat/extension-testing.md`): unlike L0..L4 it does not run per PR;
-it runs against release candidates and on a schedule via a self-hosted
-runner (M11). For per-PR signal on extension wire shapes see L0 unit
-tests (M7) and L0 corpus replay (M8).
+it runs against release candidates and on the developer's own machine
+against a SIP-on VM. For per-PR signal on extension wire shapes see L0
+unit tests (M7) and L0 corpus replay (M8). Running L5 from a dedicated
+self-hosted GitHub Actions runner (so the cron lane and release tags
+fire automatically) is tracked as a follow-up; for now the harness runs
+locally only.
 
 ## Difference vs `scripts/qa/`
 
@@ -46,6 +49,24 @@ dropped because the underlying server endpoint (`/api/policy`) is gone --
 the replacement is the per-policy app-control admin surface at
 `/api/v1/app-control/*`. A fresh scenario over the new API is tracked
 separately.
+
+## Quick start (local execution)
+
+One-time per session:
+
+1. Sign in to the EDR admin UI in a browser (break-glass or OIDC).
+2. Devtools -> Application -> Cookies -> copy the `edr_session` value.
+3. Export the three env vars below.
+
+Then iterate via the Taskfile target:
+
+    task uat:l5 -- attack-runbook --dry-run        # orchestration smoke, ~1s
+    task uat:l5 -- attack-runbook --skip-install   # already-enrolled VM, ~2 min
+    task uat:l5 -- attack-runbook                  # full install + scenario, ~5 min
+
+Or call the driver directly (the task target is a thin pass-through):
+
+    scripts/uat/system-test.sh attack-runbook --skip-install
 
 ## Running
 
@@ -137,11 +158,19 @@ L5 section of `docs/testing-strategy.md`.
 
 ## CI integration
 
-Per-PR: NOT integrated. M9 ships only the harness; M11 wires the
-self-hosted GitHub Actions runner on the developer's Mac (label
-`macos-self-hosted-edr-qa`) that invokes this driver on a schedule and
-on release tags.
+Per-PR: NOT integrated. L5 wall-time is too high for per-PR throughput,
+and the GitHub-hosted macOS runner pool can't expose the ESF entitlement
+or run nested virtualisation -- L5 needs a real Mac with a SIP-enabled
+guest. Per-PR drift in extension wire shapes is caught by L0 unit (M7)
+plus L0 corpus replay (M8); per-PR drift in catalog rules is caught by
+L6 detection efficacy (M10) on the nightly cadence.
 
-Until M11, the harness runs manually via the commands above. The
+Today: M11 ships the local-execution flavour (`task uat:l5 -- attack-runbook ...`).
+The harness runs manually on the developer's machine; the
 asserted-scenario shape means a manual run still produces a clear
 pass/fail signal suitable for a release-candidate checklist.
+
+Future: a `.github/workflows/system-test.yml` invoking this driver on
+a self-hosted runner that owns the VM. That work is preserved in the
+`m11-runner-future-work` branch and tracked as
+[issue #220](https://github.com/getvictor/fleet-edr/issues/220).

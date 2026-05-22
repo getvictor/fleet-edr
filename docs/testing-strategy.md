@@ -140,10 +140,16 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
   different shape that warrants a fresh scenario tracked separately.) Driver supports `--dry-run` for
   orchestration smoke-tests without driving real infrastructure. See `scripts/uat/README.md` for the schema
   - capture procedure.
-- Runs on a self-hosted runner (the GitHub-hosted macOS runners do not allow nested virtualisation or expose the ESF
-  entitlement). Schedule + RC tag, never per PR. The self-hosted runner integration itself is UAT plan milestone
-  **M11** (not yet landed); until then, the harness runs manually against `edr-qa` (192.168.64.7) and the
-  pass/fail signal is suitable for a release-candidate checklist.
+- Runs on a real Mac with a SIP-enabled guest (GitHub-hosted macOS runners do not allow nested virtualisation
+  or expose the ESF entitlement). Never per PR. UAT plan milestone **M11** ships the local-execution flavour:
+  `task uat:l5 -- attack-runbook ...` (or `scripts/uat/system-test.sh attack-runbook ...` direct) runs the
+  driver against the developer's own VM. The asserted-scenario shape gives a clean pass/fail signal suitable
+  for a release-candidate checklist. Wiring the same driver into a `.github/workflows/system-test.yml` that
+  fires on a `0 5 * * *` cron + every `v*` tag, against a self-hosted GitHub Actions runner labelled
+  `macos-self-hosted-edr-qa`, is preserved in the `m11-runner-future-work` branch and tracked as issue
+  [#220](https://github.com/getvictor/fleet-edr/issues/220) -- it requires registering a Mac as a runner,
+  provisioning the `edr-qa-l5` environment + secrets, and building a session-refresh routine, none of which
+  are blocking the local flow today.
 - Setting up a local VM for this layer: see `docs/install-agent-manual.md` and `docs/install-server.md`. The exact
   VM tool (UTM, VMware Fusion, Parallels) is the contributor's choice; the only requirements are SIP-enabled,
   Gatekeeper-enabled, snapshot-capable, and reachable over SSH from the runner host.
@@ -153,8 +159,9 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 - `test/efficacy/corpus/T<MITRE-id>-<slug>/` per attack technique. Each folder ships:
   - `scenario.yaml`: a fake-agent scenario (consumed by `test/efficacy/efficacy_test.go` and reusable by the
     headless and browser E2E layers).
-  - `attack.sh`: a shell driver that runs the technique on a live VM (consumed by the M11 self-hosted runner
-    when it lands; placeholder content today).
+  - `attack.sh`: a shell driver that runs the technique on a live VM (consumed by `scripts/uat/system-test.sh`
+    locally per M11; or by the future self-hosted runner when that work picks up). The starter scenarios ship
+    placeholder `attack.sh` files documenting the real-VM equivalent.
   - `expected.yaml`: the detection assertions (which rule fires, within what SLA, severity). Shared between
     modes.
 - `test/efficacy/noise/*.yaml` plus one shared `expected.yaml` (with `rules: []`) form the ambient-noise lane
