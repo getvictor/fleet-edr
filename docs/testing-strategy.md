@@ -293,7 +293,10 @@ t.Run("spec:server-event-ingestion/authenticated-batch-event-submission/a-valid-
 })
 ```
 
-**Go table-driven, via a `Spec` field that becomes the subtest name:**
+**Go table-driven, via a `Spec` field that the test code threads into the subtest name.** The scanner anchors on the
+literal `spec:` string, not on Go AST. A `Spec: "<id>"` field that is consumed only by `assert.Equal(...)` is NOT a
+marker; the field has to flow through `t.Run("spec:"+tc.Spec, ...)` (or similar) so the literal `spec:<id>` string lands
+in the source:
 
 ```go
 cases := []struct {

@@ -11,22 +11,30 @@ import (
 )
 
 // Scenario is one canonical scenario from openspec/specs/<dir>/spec.md. The canonical ID is the slash-joined slug used by the
-// spec.id / test marker contract documented in docs/testing-strategy.md.
+// spec.id / test marker contract documented in docs/testing-strategy.md. SourcePath is normalised to forward-slash and made
+// relative to the cwd at parse time so report output is stable regardless of whether the caller passed `--specs-dir` as a
+// repo-relative or absolute path.
 type Scenario struct {
-	ID          string // <spec-dir>/<requirement-slug>/<scenario-slug>
-	SpecDir     string // e.g. server-event-ingestion
-	Requirement string // requirement title, raw
-	Title       string // scenario title, raw
-	SourcePath  string // openspec/specs/<dir>/spec.md (repo-relative)
-	SourceLine  int    // 1-based line of the `#### Scenario:` heading
-	Normative   bool   // true when the parent requirement's body contains SHALL or MUST
+	ID          string
+	SpecDir     string
+	Requirement string
+	Title       string
+	SourcePath  string
+	SourceLine  int
+	Normative   bool
 }
 
 // ParseAllSpecs walks specsDir for spec.md files and returns every scenario it finds. Scenarios are sorted by canonical ID so
-// downstream output is deterministic across runs and across filesystems with different directory orderings.
+// downstream output is deterministic across runs and across filesystems with different directory orderings. SourcePath on
+// each emitted Scenario is normalised to a forward-slash, cwd-relative path so reports stay clickable whether the caller
+// passed --specs-dir as a repo-relative or absolute path.
 func ParseAllSpecs(specsDir string) ([]Scenario, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "" // fall through; relPath() handles the empty-cwd case as identity.
+	}
 	var all []Scenario
-	err := filepath.WalkDir(specsDir, func(path string, d os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(specsDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -39,7 +47,7 @@ func ParseAllSpecs(specsDir string) ([]Scenario, error) {
 		}
 		defer f.Close()
 		specDir := filepath.Base(filepath.Dir(path))
-		scenarios, err := parseSpec(f, specDir, path)
+		scenarios, err := parseSpec(f, specDir, relPath(cwd, path))
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
@@ -51,6 +59,24 @@ func ParseAllSpecs(specsDir string) ([]Scenario, error) {
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
 	return all, nil
+}
+
+// relPath returns a forward-slash, cwd-relative path for reporting. When cwd is empty (Getwd failed) or filepath.Rel returns
+// an error, the input is returned with backslashes converted but otherwise unchanged. The cost of the conversion is one
+// allocation per spec.md file; specs are sub-100 in this repo, so the work is negligible.
+func relPath(cwd, path string) string {
+	if cwd == "" {
+		return filepath.ToSlash(path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	rel, err := filepath.Rel(cwd, abs)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // parseSpec walks one spec.md and emits a Scenario per `#### Scenario:` heading. Normative is derived from whether the parent

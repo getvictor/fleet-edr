@@ -31,7 +31,9 @@ See `docs/testing-strategy.md` for the contract. The recognised shapes are:
 
 - Go subtest name: `t.Run("spec:<canonical-id>", ...)`
 - Go comment marker: `// spec:<canonical-id>` immediately above a test
-- Go table-driven `Spec` field that is later passed to `t.Run`
+- Go table-driven `Spec` field: only counts when the test code threads the field through `t.Run("spec:"+tc.Spec, ...)`
+  (or similar) so the literal `spec:<id>` string lands in the source. The scanner anchors on `spec:` as text, not on Go
+  AST, so a `Spec` field consumed only by `assert.Equal(...)` is NOT a marker.
 - Playwright title prefix: `test("spec:<canonical-id> <name>", ...)`
 - Swift XCTest function name: `func test_spec_<id_with_slashes_and_dashes_replaced_by_underscores>(...)`
 

@@ -87,9 +87,10 @@ func runCheck(args []string) int {
 		fmt.Fprintln(os.Stderr, "spectrace: parse specs:", err)
 		return 2
 	}
-	canonical := make(map[string]struct{}, len(scenarios))
-	for _, s := range scenarios {
-		canonical[s.ID] = struct{}{}
+	canonical, dupErr := buildCanonicalSet(scenarios)
+	if dupErr != nil {
+		fmt.Fprintln(os.Stderr, "spectrace:", dupErr)
+		return 2
 	}
 	markers, err := ScanMarkers(*rootDir, canonical)
 	if err != nil {
@@ -119,6 +120,25 @@ func runCheck(args []string) int {
 	default:
 		return 0
 	}
+}
+
+// buildCanonicalSet builds the lookup map used to validate marker references AND fails fast if two scenarios slug to the
+// same canonical ID. A silent collapse would let one marker appear to cover two scenarios and hide a real gap, so duplicate
+// IDs are surfaced as a hard error pointing at both source locations. With the slug algorithm in spec.go, collisions can
+// only happen when two requirement+scenario heading pairs slugify identically; if that happens, one of the spec headings
+// needs to be edited.
+func buildCanonicalSet(scenarios []Scenario) (map[string]struct{}, error) {
+	canonical := make(map[string]struct{}, len(scenarios))
+	seen := make(map[string]Scenario, len(scenarios))
+	for _, s := range scenarios {
+		if prev, exists := seen[s.ID]; exists {
+			return nil, fmt.Errorf("duplicate canonical scenario ID %q at %s:%d and %s:%d (rename one of the spec headings)",
+				s.ID, prev.SourcePath, prev.SourceLine, s.SourcePath, s.SourceLine)
+		}
+		seen[s.ID] = s
+		canonical[s.ID] = struct{}{}
+	}
+	return canonical, nil
 }
 
 // splitUncovered separates the uncovered scenarios into normative (SHALL/MUST) and advisory (no normative keyword in the

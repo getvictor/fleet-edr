@@ -45,7 +45,8 @@ func TestContainsNormativeKeyword(t *testing.T) {
 		{"uppercase MUST", "The system MUST mark events delivered only after 2xx.", true},
 		{"lowercase shall does not count", "Everyone shall be merry.", false},
 		{"lowercase must does not count", "Tests must be cheap.", false},
-		{"SHALL substring inside word does not match", "He marshalled the data.", false},
+		{"uppercase SHALL inside larger token does not match", "The marshallerSHALLer routine ran.", false},
+		{"uppercase MUST as suffix of identifier does not match", "callMUSTfire was invoked.", false},
 		{"empty line", "", false},
 		{"MUST followed by punctuation matches", "It MUST.", true},
 		{"SHALL at end of line matches", "The agent SHALL", true},
@@ -137,97 +138,157 @@ The system MUST do Y.
 	assert.Equal(t, "x/second/two", got[1].ID)
 }
 
-// TestScanFile_GoSubtest exercises the Go subtest-name marker form: `t.Run("spec:<id>", ...)`. The marker should resolve to
-// the canonical (slashed) ID regardless of surrounding quoting.
-func TestScanFile_GoSubtest(t *testing.T) {
-	src := `package x
+// TestScanFile covers every marker dialect (Go subtest, Go comment, Playwright title, Swift XCTest, malformed-marker
+// validation surface, Swift unknown-identifier, Swift ambiguity) in a single table-driven shape per CLAUDE.md's test policy.
+// Each case documents what dialect / failure surface it exercises so a future contributor adding a sixth dialect adds one
+// row rather than a sixth function.
+func TestScanFile(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		path        string
+		isSwift     bool
+		canonical   map[string]struct{}
+		wantMarkers []string // emitted Marker.ID values, in order
+	}{
+		{
+			name: "go subtest name",
+			src: `package x
 func TestFoo(t *testing.T) {
 	t.Run("spec:server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch", func(t *testing.T) {})
 }
-`
-	canonical := map[string]struct{}{
-		"server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch": {},
-	}
-	got, err := scanFile(strings.NewReader(src), "x.go", false, canonical)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch", got[0].ID)
-}
-
-// TestScanFile_GoComment covers the `// spec:<id>` comment form used when the t.Run name should stay short.
-func TestScanFile_GoComment(t *testing.T) {
-	src := `package x
+`,
+			path: "x.go", isSwift: false,
+			canonical: map[string]struct{}{
+				"server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch": {},
+			},
+			wantMarkers: []string{
+				"server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch",
+			},
+		},
+		{
+			name: "go comment marker",
+			src: `package x
 // spec:agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-a-valid-token
 func TestUpload(t *testing.T) {}
-`
-	canonical := map[string]struct{}{
-		"agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-a-valid-token": {},
-	}
-	got, err := scanFile(strings.NewReader(src), "x.go", false, canonical)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-}
-
-// TestScanFile_PlaywrightTitlePrefix covers `test("spec:<id> <name>", ...)` in TypeScript Playwright suites.
-func TestScanFile_PlaywrightTitlePrefix(t *testing.T) {
-	src := `import { test } from "@playwright/test";
+`,
+			path: "x.go", isSwift: false,
+			canonical: map[string]struct{}{
+				"agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-a-valid-token": {},
+			},
+			wantMarkers: []string{"agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-a-valid-token"},
+		},
+		{
+			name: "playwright title prefix",
+			src: `import { test } from "@playwright/test";
 test("spec:ui-authentication-session/break-glass-redemption/operator-redeems-bootstrap-token renders dashboard", async () => {});
-`
-	canonical := map[string]struct{}{
-		"ui-authentication-session/break-glass-redemption/operator-redeems-bootstrap-token": {},
-	}
-	got, err := scanFile(strings.NewReader(src), "x.ts", false, canonical)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "ui-authentication-session/break-glass-redemption/operator-redeems-bootstrap-token", got[0].ID)
-}
-
-// TestScanFile_SwiftXCTest covers the underscored Swift identifier form. Underscores in the source are ambiguously dashes or
-// slashes per the docs/testing-strategy.md mapping; resolveSwift disambiguates against the known canonical-ID set.
-func TestScanFile_SwiftXCTest(t *testing.T) {
-	src := `class EventSerializerTests: XCTestCase {
+`,
+			path: "x.ts", isSwift: false,
+			canonical: map[string]struct{}{
+				"ui-authentication-session/break-glass-redemption/operator-redeems-bootstrap-token": {},
+			},
+			wantMarkers: []string{"ui-authentication-session/break-glass-redemption/operator-redeems-bootstrap-token"},
+		},
+		{
+			name: "swift xctest identifier",
+			src: `class EventSerializerTests: XCTestCase {
     func test_spec_extension_xpc_server_peer_validation_signing_required() throws {}
 }
-`
-	canonical := map[string]struct{}{
-		"extension-xpc-server/peer-validation/signing-required": {},
-	}
-	got, err := scanFile(strings.NewReader(src), "x.swift", true, canonical)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "extension-xpc-server/peer-validation/signing-required", got[0].ID,
-		"resolveSwift must collapse the dialect difference back to the canonical slashed form")
-}
-
-// TestScanFile_InvalidReferenceIsFlagged ensures that a marker pointing to a non-existent ID is captured (not silently
-// dropped) so the check pass can fail the build on stale references after a spec rename.
-func TestScanFile_InvalidReferenceIsFlagged(t *testing.T) {
-	src := `// spec:does-not/exist/at-all
+`,
+			path: "x.swift", isSwift: true,
+			canonical: map[string]struct{}{
+				"extension-xpc-server/peer-validation/signing-required": {},
+			},
+			wantMarkers: []string{"extension-xpc-server/peer-validation/signing-required"},
+		},
+		{
+			name: "malformed marker reaches downstream invalid-ref bucket",
+			src: `// spec:Wrong-Case/foo/bar
 func Foo() {}
-`
-	canonical := map[string]struct{}{} // empty: no valid IDs
-	got, err := scanFile(strings.NewReader(src), "x.go", false, canonical)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "does-not/exist/at-all", got[0].ID)
-}
-
-// TestScanFile_SwiftUnknownIdentifierFlagged ensures that a `test_spec_foo` identifier that does not resolve to any canonical
-// ID is reported with a `swift:` prefix instead of being silently dropped, so check can flag it as an invalid reference.
-func TestScanFile_SwiftUnknownIdentifierFlagged(t *testing.T) {
-	src := `class X: XCTestCase {
+`,
+			path: "x.go", isSwift: false,
+			canonical:   map[string]struct{}{},
+			wantMarkers: []string{"Wrong-Case/foo/bar"}, // captured, validated invalid downstream
+		},
+		{
+			name: "go invalid reference is captured for downstream validation",
+			src: `// spec:does-not/exist/at-all
+func Foo() {}
+`,
+			path: "x.go", isSwift: false,
+			canonical:   map[string]struct{}{},
+			wantMarkers: []string{"does-not/exist/at-all"},
+		},
+		{
+			name: "swift unknown identifier surfaces as swift:<body>",
+			src: `class X: XCTestCase {
     func test_spec_does_not_exist() throws {}
 }
-`
-	canonical := map[string]struct{}{} // empty
-	got, err := scanFile(strings.NewReader(src), "x.swift", true, canonical)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "swift:does_not_exist", got[0].ID)
+`,
+			path: "x.swift", isSwift: true,
+			canonical:   map[string]struct{}{},
+			wantMarkers: []string{"swift:does_not_exist"},
+		},
+		{
+			// Two canonical IDs collapse to the same Swift identifier (`foo-bar` vs `foo/bar`). resolveSwiftMarker must NOT
+			// pick one at random; it surfaces a `swift-ambiguous:` reference so check reports it as invalid and the
+			// contributor renames one of the conflicting headings.
+			name: "swift ambiguous identifier surfaces as swift-ambiguous:<body>",
+			src: `class X: XCTestCase {
+    func test_spec_foo_bar() throws {}
+}
+`,
+			path: "x.swift", isSwift: true,
+			canonical: map[string]struct{}{
+				"foo-bar":   {}, // 2-segment, doesn't matter that this isn't a real canonical ID for this unit test
+				"foo/bar":   {},
+				"unrelated": {},
+			},
+			wantMarkers: []string{"swift-ambiguous:foo_bar"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			swiftIndex := buildSwiftIndex(tc.canonical)
+			got, err := scanFile(strings.NewReader(tc.src), tc.path, tc.isSwift, tc.canonical, swiftIndex)
+			require.NoError(t, err)
+			require.Len(t, got, len(tc.wantMarkers))
+			for i, want := range tc.wantMarkers {
+				assert.Equal(t, want, got[i].ID, "marker %d", i)
+				assert.Equal(t, tc.path, got[i].SourcePath, "marker %d source path", i)
+			}
+		})
+	}
 }
 
 // TestSwiftFormOf pins the canonical-to-Swift dialect translation. Slashes AND dashes both map to underscores.
 func TestSwiftFormOf(t *testing.T) {
 	assert.Equal(t, "extension_xpc_server_peer_validation_signing_required",
 		swiftFormOf("extension-xpc-server/peer-validation/signing-required"))
+}
+
+// TestBuildCanonicalSet_DuplicateIDsAreRejected pins the duplicate-detection contract added in this PR. If two scenarios
+// slug to the same canonical ID, buildCanonicalSet must fail fast with both source locations rather than silently
+// collapsing them into a single map entry.
+func TestBuildCanonicalSet_DuplicateIDsAreRejected(t *testing.T) {
+	scenarios := []Scenario{
+		{ID: "x/foo-bar/baz", SourcePath: "openspec/specs/x/spec.md", SourceLine: 10},
+		{ID: "y/qux/quux", SourcePath: "openspec/specs/y/spec.md", SourceLine: 20},
+		{ID: "x/foo-bar/baz", SourcePath: "openspec/specs/x/spec.md", SourceLine: 30},
+	}
+	_, err := buildCanonicalSet(scenarios)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate canonical scenario ID")
+	assert.Contains(t, err.Error(), "openspec/specs/x/spec.md:10")
+	assert.Contains(t, err.Error(), "openspec/specs/x/spec.md:30")
+}
+
+// TestBuildCanonicalSet_NoDuplicatesIsClean confirms the happy path: distinct IDs produce a populated set with no error.
+func TestBuildCanonicalSet_NoDuplicatesIsClean(t *testing.T) {
+	scenarios := []Scenario{
+		{ID: "a/b/c"}, {ID: "d/e/f"},
+	}
+	set, err := buildCanonicalSet(scenarios)
+	require.NoError(t, err)
+	assert.Len(t, set, 2)
 }
