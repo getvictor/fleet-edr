@@ -134,7 +134,7 @@ jobs:
       # zizmor convention. Update SHA if a newer v4 release is preferred.
       - name: Cache custom golangci-lint binary
         id: cache-golangci-custom
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: tmp/golangci-lint-custom
           key: golangci-custom-${{ runner.os }}-${{ hashFiles('.custom-gcl.yml', 'tools/comment-wrap-check/lint/go.mod', 'tools/comment-wrap-check/lint/go.sum', 'tools/comment-wrap-check/lint/*.go') }}
