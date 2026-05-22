@@ -83,7 +83,7 @@ jobs:
 
       # The advisory uncovered-scenarios list is printed to the job output but does not gate. Flip the gate to --strict
       # in this workflow once the marker backlog is closed.
-      - name: Advisory: count uncovered SHALL/MUST scenarios
+      - name: "Advisory: count uncovered SHALL/MUST scenarios"
         run: |
           set -euo pipefail
           total_normative=$(go run ./tools/spectrace list-ids --normative-only | wc -l)
