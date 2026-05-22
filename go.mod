@@ -9,6 +9,7 @@ require (
 	github.com/fleetdm/edr/tools/comment-wrap-check/lint v0.0.0-00010101000000-000000000000
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/go-webauthn/webauthn v0.17.2
+	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/open-policy-agent/opa v1.16.1
 	github.com/stretchr/testify v1.11.1
@@ -26,6 +27,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/sync v0.20.0
 	golang.org/x/time v0.15.0
 	golang.org/x/tools v0.44.0
 	modernc.org/sqlite v1.49.1
@@ -54,7 +56,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golangci/plugin-module-register v0.1.2 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
@@ -89,7 +90,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa // indirect
 	golang.org/x/text v0.36.0 // indirect
