@@ -188,6 +188,15 @@ for 30 minutes, recorded baseline checked into the repo. Longer soak runs, 500-a
 chaos, and the operational tooling for all of them (`tools/chaosctl/`) are tracked separately. The fake-agent library
 and headless binary are the shared substrate.
 
+UAT plan milestone **M12** ships the first cut of the scale lane:
+`test/scale/` exposes a `scale.Run(ctx, Options)` runner plus a `scaledriver` binary invoked via `task uat:scale`.
+Each simulated host enrols via `/api/enroll`, then loops `fakeagent.PostDirect` against `/api/events` for the configured
+duration; the runner records client-observed p50/p95/p99 latency and asserts the documented gate
+(`p99 < 250ms`, zero errors). A per-PR smoke (5 hosts x 5s) at `test/scale/scale_test.go` runs on every push via the
+`./test/scale/...` glob in the server-test job (`task test:go:server:coverage`) and proves the harness itself does not
+rot. The 30-minute baseline is captured manually and committed to `test/scale/baselines/baseline.json`. Queue-depth
+probes and SigNoz cross-checks (see the M12 row in `ai/uat/plan.md`) are explicitly deferred to a follow-up.
+
 ## Reusable artefacts
 
 ### Fake agent and headless agent binary

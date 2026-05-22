@@ -88,7 +88,10 @@ func (s *Scenario) PostDirect(ctx context.Context, baseURL, token string, opts .
 	if err != nil {
 		return err
 	}
-	client := defaultHTTPClient()
+	client := cfg.httpClient
+	if client == nil {
+		client = defaultHTTPClient()
+	}
 	url := baseURL + "/api/events"
 
 	for start := 0; start < len(envelopes); start += cfg.batchSize {

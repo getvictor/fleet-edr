@@ -297,6 +297,33 @@ tasks:
     cmds:
       - scripts/uat/system-test.sh {{.CLI_ARGS}}
 
+  uat:scale:
+    desc: |
+      Run the UAT plan M12 scale-test harness at test/scale/scaledriver against
+      an externally-running EDR server (e.g. `task dev:server`). Fans out N
+      simulated hosts via fakeagent's PostDirect, records client-observed
+      ingest p50/p95/p99 latency, fails if the p99 budget (default 250ms) is
+      breached or any POST errors.
+
+      Defaults: 100 hosts, 80/20 quiet/active mix, 5 minute lane against
+      https://localhost:8088 with TLS verification enabled. Targeting
+      dev:server's mkcert cert requires either trusting the cert in the
+      system store (`task dev:certs`) or opt-in TLS skip via
+      `-- --insecure-tls=true`. The plan's 30 min baseline run is invoked via:
+        task uat:scale -- --duration=30m --output=test/scale/baselines/baseline.json
+
+      Required env:
+        EDR_ENROLL_SECRET  shared secret the server reads from the same name
+
+      CLI flags forwarded via the task's -- separator (see `go run
+      ./test/scale/scaledriver --help` for the full list). Common forms:
+        task uat:scale                                       # 100 hosts x 5min
+        task uat:scale -- --hosts=10 --duration=30s          # quick local check
+        task uat:scale -- --duration=30m \
+            --output=test/scale/baselines/baseline.json      # baseline capture
+    cmds:
+      - go run ./test/scale/scaledriver {{.CLI_ARGS}}
+
   test:go:server:coverage:
     desc: |
       Server + shared coverage flavor of test:go:server. Emits coverage-server.out
@@ -315,7 +342,11 @@ tasks:
       # tests fully exercise them. Per the modular-monolith pattern,
       # cross-package exercise via the public api/ + bootstrap/ surface is
       # the intended coverage path; coverpkg makes Sonar see it.
-      - go test -race -count=1 -timeout=10m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/...
+      #
+      # ./test/scale/... is included so M12's per-PR smoke (5 hosts x 5s
+      # against integration.Setup) runs on every push. Wall-clock cost is
+      # ~5s, dominated by the smoke's own load lane.
+      - go test -race -count=1 -timeout=10m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/... ./test/scale/...
       - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:

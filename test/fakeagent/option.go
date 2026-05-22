@@ -3,6 +3,7 @@ package fakeagent
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"net/http"
 	"time"
 )
 
@@ -14,6 +15,7 @@ type runConfig struct {
 	speedMultiplier float64
 	batchSize       int
 	idGenerator     func() string
+	httpClient      *http.Client
 }
 
 // Option is the functional-option type for FeedControlPlane, PostDirect, and Envelopes. Use With* helpers to construct values.
@@ -55,6 +57,18 @@ func WithIDGenerator(f func() string) Option {
 		panic("fakeagent: WithIDGenerator requires a non-nil function")
 	}
 	return func(c *runConfig) { c.idGenerator = f }
+}
+
+// WithHTTPClient overrides the *http.Client PostDirect uses for POSTs to /api/events. The default builds a client with the
+// project's postDirectHTTPTimeout and stock TLS verification; callers that need shared connection pools (e.g. fan-out load
+// generators) or a custom TLS config (e.g. dev:server's mkcert-signed cert when the system trust store has not been primed)
+// pass their own client here. Has no effect on FeedControlPlane, which dials a unix socket. Panics on a nil client so the
+// failure surfaces at the call site rather than later in PostDirect when client.Do() dereferences nil.
+func WithHTTPClient(c *http.Client) Option {
+	if c == nil {
+		panic("fakeagent: WithHTTPClient requires a non-nil client")
+	}
+	return func(cfg *runConfig) { cfg.httpClient = c }
 }
 
 // newRunConfig builds the resolved config, applies any options, then returns it.
