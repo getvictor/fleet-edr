@@ -7,7 +7,7 @@ The harness exists in two shapes:
 
 | Shape | Where | When |
 |---|---|---|
-| Per-PR smoke (5 hosts x 5s) | `scale_test.go` (`-tags=integration`) | every PR via the existing server-test job |
+| Per-PR smoke (5 hosts x 5s) | `scale_test.go` (`-tags=integration`) | every PR via `task test:go:server:coverage`'s `./test/scale/...` glob |
 | Opt-in long-form run | `scaledriver/` (`go run` via `task uat:scale`) | manual; baseline capture; release-candidate |
 
 Both share the runner at `runner.go` so the smoke test exercises the same code path the long-form lane uses.
@@ -31,12 +31,18 @@ systemic regression.
 task db:up
 task dev:server
 
-# In another shell, capture a baseline.
-export EDR_ENROLL_SECRET=$(grep EDR_ENROLL_SECRET ~/.zshrc | head -1 | cut -d= -f2-)
-task uat:scale -- --hosts=10 --duration=30s     # smoke (~30s wall clock)
-task uat:scale                                  # default: 100 hosts x 5 min
-task uat:scale -- --duration=30m \
-    --output=test/scale/baselines/baseline.json  # plan's full 30 min baseline
+# In another shell, export EDR_ENROLL_SECRET from your current session (or
+# from a secret manager such as `op read ...`). Avoid scraping shell profile
+# files: the secret should live in your session env, not in a checked-in
+# rcfile path you can be parsed later.
+export EDR_ENROLL_SECRET=...   # paste from your secret source
+
+# dev:server uses mkcert; either trust the cert system-wide (`task dev:certs`)
+# OR opt in to TLS skip via `-- --insecure-tls=true`. The default is to verify.
+task uat:scale -- --hosts=10 --duration=30s --insecure-tls=true     # smoke
+task uat:scale -- --insecure-tls=true                               # 100 hosts x 5 min
+task uat:scale -- --duration=30m --insecure-tls=true \
+    --output=test/scale/baselines/baseline.json                     # full 30 min baseline
 ```
 
 The driver inherits `EDR_ENROLL_SECRET` from the environment so the same value the server reads at boot drives the test

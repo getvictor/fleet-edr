@@ -306,8 +306,10 @@ tasks:
       breached or any POST errors.
 
       Defaults: 100 hosts, 80/20 quiet/active mix, 5 minute lane against
-      https://localhost:8088 with insecure TLS (matches dev:server's mkcert
-      cert). The plan's 30 min baseline run is invoked via:
+      https://localhost:8088 with TLS verification enabled. Targeting
+      dev:server's mkcert cert requires either trusting the cert in the
+      system store (`task dev:certs`) or opt-in TLS skip via
+      `-- --insecure-tls=true`. The plan's 30 min baseline run is invoked via:
         task uat:scale -- --duration=30m --output=test/scale/baselines/baseline.json
 
       Required env:
@@ -340,7 +342,11 @@ tasks:
       # tests fully exercise them. Per the modular-monolith pattern,
       # cross-package exercise via the public api/ + bootstrap/ surface is
       # the intended coverage path; coverpkg makes Sonar see it.
-      - go test -race -count=1 -timeout=10m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/...
+      #
+      # ./test/scale/... is included so M12's per-PR smoke (5 hosts x 5s
+      # against integration.Setup) runs on every push. Wall-clock cost is
+      # ~5s, dominated by the smoke's own load lane.
+      - go test -race -count=1 -timeout=10m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/... ./test/scale/...
       - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:

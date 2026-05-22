@@ -137,6 +137,9 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		return Report{}, errors.New("scale: EnrollSecret is required")
 	}
 	opts = defaultOptions(opts)
+	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
+		return Report{}, fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
+	}
 	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
 		return Report{}, errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
 	}
@@ -225,9 +228,13 @@ func (h *hostState) run(ctx context.Context, serverURL, enrollSecret string, cli
 
 	for ctx.Err() == nil {
 		start := time.Now()
+		// Thread the runner's shared http.Client through PostDirect via WithHTTPClient so the optional --insecure-tls
+		// configuration applies to /api/events POSTs (not just /api/enroll). Without this option, fakeagent's PostDirect
+		// would build its own default *http.Client and lose the TLS skip required for dev:server's mkcert-signed cert.
 		err := h.scenario.PostDirect(ctx, serverURL, token,
 			fakeagent.WithHostID(h.hostID),
 			fakeagent.WithStartTime(start),
+			fakeagent.WithHTTPClient(client),
 		)
 		latency := time.Since(start)
 		h.mu.Lock()
@@ -340,6 +347,7 @@ func percentileSorted(sorted []time.Duration, p float64) time.Duration {
 
 // enrollOne hits /api/enroll for a single host_id and returns the issued host_token. Bounded retry: enrollment under fan-in can
 // temporarily 429 if many hosts arrive in the same second; one short backoff covers that without papering over real failures.
+// The retry-vs-terminal classification is delegated to enrollAttempt so this loop stays under the cognitive-complexity budget.
 func enrollOne(ctx context.Context, client *http.Client, serverURL, enrollSecret, hostID string) (string, error) {
 	body, _ := json.Marshal(map[string]string{
 		"enroll_secret": enrollSecret,
@@ -350,47 +358,52 @@ func enrollOne(ctx context.Context, client *http.Client, serverURL, enrollSecret
 	})
 	var lastErr error
 	for range enrollRetries {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL+"/api/enroll",
-			bytes.NewReader(body))
-		if err != nil {
+		token, retryGap, err := enrollAttempt(ctx, client, serverURL, body)
+		if err == nil {
+			return token, nil
+		}
+		lastErr = err
+		if retryGap <= 0 {
+			// enrollAttempt classified this as terminal (4xx other than 429, decode failure, missing token, request build error).
 			return "", err
 		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			if err := sleepCtx(ctx, enrollRetryConnGap); err != nil {
-				return "", err
-			}
-			continue
+		if err := sleepCtx(ctx, retryGap); err != nil {
+			return "", err
 		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			_ = resp.Body.Close()
-			lastErr = errors.New("HTTP 429 from /api/enroll")
-			if err := sleepCtx(ctx, enrollRetry429Gap); err != nil {
-				return "", err
-			}
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			return "", fmt.Errorf("/api/enroll HTTP %d", resp.StatusCode)
-		}
-		var er struct {
-			HostID    string `json:"host_id"`
-			HostToken string `json:"host_token"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&er)
-		_ = resp.Body.Close()
-		if err != nil {
-			return "", fmt.Errorf("decode enroll response: %w", err)
-		}
-		if er.HostToken == "" {
-			return "", errors.New("enroll response missing host_token")
-		}
-		return er.HostToken, nil
 	}
 	return "", lastErr
+}
+
+// enrollAttempt runs a single /api/enroll POST. Returns (token, 0, nil) on success; (_, retryGap > 0, err) when the caller
+// should sleep retryGap and retry (transport error or 429); (_, 0, err) on terminal failure.
+func enrollAttempt(ctx context.Context, client *http.Client, serverURL string, body []byte) (string, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL+"/api/enroll", bytes.NewReader(body))
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", enrollRetryConnGap, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", enrollRetry429Gap, errors.New("HTTP 429 from /api/enroll")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("/api/enroll HTTP %d", resp.StatusCode)
+	}
+	var er struct {
+		HostID    string `json:"host_id"`
+		HostToken string `json:"host_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+		return "", 0, fmt.Errorf("decode enroll response: %w", err)
+	}
+	if er.HostToken == "" {
+		return "", 0, errors.New("enroll response missing host_token")
+	}
+	return er.HostToken, 0, nil
 }
 
 func defaultOptions(o Options) Options {
@@ -437,6 +450,11 @@ func loadScenarios(opts Options) (*fakeagent.Scenario, []*fakeagent.Scenario, er
 
 // buildHTTPClient returns a client tuned for parallel small-batch POSTs: tight per-request timeout, no idle-connection ceiling
 // (every host keeps its own keep-alive open), and optional self-signed TLS skip for dev:server.
+//
+// The TLS-skip branch trips three Sonar/CodeQL rules (go:S4830 server-cert validation, go:S5527 hostname verification, gosec
+// G402). They are intentional and opt-in: the scaledriver CLI default is `--insecure-tls=false`, and the only documented
+// use case is talking to a local dev:server whose cert is signed by mkcert and not yet in the system trust store. A real
+// scale run against a production server passes the default (`false`) and the InsecureSkipVerify=true branch never executes.
 func buildHTTPClient(insecure bool) *http.Client {
 	tr := &http.Transport{
 		MaxIdleConns:        httpMaxIdle,
@@ -444,7 +462,7 @@ func buildHTTPClient(insecure bool) *http.Client {
 		IdleConnTimeout:     httpIdleTimeout,
 	}
 	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // dev:server mkcert path; opt-in via flag
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // documented opt-in for dev:server mkcert cert; NOSONAR
 	}
 	return &http.Client{Timeout: httpClientTimeout, Transport: tr}
 }
