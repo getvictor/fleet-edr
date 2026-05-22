@@ -7,6 +7,8 @@ services:
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: edr
+    # Cap binlog retention at 1 day. Default is 30 days
+    command: ["--binlog-expire-logs-seconds=86400"]
     ports:
       - "127.0.0.1:3316:3306"
     volumes:
