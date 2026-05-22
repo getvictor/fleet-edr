@@ -1,0 +1,31 @@
+# T1543.004 Create or Modify System Process: Launch Daemon.
+#
+# Synthetic dropper (a non-platform-binary, here at /tmp/raw_dropper) writes a
+# plist under /Library/LaunchDaemons/. The privilege_launchd_plist_write rule
+# fires on the open event with write-mode flags against a LaunchDaemons path
+# AND the writer process is unsigned / non-Apple-platform. Mirrors the
+# positive_unsigned_writer fixture.
+name: "T1543.004 launchd plist write from /tmp/raw_dropper"
+host:
+  id: AAAA1543-0004-0000-0000-000000000004
+  hostname: efficacy-t1543-004.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4544
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4544
+    ppid: 1
+    path: /tmp/raw_dropper
+    args: ["/tmp/raw_dropper"]
+    cwd: /tmp
+    uid: 0
+    gid: 0
+  - at: 20ms
+    type: open
+    pid: 4544
+    path: /Library/LaunchDaemons/com.synth.persistence.plist
+    flags: 1537

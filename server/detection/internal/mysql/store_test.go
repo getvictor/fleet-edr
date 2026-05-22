@@ -84,6 +84,35 @@ func TestStore_InsertEventsAtPinsTimestamp(t *testing.T) {
 		"InsertEventsAt must pin the deterministic ingest timestamp")
 }
 
+func TestStore_InsertEvents_EmptyIsNoOp(t *testing.T) {
+	// The empty-slice fast path returns nil without touching the DB. Important for the retry wrapper: an empty insert must
+	// not waste a deadlock-retry budget on a no-op transaction.
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, s.InsertEvents(ctx, nil), "InsertEvents(nil) is a no-op")
+	require.NoError(t, s.InsertEvents(ctx, []api.Event{}), "InsertEvents([]) is a no-op")
+	require.NoError(t, s.InsertEventsAt(ctx, nil, 1234), "InsertEventsAt(nil, _) is a no-op")
+
+	count, err := s.CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), count, "no rows inserted by any of the no-op calls")
+}
+
+func TestStore_InsertEvents_ClosedDBReturnsError(t *testing.T) {
+	// Closing the underlying db pool forces BeginTxx to fail on the first attempt. The deadlock-retry wrapper must NOT
+	// retry this class of error (it is not a 1213), so the call should return promptly with the begin-tx error wrapped.
+	s := newTestStore(t)
+	require.NoError(t, s.DB().Close(), "close underlying pool to force begin-tx failure")
+
+	events := []api.Event{
+		{EventID: "closed-db-1", HostID: "h", TimestampNs: 1, EventType: "fork", Payload: json.RawMessage(`{}`)},
+	}
+	err := s.InsertEvents(t.Context(), events)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "begin tx", "begin tx failures must propagate, not be swallowed by the retry loop")
+}
+
 func TestStore_FetchUnprocessedAndUnclaim(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()

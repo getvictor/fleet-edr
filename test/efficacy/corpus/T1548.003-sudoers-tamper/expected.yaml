@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1548.003-sudoers-tamper technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1548.003-sudoers-tamper
+mitre: T1548.003
+within_seconds: 30
+rules:
+  - rule_id: sudoers_tamper
+    severity: high
+    expect: alert
