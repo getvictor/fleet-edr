@@ -177,6 +177,11 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 			st.gap = opts.ActiveIterationGap
 			rep.ActiveHostCount++
 		}
+		// Pre-allocate the latency slice to the expected observation count (Duration / gap, padded by 2 for jitter +
+		// startup variance). Grow-by-double append in the hot loop is otherwise the largest allocator in a long run and
+		// can skew percentile measurements on GC-busy CI runners.
+		expectedObs := int(opts.Duration/st.gap) + 2
+		st.latencies = make([]time.Duration, 0, expectedObs)
 		hosts[i] = st
 	}
 
@@ -231,12 +236,30 @@ func (h *hostState) run(ctx context.Context, serverURL, enrollSecret string, cli
 		// Thread the runner's shared http.Client through PostDirect via WithHTTPClient so the optional --insecure-tls
 		// configuration applies to /api/events POSTs (not just /api/enroll). Without this option, fakeagent's PostDirect
 		// would build its own default *http.Client and lose the TLS skip required for dev:server's mkcert-signed cert.
+		//
+		// Latency caveat (Gemini's medium-priority note on M12 v1): the wall-clock measured here covers ONE PostDirect call,
+		// which may issue multiple HTTP POSTs if the scenario's envelope count exceeds fakeagent's batchSize (default 100).
+		// Every M10 corpus + fakeagent starter scenario produces fewer than 100 envelopes, so today a PostDirect call =
+		// one HTTP request and this measurement is per-request. If a future scenario crosses the batchSize boundary, the
+		// captured latency becomes an aggregate across batches and the runner's p99 stops corresponding to server-side
+		// http.server.duration p99. Either keep scenarios under one batch, raise the batchSize via WithBatchSize, or
+		// instrument per-request timing through a fakeagent observer hook.
 		err := h.scenario.PostDirect(ctx, serverURL, token,
 			fakeagent.WithHostID(h.hostID),
 			fakeagent.WithStartTime(start),
 			fakeagent.WithHTTPClient(client),
 		)
 		latency := time.Since(start)
+
+		// If the context cancelled while the POST was in flight, the resulting error is the runner's own shutdown signal,
+		// not a server-side problem. Exit cooperatively without counting it; otherwise tight CI timing where the lane
+		// deadline can fire mid-request would inflate error_count and flake the pass gate. The check uses ctx.Err()
+		// rather than errors.Is(err, context.Canceled) so context.DeadlineExceeded (the typical shape when the lane's
+		// own context.WithTimeout fires) is caught alongside parent-cancel propagations.
+		if err != nil && ctx.Err() != nil {
+			return
+		}
+
 		h.mu.Lock()
 		if err != nil {
 			h.errorCount++
@@ -246,9 +269,7 @@ func (h *hostState) run(ctx context.Context, serverURL, enrollSecret string, cli
 			h.postedCount++
 		}
 		h.mu.Unlock()
-		if err != nil && errors.Is(err, context.Canceled) {
-			return
-		}
+
 		// Jittered gap: gap * [jitterFloor, jitterFloor+jitterRange]. De-synchronises hosts so the server does not see a
 		// heartbeat-shaped fan-in spike.
 		jittered := time.Duration(float64(h.gap) * (jitterFloor + jitterRange*rng.Float64()))
@@ -268,7 +289,16 @@ func (h *hostState) recordErr(msg string) {
 // aggregate folds per-host latencies into the Report's percentile fields and computes pass/fail. Latencies are concatenated then
 // sorted once; with ~100 hosts and ~hundreds of observations each, an O(n log n) sort over the union is well under a millisecond.
 func aggregate(rep *Report, hosts []*hostState, opts Options) {
-	all := make([]time.Duration, 0, len(hosts)*16)
+	// Pre-size the aggregate latency slice to the exact total observation count. The per-host postedCount is already known
+	// here so the previous `len(hosts)*16` guess is replaced with the precise value; in a 100-host x 5-min x 1s lane the
+	// guess was ~20x low and forced grow-by-double reallocations.
+	totalObs := 0
+	for _, h := range hosts {
+		h.mu.Lock()
+		totalObs += h.postedCount
+		h.mu.Unlock()
+	}
+	all := make([]time.Duration, 0, totalObs)
 	for i, h := range hosts {
 		h.mu.Lock()
 		hostP99 := percentile(h.latencies, percentileP99)
