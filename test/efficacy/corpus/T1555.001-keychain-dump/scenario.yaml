@@ -1,0 +1,26 @@
+# T1555.001 Credentials from Password Stores: Keychain.
+#
+# Synthetic attacker spawns /usr/bin/security with dump-keychain subcommand.
+# Mirrors the positive_bare_dump fixture under server/rules/internal/catalog/fixtures/.
+# The credential_keychain_dump rule walks the process graph on every `exec` event,
+# matches `path == /usr/bin/security` + `args[1] == dump-keychain`, fires a high
+# severity alert -- expected within ~1s of POST.
+name: "T1555.001 credential dump via /usr/bin/security dump-keychain"
+host:
+  id: AAAA1555-0001-0000-0000-000000000001
+  hostname: efficacy-t1555.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4555
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4555
+    ppid: 1
+    path: /usr/bin/security
+    args: ["security", "dump-keychain"]
+    cwd: /
+    uid: 501
+    gid: 20

@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1543.001-launchagent-persistence technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1543.001-launchagent-persistence
+mitre: T1543.001
+within_seconds: 30
+rules:
+  - rule_id: persistence_launchagent
+    severity: high
+    expect: alert

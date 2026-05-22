@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1543.004-launchd-plist-write technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1543.004-launchd-plist-write
+mitre: T1543.004
+within_seconds: 30
+rules:
+  - rule_id: privilege_launchd_plist_write
+    severity: high
+    expect: alert

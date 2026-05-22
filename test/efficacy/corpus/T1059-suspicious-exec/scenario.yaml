@@ -1,0 +1,58 @@
+# T1059 Command and Scripting Interpreter (+ T1105 Ingress Tool Transfer).
+#
+# Synthetic shape: non-shell parent (python3) execs /bin/sh, then within
+# the 30s window the shell (or its descendants) execs a binary from /tmp.
+# The suspicious_exec rule fires on the LAST link of the chain (the /tmp
+# exec), attributes the alert back to the shell + the non-shell parent.
+# Mirrors the rule's reverse-direction triggering shape per its package
+# doc comment.
+name: "T1059 suspicious exec: python3 -> /bin/sh -> /tmp/payload"
+host:
+  id: AAAA1059-0000-0000-0000-000000000001
+  hostname: efficacy-t1059.local
+  os: macOS 26.0
+timeline:
+  # Step 1: python3 forks + execs (the non-shell parent).
+  - at: 0ms
+    type: fork
+    child_pid: 5001
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 5001
+    ppid: 1
+    path: /usr/bin/python3
+    args: ["python3", "-c", "import os; os.system('/bin/sh /tmp/payload.sh')"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+
+  # Step 2: python3 forks a /bin/sh child.
+  - at: 50ms
+    type: fork
+    child_pid: 5002
+    parent_pid: 5001
+  - at: 60ms
+    type: exec
+    pid: 5002
+    ppid: 5001
+    path: /bin/sh
+    args: ["sh", "/tmp/payload.sh"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+
+  # Step 3: /bin/sh execs a binary from /tmp -- the trigger event.
+  - at: 100ms
+    type: fork
+    child_pid: 5003
+    parent_pid: 5002
+  - at: 110ms
+    type: exec
+    pid: 5003
+    ppid: 5002
+    path: /tmp/payload
+    args: ["/tmp/payload"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
