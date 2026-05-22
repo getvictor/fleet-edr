@@ -7,10 +7,26 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
 )
+
+// mysqlErrDeadlock is MySQL error 1213: "Deadlock found when trying to get lock; try restarting transaction".
+// The server-error documentation explicitly tells callers to retry, and INSERT IGNORE under concurrent batch
+// load can trip gap locks on secondary indexes even when primary keys do not collide.
+const mysqlErrDeadlock = 1213
+
+// isDeadlockErr reports whether err wraps a MySQL deadlock (error 1213). Surface-level signal only: the caller
+// decides whether retrying is safe (which depends on whether the transaction is idempotent).
+func isDeadlockErr(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == mysqlErrDeadlock
+}
 
 // Store is the persistence handle for the detection bounded context. Holds the shared *sqlx.DB pool that cmd/main opens once via
 // server/bootstrap.OpenDB and shares across every context.
@@ -62,6 +78,32 @@ func (s *Store) insertEventsAt(ctx context.Context, events []api.Event, ingested
 		return nil
 	}
 
+	// INSERT IGNORE on the events table can deadlock under concurrent batch load: each transaction takes gap
+	// locks on the secondary indexes (idx_events_host_id, idx_events_host_type_ingested, etc.) and unrelated
+	// concurrent inserts on different host_ids can still hit lock-order inversion. The transaction is fully
+	// idempotent (INSERT IGNORE skips duplicates and we re-stamp ingested_at_ns only on rows actually inserted),
+	// so we retry on error 1213 with a short backoff. The 25-host enrollHostsBatch e2e fixture exercises this.
+	const maxAttempts = 5
+	var attemptErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		attemptErr = s.insertEventsAtOnce(ctx, events, ingestedAtNs)
+		if attemptErr == nil {
+			return nil
+		}
+		if !isDeadlockErr(attemptErr) {
+			return attemptErr
+		}
+		// Backoff = attempt * 5ms with a cap. Short on purpose — these contention windows are sub-millisecond.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * 5 * time.Millisecond):
+		}
+	}
+	return attemptErr
+}
+
+func (s *Store) insertEventsAtOnce(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
