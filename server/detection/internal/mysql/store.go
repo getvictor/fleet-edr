@@ -13,13 +13,13 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// mysqlErrDeadlock is MySQL error 1213: "Deadlock found when trying to get lock; try restarting transaction".
-// The server-error documentation explicitly tells callers to retry, and INSERT IGNORE under concurrent batch
-// load can trip gap locks on secondary indexes even when primary keys do not collide.
+// mysqlErrDeadlock is MySQL error 1213: "Deadlock found when trying to get lock; try restarting transaction". The server-error
+// documentation explicitly tells callers to retry, and INSERT IGNORE under concurrent batch load can trip gap locks on secondary
+// indexes even when primary keys do not collide.
 const mysqlErrDeadlock = 1213
 
-// isDeadlockErr reports whether err wraps a MySQL deadlock (error 1213). Surface-level signal only: the caller
-// decides whether retrying is safe (which depends on whether the transaction is idempotent).
+// isDeadlockErr reports whether err wraps a MySQL deadlock (error 1213). Surface-level signal only: the caller decides whether
+// retrying is safe (which depends on whether the transaction is idempotent).
 func isDeadlockErr(err error) bool {
 	var mysqlErr *mysql.MySQLError
 	if !errors.As(err, &mysqlErr) {
@@ -73,34 +73,47 @@ func (s *Store) InsertEventsAt(ctx context.Context, events []api.Event, ingested
 	return s.insertEventsAt(ctx, events, ingestedAtNs)
 }
 
+// insertMaxAttempts and insertBackoffStep size the deadlock-retry loop. Five attempts at 5ms*attempt linear backoff is short on
+// purpose: MySQL deadlock detection fires in sub-millisecond windows, and waiting longer just bottlenecks throughput under the
+// concurrent-batch shape that the 25-host enrollHostsBatch e2e fixture exercises.
+const (
+	insertMaxAttempts = 5
+	insertBackoffStep = 5 * time.Millisecond
+)
+
 func (s *Store) insertEventsAt(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
 	if len(events) == 0 {
 		return nil
 	}
+	// INSERT IGNORE on the events table can deadlock under concurrent batch load: each transaction takes gap locks on the secondary
+	// indexes (idx_events_host_id, idx_events_host_type_ingested, etc.) and unrelated concurrent inserts on different host_ids can
+	// still hit lock-order inversion. The transaction is fully idempotent (INSERT IGNORE skips duplicates and we re-stamp
+	// ingested_at_ns only on rows actually inserted), so we retry on error 1213.
+	return withDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
+		return s.insertEventsAtOnce(ctx, events, ingestedAtNs)
+	})
+}
 
-	// INSERT IGNORE on the events table can deadlock under concurrent batch load: each transaction takes gap
-	// locks on the secondary indexes (idx_events_host_id, idx_events_host_type_ingested, etc.) and unrelated
-	// concurrent inserts on different host_ids can still hit lock-order inversion. The transaction is fully
-	// idempotent (INSERT IGNORE skips duplicates and we re-stamp ingested_at_ns only on rows actually inserted),
-	// so we retry on error 1213 with a short backoff. The 25-host enrollHostsBatch e2e fixture exercises this.
-	const maxAttempts = 5
-	var attemptErr error
+// withDeadlockRetry runs fn up to maxAttempts times, retrying on MySQL deadlock errors (1213) with a linear backoff of attempt*step.
+// Returns immediately on success or on a non-deadlock error. Respects ctx cancellation during backoff. Callers must guarantee fn is
+// idempotent (running it after a rolled-back attempt must produce the same final state); this helper does not enforce that property.
+func withDeadlockRetry(ctx context.Context, maxAttempts int, step time.Duration, fn func() error) error {
+	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		attemptErr = s.insertEventsAtOnce(ctx, events, ingestedAtNs)
-		if attemptErr == nil {
+		lastErr = fn()
+		if lastErr == nil {
 			return nil
 		}
-		if !isDeadlockErr(attemptErr) {
-			return attemptErr
+		if !isDeadlockErr(lastErr) {
+			return lastErr
 		}
-		// Backoff = attempt * 5ms with a cap. Short on purpose — these contention windows are sub-millisecond.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Duration(attempt) * 5 * time.Millisecond):
+		case <-time.After(time.Duration(attempt) * step):
 		}
 	}
-	return attemptErr
+	return lastErr
 }
 
 func (s *Store) insertEventsAtOnce(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
