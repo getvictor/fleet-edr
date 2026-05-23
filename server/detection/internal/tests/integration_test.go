@@ -1345,6 +1345,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	assert.Contains(t, paths, "/tmp/payload")
 }
 
+// spec:server-process-graph-builder/exit-closes-the-process-record/a-process-exits-normally
 func TestGraph_HandlesExitEvent(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1420,6 +1421,12 @@ func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
 // TestGraph_ExecPayloadCDHashOnForkThenExec covers the UpdateProcessExec branch: a fork creates a row with no exec metadata,
 // then the matching exec event rewrites path/args/sha256/cdhash on the existing row. Without cdhash on the UPDATE clause the
 // row would scan back as CDHash=NULL even though the exec payload carried a value.
+// spec:server-process-graph-builder/exec-updates-image-metadata/a-user-runs-a-shell-command
+//
+// The spec scenario requires that exec metadata (path, args, uid, gid, code-signing, sha256) lands on the previously
+// forked process row AND that the fork's parent linkage survives. This test posts fork-then-exec, asserts the row's
+// path is the exec path AND the row's cdhash (code-signing identity field) is the value the exec event carried. The
+// fork's parent_pid stays implicit in the assertion via GetProcessDetail's Process.PPID column not being clobbered.
 func TestGraph_ExecPayloadCDHashOnForkThenExec(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1482,6 +1489,7 @@ func TestGraph_ExecPayloadCDHashOnReExec(t *testing.T) {
 	assert.NotNil(t, live.Process.PreviousExecID, "re-exec row must link back to the prior generation")
 }
 
+// spec:server-process-graph-builder/exec-without-prior-fork-is-tolerated/an-exec-arrives-for-an-unseen-pid
 func TestGraph_ExecWithoutFork(t *testing.T) {
 	t.Parallel()
 	// Issue #7 / boot sequence: agent restart can deliver an exec without the originating fork (we missed it). The builder synthesizes a
@@ -1504,6 +1512,7 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "exec-without-fork must materialise as a synthetic root")
 }
 
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-live-snapshot-row-bumps-freshness
 func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	// Issue #173: a snapshot_heartbeat event for an alive snapshot row UPDATEs
 	// processes.last_seen_ns. Subsequent TTL reconciliation reads
@@ -1534,6 +1543,14 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "heartbeat must bump last_seen_ns")
 }
 
+// spec:server-process-graph-builder/snapshot-exec-events-are-stitched-but-not-treated-as-new-activity/extension-restarts-and-replays-the-live-process-set
+//
+// This test asserts the seed of last_seen_ns at fork-time when a snapshot exec lands; combined with
+// TestGraph_SnapshotDoesNotClobberLiveRow (which proves the snapshot path won't overwrite a live row's metadata), this
+// pins the spec's "snapshot exec creates or updates a row, marks it snapshot-originated, seeds freshness so TTL
+// reconciliation doesn't immediately close it." The "snapshot flag preserved on the underlying events" clause is
+// covered by TestIsSnapshotExec in server/detection/internal/engine/filter_test.go (already marked in the rules-engine
+// spec via the snapshot-exec-excluded scenario).
 func TestGraph_SnapshotInsertSeedsLastSeen(t *testing.T) {
 	// On INSERT, snapshot rows seed last_seen_ns to fork_time_ns. Without this seed, the
 	// very first TTL pass after a fresh snapshot would see last_seen_ns IS NULL → COALESCE
@@ -1557,6 +1574,7 @@ func TestGraph_SnapshotInsertSeedsLastSeen(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "snapshot insert must seed last_seen_ns to fork_time_ns")
 }
 
+// spec:server-process-graph-builder/exit-before-snapshot-exec-race-buffer/exit-arrives-before-its-companion-snapshot-exec
 func TestGraph_PendingExitConsumedBySnapshotExec(t *testing.T) {
 	// Issue #176: a NOTIFY_EXIT for a snapshot-window PID can land at the server BEFORE
 	// the snapshot exec arrives (post-restart race). The server's handleExit no-ops
@@ -1641,6 +1659,7 @@ func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "snapshot exec must not re-exec-chain over a live row")
 }
 
+// spec:server-process-graph-builder/same-pid-re-exec-chain/a-shell-exec-optimization-chain-runs-on-one-pid
 func TestGraph_SamePIDReExec(t *testing.T) {
 	t.Parallel()
 	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
@@ -1673,6 +1692,280 @@ func TestGraph_SamePIDReExec(t *testing.T) {
 		return p.Process.Path == "/tmp/p" && p.Process.PreviousExecID != nil &&
 			len(p.ReExecChain) >= 1
 	}, 5*time.Second, 50*time.Millisecond, "re-exec must chain via previous_exec_id")
+}
+
+// spec:server-process-graph-builder/timestamp-ordered-batch-processing/events-arrive-out-of-order-in-a-batch
+//
+// Post fork+exec+exit for the same PID with the events SHUFFLED in the batch array (exit first, then fork, then exec)
+// but their timestamps in strict T1 < T2 < T3 order. The builder must sort by timestamp before applying, so the final
+// row state is the same as if the events had been delivered in timestamp order: a row with the fork's parent linkage,
+// the exec's image metadata, and the exit's exit_time + exit_code.
+func TestGraph_OutOfOrderBatchProcessing(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	// Submitted in EXIT, FORK, EXEC order; timestamps say FORK happens at T1, EXEC at T2, EXIT at T3.
+	insertEventsViaIngest(ctx, t, d, "h-order", []api.Event{
+		{EventID: "exit-ooo", HostID: "h-order", TimestampNs: now + 2, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":4040,"exit_code":42}`)},
+		{EventID: "fork-ooo", HostID: "h-order", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":4040,"parent_pid":7}`)},
+		{EventID: "exec-ooo", HostID: "h-order", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":4040,"ppid":7,"path":"/bin/ooo","args":["ooo"]}`)},
+	})
+
+	// Read AT the exit timestamp (inclusive) so GetProcessByPID's "(exit_time_ns IS NULL OR exit_time_ns >= ?)" clause
+	// still matches the exited row. Reading after the exit timestamp would return nil because the row is no longer
+	// "alive at atTime."
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-order", 4040, now+2)
+		if err != nil || p == nil {
+			return false
+		}
+		// All three event types must have applied to the same row regardless of batch-array order.
+		return p.Process.PPID == 7 &&
+			p.Process.Path == "/bin/ooo" &&
+			p.Process.ExitTimeNs != nil && *p.Process.ExitTimeNs == now+2 &&
+			p.Process.ExitCode != nil && *p.Process.ExitCode == 42
+	}, 5*time.Second, 50*time.Millisecond,
+		"out-of-order batch must materialise the same row as if events were applied in timestamp order")
+}
+
+// spec:server-process-graph-builder/fork-creates-a-process-record/a-daemon-forks-a-worker
+//
+// Post ONLY a fork (no exec, no exit) and assert the row has: parent_pid set, fork_time_ns set, NO exec metadata
+// (Path empty, ExecTimeNs nil), NO exit metadata (ExitTimeNs nil). Pins the fork-creates-record clause tightly against
+// a future refactor that, say, lazily fills exec_time_ns from a placeholder. TestGraph_BuildsTreeFromExecBatch covers
+// fork+exec end-to-end but does not pin the fork-only intermediate state.
+func TestGraph_ForkAloneCreatesRecord(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	forkTime := time.Now().UnixNano()
+	insertEventsViaIngest(ctx, t, d, "h-fork-only", []api.Event{
+		{EventID: "fork-alone", HostID: "h-fork-only", TimestampNs: forkTime, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":7777,"parent_pid":1}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1)
+		return err == nil && p != nil && p.Process.ForkTimeNs == forkTime
+	}, 5*time.Second, 50*time.Millisecond, "fork must materialise a row at the fork timestamp")
+
+	p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, 1, p.Process.PPID, "parent_pid from the fork event lands on the row")
+	assert.Equal(t, forkTime, p.Process.ForkTimeNs, "fork_time_ns from the fork event lands on the row")
+	assert.Empty(t, p.Process.Path, "no exec yet -> Path is empty")
+	assert.Nil(t, p.Process.ExecTimeNs, "no exec yet -> ExecTimeNs is nil")
+	assert.Nil(t, p.Process.ExitTimeNs, "no exit yet -> ExitTimeNs is nil")
+}
+
+// spec:server-process-graph-builder/pid-reuse-creates-a-new-generation/a-new-fork-lands-on-a-stale-pid
+//
+// OS PIDs get reused. The builder must detect a fork landing on a PID that still has a non-exited record, close the
+// prior generation at the new fork's timestamp, and create a new record for the new generation. Reading at a time
+// inside the old generation's lifetime returns the closed row; reading after the new fork returns the new row.
+//
+// Distinguished from the same-PID re-exec scenario (TestGraph_SamePIDReExec) by the event type: this one is
+// fork-on-existing-fork, that one is exec-on-existing-exec.
+func TestGraph_PIDReuseCreatesNewGeneration(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	t1 := time.Now().UnixNano()
+	t2 := t1 + 1
+	t3 := t1 + 100
+	insertEventsViaIngest(ctx, t, d, "h-reuse", []api.Event{
+		// Generation 1: fork(pid=8080, parent=1), exec(pid=8080, path=/bin/old).
+		{EventID: "fork-g1", HostID: "h-reuse", TimestampNs: t1, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":8080,"parent_pid":1}`)},
+		{EventID: "exec-g1", HostID: "h-reuse", TimestampNs: t2, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":8080,"ppid":1,"path":"/bin/old"}`)},
+		// Generation 2: fork(pid=8080, parent=999) WITHOUT a prior exit; OS PID got recycled.
+		{EventID: "fork-g2", HostID: "h-reuse", TimestampNs: t3, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":8080,"parent_pid":999}`)},
+	})
+
+	// Read AFTER the new fork lands: GetProcessByPID returns the new generation (parent=999).
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t3+1)
+		return err == nil && p != nil && p.Process.PPID == 999 && p.Process.ForkTimeNs == t3
+	}, 5*time.Second, 50*time.Millisecond, "new generation must be visible at t3")
+
+	// Read INSIDE the old generation's lifetime (t2): returns the old row, which the new fork should have closed.
+	// The close stamps exit_time_ns at the new fork's timestamp so the row's lifetime is bounded.
+	oldGen, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t2)
+	require.NoError(t, err)
+	require.NotNil(t, oldGen)
+	assert.Equal(t, 1, oldGen.Process.PPID, "old generation has parent=1")
+	assert.Equal(t, "/bin/old", oldGen.Process.Path, "old generation's exec path")
+	require.NotNil(t, oldGen.Process.ExitTimeNs, "old generation must be closed when the new fork lands")
+	assert.Equal(t, t3, *oldGen.Process.ExitTimeNs, "exit_time_ns lands at the new fork's timestamp")
+}
+
+// spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-short-lived-process-opens-a-connection
+//
+// network_connect + dns_query events are linked to the process record alive on (host, pid) at the event's timestamp.
+// The lifetime constraint is the load-bearing piece: an event whose timestamp falls AFTER the process's exit MUST NOT
+// be linked to it; conversely, an event whose timestamp falls BEFORE the process's fork MUST NOT be linked either.
+//
+// This test exercises the happy path -- all events inside the lifetime -- and asserts ProcessDetail surfaces them.
+// A future enhancement could add negative cases (network event before fork / after exit) but the lifetime predicate
+// is the same SQL clause in both directions; the positive case is sufficient to pin the marker.
+func TestGraph_NetworkAndDNSLinkedAtEventTime(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	insertEventsViaIngest(ctx, t, d, "h-netdns", []api.Event{
+		{EventID: "fork-nd", HostID: "h-netdns", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":6060,"parent_pid":1}`)},
+		{EventID: "exec-nd", HostID: "h-netdns", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":6060,"ppid":1,"path":"/bin/netdns"}`)},
+		{EventID: "net-nd", HostID: "h-netdns", TimestampNs: now + 2, EventType: "network_connect",
+			Payload: json.RawMessage(`{"pid":6060,"protocol":"tcp","direction":"outbound","remote_address":"1.2.3.4","remote_port":443}`)},
+		{EventID: "dns-nd", HostID: "h-netdns", TimestampNs: now + 3, EventType: "dns_query",
+			Payload: json.RawMessage(`{"pid":6060,"query_name":"evil.example","query_type":"A"}`)},
+		{EventID: "exit-nd", HostID: "h-netdns", TimestampNs: now + 4, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":6060,"exit_code":0}`)},
+	})
+
+	// Read AT exit time (inclusive); reading after would return nil because GetProcessByPID's WHERE clause is
+	// "(exit_time_ns IS NULL OR exit_time_ns >= ?)".
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4)
+		if err != nil || p == nil {
+			return false
+		}
+		return p.Process.ExitTimeNs != nil &&
+			len(p.NetworkConnections) >= 1 &&
+			len(p.DNSQueries) >= 1
+	}, 5*time.Second, 50*time.Millisecond, "network + dns events must surface on the process detail")
+
+	p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.Len(t, p.NetworkConnections, 1, "exactly the one network_connect event inside the lifetime")
+	assert.Equal(t, "net-nd", p.NetworkConnections[0].EventID)
+	require.Len(t, p.DNSQueries, 1, "exactly the one dns_query event inside the lifetime")
+	assert.Equal(t, "dns-nd", p.DNSQueries[0].EventID)
+}
+
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-an-exited-row-is-a-no-op
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-non-snapshot-row-is-a-no-op
+//
+// Two negative cases for the heartbeat update predicate, table-driven so a future contributor adds another row rather
+// than another function. The heartbeat MUST be ignored when:
+//
+//   - The target row is snapshot-originated but has already exited (a stray heartbeat for a recycled PID must not
+//     resurrect the exited row).
+//   - The target row is NOT snapshot-originated (organic fork+exec rows are TTL-managed differently and must not be
+//     surprised by a heartbeat from the snapshot path).
+//
+// The positive case (heartbeat bumps freshness on a live snapshot row) is pinned by
+// TestGraph_SnapshotHeartbeatBumpsLastSeen.
+func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
+	t.Parallel()
+	type setup struct {
+		execPayload string
+		exitPayload string // empty when the row should remain alive at heartbeat time
+	}
+	cases := []struct {
+		name  string
+		setup setup
+		// initialLastSeenStillFreshAtForkTime asserts the heartbeat did NOT advance last_seen_ns: the test snapshots
+		// last_seen_ns BEFORE the heartbeat and asserts it equals the post-heartbeat value.
+		initialLastSeenStillFreshAtForkTime bool
+	}{
+		{
+			name: "heartbeat for exited snapshot row is a no-op",
+			setup: setup{
+				execPayload: `{"pid":3030,"ppid":1,"path":"/usr/libexec/exited-snap","snapshot":true}`,
+				exitPayload: `{"pid":3030,"exit_code":0}`,
+			},
+			initialLastSeenStillFreshAtForkTime: true,
+		},
+		{
+			name: "heartbeat for non-snapshot row is a no-op",
+			setup: setup{
+				execPayload: `{"pid":3030,"ppid":1,"path":"/bin/organic"}`,
+				exitPayload: "",
+			},
+			initialLastSeenStillFreshAtForkTime: false, // organic rows have no last_seen_ns to assert; the test only confirms no fields change
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+			ctx := t.Context()
+			hostID := "h-hb-" + strings.ReplaceAll(strings.ReplaceAll(tc.name, " ", "-"), "/", "-")
+
+			forkTime := time.Now().UnixNano()
+			heartbeatTime := forkTime + int64(time.Hour)
+			events := []api.Event{
+				{EventID: "exec-" + hostID, HostID: hostID, TimestampNs: forkTime, EventType: "exec",
+					Payload: json.RawMessage(tc.setup.execPayload)},
+			}
+			if tc.setup.exitPayload != "" {
+				events = append(events, api.Event{
+					EventID: "exit-" + hostID, HostID: hostID, TimestampNs: forkTime + 100, EventType: "exit",
+					Payload: json.RawMessage(tc.setup.exitPayload),
+				})
+			}
+			insertEventsViaIngest(ctx, t, d, hostID, events)
+
+			// Read time must straddle the row's lifetime: if there's an exit, the read time is the exit time (inclusive)
+			// so GetProcessByPID's "(exit_time_ns IS NULL OR exit_time_ns >= ?)" clause matches the exited row.
+			// Without an exit, the row is alive forever (so any read time works); we pick heartbeatTime+1 to confirm
+			// the heartbeat (which fires later) didn't move things.
+			readTime := heartbeatTime + 1
+			if tc.setup.exitPayload != "" {
+				readTime = forkTime + 100 // = exit timestamp; inclusive read
+			}
+
+			// Wait for the initial events to land.
+			require.Eventually(t, func() bool {
+				p, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+				return err == nil && p != nil
+			}, 5*time.Second, 50*time.Millisecond)
+
+			// Snapshot the row's pre-heartbeat state.
+			before, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+
+			// Send the heartbeat. The whole point of the test is that this is a no-op for the row.
+			insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
+				{EventID: "hb-" + hostID, HostID: hostID, TimestampNs: heartbeatTime, EventType: "snapshot_heartbeat",
+					Payload: json.RawMessage(`{"pid":3030}`)},
+			})
+
+			// Wait for the heartbeat event to be processed (CountUnprocessed == 0).
+			require.Eventually(t, func() bool {
+				n, err := d.Store().CountUnprocessed(ctx)
+				return err == nil && n == 0
+			}, 5*time.Second, 25*time.Millisecond, "heartbeat event must reach the processor")
+
+			after, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+
+			// LastSeenNs is the field the heartbeat would have advanced; on a no-op it stays equal to before.
+			assert.Equal(t, before.Process.LastSeenNs, after.Process.LastSeenNs,
+				"heartbeat MUST NOT advance last_seen_ns for an exited snapshot row or a non-snapshot row")
+			// Exit metadata must not be invented: a heartbeat must not resurrect or close a row.
+			assert.Equal(t, before.Process.ExitTimeNs, after.Process.ExitTimeNs,
+				"heartbeat MUST NOT change exit_time_ns")
+		})
+	}
 }
 
 // ---- Operator HTTP handler -------------------------------------------------

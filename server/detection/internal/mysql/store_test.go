@@ -297,6 +297,7 @@ func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
 	assert.ElementsMatch(t, []int{10, 11}, pids)
 }
 
+// spec:server-process-graph-builder/ttl-reconciliation-respects-snapshot-freshness/snapshot-row-with-fresh-heartbeats-survives-ttl
 func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
 	// Issue #173: a snapshot row whose last_seen_ns is inside the TTL window must NOT be reconciled. The reconciler's predicate uses
 	// COALESCE(last_seen_ns, fork_time_ns) so fresh heartbeats keep the row alive even when fork_time_ns is ancient.
@@ -328,6 +329,7 @@ func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
 	assert.Nil(t, got.ExitTimeNs, "row must still be alive")
 }
 
+// spec:server-process-graph-builder/ttl-reconciliation-respects-snapshot-freshness/snapshot-row-without-recent-heartbeats-is-closed
 func TestStore_ReconcileStaleProcesses_ClosesStaleSnapshotRow(t *testing.T) {
 	// Issue #173 negative: a snapshot row with no recent heartbeats (last_seen_ns older than TTL) IS reconciled. Confirms the
 	// predicate doesn't accidentally exempt every snapshot row forever.
@@ -367,6 +369,7 @@ func TestStore_ReconcileStaleProcesses_ClosesStaleSnapshotRow(t *testing.T) {
 	assert.Equal(t, staleLastSeen+sixHours, *got.ExitTimeNs)
 }
 
+// spec:server-process-graph-builder/ttl-reconciliation-respects-snapshot-freshness/non-snapshot-row-with-missing-exit-is-closed-issue-6-regression-guard
 func TestStore_ReconcileStaleProcesses_ClosesStaleLiveRow_NoRegression(t *testing.T) {
 	// Issue #6 regression guard: a non-snapshot row with an ancient fork_time_ns and last_seen_ns IS NULL is still subject to TTL
 	// reconciliation. The COALESCE predicate degenerates to fork_time_ns for these rows, preserving the original #6 behaviour.
