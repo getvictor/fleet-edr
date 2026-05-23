@@ -533,6 +533,12 @@ func TestKillProcessAlreadyGone(t *testing.T) {
 // *exec.ExitError); the spec-relevant clause is the completed-with-killed_pid status the commander
 // reports to the server, which is what an operator's audit trail will reflect.
 func TestKillProcessSuccessful(t *testing.T) {
+	// `sleep` is in coreutils on every macOS and standard Linux runner the EDR CI fleet uses, but a minimal/distroless image might not
+	// have it; skip cleanly so the kill_process logic isn't blamed for a missing PATH entry.
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skipf("sleep not on PATH; cannot exercise the real-process kill happy path: %v", err)
+	}
+
 	// Bind the child's own context to the test so a stray child cannot outlive the test process; the
 	// commander-driven SIGKILL below is what actually reaps it in the happy path.
 	childCtx, childCancel := context.WithCancel(t.Context())

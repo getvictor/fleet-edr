@@ -55,11 +55,15 @@ func fakeEnrollServer(t *testing.T, secret, wantToken string, hits *atomic.Int64
 //
 // Three scenarios share this test. The first-boot half is the initial Ensure call: POST to /api/enroll
 // with the secret + hardware UUID, receive a token, persist it; the assertions on tp.HostID/tp.Token
-// pin that contract. The atomic-write half is pinned by the os.Stat check that the on-disk file has mode
-// 0600 (the spec's "write to sibling temp + fsync + rename" sequence is an implementation invariant
-// verified by code inspection of enrollment.go; the test pins the OBSERVABLE post-condition). The day-two
-// half is the second Ensure call: same TokenFile path, NO EnrollSecret in opts; the function loads the
-// persisted token without re-hitting the server, and tp2.HostID/tp2.Token equal the first-boot values.
+// pin that contract. The atomic-write half pins three observable invariants the temp+fsync+rename
+// algorithm in enrollment.persistFile delivers: (a) the final file exists at the configured path with
+// mode 0600, (b) no orphan `<path>.new` survives (proves the temp file was renamed away rather than
+// abandoned mid-write), and (c) the file contents parse cleanly on the day-two reload below (proves no
+// torn write). The spec's literal "write to sibling temp + fsync + rename" sequence is an
+// implementation algorithm verified by code inspection of enrollment.go:411-431; this test pins the
+// post-conditions that the algorithm is required to produce. The day-two half is the second Ensure
+// call: same TokenFile path, NO EnrollSecret in opts; the function loads the persisted token without
+// re-hitting the server, and tp2.HostID/tp2.Token equal the first-boot values.
 func TestEnsure_FirstBootEnrolls(t *testing.T) {
 	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)
 	defer srv.Close()
@@ -82,6 +86,13 @@ func TestEnsure_FirstBootEnrolls(t *testing.T) {
 	st, err := os.Stat(tokenFile)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+
+	// Atomic-write evidence: no orphan `<path>.new` survives a successful Ensure. enrollment.persistFile writes to `path + ".new"`,
+	// fsyncs, then renames over `path`; if the rename completed cleanly the temp must not exist. A direct write-in-place would also
+	// satisfy this assertion, but combined with the day-two reload below (which proves the file contents parse) it rules out the
+	// torn-write and orphan-tmp failure modes the atomic-write contract is meant to prevent.
+	_, statErr := os.Stat(tokenFile + ".new")
+	assert.True(t, os.IsNotExist(statErr), "no orphan `.new` temp file may survive a successful Ensure")
 
 	// File contents round-trip: a second Ensure with no EDR_ENROLL_SECRET must succeed via load.
 	tp2, err := Ensure(t.Context(), Options{
