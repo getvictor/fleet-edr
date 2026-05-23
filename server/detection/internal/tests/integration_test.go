@@ -1138,9 +1138,10 @@ func TestOperator_GetAlert_NotFound(t *testing.T) {
 // spec:server-rest-api/filterable-alerts-list/an-operator-combines-status-and-severity-filters
 //
 // Two scenarios share this test. The host-only filter is the simpler case; the combined-filters case below uses
-// AlertFilter{Status, Severity} on a corpus that mixes status + severity values so the matching row is
-// uniquely identified by the conjunction, not by either filter alone -- if a regression makes one of the filters
-// a no-op the test fails because the wrong number of rows comes back.
+// AlertFilter{Status, Severity} on a uniform corpus (both seeded alerts share status=open and severity=high) to
+// prove the filter is a conjunction, not a disjunction: filtering on (open, high) returns both rows, while
+// filtering on (open, critical) returns zero. If a regression made severity a no-op, the (open, critical) check
+// would incorrectly return the two open rows and the assertion would fail.
 func TestOperator_ListAlerts_FiltersByHostAndStatus(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2154,12 +2155,11 @@ func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-// spec:server-rest-api/json-response-format-and-error-shape/an-endpoint-returns-an-error
-//
-// The 400/JSON error-shape contract. Test posts a malformed alert-id and asserts the handler returns the documented
-// typed JSON error response (not a plain-text 500, not an empty body, not a stack trace). Pinning this here means a
-// regression that switched any single 4xx path from JSON to text/html would fail somewhere in the test corpus rather
-// than ship silently.
+// Pins that a malformed alert-id path-param returns 400. The marker for the spec scenario
+// "json-response-format-and-error-shape/an-endpoint-returns-an-error" is intentionally NOT on this test: the
+// operator handler currently emits plain-text via http.Error, while the spec requires JSON {"error": "code"} for
+// every 4xx/5xx. That is real spec/impl drift, tracked as a v0.1.0 follow-up; the marker will land here once the
+// handler is converted to the JSON error shape and this test asserts the body, not just the status code.
 func TestOperatorHTTP_GetAlert_BadID(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
