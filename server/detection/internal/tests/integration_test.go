@@ -12,6 +12,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,6 +90,144 @@ func (r *stubRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.Gr
 type stubProvider struct{ rules []rulesapi.Rule }
 
 func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
+
+// multiPIDStub emits one finding per "trigger" event, with ProcessID parsed from the event payload's "process_id"
+// field. The field name is "process_id" (NOT "pid") on purpose: the value is the DB row id of a processes table
+// row (an int64 AUTO_INCREMENT key), NOT an OS PID. An earlier version of this stub read payload.pid which fooled a
+// later contributor into passing an OS PID and tripping an fk_alerts_process FK violation on InsertAlert. Renaming
+// the field surfaces the right semantic at the call site (TestEngine_OneRuleMultipleFindings passes procA/procB
+// returned by mustInsertProcess, which are DB row ids). Used by the multiple-findings-from-one-rule scenario:
+// distinct DB process_ids yield distinct alert dedup keys, so the resulting findings persist as distinct alert
+// rows. stubRule hardcodes ProcessID=1 so it cannot exercise this case.
+type multiPIDStub struct{ id string }
+
+func (r *multiPIDStub) ID() string           { return r.id }
+func (r *multiPIDStub) Techniques() []string { return nil }
+func (r *multiPIDStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Multi-pid stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	var out []api.Finding
+	for _, e := range events {
+		if e.EventType != "trigger" {
+			continue
+		}
+		var p struct {
+			ProcessID int64 `json:"process_id"`
+		}
+		if err := json.Unmarshal(e.Payload, &p); err != nil || p.ProcessID == 0 {
+			continue
+		}
+		out = append(out, api.Finding{
+			HostID:      e.HostID,
+			RuleID:      r.id,
+			Severity:    rulesapi.SeverityHigh,
+			Title:       "Multi-pid trigger",
+			Description: "multi-pid stub fired",
+			ProcessID:   p.ProcessID,
+			EventIDs:    []string{e.EventID},
+		})
+	}
+	return out, nil
+}
+
+// fixedPIDStub emits one finding per "trigger" event with a configured ProcessID. Used by
+// TestEngine_PersistenceFailureSurfacesError to force the FK violation deterministically: a ProcessID that's nowhere
+// near the AUTO_INCREMENT counter triggers fk_alerts_process every time InsertAlert runs, surfacing the persistence-
+// failure path the spec scenario describes.
+//
+// The atomic evalCount field lets tests wait until the engine has actually invoked Evaluate at least once before
+// asserting downstream state. Without this signal, an Eventually-on-CountUnprocessed assertion is trivially satisfied
+// (events start unprocessed; the assertion fires before the processor even claims the batch), so the test cannot
+// actually pin "processor tried and the persistence layer rejected the finding."
+type fixedPIDStub struct {
+	id        string
+	processID int64
+	evalCount atomic.Int64
+}
+
+func (r *fixedPIDStub) ID() string           { return r.id }
+func (r *fixedPIDStub) Techniques() []string { return nil }
+func (r *fixedPIDStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Fixed-PID stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *fixedPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	r.evalCount.Add(1)
+	var out []api.Finding
+	for _, e := range events {
+		if e.EventType != "trigger" {
+			continue
+		}
+		out = append(out, api.Finding{
+			HostID:      e.HostID,
+			RuleID:      r.id,
+			Severity:    rulesapi.SeverityHigh,
+			Title:       "Triggered",
+			Description: "fixed-pid stub fired",
+			ProcessID:   r.processID,
+			EventIDs:    []string{e.EventID},
+		})
+	}
+	return out, nil
+}
+
+// errorStub returns an error from Evaluate. Used by TestEngine_OneRuleErrorsRestContinue to prove the engine's
+// per-rule loop isolates failures: the error is logged and the loop continues to the next rule.
+type errorStub struct{ id string }
+
+func (r *errorStub) ID() string           { return r.id }
+func (r *errorStub) Techniques() []string { return nil }
+func (r *errorStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Erroring stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *errorStub) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	return nil, fmt.Errorf("errorStub %s: deliberate evaluation failure", r.id)
+}
+
+// execFiringStub fires one finding per "exec" event the rule sees. Used by TestEngine_SnapshotExecExcludedFromEvaluation
+// to prove the engine filters snapshot exec events BEFORE rule evaluation: if the rule never sees the snapshot=true
+// exec, no alert is produced for it.
+//
+// The ProcessID is taken from the stub's pre-configured processID field, NOT from the event payload's "pid". Reason:
+// api.Finding.ProcessID is the alerts table's foreign key to processes.id (the auto-increment DB row id), not the OS PID.
+// An earlier draft of this stub read payload.pid (the OS PID) and used it directly, which triggered an
+// fk_alerts_process FK violation on InsertAlert; locally the processor's retry loop accidentally drove the AUTO_INCREMENT
+// past the OS PID and the FK eventually resolved (~2s), but on a slower CI runner the retry never converged within the
+// test's 5s Eventually window. Configuring the stub with the DB id returned by mustInsertProcess sidesteps the entire
+// race condition and pins the predicate the spec scenario actually cares about (filter strips snapshot exec before the
+// rule sees it).
+type execFiringStub struct {
+	id        string
+	processID int64
+}
+
+func (r *execFiringStub) ID() string           { return r.id }
+func (r *execFiringStub) Techniques() []string { return nil }
+func (r *execFiringStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: "Exec-firing stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *execFiringStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	var out []api.Finding
+	for _, e := range events {
+		if e.EventType != "exec" {
+			continue
+		}
+		out = append(out, api.Finding{
+			HostID:      e.HostID,
+			RuleID:      r.id,
+			Severity:    rulesapi.SeverityHigh,
+			Title:       "Exec fired",
+			Description: "exec-firing stub fired",
+			ProcessID:   r.processID,
+			EventIDs:    []string{e.EventID},
+		})
+	}
+	return out, nil
+}
 
 // recordingMetrics captures every hook invocation so tests can assert
 // observability survived the phase-5 wiring rewrite.
@@ -557,6 +696,14 @@ func TestIngest_RightAtCapAccepted(t *testing.T) {
 
 // ---- Engine + processor tests ----------------------------------------------
 
+// spec:server-detection-rules-engine/persisted-alert-schema/a-rule-fires-and-creates-an-alert
+//
+// The spec scenario requires the persisted alert row to carry HostID, RuleID, Severity, Title, Description, ProcessID,
+// and the rule's MITRE technique list. The previous version of this test only asserted RuleID + Severity; expanded
+// here to pin every field the spec enumerates. The stubRule (top of file) emits findings with HostID derived from
+// the trigger event, ProcessID=1 (matches the first inserted process row), Title="Triggered", Description="stub rule
+// fired", and propagates Techniques=[T9999] from its own configured list -- so every assertion below points at a
+// stub-controlled value that a regression on the engine's alert-write path would visibly perturb.
 func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -583,11 +730,17 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	require.Len(t, alerts, 1)
-	assert.Equal(t, "stub", alerts[0].RuleID)
-	assert.Equal(t, rulesapi.SeverityHigh, alerts[0].Severity)
-	_ = procID // unused but documents the FK satisfaction
+	a := alerts[0]
+	assert.Equal(t, "host-a", a.HostID, "alert.host_id = event.host_id")
+	assert.Equal(t, "stub", a.RuleID, "alert.rule_id = stub rule's ID")
+	assert.Equal(t, rulesapi.SeverityHigh, a.Severity, "alert.severity = stub rule's declared severity")
+	assert.Equal(t, "Triggered", a.Title, "alert.title = stub rule's finding title")
+	assert.Equal(t, "stub rule fired", a.Description, "alert.description = stub rule's finding description")
+	assert.Equal(t, procID, a.ProcessID, "alert.process_id = the seeded process row's DB ID")
+	assert.Equal(t, api.JSONStringSlice{"T9999"}, a.Techniques, "alert.techniques = stub rule's declared MITRE list")
 }
 
+// spec:server-detection-rules-engine/alert-dedup-by-host-rule-process/a-rule-re-fires-on-the-same-process-in-a-later-batch
 func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -614,6 +767,259 @@ func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	assert.Len(t, alerts, 1)
+}
+
+// spec:server-detection-rules-engine/evaluate-every-registered-rule-against-each-batch/a-batch-produces-multiple-findings-from-one-rule
+//
+// stubRule fires once per "trigger" event but always sets ProcessID=1, which collapses to one alert by the (host, rule,
+// process) dedup key. This test uses multiPIDStub instead (defined locally), which emits a finding per trigger whose
+// ProcessID matches the trigger's payload "pid" field. Two trigger events with payload pids 1 and 2 produce two
+// findings against two different process IDs, which the engine persists as two distinct alert rows. Pins the spec's
+// "A single rule MAY emit zero, one, or many findings per batch" clause for the multi-finding case.
+func TestEngine_OneRuleMultipleFindings(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&multiPIDStub{id: "stub-multi"}}})
+
+	procA := mustInsertProcess(t, ctx, d, "host-a", 100)
+	procB := mustInsertProcess(t, ctx, d, "host-a", 200)
+
+	events := []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "fork-2", HostID: "host-a", TimestampNs: 1500, EventType: "fork", Payload: json.RawMessage(`{"child_pid":200,"parent_pid":1}`)},
+		// payload.process_id (the DB row id from mustInsertProcess) steers the stub's emitted ProcessID; the two
+		// triggers below carry different DB ids so the resulting findings have different dedup keys and persist
+		// as two alert rows. Field name is "process_id" (not "pid") to make it obvious this is a DB-row identifier,
+		// not an OS PID -- see the multiPIDStub docstring for the prior FK-violation bug this rename prevents.
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procA, 10) + `}`)},
+		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 2100, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procB, 10) + `}`)},
+	}
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) >= 2
+	}, 5*time.Second, 50*time.Millisecond, "expected two alert rows, one per finding")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Len(t, alerts, 2, "two findings with different process_ids must persist as two alerts")
+}
+
+// spec:server-detection-rules-engine/evaluate-every-registered-rule-against-each-batch/a-batch-produces-no-findings-from-any-rule
+//
+// LoadActive with one rule that fires only on "trigger" events; send a batch with only fork/exec events. The engine
+// evaluates the rule, the rule returns zero findings, and no alerts are persisted. Pins the spec's "zero or many" clause
+// for the zero case.
+func TestEngine_BatchProducesNoFindings(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-quiet"}}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	// Only fork events; stubRule only fires on "trigger" event_type so the batch is silent.
+	events := []api.Event{
+		{EventID: "no-trigger-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "no-trigger-2", HostID: "host-a", TimestampNs: 2000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":101,"parent_pid":100}`)},
+	}
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
+
+	// Convergence-based negative assertion: poll until the processor has fully drained the batch (every event is
+	// marked processed = 1). Once CountUnprocessed reaches 0 we know the engine has evaluated against this batch and
+	// emitted no findings; then we read ListAlerts and assert empty. This pattern replaces a fixed time.Sleep which
+	// CI runners can blow past or undershoot.
+	require.Eventually(t, func() bool {
+		n, err := d.Store().CountUnprocessed(ctx)
+		return err == nil && n == 0
+	}, 5*time.Second, 25*time.Millisecond, "processor must drain the batch even when no rule fires")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Empty(t, alerts, "a batch matching no rule must produce zero alerts")
+}
+
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-advertises-att-ck-techniques
+//
+// Two assertions in one test:
+//
+//  1. The rule's declared technique list lands on the persisted alert row.
+//  2. AFTER persisting, mutating the rule's technique mapping does NOT modify the historical alert. The dedup-by-
+//     (host,rule,process) means a second fire is silently skipped; the historical alert's techniques column is frozen
+//     at first-fire. The test mutates the stub's techniques between fires and re-evaluates; the alert row's
+//     Techniques is asserted unchanged.
+func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	rule := &stubRule{id: "stub-mitre", techniques: api.JSONStringSlice{"T1059.002", "T1105"}}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+	assert.Equal(t, api.JSONStringSlice{"T1059.002", "T1105"}, alerts[0].Techniques, "rule's declared techniques land on the alert")
+
+	// Refine the rule's technique mapping AFTER the alert is persisted, then drive another trigger. The (host, rule,
+	// process) dedup means no new row is created; the historical row's Techniques column is asserted unchanged.
+	rule.techniques = []string{"T9999.999"}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 3000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	// Wait for the second trigger to actually be processed before asserting on the alert state. Replaces a fixed
+	// time.Sleep which CodeRabbit + Copilot both flagged as flake-prone: a slow CI runner can have the assertion
+	// run before the processor's next cycle, accidentally green-lighting a regression.
+	require.Eventually(t, func() bool {
+		n, err := d.Store().CountUnprocessed(ctx)
+		return err == nil && n == 0
+	}, 5*time.Second, 25*time.Millisecond, "processor must consume trigger-2 before the historical-preservation assertion")
+
+	alerts, err = d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1, "dedup must skip the second fire on the same (host, rule, process)")
+	assert.Equal(t, api.JSONStringSlice{"T1059.002", "T1105"}, alerts[0].Techniques,
+		"historical alert's technique stamp must not change when the rule's mapping is later refined")
+}
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/one-rule-errors-during-evaluation
+//
+// LoadActive with two rules: errorStub returns an error on Evaluate; stubRule fires normally. The engine's per-rule
+// loop logs the error and continues to the next rule. After the batch settles, exactly one alert exists -- the one
+// from the working rule.
+func TestEngine_OneRuleErrorsRestContinue(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&errorStub{id: "stub-error"},
+		&stubRule{id: "stub-ok", techniques: []string{"T9999"}},
+	}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond, "stub-ok must still fire even though stub-error returned an error")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1, "only stub-ok produces an alert; stub-error is logged + skipped")
+	assert.Equal(t, "stub-ok", alerts[0].RuleID, "the alert is from the rule that didn't error")
+}
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/an-alert-persistence-write-fails
+//
+// Force the alert-write path to fail by using a stub that emits Finding.ProcessID = 999999999 -- a value that doesn't
+// match any row in the processes table, so InsertAlert's fk_alerts_process FK constraint blocks the row. The engine's
+// persistFinding returns the wrapped error; Evaluate propagates it to the processor; the processor logs
+// "detection failure, will retry batch" and leaves the events as unprocessed so a future cycle can retry. The DB stays
+// usable throughout so we can actually ASSERT the outcome -- the prior shape closed the DB pool and could only check
+// "didn't panic," which CodeRabbit + Copilot + Gemini all flagged as unpinned.
+//
+// Pins the spec's two clauses: (1) the engine signals the failure (no alert is acknowledged), (2) the failed finding is
+// not silently discarded (events stay unprocessed, available for the next retry cycle).
+func TestEngine_PersistenceFailureSurfacesError(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	// processID 999999999 is guaranteed not to exist in the processes table (the BIGINT auto-increment counter is
+	// nowhere near that value in a fresh test DB), so InsertAlert hits the fk_alerts_process FK and returns an error
+	// every cycle. The processor's retry loop will keep trying; we only need it to try ONCE for the assertion to hold.
+	const bogusProcessID int64 = 999_999_999
+	rule := &fixedPIDStub{id: "stub-persist-fail", processID: bogusProcessID}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	// Wait for the engine to actually invoke Evaluate at least once. CountUnprocessed > 0 is trivially satisfied
+	// (events start unprocessed before the processor claims them), so it can't tell us "the processor tried and
+	// failed." rule.evalCount.Add(1) fires inside Evaluate; once it's >= 1, the engine demonstrably ran the rule,
+	// got a Finding, called persistFinding, hit the FK, and returned the error. That's the precondition the spec
+	// scenario actually constrains. (Gemini medium-priority finding on PR #239.)
+	require.Eventually(t, func() bool {
+		return rule.evalCount.Load() >= 1
+	}, 5*time.Second, 25*time.Millisecond, "engine must have invoked Evaluate at least once")
+
+	// Now that the engine has tried and failed, the persistence-failure path must NOT have produced an alert,
+	// and the processor must have left the events unprocessed for the next retry cycle.
+	n, err := d.Store().CountUnprocessed(ctx)
+	require.NoError(t, err)
+	assert.Positive(t, n, "events stay unprocessed because the engine returned an error on persistFinding")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Empty(t, alerts, "FK-violating finding must NOT produce an alert row; failure is surfaced, not swallowed")
+
+	// Negative assertion (b): events are still in the events table (not deleted/forgotten by the processor). A
+	// regression that drops events on persistence failure would silently lose telemetry; this assertion catches it.
+	count, err := d.Store().CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Positive(t, count, "events must remain in the table so a future retry cycle can re-evaluate them")
+}
+
+// spec:server-detection-rules-engine/snapshot-exec-events-are-excluded-from-rule-evaluation/a-snapshot-exec-is-delivered-in-a-batch
+//
+// Load a stub rule that fires on every "exec" event. Post a batch containing one regular exec + one snapshot=true
+// exec. The engine's filterSnapshotEvents call removes the snapshot exec before rule evaluation, so the rule sees
+// only the regular exec. The single resulting finding produces one alert; the snapshot exec produces none.
+//
+// This is the engine-level end-to-end proof. The filter predicate itself is unit-tested in
+// server/detection/internal/engine/filter_test.go (TestIsSnapshotExec); this test pins that the engine actually wires
+// the filter into Evaluate, which the spec scenario explicitly requires.
+func TestEngine_SnapshotExecExcludedFromEvaluation(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	procID := mustInsertProcess(t, ctx, d, "host-a", 100)
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&execFiringStub{id: "stub-exec", processID: procID}}})
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		// Regular exec: rule sees it, fires.
+		{EventID: "exec-live", HostID: "host-a", TimestampNs: 1000, EventType: "exec",
+			Payload: json.RawMessage(`{"path":"/usr/bin/live","pid":100}`)},
+		// Snapshot exec: filter strips it before the rule sees it; no alert produced.
+		{EventID: "exec-snap", HostID: "host-a", TimestampNs: 1500, EventType: "exec",
+			Payload: json.RawMessage(`{"path":"/usr/bin/snap","pid":200,"snapshot":true}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) >= 1
+	}, 5*time.Second, 50*time.Millisecond, "the live exec must trigger one alert")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	assert.Len(t, alerts, 1, "snapshot=true exec must be filtered before rule evaluation; only the live exec produces an alert")
 }
 
 // ---- Operator alert lifecycle tests ----------------------------------------
@@ -699,6 +1105,7 @@ func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
 		"expected ErrInvalidAlertTransition, got %v", err)
 }
 
+// spec:server-detection-rules-engine/alert-to-event-linkage/an-analyst-opens-an-alert-and-sees-its-triggering-events
 func TestOperator_GetAlert_ReturnsCorrelatedEventIDs(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -954,6 +1361,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	assert.Contains(t, paths, "/tmp/payload")
 }
 
+// spec:server-process-graph-builder/exit-closes-the-process-record/a-process-exits-normally
 func TestGraph_HandlesExitEvent(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1029,6 +1437,12 @@ func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
 // TestGraph_ExecPayloadCDHashOnForkThenExec covers the UpdateProcessExec branch: a fork creates a row with no exec metadata,
 // then the matching exec event rewrites path/args/sha256/cdhash on the existing row. Without cdhash on the UPDATE clause the
 // row would scan back as CDHash=NULL even though the exec payload carried a value.
+// spec:server-process-graph-builder/exec-updates-image-metadata/a-user-runs-a-shell-command
+//
+// The spec scenario requires that exec metadata (path, args, uid, gid, code-signing, sha256) lands on the previously
+// forked process row AND that the fork's parent linkage survives. This test posts fork-then-exec, asserts the row's
+// path is the exec path AND the row's cdhash (code-signing identity field) is the value the exec event carried. The
+// fork's parent_pid stays implicit in the assertion via GetProcessDetail's Process.PPID column not being clobbered.
 func TestGraph_ExecPayloadCDHashOnForkThenExec(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1091,6 +1505,7 @@ func TestGraph_ExecPayloadCDHashOnReExec(t *testing.T) {
 	assert.NotNil(t, live.Process.PreviousExecID, "re-exec row must link back to the prior generation")
 }
 
+// spec:server-process-graph-builder/exec-without-prior-fork-is-tolerated/an-exec-arrives-for-an-unseen-pid
 func TestGraph_ExecWithoutFork(t *testing.T) {
 	t.Parallel()
 	// Issue #7 / boot sequence: agent restart can deliver an exec without the originating fork (we missed it). The builder synthesizes a
@@ -1113,6 +1528,7 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "exec-without-fork must materialise as a synthetic root")
 }
 
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-live-snapshot-row-bumps-freshness
 func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	// Issue #173: a snapshot_heartbeat event for an alive snapshot row UPDATEs
 	// processes.last_seen_ns. Subsequent TTL reconciliation reads
@@ -1143,6 +1559,14 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "heartbeat must bump last_seen_ns")
 }
 
+// spec:server-process-graph-builder/snapshot-exec-events-are-stitched-but-not-treated-as-new-activity/extension-restarts-and-replays-the-live-process-set
+//
+// This test asserts the seed of last_seen_ns at fork-time when a snapshot exec lands; combined with
+// TestGraph_SnapshotDoesNotClobberLiveRow (which proves the snapshot path won't overwrite a live row's metadata), this
+// pins the spec's "snapshot exec creates or updates a row, marks it snapshot-originated, seeds freshness so TTL
+// reconciliation doesn't immediately close it." The "snapshot flag preserved on the underlying events" clause is
+// covered by TestIsSnapshotExec in server/detection/internal/engine/filter_test.go (already marked in the rules-engine
+// spec via the snapshot-exec-excluded scenario).
 func TestGraph_SnapshotInsertSeedsLastSeen(t *testing.T) {
 	// On INSERT, snapshot rows seed last_seen_ns to fork_time_ns. Without this seed, the
 	// very first TTL pass after a fresh snapshot would see last_seen_ns IS NULL → COALESCE
@@ -1166,6 +1590,7 @@ func TestGraph_SnapshotInsertSeedsLastSeen(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "snapshot insert must seed last_seen_ns to fork_time_ns")
 }
 
+// spec:server-process-graph-builder/exit-before-snapshot-exec-race-buffer/exit-arrives-before-its-companion-snapshot-exec
 func TestGraph_PendingExitConsumedBySnapshotExec(t *testing.T) {
 	// Issue #176: a NOTIFY_EXIT for a snapshot-window PID can land at the server BEFORE
 	// the snapshot exec arrives (post-restart race). The server's handleExit no-ops
@@ -1250,6 +1675,7 @@ func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "snapshot exec must not re-exec-chain over a live row")
 }
 
+// spec:server-process-graph-builder/same-pid-re-exec-chain/a-shell-exec-optimization-chain-runs-on-one-pid
 func TestGraph_SamePIDReExec(t *testing.T) {
 	t.Parallel()
 	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
@@ -1282,6 +1708,279 @@ func TestGraph_SamePIDReExec(t *testing.T) {
 		return p.Process.Path == "/tmp/p" && p.Process.PreviousExecID != nil &&
 			len(p.ReExecChain) >= 1
 	}, 5*time.Second, 50*time.Millisecond, "re-exec must chain via previous_exec_id")
+}
+
+// spec:server-process-graph-builder/timestamp-ordered-batch-processing/events-arrive-out-of-order-in-a-batch
+//
+// Post fork+exec+exit for the same PID with the events SHUFFLED in the batch array (exit first, then fork, then exec)
+// but their timestamps in strict T1 < T2 < T3 order. The builder must sort by timestamp before applying, so the final
+// row state is the same as if the events had been delivered in timestamp order: a row with the fork's parent linkage,
+// the exec's image metadata, and the exit's exit_time + exit_code.
+func TestGraph_OutOfOrderBatchProcessing(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	// Submitted in EXIT, FORK, EXEC order; timestamps say FORK happens at T1, EXEC at T2, EXIT at T3.
+	insertEventsViaIngest(ctx, t, d, "h-order", []api.Event{
+		{EventID: "exit-ooo", HostID: "h-order", TimestampNs: now + 2, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":4040,"exit_code":42}`)},
+		{EventID: "fork-ooo", HostID: "h-order", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":4040,"parent_pid":7}`)},
+		{EventID: "exec-ooo", HostID: "h-order", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":4040,"ppid":7,"path":"/bin/ooo","args":["ooo"]}`)},
+	})
+
+	// Read AT the exit timestamp (inclusive) so GetProcessByPID's "(exit_time_ns IS NULL OR exit_time_ns >= ?)" clause
+	// still matches the exited row. Reading after the exit timestamp would return nil because the row is no longer
+	// "alive at atTime."
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-order", 4040, now+2)
+		if err != nil || p == nil {
+			return false
+		}
+		// All three event types must have applied to the same row regardless of batch-array order.
+		return p.Process.PPID == 7 &&
+			p.Process.Path == "/bin/ooo" &&
+			p.Process.ExitTimeNs != nil && *p.Process.ExitTimeNs == now+2 &&
+			p.Process.ExitCode != nil && *p.Process.ExitCode == 42
+	}, 5*time.Second, 50*time.Millisecond,
+		"out-of-order batch must materialise the same row as if events were applied in timestamp order")
+}
+
+// spec:server-process-graph-builder/fork-creates-a-process-record/a-daemon-forks-a-worker
+//
+// Post ONLY a fork (no exec, no exit) and assert the row has: parent_pid set, fork_time_ns set, NO exec metadata
+// (Path empty, ExecTimeNs nil), NO exit metadata (ExitTimeNs nil). Pins the fork-creates-record clause tightly against
+// a future refactor that, say, lazily fills exec_time_ns from a placeholder. TestGraph_BuildsTreeFromExecBatch covers
+// fork+exec end-to-end but does not pin the fork-only intermediate state.
+func TestGraph_ForkAloneCreatesRecord(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	forkTime := time.Now().UnixNano()
+	insertEventsViaIngest(ctx, t, d, "h-fork-only", []api.Event{
+		{EventID: "fork-alone", HostID: "h-fork-only", TimestampNs: forkTime, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":7777,"parent_pid":1}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1)
+		return err == nil && p != nil && p.Process.ForkTimeNs == forkTime
+	}, 5*time.Second, 50*time.Millisecond, "fork must materialise a row at the fork timestamp")
+
+	p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, 1, p.Process.PPID, "parent_pid from the fork event lands on the row")
+	assert.Equal(t, forkTime, p.Process.ForkTimeNs, "fork_time_ns from the fork event lands on the row")
+	assert.Empty(t, p.Process.Path, "no exec yet -> Path is empty")
+	assert.Nil(t, p.Process.ExecTimeNs, "no exec yet -> ExecTimeNs is nil")
+	assert.Nil(t, p.Process.ExitTimeNs, "no exit yet -> ExitTimeNs is nil")
+}
+
+// spec:server-process-graph-builder/pid-reuse-creates-a-new-generation/a-new-fork-lands-on-a-stale-pid
+//
+// OS PIDs get reused. The builder must detect a fork landing on a PID that still has a non-exited record, close the
+// prior generation at the new fork's timestamp, and create a new record for the new generation. Reading at a time
+// inside the old generation's lifetime returns the closed row; reading after the new fork returns the new row.
+//
+// Distinguished from the same-PID re-exec scenario (TestGraph_SamePIDReExec) by the event type: this one is
+// fork-on-existing-fork, that one is exec-on-existing-exec.
+func TestGraph_PIDReuseCreatesNewGeneration(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	t1 := time.Now().UnixNano()
+	t2 := t1 + 1
+	t3 := t1 + 100
+	insertEventsViaIngest(ctx, t, d, "h-reuse", []api.Event{
+		// Generation 1: fork(pid=8080, parent=1), exec(pid=8080, path=/bin/old).
+		{EventID: "fork-g1", HostID: "h-reuse", TimestampNs: t1, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":8080,"parent_pid":1}`)},
+		{EventID: "exec-g1", HostID: "h-reuse", TimestampNs: t2, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":8080,"ppid":1,"path":"/bin/old"}`)},
+		// Generation 2: fork(pid=8080, parent=999) WITHOUT a prior exit; OS PID got recycled.
+		{EventID: "fork-g2", HostID: "h-reuse", TimestampNs: t3, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":8080,"parent_pid":999}`)},
+	})
+
+	// Read AFTER the new fork lands: GetProcessByPID returns the new generation (parent=999).
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t3+1)
+		return err == nil && p != nil && p.Process.PPID == 999 && p.Process.ForkTimeNs == t3
+	}, 5*time.Second, 50*time.Millisecond, "new generation must be visible at t3")
+
+	// Read INSIDE the old generation's lifetime (t2): returns the old row, which the new fork should have closed.
+	// The close stamps exit_time_ns at the new fork's timestamp so the row's lifetime is bounded.
+	oldGen, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t2)
+	require.NoError(t, err)
+	require.NotNil(t, oldGen)
+	assert.Equal(t, 1, oldGen.Process.PPID, "old generation has parent=1")
+	assert.Equal(t, "/bin/old", oldGen.Process.Path, "old generation's exec path")
+	require.NotNil(t, oldGen.Process.ExitTimeNs, "old generation must be closed when the new fork lands")
+	assert.Equal(t, t3, *oldGen.Process.ExitTimeNs, "exit_time_ns lands at the new fork's timestamp")
+}
+
+// spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-short-lived-process-opens-a-connection
+//
+// network_connect + dns_query events are linked to the process record alive on (host, pid) at the event's timestamp.
+// The lifetime constraint is the load-bearing piece: an event whose timestamp falls AFTER the process's exit MUST NOT
+// be linked to it; conversely, an event whose timestamp falls BEFORE the process's fork MUST NOT be linked either.
+//
+// This test exercises the happy path -- all events inside the lifetime -- and asserts ProcessDetail surfaces them.
+// A future enhancement could add negative cases (network event before fork / after exit) but the lifetime predicate
+// is the same SQL clause in both directions; the positive case is sufficient to pin the marker.
+func TestGraph_NetworkAndDNSLinkedAtEventTime(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	insertEventsViaIngest(ctx, t, d, "h-netdns", []api.Event{
+		{EventID: "fork-nd", HostID: "h-netdns", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":6060,"parent_pid":1}`)},
+		{EventID: "exec-nd", HostID: "h-netdns", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":6060,"ppid":1,"path":"/bin/netdns"}`)},
+		{EventID: "net-nd", HostID: "h-netdns", TimestampNs: now + 2, EventType: "network_connect",
+			Payload: json.RawMessage(`{"pid":6060,"protocol":"tcp","direction":"outbound","remote_address":"1.2.3.4","remote_port":443}`)},
+		{EventID: "dns-nd", HostID: "h-netdns", TimestampNs: now + 3, EventType: "dns_query",
+			Payload: json.RawMessage(`{"pid":6060,"query_name":"evil.example","query_type":"A"}`)},
+		{EventID: "exit-nd", HostID: "h-netdns", TimestampNs: now + 4, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":6060,"exit_code":0}`)},
+	})
+
+	// Read AT exit time (inclusive); reading after would return nil because GetProcessByPID's WHERE clause is
+	// "(exit_time_ns IS NULL OR exit_time_ns >= ?)".
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4)
+		if err != nil || p == nil {
+			return false
+		}
+		return p.Process.ExitTimeNs != nil &&
+			len(p.NetworkConnections) >= 1 &&
+			len(p.DNSQueries) >= 1
+	}, 5*time.Second, 50*time.Millisecond, "network + dns events must surface on the process detail")
+
+	p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.Len(t, p.NetworkConnections, 1, "exactly the one network_connect event inside the lifetime")
+	assert.Equal(t, "net-nd", p.NetworkConnections[0].EventID)
+	require.Len(t, p.DNSQueries, 1, "exactly the one dns_query event inside the lifetime")
+	assert.Equal(t, "dns-nd", p.DNSQueries[0].EventID)
+}
+
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-an-exited-row-is-a-no-op
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-non-snapshot-row-is-a-no-op
+//
+// Two negative cases for the heartbeat update predicate, table-driven so a future contributor adds another row rather
+// than another function. The heartbeat MUST be ignored when:
+//
+//   - The target row is snapshot-originated but has already exited (a stray heartbeat for a recycled PID must not
+//     resurrect the exited row).
+//   - The target row is NOT snapshot-originated (organic fork+exec rows are TTL-managed differently and must not be
+//     surprised by a heartbeat from the snapshot path).
+//
+// The positive case (heartbeat bumps freshness on a live snapshot row) is pinned by
+// TestGraph_SnapshotHeartbeatBumpsLastSeen.
+func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
+	t.Parallel()
+	type setup struct {
+		execPayload string
+		exitPayload string // empty when the row should remain alive at heartbeat time
+	}
+	// Both subtests use the same assertion shape -- snapshot last_seen_ns before + after the heartbeat, assert
+	// equality -- so the cases slice only differs by the row's setup (snapshot+exited vs organic+alive). An earlier
+	// version of this struct had an `initialLastSeenStillFreshAtForkTime` flag, but no subtest branched on it; the
+	// field was dead code per Gemini's PR #239 review.
+	cases := []struct {
+		name  string
+		setup setup
+	}{
+		{
+			name: "heartbeat for exited snapshot row is a no-op",
+			setup: setup{
+				execPayload: `{"pid":3030,"ppid":1,"path":"/usr/libexec/exited-snap","snapshot":true}`,
+				exitPayload: `{"pid":3030,"exit_code":0}`,
+			},
+		},
+		{
+			name: "heartbeat for non-snapshot row is a no-op",
+			setup: setup{
+				execPayload: `{"pid":3030,"ppid":1,"path":"/bin/organic"}`,
+				exitPayload: "",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+			ctx := t.Context()
+			hostID := "h-hb-" + strings.ReplaceAll(strings.ReplaceAll(tc.name, " ", "-"), "/", "-")
+
+			forkTime := time.Now().UnixNano()
+			heartbeatTime := forkTime + int64(time.Hour)
+			events := []api.Event{
+				{EventID: "exec-" + hostID, HostID: hostID, TimestampNs: forkTime, EventType: "exec",
+					Payload: json.RawMessage(tc.setup.execPayload)},
+			}
+			if tc.setup.exitPayload != "" {
+				events = append(events, api.Event{
+					EventID: "exit-" + hostID, HostID: hostID, TimestampNs: forkTime + 100, EventType: "exit",
+					Payload: json.RawMessage(tc.setup.exitPayload),
+				})
+			}
+			insertEventsViaIngest(ctx, t, d, hostID, events)
+
+			// Read time must straddle the row's lifetime: if there's an exit, the read time is the exit time (inclusive)
+			// so GetProcessByPID's "(exit_time_ns IS NULL OR exit_time_ns >= ?)" clause matches the exited row.
+			// Without an exit, the row is alive forever (so any read time works); we pick heartbeatTime+1 to confirm
+			// the heartbeat (which fires later) didn't move things.
+			readTime := heartbeatTime + 1
+			if tc.setup.exitPayload != "" {
+				readTime = forkTime + 100 // = exit timestamp; inclusive read
+			}
+
+			// Wait for the initial events to land.
+			require.Eventually(t, func() bool {
+				p, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+				return err == nil && p != nil
+			}, 5*time.Second, 50*time.Millisecond)
+
+			// Snapshot the row's pre-heartbeat state.
+			before, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+
+			// Send the heartbeat. The whole point of the test is that this is a no-op for the row.
+			insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
+				{EventID: "hb-" + hostID, HostID: hostID, TimestampNs: heartbeatTime, EventType: "snapshot_heartbeat",
+					Payload: json.RawMessage(`{"pid":3030}`)},
+			})
+
+			// Wait for the heartbeat event to be processed (CountUnprocessed == 0).
+			require.Eventually(t, func() bool {
+				n, err := d.Store().CountUnprocessed(ctx)
+				return err == nil && n == 0
+			}, 5*time.Second, 25*time.Millisecond, "heartbeat event must reach the processor")
+
+			after, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+
+			// LastSeenNs is the field the heartbeat would have advanced; on a no-op it stays equal to before.
+			assert.Equal(t, before.Process.LastSeenNs, after.Process.LastSeenNs,
+				"heartbeat MUST NOT advance last_seen_ns for an exited snapshot row or a non-snapshot row")
+			// Exit metadata must not be invented: a heartbeat must not resurrect or close a row.
+			assert.Equal(t, before.Process.ExitTimeNs, after.Process.ExitTimeNs,
+				"heartbeat MUST NOT change exit_time_ns")
+		})
+	}
 }
 
 // ---- Operator HTTP handler -------------------------------------------------
@@ -1682,14 +2381,18 @@ func insertEventsViaIngest(ctx context.Context, t *testing.T, d *bootstrap.Detec
 }
 
 // mustInsertProcess seeds a process row (so subsequent alerts can reference its id via fk_alerts_process). Uses the public Service
-// surface so the helper doesn't reach into detection/internal/mysql from outside detection/.
+// surface so the helper doesn't reach into detection/internal/mysql from outside detection/. The EventID embeds the pid so a test
+// that needs processes with DISTINCT pids on the same host can call this helper repeatedly: (host-a, pid=100) and
+// (host-a, pid=200) produce different event_ids and both fork events land. Calling the helper twice with the SAME (host, pid)
+// tuple is idempotent by design -- the second event_id collides with the first and INSERT IGNORE drops the duplicate; the
+// helper still returns the procID materialised by the first call.
 func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID string, pid int) int64 {
 	t.Helper()
 	insertEventsViaIngest(ctx, t, d, hostID, []api.Event{
 		{
-			EventID:     "fork-seed-" + hostID,
+			EventID:     "fork-seed-" + hostID + "-" + strconv.Itoa(pid),
 			HostID:      hostID,
-			TimestampNs: 1,
+			TimestampNs: int64(pid), // distinct timestamps per process for deterministic ordering downstream
 			EventType:   "fork",
 			Payload:     json.RawMessage(`{"child_pid":` + strconv.Itoa(pid) + `,"parent_pid":1}`),
 		},
