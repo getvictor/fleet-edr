@@ -65,15 +65,21 @@ A compromised or misbehaving agent MUST NOT be able to submit events that claim 
 ### Requirement: Body size limit
 
 The system SHALL cap the bytes it reads from the request body of `POST /api/events` at 10 MB. Bodies that exceed the
-cap MUST result in HTTP 400 with a typed body-read diagnostic, and no events from that batch are persisted. A well-
-behaved agent is expected to split larger telemetry into multiple batches under the cap rather than rely on the server
-to reject oversized bodies.
+cap MUST result in HTTP 413 with a typed `body_too_large` diagnostic, and no events from that batch are persisted. The
+413 status (RFC 9110 §15.5.14) is the canonical "your body exceeded the limit" signal and matches the shape Elastic
+Fleet, Datadog, Splunk HEC, and CrowdStrike's ingestion endpoints all use; an agent that sees 413 SHOULD split larger
+telemetry into multiple batches under the cap rather than retry the same body.
+
+The system MUST enforce the cap before allocating a buffer for the body so a malicious or misconfigured caller cannot
+trigger an arbitrary-size allocation. When the request advertises `Content-Length` greater than 10 MB the system MUST
+respond with 413 without reading any of the body; when the request uses chunked transfer-encoding the system MUST
+enforce the cap via a streaming reader and respond with 413 as soon as the cap is crossed.
 
 #### Scenario: An oversized request body is rejected
 
 - **GIVEN** an authenticated agent
 - **WHEN** the request body exceeds 10 MB
-- **THEN** the system responds with HTTP 400 and a typed body-read diagnostic
+- **THEN** the system responds with HTTP 413 and the body is `{"error":"body_too_large"}`
 - **AND** no events from that batch are persisted
 
 #### Scenario: A right-at-cap body is accepted

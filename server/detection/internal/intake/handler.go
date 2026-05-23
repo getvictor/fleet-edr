@@ -3,6 +3,7 @@ package intake
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
 )
+
+// MaxIngestBodyBytes is the per-request body cap on POST /api/events. The contract is documented in openspec/specs/
+// server-event-ingestion/spec.md (Body size limit requirement); see the comment on handleIngest for the enforcement shape.
+// Exported for tests that need to compose right-at-cap and over-cap bodies without duplicating the magic number.
+const MaxIngestBodyBytes = 10 * 1024 * 1024
 
 // BuildInfo is injected at startup so the readiness endpoint
 // advertises version + commit.
@@ -74,9 +80,8 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024)) // 10 MB limit
-	if err != nil {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "read_body")
+	body, ok := h.readBodyWithCap(w, r)
+	if !ok {
 		return
 	}
 
@@ -124,6 +129,40 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]int{"accepted": len(events)}); err != nil {
 		h.logger.ErrorContext(ctx, "encode response", "err", err)
 	}
+}
+
+// readBodyWithCap enforces the per-request body cap in two stages and writes the appropriate error response if either
+// stage rejects. Returns (body, true) on success or (nil, false) when the caller should return without further work.
+// Split out of handleIngest so the latter stays under the cognitive-complexity budget (go:S3776).
+//
+//  1. Content-Length fast-path. If the client advertised a length beyond the cap, reject with HTTP 413 BEFORE
+//     allocating any buffer. Cheap defense against a malicious or misconfigured caller that would otherwise trigger
+//     a 100+ MB allocation per request.
+//  2. Streaming enforce via http.MaxBytesReader. For chunked transfer-encoding (no Content-Length) or a lying
+//     Content-Length, MaxBytesReader returns a typed *http.MaxBytesError once the cap is crossed mid-stream.
+//     The previous shape used io.LimitReader, which silently truncates: a truncated body would then fail
+//     json.Unmarshal and surface as `invalid_json`, hiding the real cause. MaxBytesReader's distinguished error is
+//     what makes the 413-vs-400 split honest.
+//
+// HTTP 413 (RFC 9110 §15.5.14) is the canonical status; matches Elastic Fleet, Datadog, Splunk HEC, CrowdStrike.
+func (h *Handler) readBodyWithCap(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	ctx := r.Context()
+	if r.ContentLength > MaxIngestBodyBytes {
+		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
+		return nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxIngestBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err == nil {
+		return body, true
+	}
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
+		return nil, false
+	}
+	writeErr(ctx, h.logger, w, http.StatusBadRequest, "read_body")
+	return nil, false
 }
 
 type livezResponse struct {

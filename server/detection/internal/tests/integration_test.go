@@ -12,6 +12,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
+	"github.com/fleetdm/edr/server/detection/internal/intake"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -202,6 +204,15 @@ func withHostID(next http.Handler, hostID string) http.Handler {
 
 // ---- Ingest tests -----------------------------------------------------------
 
+// spec:server-event-ingestion/authenticated-batch-event-submission/a-valid-agent-posts-a-batch
+// spec:server-event-ingestion/decoupled-processing-pipeline/ingestion-accepts-events-while-the-processor-is-busy
+//
+// One test, two scenarios. The double-marker is honest because the test (a) posts a valid batch via the
+// host-token-wrapped IngestHandler, asserts HTTP 200 + the host shows up via the read API with the event count
+// the spec requires; (b) runs in detectionOpts{mode: ModeFull} which means the processor goroutine is live
+// during the ingest, so the test simultaneously demonstrates that the ingestion path does not block on or
+// fail because of downstream processing work. If a future refactor unwires either property, this is the test
+// that must be updated.
 func TestIngest_PersistsEvents(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -226,6 +237,7 @@ func TestIngest_PersistsEvents(t *testing.T) {
 	assert.Equal(t, int64(1), hosts[0].EventCount)
 }
 
+// spec:server-event-ingestion/host-identity-pinning/a-batch-contains-a-foreign-host-id
 func TestIngest_HostIDMismatchRejected(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -259,6 +271,288 @@ func TestIngest_RequiresHostContext(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+// spec:server-event-ingestion/required-field-validation/a-batch-contains-an-event-with-a-missing-field
+//
+// Table-driven across the four required fields. Each subtest omits exactly one (event_id, host_id, event_type,
+// timestamp_ns) on an otherwise valid envelope, posts the batch, asserts HTTP 400 with the typed
+// `missing_fields_at_<index>` error code identifying the failing field's position, and confirms ListHosts is empty
+// so the spec's "no events from that batch are persisted" clause holds. The handler's validation lives at
+// server/detection/internal/intake/handler.go's per-event loop; a regression that drops the check on any one field
+// would surface here. Pinning the error code (not just the status) also prevents a regression where the handler
+// returns 400 with a generic body and contributors silently accept it.
+func TestIngest_MissingFieldRejected(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing event_id", `[{"event_id":"","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{}}]`},
+		{"missing host_id", `[{"event_id":"e1","host_id":"","timestamp_ns":1,"event_type":"fork","payload":{}}]`},
+		{"missing event_type", `[{"event_id":"e1","host_id":"host-a","timestamp_ns":1,"event_type":"","payload":{}}]`},
+		{"missing timestamp_ns", `[{"event_id":"e1","host_id":"host-a","timestamp_ns":0,"event_type":"fork","payload":{}}]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+			ctx := t.Context()
+			srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+			t.Cleanup(srv.Close)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(tc.body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "missing field must return 400")
+
+			respBody, _ := io.ReadAll(resp.Body)
+			var parsed map[string]string
+			require.NoError(t, json.Unmarshal(respBody, &parsed))
+			// The handler emits `missing_fields_at_<idx>` where idx is the position of the offending event in the
+			// batch. Every fixture above has the bad event at index 0, so we pin the exact code rather than just
+			// the prefix.
+			assert.Equal(t, "missing_fields_at_0", parsed["error"],
+				"typed diagnostic identifying the failing event's position")
+
+			hosts, err := d.Service().ListHosts(ctx)
+			require.NoError(t, err)
+			assert.Empty(t, hosts, "no events persisted when validation fails")
+		})
+	}
+}
+
+// spec:server-event-ingestion/required-field-validation/a-batch-body-is-not-valid-json
+//
+// The handler runs io.ReadAll on the body then json.Unmarshal into []api.Event. A non-array body (here, a JSON
+// object) fails Unmarshal and the handler returns 400 with the typed `invalid_json` error code. The spec's "no
+// events persisted" clause is satisfied trivially because we never reach the insert path; the test still asserts
+// ListHosts is empty to pin the behaviour against a future refactor that might short-circuit differently. Pinning
+// the typed error code (not just the status) prevents a regression where the handler returns a generic 400.
+func TestIngest_InvalidJSONRejected(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(`{"not":"an array"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var parsed map[string]string
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	assert.Equal(t, "invalid_json", parsed["error"], "typed diagnostic per the spec")
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, hosts)
+}
+
+// spec:server-event-ingestion/idempotent-submission-by-event-id/an-agent-retries-a-batch-after-a-network-failure
+//
+// The store's InsertEvents uses INSERT IGNORE so duplicate event_id collisions are dropped silently at the
+// events table. This test posts the same single-event batch twice and asserts the second response is still 200
+// and that the events table has exactly one row afterwards. CountEvents (the events table cardinality) is the
+// authoritative probe; hosts.event_count is a per-batch arrival counter that increments on every POST including
+// duplicates by design (see server/detection/internal/mysql/perf_test.go:59) and is NOT what the idempotency
+// spec scenario constrains.
+func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	body := `[{"event_id":"e-dup-1","host_id":"host-a","timestamp_ns":1000,"event_type":"fork","payload":{"child_pid":42,"parent_pid":1}}]`
+	post := func() *http.Response {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	resp1 := post()
+	require.Equal(t, http.StatusOK, resp1.StatusCode)
+	resp1.Body.Close()
+
+	resp2 := post()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode, "retry of an already-persisted batch must succeed")
+	resp2.Body.Close()
+
+	count, err := d.Store().CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count, "duplicate event_id must not produce a duplicate row in the events table")
+}
+
+// spec:server-event-ingestion/idempotent-submission-by-event-id/a-batch-mixes-new-and-previously-seen-events
+//
+// First batch persists one event; second batch contains the same event plus a new one. The expected post-state
+// in the events table is two rows: the original (untouched) and the new one. This pins the per-row INSERT
+// IGNORE behaviour against a regression that would either reject the whole batch on the first duplicate or
+// overwrite the original row. See the comment on TestIngest_DuplicateEventIDIsIdempotent for why CountEvents is
+// the right probe rather than hosts.event_count.
+func TestIngest_MixedNewAndSeen(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	first := `[{"event_id":"e-seen","host_id":"host-a","timestamp_ns":1000,"event_type":"fork","payload":{"child_pid":1,"parent_pid":0}}]`
+	mixed := `[` +
+		`{"event_id":"e-seen","host_id":"host-a","timestamp_ns":1000,"event_type":"fork","payload":{"child_pid":1,"parent_pid":0}},` +
+		`{"event_id":"e-new","host_id":"host-a","timestamp_ns":2000,"event_type":"fork","payload":{"child_pid":2,"parent_pid":1}}` +
+		`]`
+	post := func(body string) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	post(first)
+	post(mixed)
+
+	count, err := d.Store().CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count,
+		"mixed batch: the previously-seen event is deduped, the new event is appended; events table = 2 rows")
+}
+
+// spec:server-event-ingestion/transparent-persistence-failure-reporting/the-database-is-temporarily-unavailable
+//
+// Closes the per-test MySQL handle out from under the handler, then posts a valid batch. The store's
+// InsertEvents path returns the wrapped sql error; the handler maps that to HTTP 500 with `internal` per the
+// "MUST NOT acknowledge a batch that was not durably persisted" clause. Each test gets its own testdb so closing
+// the pool here does not affect parallel tests.
+func TestIngest_DBErrorReturns5xx(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	// Close the pool so the next InsertEvents fails with "sql: database is closed". This is the same shape
+	// TestStore_InsertEvents_ClosedDBReturnsError uses in the mysql package; here we assert the handler-side
+	// 5xx translation, not the store error itself.
+	require.NoError(t, d.Store().DB().Close(), "close pool to force the insert error path")
+
+	body := `[{"event_id":"e-db-down","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{}}]`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.GreaterOrEqual(t, resp.StatusCode, 500, "DB failure must surface as a 5xx so the agent retries")
+	assert.Less(t, resp.StatusCode, 600)
+}
+
+// spec:server-event-ingestion/body-size-limit/an-oversized-request-body-is-rejected
+//
+// Two over-cap shapes are exercised so the test pins both enforcement stages of the handler:
+//
+//   - Content-Length fast-path: send a body whose declared Content-Length exceeds MaxIngestBodyBytes. The handler must
+//     reject with 413 BEFORE reading any of the body.
+//   - Streaming MaxBytesReader path: send a chunked body that crosses the cap mid-read. The previous io.LimitReader
+//     shape silently truncated and surfaced as `invalid_json`; this case is the regression test for that bug.
+//
+// Pass: 413 + JSON body {"error":"body_too_large"}. No host appears in ListHosts because no events were persisted.
+func TestIngest_OversizedBodyRejected(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		chunked bool
+	}{
+		{"content-length advertises oversize", false},
+		{"chunked body crosses cap mid-stream", true},
+	}
+	// One event with a 12 MB payload field; the array brackets + envelope overhead push the total over the 10 MB cap.
+	bigPayload := strings.Repeat("A", 12*1024*1024)
+	body := `[{"event_id":"e-big","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{"data":"` +
+		bigPayload + `"}}]`
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+			ctx := t.Context()
+			srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+			t.Cleanup(srv.Close)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			if tc.chunked {
+				// Forcing chunked encoding requires the client to NOT know the body length up front. http.NewRequest
+				// computes ContentLength from the strings.Reader; setting it to -1 makes Go's transport switch to
+				// Transfer-Encoding: chunked, which is exactly the path MaxBytesReader catches.
+				req.ContentLength = -1
+				req.Header.Set("Transfer-Encoding", "chunked")
+			}
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode, "413 per RFC 9110 §15.5.14")
+			respBody, _ := io.ReadAll(resp.Body)
+			var parsed map[string]string
+			require.NoError(t, json.Unmarshal(respBody, &parsed))
+			assert.Equal(t, "body_too_large", parsed["error"], "typed diagnostic per the spec")
+
+			hosts, err := d.Service().ListHosts(ctx)
+			require.NoError(t, err)
+			assert.Empty(t, hosts, "no events persisted when the body is rejected")
+		})
+	}
+}
+
+// spec:server-event-ingestion/body-size-limit/a-right-at-cap-body-is-accepted
+//
+// Boundary test: construct a body whose serialized length is just under MaxIngestBodyBytes and assert the handler reads
+// the entire payload, validates every event, and returns 200. The test pads ONE event's payload field with ASCII bytes
+// to drive the total body length close to the cap; the JSON wrapper overhead means the actual payload string is the
+// cap minus the envelope shape. Wall-clock cost is ~100ms for the 10 MB allocation + parse + insert; well under
+// suite-wide test budgets.
+func TestIngest_RightAtCapAccepted(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	// Compute the maximum payload-data length that keeps the total body at or below the cap. The envelope structure is
+	// fixed; everything beyond the data string is constant overhead we can subtract from the cap.
+	envelope := `[{"event_id":"e-cap","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{"data":""}}]`
+	overhead := len(envelope)
+	dataLen := intake.MaxIngestBodyBytes - overhead - 32 // 32-byte safety margin for JSON escaping / encoding
+	body := `[{"event_id":"e-cap","host_id":"host-a","timestamp_ns":1,"event_type":"fork","payload":{"data":"` +
+		strings.Repeat("A", dataLen) + `"}}]`
+	require.LessOrEqual(t, len(body), intake.MaxIngestBodyBytes, "test fixture must fit under the cap")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "right-at-cap body must be accepted")
+
+	count, err := d.Store().CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count, "the single right-at-cap event was persisted")
 }
 
 // ---- Engine + processor tests ----------------------------------------------

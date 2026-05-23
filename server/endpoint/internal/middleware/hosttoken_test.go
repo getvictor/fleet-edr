@@ -132,6 +132,13 @@ func TestHostToken_EmptyBearerSuffixRejected(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
+// spec:server-event-ingestion/authenticated-batch-event-submission/a-request-without-a-host-token-is-rejected
+//
+// The spec scenario covers two cases: "omits or supplies an unrecognized bearer token". The omit case is
+// covered by TestHostToken_MissingBearer above (this same file); the unrecognized-token case is below. One
+// marker per scenario is enough to satisfy the gate, and "unrecognized" is the meatier case so the marker
+// lands here. The middleware is what the spec's "system MUST reject" clause materialises as; the detection
+// IngestHandler runs only after this middleware has resolved the bearer to a host_id.
 func TestHostToken_InvalidToken(t *testing.T) {
 	svc := fakeService{
 		verifyToken: func(context.Context, string) (string, error) {
