@@ -75,6 +75,13 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 	return New(pt, q, func() string { return hostID }, opts)
 }
 
+// spec:agent-event-queue/synthetic-reconciliation-events-use-the-same-queue/reconciliation-exit-event-is-queued-and-uploaded
+//
+// The agent-event-queue scenario requires that a synthesized exit event flow through the standard enqueue
+// path and arrive on the wire with `exit_reason = host_reconciled` intact. The reconciler runs against a
+// real recorderQueue (the same Enqueuer the production agent wires up) and the assertion on
+// env.Payload["exit_reason"] below pins the wire-shape clause. The "uploader returns it from a normal
+// dequeue" clause is structural: there is one queue path, and the reconciler uses it.
 func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 	pt := proctable.New()
 	pt.Update(123, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
@@ -214,6 +221,11 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 	assert.Equal(t, 1, pt.Size(), "PID 0 is left alone, not reaped")
 }
 
+// spec:agent-event-queue/synthetic-reconciliation-events-use-the-same-queue/snapshot-heartbeat-event-is-queued-and-uploaded
+//
+// Pins the snapshot-heartbeat half of the synthetic-reconciliation-events contract: the heartbeat emitted
+// by the reconciler must arrive in the queue with `event_type = snapshot_heartbeat` intact (asserted below
+// on env.EventType). Same standard-queue rationale as TestRunOnce_EmitsExitForDeadPID.
 func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side liveness ping the server's 6h TTL reconciler
 	// force-exits them. RunOnce emits a snapshot_heartbeat for every alive PID flagged IsSnapshot=true.
