@@ -76,13 +76,21 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 }
 
 // spec:agent-event-queue/synthetic-reconciliation-events-use-the-same-queue/reconciliation-exit-event-is-queued-and-uploaded
+// spec:agent-process-reconciliation/periodic-kill-zero-sweep/tracked-process-has-exited-without-a-notification
+// spec:agent-process-reconciliation/synthetic-exits-are-distinguishable/synthetic-exit-shape
+// spec:agent-process-reconciliation/synthetic-exits-flow-through-the-standard-queue/enqueue-path-is-the-standard-queue
 //
-// The agent-event-queue scenario requires that a synthesized exit event flow through the standard enqueue
-// path and arrive on the wire with `exit_reason = host_reconciled` intact. The reconciler is wired here
-// against recorderQueue, a test recorder that implements the same Enqueuer interface the production
-// `*queue.Queue` does (see agent/cmd/fleet-edr-agent/main.go); the assertion on env.Payload["exit_reason"]
-// below pins the wire-shape clause that survives serialization. The "uploader returns it from a normal
-// dequeue" clause is structural: there is only one enqueue path, and the reconciler uses it.
+// Four scenarios share this test:
+//   - agent-event-queue: synthesized exit flows through standard enqueue path with exit_reason intact.
+//   - periodic-kill-zero-sweep: kernel reports "no such process" => synthetic exit + PID pruned from table.
+//   - synthetic-exit-shape: event_type="exit", exit_reason="host_reconciled", fresh UUID event_id, host_id
+//     populated — all four shape clauses are pinned by the env.* assertions below.
+//   - enqueue-path-is-the-standard-queue: the reconciler wires its Enqueuer to the same interface the
+//     production `*queue.Queue` satisfies, so durability/batching/dedup are inherited for free.
+//
+// One test legitimately demonstrates four distinct scenario clauses because they all collapse to the same
+// observation: "a PID that the kernel says is gone produces an exit event of the documented shape via the
+// standard queue interface, and the PID is removed from the tracking table."
 func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 	pt := proctable.New()
 	pt.Update(123, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
@@ -123,6 +131,12 @@ func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 	assert.True(t, ok, "live PID must remain in the proctable")
 }
 
+// spec:agent-process-reconciliation/periodic-kill-zero-sweep/probe-is-blocked-by-permissions
+//
+// Demonstrates the main clause of the scenario: when the kernel returns EPERM/EINVAL rather than ESRCH,
+// the entry is treated as alive (no synthetic exit) and stays in the proctable. The AND clause about
+// snapshot-originated processes receiving a heartbeat under EPERM is covered by the companion test
+// TestRunOnce_EPERMOnSnapshotPIDEmitsHeartbeat below; this test exercises non-snapshot PIDs only.
 func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
 	pt := proctable.New()
 	pt.Update(10, proctable.ProcessInfo{Path: "/bin/perm", StartTime: 0})
@@ -145,6 +159,12 @@ func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
 	assert.Equal(t, 2, pt.Size(), "neither PID may be pruned")
 }
 
+// spec:agent-process-reconciliation/reconciliation-respects-the-freshly-observed-window/newly-observed-process
+//
+// Both PIDs are probed dead. The young one (5s ago, inside the 30s MinAge window) is skipped this pass and
+// stays in the proctable; the old one (5min ago) is reaped. Pins both the "skipped this pass" clause and
+// the implicit "reconsidered on a future pass" — the proctable entry is preserved, so the next pass with
+// the clock advanced past MinAge would reap it.
 func TestRunOnce_RespectsMinAge(t *testing.T) {
 	now := time.Unix(0, 1_000_000_000_000)
 	pt := proctable.New()
@@ -169,6 +189,11 @@ func TestRunOnce_RespectsMinAge(t *testing.T) {
 	assert.True(t, ok, "young dead PID must be left in place this pass")
 }
 
+// spec:agent-process-reconciliation/skip-when-host-identity-is-unknown/enrollment-has-not-yet-completed
+//
+// hostFn returns "" (no enrollment). The pass MUST exit immediately: no probes, no enqueues, no proctable
+// mutations. Pinned by the three assertions below — 0 exits, 0 heartbeats, queue empty — plus pt.Lookup(1)
+// confirming the entry was not touched.
 func TestRunOnce_NoHostIDSkips(t *testing.T) {
 	pt := proctable.New()
 	pt.Update(1, proctable.ProcessInfo{Path: "/bin/x", StartTime: 0})
@@ -187,6 +212,12 @@ func TestRunOnce_NoHostIDSkips(t *testing.T) {
 	assert.True(t, ok, "no host_id means no events; the proctable must stay intact")
 }
 
+// spec:agent-process-reconciliation/per-pass-cap-on-synthetic-exits/many-stale-entries-at-once
+//
+// 10 dead PIDs, cap=3 => exactly 3 exits emitted and 7 entries left in the proctable for subsequent
+// passes to reconcile. The companion scenario about heartbeats continuing past the exit cap is covered by
+// TestRunOnce_ExitCapDoesNotGateHeartbeats below; this test pins the pure exit-cap clause with non-snapshot
+// PIDs so the heartbeat path is out of the picture.
 func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 	pt := proctable.New()
 	dead := make(map[int]bool, 10)
@@ -223,10 +254,12 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 }
 
 // spec:agent-event-queue/synthetic-reconciliation-events-use-the-same-queue/snapshot-heartbeat-event-is-queued-and-uploaded
+// spec:agent-process-reconciliation/heartbeat-emission-for-snapshot-originated-processes/live-snapshot-originated-process-emits-a-heartbeat
 //
-// Pins the snapshot-heartbeat half of the synthetic-reconciliation-events contract: the heartbeat emitted
-// by the reconciler must arrive in the queue with `event_type = snapshot_heartbeat` intact (asserted below
-// on env.EventType). Same standard-queue rationale as TestRunOnce_EmitsExitForDeadPID.
+// Two scenarios share this test: the queue-side contract that snapshot_heartbeat events flow through the
+// standard enqueue path, and the reconciliation-side contract that live PIDs flagged IsSnapshot=true emit
+// a heartbeat (carrying the host id) while live non-snapshot PIDs do not. The companion test
+// TestRunOnce_NoHeartbeatForLiveNonSnapshotPID pins the negative half on its own.
 func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side liveness ping the server's 6h TTL reconciler
 	// force-exits them. RunOnce emits a snapshot_heartbeat for every alive PID flagged IsSnapshot=true.
@@ -257,6 +290,15 @@ func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 	assert.EqualValues(t, 1, env.Payload["pid"])
 }
 
+// spec:agent-process-reconciliation/periodic-kill-zero-sweep/tracked-process-is-still-alive
+// spec:agent-process-reconciliation/heartbeat-emission-for-snapshot-originated-processes/live-non-snapshot-process-does-not-emit-a-heartbeat
+//
+// Two scenarios share this test, and they describe the same observation from different angles:
+//   - The kill-zero-sweep scenario asserts that a live PID produces no synthetic exit and that the entry
+//     is preserved. stats.Exits==0 and the queue stays empty pin both clauses; the entry preservation is
+//     implicit (the reconciler removes proctable entries only when it emits an exit).
+//   - The heartbeat scenario asserts the negative case: a non-snapshot live PID emits NOTHING, not even a
+//     heartbeat. The Heartbeats==0 assertion plus the empty queue pin that clause.
 func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
 	// Regression guard for the issue #173 implementation: only snapshot PIDs heartbeat. A regular live PID must not produce a
 	// heartbeat - the fork/exec/exit stream already keeps the server's row fresh.
@@ -271,6 +313,10 @@ func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
 	assert.Empty(t, q.snapshot())
 }
 
+// spec:agent-process-reconciliation/heartbeat-emission-for-snapshot-originated-processes/dead-snapshot-originated-process-emits-a-synthetic-exit-not-a-heartbeat
+//
+// A dead snapshot PID emits a host_reconciled exit AND no heartbeat. The snapshot flag does not change
+// the kill-zero-sweep verdict — kernel says gone, so the PID gets reaped and a synthetic exit fires.
 func TestRunOnce_DeadSnapshotPIDEmitsExitNotHeartbeat(t *testing.T) {
 	// A snapshot PID that the kernel says is gone emits a host_reconciled exit, not a
 	// heartbeat. Same path as the issue #6 dead-PID flow; snapshot flag doesn't change it.
@@ -381,6 +427,13 @@ func TestRun_EmitsSyntheticExitDuringLoop(t *testing.T) {
 	assert.NotEmpty(t, q.snapshot(), "Run must emit at least one synthetic exit before the deadline")
 }
 
+// spec:agent-process-reconciliation/per-entry-failures-do-not-stall-the-pass/enqueue-fails-for-one-entry
+//
+// Pins the "failed entry remains in the table to be retried on a future pass" clause: when Enqueue
+// returns "queue full" for the only dead PID in the table, the PID stays in the proctable so the next
+// pass can try again. The "pass continues with remaining identifiers" clause requires a multi-PID setup
+// where one fails and others succeed — that is covered by the companion test
+// TestRunOnce_EnqueueErrorContinuesPass below.
 func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 	pt := proctable.New()
 	pt.Update(42, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
@@ -430,6 +483,97 @@ func TestEmitSyntheticExit_MarshalError(t *testing.T) {
 	assert.Empty(t, q.snapshot())
 	_, ok := pt.Lookup(8)
 	assert.True(t, ok)
+}
+
+// spec:agent-process-reconciliation/periodic-kill-zero-sweep/probe-is-blocked-by-permissions
+//
+// Covers the AND clause of the scenario that TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive doesn't reach:
+// when the probe is blocked by permission denied on a snapshot-originated PID, the pass MUST still emit
+// a heartbeat for it. EPERM is positive proof the process exists; treating it as "live" means the same
+// snapshot-heartbeat path as a fully signallable live snapshot PID. Without this clause, snapshot PIDs
+// owned by another user would silently age out of the server's freshness window.
+func TestRunOnce_EPERMOnSnapshotPIDEmitsHeartbeat(t *testing.T) {
+	pt := proctable.New()
+	pt.Update(77, proctable.ProcessInfo{Path: "/sbin/root-owned-snap", StartTime: 0, IsSnapshot: true})
+
+	q := &recorderQueue{}
+	r := newRunner(t, pt, q, nil, "host-A", Options{
+		Kill: func(_ int, _ syscall.Signal) error { return syscall.EPERM },
+	})
+
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 0, stats.Exits, "EPERM must NOT trigger a synthetic exit")
+	assert.Equal(t, 1, stats.Heartbeats, "EPERM on a snapshot PID must still emit a heartbeat")
+
+	_, ok := pt.Lookup(77)
+	assert.True(t, ok, "EPERM means the PID stays in the table")
+
+	events := q.snapshot()
+	require.Len(t, events, 1)
+	var env struct {
+		EventType string         `json:"event_type"`
+		HostID    string         `json:"host_id"`
+		Payload   map[string]any `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(events[0], &env))
+	assert.Equal(t, "snapshot_heartbeat", env.EventType)
+	assert.Equal(t, "host-A", env.HostID)
+	assert.EqualValues(t, 77, env.Payload["pid"])
+}
+
+// spec:agent-process-reconciliation/per-pass-cap-on-synthetic-exits/exit-cap-reached-while-live-snapshot-processes-remain
+//
+// Pins the rule that the per-pass exit cap MUST NOT gate heartbeat emission. Setup: 3 dead snapshot PIDs
+// + 2 live snapshot PIDs, cap=2. Expected: 2 exits (cap enforced), 2 heartbeats (cap does not apply to
+// the heartbeat path). Without this guarantee, a host with thousands of stale snapshot rows could
+// starve out heartbeats for the still-alive ones and lose the freshness window.
+func TestRunOnce_ExitCapDoesNotGateHeartbeats(t *testing.T) {
+	pt := proctable.New()
+	dead := make(map[int]bool, 3)
+	for _, pid := range []int32{10, 11, 12} {
+		pt.Update(pid, proctable.ProcessInfo{Path: "/dead-snap", StartTime: 0, IsSnapshot: true})
+		dead[int(pid)] = true
+	}
+	for _, pid := range []int32{20, 21} {
+		pt.Update(pid, proctable.ProcessInfo{Path: "/live-snap", StartTime: 0, IsSnapshot: true})
+	}
+
+	q := &recorderQueue{}
+	r := newRunner(t, pt, q, &killer{dead: dead}, "h", Options{MaxPerPass: 2})
+
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 2, stats.Exits, "exit cap must hold at MaxPerPass=2 even though 3 PIDs are dead")
+	assert.Equal(t, 2, stats.Heartbeats, "heartbeat path is NOT gated by the exit cap; both live snapshot PIDs must heartbeat")
+}
+
+// spec:agent-process-reconciliation/per-entry-failures-do-not-stall-the-pass/enqueue-fails-for-one-entry
+//
+// Pins the "pass continues with the remaining identifiers" clause: when the first synthetic-exit enqueue
+// fails ("queue full" via recorderQueue.failNext), the pass MUST continue and successfully enqueue the
+// remaining PIDs. recorderQueue.failNext clears itself after one trip so the second PID's enqueue
+// succeeds. Pinning: stats.Exits == 1 (only the successful one is counted) AND the failed PID stays in
+// the proctable for retry while the successful PID is reaped.
+func TestRunOnce_EnqueueErrorContinuesPass(t *testing.T) {
+	pt := proctable.New()
+	pt.Update(101, proctable.ProcessInfo{Path: "/bin/dead-a", StartTime: 0})
+	pt.Update(102, proctable.ProcessInfo{Path: "/bin/dead-b", StartTime: 0})
+
+	q := &recorderQueue{failNext: errors.New("queue full")}
+	r := newRunner(t, pt, q, &killer{dead: map[int]bool{101: true, 102: true}}, "h", Options{})
+
+	stats := r.RunOnce(context.Background())
+	assert.Equal(t, 1, stats.Exits, "one enqueue failed; the other PID's exit succeeded")
+
+	// Exactly one PID got reaped from the table and exactly one event landed in the queue. The order is
+	// non-deterministic (proctable iteration), so we assert the count rather than which PID was first.
+	survivingInPT := 0
+	for _, pid := range []int32{101, 102} {
+		if _, ok := pt.Lookup(pid); ok {
+			survivingInPT++
+		}
+	}
+	assert.Equal(t, 1, survivingInPT, "failed-enqueue PID must stay for retry; successful one is reaped")
+	require.Len(t, q.snapshot(), 1, "only the successful enqueue lands in the queue")
 }
 
 func TestNewUUIDv4_FormatAndUniqueness(t *testing.T) {
