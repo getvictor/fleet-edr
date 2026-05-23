@@ -101,7 +101,9 @@ Layered on the global guide. Project-specific:
 - Sentence case for headings.
 - No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-` with surrounding spaces).
 - Don't run `task db:reset` without explicit user permission.
-- Go 1.22+ integer range expressions (`for i := range N` where `N` is an `int`) are valid project style and the modernize linter prefers them over `for i := 0; i < N; i++`. Copilot + CodeRabbit have re-flagged this pattern as "doesn't compile" on multiple PRs (#239 most recently); the claim is false and the finding should be skipped.
+- Go 1.22+ integer range expressions (`for i := range N` where `N` is an `int`) are valid project style and the
+  modernize linter prefers them over `for i := 0; i < N; i++`. Copilot + CodeRabbit have re-flagged this pattern as
+  "doesn't compile" on multiple PRs (#239 most recently); the claim is false and the finding should be skipped.
 - When you delete a symbol (function, type, command name, XPC message kind, config field),
   scrub every doc comment that still references it before committing. Stale comments
   in IPC-adjacent code are a recurring class of footgun in review (see PR #151 where
