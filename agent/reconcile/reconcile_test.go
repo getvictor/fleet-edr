@@ -84,7 +84,7 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 //   - agent-event-queue: synthesized exit flows through standard enqueue path with exit_reason intact.
 //   - periodic-kill-zero-sweep: kernel reports "no such process" => synthetic exit + PID pruned from table.
 //   - synthetic-exit-shape: event_type="exit", exit_reason="host_reconciled", fresh UUID event_id, host_id
-//     populated — all four shape clauses are pinned by the env.* assertions below.
+//     populated; all four shape clauses are pinned by the env.* assertions below.
 //   - enqueue-path-is-the-standard-queue: the reconciler wires its Enqueuer to the same interface the
 //     production `*queue.Queue` satisfies, so durability/batching/dedup are inherited for free.
 //
@@ -163,7 +163,7 @@ func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
 //
 // Both PIDs are probed dead. The young one (5s ago, inside the 30s MinAge window) is skipped this pass and
 // stays in the proctable; the old one (5min ago) is reaped. Pins both the "skipped this pass" clause and
-// the implicit "reconsidered on a future pass" — the proctable entry is preserved, so the next pass with
+// the implicit "reconsidered on a future pass": the proctable entry is preserved, so the next pass with
 // the clock advanced past MinAge would reap it.
 func TestRunOnce_RespectsMinAge(t *testing.T) {
 	now := time.Unix(0, 1_000_000_000_000)
@@ -192,7 +192,7 @@ func TestRunOnce_RespectsMinAge(t *testing.T) {
 // spec:agent-process-reconciliation/skip-when-host-identity-is-unknown/enrollment-has-not-yet-completed
 //
 // hostFn returns "" (no enrollment). The pass MUST exit immediately: no probes, no enqueues, no proctable
-// mutations. Pinned by the three assertions below — 0 exits, 0 heartbeats, queue empty — plus pt.Lookup(1)
+// mutations. Pinned by the three assertions below (0 exits, 0 heartbeats, queue empty) plus pt.Lookup(1)
 // confirming the entry was not touched.
 func TestRunOnce_NoHostIDSkips(t *testing.T) {
 	pt := proctable.New()
@@ -316,7 +316,7 @@ func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
 // spec:agent-process-reconciliation/heartbeat-emission-for-snapshot-originated-processes/dead-snapshot-originated-process-emits-a-synthetic-exit-not-a-heartbeat
 //
 // A dead snapshot PID emits a host_reconciled exit AND no heartbeat. The snapshot flag does not change
-// the kill-zero-sweep verdict — kernel says gone, so the PID gets reaped and a synthetic exit fires.
+// the kill-zero-sweep verdict: kernel says gone, so the PID gets reaped and a synthetic exit fires.
 func TestRunOnce_DeadSnapshotPIDEmitsExitNotHeartbeat(t *testing.T) {
 	// A snapshot PID that the kernel says is gone emits a host_reconciled exit, not a
 	// heartbeat. Same path as the issue #6 dead-PID flow; snapshot flag doesn't change it.
@@ -432,7 +432,7 @@ func TestRun_EmitsSyntheticExitDuringLoop(t *testing.T) {
 // Pins the "failed entry remains in the table to be retried on a future pass" clause: when Enqueue
 // returns "queue full" for the only dead PID in the table, the PID stays in the proctable so the next
 // pass can try again. The "pass continues with remaining identifiers" clause requires a multi-PID setup
-// where one fails and others succeed — that is covered by the companion test
+// where one fails and others succeed; that is covered by the companion test
 // TestRunOnce_EnqueueErrorContinuesPass below.
 func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 	pt := proctable.New()
