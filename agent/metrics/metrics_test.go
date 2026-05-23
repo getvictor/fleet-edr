@@ -10,9 +10,12 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-// TestRecorder_QueueDropped proves the Recorder emits the expected counter samples with `lossy` attributes that downstream alerts key
-// on. We build a local MeterProvider + ManualReader rather than overriding the global one so the test can run in parallel with any
-// other that happens to touch otel.Meter.
+// spec:observability-instrumentation/stable-counter-names/already-delivered-queue-trim-is-distinguishable-from-data-loss
+//
+// Agent-side counterpart to server/metrics's TestRecorder_RecordsCounters (which pins the same scenario
+// from the consolidated Recorder API). Proves the agent's Recorder emits the lossy=true vs lossy=false
+// distinction on edr.agent.queue.dropped: the assertions on losslessSum (3) and lossySum (5) split the
+// data points by attribute so a regression that dropped the `lossy` attribute would mix the totals.
 func TestRecorder_QueueDropped(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -56,6 +59,11 @@ func TestRecorder_QueueDropped(t *testing.T) {
 	assert.Equal(t, int64(5), lossySum)
 }
 
+// spec:observability-instrumentation/instrumentation-is-safe-on-a-nil-receiver/call-sites-do-not-guard-the-recorder
+//
+// Companion to server/metrics's TestNilRecorder_AllMethodsSafe; pins the agent-side half of the
+// nil-recorder safety contract. The agent queue drives this directly on every Enqueue cap-eviction path,
+// so the regression bar is real even though the assertion is trivially small.
 func TestNilRecorder_QueueDropped_Safe(t *testing.T) {
 	var r *Recorder
 	assert.NotPanics(t, func() {
