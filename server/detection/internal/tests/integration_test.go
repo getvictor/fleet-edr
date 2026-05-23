@@ -91,10 +91,14 @@ type stubProvider struct{ rules []rulesapi.Rule }
 
 func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
 
-// multiPIDStub emits one finding per "trigger" event, with ProcessID parsed from the event payload's "pid" field. Used
-// by the multiple-findings-from-one-rule scenario test (TestEngine_OneRuleMultipleFindings): different pids in the
-// payload yield different alert dedup keys, so the resulting findings persist as distinct alert rows. stubRule
-// hardcodes ProcessID=1 so it cannot exercise this case.
+// multiPIDStub emits one finding per "trigger" event, with ProcessID parsed from the event payload's "process_id"
+// field. The field name is "process_id" (NOT "pid") on purpose: the value is the DB row id of a processes table
+// row (an int64 AUTO_INCREMENT key), NOT an OS PID. An earlier version of this stub read payload.pid which fooled a
+// later contributor into passing an OS PID and tripping an fk_alerts_process FK violation on InsertAlert. Renaming
+// the field surfaces the right semantic at the call site (TestEngine_OneRuleMultipleFindings passes procA/procB
+// returned by mustInsertProcess, which are DB row ids). Used by the multiple-findings-from-one-rule scenario:
+// distinct DB process_ids yield distinct alert dedup keys, so the resulting findings persist as distinct alert
+// rows. stubRule hardcodes ProcessID=1 so it cannot exercise this case.
 type multiPIDStub struct{ id string }
 
 func (r *multiPIDStub) ID() string           { return r.id }
@@ -110,9 +114,9 @@ func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesap
 			continue
 		}
 		var p struct {
-			PID int64 `json:"pid"`
+			ProcessID int64 `json:"process_id"`
 		}
-		if err := json.Unmarshal(e.Payload, &p); err != nil || p.PID == 0 {
+		if err := json.Unmarshal(e.Payload, &p); err != nil || p.ProcessID == 0 {
 			continue
 		}
 		out = append(out, api.Finding{
@@ -121,7 +125,7 @@ func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesap
 			Severity:    rulesapi.SeverityHigh,
 			Title:       "Multi-pid trigger",
 			Description: "multi-pid stub fired",
-			ProcessID:   p.PID,
+			ProcessID:   p.ProcessID,
 			EventIDs:    []string{e.EventID},
 		})
 	}
@@ -132,9 +136,15 @@ func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesap
 // TestEngine_PersistenceFailureSurfacesError to force the FK violation deterministically: a ProcessID that's nowhere
 // near the AUTO_INCREMENT counter triggers fk_alerts_process every time InsertAlert runs, surfacing the persistence-
 // failure path the spec scenario describes.
+//
+// The atomic evalCount field lets tests wait until the engine has actually invoked Evaluate at least once before
+// asserting downstream state. Without this signal, an Eventually-on-CountUnprocessed assertion is trivially satisfied
+// (events start unprocessed; the assertion fires before the processor even claims the batch), so the test cannot
+// actually pin "processor tried and the persistence layer rejected the finding."
 type fixedPIDStub struct {
 	id        string
 	processID int64
+	evalCount atomic.Int64
 }
 
 func (r *fixedPIDStub) ID() string           { return r.id }
@@ -144,6 +154,7 @@ func (r *fixedPIDStub) Doc() rulesapi.Documentation {
 }
 
 func (r *fixedPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	r.evalCount.Add(1)
 	var out []api.Finding
 	for _, e := range events {
 		if e.EventType != "trigger" {
@@ -778,10 +789,14 @@ func TestEngine_OneRuleMultipleFindings(t *testing.T) {
 	events := []api.Event{
 		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
 		{EventID: "fork-2", HostID: "host-a", TimestampNs: 1500, EventType: "fork", Payload: json.RawMessage(`{"child_pid":200,"parent_pid":1}`)},
-		// payload.pid steers the stub's emitted ProcessID; the two triggers below carry different pids so the resulting
-		// findings have different dedup keys and persist as two alert rows.
-		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{"pid":` + strconv.FormatInt(procA, 10) + `}`)},
-		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 2100, EventType: "trigger", Payload: json.RawMessage(`{"pid":` + strconv.FormatInt(procB, 10) + `}`)},
+		// payload.process_id (the DB row id from mustInsertProcess) steers the stub's emitted ProcessID; the two
+		// triggers below carry different DB ids so the resulting findings have different dedup keys and persist
+		// as two alert rows. Field name is "process_id" (not "pid") to make it obvious this is a DB-row identifier,
+		// not an OS PID -- see the multiPIDStub docstring for the prior FK-violation bug this rename prevents.
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procA, 10) + `}`)},
+		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 2100, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procB, 10) + `}`)},
 	}
 	insertEventsViaIngest(ctx, t, d, "host-a", events)
 
@@ -937,27 +952,28 @@ func TestEngine_PersistenceFailureSurfacesError(t *testing.T) {
 	// nowhere near that value in a fresh test DB), so InsertAlert hits the fk_alerts_process FK and returns an error
 	// every cycle. The processor's retry loop will keep trying; we only need it to try ONCE for the assertion to hold.
 	const bogusProcessID int64 = 999_999_999
-	d.LoadActive(stubProvider{rules: []rulesapi.Rule{
-		&fixedPIDStub{id: "stub-persist-fail", processID: bogusProcessID},
-	}})
+	rule := &fixedPIDStub{id: "stub-persist-fail", processID: bogusProcessID}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
 	mustInsertProcess(t, ctx, d, "host-a", 100)
 
 	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
 		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
 	})
 
-	// Negative assertion (a): no alert is ever persisted; the engine's error path prevents the row from landing.
-	// Wait long enough that the processor has unambiguously attempted the batch at least once (~5 ticks at 20ms/cycle
-	// in this test mode); negative assertion needs deterministic settle, so Eventually wraps a counter on the WARN
-	// log path would be cleaner but we don't have a hook to it. The 200ms is a generous lower bound on the processor's
-	// first cycle while still keeping the test fast.
+	// Wait for the engine to actually invoke Evaluate at least once. CountUnprocessed > 0 is trivially satisfied
+	// (events start unprocessed before the processor claims them), so it can't tell us "the processor tried and
+	// failed." rule.evalCount.Add(1) fires inside Evaluate; once it's >= 1, the engine demonstrably ran the rule,
+	// got a Finding, called persistFinding, hit the FK, and returned the error. That's the precondition the spec
+	// scenario actually constrains. (Gemini medium-priority finding on PR #239.)
 	require.Eventually(t, func() bool {
-		// The trigger event must have been ATTEMPTED at least once -- but since FK fails, the events stay
-		// unprocessed. We detect "processor has attempted but couldn't persist" by CountUnprocessed > 0 AFTER giving
-		// the processor enough time to claim + fail the batch.
-		n, err := d.Store().CountUnprocessed(ctx)
-		return err == nil && n > 0
-	}, 2*time.Second, 25*time.Millisecond, "trigger event must remain unprocessed because the alert write keeps failing")
+		return rule.evalCount.Load() >= 1
+	}, 5*time.Second, 25*time.Millisecond, "engine must have invoked Evaluate at least once")
+
+	// Now that the engine has tried and failed, the persistence-failure path must NOT have produced an alert,
+	// and the processor must have left the events unprocessed for the next retry cycle.
+	n, err := d.Store().CountUnprocessed(ctx)
+	require.NoError(t, err)
+	assert.Positive(t, n, "events stay unprocessed because the engine returned an error on persistFinding")
 
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
@@ -1877,12 +1893,13 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 		execPayload string
 		exitPayload string // empty when the row should remain alive at heartbeat time
 	}
+	// Both subtests use the same assertion shape -- snapshot last_seen_ns before + after the heartbeat, assert
+	// equality -- so the cases slice only differs by the row's setup (snapshot+exited vs organic+alive). An earlier
+	// version of this struct had an `initialLastSeenStillFreshAtForkTime` flag, but no subtest branched on it; the
+	// field was dead code per Gemini's PR #239 review.
 	cases := []struct {
 		name  string
 		setup setup
-		// initialLastSeenStillFreshAtForkTime asserts the heartbeat did NOT advance last_seen_ns: the test snapshots
-		// last_seen_ns BEFORE the heartbeat and asserts it equals the post-heartbeat value.
-		initialLastSeenStillFreshAtForkTime bool
 	}{
 		{
 			name: "heartbeat for exited snapshot row is a no-op",
@@ -1890,7 +1907,6 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 				execPayload: `{"pid":3030,"ppid":1,"path":"/usr/libexec/exited-snap","snapshot":true}`,
 				exitPayload: `{"pid":3030,"exit_code":0}`,
 			},
-			initialLastSeenStillFreshAtForkTime: true,
 		},
 		{
 			name: "heartbeat for non-snapshot row is a no-op",
@@ -1898,7 +1914,6 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 				execPayload: `{"pid":3030,"ppid":1,"path":"/bin/organic"}`,
 				exitPayload: "",
 			},
-			initialLastSeenStillFreshAtForkTime: false, // organic rows have no last_seen_ns to assert; the test only confirms no fields change
 		},
 	}
 	for _, tc := range cases {
