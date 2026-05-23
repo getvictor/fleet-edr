@@ -9,9 +9,9 @@ import (
 
 // spec:agent-event-queue/fifo-dequeue-of-pending-events/uploader-requests-a-batch
 //
-// Enqueue three events A/B/C in order, request a batch of two: the queue MUST return A,B in insertion order
-// and leave C in the queue (the scenario's example uses 5/3 but the contract is the same — ordering plus
-// batch-size truncation plus the unused tail staying available for the next dequeue).
+// Enqueue three events A/B/C in order, request a batch of two: the queue MUST return A,B in insertion
+// order and MUST NOT return more than the requested batch size. The scenario's example uses 5/3 but the
+// contract is the same — ordering plus batch-size truncation, both pinned by the assertions below.
 func TestEnqueueDequeue(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -340,9 +340,14 @@ func (s *stubMetrics) hadLossy() bool {
 
 // spec:agent-event-queue/durable-enqueue/agent-crashes-after-enqueue
 //
-// Enqueue an event, Close the queue (proxy for abrupt agent exit; SQLite has already fsync'd the WAL on
-// commit so Close is at-least-as-strong as a crash), Open the same dbPath, and the event must still be
-// dequeueable. Pins the durability contract that the queue persists rows before returning success.
+// Pins the durability invariant the spec describes: an event whose Enqueue returned success MUST survive
+// the agent restarting against the same dbPath. The test simulates restart via Close+reopen, which is a
+// proxy for a true crash rather than an exact replica — a real crash would never call Close. The proxy
+// is justified for an in-process test because the queue uses SQLite WAL (see queue.go Open DSN) and the
+// underlying driver's default synchronous mode fsyncs the WAL at COMMIT; under those settings the event
+// is on disk before Enqueue returns, and a process death after Enqueue would leave the same persisted
+// state Close+reopen exposes. A bit-exact crash test would need a subprocess + os.Exit; that is filed as
+// follow-up #243's neighbour of cap-eviction-races and disk-full.
 func TestQueue_AgentCrashSurvivesEnqueue(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "durable.db")
 
@@ -351,6 +356,7 @@ func TestQueue_AgentCrashSurvivesEnqueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	t.Cleanup(func() { _ = q.Close() })
 	const payload = `{"event_id":"durable-1","event_type":"exec"}`
 	if err := q.Enqueue(ctx, []byte(payload)); err != nil {
 		t.Fatalf("enqueue: %v", err)

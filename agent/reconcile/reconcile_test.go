@@ -78,10 +78,11 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 // spec:agent-event-queue/synthetic-reconciliation-events-use-the-same-queue/reconciliation-exit-event-is-queued-and-uploaded
 //
 // The agent-event-queue scenario requires that a synthesized exit event flow through the standard enqueue
-// path and arrive on the wire with `exit_reason = host_reconciled` intact. The reconciler runs against a
-// real recorderQueue (the same Enqueuer the production agent wires up) and the assertion on
-// env.Payload["exit_reason"] below pins the wire-shape clause. The "uploader returns it from a normal
-// dequeue" clause is structural: there is one queue path, and the reconciler uses it.
+// path and arrive on the wire with `exit_reason = host_reconciled` intact. The reconciler is wired here
+// against recorderQueue, a test recorder that implements the same Enqueuer interface the production
+// `*queue.Queue` does (see agent/cmd/fleet-edr-agent/main.go); the assertion on env.Payload["exit_reason"]
+// below pins the wire-shape clause that survives serialization. The "uploader returns it from a normal
+// dequeue" clause is structural: there is only one enqueue path, and the reconciler uses it.
 func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 	pt := proctable.New()
 	pt.Update(123, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
