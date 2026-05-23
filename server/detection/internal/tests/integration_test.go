@@ -1106,6 +1106,11 @@ func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/alert-to-event-linkage/an-analyst-opens-an-alert-and-sees-its-triggering-events
+// spec:server-rest-api/alert-detail-with-linked-event-ids/an-operator-opens-an-alert
+//
+// Two scenarios share this test: the rules-engine spec says alerts carry their triggering event IDs (the engine-side
+// contract); the REST API spec says GetAlert returns those event IDs to an operator opening the detail page (the read
+// surface). The same code path satisfies both: the service-layer GetAlert query reads the alert_events join table.
 func TestOperator_GetAlert_ReturnsCorrelatedEventIDs(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1129,6 +1134,13 @@ func TestOperator_GetAlert_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAlertNotFound)
 }
 
+// spec:server-rest-api/filterable-alerts-list/an-operator-filters-alerts-by-host
+// spec:server-rest-api/filterable-alerts-list/an-operator-combines-status-and-severity-filters
+//
+// Two scenarios share this test. The host-only filter is the simpler case; the combined-filters case below uses
+// AlertFilter{Status, Severity} on a corpus that mixes status + severity values so the matching row is
+// uniquely identified by the conjunction, not by either filter alone -- if a regression makes one of the filters
+// a no-op the test fails because the wrong number of rows comes back.
 func TestOperator_ListAlerts_FiltersByHostAndStatus(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1151,6 +1163,18 @@ func TestOperator_ListAlerts_FiltersByHostAndStatus(t *testing.T) {
 	openOnly, err := d.Service().ListAlerts(ctx, api.AlertFilter{Status: api.AlertStatusOpen})
 	require.NoError(t, err)
 	assert.Len(t, openOnly, 2, "fresh alerts default to open")
+
+	// Combined status + severity filter. The two seeded alerts both default to (status=open, severity=high) per
+	// insertAlertDirect's hardcoded severity, so filtering on (open, high) returns both and filtering on (open,
+	// critical) returns zero. The two combined cases together prove the filter is a conjunction, not a disjunction:
+	// if a regression made severity a no-op, both subqueries would return 2 and the second assertion would fail.
+	openHigh, err := d.Service().ListAlerts(ctx, api.AlertFilter{Status: api.AlertStatusOpen, Severity: api.SeverityHigh})
+	require.NoError(t, err)
+	assert.Len(t, openHigh, 2, "both seeded alerts match (open, high)")
+
+	openCritical, err := d.Service().ListAlerts(ctx, api.AlertFilter{Status: api.AlertStatusOpen, Severity: api.SeverityCritical})
+	require.NoError(t, err)
+	assert.Empty(t, openCritical, "no seeded alerts match (open, critical); proves severity is honored, not no-op")
 }
 
 // ---- Heartbeat / metrics gauges --------------------------------------------
@@ -1306,6 +1330,14 @@ func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 
 // ---- Graph builder exec/exit paths -----------------------------------------
 
+// spec:server-rest-api/per-host-process-forest/a-time-range-is-supplied
+//
+// The TimeRange parameter is the load-bearing piece here: this test passes `api.TimeRange{FromNs: now - 1h, ToNs:
+// now + 1h}` to BuildTree, and the assertion that the python -> sh -> /tmp/payload chain appears only succeeds when
+// the time-range filter resolves to "alive in window." A regression that ignored the TimeRange (returning every row
+// regardless of lifetime) would pass; a regression that misread the bounds would fail with an empty forest. The
+// HTTP-layer happy path is covered by TestOperatorHTTP_ProcessTree_HappyPath; this service-layer test pins the
+// time-range read predicate itself.
 func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1676,6 +1708,13 @@ func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 }
 
 // spec:server-process-graph-builder/same-pid-re-exec-chain/a-shell-exec-optimization-chain-runs-on-one-pid
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/an-operator-inspects-a-process-detail
+//
+// Two scenarios share this test. The graph-builder spec scenario covers the WRITE path (the builder closes the prior
+// generation and links the new one via previous_exec_id). The REST API spec scenario covers the READ path (the
+// ProcessDetail handler returns a non-empty ReExecChain). The test's assertion on `len(p.ReExecChain) >= 1`
+// demonstrates both clauses against one fixture; if a regression broke either side -- writer linking OR reader join
+// -- the same assertion fires.
 func TestGraph_SamePIDReExec(t *testing.T) {
 	t.Parallel()
 	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
@@ -1985,6 +2024,13 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 
 // ---- Operator HTTP handler -------------------------------------------------
 
+// spec:server-rest-api/list-enrolled-hosts/an-operator-opens-the-hosts-dashboard
+// spec:server-rest-api/json-response-format-and-error-shape/a-successful-response-is-json
+//
+// Two scenarios share this test: list-enrolled-hosts is the obvious one (the test asserts the hosts dashboard payload
+// shape); the JSON-response-shape scenario is satisfied incidentally because this happy-path 200 returns a JSON body
+// matching the documented schema -- if a regression switched the response Content-Type or removed the JSON wrapper,
+// this test's json.Decode call would fail.
 func TestOperatorHTTP_ListHosts(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2091,6 +2137,7 @@ func TestOperatorHTTP_ListAlerts_SourceFilter(t *testing.T) {
 	})
 }
 
+// spec:server-rest-api/alert-detail-with-linked-event-ids/the-alert-id-is-unknown
 func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2107,6 +2154,12 @@ func TestOperatorHTTP_GetAlert_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// spec:server-rest-api/json-response-format-and-error-shape/an-endpoint-returns-an-error
+//
+// The 400/JSON error-shape contract. Test posts a malformed alert-id and asserts the handler returns the documented
+// typed JSON error response (not a plain-text 500, not an empty body, not a stack trace). Pinning this here means a
+// regression that switched any single 4xx path from JSON to text/html would fail somewhere in the test corpus rather
+// than ship silently.
 func TestOperatorHTTP_GetAlert_BadID(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2123,6 +2176,7 @@ func TestOperatorHTTP_GetAlert_BadID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+// spec:server-rest-api/update-alert-lifecycle-status/an-operator-resolves-an-alert
 func TestOperatorHTTP_UpdateAlertStatus_HappyPath(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{
@@ -2165,6 +2219,7 @@ func TestOperatorHTTP_UpdateAlertStatus_BadBody(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+// spec:server-rest-api/update-alert-lifecycle-status/an-invalid-status-value-is-supplied
 func TestOperatorHTTP_UpdateAlertStatus_InvalidStatus(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2217,6 +2272,7 @@ func TestOperatorHTTP_ProcessDetail_BadPID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/the-pid-is-not-known-on-the-host
 func TestOperatorHTTP_ProcessDetail_NotFound(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2233,6 +2289,7 @@ func TestOperatorHTTP_ProcessDetail_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// spec:server-rest-api/per-host-process-forest/an-operator-views-a-host-s-process-tree
 func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})

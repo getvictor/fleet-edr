@@ -58,6 +58,7 @@ var sealedBody = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, "ok")
 })
 
+// spec:server-rest-api/session-authentication-and-csrf-protection/a-browser-without-a-session-cookie-calls-a-ui-endpoint
 func TestSession_MissingCookieReturns401(t *testing.T) {
 	t.Parallel()
 	svc, _ := newService(t)
@@ -173,6 +174,12 @@ func TestCSRF_MisconfiguredReturns500(t *testing.T) {
 }
 
 // CSRF stack: happy path + the two failure modes with a real Session pinned.
+// spec:server-rest-api/session-authentication-and-csrf-protection/a-state-changing-call-omits-the-csrf-token
+//
+// The "unsafe method missing header => 403" subtest below is the specific clause the spec scenario describes: a
+// state-changing request (POST/PUT/DELETE) that omits the CSRF token must be rejected. The "wrong header" and
+// "correct header" subtests pin the surrounding contract so a regression in either branch can't silently weaken
+// the unsafe-no-header rejection.
 func TestCSRF_Stack(t *testing.T) {
 	t.Parallel()
 	svc, ss := newService(t)
