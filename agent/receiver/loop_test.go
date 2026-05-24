@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -53,10 +54,15 @@ type stubScript struct {
 }
 
 func newStubConnector(s stubScript) *stubConnector {
+	// Unbuffered channels make emitEvent / emitError synchronization points: a sequential onConnect that emits an event
+	// then a terminal error is guaranteed to deliver them in that order to pipeEvents, because the second send cannot
+	// start until the first send is paired with a receive. A buffered design lets both sends complete before pipeEvents
+	// reaches its select, and Go's select then picks randomly between the two ready channels - which makes any test
+	// that asserts "event delivered, then reconnect" intermittently fail on errors-picked-first.
 	return &stubConnector{
 		script: s,
-		events: make(chan Event, 32),
-		errs:   make(chan int, 4),
+		events: make(chan Event),
+		errs:   make(chan int),
 	}
 }
 
@@ -150,6 +156,10 @@ func (r *recordingSleep) Sleep(ctx context.Context, d time.Duration) bool {
 	if ctx.Err() != nil {
 		return false
 	}
+	// Yield so an always-failing-connector test (e.g. TestLoop_TwoParallelLoops_NetworkExtensionDown) doesn't busy-spin
+	// the scheduler between iterations. The actual loop semantics under test - that retries occur and that backoff durations
+	// are recorded - are unaffected by the yield, but it keeps the test from monopolizing a P thread under -race.
+	runtime.Gosched()
 	return true
 }
 
@@ -414,8 +424,10 @@ func TestLoop_DroppedEventsDuringDisconnectAreTolerated(t *testing.T) {
 	factory, _ := scriptedFactory([]stubScript{
 		{onConnect: func(c *stubConnector) {
 			c.emitEvent([]byte("A1"))
-			// Pretend events were generated here on the peer but lost in the reconnect window — we model
-			// the loss by NOT sending them on this connector and NOT sending them on the next either.
+			// Pretend events were generated here on the peer but lost in the reconnect window - we model the loss by NOT
+			// sending them on this connector and NOT sending them on the next either. With unbuffered channels, the
+			// emitEvent above already blocked until pipeEvents read A1, so the terminal error below is delivered AFTER
+			// the event without needing an explicit handshake.
 			c.emitError(ErrorConnectionInterrupted)
 		}},
 		{onConnect: func(c *stubConnector) { c.emitEvent([]byte("B1")) }},

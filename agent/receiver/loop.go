@@ -97,16 +97,28 @@ type Loop struct {
 // NewLoop constructs a Loop. The factory MUST return a fresh Connector per call. A nil logger falls back to slog.Default(). Zero-valued
 // config fields take the production defaults: 1s initial backoff, 30s cap, 10s heartbeat interval, 5s heartbeat ping timeout.
 func NewLoop(factory ConnectorFactory, cfg LoopConfig, hooks LoopHooks, logger *slog.Logger) *Loop {
-	if cfg.InitialBackoff == 0 {
+	if factory == nil {
+		// A nil factory would nil-deref on the first runOnce. Surface the misconfiguration at construction time so the
+		// agent fails to start instead of crashing mid-reconnect once XPC actually errors.
+		panic("receiver.NewLoop: ConnectorFactory must not be nil")
+	}
+	if cfg.InitialBackoff <= 0 {
 		cfg.InitialBackoff = defaultInitialBackoff
 	}
-	if cfg.MaxBackoff == 0 {
+	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = defaultMaxBackoff
 	}
-	if cfg.HeartbeatInterval == 0 {
+	if cfg.MaxBackoff < cfg.InitialBackoff {
+		// A MaxBackoff below InitialBackoff would make the doubling step in Run actively shrink the wait (never reaching
+		// the cap) and confuse operators. Clamp to InitialBackoff so the loop still makes forward progress.
+		cfg.MaxBackoff = cfg.InitialBackoff
+	}
+	if cfg.HeartbeatInterval <= 0 {
+		// time.NewTicker panics on a non-positive interval. Defaulting here keeps the agent process alive across a
+		// misconfigured LoopConfig instead of crashing the receiver goroutine.
 		cfg.HeartbeatInterval = defaultHeartbeatInterval
 	}
-	if cfg.HeartbeatTimeout == 0 {
+	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = defaultHeartbeatTimeout
 	}
 	if hooks.Sleep == nil {
@@ -183,6 +195,13 @@ func (l *Loop) pipeEvents(ctx context.Context, conn Connector) bool {
 	go l.runHeartbeat(ctx, conn, heartbeatDone, heartbeatFailed)
 	defer close(heartbeatDone)
 
+	// Bind the channels once so the select reads stable references even if the connector swaps internal state under us.
+	// More importantly, the two-value receive forms below detect a closed channel: if a Connector implementation ever
+	// closes Events / Errors on its way out, we treat that as a reconnect signal instead of either tight-looping on a
+	// zero-value Event (Events closed) or treating a synthetic 0 as a real XPC error code (Errors closed).
+	eventsCh := conn.Events()
+	errorsCh := conn.Errors()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -192,14 +211,25 @@ func (l *Loop) pipeEvents(ctx context.Context, conn Connector) bool {
 			// event arrived. Reconnect to bind a fresh Mach port.
 			l.logger.WarnContext(ctx, "xpc heartbeat failed, reconnecting", "service", l.cfg.ServiceName)
 			return true
-		case evt := <-conn.Events():
+		case evt, ok := <-eventsCh:
+			if !ok {
+				l.logger.WarnContext(ctx, "xpc events channel closed, reconnecting", "service", l.cfg.ServiceName)
+				return true
+			}
 			if l.hooks.OnEvent != nil {
 				l.hooks.OnEvent(ctx, evt)
 			}
-		case errCode := <-conn.Errors():
+		case errCode, ok := <-errorsCh:
+			if !ok {
+				l.logger.WarnContext(ctx, "xpc errors channel closed, reconnecting", "service", l.cfg.ServiceName)
+				return true
+			}
 			// All XPC error codes force a reconnect today; the classification is for log fidelity so SigNoz operators can tell
-			// expected transient codes apart from unexpected ones at a glance.
-			l.logger.WarnContext(ctx, "xpc error", "code", errCode,
+			// expected transient codes apart from unexpected ones at a glance. service is included so concurrent ESF +
+			// network-extension loops produce distinguishable log lines.
+			l.logger.WarnContext(ctx, "xpc error",
+				"service", l.cfg.ServiceName,
+				"code", errCode,
 				"expected", errCode == ErrorConnectionInvalid ||
 					errCode == ErrorConnectionInterrupted ||
 					errCode == ErrorTerminated)
