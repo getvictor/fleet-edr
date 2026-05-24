@@ -167,10 +167,12 @@ func TestHandleList_StatusFilter(t *testing.T) {
 // `?host_id=host-b`, and capturing the hostID passed to the service: must be host-a regardless of the
 // query string. A regression that swapped the priority would surface here.
 func TestHandleList_TokenHostIDIsAuthoritative(t *testing.T) {
-	var capturedHostID string
+	// Channel rather than a shared variable so the test/handler goroutines synchronize cleanly under `go test -race`. Buffered=1 so
+	// the handler closure doesn't block if the test happens to read after the channel was sent into.
+	capturedHostID := make(chan string, 1)
 	svc := fakeService{
 		listForHost: func(_ context.Context, hostID string, _ api.Status) ([]api.Command, error) {
-			capturedHostID = hostID
+			capturedHostID <- hostID
 			return []api.Command{}, nil
 		},
 	}
@@ -185,7 +187,7 @@ func TestHandleList_TokenHostIDIsAuthoritative(t *testing.T) {
 	defer resp.Body.Close()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "host-a", capturedHostID,
+	assert.Equal(t, "host-a", <-capturedHostID,
 		"the pinned host id (from the bearer token) must be authoritative; the ?host_id=host-b query MUST be ignored")
 }
 
