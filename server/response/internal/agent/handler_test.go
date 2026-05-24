@@ -156,6 +156,41 @@ func TestHandleList_StatusFilter(t *testing.T) {
 	}
 }
 
+// spec:agent-command-executor/commands-are-scoped-to-the-authenticated-host/token-does-not-match-query-host
+// spec:agent-enrollment/per-host-token-scoping/token-cannot-read-another-host-s-commands
+//
+// Two scenarios share this test (one in the agent-command-executor spec, one in agent-enrollment), both
+// pinning the same server-side guarantee: the host_id pinned by the HostToken middleware is
+// authoritative, and a tampered `?host_id=` query param cannot widen scope to another host. The handler
+// reads HostIDFromContext for the listForHost call and IGNORES the URL query (see the explicit comment
+// in handler.go). Test pins it by setting the context host to host-a, issuing a request with
+// `?host_id=host-b`, and capturing the hostID passed to the service: must be host-a regardless of the
+// query string. A regression that swapped the priority would surface here.
+func TestHandleList_TokenHostIDIsAuthoritative(t *testing.T) {
+	// Channel rather than a shared variable so the test/handler goroutines synchronize cleanly under `go test -race`. Buffered=1 so
+	// the handler closure doesn't block if the test happens to read after the channel was sent into.
+	capturedHostID := make(chan string, 1)
+	svc := fakeService{
+		listForHost: func(_ context.Context, hostID string, _ api.Status) ([]api.Command, error) {
+			capturedHostID <- hostID
+			return []api.Command{}, nil
+		},
+	}
+	// Middleware pins "host-a" on the request context, simulating HostToken auth for host A.
+	srv := newAgentServer(t, svc, "host-a")
+
+	// Request carries a tampered ?host_id=host-b query string that a malicious or buggy agent might send.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/commands?host_id=host-b", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "host-a", <-capturedHostID,
+		"the pinned host id (from the bearer token) must be authoritative; the ?host_id=host-b query MUST be ignored")
+}
+
 func TestHandleList_ServiceError(t *testing.T) {
 	svc := fakeService{
 		listForHost: func(context.Context, string, api.Status) ([]api.Command, error) {
