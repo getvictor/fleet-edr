@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/fleetdm/edr/agent/queue"
 )
@@ -334,4 +335,52 @@ func openTestQueue(t *testing.T) *queue.Queue {
 	}
 	t.Cleanup(func() { _ = q.Close() })
 	return q
+}
+
+// spec:agent-event-uploader/drain-on-shutdown/graceful-shutdown
+//
+// Restored from PR #254 prep where the test was drafted, found a real impl bug (Run passed the
+// already-cancelled ctx into drainOnce, making DequeueBatch fail immediately so no drain ran), and
+// removed because the assertion would have caught the bug rather than the marker. The fix in
+// uploader.go's Run now builds a fresh context.WithTimeout for the shutdown branch, so a graceful
+// shutdown actually drains queued events before Run returns. Pinned by depth==0 after Run exits;
+// the prior bug would have left depth==1.
+func TestUpload_GracefulShutdownDrainsRemaining(t *testing.T) {
+	q := openTestQueue(t)
+	parentCtx := t.Context()
+	if err := q.Enqueue(parentCtx, []byte(`{"event_id":"drain-on-shutdown"}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	// 10s Interval so the periodic ticker doesn't fire during this sub-second test. The drain MUST
+	// happen via the ctx.Done() branch, not via a periodic tick.
+	cfg.Interval = 10 * time.Second
+
+	u := New(q, cfg, nil, nil)
+
+	runCtx, cancel := context.WithCancel(parentCtx)
+	done := make(chan error, 1)
+	go func() { done <- u.Run(runCtx) }()
+
+	// Yield long enough that Run is parked on the ticker / ctx.Done select before cancellation.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of ctx cancellation")
+	}
+
+	depth, _ := q.Depth(parentCtx)
+	if depth != 0 {
+		t.Fatalf("graceful-shutdown drain must mark queued events uploaded before Run returns; depth=%d", depth)
+	}
 }
