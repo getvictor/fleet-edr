@@ -81,11 +81,13 @@ final class CorpusReplayTests: XCTestCase {
     //
     // The corpus replay is the structural guard that "capture is non-fatal on individual event
     // errors": every captured event in the corpus must round-trip byte-stable across encoder
-    // versions. A regression that introduces a serialization error in ONE event type (say, exec
-    // payload with new optional field) is caught here per-file and fails THAT file's assertion
-    // without taking down the rest of the loop; the seed-driven loop's per-file XCTFail shape pins
-    // the spec's "the capture pipeline drops the bad event, logs, and continues" contract because
-    // failures here are partial-batch rather than test-suite-fatal.
+    // versions. A regression that introduces a serialization error in any event type (say, exec
+    // payload with new optional field) is caught here as a failure of THIS test, alerting the
+    // operator to a wire-shape break. Note: the per-file loop uses `try`, so the FIRST round-trip
+    // failure aborts the loop rather than continuing per-file; the spec's runtime "drop one bad
+    // event, log, and continue" contract for the capture pipeline is implemented in the extension's
+    // event-emission code, not in this test. This test pins the upstream invariant (no event in the
+    // corpus fails to round-trip) that the runtime tolerance relies on.
     func testEveryCorpusFileRoundTripsByteStable() throws {
         let regenerate = ProcessInfo.processInfo.environment["EDR_CORPUS_REGENERATE"] == "1"
         let corpusRoot = Self.corpusDirectory()

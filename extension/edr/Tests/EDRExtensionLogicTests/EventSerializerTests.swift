@@ -121,8 +121,10 @@ final class EventSerializerTests: XCTestCase {
     // spec:endpoint-event-collection/process-lifecycle-event-capture/a-daemon-forks-a-worker
     //
     // Daemon-forks-a-worker maps to the ForkPayload wire shape: child_pid + parent_pid, snake_case,
-    // round-trippable. The exact-string assertion below pins the byte-level wire bytes (no extra
-    // keys, no omitted ones) so a regression on field naming or insertion order would surface here.
+    // round-trippable. The encoder is configured with .sortedKeys (see the encoder block at the top
+    // of this file) so the exact-string assertion below pins the sorted-key JSON output: a regression
+    // on field naming, omitting a key, or adding an unexpected one would surface here as the
+    // assertion comparing against a literal byte string.
     func testForkPayloadWireKeys() throws {
         let payload = ForkPayload(childPid: 5, parentPid: 4)
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
@@ -142,13 +144,11 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertEqual(decoded.exitCode, 137)
     }
 
-    // spec:endpoint-event-collection/outbound-socket-flow-capture/a-process-opens-an-outbound-tcp-connection
-    //
-    // OpenPayload pins the wire shape for the open / connect class of events; the exact-string
-    // assertion below proves the snake_case naming + key set match what the server's ingest decoder
-    // expects. The spec's "outbound TCP connection" semantics map directly to this payload because the
-    // extension's NetworkExtension surface raises connect events through the same wire envelope
-    // OpenPayload defines.
+    // The outbound-TCP-connection marker was considered for this test and pulled: OpenPayload is the
+    // ESF FILE-OPEN event shape (pid + file path + flags, see EventSerializer.swift), NOT an outbound
+    // network connection. The outbound-tcp-connection scenario is served by NetworkConnectPayload in
+    // extension/edr/networkextension/NetworkEventSerializer.swift; that surface has no unit-test
+    // target today, tracked in #259.
     func testOpenPayloadWireKeys() throws {
         let payload = OpenPayload(pid: 12, path: "/etc/hosts", flags: 0)
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
@@ -208,8 +208,10 @@ final class EventSerializerTests: XCTestCase {
     // spec:endpoint-event-collection/canonical-event-envelope/an-event-envelope-is-well-formed
     //
     // Pins the canonical envelope shape every event MUST carry: event_id (UUID), host_id, timestamp_ns
-    // (nanoseconds-since-epoch), event_type (string discriminator), and a nested payload. The exact
-    // assertions below verify all five wire keys + the payload nest are byte-stable.
+    // (nanoseconds-since-epoch), event_type (string discriminator), and a nested payload. The substring
+    // (json.contains) assertions below verify all five wire keys are present and the payload is nested
+    // as a sub-object; a full byte-level comparison would also be valid given .sortedKeys but the
+    // substring form is more diagnostic when one key changes name.
     func testEventEnvelopeWireKeysAndNesting() throws {
         let payload = ForkPayload(childPid: 11, parentPid: 10)
         let envelope = EventEnvelope(
