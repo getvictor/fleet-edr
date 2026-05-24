@@ -55,8 +55,9 @@ func TestInit_Disabled(t *testing.T) {
 // With a non-empty Endpoint, the export pipeline is wired up (the test points it at a dead TCP port to
 // avoid CI flakiness on real collectors). The scenario's spec-relevant clause this test pins is "the
 // SDK is configured to export via OTLP using the standard env vars" — observable through Init
-// returning a non-nil shutdown hook and the shutdown call respecting the deadline. Actual successful
-// export to a live collector is exercised in dev via the SigNoz pipeline (see memory: observability_signoz_dev_state).
+// returning a non-nil shutdown hook and the shutdown call respecting the deadline. End-to-end export
+// to a live collector is validated against the dev SigNoz pipeline; that path is out of scope for an
+// in-process unit test because it requires an external service.
 func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 	restoreGlobals(t)
 	// Pass a URL pointing at a port we are confident nothing is listening on. The http:// scheme tells the SDK's
@@ -90,9 +91,9 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 // Pins that the global TextMapPropagator is the W3C one (or at least understands W3C). The test
 // extracts a synthetic traceparent and round-trips it via inject; if the propagator weren't a W3C
 // implementation, the injected carrier would either drop the header or rewrite it in a non-W3C format.
-// This is the agent-side prerequisite for "the resulting server span is a child of the inbound trace";
-// the actual parent-child stitching happens at every http.Handler that calls
-// `otel.GetTextMapPropagator().Extract(...)`, which this propagator install makes well-defined.
+// Init wires the propagator at the process level and applies to every binary that consumes this
+// package (server, agent, ingest); the actual parent-child stitching happens at every http.Handler
+// that calls `otel.GetTextMapPropagator().Extract(...)`, which this propagator install makes well-defined.
 func TestInit_PropagatorInstalled(t *testing.T) {
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})

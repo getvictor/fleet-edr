@@ -197,11 +197,11 @@ func TestUpload401_CallsOnAuthFail(t *testing.T) {
 
 // spec:agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-no-token
 //
-// When the agent has not yet enrolled (TokenFn returns ""), the server returns 401 (because no
-// Authorization header carries a valid token) and the events MUST stay in the local queue. The 401
-// also triggers OnAuthFail, but the scenario's load-bearing clause for THIS test is "events are not
-// removed from the local queue" — pinned by the depth==1 assertion below. The server's 401-on-empty-
-// token enforcement is server-side; here we exercise the agent-side half (no token in the request
+// When the agent has not yet enrolled and TokenFn returns "", the server returns 401 (no valid
+// Authorization header) and the events MUST stay in the local queue. The 401 also triggers
+// OnAuthFail, but the scenario's load-bearing clause for THIS test is "events are not removed from
+// the local queue" pinned by the depth==1 assertion below. The server's 401-on-empty-token
+// enforcement is server-side; here we exercise the agent-side half (no usable token in the request
 // header, batch stays queued).
 func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
 	q := openTestQueue(t)
@@ -211,23 +211,26 @@ func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	var sawAuthHeader string
+	// atomic.Value because httptest hands requests on a separate goroutine; the bare assignment
+	// would be a race under `go test -race`.
+	var sawAuthHeader atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawAuthHeader = r.Header.Get("Authorization")
+		sawAuthHeader.Store(r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 
 	cfg := DefaultConfig()
 	cfg.ServerURL = srv.URL
-	// No TokenFn => no Authorization header at all.
+	// TokenFn present but returns "" — the unenrolled-agent shape the spec scenario describes.
+	cfg.TokenFn = func() string { return "" }
 	cfg.MaxRetries = 3
 
 	u := New(q, cfg, nil, nil)
 	_ = u.drainOnce(ctx)
 
-	if sawAuthHeader != "" {
-		t.Fatalf("expected no Authorization header when TokenFn is nil, got %q", sawAuthHeader)
+	if got, ok := sawAuthHeader.Load().(string); ok && got != "" {
+		t.Fatalf("expected no usable Authorization header when TokenFn returns \"\", got %q", got)
 	}
 	depth, _ := q.Depth(ctx)
 	if depth != 1 {
@@ -253,14 +256,21 @@ func TestUpload_BoundedBatchSize(t *testing.T) {
 		}
 	}
 
-	var receivedCount int
+	// atomic.Int64 because the httptest handler runs on its own goroutine; a bare int would race
+	// against the main-goroutine read after drainOnce. int64 avoids the gosec int->int32 overflow lint.
+	var receivedCount atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			return
+		}
 		var events []json.RawMessage
 		if err := json.Unmarshal(body, &events); err != nil {
 			t.Errorf("unmarshal: %v", err)
+			return
 		}
-		receivedCount = len(events)
+		receivedCount.Store(int64(len(events)))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -272,8 +282,8 @@ func TestUpload_BoundedBatchSize(t *testing.T) {
 	u := New(q, cfg, nil, nil)
 	_ = u.drainOnce(ctx)
 
-	if receivedCount != 3 {
-		t.Fatalf("expected exactly 3 events in the bounded request, got %d", receivedCount)
+	if got := receivedCount.Load(); got != 3 {
+		t.Fatalf("expected exactly 3 events in the bounded request, got %d", got)
 	}
 	depth, _ := q.Depth(ctx)
 	if depth != 7 {
