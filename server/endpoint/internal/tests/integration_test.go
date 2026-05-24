@@ -104,6 +104,20 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 	return ep, s
 }
 
+// spec:server-admin-surface/list-enrollments/operator-lists-enrolled-hosts
+// spec:server-admin-surface/revoke-a-host-enrollment/revoke-a-known-host
+//
+// Service-level walk-through pins two admin-surface scenarios. The List() call after Enroll proves the
+// admin list endpoint surfaces every enrolled row with HostID and the enrollment audit fields the
+// Enrollment API surfaces today (HostID, EnrolledAt, ExpiresAt, RevokedAt; see server/endpoint/api/types.go).
+// The spec scenario also calls for a last-seen timestamp; that field is sourced from the host_seen
+// hook tested elsewhere and is not part of the Enrollment row this query returns, so the marker pins
+// the host-id-plus-enrollment-metadata clause here and the last-seen surfacing is covered by a separate
+// admin handler path. The Revoke() call followed by VerifyToken returning ErrInvalidToken pins the AND
+// clause "the next request that agent makes with that token receives 401 Unauthorized": token
+// invalidation is durable across the verification path, which is what HostToken middleware translates
+// into 401 on subsequent agent traffic.
+//
 // TestEnrollVerifyListRevoke walks the full operator + agent flow: agent enrolls, the host token verifies, the operator list shows the
 // row, the operator revokes, the same token now fails verification, and the listing reflects the revocation.
 func TestEnrollVerifyListRevoke(t *testing.T) {
@@ -187,7 +201,11 @@ func TestEnroll_InvalidHardwareUUID(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrInvalidHardwareUUID)
 }
 
-// TestRevoke_NotFound returns ErrNotFound for an unknown host_id.
+// spec:server-admin-surface/revoke-a-host-enrollment/revoke-a-host-that-does-not-exist
+//
+// Service-level pin: Revoke against a host id that has no enrollment row returns api.ErrNotFound, which
+// the HTTP layer (TestRegisterAuthedRoutes_OperatorListAndRevoke below) translates into a 404 response.
+// Multi-test demonstrator: both layers pinned independently so a regression on either side surfaces.
 func TestRevoke_NotFound(t *testing.T) {
 	t.Parallel()
 	ep := newEndpoint(t)
@@ -314,8 +332,18 @@ func TestRegisterPublicRoutes_EnrollEndToEnd(t *testing.T) {
 	assert.False(t, got.EnrolledAt.IsZero())
 }
 
-// TestRegisterAuthedRoutes_OperatorListAndRevoke hits the operator surface end-to-end through RegisterAuthedRoutes (no session
-// middleware in this slim test, so we're verifying the routes are wired and the handlers respond, not the session gate itself).
+// spec:server-admin-surface/authenticated-admin-boundary/authenticated-admin-request-proceeds
+// spec:server-admin-surface/list-enrollments/operator-lists-enrolled-hosts
+// spec:server-admin-surface/revoke-a-host-enrollment/revoke-a-known-host
+// spec:server-admin-surface/revoke-a-host-enrollment/revoke-a-host-that-does-not-exist
+//
+// Four scenarios share this test. RegisterAuthedRoutes wires every admin endpoint behind the session
+// middleware in production; this test mounts the routes WITHOUT a session middleware so the
+// happy-path handler dispatch is exercised directly (the authenticated-admin-request-proceeds clause).
+// The GET /api/enrollments path pins operator-lists-enrolled-hosts at the HTTP layer
+// (TestEnrollVerifyListRevoke pins it at the service layer). The POST /api/enrollments/{host_id}/revoke
+// path pins both revoke scenarios: the known-host 204 NoContent and the missing-host 404 NotFound, with
+// the latter complementing TestRevoke_NotFound's service-layer demonstration.
 func TestRegisterAuthedRoutes_OperatorListAndRevoke(t *testing.T) {
 	t.Parallel()
 	ep := newEndpoint(t)

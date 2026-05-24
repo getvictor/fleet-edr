@@ -64,6 +64,12 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
 }
 
+// spec:server-admin-surface/audit-trail-for-state-changing-admin-actions/revoke-produces-an-audit-record
+//
+// A successful revoke MUST emit a structured audit record carrying the operator-supplied actor + reason,
+// the action identifier, and the affected host id. Pinned by the captureRecorder assertions below: the
+// recorder fires exactly once, the action is AuditEnrollmentRevoke, the target is the host, and the
+// payload preserves actor + reason verbatim from the operator's request body.
 func TestHandler_Revoke_EmitsAudit(t *testing.T) {
 	svc := fakeRevokeService{revoke: func(_ context.Context, _, _, _ string) error { return nil }}
 	rec := &captureRecorder{}
@@ -185,6 +191,48 @@ func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
 			body, _ := json.Marshal(tc.body)
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 				srv.URL+"/api/enrollments/H-1/rotate", bytes.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
+// spec:server-admin-surface/revoke-a-host-enrollment/revoke-without-an-actor-or-reason
+//
+// The revoke endpoint MUST refuse a request body missing `actor` or `reason` (or carrying whitespace-only
+// values) with a 400 and MUST NOT call the service-level Revoke. Pinned by table-driven cases covering
+// every shape the validator must reject; the fakeRevokeService's t.Fatal in the Revoke callback proves
+// the handler stops at validation rather than persisting the empty audit attribution.
+func TestHandler_Revoke_RequiresActorAndReason(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"missing actor", map[string]any{"reason": "x"}},
+		{"missing reason", map[string]any{"actor": "x"}},
+		{"both empty", map[string]any{}},
+		{"whitespace actor", map[string]any{"actor": "   ", "reason": "y"}},
+		{"whitespace reason", map[string]any{"actor": "y", "reason": "\t"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := fakeRevokeService{revoke: func(context.Context, string, string, string) error {
+				t.Fatal("Revoke must not be called when actor/reason validation fails")
+				return nil
+			}}
+			h := New(svc, allowAllAuthZ{}, nil)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+
+			body, _ := json.Marshal(tc.body)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+				srv.URL+"/api/enrollments/H-1/revoke", bytes.NewReader(body))
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := srv.Client().Do(req)
