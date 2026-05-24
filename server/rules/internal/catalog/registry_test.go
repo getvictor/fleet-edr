@@ -37,6 +37,14 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	}
 }
 
+// spec:server-admin-surface/per-rule-documentation-endpoint/rule-with-config-knobs
+//
+// For every shipped rule that declares operator-tunable config knobs, the doc.Config entries MUST each
+// carry env_var, type, and description (the per-knob loop below asserts these three). The spec scenario
+// also calls for a `default` field on each knob; the current Config struct does not surface a default,
+// so the marker pins three of four clauses with that gap acknowledged. The Config-shape extension is
+// tracked separately when the documentation contract is refreshed.
+//
 // TestAll_DocStructIsPopulated walks every shipped rule's Doc() and locks in the operator-facing invariants. Drives coverage of each
 // rule's Doc() body from the rules package itself so SonarCloud's Go coverage profile attributes the lines correctly (cross-package
 // coverage isn't aggregated under the project's current `-coverprofile` setup). Same checks as the gate in tools/gen-rule-docs,

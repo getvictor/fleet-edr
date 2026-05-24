@@ -1,10 +1,12 @@
 package middleware_test
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,6 +61,13 @@ var sealedBody = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 })
 
 // spec:server-rest-api/session-authentication-and-csrf-protection/a-browser-without-a-session-cookie-calls-a-ui-endpoint
+// spec:server-admin-surface/authenticated-admin-boundary/unauthenticated-request-is-rejected
+//
+// Two scenarios share this test. The Session middleware is what gates every admin-surface endpoint
+// (server-admin-surface/spec.md:19-23 enumerates `/api/enrollments`, `/api/policy`, `/api/attack-coverage`,
+// `/api/rules` as the routes behind it), so the 401-with-JSON-shape contract the admin scenario asserts
+// is identical to the session-middleware contract. The added body decode below pins the JSON shape
+// clause `{"error": "..."}` that the spec requires.
 func TestSession_MissingCookieReturns401(t *testing.T) {
 	t.Parallel()
 	svc, _ := newService(t)
@@ -76,6 +85,17 @@ func TestSession_MissingCookieReturns401(t *testing.T) {
 	// login page", not "retry with a Bearer token", so clients that surface WWW-Authenticate to the user (browsers' HTTP-Basic dialog,
 	// curl --anyauth) shouldn't see one.
 	assert.Empty(t, resp.Header.Get("WWW-Authenticate"))
+
+	// JSON-error-shape clause from server-admin-surface/unauthenticated-request-is-rejected: the body MUST be the documented
+	// {"error": "..."} envelope rather than an empty body or plain text. The admin endpoints inherit this from the session middleware
+	// emitting via WriteCookieAuthFailure -> NoStoreJSON in server/httpserver/authfail.go.
+	assert.Equal(t, "application/json", strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0],
+		"401 body must be advertised as application/json")
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.NotEmpty(t, body.Error, "401 body must carry an error code per the spec's error-shape contract")
 }
 
 func TestSession_UnknownCookieReturns401(t *testing.T) {
