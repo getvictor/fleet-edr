@@ -23,6 +23,13 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 	return users.New(db), rbac.New(db), db
 }
 
+// Markers for `first-startup-seed` and `recovery-after-a-lost-password` were considered for this test
+// but pulled: those scenarios' load-bearing THEN clauses are the password banner on stderr and the
+// "fresh 24-byte password" generation, neither of which Phase 4b's seeder produces (the redemption
+// URL banner lives in cmd/main, the seeder leaves password NULL). Pinning the markers here would
+// overstate coverage. The drift is tracked in #257; the marker will return when the spec is rewritten
+// around the redemption-URL flow.
+//
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
 // The Phase 4b flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
 func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
@@ -49,6 +56,13 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	_ = db
 }
 
+// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/restart-with-an-existing-operator
+//
+// Pins the no-duplicate-account-on-rerun clause: a second seed against a populated DB returns the same
+// row instead of inserting another, AND the rbac binding count stays at 1 (no banner check needed
+// since Phase 4b moved the banner emission to cmd/main, but the "no banner is emitted" clause is
+// structural here: the seed function never writes to stderr on a no-op path).
+//
 // Idempotent: a second seed against the same DB returns the existing row instead of attempting another insert AND does not duplicate
 // the role binding (rbac unique key swallows the conflict). Pinned because container restarts re-run the seed step.
 func TestAdmin_IdempotentOnRerun(t *testing.T) {
