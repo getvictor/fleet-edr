@@ -28,6 +28,11 @@ const (
 	// defaultClientTimeout is the per-request HTTP timeout when the caller
 	// does not pass an *http.Client.
 	defaultClientTimeout = 30 * time.Second
+
+	// shutdownDrainTimeout bounds the final drain attempt Run runs when its caller cancels the context. The parent ctx is already dead
+	// at that point, so DequeueBatch + the HTTP POST need a fresh context to make progress; this constant prevents a hung server from
+	// blocking Run's return indefinitely. 10s is enough for one upload round-trip on a degraded network.
+	shutdownDrainTimeout = 10 * time.Second
 )
 
 // Config holds uploader settings.
@@ -95,7 +100,15 @@ func (u *Uploader) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = u.drainOnce(ctx)
+			// Shutdown drain: the spec's "execute one more upload attempt before returning" clause requires a usable context.
+			// Reusing the cancelled `ctx` here would short-circuit DequeueBatch (SQLite QueryContext rejects cancelled contexts
+			// immediately). context.WithoutCancel detaches from the parent's cancellation signal while preserving its values
+			// (OTel trace IDs, slog attributes), so the shutdown-drain log lines and spans still correlate with the run that
+			// triggered them. The bounded timeout caps Run's exit latency: long enough for one HTTP upload round-trip on a
+			// degraded network, short enough that a hung server cannot block agent shutdown indefinitely.
+			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainTimeout)
+			_ = u.drainOnce(drainCtx)
+			cancel()
 			return ctx.Err()
 		case <-ticker.C:
 			_ = u.drainOnce(ctx)
