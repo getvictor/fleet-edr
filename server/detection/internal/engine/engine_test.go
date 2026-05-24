@@ -5,6 +5,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -59,3 +64,59 @@ func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
 type stubProvider struct{ rules []rulesapi.Rule }
 
 func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
+
+// spec:observability-instrumentation/trace-propagation-through-the-request-pipeline/detection-spans-carry-rule-context
+//
+// Per-rule spans MUST carry at least rule_id and an alert count attribute so downstream dashboards can group detection latency
+// by rule. The test registers a stub rule, installs an in-memory SpanRecorder as the global tracer provider, calls
+// Engine.Evaluate, then walks the recorder's captured spans for one with rule_id == stub's id and asserts the alert_count attr is
+// also present. stubRule returns zero findings so persistFinding is never reached (avoids needing a live mysql.Store); the test
+// pins attribute presence and value, not non-zero counts -- the alert-count contract is "the attr exists and is countable", and
+// 0 is a valid count.
+func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(prev)
+	})
+	// The Evaluate path uses the package-level tracer var captured at init from otel.Tracer("..."); reset it to point at the new
+	// provider so the spans we record are the ones the engine actually opens. Restore the original on cleanup.
+	prevTracer := tracer
+	tracer = tp.Tracer("server/detection/engine")
+	t.Cleanup(func() { tracer = prevTracer })
+
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-rule-x"}}})
+
+	require.NoError(t, e.Evaluate(t.Context(), nil))
+
+	ended := rec.Ended()
+	require.NotEmpty(t, ended, "evaluateRule MUST end at least one span per Evaluate call")
+	var found bool
+	for _, sp := range ended {
+		var ruleID string
+		var alertCount int64
+		var sawAlertCountAttr bool
+		for _, a := range sp.Attributes() {
+			switch a.Key {
+			case attribute.Key("rule_id"):
+				ruleID = a.Value.AsString()
+			case attribute.Key("alert_count"):
+				alertCount = a.Value.AsInt64()
+				sawAlertCountAttr = true
+			}
+		}
+		if ruleID != "stub-rule-x" {
+			continue
+		}
+		found = true
+		assert.Equal(t, "detection.rule.evaluate", sp.Name(),
+			"per-rule span MUST be named so dashboards can filter by operation")
+		assert.True(t, sawAlertCountAttr, "alert_count attribute MUST be present so dashboards can sum across rules")
+		assert.Equal(t, int64(0), alertCount, "stub rule returned no findings; alert_count MUST reflect that")
+	}
+	assert.True(t, found, "no recorded span carried rule_id=stub-rule-x; the rule_id attr is the spec's primary key")
+}

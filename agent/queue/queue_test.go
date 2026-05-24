@@ -473,3 +473,103 @@ func TestQueue_DuplicateEventIDIsAccepted(t *testing.T) {
 		t.Fatalf("duplicate event_id must still yield distinct row ids: both=%d", batch[0].ID)
 	}
 }
+
+// spec:agent-event-queue/acknowledgement-marks-events-uploaded/cap-eviction-races-an-in-flight-upload
+//
+// The uploader's "dequeue → POST → MarkUploaded" sequence is non-atomic with cap enforcement. When the queue evicts
+// pending rows under the byte cap between Dequeue and MarkUploaded, the IDs the uploader is about to ack no longer
+// exist. The spec scenario pins two properties: (1) MarkUploaded MUST be a silent no-op for evicted IDs (so the
+// uploader doesn't crash on an ack that lost its race), and (2) the cap-eviction MUST surface through the lossy-drop
+// metric (so operators see the in-flight loss).
+//
+// MarkUploaded is `UPDATE events SET uploaded = 1 WHERE id = ?` — the missing-row case affects 0 rows and returns
+// nil naturally, no special-case handling needed. The eviction path is exercised by enqueueing enough rows to push
+// the queue past its byte cap; since none of the rows are uploaded=1 yet, the cap drops oldest pending (lossy).
+func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {
+	q := openCappedQueue(t, 32*1024)
+	ctx := t.Context()
+	payload := make([]byte, 1024)
+	for i := range payload {
+		payload[i] = 'x'
+	}
+
+	var stub stubMetrics
+	q.SetMetrics(&stub)
+
+	// Phase 1: enqueue a small initial batch and dequeue it so the uploader has captured these IDs as "in-flight".
+	for range 5 {
+		if err := q.Enqueue(ctx, payload); err != nil {
+			t.Fatalf("initial enqueue: %v", err)
+		}
+	}
+	inflight, err := q.DequeueBatch(ctx, 10)
+	if err != nil {
+		t.Fatalf("dequeue in-flight batch: %v", err)
+	}
+	if len(inflight) != 5 {
+		t.Fatalf("expected 5 in-flight rows, got %d", len(inflight))
+	}
+	inflightIDs := make([]int64, len(inflight))
+	for i, e := range inflight {
+		inflightIDs[i] = e.ID
+	}
+
+	// Phase 2: enqueue enough additional events to force the cap to lossy-drop pending rows. The in-flight rows
+	// (oldest) are the first to go because nothing is marked uploaded yet.
+	for range 200 {
+		if err := q.Enqueue(ctx, payload); err != nil {
+			t.Fatalf("pressure enqueue: %v", err)
+		}
+	}
+	if !stub.hadLossy() {
+		t.Fatalf("expected at least one lossy drop during cap pressure; metrics stub saw none")
+	}
+
+	// Phase 3: ack the originally-dequeued IDs. Some MUST already be gone (the cap evicted them); MarkUploaded MUST
+	// still return nil so the uploader's happy path doesn't surface a failure for events the queue has chosen to drop.
+	if err := q.MarkUploaded(ctx, inflightIDs); err != nil {
+		t.Fatalf("MarkUploaded on evicted-in-flight IDs MUST be a silent no-op, got: %v", err)
+	}
+
+	// Sanity check: at least one of the in-flight rows was evicted (verifies the test actually exercised the race
+	// rather than racing nobody). Counts both rows: the in-flight IDs that survived plus everything queued in Phase 2.
+	depth, err := q.Depth(ctx)
+	if err != nil {
+		t.Fatalf("depth: %v", err)
+	}
+	// 5 in-flight + 200 pressure = 205 rows enqueued. After lossy drops, depth MUST be strictly less than 205. If the
+	// cap didn't fire there's no race to test.
+	if depth >= 205 {
+		t.Fatalf("expected cap enforcement to drop rows; depth=%d still >= 205 enqueues", depth)
+	}
+}
+
+// spec:agent-event-queue/storage-i-o-errors-surface-to-the-caller/disk-is-full-during-enqueue
+//
+// The spec pins that an Enqueue against an exhausted disk MUST return an error so the caller can backoff / load-shed
+// rather than silently succeeding. We simulate ENOSPC using SQLite's max_page_count PRAGMA: when set, INSERTs that
+// would grow the database beyond that page count return SQLITE_FULL ("database or disk is full"). This is the same
+// error class the modernc.org/sqlite driver returns for a real ENOSPC on the underlying disk, so the test exercises
+// the production-relevant code path (db.ExecContext's INSERT returning an error from queue.Enqueue).
+func TestQueue_DiskFullDuringEnqueueReturnsError(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+
+	// max_page_count = 4 with the default 4 KiB pages = 16 KiB cap. A 64 KiB payload cannot fit and triggers SQLITE_FULL on the first
+	// Enqueue. Reaching for the underlying *sql.DB is acceptable here because the test lives in the same package as Queue (no API
+	// change needed) and the PRAGMA is the standard SQLite knob for simulating ENOSPC without touching the host filesystem.
+	if _, err := q.db.ExecContext(ctx, "PRAGMA max_page_count = 4"); err != nil {
+		t.Fatalf("set max_page_count: %v", err)
+	}
+
+	bigPayload := make([]byte, 64*1024)
+	for i := range bigPayload {
+		bigPayload[i] = 'x'
+	}
+
+	err := q.Enqueue(ctx, bigPayload)
+	if err == nil {
+		t.Fatalf("enqueue against an exhausted-page-count DB MUST return an error; got nil so the caller would " +
+			"believe the event was durable when it actually was not")
+	}
+}

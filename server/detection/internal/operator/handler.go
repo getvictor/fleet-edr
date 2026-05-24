@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -15,9 +16,18 @@ import (
 )
 
 const (
-	msgInternalError   = "internal error"
-	msgNotFound        = "not found"
-	msgInvalidJSONBody = "invalid JSON body"
+	// Error codes for the `{"error": "<code>"}` JSON envelope this handler writes on 4xx / 5xx responses. The codes are
+	// stable typed strings (server-rest-api JSON-response-format spec): clients dispatch on them without parsing the
+	// human-readable message that may accompany them in logs but is NOT part of the response body.
+	errInternal           = "internal"
+	errNotFound           = "not_found"
+	errInvalidJSONBody    = "invalid_json"
+	errHostIDRequired     = "host_id_required"
+	errInvalidPID         = "invalid_pid"
+	errInvalidAlertID     = "invalid_alert_id"
+	errInvalidStatus      = "invalid_status"
+	errInvalidStatusTrans = "invalid_status_transition"
+	errInvalidUser        = "invalid_user"
 
 	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
 	// without paging.
@@ -26,6 +36,13 @@ const (
 	// accidentally asking for the whole host's history in one query.
 	processTreeMaxLimit = 5000
 )
+
+// writeError emits a `{"error": "<code>"}` JSON body per the server-rest-api JSON-response-format requirement. Mirrors the pattern
+// in server/response/internal/operator/handler.go and server/identity/internal/audit/handler.go so all session-authenticated
+// endpoints surface failures with the same envelope a scripted client can dispatch on without parsing prose.
+func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, status int, code string) {
+	httpserver.NoStoreJSON(ctx, h.logger, w, status, map[string]string{"error": code})
+}
 
 // alertDetailResponse extends Alert with linked event IDs for the
 // detail endpoint.
@@ -82,7 +99,7 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	hosts, err := h.svc.ListHosts(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list hosts", "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if hosts == nil {
@@ -92,13 +109,13 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	hostID := r.PathValue("host_id")
 	if hostID == "" {
-		http.Error(w, "host_id required", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errHostIDRequired)
 		return
 	}
 
-	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{Type: "process", ID: hostID}) {
 		return
 	}
@@ -115,7 +132,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if roots == nil {
@@ -125,15 +142,15 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	hostID := r.PathValue("host_id")
 	pidStr := r.PathValue("pid")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
-		http.Error(w, "invalid pid", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPID)
 		return
 	}
 
-	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{Type: "process", ID: hostID}) {
 		return
 	}
@@ -143,11 +160,11 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if detail == nil {
-		http.Error(w, msgNotFound, http.StatusNotFound)
+		h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 		return
 	}
 	h.writeJSON(w, r, detail)
@@ -170,7 +187,7 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts, err := h.svc.ListAlerts(ctx, f)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list alerts", "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if alerts == nil {
@@ -180,24 +197,24 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid alert id", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidAlertID)
 		return
 	}
 
-	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert", ID: strconv.FormatInt(id, 10)}) {
 		return
 	}
 	alert, eventIDs, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
 		if errors.Is(err, api.ErrAlertNotFound) {
-			http.Error(w, msgNotFound, http.StatusNotFound)
+			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "get alert", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if eventIDs == nil {
@@ -207,9 +224,10 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid alert id", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidAlertID)
 		return
 	}
 
@@ -217,7 +235,7 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidJSONBody)
 		return
 	}
 
@@ -230,11 +248,9 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	case string(api.AlertStatusResolved):
 		action = identityapi.ActionAlertResolve
 	default:
-		http.Error(w, "invalid status: must be open, acknowledged, or resolved", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidStatus)
 		return
 	}
-
-	ctx := r.Context()
 
 	// Phase 5: alert.resolve on a critical-severity alert requires a fresh auth event. Fetch severity before the gate so the chokepoint
 	// sees Resource.Severity. Other actions (Reopen, Acknowledge) don't need the read but the handler runs it uniformly — alerts are small
@@ -243,11 +259,11 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	preGate, _, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
 		if errors.Is(err, api.ErrAlertNotFound) {
-			http.Error(w, msgNotFound, http.StatusNotFound)
+			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "pre-gate alert lookup", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 
@@ -262,17 +278,17 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	if _, err := h.svc.UpdateAlertStatus(ctx, id, api.AlertStatus(body.Status), userID); err != nil {
 		switch {
 		case errors.Is(err, api.ErrAlertNotFound):
-			http.Error(w, msgNotFound, http.StatusNotFound)
+			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 			return
 		case errors.Is(err, api.ErrInvalidAlertTransition):
-			http.Error(w, "invalid status transition", http.StatusBadRequest)
+			h.writeError(ctx, w, http.StatusBadRequest, errInvalidStatusTrans)
 			return
 		case errors.Is(err, api.ErrInvalidUserUpdater):
-			http.Error(w, "invalid user", http.StatusBadRequest)
+			h.writeError(ctx, w, http.StatusBadRequest, errInvalidUser)
 			return
 		}
 		h.logger.ErrorContext(ctx, "update alert status", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 

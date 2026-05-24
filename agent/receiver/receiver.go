@@ -19,21 +19,12 @@ extern int bridge_connect_go(const char *service_name, int receiver_id);
 import "C"
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 	"unsafe"
 )
-
-func getLogger() *slog.Logger {
-	if l := logger.Load(); l != nil {
-		return l
-	}
-	return slog.Default()
-}
 
 // Receiver manages a single XPC connection and delivers events.
 type Receiver struct {
@@ -198,7 +189,7 @@ func (r *Receiver) Disconnect() {
 	receiversMu.Unlock()
 }
 
-// onEvent is called from C (via callbacks.go) when an XPC event message arrives.
+// onEvent is called from C (via callbacks.go) when an XPC event message arrives. The drop-on-full + warn behaviour lives in tryDeliverEvent (common.go) so the agent-xpc-receiver "downstream consumer falls behind" contract is testable without a live Mach service.
 func onEvent(receiverID int, data unsafe.Pointer, length int) {
 	receiversMu.Lock()
 	recv := receivers[receiverID]
@@ -209,12 +200,7 @@ func onEvent(receiverID int, data unsafe.Pointer, length int) {
 	}
 
 	buf := C.GoBytes(data, C.int(length))
-
-	select {
-	case recv.events <- Event{Data: buf}:
-	default:
-		getLogger().WarnContext(context.Background(), "receiver event channel full", "service", recv.serviceName)
-	}
+	tryDeliverEvent(recv.events, Event{Data: buf}, recv.serviceName)
 }
 
 // onError is called from C (via callbacks.go) when an XPC connection error occurs.

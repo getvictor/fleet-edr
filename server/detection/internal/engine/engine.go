@@ -5,10 +5,19 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
+
+// tracer is the OTel tracer this package opens per-rule spans on so downstream dashboards can group detection latency + alert
+// counts by rule_id without having to parse log lines. observability-instrumentation spec pins the rule_id + alert_count
+// attribute shape.
+var tracer = otel.Tracer("server/detection/engine")
 
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
 // api.GraphReader through the same interface and dispatch stays non-allocating.
@@ -78,16 +87,35 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	live := filterSnapshotEvents(events)
 	for _, rule := range e.rules {
-		findings, err := rule.Evaluate(ctx, live, e.store)
-		if err != nil {
-			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
-			continue
+		if err := e.evaluateRule(ctx, rule, live); err != nil {
+			return err
 		}
-		techniques := rule.Techniques()
-		for _, f := range findings {
-			if err := e.persistFinding(ctx, f, techniques); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+// evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
+// can be grouped by rule in downstream dashboards. The span is annotated with alert_count after the rule returns; on rule-evaluate
+// failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
+// persistence fails - rule-evaluation errors are logged + swallowed so a buggy rule doesn't block the rest.
+func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []api.Event) error {
+	ctx, span := tracer.Start(ctx, "detection.rule.evaluate",
+		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
+	defer span.End()
+
+	findings, err := rule.Evaluate(ctx, live, e.store)
+	if err != nil {
+		span.RecordError(err)
+		e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
+		return nil
+	}
+	span.SetAttributes(attribute.Int("alert_count", len(findings)))
+
+	techniques := rule.Techniques()
+	for _, f := range findings {
+		if err := e.persistFinding(ctx, f, techniques); err != nil {
+			span.RecordError(err)
+			return err
 		}
 	}
 	return nil
