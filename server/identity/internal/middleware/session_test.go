@@ -131,6 +131,12 @@ func TestSession_MalformedCookieReturns401(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
+// spec:ui-authentication-session/get-requests-authenticate-by-cookie-alone/get-with-valid-session
+//
+// Pins the middleware-layer half of GET-with-valid-session: the Session middleware pins the user id
+// AND the *api.Session (carrying the CSRF token) on the request context when a valid cookie arrives.
+// Downstream handlers read both via api.UserIDFromContext / api.SessionFromContext; the assertions
+// below pin that the pin actually happens (sawUserID==42 + CSRFToken match).
 func TestSession_ValidCookieLetsHandlerRun(t *testing.T) {
 	t.Parallel()
 	svc, ss := newService(t)
@@ -195,9 +201,17 @@ func TestCSRF_MisconfiguredReturns500(t *testing.T) {
 
 // CSRF stack: happy path + the two failure modes with a real Session pinned.
 // spec:server-rest-api/session-authentication-and-csrf-protection/a-state-changing-call-omits-the-csrf-token
+// spec:ui-authentication-session/unsafe-requests-require-both-cookie-and-csrf-header/post-with-cookie-but-no-csrf-header
+// spec:ui-authentication-session/unsafe-requests-require-both-cookie-and-csrf-header/post-with-mismatched-csrf-header
+// spec:ui-authentication-session/unsafe-requests-require-both-cookie-and-csrf-header/post-with-valid-cookie-and-csrf-header
 //
-// The "unsafe method missing header => 403" subtest below is the specific clause the spec scenario describes: a
-// state-changing request (POST/PUT/DELETE) that omits the CSRF token must be rejected. The "wrong header" and
+// Four scenarios share this test. The server-rest-api scenario covers the no-CSRF-token rejection at
+// the REST surface; the three ui-auth scenarios cover the three CSRF-stack subtests below in one
+// observation each: missing header => 403, wrong header => 403 (constant-time compare so a regression
+// to non-constant-time compare wouldn't change this assertion but is structurally required), and
+// correct header => 200 (the happy path that lets the action through). The "unsafe method missing
+// header => 403" subtest below is the specific clause the spec scenario describes: a state-changing
+// request (POST/PUT/DELETE) that omits the CSRF token must be rejected. The "wrong header" and
 // "correct header" subtests pin the surrounding contract so a regression in either branch can't silently weaken
 // the unsafe-no-header rejection.
 func TestCSRF_Stack(t *testing.T) {

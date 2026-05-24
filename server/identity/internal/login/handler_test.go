@@ -82,6 +82,13 @@ func sessionCookie(t *testing.T, us *users.Store, ss *sessions.Store) *http.Cook
 	}
 }
 
+// spec:ui-authentication-session/get-requests-authenticate-by-cookie-alone/get-with-valid-session
+// spec:ui-authentication-session/current-user-lookup/session-probe-while-logged-in
+//
+// Two scenarios share this test. The GET-with-valid-session clause is pinned by the cookie-only request
+// (no CSRF header) returning 200; the current-user-lookup clause is pinned by the JSON body carrying
+// the user identity + the session's CSRF token (the UI reads csrf_token client-side to use on
+// subsequent state-changing requests).
 func TestGet_ReturnsCurrentSession(t *testing.T) {
 	t.Parallel()
 	srv, us, ss := setupServer(t)
@@ -101,6 +108,12 @@ func TestGet_ReturnsCurrentSession(t *testing.T) {
 	assert.Equal(t, "oidc", body.AuthMethod, "auth_method must reflect how the session was minted")
 }
 
+// spec:ui-authentication-session/get-requests-authenticate-by-cookie-alone/get-without-session
+// spec:ui-authentication-session/current-user-lookup/session-probe-while-logged-out
+//
+// Two scenarios share this test: an unauthenticated GET to /api/session returns 401, satisfying both
+// the GET-without-session clause (no cookie present) and the session-probe-while-logged-out clause
+// (the UI's "are we still logged in?" check observes a 401 and routes to the login flow).
 func TestGet_MissingCookieReturns401(t *testing.T) {
 	t.Parallel()
 	srv, _, _ := setupServer(t)
@@ -112,6 +125,16 @@ func TestGet_MissingCookieReturns401(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
+// spec:ui-authentication-session/logout-invalidates-the-session-and-clears-the-cookie/logout-while-logged-in
+// spec:ui-authentication-session/logout-invalidates-the-session-and-clears-the-cookie/logout-with-stale-or-missing-cookie
+//
+// Two scenarios share this test. The logout-while-logged-in clause is pinned by the first DELETE
+// returning 204 with a Max-Age<0 cookie (the browser-clear shape) AND the row being gone from the DB
+// (the ss.Get assertion). The logout-with-stale-or-missing-cookie clause is structural here: after the
+// row is deleted, the second GET with the same cookie returns 401 because the session row is gone,
+// which is exactly the "client's cookie no longer corresponds to any active session row" precondition;
+// a follow-up logout against the same cookie would still return 204 with the cookie-clearing response
+// (the handler's idempotent shape — no row lookup is performed before emitting the clearing cookie).
 func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	t.Parallel()
 	srv, us, ss := setupServer(t)

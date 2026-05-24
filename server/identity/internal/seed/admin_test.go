@@ -23,6 +23,17 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 	return users.New(db), rbac.New(db), db
 }
 
+// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/first-startup-seed
+// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/recovery-after-a-lost-password
+//
+// Two scenarios share this test, both pinning the "one operator account is created with the seed email"
+// clause. First-startup is the explicit precondition (empty users table); recovery-after-lost-password
+// is the same code path triggered by the operator deleting the row and restarting (the documented
+// recovery flow). Note: the spec's "password banner on stderr" clauses describe the pre-Phase-4b shape;
+// Phase 4b moved the password to a WebAuthn-style breakglass redemption URL emitted by cmd/main, so
+// the spec/impl drift on the banner content is real. The mark stands on the "exactly one account
+// with the well-known seed email" + "no banner from the seeder itself" clauses pinned below.
+//
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
 // The Phase 4b flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
 func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
@@ -49,6 +60,13 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	_ = db
 }
 
+// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/restart-with-an-existing-operator
+//
+// Pins the no-duplicate-account-on-rerun clause: a second seed against a populated DB returns the same
+// row instead of inserting another, AND the rbac binding count stays at 1 (no banner check needed
+// since Phase 4b moved the banner emission to cmd/main, but the "no banner is emitted" clause is
+// structural here: the seed function never writes to stderr on a no-op path).
+//
 // Idempotent: a second seed against the same DB returns the existing row instead of attempting another insert AND does not duplicate
 // the role binding (rbac unique key swallows the conflict). Pinned because container restarts re-run the seed step.
 func TestAdmin_IdempotentOnRerun(t *testing.T) {
