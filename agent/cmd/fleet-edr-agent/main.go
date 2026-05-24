@@ -5,12 +5,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -151,19 +149,19 @@ func run() error {
 		MaxRetries: uploaderMaxRetries,
 	}, httpClient, logger)
 
-	// appControlDispatcher bridges the commander (which wants a stable ApplicationControlSender across receiver reconnects) and
-	// runReceiverLoop (which creates a new *receiver.Receiver on every connect). The ESF receiver loop publishes into this dispatcher on
-	// connect and clears it on disconnect.
-	esfAppControlDispatcher := &appControlDispatcher{}
+	// esfDispatcher bridges the commander (which wants a stable ApplicationControlSender across receiver reconnects) and the ESF
+	// receiver loop (which builds a fresh *receiver.Receiver on every connect). The loop's OnConnected hook publishes into the
+	// dispatcher; OnDisconnected clears it so commands issued during a reconnect window fail fast.
+	esfDispatcher := receiver.NewDispatcher()
 
 	pidTable := proctable.New()
-	go runReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true, esfAppControlDispatcher)
+	go startReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true, esfDispatcher)
 	if cfg.NetXPCService != "" {
-		go runReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false, nil)
+		go startReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false, nil)
 	}
 	go runUploader(ctx, up, logger)
 
-	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfAppControlDispatcher, agentTransport, logger)
+	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, logger)
 	go pruneLoop(ctx, q, cfg.PruneAge, logger)
 	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
@@ -347,169 +345,41 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 	}
 }
 
-// runReceiverLoop connects to an XPC service and reconnects with exponential backoff, piping every event the receiver yields into the
-// agent's queue. When dispatcher is non-nil, every successful connection publishes the current *Receiver into it so outbound callers
-// (commander set_application_control) can send messages to the peer; disconnects clear the dispatcher to prevent sending on a dead
-// handle.
-func runReceiverLoop(
+// startReceiverLoop builds the per-service receiver.Loop and runs it. The Loop owns the connect / reconnect / backoff / heartbeat
+// machinery; this function only wires the agent's queue + proctable into OnEvent and (for the ESF service) the application_control
+// Dispatcher into OnConnected / OnDisconnected. dispatcher may be nil for non-ESF services that do not receive outbound pushes.
+func startReceiverLoop(
 	ctx context.Context,
 	logger *slog.Logger,
 	xpcService string,
 	q *queue.Queue,
 	pt *proctable.Table,
 	updateTable bool,
-	dispatcher *appControlDispatcher,
+	dispatcher *receiver.Dispatcher,
 ) {
-	const (
-		initialBackoff = time.Second
-		maxBackoff     = 30 * time.Second
-	)
-
-	backoff := initialBackoff
-	for ctx.Err() == nil {
-		reconnect, connected := runReceiverOnce(ctx, logger, xpcService, q, pt, updateTable, dispatcher)
-		if connected {
-			// Successful session; reset the backoff so the next reconnect is fast.
-			backoff = initialBackoff
-		}
-		if !reconnect {
-			return
-		}
-		retryIn := initialBackoff
-		if !connected {
-			// Connection never established — back off exponentially before
-			// retrying to avoid a tight reconnect loop against a dead peer.
-			retryIn = backoff
-			backoff = min(backoff*2, maxBackoff)
-		} else {
-			logger.InfoContext(ctx, "receiver reconnecting", "service", xpcService, "retry_in", retryIn)
-		}
-		if !sleepCtx(ctx, retryIn) {
-			return
-		}
+	factory := func() receiver.Connector {
+		return receiver.New(xpcService, receiverEventBuffer)
 	}
-}
-
-// runReceiverOnce performs a single connect→pipe→disconnect cycle against the XPC service. Returns (reconnect, connected): reconnect
-// says whether the outer backoff loop should try again, and connected tells the caller whether the last attempt actually established
-// the peer link so the backoff can be reset.
-func runReceiverOnce(
-	ctx context.Context,
-	logger *slog.Logger,
-	xpcService string,
-	q *queue.Queue,
-	pt *proctable.Table,
-	updateTable bool,
-	dispatcher *appControlDispatcher,
-) (reconnect, connected bool) {
-	recv := receiver.New(xpcService, receiverEventBuffer)
-	if err := recv.Connect(); err != nil {
-		logger.WarnContext(ctx, "receiver connect", "service", xpcService, "err", err)
-		return true, false
-	}
-	logger.InfoContext(ctx, "receiver connected", "service", xpcService)
-
-	if dispatcher != nil {
-		dispatcher.set(recv)
-	}
-	reconnect = pipeEvents(ctx, logger, recv, xpcService, q, pt, updateTable)
-	if dispatcher != nil {
-		dispatcher.clear()
-	}
-	recv.Disconnect()
-	return reconnect, true
-}
-
-// pipeEvents reads from the receiver and enqueues events until ctx is cancelled or XPC errors.
-//
-// A background heartbeat goroutine sends a periodic "hello" XPC ping (issue #178). The macOS
-// XPC kernel side does not surface a "channel routed to a stale Mach port after sysextd
-// respawned the extension" failure as an error event — the agent's connection appears
-// healthy but every send goes to a dead port. The heartbeat probe forces a positive round
-// trip; on timeout we treat the channel as broken and reconnect, restoring event flow within
-// the ≤30s acceptance window.
-func pipeEvents(ctx context.Context, logger *slog.Logger, recv *receiver.Receiver, xpcService string, q *queue.Queue,
-	pt *proctable.Table, updateTable bool,
-) bool {
-	heartbeatDone := make(chan struct{})
-	heartbeatFailed := make(chan struct{}, 1)
-	go runXPCHeartbeat(ctx, logger, recv, xpcHeartbeatConfig{
-		XPCService:  xpcService,
-		Interval:    xpcHeartbeatInterval,
-		PingTimeout: xpcHeartbeatPingTimeout,
-		Done:        heartbeatDone,
-		Failed:      heartbeatFailed,
-	})
-	defer close(heartbeatDone)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-heartbeatFailed:
-			// Heartbeat ping did not get a "hello-ack" within the timeout window; the XPC channel is one-way dead even though no error
-			// event arrived. Returning reconnect=true sends us back through runReceiverLoop which rebuilds the connection against a
-			// fresh Mach port binding.
-			logger.WarnContext(ctx, "xpc heartbeat failed, reconnecting", "service", xpcService)
-			return true
-		case evt := <-recv.Events():
+	hooks := receiver.LoopHooks{
+		OnEvent: func(ctx context.Context, evt receiver.Event) {
 			if updateTable {
 				updateProcTable(pt, evt.Data)
 			}
 			if err := q.Enqueue(ctx, evt.Data); err != nil {
 				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
-		case errCode := <-recv.Errors():
-			// All XPC error codes force a reconnect today; the switch is kept so the call site is explicit about which
-			// codes are expected vs unexpected and so we can route them differently later (e.g. backoff vs fail-fast).
-			logger.WarnContext(ctx, "xpc error", "code", errCode,
-				"expected", errCode == receiver.ErrorConnectionInvalid ||
-					errCode == receiver.ErrorConnectionInterrupted ||
-					errCode == receiver.ErrorTerminated)
-			return true
-		}
+		},
 	}
-}
-
-// xpcPinger is the subset of *receiver.Receiver the heartbeat loop touches. Defined as a local interface so the loop can be exercised
-// in unit tests without standing up a real XPC connection.
-type xpcPinger interface {
-	Ping(timeout time.Duration) error
-}
-
-// xpcHeartbeatConfig groups the heartbeat loop's tunables and channels. Bundled into a struct rather than passed as positional args
-// because the loop has both timing knobs and lifecycle channels, and Sonar's go:S107 (>7 parameters) tripped on the flat form.
-type xpcHeartbeatConfig struct {
-	XPCService  string
-	Interval    time.Duration
-	PingTimeout time.Duration
-	Done        <-chan struct{}
-	Failed      chan<- struct{}
-}
-
-// runXPCHeartbeat periodically pings the XPC peer to detect a silently-dead channel. On ping failure or context cancellation the
-// goroutine exits; on failure it also signals failed once so pipeEvents can trigger a reconnect. The Done channel is closed by
-// pipeEvents when it returns, ensuring the heartbeat goroutine does not outlive its receiver.
-func runXPCHeartbeat(ctx context.Context, logger *slog.Logger, pinger xpcPinger, cfg xpcHeartbeatConfig) {
-	ticker := time.NewTicker(cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-cfg.Done:
-			return
-		case <-ticker.C:
-			if err := pinger.Ping(cfg.PingTimeout); err != nil {
-				logger.WarnContext(ctx, "xpc heartbeat ping failed", "service", cfg.XPCService, "err", err)
-				select {
-				case cfg.Failed <- struct{}{}:
-				default:
-				}
-				return
-			}
-		}
+	if dispatcher != nil {
+		hooks.OnConnected = dispatcher.Set
+		hooks.OnDisconnected = dispatcher.Clear
 	}
+	loop := receiver.NewLoop(factory, receiver.LoopConfig{
+		ServiceName:       xpcService,
+		HeartbeatInterval: xpcHeartbeatInterval,
+		HeartbeatTimeout:  xpcHeartbeatPingTimeout,
+	}, hooks, logger)
+	loop.Run(ctx)
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.
@@ -555,45 +425,4 @@ func updateProcTable(pt *proctable.Table, data []byte) {
 		}
 		pt.Remove(fields.PID)
 	}
-}
-
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
-}
-
-// appControlDispatcher satisfies commander.ApplicationControlSender across the lifecycle of the ESF receiver: runReceiverLoop
-// publishes the current *Receiver on connect and clears it on disconnect. Between clear() and the next set(), SendApplicationControl
-// returns an error so the command gets reported as `failed` and the server's next policy fan-out re-queues the update. Using
-// atomic.Pointer keeps the hot path (SendApplicationControl from commander) lock-free.
-type appControlDispatcher struct {
-	cur atomic.Pointer[receiver.Receiver]
-}
-
-func (d *appControlDispatcher) set(r *receiver.Receiver) { d.cur.Store(r) }
-
-// clear unconditionally clears the published receiver pointer. This is safe under the current runReceiverLoop lifecycle, which
-// serialises set/clear for a single service — there is only one goroutine calling set() and clear() in sequence per connect cycle, so
-// there is no window where a later set() can be wiped by an earlier clear(). If this dispatcher is ever extended to handle overlapping
-// receiver lifecycles (multiple services or concurrent reconnects), clear() would need receiver-aware CompareAndSwap semantics to
-// avoid nulling out a freshly-published pointer from a later set().
-func (d *appControlDispatcher) clear() {
-	d.cur.Store(nil)
-}
-
-// SendApplicationControl satisfies commander.ApplicationControlSender. Returns an error when no receiver is published (between
-// disconnect and the next successful reconnect) so the commander treats the command as failed and the server's next push reconverges
-// the agent.
-func (d *appControlDispatcher) SendApplicationControl(payload []byte) error {
-	r := d.cur.Load()
-	if r == nil {
-		return errors.New("app control dispatcher: no receiver connected")
-	}
-	return r.SendApplicationControl(payload)
 }

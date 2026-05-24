@@ -1,10 +1,8 @@
-package main
+package receiver
 
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,45 +11,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakePinger implements xpcPinger for tests. Configure pingFn to control
-// per-call behaviour; count tracks how many times Ping has been invoked.
-type fakePinger struct {
+// pingerConnector is a Connector stub whose only configured method is Ping - used by the heartbeat-isolation tests below to drive
+// runHeartbeat without also exercising the connect / event-pump paths. Methods unrelated to Ping panic so an accidental wider use
+// surfaces immediately.
+type pingerConnector struct {
 	count  atomic.Int64
 	pingFn func(timeout time.Duration) error
 }
 
-func (f *fakePinger) Ping(timeout time.Duration) error {
-	f.count.Add(1)
-	if f.pingFn != nil {
-		return f.pingFn(timeout)
+func (p *pingerConnector) Connect() error       { panic("pingerConnector.Connect: unused") }
+func (p *pingerConnector) Disconnect()          { panic("pingerConnector.Disconnect: unused") }
+func (p *pingerConnector) Events() <-chan Event { panic("pingerConnector.Events: unused") }
+func (p *pingerConnector) Errors() <-chan int   { panic("pingerConnector.Errors: unused") }
+func (p *pingerConnector) SendApplicationControl(b []byte) error {
+	panic("pingerConnector.SendApplicationControl: unused")
+}
+
+func (p *pingerConnector) Ping(timeout time.Duration) error {
+	p.count.Add(1)
+	if p.pingFn != nil {
+		return p.pingFn(timeout)
 	}
 	return nil
 }
 
-func newDiscardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// newHeartbeatLoop builds a Loop with the supplied interval / timeout and a
+// discard logger, just enough for runHeartbeat to be driven in isolation.
+func newHeartbeatLoop(interval, timeout time.Duration) *Loop {
+	return &Loop{
+		cfg: LoopConfig{
+			ServiceName:       "svc",
+			HeartbeatInterval: interval,
+			HeartbeatTimeout:  timeout,
+		},
+		logger: discardLogger(),
+	}
 }
 
-func TestRunXPCHeartbeat(t *testing.T) {
+// These tests cover the heartbeat goroutine in isolation. They previously lived in agent/cmd/fleet-edr-agent/heartbeat_test.go against
+// the standalone runXPCHeartbeat function; the heartbeat moved into Loop.runHeartbeat when the reconnect/backoff/heartbeat machinery
+// consolidated into the receiver package.
+
+func TestLoopRunHeartbeat(t *testing.T) {
 	t.Parallel()
 
 	t.Run("exits on done close without signalling failed", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		pinger := &fakePinger{}
+		pinger := &pingerConnector{}
 		done := make(chan struct{})
 		failed := make(chan struct{}, 1)
+		loop := newHeartbeatLoop(time.Hour, time.Second)
 
-		// Use a long interval so no tick fires; we rely on done to exit.
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
-				XPCService:  "svc",
-				Interval:    time.Hour,
-				PingTimeout: time.Second,
-				Done:        done,
-				Failed:      failed,
-			})
+			loop.runHeartbeat(ctx, pinger, done, failed)
 			close(doneCh)
 		}()
 
@@ -59,9 +73,8 @@ func TestRunXPCHeartbeat(t *testing.T) {
 		select {
 		case <-doneCh:
 		case <-time.After(time.Second):
-			t.Fatal("runXPCHeartbeat did not exit after done was closed")
+			t.Fatal("runHeartbeat did not exit after done was closed")
 		}
-
 		assert.Equal(t, int64(0), pinger.count.Load(), "ping must not fire when no tick elapsed")
 		assert.Empty(t, failed, "failed must not be signalled on clean exit")
 	})
@@ -69,20 +82,15 @@ func TestRunXPCHeartbeat(t *testing.T) {
 	t.Run("exits on ctx cancel without signalling failed", func(t *testing.T) {
 		t.Parallel()
 		ctx, cancel := context.WithCancel(context.Background())
-		pinger := &fakePinger{}
+		pinger := &pingerConnector{}
 		done := make(chan struct{})
 		defer close(done)
 		failed := make(chan struct{}, 1)
+		loop := newHeartbeatLoop(time.Hour, time.Second)
 
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
-				XPCService:  "svc",
-				Interval:    time.Hour,
-				PingTimeout: time.Second,
-				Done:        done,
-				Failed:      failed,
-			})
+			loop.runHeartbeat(ctx, pinger, done, failed)
 			close(doneCh)
 		}()
 
@@ -90,29 +98,22 @@ func TestRunXPCHeartbeat(t *testing.T) {
 		select {
 		case <-doneCh:
 		case <-time.After(time.Second):
-			t.Fatal("runXPCHeartbeat did not exit after ctx cancel")
+			t.Fatal("runHeartbeat did not exit after ctx cancel")
 		}
-
 		assert.Empty(t, failed, "failed must not be signalled on ctx cancel")
 	})
 
 	t.Run("ping success keeps heartbeat alive across multiple ticks", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		pinger := &fakePinger{pingFn: func(time.Duration) error { return nil }}
+		pinger := &pingerConnector{pingFn: func(time.Duration) error { return nil }}
 		done := make(chan struct{})
 		failed := make(chan struct{}, 1)
+		loop := newHeartbeatLoop(10*time.Millisecond, time.Second)
 
-		// Short interval so several ticks fire before we close done.
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
-				XPCService:  "svc",
-				Interval:    10 * time.Millisecond,
-				PingTimeout: time.Second,
-				Done:        done,
-				Failed:      failed,
-			})
+			loop.runHeartbeat(ctx, pinger, done, failed)
 			close(doneCh)
 		}()
 
@@ -122,7 +123,7 @@ func TestRunXPCHeartbeat(t *testing.T) {
 		select {
 		case <-doneCh:
 		case <-time.After(time.Second):
-			t.Fatal("runXPCHeartbeat did not exit after done close")
+			t.Fatal("runHeartbeat did not exit after done close")
 		}
 		assert.Empty(t, failed, "failed must not be signalled while pings succeed")
 	})
@@ -130,20 +131,15 @@ func TestRunXPCHeartbeat(t *testing.T) {
 	t.Run("first ping failure signals failed and exits", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		pinger := &fakePinger{pingFn: func(time.Duration) error { return errors.New("boom") }}
+		pinger := &pingerConnector{pingFn: func(time.Duration) error { return errors.New("boom") }}
 		done := make(chan struct{})
 		defer close(done)
 		failed := make(chan struct{}, 1)
+		loop := newHeartbeatLoop(10*time.Millisecond, time.Second)
 
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
-				XPCService:  "svc",
-				Interval:    10 * time.Millisecond,
-				PingTimeout: time.Second,
-				Done:        done,
-				Failed:      failed,
-			})
+			loop.runHeartbeat(ctx, pinger, done, failed)
 			close(doneCh)
 		}()
 
@@ -163,22 +159,17 @@ func TestRunXPCHeartbeat(t *testing.T) {
 	t.Run("failed channel full does not deadlock", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		pinger := &fakePinger{pingFn: func(time.Duration) error { return errors.New("boom") }}
+		pinger := &pingerConnector{pingFn: func(time.Duration) error { return errors.New("boom") }}
 		done := make(chan struct{})
 		defer close(done)
 		// Pre-fill failed so the non-blocking send drops.
 		failed := make(chan struct{}, 1)
 		failed <- struct{}{}
+		loop := newHeartbeatLoop(10*time.Millisecond, time.Second)
 
 		doneCh := make(chan struct{})
 		go func() {
-			runXPCHeartbeat(ctx, newDiscardLogger(), pinger, xpcHeartbeatConfig{
-				XPCService:  "svc",
-				Interval:    10 * time.Millisecond,
-				PingTimeout: time.Second,
-				Done:        done,
-				Failed:      failed,
-			})
+			loop.runHeartbeat(ctx, pinger, done, failed)
 			close(doneCh)
 		}()
 
