@@ -146,6 +146,15 @@ func TestGet_UnknownIDReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
+// spec:ui-authentication-session/sessions-expire-12-hours-after-issue/a-request-after-the-12-hour-window-is-rejected
+//
+// Pins the expired-session-rejection clause: a session whose absolute cap has elapsed returns
+// ErrNotFound from Get, which the Session middleware translates into 401 on the wire (covered by
+// TestSession_MissingCookieReturns401's same response shape). The spec scenario speaks of a flat 12h
+// window; the impl uses configurable Idle + Absolute timeouts per session class (see
+// sessions.Timeouts in sessions.go). This test uses a 1h cap for speed; the load-bearing contract
+// the spec asserts is "after expiry the request is rejected," which is what the ErrNotFound below
+// pins. The flat-12h-vs-configurable-timeouts difference is the spec/impl drift tracked in #257.
 func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	t.Parallel()
 	// Drive the clock backwards so the row we just created is already past its expires_at when Get runs. This is more reliable than

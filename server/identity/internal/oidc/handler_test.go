@@ -110,6 +110,15 @@ func TestPathStartsWithSingleSlash(t *testing.T) {
 	}
 }
 
+// spec:ui-authentication-session/login-attempts-are-rate-limited-and-audited/failed-login-is-audited
+//
+// Pins the audit-on-failed-login contract on the OIDC code path: a failure during the OIDC callback
+// emits an `auth.oidc.failure` audit row carrying the actor email, the typed reason, and the
+// user-agent. The spec scenario's "presented email + typed reason" clauses are pinned by the
+// ActorEmail and Payload["reason"] assertions below. The "does not include the presented password"
+// clause is structurally satisfied because OIDC never presents a password to the EDR (the IdP
+// authenticates the user; the EDR sees an OIDC subject claim).
+//
 // failureAudit emits an auth.oidc.failure row with the spec reason and payload populated; pinned because it's the unknown-subject +
 // email-conflict path the operator dashboards key on.
 func TestFailureAudit(t *testing.T) {
