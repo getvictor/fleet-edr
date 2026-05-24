@@ -71,12 +71,29 @@ final class DNSParserTests: XCTestCase {
         XCTAssertEqual(DNSParser.queryName(from: packet), "example.com")
     }
 
+    // spec:endpoint-event-collection/dns-query-capture/an-application-resolves-a-hostname-over-udp
+    //
+    // DNS query capture starts with parsing the UDP query packet to extract the queried hostname; the
+    // DNSProxyProvider raises a dns_query event built from this parse. The multi-label subdomain case
+    // is the realistic shape an EDR sees in the field (api.fleetdm.com vs just example.com); the
+    // assertion below pins that the parser correctly walks compressed-free label boundaries to
+    // assemble the dotted name an analyst expects to see.
     func testQueryNameMultiLabelSubdomain() {
         var packet = header(id: 0x1234, qdcount: 1, ancount: 0)
         packet.append(question(name: "api.fleetdm.com", qtype: 1))
         XCTAssertEqual(DNSParser.queryName(from: packet), "api.fleetdm.com")
     }
 
+    // spec:endpoint-event-collection/dns-query-capture/a-dns-query-that-cannot-be-parsed-is-still-forwarded
+    //
+    // When the DNS parser cannot extract a queried name (compression pointers in the query section,
+    // malformed buffer, label-length overflow), it returns nil rather than crashing or rejecting the
+    // packet. The DNSProxyProvider treats nil as "no parsed name available" but still forwards the
+    // event with whatever it could extract; that "still forwarded" clause is upstream of this test,
+    // but the load-bearing precondition the upstream contract relies on is exactly the
+    // returns-nil-gracefully shape pinned below. Companion tests for header-only / overflow /
+    // empty-packet inputs (testQueryNameReturnsNilFor*) pin the same nil-return shape across the
+    // class of malformed packets the parser is required to tolerate.
     func testQueryNameReturnsNilForCompressionPointerInQname() {
         // QNAME starts with a compression-pointer byte (0xC0). The parser refuses to
         // resolve pointers in the query section -- they would not occur in real

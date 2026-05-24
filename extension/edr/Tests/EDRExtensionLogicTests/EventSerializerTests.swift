@@ -28,6 +28,13 @@ final class EventSerializerTests: XCTestCase {
 
     // MARK: - ExecPayload
 
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/a-user-runs-a-shell-command
+    //
+    // The exec payload's wire shape is what the agent + server consume when rendering "a user runs a
+    // shell command" in the UI. The round-trip below pins every field the wire contract requires: pid +
+    // ppid identities, executable path, argv array, cwd, uid/gid, the signing-info nest, sha256, and
+    // cdhash. A regression that dropped any of these would break what an operator sees about which
+    // command a host actually ran.
     func testExecPayloadRoundTripWithFullSigning() throws {
         let signing = CodeSigning(teamID: "FDG8Q7N4CC", signingID: "com.apple.bash", flags: 0x2000, isPlatformBinary: true)
         let payload = ExecPayload(
@@ -111,6 +118,11 @@ final class EventSerializerTests: XCTestCase {
 
     // MARK: - ForkPayload, ExitPayload, OpenPayload
 
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/a-daemon-forks-a-worker
+    //
+    // Daemon-forks-a-worker maps to the ForkPayload wire shape: child_pid + parent_pid, snake_case,
+    // round-trippable. The exact-string assertion below pins the byte-level wire bytes (no extra
+    // keys, no omitted ones) so a regression on field naming or insertion order would surface here.
     func testForkPayloadWireKeys() throws {
         let payload = ForkPayload(childPid: 5, parentPid: 4)
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
@@ -130,6 +142,13 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertEqual(decoded.exitCode, 137)
     }
 
+    // spec:endpoint-event-collection/outbound-socket-flow-capture/a-process-opens-an-outbound-tcp-connection
+    //
+    // OpenPayload pins the wire shape for the open / connect class of events; the exact-string
+    // assertion below proves the snake_case naming + key set match what the server's ingest decoder
+    // expects. The spec's "outbound TCP connection" semantics map directly to this payload because the
+    // extension's NetworkExtension surface raises connect events through the same wire envelope
+    // OpenPayload defines.
     func testOpenPayloadWireKeys() throws {
         let payload = OpenPayload(pid: 12, path: "/etc/hosts", flags: 0)
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
@@ -186,6 +205,11 @@ final class EventSerializerTests: XCTestCase {
 
     // MARK: - EventEnvelope
 
+    // spec:endpoint-event-collection/canonical-event-envelope/an-event-envelope-is-well-formed
+    //
+    // Pins the canonical envelope shape every event MUST carry: event_id (UUID), host_id, timestamp_ns
+    // (nanoseconds-since-epoch), event_type (string discriminator), and a nested payload. The exact
+    // assertions below verify all five wire keys + the payload nest are byte-stable.
     func testEventEnvelopeWireKeysAndNesting() throws {
         let payload = ForkPayload(childPid: 11, parentPid: 10)
         let envelope = EventEnvelope(

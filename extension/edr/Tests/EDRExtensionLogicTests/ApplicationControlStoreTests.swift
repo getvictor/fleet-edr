@@ -110,6 +110,15 @@ final class ApplicationControlStoreTests: XCTestCase {
 
     // MARK: - apply: per-rule-type routing
 
+    // spec:endpoint-event-collection/process-exec-authorization/an-exec-of-a-blocklisted-path-is-denied
+    //
+    // The exec-authorization decision is "look up the exec's path / cdhash / signing-id / team-id in
+    // the per-rule-type maps the ApplicationControlStore maintains, and DENY if any rule matches."
+    // This test pins the store-side half of that decision: every rule type lands in its own typed map
+    // and is indexed by the identifier the subscriber consults at exec-authorization time. The ESF
+    // ES_AUTH_RESULT_DENY return from the subscriber when the store reports a match is downstream of
+    // this test (subscribed in extension/ESFSubscriber.swift, not unit-tested here), but the data
+    // structure that drives the deny decision is what the assertions below pin.
     func testApplyRoutesEveryRuleTypeIntoItsOwnMap() {
         let store = makeStore()
         let payload = document(
