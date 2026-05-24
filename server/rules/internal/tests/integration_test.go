@@ -110,17 +110,30 @@ func TestOperator_GetRules(t *testing.T) {
 
 	var body struct {
 		Rules []struct {
-			ID  string `json:"id"`
-			Doc struct {
-				Title    string `json:"title"`
-				Severity string `json:"severity"`
+			ID         string   `json:"id"`
+			Techniques []string `json:"techniques"`
+			Doc        struct {
+				Title       string   `json:"title"`
+				Summary     string   `json:"summary"`
+				Description string   `json:"description"`
+				Severity    string   `json:"severity"`
+				EventTypes  []string `json:"event_types"`
 			} `json:"doc"`
 		} `json:"rules"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	require.Len(t, body.Rules, len(r.Catalog().List()))
 	assert.Equal(t, "suspicious_exec", body.Rules[0].ID)
-	assert.NotEmpty(t, body.Rules[0].Doc.Title)
+	// Every rule MUST surface the documented doc fields + at least one event_type. The per-rule loop
+	// pins what the marker docstring promises: id, techniques, and the full doc block.
+	for _, rule := range body.Rules {
+		assert.NotEmpty(t, rule.ID, "every rule must have an id")
+		assert.NotEmpty(t, rule.Doc.Title, "rule %s missing doc.title", rule.ID)
+		assert.NotEmpty(t, rule.Doc.Summary, "rule %s missing doc.summary", rule.ID)
+		assert.NotEmpty(t, rule.Doc.Description, "rule %s missing doc.description", rule.ID)
+		assert.NotEmpty(t, rule.Doc.Severity, "rule %s missing doc.severity", rule.ID)
+		assert.NotEmpty(t, rule.Doc.EventTypes, "rule %s missing doc.event_types", rule.ID)
+	}
 }
 
 // spec:server-admin-surface/att-ck-coverage-layer-endpoint/coverage-when-rules-are-registered
@@ -149,6 +162,9 @@ func TestOperator_GetAttackCoverage(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 		assert.Equal(t, "enterprise-attack", body["domain"])
+		techniques, ok := body["techniques"].([]any)
+		require.True(t, ok, "techniques must be present and an array")
+		assert.NotEmpty(t, techniques, "with the default catalog wired in, techniques must be non-empty per spec")
 		out, err := json.Marshal(body)
 		require.NoError(t, err)
 		return string(out)

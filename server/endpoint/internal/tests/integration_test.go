@@ -108,11 +108,15 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 // spec:server-admin-surface/revoke-a-host-enrollment/revoke-a-known-host
 //
 // Service-level walk-through pins two admin-surface scenarios. The List() call after Enroll proves the
-// admin list endpoint surfaces every enrolled row with HostID + last-seen metadata (the THEN clause
-// "every row includes the host id and the host's last-seen timestamp"). The Revoke() call followed by
-// VerifyToken returning ErrInvalidToken pins the AND clause "the next request that agent makes with
-// that token receives 401 Unauthorized" — token invalidation is durable across the verification path,
-// which is what HostToken middleware translates into 401 on subsequent agent traffic.
+// admin list endpoint surfaces every enrolled row with HostID and the enrollment audit fields the
+// Enrollment API surfaces today (HostID, EnrolledAt, ExpiresAt, RevokedAt; see server/endpoint/api/types.go).
+// The spec scenario also calls for a last-seen timestamp; that field is sourced from the host_seen
+// hook tested elsewhere and is not part of the Enrollment row this query returns, so the marker pins
+// the host-id-plus-enrollment-metadata clause here and the last-seen surfacing is covered by a separate
+// admin handler path. The Revoke() call followed by VerifyToken returning ErrInvalidToken pins the AND
+// clause "the next request that agent makes with that token receives 401 Unauthorized": token
+// invalidation is durable across the verification path, which is what HostToken middleware translates
+// into 401 on subsequent agent traffic.
 //
 // TestEnrollVerifyListRevoke walks the full operator + agent flow: agent enrolls, the host token verifies, the operator list shows the
 // row, the operator revokes, the same token now fails verification, and the listing reflects the revocation.

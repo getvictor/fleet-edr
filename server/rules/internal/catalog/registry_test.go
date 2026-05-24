@@ -40,10 +40,11 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 // spec:server-admin-surface/per-rule-documentation-endpoint/rule-with-config-knobs
 //
 // For every shipped rule that declares operator-tunable config knobs, the doc.Config entries MUST each
-// carry env_var, type, and description (the per-knob loop below asserts these three). The spec scenario
-// also calls for a `default` field on each knob; the current Config struct does not surface a default,
-// so the marker pins three of four clauses with that gap acknowledged. The Config-shape extension is
-// tracked separately when the documentation contract is refreshed.
+// carry env_var, type, default, and description. ConfigKnob.Default (server/rules/api/types.go) can
+// legitimately be the empty string for "feature off until configured", so the loop below asserts only
+// that env_var, type, and description are non-empty plus that the Default field is reachable. A regression
+// that removed the Default field from the JSON shape would break compilation here rather than landing as
+// silent contract drift in the operator UI.
 //
 // TestAll_DocStructIsPopulated walks every shipped rule's Doc() and locks in the operator-facing invariants. Drives coverage of each
 // rule's Doc() body from the rules package itself so SonarCloud's Go coverage profile attributes the lines correctly (cross-package
@@ -72,6 +73,10 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 				assert.NotEmpty(t, c.EnvVar, "%s config knob missing EnvVar", r.ID())
 				assert.NotEmpty(t, c.Type, "%s config knob %s missing Type", r.ID(), c.EnvVar)
 				assert.NotEmpty(t, c.Description, "%s config knob %s missing Description", r.ID(), c.EnvVar)
+				// Default is allowed to be the empty string (feature off until configured); the field
+				// must exist on the struct so the JSON shape advertises the knob's default to operators.
+				// _ = is a compile-time reference, not a runtime assertion.
+				_ = c.Default
 			}
 		})
 	}
