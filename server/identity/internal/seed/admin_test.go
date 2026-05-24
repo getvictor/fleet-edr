@@ -23,16 +23,12 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 	return users.New(db), rbac.New(db), db
 }
 
-// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/first-startup-seed
-// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/recovery-after-a-lost-password
-//
-// Two scenarios share this test, both pinning the "one operator account is created with the seed email"
-// clause. First-startup is the explicit precondition (empty users table); recovery-after-lost-password
-// is the same code path triggered by the operator deleting the row and restarting (the documented
-// recovery flow). Note: the spec's "password banner on stderr" clauses describe the pre-Phase-4b shape;
-// Phase 4b moved the password to a WebAuthn-style breakglass redemption URL emitted by cmd/main, so
-// the spec/impl drift on the banner content is real. The mark stands on the "exactly one account
-// with the well-known seed email" + "no banner from the seeder itself" clauses pinned below.
+// Markers for `first-startup-seed` and `recovery-after-a-lost-password` were considered for this test
+// but pulled: those scenarios' load-bearing THEN clauses are the password banner on stderr and the
+// "fresh 24-byte password" generation, neither of which Phase 4b's seeder produces (the redemption
+// URL banner lives in cmd/main, the seeder leaves password NULL). Pinning the markers here would
+// overstate coverage. The drift is tracked in #257; the marker will return when the spec is rewritten
+// around the redemption-URL flow.
 //
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
 // The Phase 4b flow does NOT print a password banner - the redemption URL banner lives in cmd/main.

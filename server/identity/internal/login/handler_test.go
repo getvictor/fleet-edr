@@ -134,7 +134,7 @@ func TestGet_MissingCookieReturns401(t *testing.T) {
 // row is deleted, the second GET with the same cookie returns 401 because the session row is gone,
 // which is exactly the "client's cookie no longer corresponds to any active session row" precondition;
 // a follow-up logout against the same cookie would still return 204 with the cookie-clearing response
-// (the handler's idempotent shape — no row lookup is performed before emitting the clearing cookie).
+// (the handler's idempotent shape: no row lookup is performed before emitting the clearing cookie).
 func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	t.Parallel()
 	srv, us, ss := setupServer(t)
