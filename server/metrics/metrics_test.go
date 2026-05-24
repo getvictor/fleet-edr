@@ -112,6 +112,19 @@ func (s stubGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 	return s.offline, nil
 }
 
+// spec:observability-instrumentation/stable-counter-names/ingested-events-are-counted-by-host
+// spec:observability-instrumentation/stable-counter-names/alerts-are-counted-only-on-creation
+// spec:observability-instrumentation/stable-counter-names/already-delivered-queue-trim-is-distinguishable-from-data-loss
+// spec:observability-instrumentation/db-query-latency-histogram/a-store-operation-records-its-latency
+// spec:observability-instrumentation/observable-host-fleet-gauges/gauges-evaluate-on-the-reader-cadence
+//
+// Five scenarios share this test because they describe the same observation from different angles: every
+// counter / histogram / gauge that the spec names is fired once by Recorder methods and then collected
+// via the ManualReader. The asserts pin (a) host_id attr on edr.events.ingested, (b) rule_id+severity
+// attrs on edr.alerts.created, (c) the lossy=true vs lossy=false distinction on edr.agent.queue.dropped
+// (server-side mirror of the agent-side TestRecorder_QueueDropped), (d) the op attr on the
+// edr.db.query.duration histogram, and (e) that collect() drives the gauge callbacks and observes their
+// values (stubGauges feeds enrolled=3, offline=1; the gauge assertions see them).
 func TestRecorder_RecordsCounters(t *testing.T) {
 	r, collect := newTestRecorder(t, stubGauges{enrolled: 3, offline: 1}, Options{})
 	ctx := context.Background()
@@ -163,6 +176,10 @@ func (g thresholdCapturingGauges) OfflineHosts(_ context.Context, t time.Duratio
 	return 0, nil
 }
 
+// spec:observability-instrumentation/instrumentation-is-safe-on-a-nil-receiver/call-sites-do-not-guard-the-recorder
+//
+// Methods short-circuit on nil so call sites can tolerate "no metrics configured" without defensive
+// checks. Companion agent-side coverage in TestNilRecorder_QueueDropped_Safe.
 func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 	// Methods short-circuit on nil so call sites can tolerate "no metrics configured"
 	// without defensive checks. Lock that property in as a test.
@@ -189,3 +206,38 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 var (
 	_ detectionapi.MetricsRecorder = (*Recorder)(nil)
 )
+
+// spec:observability-instrumentation/observable-host-fleet-gauges/a-failing-gauge-callback-is-contained
+//
+// A GaugeSource that returns an error from EnrolledHosts MUST NOT take down the whole collection cycle.
+// The contract: the failed gauge observes no value, but the other gauges and counters still report.
+// Pins that contract by wiring a failingGauges source whose EnrolledHosts returns an error while
+// OfflineHosts succeeds, then asserting (a) collect() returns without error, (b) the failed gauge has
+// no datapoint, and (c) the offline gauge reports its value.
+func TestRecorder_FailingGaugeCallbackIsContained(t *testing.T) {
+	gauges := failingGauges{offline: 7}
+	_, collect := newTestRecorder(t, gauges, Options{})
+
+	// collect itself must not panic or fail even though one gauge callback errors. The test helper would call require.NoError on
+	// the Collect; if the implementation propagated the error here we'd see a failure at that line.
+	rm := collect()
+
+	assert.Equal(t, int64(-1), findGauge(t, rm, "edr.enrolled.hosts"),
+		"failed gauge callback must observe no value this cycle")
+	assert.Equal(t, int64(7), findGauge(t, rm, "edr.offline.hosts"),
+		"the rest of the gauge collection must still succeed")
+}
+
+// failingGauges has EnrolledHosts return an error to exercise the per-gauge containment branch; the
+// OfflineHosts callback still succeeds so the test can also assert the rest of the cycle proceeds.
+type failingGauges struct {
+	offline int
+}
+
+func (g failingGauges) EnrolledHosts(context.Context) (int, error) {
+	return 0, assert.AnError
+}
+
+func (g failingGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
+	return g.offline, nil
+}

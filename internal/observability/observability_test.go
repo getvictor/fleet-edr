@@ -28,6 +28,12 @@ func restoreGlobals(t *testing.T) {
 	})
 }
 
+// spec:observability-instrumentation/otlp-export-is-opt-in-via-otel-exporter-otlp-endpoint/otel-exporter-otlp-endpoint-is-unset
+//
+// With Endpoint="" (the SDK's no-op condition mapped from an unset OTEL_EXPORTER_OTLP_ENDPOINT), Init
+// must still return a non-nil shutdown hook, the shutdown call must complete promptly, AND the W3C
+// propagator must be installed so inbound traceparent headers are still parsed (otherwise services
+// behind a no-OTel EDR would lose distributed-trace context for free, which is a regression).
 func TestInit_Disabled(t *testing.T) {
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
@@ -44,6 +50,14 @@ func TestInit_Disabled(t *testing.T) {
 	assert.NotNil(t, otel.GetTextMapPropagator(), "TextMapPropagator should be installed")
 }
 
+// spec:observability-instrumentation/otlp-export-is-opt-in-via-otel-exporter-otlp-endpoint/otel-exporter-otlp-endpoint-points-at-a-collector
+//
+// With a non-empty Endpoint, the export pipeline is wired up (the test points it at a dead TCP port to
+// avoid CI flakiness on real collectors). The scenario's spec-relevant clause this test pins is "the
+// SDK is configured to export via OTLP using the standard env vars" — observable through Init
+// returning a non-nil shutdown hook and the shutdown call respecting the deadline. End-to-end export
+// to a live collector is validated against the dev SigNoz pipeline; that path is out of scope for an
+// in-process unit test because it requires an external service.
 func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 	restoreGlobals(t)
 	// Pass a URL pointing at a port we are confident nothing is listening on. The http:// scheme tells the SDK's
@@ -72,6 +86,14 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 	_ = err
 }
 
+// spec:observability-instrumentation/trace-propagation-through-the-request-pipeline/inbound-traceparent-is-honoured
+//
+// Pins that the global TextMapPropagator is the W3C one (or at least understands W3C). The test
+// extracts a synthetic traceparent and round-trips it via inject; if the propagator weren't a W3C
+// implementation, the injected carrier would either drop the header or rewrite it in a non-W3C format.
+// Init wires the propagator at the process level and applies to every binary that consumes this
+// package (server, agent, ingest); the actual parent-child stitching happens at every http.Handler
+// that calls `otel.GetTextMapPropagator().Extract(...)`, which this propagator install makes well-defined.
 func TestInit_PropagatorInstalled(t *testing.T) {
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})

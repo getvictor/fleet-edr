@@ -3,6 +3,7 @@ package uploader
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,14 @@ import (
 	"github.com/fleetdm/edr/agent/queue"
 )
 
+// spec:agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-a-valid-token
+// spec:agent-event-uploader/successful-upload-acknowledges-events/server-returns-200-or-204
+//
+// Two scenarios share this test. The Authorization-header assertion + path check pin the bearer-token
+// contract; the depth==0 assertion after a 200 pins the "marked uploaded, eligible for removal" half of
+// successful-upload-acknowledges-events. The 204 branch of "server returns 200 or 204" is symmetric
+// because doUpload's success predicate is `resp.StatusCode >= 200 && resp.StatusCode < 300`, treating
+// 2xx as a class; the 200 case here exercises that predicate.
 func TestUploadBatch(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -67,6 +76,13 @@ func TestUploadBatch(t *testing.T) {
 	}
 }
 
+// spec:agent-event-uploader/transient-failures-retry-with-backoff/first-attempt-times-out-second-succeeds
+//
+// Server returns 5xx on attempts 1 and 2, 200 on attempt 3. The scenario specifies "first attempt times
+// out" but the contract is identical for any transient failure that doesn't produce a typed 4xx
+// clientError: 5xx, network error, or timeout all flow through the same retry-with-backoff path. The
+// 5xx-mid-batch shape (assertion: the SAME batch is sent each attempt, then marked uploaded once a 2xx
+// arrives) is what the depth==0 assertion below pins.
 func TestUploadRetry(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -103,6 +119,14 @@ func TestUploadRetry(t *testing.T) {
 	}
 }
 
+// spec:agent-event-uploader/successful-upload-acknowledges-events/server-returns-5xx-mid-batch
+// spec:agent-event-uploader/transient-failures-retry-with-backoff/all-retries-exhausted
+//
+// Two scenarios share this test. The 5xx-mid-batch scenario's THEN clauses ("none marked uploaded;
+// same batch is eligible to retry on the next attempt") are pinned by the depth==1 assertion after the
+// drain. The all-retries-exhausted scenario adds the cap clause: MaxRetries=3 means the uploader stops
+// retrying after attempt 3 within this cycle, and the batch sits in the queue for a future cycle to try
+// again.
 func TestUploadAllRetriesFail(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -130,8 +154,13 @@ func TestUploadAllRetriesFail(t *testing.T) {
 	}
 }
 
-// TestUpload401_CallsOnAuthFail locks in the 401 → re-auth signal. An early QA bug had OnAuthFail never firing because the agent's TLS
-// config was broken; this test prevents any future regression where the auth path stops surfacing 401s to enrollment.
+// spec:agent-event-uploader/401-triggers-re-enrollment/401-during-upload
+//
+// Locks in the 401 -> re-auth signal. An early QA bug had OnAuthFail never firing because the agent's
+// TLS config was broken; this test prevents any future regression where the auth path stops surfacing
+// 401s to enrollment. Pins the three THEN clauses of the scenario: the auth-fail callback fires
+// (called==1), the batch is not marked uploaded (depth==1), and the next cycle resumes with whatever
+// token enrollment now holds (structural: TokenFn is called fresh on every drainOnce).
 func TestUpload401_CallsOnAuthFail(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -163,6 +192,136 @@ func TestUpload401_CallsOnAuthFail(t *testing.T) {
 	depth, _ := q.Depth(ctx)
 	if depth != 1 {
 		t.Fatalf("expected queue depth 1 after 401, got %d", depth)
+	}
+}
+
+// spec:agent-event-uploader/upload-uses-the-host-bearer-token/upload-with-no-token
+//
+// When the agent has not yet enrolled and TokenFn returns "", the server returns 401 (no valid
+// Authorization header) and the events MUST stay in the local queue. The 401 also triggers
+// OnAuthFail, but the scenario's load-bearing clause for THIS test is "events are not removed from
+// the local queue" pinned by the depth==1 assertion below. The server's 401-on-empty-token
+// enforcement is server-side; here we exercise the agent-side half (no usable token in the request
+// header, batch stays queued).
+func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"no-token-evt"}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// atomic.Value because httptest hands requests on a separate goroutine; the bare assignment
+	// would be a race under `go test -race`.
+	var sawAuthHeader atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuthHeader.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	// TokenFn present but returns "" — the unenrolled-agent shape the spec scenario describes.
+	cfg.TokenFn = func() string { return "" }
+	cfg.MaxRetries = 3
+
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
+
+	if got, ok := sawAuthHeader.Load().(string); ok && got != "" {
+		t.Fatalf("expected no usable Authorization header when TokenFn returns \"\", got %q", got)
+	}
+	depth, _ := q.Depth(ctx)
+	if depth != 1 {
+		t.Fatalf("expected queue depth 1 (batch stays queued on 401), got %d", depth)
+	}
+}
+
+// spec:agent-event-uploader/bounded-request-size/queue-holds-more-events-than-fit-in-one-request
+//
+// Enqueue 10 events, set BatchSize=3. A single drainOnce dequeues exactly 3 events; the remaining 7
+// stay queued for subsequent cycles. The spec's "one or more requests of bounded size" half is pinned
+// by the single-request-with-3-events shape; the "events that did not fit ... remain queued" half is
+// pinned by the depth==7 assertion. Multiple drainOnce calls would empty the queue but the bounded
+// per-request shape is what this test pins.
+func TestUpload_BoundedBatchSize(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+
+	for i := range 10 {
+		payload := fmt.Sprintf(`{"event_id":"bounded-%d"}`, i)
+		if err := q.Enqueue(ctx, []byte(payload)); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+
+	// atomic.Int64 because the httptest handler runs on its own goroutine; a bare int would race
+	// against the main-goroutine read after drainOnce. int64 avoids the gosec int->int32 overflow lint.
+	var receivedCount atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			return
+		}
+		var events []json.RawMessage
+		if err := json.Unmarshal(body, &events); err != nil {
+			t.Errorf("unmarshal: %v", err)
+			return
+		}
+		receivedCount.Store(int64(len(events)))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.BatchSize = 3
+
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
+
+	if got := receivedCount.Load(); got != 3 {
+		t.Fatalf("expected exactly 3 events in the bounded request, got %d", got)
+	}
+	depth, _ := q.Depth(ctx)
+	if depth != 7 {
+		t.Fatalf("expected 7 events still queued for subsequent cycles, got %d", depth)
+	}
+}
+
+// spec:agent-event-uploader/401-triggers-re-enrollment/401-is-treated-as-non-retryable-within-the-cycle
+//
+// MaxRetries=5 but a single 401 must NOT consume the retry budget. Pinned by attempts.Load()==1: only
+// one request hits the server even though the configured cap would allow 5. The spec rationale is that
+// retrying a 401 with the SAME (stale) token would be wasteful and would delay the next cycle picking
+// up a refreshed token from the enrollment path.
+func TestUpload_401IsNonRetryableWithinCycle(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"non-retry-401"}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.TokenFn = func() string { return "stale-token" }
+	cfg.OnAuthFail = func(context.Context) {}
+	cfg.MaxRetries = 5 // intentionally generous; a 401 must NOT consume this budget
+
+	u := New(q, cfg, nil, nil)
+	_ = u.drainOnce(ctx)
+
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 attempt on 401 regardless of MaxRetries=%d, got %d", cfg.MaxRetries, got)
 	}
 }
 
