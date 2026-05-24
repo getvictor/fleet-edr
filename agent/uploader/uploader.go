@@ -102,11 +102,11 @@ func (u *Uploader) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			// Shutdown drain: the spec's "execute one more upload attempt before returning" clause requires a usable context.
 			// Reusing the cancelled `ctx` here would short-circuit DequeueBatch (SQLite QueryContext rejects cancelled contexts
-			// immediately), so we build a fresh background context with a bounded timeout. The cap on Run's exit latency is
-			// whatever shutdownDrainTimeout is set to: long enough for one HTTP upload round-trip on a degraded network, short
-			// enough that a hung server cannot block agent shutdown indefinitely.
-			drainCtx, cancel := context.WithTimeout(context.Background(), shutdownDrainTimeout)
-			//nolint:contextcheck // The new context is the whole point: the inherited ctx is dead and would block the drain.
+			// immediately). context.WithoutCancel detaches from the parent's cancellation signal while preserving its values
+			// (OTel trace IDs, slog attributes), so the shutdown-drain log lines and spans still correlate with the run that
+			// triggered them. The bounded timeout caps Run's exit latency: long enough for one HTTP upload round-trip on a
+			// degraded network, short enough that a hung server cannot block agent shutdown indefinitely.
+			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainTimeout)
 			_ = u.drainOnce(drainCtx)
 			cancel()
 			return ctx.Err()
