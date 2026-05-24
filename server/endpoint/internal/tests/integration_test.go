@@ -106,17 +106,19 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 
 // spec:server-admin-surface/list-enrollments/operator-lists-enrolled-hosts
 // spec:server-admin-surface/revoke-a-host-enrollment/revoke-a-known-host
+// spec:agent-enrollment/per-host-token-scoping/revoking-a-host-invalidates-its-token
 //
-// Service-level walk-through pins two admin-surface scenarios. The List() call after Enroll proves the
-// admin list endpoint surfaces every enrolled row with HostID and the enrollment audit fields the
-// Enrollment API surfaces today (HostID, EnrolledAt, ExpiresAt, RevokedAt; see server/endpoint/api/types.go).
-// The spec scenario also calls for a last-seen timestamp; that field is sourced from the host_seen
-// hook tested elsewhere and is not part of the Enrollment row this query returns, so the marker pins
-// the host-id-plus-enrollment-metadata clause here and the last-seen surfacing is covered by a separate
-// admin handler path. The Revoke() call followed by VerifyToken returning ErrInvalidToken pins the AND
-// clause "the next request that agent makes with that token receives 401 Unauthorized": token
-// invalidation is durable across the verification path, which is what HostToken middleware translates
-// into 401 on subsequent agent traffic.
+// Three scenarios share this test. The List() call after Enroll proves the admin list endpoint
+// surfaces every enrolled row with HostID and the enrollment audit fields the Enrollment API surfaces
+// today (HostID, EnrolledAt, ExpiresAt, RevokedAt; see server/endpoint/api/types.go). The spec
+// scenario also calls for a last-seen timestamp; that field is sourced from the host_seen hook tested
+// elsewhere and is not part of the Enrollment row this query returns. The Revoke() call followed by
+// VerifyToken returning ErrInvalidToken pins both the admin-surface clause "the next request that
+// agent makes with that token receives 401" AND the agent-enrollment clause "revoking a host
+// invalidates its token": the SERVER-side enforcement is the load-bearing half (VerifyToken returns
+// ErrInvalidToken which the HostToken middleware translates to 401), and the agent's "re-enroll path
+// engages on the next request" half is already pinned in agent/enrollment/enrollment_test.go's
+// TestOnUnauthorized_Throttles.
 //
 // TestEnrollVerifyListRevoke walks the full operator + agent flow: agent enrolls, the host token verifies, the operator list shows the
 // row, the operator revokes, the same token now fails verification, and the listing reflects the revocation.
@@ -187,6 +189,14 @@ func TestEnroll_BadSecretMaps401(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrInvalidSecret)
 }
 
+// spec:agent-enrollment/first-boot-enrollment-exchange/hardware-uuid-is-malformed
+//
+// Pins the server-side half of the malformed-UUID scenario: a non-canonical hardware_uuid is rejected
+// at the service layer with api.ErrInvalidHardwareUUID before any enrollment row is persisted. The
+// HTTP-layer 400 response is downstream (covered by TestEnroll_InvalidUUID in enroll/handler_test.go),
+// and the agent-side "does not persist any token file" clause is the agent's behavior on observing a
+// 4xx from this endpoint (covered by enrollment.go's success-path-only persist call).
+//
 // TestEnroll_InvalidHardwareUUID covers the UUID-validation branch.
 func TestEnroll_InvalidHardwareUUID(t *testing.T) {
 	t.Parallel()

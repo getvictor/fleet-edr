@@ -122,6 +122,12 @@ func TestEnroll_SecretMismatch(t *testing.T) {
 	assert.Equal(t, "secret_mismatch", body.Error)
 }
 
+// spec:agent-enrollment/first-boot-enrollment-exchange/hardware-uuid-is-malformed
+//
+// HTTP-layer demonstrator: the enroll handler returns 400 with error code "hardware_uuid_invalid" when
+// the agent posts a non-canonical hardware_uuid. Companion to the service-layer pin in
+// server/endpoint/internal/tests/integration_test.go:TestEnroll_InvalidHardwareUUID; this test adds the
+// HTTP-layer 400 + JSON error envelope assertions the spec scenario calls for.
 func TestEnroll_InvalidUUID(t *testing.T) {
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
@@ -173,6 +179,13 @@ func TestEnroll_BadBody_NotJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+// spec:agent-enrollment/enrollment-is-rate-limited-per-source-ip/excess-enroll-attempts-from-one-ip
+//
+// Pins the per-IP rate-limiter contract: after the burst is exhausted (configured here at 2), further
+// enroll attempts from the same IP return 429 with Retry-After: 60. The "no enrollment row is created
+// or modified" clause is structural: 429 fires BEFORE the handler invokes svc.Enroll, so the fake
+// service's enroll callback is never reached for the 429-status request. The Retry-After header
+// matches the spec scenario's explicit requirement.
 func TestEnroll_RateLimit(t *testing.T) {
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
