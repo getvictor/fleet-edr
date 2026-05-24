@@ -121,11 +121,11 @@ func (e *callbackTestEnv) callbackRequest(t *testing.T, stateOverride string) *h
 //
 // Pins the cookie-attributes clause on the OIDC happy-path session mint: after the callback succeeds
 // and a session is created, the response sets the session cookie with HttpOnly=true. The assertion on
-// sessCookie.HttpOnly below pins the spec's HttpOnly clause; the SameSite clause is asserted by the
-// writeSessionCookie helper's tests in handler_test.go (TestWriteStateCookie covers the state cookie's
-// shape; the session cookie uses the same helper with SameSiteLax). The "Secure when TLS is enabled"
-// clause is config-driven via Options.CookieSecure (see login.Options) and is structurally tied to
-// the deployment's TLS setting, not directly asserted here.
+// sessCookie.HttpOnly below pins one clause; the full attribute set (Path=/, SameSiteLax, Secure,
+// MaxAge derived from ExpiresAt) is pinned in isolation by TestWriteSessionCookie in handler_test.go,
+// which calls writeSessionCookie directly with a constructed Session literal. Multi-test
+// demonstrator: this end-to-end test catches a regression where the handler stops calling
+// writeSessionCookie at all; the unit test catches a regression inside the helper itself.
 //
 // Happy path: state cookie verifies, code exchanges, JIT runs (subject is fresh, JIT enabled), session minted, response is a 302 to
 // the state's pinned redirect with both cookies set. Audits one auth.oidc.success row plus one user.created row from the provisioner.

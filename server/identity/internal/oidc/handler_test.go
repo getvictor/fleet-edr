@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/sessions"
 )
 
 // captureAudit collects audit events without writing to MySQL.
@@ -142,9 +143,10 @@ func TestFailureAudit(t *testing.T) {
 	assert.Equal(t, "okta-1", got.Payload["subject"])
 }
 
-// writeStateCookie + writeSessionCookie set a single audited cookie with HttpOnly + SameSiteLax + the path scope expected by the
-// handler. Pinned because the cookie helpers consolidate three previous inline construction sites; a regression that stripped HttpOnly
-// would silently expose state to JS-level XSS.
+// writeStateCookie + writeSessionCookie each set a cookie with HttpOnly + SameSiteLax + Secure but for different scopes (state cookie
+// is path-restricted to /api/auth/; session cookie is /). Pinned because the cookie helpers consolidate three previous inline
+// construction sites; a regression that stripped HttpOnly would silently expose the cookie to JS-level XSS. The session-cookie
+// attribute set has its own direct test in TestWriteSessionCookie below.
 func TestWriteStateCookie(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t)
@@ -159,6 +161,43 @@ func TestWriteStateCookie(t *testing.T) {
 	assert.Equal(t, http.SameSiteLaxMode, c.SameSite)
 	assert.Equal(t, 60, c.MaxAge)
 	assert.True(t, c.Secure, "OIDC cookies are unconditionally Secure; localhost browser carve-out keeps dev working")
+}
+
+// spec:ui-authentication-session/session-cookie-is-http-only-and-same-site/cookie-attributes-on-login
+//
+// Direct unit test for writeSessionCookie's full attribute set. Mirrors TestWriteStateCookie's shape
+// for the OIDC state cookie. The session-cookie path is "/" (broader than the state cookie's
+// /api/auth/ scope) because every authed admin endpoint reads it; the rest of the attributes
+// (HttpOnly, SameSiteLax, Secure) match the state cookie's hardening. Value is the base64url-encoded
+// session token; MaxAge reflects time-until-ExpiresAt in seconds. Multi-test demonstrator with
+// TestHandleCallback_HappyPath_JITNewUser in callback_integration_test.go (which pins HttpOnly on the
+// assembled OIDC callback response); this test pins the FULL attribute set in isolation.
+func TestWriteSessionCookie(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t)
+	w := httptest.NewRecorder()
+
+	// Construct a Session literal. writeSessionCookie reads ID + ExpiresAt only; the rest of the fields are irrelevant to the
+	// cookie shape. 32 bytes is the canonical session-ID length so the base64url-encoded value is well-formed.
+	rawID := make([]byte, 32)
+	for i := range rawID {
+		rawID[i] = byte(i)
+	}
+	expires := time.Now().Add(12 * time.Hour)
+	sess := &sessions.Session{ID: rawID, ExpiresAt: expires}
+
+	h.writeSessionCookie(w, sess)
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	c := cookies[0]
+	assert.Equal(t, api.SessionCookieName, c.Name)
+	assert.Equal(t, api.EncodeToken(rawID), c.Value, "value must be the base64url-encoded session id")
+	assert.Equal(t, "/", c.Path, "session cookie scope is the whole app, not /api/auth/")
+	assert.True(t, c.HttpOnly, "session cookie must be HttpOnly so JS on any origin cannot read it")
+	assert.Equal(t, http.SameSiteLaxMode, c.SameSite, "SameSiteLax blocks cross-site form-submission auth bypass")
+	assert.True(t, c.Secure, "session cookie is unconditionally Secure; localhost dev relies on the browser carve-out")
+	assert.Positive(t, c.MaxAge, "MaxAge derived from time-until-ExpiresAt; must be positive for a fresh session")
+	assert.WithinDuration(t, expires, c.Expires, time.Second, "Expires reflects ExpiresAt within HTTP-date rounding")
 }
 
 // HandleCallback failure paths: state-cookie absent, malformed,
