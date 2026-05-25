@@ -1,9 +1,10 @@
 name: Spec traceability
 
 # spectrace ties scenarios in openspec/specs/<dir>/spec.md to tests via the canonical-ID marker contract documented in
-# docs/testing-strategy.md. UAT plan milestone M13 phased rollout finished at 262/262 markers on main; the gate now runs
-# in --strict mode so that invalid references AND uncovered SHALL/MUST scenarios both fail the build. New normative
-# scenarios MUST land with at least one marker; spec renames MUST update every marker that references the old slug.
+# docs/testing-strategy.md. UAT plan milestone M13 phased rollout finished with all 262 normative scenarios covered on
+# main; the gate now runs in --strict mode so that invalid references AND uncovered SHALL/MUST scenarios both fail the
+# build. New normative scenarios MUST land with at least one marker; spec renames MUST update every marker that
+# references the old slug.
 
 on:
   push:
