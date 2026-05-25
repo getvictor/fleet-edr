@@ -37,6 +37,10 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 // []api.Rule{}), so no production-code change is required to exercise the contract. Adding a bootstrap option that callers
 // could pass to override the catalog would widen the public surface for one test; the focused construction here is cheaper
 // and equally tight.
+//
+// Test structure: status / content-type / payload-shape are split into t.Run subtests so a regression on one dimension
+// (e.g., the handler starts emitting text/plain on the no-rules path) is named in the failure output and not lost in a
+// flat test body.
 func TestHandler_ATTACKCoverage_NoRules(t *testing.T) {
 	t.Parallel()
 	svc := service.New([]rulesapi.Rule{}, slog.Default())
@@ -51,14 +55,28 @@ func TestHandler_ATTACKCoverage_NoRules(t *testing.T) {
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "no-rules server MUST still serve 200, not 500 / nil")
-	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json",
-		"response MUST be JSON so the Navigator import path stays the same as the with-rules case")
 
+	// Read + decode the body up front so the payload-shape subtest doesn't depend on subtest scheduling order under
+	// t.Parallel (the body would otherwise be drained by the first subtest that touches it).
 	var layer struct {
 		Techniques []any `json:"techniques"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&layer))
-	assert.NotNil(t, layer.Techniques, "techniques field MUST be present (empty array), not omitted")
-	assert.Empty(t, layer.Techniques, "with zero registered rules, the coverage layer MUST carry zero techniques")
+
+	t.Run("status is 200", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "no-rules server MUST still serve 200, not 500 / nil")
+	})
+
+	t.Run("content-type is application/json", func(t *testing.T) {
+		t.Parallel()
+		assert.Contains(t, resp.Header.Get("Content-Type"), "application/json",
+			"response MUST be JSON so the Navigator import path stays the same as the with-rules case")
+	})
+
+	t.Run("payload techniques array is present and empty", func(t *testing.T) {
+		t.Parallel()
+		assert.NotNil(t, layer.Techniques, "techniques field MUST be present (empty array), not omitted")
+		assert.Empty(t, layer.Techniques, "with zero registered rules, the coverage layer MUST carry zero techniques")
+	})
 }
