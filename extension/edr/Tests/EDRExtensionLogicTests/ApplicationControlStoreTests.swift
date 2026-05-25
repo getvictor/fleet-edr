@@ -144,6 +144,45 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.pathRules["/usr/local/bin/foo"]?.ruleID, "r6")
     }
 
+    // spec:endpoint-event-collection/process-exec-authorization/an-exec-of-a-non-blocklisted-path-is-allowed
+    //
+    // The exec-authorization decision is "look up the exec's path / cdhash / signing-id / team-id / binary
+    // hash in the per-rule-type maps the ApplicationControlStore maintains, and DENY if any rule matches;
+    // ALLOW (and emit a notification event) otherwise." The blocklisted-path-is-denied scenario is pinned by
+    // testApplyRoutesEveryRuleTypeIntoItsOwnMap (data structure side of the deny decision); this test pins
+    // the symmetric allow case: a path / identifier that is NOT in the typed maps produces no lookup hit, so
+    // the subscriber's downstream `if storeRule == nil { return ES_AUTH_RESULT_ALLOW }` branch takes the
+    // allow path. The ES_AUTH_RESULT_ALLOW return + the resulting exec notification event are downstream of
+    // this test (subscribed in extension/ESFSubscriber.swift, exercised at the system / VM layer per
+    // docs/testing-strategy.md), but the absence-of-match in the data structure is the unit-testable half.
+    func testApplySnapshotMissesUnregisteredIdentifiers() {
+        let store = makeStore()
+        store.apply(rawJSON: document(
+            policyID: 1, version: 1,
+            rules: [
+                RuleSpec(type: "BINARY", identifier: "blocked-binary-hex", ruleID: "r1"),
+                RuleSpec(type: "PATH", identifier: "/usr/local/bin/banned", ruleID: "r2"),
+                RuleSpec(type: "SIGNINGID", identifier: "BANNED:com.example.banned", ruleID: "r3"),
+                RuleSpec(type: "TEAMID", identifier: "BANNEDTEAM", ruleID: "r4")
+            ]
+        ))
+        let snapshot = store.currentSnapshot()
+        // Sanity-check the blocked entries DID land so the negative assertions below are meaningful.
+        XCTAssertNotNil(snapshot.binaryRules["blocked-binary-hex"])
+        XCTAssertNotNil(snapshot.pathRules["/usr/local/bin/banned"])
+        // The same-typed-map lookup misses for an identifier the policy never named. The
+        // ApplicationControlStore returns no rule; the subscriber's "no match -> allow" branch fires.
+        XCTAssertNil(snapshot.binaryRules["unregistered-binary-hex"])
+        XCTAssertNil(snapshot.pathRules["/usr/bin/ls"])
+        XCTAssertNil(snapshot.signingIDRules["FDG8Q7N4CC:com.fleetdm.allowed"])
+        XCTAssertNil(snapshot.teamIDRules["FDG8Q7N4CC"])
+        // Cross-type lookups also miss: a path that happens to coincide with a binary-hex string lands in
+        // the wrong map by construction (each rule type's identifier shape is distinct). This pins the
+        // "every rule type is consulted independently" property.
+        XCTAssertNil(snapshot.binaryRules["/usr/local/bin/banned"])
+        XCTAssertNil(snapshot.pathRules["blocked-binary-hex"])
+    }
+
     // MARK: - apply: monotonic-version gate
 
     func testApplyHonorsMonotonicVersionGate() {
