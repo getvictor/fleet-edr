@@ -314,8 +314,12 @@ func TestHandleSetupPost_ChallengeMissing(t *testing.T) {
 	assert.Equal(t, "challenge_missing", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
+// spec:ui-authentication-session/login-mints-a-session-cookie-and-a-csrf-token/login-with-empty-fields
+//
 // POST /admin/break-glass/challenge with malformed JSON returns 400 body_invalid. Pinned because handler must reject before reaching
-// the service layer.
+// the service layer. The spec's "login with empty fields" scenario maps onto this break-glass entry point: an operator posting an
+// empty-or-malformed body to the login surface MUST get back 400 with the typed `X-Edr-Auth-Reason: body_invalid` header, and no
+// session row or cookie is created (the service layer is never reached).
 func TestHandleBeginLogin_BadBody(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newHandler(t)

@@ -23,15 +23,20 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 	return users.New(db), rbac.New(db), db
 }
 
-// Markers for `first-startup-seed` and `recovery-after-a-lost-password` were considered for this test
-// but pulled: those scenarios' load-bearing THEN clauses are the password banner on stderr and the
-// "fresh 24-byte password" generation, neither of which Phase 4b's seeder produces (the redemption
-// URL banner lives in cmd/main, the seeder leaves password NULL). Pinning the markers here would
-// overstate coverage. The drift is tracked in #257; the marker will return when the spec is rewritten
-// around the redemption-URL flow.
+// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/first-startup-seed
+// spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/recovery-after-a-lost-password
 //
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
 // The Phase 4b flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
+//
+// The spec was rewritten in PR #267 to describe the Phase 4b break-glass admin + redemption-URL flow (issue #257). Both
+// scenarios this test pins reduce to the same structural property: "if the users table is empty when the seeder runs,
+// a break-glass admin row is inserted with the well-known email + NULL password + is_breakglass=1 + super_admin binding,
+// and the seed function itself does NOT write a password banner". For first-startup-seed the precondition is "fresh
+// install with empty users table"; for recovery-after-a-lost-password the precondition is "operator deleted the user row
+// and restarted" (which leaves the table empty from the seeder's perspective). The cmd/main redemption-URL emission is
+// covered separately at startup-banner integration and is out of scope here; this test pins the seed function's contract
+// directly via the stderr buffer being empty.
 func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	t.Parallel()
 	us, rb, db := newSeedFixture(t)
