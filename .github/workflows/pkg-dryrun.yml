@@ -109,9 +109,11 @@ jobs:
       # spec:release-packaging/dry-run-build-on-any-macos-runner/dry-run-does-not-contact-apple
       #
       # The --dry-run flag short-circuits build.sh's notarize + staple steps and uses ad-hoc signing (CODE_SIGN_IDENTITY=-)
-      # so no network call to Apple's notary is made. The `permissions: contents: read` job scope above also denies any
-      # secret access; APPLE_TEAM_ID is a literal team-id string, not a secret. The pkg-dryrun job structurally cannot
-      # contact Apple even if build.sh tried.
+      # so the script never invokes notarytool or stapler. The job also runs without any signing/notary credentials in env
+      # (no APPLE_DEV_ID_*_P12_*, no APPLE_NOTARY_APP_PASSWORD), so even if a future regression re-introduced a notarize
+      # call, it would fail-fast on missing credentials before reaching the network. Hosted runners DO have outbound
+      # network access; the guarantee is "the dry-run path doesn't try to contact Apple", not "the runner is sandboxed
+      # from the public internet".
       - name: Run pkg build dry-run
         env:
           APPLE_TEAM_ID: FDG8Q7N4CC

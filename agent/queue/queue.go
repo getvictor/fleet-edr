@@ -174,6 +174,21 @@ func (q *Queue) RecordClientError(ctx context.Context, ids []int64, quarantineTh
 		defer quarantineStmt.Close()
 	}
 
+	newlyQuarantined, err := bumpAndQuarantineRows(ctx, ids, bumpStmt, quarantineStmt, quarantineThreshold)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return newlyQuarantined, nil
+}
+
+// bumpAndQuarantineRows is the inner loop extracted from RecordClientError to keep cognitive complexity under Sonar's S3776
+// budget. For each id, bumps the per-row counter; when quarantineStmt is non-nil, applies the quarantine UPDATE and collects
+// ids that flipped uploaded=0->1 on THIS call so the caller can audit them.
+func bumpAndQuarantineRows(ctx context.Context, ids []int64, bumpStmt, quarantineStmt *sql.Stmt, threshold int) ([]int64, error) {
 	var newlyQuarantined []int64
 	for _, id := range ids {
 		if _, err := bumpStmt.ExecContext(ctx, id); err != nil {
@@ -182,7 +197,7 @@ func (q *Queue) RecordClientError(ctx context.Context, ids []int64, quarantineTh
 		if quarantineStmt == nil {
 			continue
 		}
-		res, err := quarantineStmt.ExecContext(ctx, id, quarantineThreshold)
+		res, err := quarantineStmt.ExecContext(ctx, id, threshold)
 		if err != nil {
 			return nil, err
 		}
@@ -193,10 +208,6 @@ func (q *Queue) RecordClientError(ctx context.Context, ids []int64, quarantineTh
 		if affected > 0 {
 			newlyQuarantined = append(newlyQuarantined, id)
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	return newlyQuarantined, nil
 }

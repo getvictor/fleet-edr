@@ -30,8 +30,10 @@ var markerRE = regexp.MustCompile(`(?:\W|^)spec:([A-Za-z0-9][A-Za-z0-9_/-]*)`)
 // (`-` and `/` both map to `_` per docs/testing-strategy.md), so resolveSwift reconciles against the known canonical-ID set.
 var swiftMarkerRE = regexp.MustCompile(`\btest_spec_([a-z0-9_]+)\b`)
 
-// ScanMarkers walks rootDir and returns every marker reference found in Go / TS / TSX / Swift sources. Returns markers in
-// file-encounter order; the caller sorts as needed.
+// ScanMarkers walks rootDir and returns every marker reference found in Go / TS / TSX / Swift sources plus YAML
+// (.yml / .yaml) workflow files and shell (.sh) scripts. Returns markers in file-encounter order; the caller sorts as
+// needed. The YAML + shell branches use the same `(?:\W|^)spec:` regex as the source-language branches, so `# spec:<id>`
+// in a workflow step or a script comment is recognised the same way `// spec:<id>` is in Go.
 //
 // `tools/spectrace` is excluded from the walk because the linter's own test fixtures construct example marker strings; if
 // counted, they would inflate the coverage number and emit false-positive invalid-reference warnings against the linter's
