@@ -79,8 +79,9 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 // spec:agent-process-reconciliation/periodic-kill-zero-sweep/tracked-process-has-exited-without-a-notification
 // spec:agent-process-reconciliation/synthetic-exits-are-distinguishable/synthetic-exit-shape
 // spec:agent-process-reconciliation/synthetic-exits-flow-through-the-standard-queue/enqueue-path-is-the-standard-queue
+// spec:endpoint-event-collection/reconciliation-events-are-tagged/agent-fills-a-missing-exit-event
 //
-// Four scenarios share this test:
+// Five scenarios share this test:
 //   - agent-event-queue: synthesized exit flows through standard enqueue path with exit_reason intact.
 //   - periodic-kill-zero-sweep: kernel reports "no such process" => synthetic exit + PID pruned from table.
 //   - synthetic-exit-shape: event_type="exit", exit_reason="host_reconciled", fresh UUID event_id, host_id
@@ -255,10 +256,13 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 
 // spec:agent-event-queue/synthetic-reconciliation-events-use-the-same-queue/snapshot-heartbeat-event-is-queued-and-uploaded
 // spec:agent-process-reconciliation/heartbeat-emission-for-snapshot-originated-processes/live-snapshot-originated-process-emits-a-heartbeat
+// spec:endpoint-event-collection/reconciliation-events-are-tagged/snapshot-originated-process-is-still-alive-on-a-later-pass
 //
-// Two scenarios share this test: the queue-side contract that snapshot_heartbeat events flow through the
-// standard enqueue path, and the reconciliation-side contract that live PIDs flagged IsSnapshot=true emit
-// a heartbeat (carrying the host id) while live non-snapshot PIDs do not. The companion test
+// Three scenarios share this test: the queue-side contract that snapshot_heartbeat events flow through the
+// standard enqueue path, the reconciliation-side contract that live PIDs flagged IsSnapshot=true emit a
+// heartbeat (carrying the host id) while live non-snapshot PIDs do not, and the endpoint-event-collection
+// contract that a snapshot-originated process still alive on a later reconciliation pass emits a
+// snapshot_heartbeat event (not a duplicate exec or a synthetic exit). The companion test
 // TestRunOnce_NoHeartbeatForLiveNonSnapshotPID pins the negative half on its own.
 func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side liveness ping the server's 6h TTL reconciler

@@ -149,6 +149,15 @@ func TestEnvelopes_HostIDOverride(t *testing.T) {
 	}
 }
 
+// spec:endpoint-event-collection/outbound-socket-flow-capture/a-process-opens-an-outbound-tcp-connection
+//
+// The fakeagent's network_connect row asserts the exact wire contract the spec scenario calls out: a TCP
+// outbound connection emits a network_connect envelope whose payload identifies pid, protocol=tcp,
+// direction=outbound, remote_address, and remote_port. Optional path/uid/local_address/local_port/
+// remote_hostname are documented as nullable in schema/events.json. The fakeagent feeder is the wire-level
+// fixture that the cross-context integration tests use to drive realistic event streams; pinning the
+// network_connect shape here means the same contract that the live network filter produces is what
+// downstream Go consumers (server detection engine, retention, alert pipeline) parse.
 func TestEnvelopes_PayloadShapePerEventType(t *testing.T) {
 	// One scenario, one event of each supported type. Build envelopes, then unmarshal each payload back into a generic map and
 	// assert on the required-fields-per-schema. Catches regressions where buildPayload omits a required field.

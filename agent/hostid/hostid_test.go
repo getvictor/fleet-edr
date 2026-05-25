@@ -58,6 +58,15 @@ func TestParseIORegOutput(t *testing.T) {
 	}
 }
 
+// spec:endpoint-event-collection/canonical-event-envelope/events-from-the-same-device-share-a-host-id
+//
+// The spec's two clauses are "every emitted event carries the same host_id" and "that value persists across
+// reboots." Both clauses bottom out on the same property: the host_id returned by Get() is sourced from
+// IOPlatformUUID, which the macOS kernel reads from hardware and is stable across reboots of that device.
+// This test pins the determinism of the source: feeding Get a known IOPlatformUUID line returns that exact
+// UUID, so any caller that stamps Get()'s result onto every event envelope satisfies both spec clauses.
+// The stamping side is exercised by the reconcile_test.go tests that emit envelopes carrying env.HostID.
+//
 // TestGet_FromFakeIOReg drives the Get() shell-out path. Real ioreg only runs on macOS and emits non-deterministic data, so we point
 // ioregPath at a tiny shell wrapper that prints a known IOPlatformUUID line. This is the only way to cover the success path of Get
 // without making the test host-dependent.

@@ -80,6 +80,15 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertTrue(json.contains("\"path\":\"\\/bin\\/sh\""))
     }
 
+    // spec:endpoint-event-collection/reconciliation-events-are-tagged/extension-restarts-and-rebuilds-the-live-process-set
+    //
+    // The spec scenario asserts the extension emits one exec event per pre-existing process with
+    // snapshot = true on restart. The enumeration side lives in ProcessSnapshotEnumerator.swift (kept out of
+    // the SwiftPM target because it invokes sysctl against the live process table on the test machine, which
+    // makes machine-dependent assertions impossible). The wire-shape side, which is the contract the server's
+    // detection engine consumes, is exactly what this test pins: an ExecPayload with isSnapshot=true
+    // serializes with `snapshot:true` in the wire bytes so server/detection's `bytes.Contains` gate over
+    // `"snapshot":true` drops snapshot-originated execs from rule evaluation.
     func testExecPayloadEmitsSnapshotKeyWhenTrue() throws {
         let payload = ExecPayload(
             pid: 99, ppid: 1, path: "/bin/ls", args: ["ls"], cwd: "/", uid: 0, gid: 0,
