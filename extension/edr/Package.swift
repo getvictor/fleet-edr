@@ -47,8 +47,22 @@ let package = Package(
                 "build",
                 "tmp",
                 "edr.xcodeproj",
-                "edr",
                 "Tests",
+                // The host-app target's executable-and-AppKit files. main.swift has top-level executable
+                // code (legal only in an entry-point file, illegal in a library target); BlockAlert /
+                // NotificationListener / BlockNotification pull in AppKit-only UI surfaces (NSAlert,
+                // NSApplication) that belong in the production host-app bundle, not in the EDRExtensionLogic
+                // library whose role is to expose pure-logic types for XCTest. SwiftPM CAN link AppKit on a
+                // .macOS target — the exclusion is library-hygiene (no UI deps, no top-level code), not a
+                // SwiftPM linker limitation. edr/ExtensionManagerLogic.swift IS in the source list below
+                // (pure-logic types only, no top-level code) so host-app-extension-manager spec scenarios
+                // are unit-testable.
+                "edr/main.swift",
+                "edr/BlockAlert.swift",
+                "edr/NotificationListener.swift",
+                "edr/BlockNotification.swift",
+                "edr/Info.plist",
+                "edr/edr.entitlements",
                 "extension/Info.plist",
                 "extension/extension.entitlements",
                 "extension/main.swift",
@@ -67,6 +81,7 @@ let package = Package(
                 "com.fleetdm.edr.notify.plist"
             ],
             sources: [
+                "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
                 "extension/XPCServer.swift",
                 "extension/BlockNotification.swift",
