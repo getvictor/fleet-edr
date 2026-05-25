@@ -3,59 +3,148 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer")
 
-/// Code signing requirement that peers must satisfy to connect to the XPC service.
-/// Production: only binaries signed with the Fleet Device Management team ID
-/// (FDG8Q7N4CC) pass. Debug builds additionally accept the pinned cdhash of the
-/// locally-built ad-hoc agent so dev iteration on SIP-off VMs works -- `go build`
-/// produces an ad-hoc signature with no team ID, so the strict production
-/// requirement would lock dev iteration out (observed on edr-dev as
-/// "Received message forbidden due to code signing requirement" rejecting the
-/// agent's hello message).
+/// PeerCodeSigningRequirement vends the two requirement strings the XPC server pins peers against. Exposed as type-level
+/// constants so the unit tests can assert the requirement language on both production and debug paths without spinning
+/// up an XPC listener.
 ///
-/// The cdhash clause pins to ONE specific hash, not "any ad-hoc binary." A
-/// different ad-hoc-signed process cannot impersonate the agent. `#if DEBUG`
-/// excludes the entire ad-hoc branch from release builds so production binaries
-/// are team-id-only even if this constant is left in source.
-#if DEBUG
-private let peerCodeSigningRequirement = """
-    (anchor apple generic and certificate leaf[subject.OU] = "FDG8Q7N4CC") or \
-    cdhash H"\(adHocPeerCDHash)"
-    """
+/// Production: only binaries signed with the Fleet Device Management team ID (FDG8Q7N4CC, chained to the Apple anchor)
+/// pass. Debug builds additionally accept the pinned cdhash of the locally-built ad-hoc agent so dev iteration on
+/// SIP-disabled VMs works: `go build` produces an ad-hoc signature with no team ID, so the strict production requirement
+/// would lock dev iteration out (observed on edr-dev as "Received message forbidden due to code signing requirement"
+/// rejecting the agent's hello message). The cdhash clause pins to ONE specific hash, not "any ad-hoc binary," so a
+/// different ad-hoc-signed process cannot impersonate the agent. The active `peerCodeSigningRequirement` constant below
+/// excludes the ad-hoc branch from release builds so production binaries are team-id-only even if the .debug string is
+/// left in source.
+enum PeerCodeSigningRequirement {
+    /// FDM team ID. Every signed peer that reaches us in production must chain to a leaf cert carrying this OU.
+    static let teamID = "FDG8Q7N4CC"
 
-/// cdhash of the locally-built ad-hoc agent binary. Update via `task build:agent`
-/// followed by `codesign -d -r - agent/tmp/fleet-edr-agent` to read the new hash.
-/// Go's deterministic builds keep this stable across rebuilds of identical
-/// source, so the update cadence matches Go-side code changes, not every build.
-private let adHocPeerCDHash = "b854184cd523298f078a3281c721ed715c3fe626"
-#else
-private let peerCodeSigningRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
-#endif
+    /// Cdhash of the locally-built ad-hoc agent binary. Update via `task build:agent` followed by
+    /// `codesign -d -r - agent/tmp/fleet-edr-agent` to read the new hash. Go's deterministic builds keep this stable
+    /// across rebuilds of identical source, so the update cadence matches Go-side code changes, not every build.
+    static let adHocCDHashDebug = "b854184cd523298f078a3281c721ed715c3fe626"
 
-/// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case,
-/// which is fine for an extension that already keeps ESF deadlines alive on a few-second
-/// latency budget. Once full, oldest entries are dropped (lossy FIFO) so a stuck agent
-/// can never OOM the extension.
+    /// Production requirement string: Apple anchor + FDM team ID, nothing else. Used by release-configured extensions.
+    static let production = "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\""
+
+    /// Debug requirement string: production + the pinned ad-hoc cdhash. Used by debug-configured extensions only.
+    static let debug = """
+        (anchor apple generic and certificate leaf[subject.OU] = "\(teamID)") or \
+        cdhash H"\(adHocCDHashDebug)"
+        """
+}
+
+/// The active requirement string the listener applies at peer-accept time. Picks between .production and .debug via
+/// `#if DEBUG` so a release extension never accepts the ad-hoc cdhash even if the .debug constant is left in source.
+private let peerCodeSigningRequirement: String = {
+    #if DEBUG
+    return PeerCodeSigningRequirement.debug
+    #else
+    return PeerCodeSigningRequirement.production
+    #endif
+}()
+
+/// XPC message-type strings the inbound dispatcher recognises, plus the outbound hello-ack type. Centralised here so a
+/// future protocol evolution (adding a new inbound type) touches one place + one switch arm in dispatchInbound.
+enum XPCMessageType {
+    static let hello = "hello"
+    static let helloAck = "hello-ack"
+    static let applicationControlUpdate = "application_control.update"
+}
+
+/// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case, which is fine for an
+/// extension that already keeps ESF deadlines alive on a few-second latency budget. Once full, oldest entries are
+/// dropped (lossy FIFO) so a stuck agent can never OOM the extension. File-private because only XPCServer + the
+/// adjacent log line need it; PendingBuffer takes its cap as an init parameter so it's testable without referencing
+/// this constant.
 private let pendingSendCap = 10_000
 
-/// XPCServer vends a Mach service that the Go agent connects to.
-/// Serialized ESF events are broadcast to all connected peers as
-/// XPC dictionaries with a "data" key containing raw JSON bytes.
+/// PendingBuffer is a bounded FIFO of event payloads the XPC server buffers while no peer is connected. Drained to the
+/// next peer that completes the hello handshake. Extracted from XPCServer so the cap + drop-oldest semantics + drain
+/// behaviour are unit-testable without a real XPC peer.
+struct PendingBuffer {
+    private(set) var entries: [Data] = []
+    let cap: Int
+
+    init(cap: Int) {
+        precondition(cap > 0, "PendingBuffer cap must be > 0")
+        self.cap = cap
+    }
+
+    /// append adds `data` to the buffer. Returns the number of entries dropped from the front to fit under cap (0 when
+    /// the buffer had room). Callers log on drop > 0 for operator visibility.
+    @discardableResult
+    mutating func append(_ data: Data) -> Int {
+        entries.append(data)
+        let overflow = entries.count - cap
+        if overflow > 0 {
+            entries.removeFirst(overflow)
+            return overflow
+        }
+        return 0
+    }
+
+    /// drain returns the buffered entries in append order and empties the buffer. Called when a peer completes the
+    /// hello handshake; the caller forwards each entry to that single peer (NOT a broadcast).
+    mutating func drain() -> [Data] {
+        let out = entries
+        entries.removeAll(keepingCapacity: false)
+        return out
+    }
+
+    var count: Int { entries.count }
+    var isEmpty: Bool { entries.isEmpty }
+}
+
+/// XPCInboundDispatch is the verdict the dispatcher returns for one inbound XPC dictionary message. The XPC-layer code
+/// in XPCServer translates each case into the corresponding xpc_connection_send_message + ApplicationControlStore call;
+/// the verdict itself is pure data so unit tests cover every code path without an XPC framework dependency.
+enum XPCInboundDispatch: Equatable {
+    /// `type = hello`: send hello-ack to this peer + drain the pending buffer to this peer.
+    case helloAck
+    /// `type = application_control.update` with non-empty `data`: pass the bytes to ApplicationControlStore.apply.
+    case applyApplicationControl(Data)
+    /// `type = application_control.update` with missing or empty `data`: ignore + leave the active policy untouched.
+    /// Distinct from .ignore so the operator-visible log line can be specific.
+    case rejectMissingData
+    /// Unknown type, or no `type` field at all: log + ignore. Connection stays open; forward-compat agents can introduce
+    /// new types without breaking older extensions.
+    case ignore
+}
+
+/// dispatchInbound classifies an inbound `(type, data)` pair into an XPCInboundDispatch. Pure function so every
+/// extension-xpc-server scenario (hello, application_control.update with + without data, unknown future type) is
+/// covered by the unit-test suite.
+func dispatchInbound(type: String?, data: Data?) -> XPCInboundDispatch {
+    guard let type else { return .ignore }
+    switch type {
+    case XPCMessageType.hello:
+        return .helloAck
+    case XPCMessageType.applicationControlUpdate:
+        guard let data, !data.isEmpty else { return .rejectMissingData }
+        return .applyApplicationControl(data)
+    default:
+        return .ignore
+    }
+}
+
+/// XPCServer vends a Mach service that the Go agent connects to. Serialized ESF events are broadcast to all connected
+/// peers as XPC dictionaries with a "data" key containing raw JSON bytes.
 ///
-/// Startup race the buffer handles (issue #11 + #173 review): on extension restart a
-/// phantom XPC peer can connect-and-immediately-disconnect within a few ms — observed
-/// empirically as "Peer connected (total: 1)" followed by "Peer disconnected (total: 0)"
-/// 10ms later, with the real agent peer arriving a second or two afterwards. Without the
-/// buffer, every event the extension sends in that window (snapshot pass, plus the first
-/// few live execs) goes into an empty peer set and is silently lost. The buffer captures
-/// those sends so the next connecting peer drains them on accept.
+/// Startup race the buffer handles (issue #11 + #173 review): on extension restart a phantom XPC peer can
+/// connect-and-immediately-disconnect within a few ms — observed empirically as "Peer connected (total: 1)" followed
+/// by "Peer disconnected (total: 0)" 10ms later, with the real agent peer arriving a second or two afterwards. Without
+/// the buffer, every event the extension sends in that window (snapshot pass, plus the first few live execs) goes into
+/// an empty peer set and is silently lost. The buffer captures those sends so the next connecting peer drains them on
+/// hello.
 final class XPCServer {
     private let serviceName: String
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
     private let queue = DispatchQueue(label: "com.fleetdm.edr.xpcserver")
-    /// FIFO buffer of event payloads enqueued while no peer was connected. Drained to the
-    /// next peer that connects (in order, oldest-first). All access on `queue`.
-    private var pendingSends: [Data] = []
+    /// FIFO buffer of event payloads enqueued while no peer was connected. Drained to the next peer that completes the
+    /// hello handshake (in order, oldest-first). All access on `queue`.
+    private var pendingBuffer = PendingBuffer(cap: pendingSendCap)
 
     init(serviceName: String) {
         self.serviceName = serviceName
@@ -76,15 +165,19 @@ final class XPCServer {
         logger.info("XPC listener started on \(self.serviceName)")
     }
 
-    /// send enqueues an event payload for delivery to every connected peer. When no peer
-    /// is connected the event is appended to pendingSends and flushed to the next peer
-    /// that connects. Drops oldest entries when the buffer fills (lossy FIFO) so a stuck
-    /// or never-connecting agent can never OOM the extension.
+    /// send enqueues an event payload for delivery to every connected peer. When no peer is connected the event is
+    /// appended to the pending buffer and flushed to the next peer that completes the hello handshake. Drops oldest
+    /// entries when the buffer fills (lossy FIFO) so a stuck or never-connecting agent can never OOM the extension.
     func send(data: Data) {
         queue.async { [weak self] in
             guard let self else { return }
             if self.peers.isEmpty {
-                self.appendPending(data)
+                let dropped = self.pendingBuffer.append(data)
+                if dropped > 0 {
+                    logger.warning(
+                        "XPC peer absent; dropped \(dropped, privacy: .public) oldest pending events (cap \(pendingSendCap, privacy: .public))"
+                    )
+                }
                 return
             }
             self.broadcastLocked(data)
@@ -92,15 +185,6 @@ final class XPCServer {
     }
 
     // MARK: - Private — all callers run on `queue`
-
-    private func appendPending(_ data: Data) {
-        pendingSends.append(data)
-        if pendingSends.count > pendingSendCap {
-            let drop = pendingSends.count - pendingSendCap
-            pendingSends.removeFirst(drop)
-            logger.warning("XPC peer absent; dropped \(drop, privacy: .public) oldest pending events (cap \(pendingSendCap, privacy: .public))")
-        }
-    }
 
     private func broadcastLocked(_ data: Data) {
         let msg = xpc_dictionary_create_empty()
@@ -113,16 +197,15 @@ final class XPCServer {
         }
     }
 
-    /// flushPendingTo sends every buffered event to the freshly-connected peer in order,
-    /// then clears the buffer. Sending to one peer rather than broadcasting to all peers
-    /// reflects the design contract: a queued event is the same event the broadcast would
-    /// have delivered, and at the moment it was queued there were no peers — the newly
-    /// arriving peer is the rightful recipient. If a SECOND peer connects later, that's
-    /// a separate session and doesn't get the historical buffer.
+    /// flushPendingTo sends every buffered event to the freshly-connected peer in order, then clears the buffer.
+    /// Sending to one peer rather than broadcasting to all peers reflects the design contract: a queued event is the
+    /// same event the broadcast would have delivered, and at the moment it was queued there were no peers — the newly
+    /// arriving peer is the rightful recipient. If a SECOND peer connects later, that's a separate session and doesn't
+    /// get the historical buffer.
     private func flushPendingTo(_ peer: XPCPeer) {
-        guard !pendingSends.isEmpty else { return }
-        let count = pendingSends.count
-        for data in pendingSends {
+        guard !pendingBuffer.isEmpty else { return }
+        let drained = pendingBuffer.drain()
+        for data in drained {
             let msg = xpc_dictionary_create_empty()
             data.withUnsafeBytes { buf in
                 guard let baseAddress = buf.baseAddress else { return }
@@ -130,60 +213,46 @@ final class XPCServer {
             }
             xpc_connection_send_message(peer.connection, msg)
         }
-        pendingSends.removeAll(keepingCapacity: false)
-        logger.info("XPC flushed \(count, privacy: .public) buffered events to newly-connected peer")
+        logger.info("XPC flushed \(drained.count, privacy: .public) buffered events to newly-connected peer")
     }
 
-    /// handlePeerMessage dispatches an inbound XPC dictionary from a connected peer (the
-    /// agent). The protocol is tiny: a "type" string tells us what kind of message it is.
-    ///
-    ///   - "hello" : the handshake the agent uses to trigger the Mach port bind.
-    ///               We reply with "hello-ack" and flush any pending events to this peer
-    ///               — receiving the hello is positive proof the channel is alive in both
-    ///               directions, which the agent uses to detect stale Mach port bindings
-    ///               post-extension-respawn (issue #178).
-    ///   - "application_control.update" : a typed snapshot push from the
-    ///     server's fan-out. The "data" key holds raw JSON bytes that
-    ///     ApplicationControlStore decodes + persists.
-    ///
-    /// Unknown types are logged and ignored — future protocol evolutions should be
-    /// additive, and a forward-compat agent must still work against this server.
+    /// handlePeerMessage dispatches an inbound XPC dictionary from a connected peer (the agent). The decision logic
+    /// lives in `dispatchInbound` so unit tests cover every reply path; this method does the XPC framework calls each
+    /// verdict needs.
     private func handlePeerMessage(_ event: xpc_object_t, peer: XPCPeer) {
-        guard let typeCStr = xpc_dictionary_get_string(event, "type") else {
-            return
+        let typeStr = xpc_dictionary_get_string(event, "type").map { String(cString: $0) }
+        var dataLen: Int = 0
+        var inboundData: Data?
+        if let dataPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 {
+            inboundData = Data(bytes: dataPtr, count: dataLen)
         }
-        let type = String(cString: typeCStr)
-        if type == "hello" {
+
+        switch dispatchInbound(type: typeStr, data: inboundData) {
+        case .helloAck:
             let ack = xpc_dictionary_create_empty()
-            xpc_dictionary_set_string(ack, "type", "hello-ack")
+            xpc_dictionary_set_string(ack, "type", XPCMessageType.helloAck)
             xpc_connection_send_message(peer.connection, ack)
-            // Receipt of hello is positive proof this peer is the real agent (not a
-            // phantom). Flush any events buffered while no peer was connected so the
-            // agent picks them up immediately rather than after the first natural exec.
+            // Receipt of hello is positive proof this peer is the real agent (not a phantom). Flush any events
+            // buffered while no peer was connected so the agent picks them up immediately rather than after the
+            // first natural exec.
             flushPendingTo(peer)
-            return
-        }
-        if type == "application_control.update" {
-            var dataLen: Int = 0
-            guard let rawPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 else {
-                logger.error("application_control.update missing 'data'")
-                return
-            }
-            let data = Data(bytes: rawPtr, count: dataLen)
+        case .applyApplicationControl(let data):
             ApplicationControlStore.shared.apply(rawJSON: data)
-            return
+        case .rejectMissingData:
+            logger.error("application_control.update missing 'data'")
+        case .ignore:
+            // type is peer-supplied; redact in the unified log so a compromised peer cannot inject arbitrary strings
+            // into log readers. typeStr may be nil if the peer omitted the field entirely.
+            logger.info("unknown XPC message type: \(typeStr ?? "(none)", privacy: .private)")
         }
-        // type is peer-supplied; redact in the unified log so a compromised peer
-        // cannot inject arbitrary strings into log readers.
-        logger.info("unknown XPC message type: \(type, privacy: .private)")
     }
 
     private func handleListenerEvent(_ event: xpc_object_t) {
         let type = xpc_get_type(event)
 
         if type == XPC_TYPE_CONNECTION {
-            // Validate peer code signing before accepting the connection.
-            // The agent binary must be signed with --options runtime for this to work.
+            // Validate peer code signing before accepting the connection. The agent binary must be signed with
+            // --options runtime for this to work.
             let result = xpc_connection_set_peer_code_signing_requirement(event, peerCodeSigningRequirement)
             if result != 0 {
                 logger.error("Failed to set peer code signing requirement: \(result)")
@@ -210,10 +279,9 @@ final class XPCServer {
             }
 
             xpc_connection_activate(event)
-            // Buffer flush is gated on receiving the peer's "hello" message rather than
-            // a time-based fallback (issue #178). A real agent peer sends hello to
-            // trigger the lazy Mach port bind; a phantom peer (observed in QA: connect
-            // → disconnect within ~10ms with no inbound traffic) never sends hello and
+            // Buffer flush is gated on receiving the peer's "hello" message rather than a time-based fallback
+            // (issue #178). A real agent peer sends hello to trigger the lazy Mach port bind; a phantom peer
+            // (observed in QA: connect → disconnect within ~10ms with no inbound traffic) never sends hello and
             // therefore never gets the buffer. handlePeerMessage handles the flush.
         } else if type == XPC_TYPE_ERROR {
             logger.error("Listener error")

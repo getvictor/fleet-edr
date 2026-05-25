@@ -40,6 +40,11 @@ The extensions SHALL reject any inbound XPC connection whose peer does not satis
 the Apple anchor and the Fleet Device Management team identifier. The validation MUST run before any event is delivered
 to the peer and before any inbound message from the peer is processed.
 
+Implementations MUST use `xpc_connection_set_peer_code_signing_requirement` (macOS 13+) as the sole peer-validation
+gate. Implementations MUST NOT additionally call `SecCodeCheckValidity`, `SecCodeCopyGuestWithAttributes`, or any other
+user-side variant of the same check against the same requirement string. The rationale, threat model, and the deferred
+tightening to pin the agent's signing identifier are documented in [ADR-0007](../../../docs/adr/0007-xpc-peer-validation-libxpc-only.md).
+
 #### Scenario: A peer with the wrong team ID is rejected
 
 - **GIVEN** an extension's XPC service is listening
@@ -93,7 +98,7 @@ dictionary message containing a `data` field whose value is the raw JSON event b
 
 ### Requirement: Inbound policy update
 
-The system extension SHALL accept inbound XPC dictionary messages with `type = policy.update` and a `data` field
+The system extension SHALL accept inbound XPC dictionary messages with `type = application_control.update` and a `data` field
 containing raw policy JSON bytes from any validated peer. On receipt the extension MUST replace the active blocklist
 with the policy described by `data` and MUST persist that policy so it survives extension restart.
 
@@ -104,7 +109,7 @@ with the policy described by `data` and MUST persist that policy so it survives 
 - **THEN** the new blocklist becomes the active policy used by exec authorization
 - **AND** the new blocklist persists across a restart of the extension
 
-#### Scenario: A policy.update with no data is rejected
+#### Scenario: An application_control.update with no data is rejected
 
 - **GIVEN** a validated agent connection is open to the system extension
 - **WHEN** the agent sends a `policy.update` message with no `data` field or empty data
