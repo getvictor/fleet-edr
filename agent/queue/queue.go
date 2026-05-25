@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_uploaded ON events(uploaded, id);
 `
 
+// migrationsClientErrorCount lazily adds the client_error_count column to the events table on Open. The column is the
+// per-row counter the uploader bumps on every drain-tick that returns a non-401 4xx for the row's batch; once the value
+// crosses the operator-configured quarantine threshold the row is set uploaded=1 so it stops being dequeued
+// (#253: permanent-client-errors-are-not-infinitely-retained). The migration is conditional via `PRAGMA table_info` +
+// ALTER TABLE so existing on-disk queues from older agent versions upgrade in place without losing pending events.
+const migrationsClientErrorCount = `client_error_count`
+
 // QueuedEvent is an event read from the queue.
 type QueuedEvent struct {
 	ID        int64
@@ -88,12 +95,121 @@ func Open(ctx context.Context, dbPath string, opts Options) (*Queue, error) {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	if err := migrateClientErrorCount(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate client_error_count: %w", err)
+	}
 
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Queue{db: db, maxBytes: opts.MaxBytes, logger: logger}, nil
+}
+
+// migrateClientErrorCount adds the client_error_count column to existing events tables. SQLite's ALTER TABLE ADD COLUMN
+// is online for a column with a DEFAULT, so the migration is safe to run on an agent that's been queuing events for
+// months. The PRAGMA table_info pre-check makes the migration idempotent across Open calls.
+func migrateClientErrorCount(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(events)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == migrationsClientErrorCount {
+			return rows.Close()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx,
+		"ALTER TABLE events ADD COLUMN client_error_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RecordClientError increments the client_error_count for every id in `ids` and, when the post-increment value reaches
+// `quarantineThreshold`, sets uploaded=1 so the row stops being dequeued. Returns the subset of ids that crossed the
+// threshold on THIS call so the caller (the uploader) can emit one audit-log line per newly-quarantined batch.
+//
+// The contract the uploader relies on: a row is quarantined exactly once. Subsequent RecordClientError calls against
+// the same id are no-ops because the row's uploaded column is already 1 and the DequeueBatch query filters on
+// uploaded=0. quarantineThreshold <= 0 disables quarantine (counter still bumps so operators can read it via the
+// debug surface, but no row is sealed).
+func (q *Queue) RecordClientError(ctx context.Context, ids []int64, quarantineThreshold int) ([]int64, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+
+	bumpStmt, err := tx.PrepareContext(ctx,
+		"UPDATE events SET client_error_count = client_error_count + 1 WHERE id = ? AND uploaded = 0")
+	if err != nil {
+		return nil, err
+	}
+	defer bumpStmt.Close()
+
+	var quarantineStmt *sql.Stmt
+	if quarantineThreshold > 0 {
+		quarantineStmt, err = tx.PrepareContext(ctx,
+			"UPDATE events SET uploaded = 1 WHERE id = ? AND client_error_count >= ? AND uploaded = 0")
+		if err != nil {
+			return nil, err
+		}
+		defer quarantineStmt.Close()
+	}
+
+	newlyQuarantined, err := bumpAndQuarantineRows(ctx, ids, bumpStmt, quarantineStmt, quarantineThreshold)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return newlyQuarantined, nil
+}
+
+// bumpAndQuarantineRows is the inner loop extracted from RecordClientError to keep cognitive complexity under Sonar's S3776
+// budget. For each id, bumps the per-row counter; when quarantineStmt is non-nil, applies the quarantine UPDATE and collects
+// ids that flipped uploaded=0->1 on THIS call so the caller can audit them.
+func bumpAndQuarantineRows(ctx context.Context, ids []int64, bumpStmt, quarantineStmt *sql.Stmt, threshold int) ([]int64, error) {
+	var newlyQuarantined []int64
+	for _, id := range ids {
+		if _, err := bumpStmt.ExecContext(ctx, id); err != nil {
+			return nil, err
+		}
+		if quarantineStmt == nil {
+			continue
+		}
+		res, err := quarantineStmt.ExecContext(ctx, id, threshold)
+		if err != nil {
+			return nil, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if affected > 0 {
+			newlyQuarantined = append(newlyQuarantined, id)
+		}
+	}
+	return newlyQuarantined, nil
 }
 
 // SetMetrics installs the OTel hook. Safe to call after Open; nil clears.

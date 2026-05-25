@@ -25,6 +25,12 @@ const (
 	// up and falls through to the next drain tick.
 	defaultMaxRetries = 5
 
+	// defaultClientErrorQuarantineThreshold caps the number of consecutive drain ticks a row's batch may return a non-401 4xx
+	// before the row is quarantined (uploaded=1, removed from the dequeue set, audit log emitted). 10 matches the spec's
+	// "after the configured maximum retry budget is exhausted" clause and gives operators ~10 seconds at the default tick
+	// rate to roll back a bad server change before client events start dropping.
+	defaultClientErrorQuarantineThreshold = 10
+
 	// defaultClientTimeout is the per-request HTTP timeout when the caller
 	// does not pass an *http.Client.
 	defaultClientTimeout = 30 * time.Second
@@ -56,14 +62,22 @@ type Config struct {
 
 	// MaxRetries is the maximum number of retries per batch on failure.
 	MaxRetries int
+
+	// ClientErrorQuarantineThreshold is the count of consecutive drain ticks a row's batch returning a non-401 4xx
+	// must reach before the row is marked uploaded so it stops being dequeued. 0 disables quarantine (the legacy
+	// behaviour: 4xx batches stay in the queue forever and re-fail every tick). Default applied by DefaultConfig is
+	// 10, which gives the server ~10 drain-ticks (~10s with the default 1s tick) to recover from a transient
+	// validation glitch before the agent gives up on the events.
+	ClientErrorQuarantineThreshold int
 }
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		BatchSize:  defaultBatchSize,
-		Interval:   time.Second,
-		MaxRetries: defaultMaxRetries,
+		BatchSize:                      defaultBatchSize,
+		Interval:                       time.Second,
+		MaxRetries:                     defaultMaxRetries,
+		ClientErrorQuarantineThreshold: defaultClientErrorQuarantineThreshold,
 	}
 }
 
@@ -77,12 +91,21 @@ type Uploader struct {
 
 // New creates an Uploader. The http.Client should already be wrapped with otelhttp.NewTransport if the caller wants OTel propagation;
 // callers that pass nil get a vanilla client with a 30s timeout and no instrumentation.
+//
+// ClientErrorQuarantineThreshold normalisation: production wiring (agent/cmd/fleet-edr-agent/main.go) constructs
+// uploader.Config via a keyed literal that doesn't mention every field; without the normalisation below the threshold
+// would default to 0 and disable the #253 quarantine path entirely. A zero value is treated as "apply the documented
+// default"; a NEGATIVE value remains negative and is treated as "explicitly disabled" downstream so test code can opt
+// out without colliding with the zero-value default.
 func New(q *queue.Queue, cfg Config, client *http.Client, logger *slog.Logger) *Uploader {
 	if client == nil {
 		client = &http.Client{Timeout: defaultClientTimeout}
 	}
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if cfg.ClientErrorQuarantineThreshold == 0 {
+		cfg.ClientErrorQuarantineThreshold = defaultClientErrorQuarantineThreshold
 	}
 	return &Uploader{
 		queue:  q,
@@ -155,6 +178,12 @@ func (u *Uploader) drainOnce(ctx context.Context) error {
 				"batch_size", len(batch))
 			return err
 		}
+		// Non-401 4xx is a permanent client error for this batch (malformed event, schema-rejected payload, etc.). Without the
+		// quarantine path, the batch would stay queued and re-fail every drain tick forever (#253). recordClientErrorAndAudit
+		// extracts the bump + audit-log path so drainOnce stays under the cognitive-complexity budget Sonar enforces.
+		if errors.As(err, &clientErr) && u.cfg.ClientErrorQuarantineThreshold > 0 {
+			u.recordClientErrorAndAudit(ctx, ids, clientErr.statusCode, len(batch))
+		}
 		u.logger.ErrorContext(ctx, "uploader upload failed", "err", err, "batch_size", len(batch))
 		return err
 	}
@@ -164,6 +193,30 @@ func (u *Uploader) drainOnce(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// recordClientErrorAndAudit is the #253 poisoned-events bookkeeping path extracted out of drainOnce. Bumps the per-row
+// client_error_count for every id in the dequeued batch; rows that cross the threshold get sealed (uploaded=1) by
+// RecordClientError in the same transaction and returned for the audit-log line. The audit log fires at most once per drain
+// tick (the tick that crosses the threshold for any row); subsequent ticks see uploaded=1 rows that DequeueBatch no longer
+// surfaces. Extraction was driven by Sonar's S3776 budget (drainOnce was 18 vs 15 cognitive complexity).
+func (u *Uploader) recordClientErrorAndAudit(ctx context.Context, ids []int64, statusCode, batchSize int) {
+	quarantined, qerr := u.queue.RecordClientError(ctx, ids, u.cfg.ClientErrorQuarantineThreshold)
+	if qerr != nil {
+		u.logger.ErrorContext(ctx, "uploader quarantine bookkeeping failed", "err", qerr, "batch_size", batchSize)
+	}
+	if len(quarantined) == 0 {
+		return
+	}
+	// One audit-class log line per drain tick that quarantines any rows. The structured fields (event_count, status_code,
+	// threshold) are what a SigNoz alert dashboard groups on so operators can tell "one bad event" from "the server
+	// started rejecting everything".
+	u.logger.ErrorContext(ctx, "uploader quarantined events after persistent client errors",
+		"audit", "uploader.events_quarantined",
+		"event_count", len(quarantined),
+		"status_code", statusCode,
+		"threshold", u.cfg.ClientErrorQuarantineThreshold,
+	)
 }
 
 func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {

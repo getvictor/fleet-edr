@@ -20,23 +20,35 @@ cannot use them to enumerate operators.
 
 ### Requirement: Login mints a session cookie and a CSRF token
 
-The system SHALL accept email and password on the session endpoint and on success SHALL set the session cookie and return
-the CSRF token in the response body, so the UI can read the CSRF token client-side without exposing the session identifier
-to JavaScript.
+The system SHALL mint a session cookie on a successful operator login. The login surface is split across two entry points:
+
+1. **OIDC callback** at `GET /api/auth/callback`. After the operator completes the IdP redirect, the callback handler
+   exchanges the authorization code, runs the JIT provisioner (when enabled), inserts a sessions row, and 302-redirects
+   to the state's pinned post-login URL with the session cookie set.
+2. **Break-glass finish-login** at `POST /admin/break-glass`. After the operator completes the WebAuthn assertion and
+   the password challenge, the handler verifies the credential, inserts a sessions row, and returns 200 with the session
+   cookie set.
+
+Both paths set the session cookie with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`. The per-session
+CSRF token is NOT returned in the login-success response body; the UI reads it from `GET /api/session` once the cookie
+is set, which keeps the login-handler response shapes aligned across the two entry points. The legacy `POST /api/session`
+password-form endpoint was retired in Phase 5b and is not part of this contract.
 
 #### Scenario: Successful login
 
-- **GIVEN** the client posts a valid email and password
-- **WHEN** the request is processed
-- **THEN** the server responds 200 with a JSON body containing the user identity and a CSRF token
-- **AND** the response sets the session cookie with HttpOnly, SameSite=Lax, and (when TLS is enabled) Secure
+- **GIVEN** the operator completes the OIDC IdP redirect with a subject the JIT provisioner accepts
+- **WHEN** the IdP's redirect lands at `/api/auth/callback` with a valid `state` cookie and authorization code
+- **THEN** the server responds 302 to the state's pinned redirect (`/ui/` on the happy path) and sets the session cookie
+  with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`
 - **AND** subsequent authenticated requests carrying that cookie are recognized as the same session
 
 #### Scenario: Login with empty fields
 
-- **GIVEN** the client posts an empty email or empty password
+- **GIVEN** the client posts a malformed or empty body to a login endpoint (e.g., non-JSON at
+  `POST /admin/break-glass/challenge`, or a body that omits required fields)
 - **WHEN** the request is processed
-- **THEN** the server responds 400 with a typed error
+- **THEN** the server responds `400 Bad Request` with a typed `X-Edr-Auth-Reason: body_invalid` header (or the
+  endpoint-specific equivalent)
 - **AND** no session is created and no cookie is set
 
 ### Requirement: Login failures do not enumerate accounts
@@ -83,21 +95,23 @@ a constant-time equality check. The system SHALL NOT store plaintext passwords o
 
 ### Requirement: Initial operator account is bootstrapped at first startup
 
-The system SHALL ensure a single operator account exists when the server starts with an empty users table by generating a
-random password and SHALL surface that password to the operator exactly once on the standard error stream. The system
-SHALL NOT consult any environment variable to set the seeded password; the password is always randomly generated. The
-seeded account uses a fixed well-known email so the operator knows where to log in. There is no in-product
-password-reset flow; the documented recovery path when the password is lost is to delete the user row and restart the
-server, which re-runs the seeder.
+The system SHALL ensure a single operator account exists when the server starts with an empty users table by inserting a
+break-glass admin row (NULL password, `is_breakglass = 1`) with the well-known seed email and binding the `super_admin`
+role at global scope. The seed function itself MUST NOT print a password banner; the operator-facing redemption URL is
+logged separately by `cmd/main` on the same startup pass so the operator can complete a one-time WebAuthn enrollment that
+sets a password and registers a credential. There is no in-product password-reset flow; the documented recovery path
+when the operator loses access is to delete the seeded user row and restart the server, which re-runs the seeder and
+logs a new redemption URL.
 
 #### Scenario: First-startup seed
 
 - **GIVEN** the server starts and the users table is empty
-- **WHEN** initialization runs
-- **THEN** exactly one operator account is created with the well-known seed email
-- **AND** a fresh password equivalent to 24 random bytes (about 192 bits of entropy) is generated and base64url-encoded
-- **AND** a banner containing the email and password is written to the standard error stream as a single write
-- **AND** the password does not appear in the structured log; only the seed event with the user id and email is logged
+- **WHEN** the seeder runs
+- **THEN** exactly one operator account is inserted with the well-known seed email, NULL password, and `is_breakglass = 1`
+- **AND** a `super_admin` role binding at global scope is inserted alongside the user row so the seeded admin has full
+  privileges on first redemption
+- **AND** the seed function does NOT write a password banner to stderr; the redemption URL is the responsibility of
+  `cmd/main` on the same startup pass
 
 #### Scenario: Restart with an existing operator
 
@@ -107,9 +121,11 @@ server, which re-runs the seeder.
 
 #### Scenario: Recovery after a lost password
 
-- **GIVEN** the captured seed banner has been lost and the operator cannot log in
-- **WHEN** the operator deletes the seeded row from the users table and restarts the server
-- **THEN** the seeder runs again and a new banner with a new password is written to the standard error stream
+- **GIVEN** the operator has lost access (the redemption URL was never captured or the only enrolled credential was
+  destroyed)
+- **WHEN** the operator deletes the seeded user row and restarts the server
+- **THEN** the seeder runs again, inserts a fresh break-glass admin row, and `cmd/main` logs a new redemption URL the
+  operator can use to enrol a credential and set a password
 
 ### Requirement: GET requests authenticate by cookie alone
 

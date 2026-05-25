@@ -616,3 +616,77 @@ func TestQueue_DiskFullDuringEnqueueReturnsError(t *testing.T) {
 		t.Fatalf("expected SQLITE_FULL (code 13), got code=%d (%#x): %v", got, sqliteErr.Code(), err)
 	}
 }
+
+// TestQueue_OpenIsIdempotentAfterMigration pins the migration's already-has-column branch: reopening a DB path twice MUST NOT
+// re-add the client_error_count column (the PRAGMA table_info pre-check + the loop's early-return at
+// "name == migrationsClientErrorCount" cover this). A regression that issued ALTER TABLE on every Open would surface here
+// because SQLite would error "duplicate column name: client_error_count" on the second Open.
+func TestQueue_OpenIsIdempotentAfterMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "idem.db")
+	ctx := t.Context()
+	q1, err := Open(ctx, dbPath, Options{})
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	if err := q1.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	q2, err := Open(ctx, dbPath, Options{})
+	if err != nil {
+		t.Fatalf("second Open MUST NOT re-run the migration; got: %v", err)
+	}
+	t.Cleanup(func() { _ = q2.Close() })
+}
+
+// TestQueue_RecordClientError_EmptyIDsIsNoOp pins the early-return contract: passing an empty id slice MUST succeed without
+// opening a transaction or touching the DB. Catches a regression that started a write transaction on every drainOnce even when
+// the uploader's batch was empty.
+func TestQueue_RecordClientError_EmptyIDsIsNoOp(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	quarantined, err := q.RecordClientError(ctx, nil, 5)
+	if err != nil {
+		t.Fatalf("empty-ids RecordClientError MUST succeed, got: %v", err)
+	}
+	if quarantined != nil {
+		t.Fatalf("empty-ids RecordClientError MUST return nil slice, got %v", quarantined)
+	}
+}
+
+// TestQueue_RecordClientError_ThresholdDisabled pins the threshold<=0 branch: with quarantineThreshold=0, the counter still
+// bumps but no row is sealed. The caller (uploader DefaultConfig() with the new normalisation in New()) treats 0 as "apply
+// the default 10"; a negative value reaches this branch as "explicitly disabled" so a test can opt out without colliding.
+func TestQueue_RecordClientError_ThresholdDisabled(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"no-quarantine"}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	batch, err := q.DequeueBatch(ctx, 10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(batch))
+	}
+	ids := []int64{batch[0].ID}
+
+	// Hammer 20 calls with threshold=-1 (explicitly disabled). No row should be sealed; subsequent dequeues MUST
+	// still see the row.
+	for i := range 20 {
+		quarantined, err := q.RecordClientError(ctx, ids, -1)
+		if err != nil {
+			t.Fatalf("RecordClientError #%d: %v", i, err)
+		}
+		if quarantined != nil {
+			t.Fatalf("threshold=-1 MUST NOT quarantine; got %v on call %d", quarantined, i)
+		}
+	}
+	again, err := q.DequeueBatch(ctx, 10)
+	if err != nil {
+		t.Fatalf("post-bump dequeue: %v", err)
+	}
+	if len(again) != 1 {
+		t.Fatalf("threshold-disabled row MUST stay visible to DequeueBatch; got %d rows", len(again))
+	}
+}

@@ -1,16 +1,22 @@
 package uploader
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/agent/queue"
 )
@@ -335,6 +341,62 @@ func openTestQueue(t *testing.T) *queue.Queue {
 	}
 	t.Cleanup(func() { _ = q.Close() })
 	return q
+}
+
+// spec:agent-event-uploader/permanent-client-errors-are-not-infinitely-retained/server-consistently-returns-4xx-for-a-malformed-event
+//
+// Pins the #253 quarantine contract: when the server returns a non-401 4xx for the same batch on every drain tick, the
+// uploader MUST stop retransmitting after a bounded number of attempts. Sequence:
+//
+//  1. Enqueue one event. Set ClientErrorQuarantineThreshold=3 so the test is fast.
+//  2. Stand up a 400-everytime server.
+//  3. Drive drainOnce in a loop. Each tick: dequeue (returns the row because uploaded=0), upload (fails with 400),
+//     RecordClientError bumps the row's client_error_count from 0->1, 1->2, 2->3 across the three ticks.
+//  4. On the 3rd tick, the post-bump value reaches the threshold; RecordClientError sets uploaded=1 in the same
+//     transaction and returns the row id as newly-quarantined. The audit-class log line fires once.
+//  5. A 4th drainOnce returns immediately because DequeueBatch filters on uploaded=0 - the row is no longer visible.
+//
+// The assertion that locks in "MUST NOT retransmit indefinitely" is: the server's request counter stops climbing
+// after the 3rd tick. The audit log line is asserted via a buffered slog handler.
+func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"poison-1"}`)), "enqueue seed event")
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadRequest) // permanent 4xx; non-401 so the quarantine path is exercised
+	}))
+	defer srv.Close()
+
+	auditLog := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(auditLog, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.ClientErrorQuarantineThreshold = 3
+	u := New(q, cfg, nil, logger)
+
+	t.Run("three failing drains hit the server", func(t *testing.T) {
+		for i := range 3 {
+			require.Errorf(t, u.drainOnce(ctx), "drain %d: expected an error (server is 400)", i)
+		}
+		assert.Equal(t, int32(3), requests.Load(), "exactly 3 server requests across the 3 drain ticks")
+	})
+
+	t.Run("fourth drain is a no-op against the server", func(t *testing.T) {
+		// Row is quarantined (uploaded=1), so dequeue is empty and the server is NOT contacted.
+		require.NoError(t, u.drainOnce(ctx), "post-quarantine drain MUST succeed cleanly with an empty queue")
+		assert.Equal(t, int32(3), requests.Load(), "post-quarantine drain MUST NOT contact the server")
+	})
+
+	t.Run("audit log fires exactly once on threshold crossing", func(t *testing.T) {
+		assert.Contains(t, auditLog.String(), "uploader.events_quarantined",
+			"audit log line MUST be tagged audit=uploader.events_quarantined")
+		assert.Equal(t, 1, strings.Count(auditLog.String(), "uploader.events_quarantined"),
+			"audit log line MUST fire exactly once (only the drain tick that crossed the threshold)")
+	})
 }
 
 // spec:agent-event-uploader/drain-on-shutdown/graceful-shutdown

@@ -17,11 +17,13 @@ without reading the handler source.
 ### Requirement: Authenticated admin boundary
 
 The server MUST gate every endpoint defined by this capability (`/api/enrollments`,
-`/api/enrollments/{host_id}/revoke`, `/api/v1/app-control/policies`, `/api/v1/app-control/rules`,
-`/api/v1/app-control/host-groups`, `/api/attack-coverage`, and `/api/rules`) behind the operator-session middleware,
-so a caller that is not authenticated as an operator SHALL receive `401 Unauthorized`. These endpoints share an
-authentication boundary with the rest of the operator API; there is no separate "admin" auth mode in the current
-implementation.
+`/api/enrollments/{host_id}/revoke`, every route under the `/api/v1/app-control/*` prefix including the
+`policies`, `policies/{id}/rules`, `policies/{id}/rules:bulkUpsert`, `rules`, `host-groups`, and
+`policies/{id}/assignments` sub-paths for all HTTP methods, `/api/attack-coverage`, and `/api/rules`) behind the
+operator-session middleware, so a caller that is not authenticated as an operator SHALL receive `401 Unauthorized`.
+These endpoints share an authentication boundary with the rest of the operator API; there is no separate "admin"
+auth mode in the current implementation. The host-groups and assignments sub-resources are present on the wire but
+their CRUD contracts are not specified in this document; they inherit the auth boundary above.
 
 #### Scenario: Unauthenticated request is rejected
 
@@ -77,19 +79,19 @@ revoked, the next authenticated request from that host's agent MUST receive `401
 
 ### Requirement: Read application-control policies
 
-The system SHALL expose `GET /api/v1/app-control/policies` returning every application-control policy known to the server,
-and `GET /api/v1/app-control/policies/{id}` returning a single policy by id (with its rules inlined). Each policy MUST
-carry an `id`, a human-friendly `name`, a `description`, a monotonically increasing `version`, and `created_at` /
-`updated_at` audit timestamps. The single-policy response MUST inline the policy's `rules` array. The seed pass creates
-a default policy on first boot; reading before any operator change MUST return that default policy cleanly with an empty
-`rules` array.
+The system SHALL expose `GET /api/v1/app-control/policies` returning the list of application-control policies known to the
+server. The list response MUST NOT inline the `rules` field for each policy (it is omitted from the list shape to keep the
+index endpoint cheap); each entry carries the policy's `id`, `name`, `description`, `version`, and `created_at` /
+`updated_at` audit timestamps plus an assignment count. The system SHALL also expose
+`GET /api/v1/app-control/policies/{id}` returning a single policy by id with its `rules` array inlined. The seed pass
+creates a default policy on first boot; reading the list before any operator change MUST surface that default policy.
 
 #### Scenario: First-query returns the seeded default policy
 
 - **GIVEN** a server that has never had an operator-driven policy mutation
 - **WHEN** the operator requests `GET /api/v1/app-control/policies`
 - **THEN** the server returns `200 OK`
-- **AND** the response carries the seeded default policy with its `id`, `name`, `version`, and an empty `rules` array
+- **AND** the response includes the seeded default policy with its `id`, `name`, and `version` set
 
 #### Scenario: Read after operator changes
 
@@ -105,17 +107,29 @@ The system SHALL expose `POST /api/v1/app-control/policies/{id}/rules`, `PATCH /
 `version`. The system SHALL attempt to queue a `set_application_control` command carrying the post-bump policy state
 for every active host assigned to the policy, on a best-effort basis. A failure to enqueue the command for an individual
 host MUST NOT roll back the rule mutation; the server MUST log the per-host fan-out failures so the next agent poll or
-admin push can reconcile, and MUST record the fan-out count in the audit payload. The request body MUST carry `actor` and
-`reason` (both required), plus a `rule_type` and `identifier`. `rule_type` MUST be one of the supported kinds (`binary`,
-`cdhash`, `signing_id`, `team_id`); `identifier` MUST satisfy the format rules for the declared `rule_type` (e.g., absolute
-path for `binary`, 64-char lowercase hex for `cdhash`). A request that violates either constraint MUST be rejected with
-`400 Bad Request` and the policy MUST NOT be modified.
+admin push can reconcile, and MUST record the fan-out count in the audit payload.
+
+Every mutation request body MUST carry a non-empty `reason`. The operator identity (`actor`) is NOT carried in the body;
+it is derived from the authenticated session context and recorded in the audit row in the form `user:<id>`. The
+POST (create) body MUST additionally carry `rule_type` and `identifier`; PATCH and DELETE accept partial mutations against
+the existing rule and do not need either. `rule_type` MUST be one of the supported uppercase tokens (`BINARY`, `CDHASH`,
+`SIGNINGID`, `TEAMID`; `CERTIFICATE` and `PATH` exist on the wire enum but are not yet enforced and currently surface
+as an unsupported-rule-type error). `identifier` MUST satisfy the format rules for the declared `rule_type`:
+
+- `BINARY`: 64 lowercase hex characters (SHA-256 of the executable file).
+- `CDHASH`: 40 lowercase hex characters (Code Directory hash).
+- `SIGNINGID`: `<TeamID>:<bundle.id>` or `platform:<bundle.id>` for Apple platform binaries.
+- `TEAMID`: 10-character alphanumeric Apple Developer Team ID (e.g. `EQHXZ8M8AV`).
+
+A request that violates the rule-type or identifier constraints MUST be rejected with `400 Bad Request` and the policy
+MUST NOT be modified.
 
 #### Scenario: Valid rule create increments version and fans out
 
 - **GIVEN** a current policy at version `v`
-- **WHEN** the operator POSTs a valid rule with non-empty `actor` and `reason`
-- **THEN** the server returns `201 Created` carrying the new rule and the policy now at version `v+1`
+- **WHEN** the operator POSTs a valid rule with a non-empty `reason`
+- **THEN** the server returns `201 Created` carrying the new rule
+- **AND** the owning policy's `version` has bumped to `v+1` (observable via a subsequent `GET /api/v1/app-control/policies/{id}`)
 - **AND** the server attempts to queue a `set_application_control` command for every active host assigned to the policy
 - **AND** any host whose enqueue fails is logged so a subsequent reconcile can resend
 
@@ -123,30 +137,35 @@ path for `binary`, 64-char lowercase hex for `cdhash`). A request that violates 
 
 - **GIVEN** any current policy
 - **WHEN** the operator POSTs a rule whose `identifier` violates the format rules for the declared `rule_type` (e.g., a
-  non-absolute path for `rule_type=binary`, or a non-hex string for `rule_type=cdhash`)
+  non-hex string for `rule_type=BINARY`, or a string longer than 10 characters for `rule_type=TEAMID`)
 - **THEN** the server returns `400 Bad Request`
 - **AND** the persisted policy is unchanged
 
 #### Scenario: Unsupported rule type is rejected without persisting
 
 - **GIVEN** any current policy
-- **WHEN** the operator POSTs a rule whose `rule_type` is not in the supported set
+- **WHEN** the operator POSTs a rule whose `rule_type` is not in the supported set (e.g., `CERTIFICATE` or `PATH` in the
+  current cut, both of which exist on the enum but lack validators)
 - **THEN** the server returns `400 Bad Request`
 - **AND** the persisted policy is unchanged
 
 #### Scenario: Missing actor or reason is rejected
 
 - **GIVEN** an authenticated operator
-- **WHEN** the operator POSTs a rule body without `actor` or without `reason`
-- **THEN** the server returns `400 Bad Request` and does not modify the policy
+- **WHEN** a rule mutation reaches the store layer with either an empty `reason` (which the HTTP handler forwards from
+  the request body) or an empty server-supplied `actor` identifier (a session-middleware bug)
+- **THEN** the store returns `ErrAppControlInvalidRequest`, which the HTTP handler maps to `400 Bad Request`, and the
+  policy MUST NOT be modified
 
 ### Requirement: Audit trail for state-changing admin actions
 
-Every successful state-changing admin call (revoke, application-control rule create / update / delete, policy create / update /
-delete) SHALL emit a structured audit log record carrying at minimum a timestamp, the operator-supplied `actor`, the
-operator-supplied `reason`, the action name, and either the affected host id (for revoke) or the post-bump policy version and
-fan-out count (for application-control mutations). The audit record MUST be emitted at a level that downstream SIEM and SigNoz
-queries can filter on so SOC teams can reconstruct who changed what and when.
+Every successful state-changing admin call defined by this specification (revoke, and application-control rule create / update /
+delete) SHALL emit a structured audit log record carrying at minimum a timestamp, the operator's identity (`actor`, sourced from
+the session context as `user:<id>` for application-control mutations), the operator-supplied `reason` from the request body, the
+action name, and either the affected host id (for revoke) or the affected rule id + post-bump policy version + fan-out count
+(for application-control rule mutations). The audit record MUST be emitted at a level that downstream SIEM and SigNoz queries
+can filter on so SOC teams can reconstruct who changed what and when. The implementation also emits audit rows for policy CRUD
+endpoints exposed under `/api/v1/app-control/policies` (create, update, delete); those flows are not specified in this document.
 
 #### Scenario: Revoke produces an audit record
 

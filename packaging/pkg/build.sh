@@ -314,9 +314,14 @@ DIST_XML="$STAGE/distribution.xml"
 ESCAPED_VERSION=$(printf '%s' "$VERSION" | sed 's/[&|\\]/\\&/g')
 sed "s|__VERSION__|$ESCAPED_VERSION|g" "$ROOT/packaging/pkg/distribution.xml" > "$DIST_XML"
 
-# Filename-safe variant of $VERSION: replace `/` with `-` so a namespaced
-# git tag like `release/v1.2` produces `fleet-edr-release-v1.2.pkg` rather
-# than trying to write into a subdirectory that does not exist.
+# spec:release-packaging/final-artifact-naming/versioned-package-name
+# spec:release-packaging/final-artifact-naming/tag-with-a-path-separator-character
+#
+# Both spec scenarios pin the same two lines below:
+#   - versioned-package-name: dist/fleet-edr-<tag>.pkg is the canonical artifact path. A tag like `v1.2.3` lands as
+#     `dist/fleet-edr-v1.2.3.pkg`.
+#   - tag-with-a-path-separator-character: a namespaced tag like `release/v1.2` would otherwise try to write into a
+#     non-existent subdirectory. The `tr '/' '-'` substitution makes it land as `dist/fleet-edr-release-v1.2.pkg`.
 SAFE_VERSION=$(printf '%s' "$VERSION" | tr '/' '-')
 PKG_OUT="$DIST/fleet-edr-${SAFE_VERSION}.pkg"
 sign_pkg productbuild \

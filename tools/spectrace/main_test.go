@@ -230,6 +230,73 @@ func Foo() {}
 			wantMarkers: []string{"swift:does_not_exist"},
 		},
 		{
+			name: "yaml workflow step marker (hash comment)",
+			src: `jobs:
+  build:
+    steps:
+      # spec:release-packaging/dry-run-build-on-any-macos-runner/pull-request-runs-the-dry-run
+      - name: pkg dry-run
+        run: packaging/pkg/build.sh --dry-run
+`,
+			path: ".github/workflows/pkg-dryrun.yml", isSwift: false,
+			canonical: map[string]struct{}{
+				"release-packaging/dry-run-build-on-any-macos-runner/pull-request-runs-the-dry-run": {},
+			},
+			wantMarkers: []string{
+				"release-packaging/dry-run-build-on-any-macos-runner/pull-request-runs-the-dry-run",
+			},
+		},
+		{
+			name: "shell script marker (hash comment)",
+			src: `#!/bin/bash
+# spec:release-packaging/uninstall-path-is-deliverable/operator-runs-the-uninstall-script
+set -euo pipefail
+echo "uninstalling..."
+`,
+			path: "packaging/pkg/uninstall.sh", isSwift: false,
+			canonical: map[string]struct{}{
+				"release-packaging/uninstall-path-is-deliverable/operator-runs-the-uninstall-script": {},
+			},
+			wantMarkers: []string{
+				"release-packaging/uninstall-path-is-deliverable/operator-runs-the-uninstall-script",
+			},
+		},
+		{
+			name: "yaml workflow multiple markers stacked on one step",
+			src: `jobs:
+  release:
+    steps:
+      # spec:release-packaging/real-release-build-is-gated-to-release-tag-refs/tag-push-triggers-a-real-build
+      # spec:release-packaging/notarization-and-stapling/released-package-is-stapled
+      - name: release pkg
+        run: packaging/pkg/build.sh --notarize --staple
+`,
+			path: ".github/workflows/release.yml", isSwift: false,
+			canonical: map[string]struct{}{
+				"release-packaging/real-release-build-is-gated-to-release-tag-refs/tag-push-triggers-a-real-build": {},
+				"release-packaging/notarization-and-stapling/released-package-is-stapled":                          {},
+			},
+			wantMarkers: []string{
+				"release-packaging/real-release-build-is-gated-to-release-tag-refs/tag-push-triggers-a-real-build",
+				"release-packaging/notarization-and-stapling/released-package-is-stapled",
+			},
+		},
+		{
+			name: "yaml inline trailing-comment marker (hash after step text)",
+			src: `jobs:
+  build:
+    steps:
+      - run: ./build.sh # spec:release-packaging/final-artifact-naming/versioned-package-name
+`,
+			path: ".github/workflows/release.yml", isSwift: false,
+			canonical: map[string]struct{}{
+				"release-packaging/final-artifact-naming/versioned-package-name": {},
+			},
+			wantMarkers: []string{
+				"release-packaging/final-artifact-naming/versioned-package-name",
+			},
+		},
+		{
 			// Two canonical IDs collapse to the same Swift identifier (`foo-bar` vs `foo/bar`). resolveSwiftMarker must NOT
 			// pick one at random; it surfaces a `swift-ambiguous:` reference so check reports it as invalid and the
 			// contributor renames one of the conflicting headings.

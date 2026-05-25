@@ -118,12 +118,16 @@ func (e *callbackTestEnv) callbackRequest(t *testing.T, stateOverride string) *h
 }
 
 // spec:ui-authentication-session/session-cookie-is-http-only-and-same-site/cookie-attributes-on-login
+// spec:ui-authentication-session/login-mints-a-session-cookie-and-a-csrf-token/successful-login
 //
-// Pins the cookie-attributes clause on the OIDC happy-path session mint: after the callback succeeds
-// and a session is created, the response sets the session cookie with HttpOnly=true. The assertion on
-// sessCookie.HttpOnly below pins one clause; the full attribute set (Path=/, SameSiteLax, Secure,
-// MaxAge derived from ExpiresAt) is pinned in isolation by TestWriteSessionCookie in handler_test.go,
-// which calls writeSessionCookie directly with a constructed Session literal. Multi-test
+// Pins the cookie-attributes clause AND the spec's "successful login" scenario on the OIDC happy-path session mint:
+// after the callback succeeds and a session is created, the response is 302 to the state's pinned redirect (/ui/) and
+// sets the session cookie with HttpOnly=true. The assertion on sessCookie.HttpOnly below pins one clause; the full
+// attribute set (Path=/, SameSiteLax, Secure, MaxAge derived from ExpiresAt) is pinned in isolation by
+// TestWriteSessionCookie in handler_test.go, which calls writeSessionCookie directly with a constructed Session literal.
+// The 302 status + Location: /ui/ assertion + the audit.oidc.success row together pin the spec's "successful login"
+// scenario for the OIDC entry point; the break-glass entry point's happy path is pinned separately by
+// TestHandle_FullLogin_Success in server/identity/internal/breakglass/finishflow_test.go. Multi-test
 // demonstrator: this end-to-end test catches a regression where the handler stops calling
 // writeSessionCookie at all; the unit test catches a regression inside the helper itself.
 //

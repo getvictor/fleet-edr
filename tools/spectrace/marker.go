@@ -30,8 +30,10 @@ var markerRE = regexp.MustCompile(`(?:\W|^)spec:([A-Za-z0-9][A-Za-z0-9_/-]*)`)
 // (`-` and `/` both map to `_` per docs/testing-strategy.md), so resolveSwift reconciles against the known canonical-ID set.
 var swiftMarkerRE = regexp.MustCompile(`\btest_spec_([a-z0-9_]+)\b`)
 
-// ScanMarkers walks rootDir and returns every marker reference found in Go / TS / TSX / Swift sources. Returns markers in
-// file-encounter order; the caller sorts as needed.
+// ScanMarkers walks rootDir and returns every marker reference found in Go / TS / TSX / Swift sources plus YAML
+// (.yml / .yaml) workflow files and shell (.sh) scripts. Returns markers in file-encounter order; the caller sorts as
+// needed. The YAML + shell branches use the same `(?:\W|^)spec:` regex as the source-language branches, so `# spec:<id>`
+// in a workflow step or a script comment is recognised the same way `// spec:<id>` is in Go.
 //
 // `tools/spectrace` is excluded from the walk because the linter's own test fixtures construct example marker strings; if
 // counted, they would inflate the coverage number and emit false-positive invalid-reference warnings against the linter's
@@ -103,6 +105,16 @@ func (w *markerWalker) visit(path string, d os.DirEntry) ([]Marker, error, error
 	ext := strings.ToLower(filepath.Ext(d.Name()))
 	switch ext {
 	case ".go", ".ts", ".tsx", ".swift":
+		// Source languages with code-style comment prefixes (`//`, `/* */`).
+	case ".yml", ".yaml", ".sh":
+		// CI workflows + packaging shell scripts use `#` comment prefix. The release-packaging spec has 12 scenarios whose only
+		// enforcement surface lives in `.github/workflows/*.yml` (dry-run + tag-gated build + notarization steps) and
+		// `packaging/pkg/*.sh` (build / uninstall / ci-setup); without scanning these file types, those scenarios are structurally
+		// unmarkable (issue #255 item 3). The markerRE pattern `(?:\W|^)spec:` matches `# spec:<id>` the same way it matches
+		// `// spec:<id>`, so no parser changes are needed beyond the ext gate. Markdown is intentionally NOT in this set:
+		// docs/testing-strategy.md carries illustrative marker examples (`spec:server-event-ingestion/...`) that would inflate the
+		// coverage count if scanned. If a real documentation surface needs marker coverage in the future, add `.md` here AND add
+		// docs/testing-strategy.md to skipRelPaths to keep the example-vs-marker boundary clean.
 	default:
 		return nil, nil, nil
 	}
