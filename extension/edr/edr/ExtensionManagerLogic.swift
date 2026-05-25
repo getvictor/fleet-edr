@@ -86,19 +86,27 @@ struct CompletionAggregator {
         self.expected = expected
     }
 
-    /// record adds an outcome to the aggregate. Returns true when every expected request has reported (the
-    /// caller should read `verdict` only after record returns true).
+    /// record adds an outcome to the aggregate. Returns true when every expected request has reported
+    /// (the caller can then safely read `verdict`). Over-recording trips a precondition: in production the
+    /// OSSystemExtensionRequest delegate fires didFinishWithResult OR didFailWithError exactly once per
+    /// submitted request, so a record() call past `expected` is a logic error (likely a double-decrement
+    /// in pendingCount or a duplicate request submission).
     @discardableResult
     mutating func record(_ outcome: CompletionOutcome) -> Bool {
+        precondition(outcomes.count < expected,
+                     "CompletionAggregator: cannot record more than \(expected) outcomes")
         outcomes.append(outcome)
         return outcomes.count >= expected
     }
 
-    /// verdict returns the aggregate result given the outcomes recorded so far. Precedence: any failure
-    /// dominates (`.anyFailed`); otherwise any will-complete-after-reboot dominates (`.rebootRequired`);
-    /// otherwise `.allSucceeded`. Reading before `isComplete` is true returns a conservative result that
-    /// may not reflect the final verdict; gate on `isComplete` first.
+    /// verdict returns the aggregate result. Precondition: every expected outcome has been recorded
+    /// (`isComplete == true`). Precedence: any failure dominates (`.anyFailed`); otherwise any
+    /// will-complete-after-reboot dominates (`.rebootRequired`); otherwise `.allSucceeded`. The
+    /// precondition catches callers that read the verdict before all delegate callbacks have fired —
+    /// silently returning `.allSucceeded` in that window would mask a pending failure and lead to a
+    /// premature `enableContentFilter()` call on the activate path.
     var verdict: AggregateVerdict {
+        precondition(isComplete, "CompletionAggregator: cannot query verdict before isComplete == true")
         if outcomes.contains(.failed) { return .anyFailed }
         if outcomes.contains(.willCompleteAfterReboot) { return .rebootRequired }
         return .allSucceeded
