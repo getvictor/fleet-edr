@@ -11,9 +11,9 @@ spectrace list-ids   [--specs-dir DIR] [--normative-only]
 ```
 
 - `check` walks every `#### Scenario:` under a `### Requirement:` whose body contains the RFC 2119 keywords SHALL or
-  MUST, computes the canonical ID, and scans `*.go`, `*.ts`, `*.tsx`, `*.swift` for matching markers. Prints the
-  coverage delta to stdout and the gap list to stderr. Exit code is 0 unless an invalid reference is present, or
-  `--strict` is set and at least one normative scenario is uncovered.
+  MUST, computes the canonical ID, and scans `*.go`, `*.ts`, `*.tsx`, `*.swift`, `*.yml`, `*.yaml`, and `*.sh` for
+  matching markers. Prints the coverage delta to stdout and the gap list to stderr. Exit code is 0 unless an invalid
+  reference is present, or `--strict` is set and at least one normative scenario is uncovered.
 
 - `list-ids` prints the canonical scenario IDs, one per line, so contributors can copy a marker without typing the slug.
   `--normative-only` restricts the output to SHALL / MUST scenarios (the gateable set).

@@ -15,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/fleetdm/edr/agent/queue"
 )
 
@@ -358,9 +361,7 @@ func openTestQueue(t *testing.T) *queue.Queue {
 func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
-	if err := q.Enqueue(ctx, []byte(`{"event_id":"poison-1"}`)); err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
+	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"poison-1"}`)), "enqueue seed event")
 
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -377,31 +378,25 @@ func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) {
 	cfg.ClientErrorQuarantineThreshold = 3
 	u := New(q, cfg, nil, logger)
 
-	// Three drains: each tick bumps the row's counter; the 3rd one trips the threshold + quarantines.
-	for i := range 3 {
-		if err := u.drainOnce(ctx); err == nil {
-			t.Fatalf("drain %d: expected an error (server is 400), got nil", i)
+	t.Run("three failing drains hit the server", func(t *testing.T) {
+		for i := range 3 {
+			require.Errorf(t, u.drainOnce(ctx), "drain %d: expected an error (server is 400)", i)
 		}
-	}
-	if got := requests.Load(); got != 3 {
-		t.Fatalf("expected exactly 3 server requests across the 3 drain ticks, got %d", got)
-	}
+		assert.Equal(t, int32(3), requests.Load(), "exactly 3 server requests across the 3 drain ticks")
+	})
 
-	// 4th drain: row is quarantined (uploaded=1), so dequeue is empty and the server is NOT contacted.
-	if err := u.drainOnce(ctx); err != nil {
-		t.Fatalf("post-quarantine drain MUST succeed cleanly with an empty queue, got: %v", err)
-	}
-	if got := requests.Load(); got != 3 {
-		t.Fatalf("post-quarantine drain MUST NOT contact the server; request counter advanced to %d", got)
-	}
+	t.Run("fourth drain is a no-op against the server", func(t *testing.T) {
+		// Row is quarantined (uploaded=1), so dequeue is empty and the server is NOT contacted.
+		require.NoError(t, u.drainOnce(ctx), "post-quarantine drain MUST succeed cleanly with an empty queue")
+		assert.Equal(t, int32(3), requests.Load(), "post-quarantine drain MUST NOT contact the server")
+	})
 
-	// Audit-class log line fired exactly once on the tick that crossed the threshold.
-	if got := auditLog.String(); !strings.Contains(got, "uploader.events_quarantined") {
-		t.Fatalf("expected audit log line tagged audit=uploader.events_quarantined, got:\n%s", got)
-	}
-	if got := strings.Count(auditLog.String(), "uploader.events_quarantined"); got != 1 {
-		t.Fatalf("audit log line MUST fire exactly once (only the drain tick that crossed the threshold); got %d occurrences", got)
-	}
+	t.Run("audit log fires exactly once on threshold crossing", func(t *testing.T) {
+		assert.Contains(t, auditLog.String(), "uploader.events_quarantined",
+			"audit log line MUST be tagged audit=uploader.events_quarantined")
+		assert.Equal(t, 1, strings.Count(auditLog.String(), "uploader.events_quarantined"),
+			"audit log line MUST fire exactly once (only the drain tick that crossed the threshold)")
+	})
 }
 
 // spec:agent-event-uploader/drain-on-shutdown/graceful-shutdown

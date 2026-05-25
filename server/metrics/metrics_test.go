@@ -273,9 +273,11 @@ func TestObserveDBQuery_OperationNamesAreBounded(t *testing.T) {
 		allowed[op] = struct{}{}
 	}
 
-	// Walk from the server module root. The metrics package lives at server/metrics/, so two dots up reaches server/.
-	root, err := filepath.Abs("../..")
-	require.NoError(t, err, "resolve server module root")
+	// Walk from the server root only. The metrics package lives at server/metrics/, so one dot up reaches server/. Scoping to
+	// server/ keeps the test from scanning unrelated packages (agent/, tools/, etc.) that don't carry ObserveDBQuery call sites
+	// and would inflate the walk time + reach files that may legitimately use the literal "ObserveDBQuery" string elsewhere.
+	root, err := filepath.Abs("..")
+	require.NoError(t, err, "resolve server root")
 
 	bads, walkErr := scanObserveDBQueryCallSites(root, allowed)
 	require.NoError(t, walkErr)
@@ -327,8 +329,10 @@ func scanObserveDBQueryCallSites(rootDir string, allowed map[string]struct{}) ([
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
-			// A parse failure here would also surface in `go build`; not the static analyzer's job to re-report it.
-			return nil
+			// Fail with the path so a parse error in a future contributor's commit doesn't silently disable the analyzer for
+			// that file. `go build` would surface the same error in CI, but this test fires earlier in the gate sequence and
+			// surfaces a clearer "operation-names bound test couldn't parse X" message.
+			return fmt.Errorf("parse %s: %w", path, err)
 		}
 		bads = appendObserveDBQueryViolations(bads, file, fset, allowed)
 		return nil
