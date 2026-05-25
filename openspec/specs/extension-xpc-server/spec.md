@@ -40,6 +40,11 @@ The extensions SHALL reject any inbound XPC connection whose peer does not satis
 the Apple anchor and the Fleet Device Management team identifier. The validation MUST run before any event is delivered
 to the peer and before any inbound message from the peer is processed.
 
+Implementations MUST use `xpc_connection_set_peer_code_signing_requirement` (macOS 13+) as the sole peer-validation
+gate. Implementations MUST NOT additionally call `SecCodeCheckValidity`, `SecCodeCopyGuestWithAttributes`, or any other
+user-side variant of the same check against the same requirement string. The rationale, threat model, and the deferred
+tightening to pin the agent's signing identifier are documented in [ADR-0007](../../../docs/adr/0007-xpc-peer-validation-libxpc-only.md).
+
 #### Scenario: A peer with the wrong team ID is rejected
 
 - **GIVEN** an extension's XPC service is listening
