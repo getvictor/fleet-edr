@@ -3,13 +3,13 @@
 ## Purpose
 
 The server admin surface is the operator's API into the Fleet EDR control plane. It exposes the endpoints the admin UI and any
-externally scripted tooling rely on: enumerating enrolled hosts, revoking a host's credentials, viewing and pushing the
-server-driven blocklist policy, and rendering the detection content (per-rule documentation and ATT&CK technique coverage) that
-buyers and SOC analysts compare against. It is the only documented way for a human operator to change runtime state on the
-server.
+externally scripted tooling rely on: enumerating enrolled hosts, revoking a host's credentials, reading and mutating the
+application-control policies + rules that fan out to enrolled hosts, and rendering the detection content (per-rule documentation
+and ATT&CK technique coverage) that buyers and SOC analysts compare against. It is the only documented way for a human operator
+to change runtime state on the server.
 
-This specification fixes the HTTP contract — paths, methods, request and response shapes, auth boundary, and the audit trail every
-state-changing call leaves behind — so the UI, integration scripts, and post-incident reviewers can reason about admin behaviour
+This specification fixes the HTTP contract: paths, methods, request and response shapes, auth boundary, and the audit trail every
+state-changing call leaves behind, so the UI, integration scripts, and post-incident reviewers can reason about admin behaviour
 without reading the handler source.
 
 ## Requirements
@@ -17,10 +17,11 @@ without reading the handler source.
 ### Requirement: Authenticated admin boundary
 
 The server MUST gate every endpoint defined by this capability (`/api/enrollments`,
-`/api/enrollments/{host_id}/revoke`, `/api/policy`, `/api/attack-coverage`, and `/api/rules`) behind the
-operator-session middleware, so a caller that is not authenticated as an operator SHALL receive `401 Unauthorized`.
-These endpoints share an authentication boundary with the rest of the operator API; there is no separate "admin" auth
-mode in the current implementation.
+`/api/enrollments/{host_id}/revoke`, `/api/v1/app-control/policies`, `/api/v1/app-control/rules`,
+`/api/v1/app-control/host-groups`, `/api/attack-coverage`, and `/api/rules`) behind the operator-session middleware,
+so a caller that is not authenticated as an operator SHALL receive `401 Unauthorized`. These endpoints share an
+authentication boundary with the rest of the operator API; there is no separate "admin" auth mode in the current
+implementation.
 
 #### Scenario: Unauthenticated request is rejected
 
@@ -74,72 +75,78 @@ revoked, the next authenticated request from that host's agent MUST receive `401
 - **WHEN** the operator POSTs to revoke that host id
 - **THEN** the server returns `404 Not Found`
 
-### Requirement: Read the current blocklist policy
+### Requirement: Read application-control policies
 
-The system SHALL expose `GET /api/policy` returning the current default policy. The response MUST always include a
-`name`, a monotonically increasing `version`, a `blocklist` object with `paths` and `hashes` arrays, plus `updated_at` and
-`updated_by` audit fields. On a freshly-seeded server with no operator changes the policy MUST return cleanly with empty `paths`
-and `hashes`.
+The system SHALL expose `GET /api/v1/app-control/policies` returning every application-control policy known to the server,
+and `GET /api/v1/app-control/policies/{id}` returning a single policy by id (with its rules inlined). Each policy MUST
+carry an `id`, a human-friendly `name`, a `description`, a monotonically increasing `version`, and `created_at` /
+`updated_at` audit timestamps. The single-policy response MUST inline the policy's `rules` array. The seed pass creates
+a default policy on first boot; reading before any operator change MUST return that default policy cleanly with an empty
+`rules` array.
 
-#### Scenario: First-query returns the seeded empty policy
+#### Scenario: First-query returns the seeded default policy
 
-- **GIVEN** a server that has never had a policy push
-- **WHEN** the operator requests `GET /api/policy`
+- **GIVEN** a server that has never had an operator-driven policy mutation
+- **WHEN** the operator requests `GET /api/v1/app-control/policies`
 - **THEN** the server returns `200 OK`
-- **AND** the response body's `blocklist.paths` and `blocklist.hashes` are present and empty
+- **AND** the response carries the seeded default policy with its `id`, `name`, `version`, and an empty `rules` array
 
 #### Scenario: Read after operator changes
 
-- **GIVEN** the operator has previously persisted a non-empty blocklist
-- **WHEN** the operator requests `GET /api/policy`
-- **THEN** the response carries the latest persisted version, blocklist contents, and updated-by attribution
+- **GIVEN** the operator has previously created at least one application-control rule on a policy
+- **WHEN** the operator requests `GET /api/v1/app-control/policies/{id}` for that policy
+- **THEN** the response carries the latest persisted `version` and inlines the policy's `rules` array with the operator's
+  changes reflected
 
-### Requirement: Persist and fan out a new blocklist policy
+### Requirement: Persist and fan out application-control rules
 
-The system SHALL expose `PUT /api/policy` that atomically bumps the policy's version and replaces the blocklist.
-The system SHALL attempt to queue a `set_blocklist` command carrying the new version for every active host on a
-best-effort basis. A failure to enqueue the command for an individual host MUST NOT roll back the policy update; the
-server MUST log the per-host fan-out failures so the next agent poll or admin push can reconcile, and MAY surface
-per-host fan-out diagnostics in the response. The request body MUST carry `actor` and `reason` (both required), plus
-optional `paths` and `hashes` arrays. Paths MUST be absolute (start with `/`); hashes MUST be 64-character lowercase hex
-(SHA-256). A request that violates either constraint MUST be rejected with `400 Bad Request` and the policy MUST NOT be
-modified.
+The system SHALL expose `POST /api/v1/app-control/policies/{id}/rules`, `PATCH /api/v1/app-control/rules/{id}`, and
+`DELETE /api/v1/app-control/rules/{id}` that atomically apply the requested mutation and bump the owning policy's
+`version`. The system SHALL attempt to queue a `set_application_control` command carrying the post-bump policy state
+for every active host assigned to the policy, on a best-effort basis. A failure to enqueue the command for an individual
+host MUST NOT roll back the rule mutation; the server MUST log the per-host fan-out failures so the next agent poll or
+admin push can reconcile, and MUST record the fan-out count in the audit payload. The request body MUST carry `actor` and
+`reason` (both required), plus a `rule_type` and `identifier`. `rule_type` MUST be one of the supported kinds (`binary`,
+`cdhash`, `signing_id`, `team_id`); `identifier` MUST satisfy the format rules for the declared `rule_type` (e.g., absolute
+path for `binary`, 64-char lowercase hex for `cdhash`). A request that violates either constraint MUST be rejected with
+`400 Bad Request` and the policy MUST NOT be modified.
 
-#### Scenario: Valid policy push increments version and fans out
+#### Scenario: Valid rule create increments version and fans out
 
 - **GIVEN** a current policy at version `v`
-- **WHEN** the operator PUTs a valid policy with non-empty `actor` and `reason`
-- **THEN** the server returns `200 OK` carrying the new policy at version `v+1`
-- **AND** the server attempts to queue a `set_blocklist` command for every active host carrying the new version and
-  blocklist
+- **WHEN** the operator POSTs a valid rule with non-empty `actor` and `reason`
+- **THEN** the server returns `201 Created` carrying the new rule and the policy now at version `v+1`
+- **AND** the server attempts to queue a `set_application_control` command for every active host assigned to the policy
 - **AND** any host whose enqueue fails is logged so a subsequent reconcile can resend
 
-#### Scenario: Invalid path is rejected without persisting
+#### Scenario: Invalid identifier is rejected without persisting
 
 - **GIVEN** any current policy
-- **WHEN** the operator PUTs a policy whose `paths` includes a non-absolute entry such as `tmp/payload`
+- **WHEN** the operator POSTs a rule whose `identifier` violates the format rules for the declared `rule_type` (e.g., a
+  non-absolute path for `rule_type=binary`, or a non-hex string for `rule_type=cdhash`)
 - **THEN** the server returns `400 Bad Request`
 - **AND** the persisted policy is unchanged
 
-#### Scenario: Invalid hash is rejected without persisting
+#### Scenario: Unsupported rule type is rejected without persisting
 
 - **GIVEN** any current policy
-- **WHEN** the operator PUTs a policy whose `hashes` includes anything other than 64 lowercase hex characters
+- **WHEN** the operator POSTs a rule whose `rule_type` is not in the supported set
 - **THEN** the server returns `400 Bad Request`
 - **AND** the persisted policy is unchanged
 
 #### Scenario: Missing actor or reason is rejected
 
 - **GIVEN** an authenticated operator
-- **WHEN** the operator PUTs a policy body without `actor` or without `reason`
+- **WHEN** the operator POSTs a rule body without `actor` or without `reason`
 - **THEN** the server returns `400 Bad Request` and does not modify the policy
 
 ### Requirement: Audit trail for state-changing admin actions
 
-Every successful state-changing admin call (revoke, policy update) SHALL emit a structured audit log record carrying at minimum a
-timestamp, the operator-supplied `actor`, the operator-supplied `reason`, the action name, and the affected host id (for revoke)
-or new policy version and per-list change counts (for policy update). The audit record MUST be emitted at a level that downstream
-SIEM and SigNoz queries can filter on so SOC teams can reconstruct who changed what and when.
+Every successful state-changing admin call (revoke, application-control rule create / update / delete, policy create / update /
+delete) SHALL emit a structured audit log record carrying at minimum a timestamp, the operator-supplied `actor`, the
+operator-supplied `reason`, the action name, and either the affected host id (for revoke) or the post-bump policy version and
+fan-out count (for application-control mutations). The audit record MUST be emitted at a level that downstream SIEM and SigNoz
+queries can filter on so SOC teams can reconstruct who changed what and when.
 
 #### Scenario: Revoke produces an audit record
 
@@ -148,12 +155,12 @@ SIEM and SigNoz queries can filter on so SOC teams can reconstruct who changed w
 - **THEN** a structured log record is emitted carrying the operator's `actor`, the operator's `reason`, the host id, and the action
   identifier `revoke`
 
-#### Scenario: Policy update produces an audit record
+#### Scenario: Rule update produces an audit record
 
-- **GIVEN** an operator who successfully PUTs a new policy
-- **WHEN** the update commits
-- **THEN** a structured log record is emitted carrying the operator's `actor`, the operator's `reason`, the new version, and the
-  count of active hosts the new policy was fanned out to
+- **GIVEN** an operator who successfully PATCHes an existing application-control rule
+- **WHEN** the update commits and the fan-out completes
+- **THEN** a structured audit record is emitted carrying the operator's `actor`, the operator's `reason`, the affected rule id,
+  the post-bump policy version, and the count of active hosts the `set_application_control` command was fanned out to
 
 ### Requirement: ATT&CK coverage layer endpoint
 

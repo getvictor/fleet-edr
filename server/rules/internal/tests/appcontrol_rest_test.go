@@ -175,6 +175,8 @@ func (r *appControlRig) do(t *testing.T, method, path string, body any) *http.Re
 	return resp
 }
 
+// spec:server-admin-surface/read-application-control-policies/first-query-returns-the-seeded-default-policy
+//
 // TestAppControl_ListPolicies_ReturnsSeededDefault: the seed bootstrap creates one `Default` policy. The list endpoint must surface it
 // so the UI's "open policy detail" link has a target.
 func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
@@ -195,8 +197,11 @@ func TestAppControlREST_ListPolicies_ReturnsSeededDefault(t *testing.T) {
 	assert.Equal(t, 1, body.Policies[0].AssignmentCount, "seed Default policy is assigned to all-hosts (count=1)")
 }
 
+// spec:server-admin-surface/read-application-control-policies/read-after-operator-changes
+//
 // TestAppControl_GetPolicy_IncludesRules: a freshly-seeded policy has zero rules; after a POST the GET path should include the new
-// rule in the Rules slice.
+// rule in the Rules slice. Pins the "read after operator changes" spec scenario: the response carries the post-mutation `version`
+// and the `rules` array reflects what the operator just persisted.
 func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
@@ -231,8 +236,12 @@ func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 	assert.Equal(t, rulesapi.SeverityRuleHigh, withRule.Rules[0].Severity)
 }
 
-// TestAppControl_CreateRule_FansOutToEveryHost: the headline contract. One rule create → one set_application_control command per host,
+// spec:server-admin-surface/persist-and-fan-out-application-control-rules/valid-rule-create-increments-version-and-fans-out
+//
+// TestAppControl_CreateRule_FansOutToEveryHost: the headline contract. One rule create -> one set_application_control command per host,
 // each carrying the same wire payload. Dedup if HostLister returns duplicates so the audit row's fanout_hosts is the unique count.
+// Pins the spec scenario: POST returns the new rule with policy.version bumped, and a set_application_control command lands on every
+// active host assigned to the policy.
 func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	t.Parallel()
 	hosts := []string{"host-a", "host-b", "host-c", "host-a"} // dup to assert dedup
@@ -401,8 +410,11 @@ func TestAppControlREST_CreateRule_RejectsDuplicate(t *testing.T) {
 	assert.Len(t, r.inserter.snapshot(), 1)
 }
 
+// spec:server-admin-surface/persist-and-fan-out-application-control-rules/invalid-identifier-is-rejected-without-persisting
+//
 // TestAppControl_CreateRule_BadIdentifierIs400: BINARY rules require 64 lowercase hex characters; anything else is a typed validation
-// error mapped to 400.
+// error mapped to 400. Pins the spec's "invalid identifier rejected without persisting" clause: the handler returns 400 with
+// `application_control.invalid_rule` and the persisted policy is unchanged.
 func TestAppControlREST_CreateRule_BadIdentifierIs400(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
@@ -632,6 +644,8 @@ func seedRule(t *testing.T, r *appControlRig, policyID int64, identifier string)
 	return rule.ID
 }
 
+// spec:server-admin-surface/audit-trail-for-state-changing-admin-actions/rule-update-produces-an-audit-record
+//
 // TestAppControlREST_UpdateRule_HappyPath_FansOutAndAudits hits PATCH /rules/{id}, asserts the response carries the updated
 // fields, that a fresh set_application_control command lands on every host, and that the rule_update audit row reflects the
 // post-bump policy_version and fanout counts.

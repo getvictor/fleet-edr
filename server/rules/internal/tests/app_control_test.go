@@ -331,6 +331,8 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlDuplicateRule)
 }
 
+// spec:server-admin-surface/persist-and-fan-out-application-control-rules/unsupported-rule-type-is-rejected-without-persisting
+//
 // TestAppControl_CreateRule_RejectsUnsupportedTypes pins the rule_type gate after the Phase A close-out: CDHASH / SIGNINGID / TEAMID
 // are accepted (they pass through the validator and the unsupported-sentinel does not fire), while CERTIFICATE + PATH remain
 // deferred and continue to surface ErrAppControlUnsupportedRuleType so the REST surface is honest about what's wired today.
@@ -449,6 +451,8 @@ func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 	}
 }
 
+// spec:server-admin-surface/persist-and-fan-out-application-control-rules/missing-actor-or-reason-is-rejected
+//
 // TestAppControl_CreateRule_RequiresActorAndReason locks in the auditability contract: a state-changing call without an actor or
 // reason is rejected up front, not silently attributed to "system".
 func TestAppControl_CreateRule_RequiresActorAndReason(t *testing.T) {
