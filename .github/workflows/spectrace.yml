@@ -1,9 +1,9 @@
 name: Spec traceability
 
 # spectrace ties scenarios in openspec/specs/<dir>/spec.md to tests via the canonical-ID marker contract documented in
-# docs/testing-strategy.md. UAT plan milestone M13 phased rollout: invalid references fail the build today (catches typos
-# and stale renames at zero backlog cost), but uncovered SHALL/MUST scenarios are advisory until the marker backlog is
-# closed and the gate flips to --strict.
+# docs/testing-strategy.md. UAT plan milestone M13 phased rollout finished at 262/262 markers on main; the gate now runs
+# in --strict mode so that invalid references AND uncovered SHALL/MUST scenarios both fail the build. New normative
+# scenarios MUST land with at least one marker; spec renames MUST update every marker that references the old slug.
 
 on:
   push:
@@ -60,7 +60,7 @@ jobs:
           fi
 
   spectrace:
-    name: spectrace check (advisory)
+    name: spectrace check
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -75,19 +75,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The check exits 0 when there are no invalid references, even if there are uncovered SHALL/MUST scenarios; that is
-      # the documented phased-rollout shape. Invalid references DO fail the build because they almost always indicate a
-      # typo or a rename that hasn't propagated, and the cost to fix one is trivial.
-      - name: Run spectrace check
-        run: go run ./tools/spectrace check
-
-      # The advisory uncovered-scenarios list is printed to the job output but does not gate. Flip the gate to --strict
-      # in this workflow once the marker backlog is closed.
-      - name: "Advisory: count uncovered SHALL/MUST scenarios"
-        run: |
-          set -euo pipefail
-          total_normative=$(go run ./tools/spectrace list-ids --normative-only | wc -l)
-          # `check` already prints the per-scenario gap list; this step echoes the headline numbers to make the rollout
-          # progress visible in the job log without scrolling through every entry.
-          echo "spectrace: total normative scenarios = $total_normative"
-          echo "spectrace: phased rollout, --strict not yet enforced; see docs/testing-strategy.md"
+      # --strict mode: the check fails the build on EITHER invalid references (typo, stale spec rename) OR uncovered
+      # SHALL/MUST scenarios. The advisory phase is over; main is at 100% coverage and the gate enforces it from here.
+      # The check's stdout includes the headline "N/M normative scenarios have a test marker" line, so a passing run
+      # still surfaces the coverage figure in the job log without a separate informational step.
+      - name: Run spectrace check (strict)
+        run: go run ./tools/spectrace check --strict
