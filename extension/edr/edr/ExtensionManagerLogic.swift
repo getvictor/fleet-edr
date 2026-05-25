@@ -38,19 +38,32 @@ enum HostAppAction: String, Equatable, CaseIterable, Sendable {
 }
 
 /// parseHostAppAction maps an argv string (or nil for "no subcommand provided") to a HostAppAction.
-/// Returns `.activate` for the implicit default when no argument is supplied (the documented default for
-/// `edr` invoked with no subcommand). Returns nil for an unrecognised string so the caller can refuse the
-/// command and print a usage message — silently defaulting unknown input to `.activate` is a footgun (a
-/// typo like `deactvate` would silently activate when the operator intended to deactivate).
+/// Returns `.activate` ONLY when `arg` is nil (no positional argument at all — the documented default for
+/// `edr` invoked with no subcommand). Returns nil for an unrecognised string AND for an empty string so
+/// the caller can refuse the command and print a usage message: `edr ""` is much more likely a shell
+/// expansion bug than an intentional "use default" invocation, and silently defaulting it would defeat
+/// the fail-loudly contract. The same rationale covers typos (`deactvate`) and case-mismatches (`ACTIVATE`).
 func parseHostAppAction(_ arg: String?) -> HostAppAction? {
-    guard let arg, !arg.isEmpty else { return .activate }
+    guard let arg else { return .activate }
+    if arg.isEmpty { return nil }
     return HostAppAction(rawValue: arg)
 }
 
+/// validateHostAppArgs resolves the full positional-argument array (the slice of CommandLine.arguments
+/// past argv[0]) to a HostAppAction, or returns nil to signal "print usage + exit non-zero". The host app
+/// accepts at most one positional after the binary name; extra positionals (`edr deactivate typo`) are
+/// rejected as malformed because the silent-drop of the tail would let `typo` operators-misintent a real
+/// deactivation. Pulling the shape rules into a pure function lets spec-tests pin every failure mode
+/// without driving the binary itself.
+func validateHostAppArgs(_ args: [String]) -> HostAppAction? {
+    guard args.count <= 1 else { return nil }
+    return parseHostAppAction(args.first)
+}
+
 /// hostAppUsage returns the operator-facing usage message printed when the host app is invoked with an
-/// unrecognised subcommand. Lists every documented subcommand (the raw values of HostAppAction) plus the
-/// implicit default. Exposed as a pure function so tests can pin the wording without driving the host-app
-/// binary.
+/// unrecognised subcommand, an empty argument, or extra positional arguments. Lists every documented
+/// subcommand (the raw values of HostAppAction) plus the implicit default. Exposed as a pure function so
+/// tests can pin the wording without driving the host-app binary.
 func hostAppUsage() -> String {
     let known = HostAppAction.allCases.map(\.rawValue).joined(separator: ", ")
     return """
@@ -58,6 +71,7 @@ func hostAppUsage() -> String {
 
     Known subcommands: \(known)
     No subcommand is treated as 'activate'.
+    Extra positional arguments after the subcommand are rejected.
     """
 }
 

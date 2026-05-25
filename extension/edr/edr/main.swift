@@ -208,13 +208,16 @@ private func runNotifyMode() {
     }
 }
 
-let argAction = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil
-guard let action = parseHostAppAction(argAction) else {
-    // Unknown subcommand. Print usage to stderr and exit non-zero so an operator's typo can't silently
-    // become an unintended activation. The "stderr + non-zero" combination is the documented contract for
-    // unknown subcommands per the host-app-extension-manager spec.
-    FileHandle.standardError.write(Data(hostAppUsage().utf8))
-    FileHandle.standardError.write(Data("\n".utf8))
+let positionalArgs = Array(CommandLine.arguments.dropFirst())
+guard let action = validateHostAppArgs(positionalArgs) else {
+    // Malformed CLI invocation: unrecognised subcommand, empty argument, OR extra positional arguments
+    // after the subcommand. All three collapse to the same fail-loudly contract: print usage to stderr,
+    // exit non-zero, so an operator's typo or shell-expansion bug can't silently become an unintended
+    // activation. `write(contentsOf:)` is the macOS-10.15.4+ replacement for the deprecated `write(_:)`;
+    // try? is appropriate here because we're already on the exit-FAILURE path and have nothing to do
+    // about a stderr write failure.
+    try? FileHandle.standardError.write(contentsOf: Data(hostAppUsage().utf8))
+    try? FileHandle.standardError.write(contentsOf: Data("\n".utf8))
     exit(EXIT_FAILURE)
 }
 

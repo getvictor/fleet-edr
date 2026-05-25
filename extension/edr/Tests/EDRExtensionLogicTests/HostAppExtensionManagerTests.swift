@@ -226,11 +226,9 @@ final class HostAppExtensionManagerTests: XCTestCase {
     // MARK: - Action parsing (supporting coverage)
 
     func testParseHostAppActionRecognisesEveryDocumentedSubcommand() {
-        // Mirrors main.swift's `CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil` shape:
-        // nil and empty argv default to .activate (the documented no-subcommand behavior); every
-        // recognised raw value resolves to the matching enum case.
+        // nil argv defaults to .activate (the documented no-subcommand behavior); every recognised raw
+        // value resolves to the matching enum case.
         XCTAssertEqual(parseHostAppAction(nil), .activate)
-        XCTAssertEqual(parseHostAppAction(""), .activate)
         XCTAssertEqual(parseHostAppAction("activate"), .activate)
         XCTAssertEqual(parseHostAppAction("deactivate"), .deactivate)
         XCTAssertEqual(parseHostAppAction("enable-filter"), .enableFilter)
@@ -243,18 +241,40 @@ final class HostAppExtensionManagerTests: XCTestCase {
     // MARK: - Requirement: Subcommand parsing fails loudly on unknown input
 
     // spec:host-app-extension-manager/subcommand-parsing-fails-loudly-on-unknown-input/unknown-subcommand-exits-with-usage-and-non-zero-status
-    func testParseHostAppActionReturnsNilForUnknownSubcommandAndUsageListsKnownNames() {
-        // The spec scenario asserts the host app prints usage + exits non-zero for an unrecognised
-        // subcommand. The parsing side of that contract is `parseHostAppAction` returning nil; main.swift's
+    func testMalformedCLIInvocationReturnsNilSoMainSwiftCanPrintUsageAndExit() {
+        // The spec scenario asserts the host app prints usage + exits non-zero for ANY malformed
+        // invocation: typo / deprecated name (unrecognised subcommand), empty subcommand argument
+        // (`edr ""`), OR extra positional arguments after a valid subcommand (`edr deactivate typo`).
+        // The parsing side of that contract is `validateHostAppArgs` returning nil; main.swift's
         // top-level `guard let action = ... else { write(hostAppUsage()); exit(EXIT_FAILURE) }` is what
-        // converts the nil into the documented stderr + non-zero exit. A typo close to a real subcommand
-        // (`deactvate`) is the realistic footgun the contract guards against.
+        // converts the nil into the documented stderr + non-zero exit.
+
+        // Unrecognised subcommand (the original case): typo, near-miss, case-mismatch.
         XCTAssertNil(parseHostAppAction("unknown-subcommand"),
                      "an unrecognised subcommand must NOT silently default to activate")
         XCTAssertNil(parseHostAppAction("deactvate"),
                      "a near-miss typo of deactivate must NOT silently activate")
         XCTAssertNil(parseHostAppAction("ACTIVATE"),
                      "case-sensitivity: ALL-CAPS subcommand is unrecognised")
+
+        // Empty subcommand argument (`edr ""`): typically a shell-expansion bug; fail loudly.
+        XCTAssertNil(parseHostAppAction(""),
+                     "an empty argv[1] must NOT silently default to activate (likely a shell-expansion bug)")
+        XCTAssertNil(validateHostAppArgs([""]),
+                     "argv shaped as a single empty positional must be rejected")
+
+        // Extra positional arguments after a valid subcommand: `edr deactivate typo` is the realistic
+        // footgun; the tail must NOT be silently dropped.
+        XCTAssertNil(validateHostAppArgs(["deactivate", "typo"]),
+                     "extra positional arguments must NOT be silently dropped")
+        XCTAssertNil(validateHostAppArgs(["activate", "extra1", "extra2"]),
+                     "any number of extra positionals after the subcommand is malformed")
+
+        // No-positional and single-valid-positional remain the happy paths.
+        XCTAssertEqual(validateHostAppArgs([]), .activate,
+                       "no positional argument is the documented no-subcommand default")
+        XCTAssertEqual(validateHostAppArgs(["deactivate"]), .deactivate,
+                       "a single recognised positional resolves to its enum case")
 
         // The usage message lists every documented subcommand so an operator sees the supported set.
         let usage = hostAppUsage()
@@ -264,5 +284,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         }
         XCTAssertTrue(usage.lowercased().contains("usage"),
                       "usage message must start with an operator-recognisable 'Usage:' header")
+        XCTAssertTrue(usage.lowercased().contains("extra positional"),
+                      "usage message must call out the extra-positional rejection rule")
     }
 }
