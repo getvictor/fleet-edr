@@ -108,6 +108,22 @@ extensions resume capture without operator action after the host comes back up.
 - **AND** the DNS proxy is still enabled
 - **AND** event capture resumes without operator action
 
+### Requirement: Subcommand parsing fails loudly on unknown input
+
+The host app SHALL refuse to interpret an unrecognised subcommand as a valid action. When the operator
+invokes `edr <unknown-name>` (typo, deprecated subcommand, anything not in the documented set) the host app
+MUST print a usage message that lists the documented subcommands and MUST exit with a non-zero status. The
+host app MUST NOT silently default unknown input to an activation request.
+
+#### Scenario: Unknown subcommand exits with usage and non-zero status
+
+- **GIVEN** the host app binary
+- **WHEN** an operator runs `edr` with a subcommand the binary does not recognise (for example a typo
+  `deactvate`)
+- **THEN** the host app prints a usage message listing the documented subcommands
+- **AND** the host app exits with a non-zero status
+- **AND** the host app does NOT submit an activation request
+
 ### Requirement: Activation reports completion outcomes
 
 The host app SHALL report whether each activation completed immediately, completed but requires a reboot to take effect,

@@ -1,22 +1,17 @@
-// Pure-logic types extracted from main.swift for the host-app-extension-manager spec contract.
+// Pure-logic types for the host-app-extension-manager spec contract.
 //
-// Why this file exists separately from main.swift:
+// This file is compiled by BOTH:
+//   1. The Xcode `edr` executable target (via PBXFileSystemSynchronizedRootGroup auto-discovery: every Swift
+//      file under extension/edr/edr/ is a member of the `edr` target by default; only Info.plist is on the
+//      exception list in edr.xcodeproj/project.pbxproj). main.swift consumes these types directly.
+//   2. The SwiftPM `EDRExtensionLogic` library target (listed explicitly in Package.swift sources). XCTest
+//      drives every type here to pin the host-app-extension-manager spec contract.
 //
-// main.swift carries file-scope executable code (`let action = CommandLine.arguments…`, the top-level
-// switch on `action`) which is legal only in an executable target's entry-point file. The SwiftPM
-// EDRExtensionLogic target is a LIBRARY, so it cannot include main.swift. To make the host-app's
-// state-machine + subcommand-dispatch contract unit-testable we host the pure-logic types here, then
-// import them from XCTest. main.swift implements the same contract in line with the OSSystemExtensionRequest
-// delegate callbacks + NEFilterManager / NEDNSProxyManager calls; the Xcode pbxproj stays unchanged because
-// this file is consumed only by SwiftPM tests, not by the production edr executable target.
-//
-// Contract: future changes to the host-app behavior MUST update both surfaces.
-//   1. main.swift production code (ExtensionManager class, enableContentFilter / disableContentFilter,
-//      enableDNSProxy / disableDNSProxy, the top-level switch).
-//   2. This file's types AND the XCTest functions that assert the spec contract against them.
-// A spec-test that diverges from main.swift's behavior would be a marker that overclaims; CI's system / VM
-// rehearsal layer (docs/testing-strategy.md) is the line of defense that catches the production-code side
-// regressing away from the contract these tests pin.
+// Why the split exists at all: main.swift carries file-scope executable code (`let action = ...`, the
+// top-level switch on `action`) which is legal only in an executable target's entry-point file. The
+// SwiftPM library target cannot include main.swift, so the pure-logic types it tests live here instead.
+// Both surfaces compile the same file, so spec-tests run against the same code main.swift uses — no
+// parallel implementation, no desync risk.
 
 import Foundation
 
@@ -42,12 +37,28 @@ enum HostAppAction: String, Equatable, CaseIterable, Sendable {
     case notify
 }
 
-/// parseHostAppAction maps an argv string (or nil for "no subcommand provided") to a HostAppAction. The
-/// default when no argument is supplied is `.activate`, matching main.swift's
-/// `CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"` shape.
-func parseHostAppAction(_ arg: String?) -> HostAppAction {
+/// parseHostAppAction maps an argv string (or nil for "no subcommand provided") to a HostAppAction.
+/// Returns `.activate` for the implicit default when no argument is supplied (the documented default for
+/// `edr` invoked with no subcommand). Returns nil for an unrecognised string so the caller can refuse the
+/// command and print a usage message — silently defaulting unknown input to `.activate` is a footgun (a
+/// typo like `deactvate` would silently activate when the operator intended to deactivate).
+func parseHostAppAction(_ arg: String?) -> HostAppAction? {
     guard let arg, !arg.isEmpty else { return .activate }
-    return HostAppAction(rawValue: arg) ?? .activate
+    return HostAppAction(rawValue: arg)
+}
+
+/// hostAppUsage returns the operator-facing usage message printed when the host app is invoked with an
+/// unrecognised subcommand. Lists every documented subcommand (the raw values of HostAppAction) plus the
+/// implicit default. Exposed as a pure function so tests can pin the wording without driving the host-app
+/// binary.
+func hostAppUsage() -> String {
+    let known = HostAppAction.allCases.map(\.rawValue).joined(separator: ", ")
+    return """
+    Usage: edr <subcommand>
+
+    Known subcommands: \(known)
+    No subcommand is treated as 'activate'.
+    """
 }
 
 /// CompletionOutcome is the per-request verdict the OSSystemExtensionRequest delegate folds into the host

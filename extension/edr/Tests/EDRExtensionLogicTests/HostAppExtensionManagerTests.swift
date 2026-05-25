@@ -223,21 +223,46 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(postAggregateStep(for: .activate, verdict: agg.verdict), .exitImmediately)
     }
 
-    // MARK: - Action parsing (supporting coverage; not a spec scenario on its own)
+    // MARK: - Action parsing (supporting coverage)
 
-    func testParseHostAppActionDefaultsToActivateWhenNoArgumentSupplied() {
-        // Mirrors main.swift's `CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"`
-        // shape — an operator running `edr` with no subcommand gets the activate path.
+    func testParseHostAppActionRecognisesEveryDocumentedSubcommand() {
+        // Mirrors main.swift's `CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil` shape:
+        // nil and empty argv default to .activate (the documented no-subcommand behavior); every
+        // recognised raw value resolves to the matching enum case.
         XCTAssertEqual(parseHostAppAction(nil), .activate)
         XCTAssertEqual(parseHostAppAction(""), .activate)
         XCTAssertEqual(parseHostAppAction("activate"), .activate)
+        XCTAssertEqual(parseHostAppAction("deactivate"), .deactivate)
         XCTAssertEqual(parseHostAppAction("enable-filter"), .enableFilter)
+        XCTAssertEqual(parseHostAppAction("disable-filter"), .disableFilter)
+        XCTAssertEqual(parseHostAppAction("enable-dns-proxy"), .enableDNSProxy)
         XCTAssertEqual(parseHostAppAction("disable-dns-proxy"), .disableDNSProxy)
         XCTAssertEqual(parseHostAppAction("notify"), .notify)
-        // Unrecognised subcommands fall through to activate, matching main.swift's default case which
-        // constructs ExtensionManager(action: action) and submits an activation request. (A typo turns
-        // into an unintended activate; this is the documented behavior since the wire never sees the
-        // unrecognised string downstream.)
-        XCTAssertEqual(parseHostAppAction("unknown-subcommand"), .activate)
+    }
+
+    // MARK: - Requirement: Subcommand parsing fails loudly on unknown input
+
+    // spec:host-app-extension-manager/subcommand-parsing-fails-loudly-on-unknown-input/unknown-subcommand-exits-with-usage-and-non-zero-status
+    func testParseHostAppActionReturnsNilForUnknownSubcommandAndUsageListsKnownNames() {
+        // The spec scenario asserts the host app prints usage + exits non-zero for an unrecognised
+        // subcommand. The parsing side of that contract is `parseHostAppAction` returning nil; main.swift's
+        // top-level `guard let action = ... else { write(hostAppUsage()); exit(EXIT_FAILURE) }` is what
+        // converts the nil into the documented stderr + non-zero exit. A typo close to a real subcommand
+        // (`deactvate`) is the realistic footgun the contract guards against.
+        XCTAssertNil(parseHostAppAction("unknown-subcommand"),
+                     "an unrecognised subcommand must NOT silently default to activate")
+        XCTAssertNil(parseHostAppAction("deactvate"),
+                     "a near-miss typo of deactivate must NOT silently activate")
+        XCTAssertNil(parseHostAppAction("ACTIVATE"),
+                     "case-sensitivity: ALL-CAPS subcommand is unrecognised")
+
+        // The usage message lists every documented subcommand so an operator sees the supported set.
+        let usage = hostAppUsage()
+        for action in HostAppAction.allCases {
+            XCTAssertTrue(usage.contains(action.rawValue),
+                          "usage message must list every documented subcommand; missing \(action.rawValue)")
+        }
+        XCTAssertTrue(usage.lowercased().contains("usage"),
+                      "usage message must start with an operator-recognisable 'Usage:' header")
     }
 }
