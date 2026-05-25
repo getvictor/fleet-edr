@@ -9,7 +9,7 @@ import { openDB, resetDB } from "../../fixtures/db";
 // that links back to the coverage page, not produce a hard error or 404.
 //
 // The fixture rules come from the registered catalog at server/rules/internal/catalog/. To avoid coupling the
-// test to a specific rule's text we fetch /api/rules/docs first, pick the first entry the server reports, and
+// test to a specific rule's text we fetch /api/rules first, pick the first entry the server reports, and
 // assert against THAT entry's fields. The page only needs to render any registered rule's documentation;
 // pinning to a specific rule's copy would make the test fragile when catalog content moves.
 test.describe("per-rule documentation page", () => {
@@ -58,7 +58,7 @@ test.describe("per-rule documentation page", () => {
     // Summary, severity, and the per-section headings always render for any registered rule. Severity case
     // varies (Badge renders lowercase) so match case-insensitively.
     await expect(page.getByText(target.doc.summary, { exact: false })).toBeVisible();
-    await expect(page.getByRole("row", { name: new RegExp(`severity\\s+${target.doc.severity}`, "i") }))
+    await expect(page.getByRole("row", { name: new RegExp(String.raw`severity\s+${target.doc.severity}`, "i") }))
       .toBeVisible();
     await expect(page.getByRole("row", { name: /att&ck/i })).toBeVisible();
     await expect(page.getByRole("row", { name: /event types/i })).toBeVisible();

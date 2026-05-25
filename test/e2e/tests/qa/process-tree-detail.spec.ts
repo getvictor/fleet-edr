@@ -2,6 +2,7 @@ import { test, expect } from "../../fixtures/agent";
 import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
 import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
 import { openDB, resetDB } from "../../fixtures/db";
+import { setupProcessTreeDeep } from "../../fixtures/process-tree";
 
 // Process tree node-select + detail panel + kill control. The spec splits this surface into three scenarios:
 //   1. selecting-a-process-opens-the-detail-panel — click a node, panel renders.
@@ -34,43 +35,9 @@ test.describe("process tree detail and kill control", () => {
     }
   });
 
-  async function gotoTreeWithProcesses(
-    page: import("@playwright/test").Page,
-    agent: import("../../fixtures/agent").AgentFixtures["agent"],
-  ): Promise<string> {
-    const hostId = crypto.randomUUID();
-    const r = await agent.runScenario("process-tree-deep.yaml", { hostIdOverride: hostId });
-    expect(r.hostId).toBe(hostId);
-
-    // Wait for the processor to materialise rows before navigating; the page would otherwise render an empty
-    // tree on first load (no nodes, no clickable target).
-    const db = await openDB();
-    try {
-      await expect
-        .poll(
-          async () => {
-            const [rows] = (await db.query(
-              "SELECT COUNT(*) AS n FROM processes WHERE host_id = ?",
-              [hostId],
-            )) as [Array<{ n: number | string }>, unknown];
-            return Number(rows[0].n);
-          },
-          { timeout: 10_000, message: "processor never materialised process rows for process-tree-deep" },
-        )
-        .toBeGreaterThanOrEqual(4);
-    } finally {
-      await db.end();
-    }
-
-    await page.goto(`/ui/hosts/${encodeURIComponent(hostId)}`);
-    // Wait on the rendered tree: at least one g.node must exist before the click handler can fire.
-    await expect(page.locator("svg g.node").first()).toBeVisible({ timeout: 15_000 });
-    return hostId;
-  }
-
   // spec:web-ui/process-tree-visualization/selecting-a-process-opens-the-detail-panel
   test("clicking a process node opens the detail panel for that PID", async ({ page, agent }) => {
-    await gotoTreeWithProcesses(page, agent);
+    await setupProcessTreeDeep(page, agent);
 
     // Click the first node (any node — the spec just asserts that activating a node opens the panel; the
     // panel's content is exercised by the next test). .first() avoids the case where multiple nodes share
@@ -83,7 +50,7 @@ test.describe("process tree detail and kill control", () => {
 
   // spec:web-ui/process-detail-content/process-detail-surfaces-investigation-fields
   test("process detail surfaces the documented investigation fields", async ({ page, agent }) => {
-    await gotoTreeWithProcesses(page, agent);
+    await setupProcessTreeDeep(page, agent);
     await page.locator("svg g.node").first().click();
 
     // The detail panel renders the fields as a <dl> with <dt>FIELD</dt><dd>VALUE</dd> pairs. We assert on
@@ -106,7 +73,7 @@ test.describe("process tree detail and kill control", () => {
 
   // spec:web-ui/process-detail-content/operator-kills-a-running-process
   test("clicking kill issues a /commands kill_process and surfaces the lifecycle state", async ({ page, agent }) => {
-    const hostId = await gotoTreeWithProcesses(page, agent);
+    const hostId = await setupProcessTreeDeep(page, agent);
     await page.locator("svg g.node").first().click();
 
     const detail = page.locator(".process-detail");

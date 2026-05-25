@@ -18,6 +18,7 @@ import { test, expect } from "../../fixtures/agent";
 import { Page, Browser, BrowserContext } from "@playwright/test";
 import { resetAndSignIn, resetHostData, uninstallVirtualAuthenticator } from "../../fixtures/auth";
 import { openDB } from "../../fixtures/db";
+import { setupProcessTreeDeep } from "../../fixtures/process-tree";
 import { VirtualAuthenticator } from "../../fixtures/webauthn";
 
 test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
@@ -161,30 +162,11 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
   // spec:web-ui/process-tree-visualization/process-tree-renders-for-a-host
   test("process tree: process-tree-deep -> /ui/hosts/<id> renders the host page", async ({ agent }) => {
     const p = requirePage();
-    const hostId = crypto.randomUUID();
-    const r = await agent.runScenario("process-tree-deep.yaml", { hostIdOverride: hostId });
-    expect(r.hostId).toBe(hostId);
+    // setupProcessTreeDeep enrols a fresh host, posts the scenario, waits for the processor to materialise
+    // at least 4 process rows, navigates to /ui/hosts/<id>, and waits for the rendered tree. Shared with
+    // process-tree-detail.spec.ts; collapses the previous inline copy that Sonar flagged as duplicated code.
+    const hostId = await setupProcessTreeDeep(p, agent);
 
-    // One DB connection for the whole poll; see note in the event-count test.
-    const db = await openDB();
-    try {
-      await expect
-        .poll(
-          async () => {
-            const [rows] = (await db.query(
-              "SELECT COUNT(*) AS n FROM processes WHERE host_id = ?",
-              [hostId],
-            )) as [Array<{ n: number | string }>, unknown];
-            return Number(rows[0].n);
-          },
-          { timeout: 10_000, message: "processor never materialised process rows for process-tree-deep" },
-        )
-        .toBeGreaterThanOrEqual(4);
-    } finally {
-      await db.end();
-    }
-
-    await p.goto(`/ui/hosts/${encodeURIComponent(hostId)}`);
     // PageHeader renders the host_id; asserting on the text avoids depending on D3 SVG selectors (those are layout-tuning-fragile).
     await expect(p.getByText(hostId)).toBeVisible({ timeout: 15_000 });
   });

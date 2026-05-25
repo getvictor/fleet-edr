@@ -76,7 +76,9 @@ test.describe("application control policy editor", () => {
       ),
       page.getByRole("button", { name: /save rule/i }).click(),
     ]);
-    expect(resp.status()).toBe(200);
+    // handleCreateRule writes http.StatusCreated (201) per
+    // server/rules/internal/operator/appcontrol_handler.go:233.
+    expect(resp.status()).toBe(201);
     const sent = JSON.parse(resp.request().postData() ?? "{}") as Record<string, unknown>;
     expect(sent.rule_type).toBe("BINARY");
     expect(sent.identifier).toBe(VALID_BINARY_IDENTIFIER);
