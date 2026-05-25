@@ -54,8 +54,10 @@ enum XPCMessageType {
 
 /// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case, which is fine for an
 /// extension that already keeps ESF deadlines alive on a few-second latency budget. Once full, oldest entries are
-/// dropped (lossy FIFO) so a stuck agent can never OOM the extension.
-let pendingSendCap = 10_000
+/// dropped (lossy FIFO) so a stuck agent can never OOM the extension. File-private because only XPCServer + the
+/// adjacent log line need it; PendingBuffer takes its cap as an init parameter so it's testable without referencing
+/// this constant.
+private let pendingSendCap = 10_000
 
 /// PendingBuffer is a bounded FIFO of event payloads the XPC server buffers while no peer is connected. Drained to the
 /// next peer that completes the hello handshake. Extracted from XPCServer so the cap + drop-oldest semantics + drain
@@ -172,7 +174,9 @@ final class XPCServer {
             if self.peers.isEmpty {
                 let dropped = self.pendingBuffer.append(data)
                 if dropped > 0 {
-                    logger.warning("XPC peer absent; dropped \(dropped, privacy: .public) oldest pending events (cap \(pendingSendCap, privacy: .public))")
+                    logger.warning(
+                        "XPC peer absent; dropped \(dropped, privacy: .public) oldest pending events (cap \(pendingSendCap, privacy: .public))"
+                    )
                 }
                 return
             }
@@ -218,8 +222,10 @@ final class XPCServer {
     private func handlePeerMessage(_ event: xpc_object_t, peer: XPCPeer) {
         let typeStr = xpc_dictionary_get_string(event, "type").map { String(cString: $0) }
         var dataLen: Int = 0
-        let dataPtr = xpc_dictionary_get_data(event, "data", &dataLen)
-        let inboundData: Data? = (dataPtr != nil && dataLen > 0) ? Data(bytes: dataPtr!, count: dataLen) : nil
+        var inboundData: Data?
+        if let dataPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 {
+            inboundData = Data(bytes: dataPtr, count: dataLen)
+        }
 
         switch dispatchInbound(type: typeStr, data: inboundData) {
         case .helloAck:

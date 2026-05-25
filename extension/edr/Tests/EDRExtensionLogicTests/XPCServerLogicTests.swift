@@ -19,10 +19,12 @@ final class XPCServerLogicTests: XCTestCase {
 
     // spec:extension-xpc-server/mach-service-registration/an-agent-connects-to-the-system-extension
     func testSingleValidatedPeerLandsInTheBroadcastSet() {
-        // The accept path adds a peer to a `Set<XPCPeer>` once the OS-level peer code-signing requirement passes; from
+        // The accept path adds a peer to `Set<XPCPeer>` once the OS-level peer code-signing requirement passes; from
         // that point on, every subsequent broadcast iterates over the set. We can't construct a real xpc_connection_t
-        // in a unit test, so we model the peers as opaque identifiers; the production code uses the same Set semantics
-        // via the XPCPeer wrapper (Hashable on ObjectIdentifier of the connection).
+        // in a unit test (the type is opaque + lifetime-tied to a real Mach port) so this test asserts only the
+        // `Set` semantics the production accept-path relies on. XPCPeer's Hashable implementation (ObjectIdentifier of
+        // the connection) is exercised indirectly by every Mach round-trip on the dev VM; the system / VM layer per
+        // docs/testing-strategy.md is where that is verified.
         var peers: Set<Int> = []
         peers.insert(1)
         XCTAssertEqual(peers.count, 1)
@@ -64,6 +66,10 @@ final class XPCServerLogicTests: XCTestCase {
                        "production requirement must not embed the debug cdhash constant")
     }
 
+    // The canonical-ID slug is derived from the spec heading and lands above the test on one line per the spectrace
+    // marker contract; the resulting comment exceeds the 150-char SwiftLint default. Per-line disable is the right
+    // exception here because the slug is a fixed external contract, not a stylistic choice.
+    // swiftlint:disable:next line_length
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-when-its-code-directory-hash-matches-the-pinned-value
     func testDebugRequirementPinsTheAdHocCDHashAndIncludesProductionClause() {
         // Debug requirement = production-style team-id clause OR cdhash clause for the pinned ad-hoc agent. The pin is
@@ -95,18 +101,19 @@ final class XPCServerLogicTests: XCTestCase {
 
     // spec:extension-xpc-server/event-broadcast-to-all-connected-peers/an-event-is-broadcast-to-multiple-agents
     func testBroadcastFanOutCoversEveryPeerInTheSet() {
-        // Model the broadcast as the iteration shape XPCServer.broadcastLocked uses: for peer in peers { send(peer) }.
-        // The contract is "every peer in the set receives the message"; we mirror that by counting calls per peer.
+        // XPCServer.broadcastLocked's contract is "iterate `peers` once and send the same xpc_dictionary message to
+        // every peer." This test pins the iteration shape: each peer in the set sees exactly one send call per event,
+        // and the iteration covers every peer (no skipped, no doubled). The actual payload-shared-not-cloned property
+        // is a consequence of the xpc_dictionary being constructed ONCE outside the for-loop in production code; a
+        // unit test can't observe that property without the real XPC framework.
         let peers: [Int] = [1, 2]
         var calls: [Int: Int] = [:]
-        let payload = Data("event".utf8)
         for peer in peers {
             calls[peer, default: 0] += 1
-            // Each call would send the same payload bytes; we verify the data is shared rather than per-peer-distinct.
-            XCTAssertEqual(payload, Data("event".utf8))
         }
-        XCTAssertEqual(calls[1], 1)
-        XCTAssertEqual(calls[2], 1)
+        XCTAssertEqual(calls[1], 1, "peer 1 must receive exactly one send call per broadcast")
+        XCTAssertEqual(calls[2], 1, "peer 2 must receive exactly one send call per broadcast")
+        XCTAssertEqual(calls.count, peers.count, "every peer in the set receives the broadcast")
     }
 
     // spec:extension-xpc-server/event-broadcast-to-all-connected-peers/an-event-is-emitted-with-no-peers-connected
@@ -142,7 +149,7 @@ final class XPCServerLogicTests: XCTestCase {
         }
     }
 
-    // spec:extension-xpc-server/inbound-policy-update/a-policy-update-with-no-data-is-rejected
+    // spec:extension-xpc-server/inbound-policy-update/an-application-control-update-with-no-data-is-rejected
     func testApplicationControlUpdateWithoutDataDispatchesToRejectMissingData() {
         // The spec's two failure shapes (missing data field OR empty data) both surface as .rejectMissingData. The
         // active policy is NOT touched and the connection stays open (the connection-open invariant is part of "the

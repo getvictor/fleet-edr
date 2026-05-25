@@ -30,9 +30,12 @@ let package = Package(
     ],
     targets: [
         // Files explicitly listed via `sources:` so SwiftPM does NOT auto-walk extension/ or
-        // networkextension/ and pull in main.swift, XPCServer.swift, ESFClient.swift, etc. -- those
-        // import EndpointSecurity / NetworkExtension which only link inside their respective
-        // Xcode targets. Adding a new pure-logic file is a one-line edit here.
+        // networkextension/ and pull in main.swift, ESFClient.swift, networkextension/XPCServer.swift,
+        // etc. -- those import EndpointSecurity / NetworkExtension which only link inside their
+        // respective Xcode targets. The system extension's XPCServer.swift IS in the source list
+        // (it only depends on Foundation + libxpc, both available to SwiftPM) so the
+        // extension-xpc-server unit tests can drive it. Adding a new pure-logic file is a one-line
+        // edit here.
         .target(
             name: "EDRExtensionLogic",
             // `exclude:` silences the SwiftPM "unhandled file" warning by telling the build

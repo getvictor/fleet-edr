@@ -104,7 +104,7 @@ with the policy described by `data` and MUST persist that policy so it survives 
 - **THEN** the new blocklist becomes the active policy used by exec authorization
 - **AND** the new blocklist persists across a restart of the extension
 
-#### Scenario: A policy update with no data is rejected
+#### Scenario: An application_control.update with no data is rejected
 
 - **GIVEN** a validated agent connection is open to the system extension
 - **WHEN** the agent sends a `policy.update` message with no `data` field or empty data
