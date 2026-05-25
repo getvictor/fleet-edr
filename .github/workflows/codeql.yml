@@ -148,9 +148,16 @@ jobs:
           persist-credentials: false
 
       - name: Xcode version
-        # Log which Xcode the runner picked so future project-format
-        # failures surface directly (same pattern as pkg-dryrun).
-        run: xcodebuild -version
+        id: xcode-version
+        # Log which Xcode the runner picked so future project-format failures surface directly (same pattern
+        # as pkg-dryrun). Also emit a short hash of the version string to GITHUB_OUTPUT so the cache key
+        # below binds to it: macos-15 runners auto-upgrade their Xcode periodically, and a stale cache built
+        # against the previous Xcode contains .swiftmodule files that the new compiler may not be able to
+        # read. Binding the cache key to the Xcode version invalidates the cache on a runner-image bump.
+        run: |
+          xcodebuild -version
+          xcode_id=$(xcodebuild -version | shasum -a 256 | cut -c1-12)
+          echo "id=$xcode_id" >> "$GITHUB_OUTPUT"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
@@ -159,19 +166,60 @@ jobs:
           build-mode: manual
           queries: security-extended
 
+      - name: Cache Swift compile artifacts
+        # Two-tier cache. ModuleCache.noindex is the SHARED precompiled-.swiftmodule cache for the stdlib +
+        # system frameworks (per-Xcode-version, not per-project); always safe to reuse because CodeQL's
+        # extractor doesn't depend on it. The project-specific SwiftCompileCache holds per-compile-input
+        # outputs; on a cache hit Xcode pulls the result from cache instead of re-invoking swiftc, which
+        # means CodeQL's swiftc wrapper never observes those files.
+        #
+        # Cache key shape (Xcode version + pbxproj/Package + every .swift file):
+        #   - Xcode version (steps.xcode-version.outputs.id) invalidates on runner-image Xcode bumps so
+        #     stale .swiftmodule files built by an older swiftc never reach a newer swiftc.
+        #   - pbxproj + Package.swift hash invalidates on project-shape changes (target add/remove, sources
+        #     list edit, dependency bump).
+        #   - Every .swift file's content hash means the PRIMARY KEY misses on ANY source change; the next
+        #     run is a full build with full CodeQL coverage.
+        #
+        # The single restore-keys entry falls back to a stale cache when ONLY Swift sources changed but the
+        # Xcode version + project shape are unchanged. That path trades some CodeQL coverage on unchanged
+        # files for build speed on PR re-runs (cached outputs bypass swiftc, so the extractor won't trace
+        # those files). No OS-only fallback: for a security scanner, restoring an unrelated branch's cache
+        # would silently downgrade analysis coverage, and Copilot rightly flagged that as too broad.
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+            ~/Library/Developer/Xcode/DerivedData/edr-*/Build/Intermediates.noindex/SwiftCompileCache
+          key: codeql-swift-${{ runner.os }}-${{ steps.xcode-version.outputs.id }}-${{ hashFiles('extension/edr/edr.xcodeproj/project.pbxproj', 'extension/edr/Package.swift') }}-${{ hashFiles('extension/**/*.swift') }}
+          restore-keys: |
+            codeql-swift-${{ runner.os }}-${{ steps.xcode-version.outputs.id }}-${{ hashFiles('extension/edr/edr.xcodeproj/project.pbxproj', 'extension/edr/Package.swift') }}-
+
       - name: Build Xcode project for CodeQL
-        # Swift's extractor observes the compile, so we must actually build
-        # the project during the CodeQL trace. Ad-hoc signing is fine for
-        # analysis; we're not packaging.
+        # Swift's extractor observes the compile, so we must actually build the project
+        # during the CodeQL trace. Ad-hoc signing is fine for analysis; we're not
+        # packaging.
+        #
+        # Flags worth noting:
+        #   - COMPILER_INDEX_STORE_ENABLE=NO disables Xcode's parallel SourceKit indexing
+        #     during compilation. CodeQL has its own trace mechanism that doesn't use the
+        #     index store, so the indexing is pure overhead in this job (~10-30% saving
+        #     observed on similar Swift-heavy CodeQL pipelines).
+        #   - -skipPackagePluginValidation + -skipMacroValidation skip SwiftPM plugin /
+        #     macro signature checks that aren't relevant when no untrusted plugins or
+        #     macros are in the dependency tree (this project has neither).
         run: |
           xcodebuild \
             -project extension/edr/edr.xcodeproj \
             -scheme edr \
             -configuration Debug \
             -destination 'generic/platform=macOS' \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
       - name: Analyze
