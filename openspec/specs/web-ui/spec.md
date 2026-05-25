@@ -23,7 +23,7 @@ login MUST surface a generic error without revealing whether the email or the pa
 
 - **GIVEN** a browser with no active session cookie
 - **WHEN** the user navigates to the application
-- **THEN** the UI renders the login page with email and password fields
+- **THEN** the UI renders the login page with the configured sign-in controls (SSO and a break-glass entry point)
 
 #### Scenario: Successful login routes to the home view
 

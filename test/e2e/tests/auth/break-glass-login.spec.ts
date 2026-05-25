@@ -63,6 +63,7 @@ test.describe("break-glass day-to-day login", () => {
     if (va) await uninstallVirtualAuthenticator(va);
   });
 
+  // spec:web-ui/authenticated-entry-to-the-application/successful-login-routes-to-the-home-view
   test("login with correct password + assertion lands at /ui/", async ({
     page,
   }) => {

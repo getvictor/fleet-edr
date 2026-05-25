@@ -79,6 +79,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
     await expect(p.locator("table")).toHaveCount(0);
   });
 
+  // spec:web-ui/host-list-is-the-home-view/host-list-renders-rows-for-enrolled-hosts
   test("many hosts: enrol 25 hosts via enrollHostsBatch -> all render in <tr>", async ({ agent }) => {
     const p = requirePage();
     const BATCH_SIZE = 25;
@@ -156,6 +157,8 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
     }
   });
 
+  // spec:web-ui/host-list-is-the-home-view/clicking-a-host-opens-its-process-tree
+  // spec:web-ui/process-tree-visualization/process-tree-renders-for-a-host
   test("process tree: process-tree-deep -> /ui/hosts/<id> renders the host page", async ({ agent }) => {
     const p = requirePage();
     const hostId = crypto.randomUUID();

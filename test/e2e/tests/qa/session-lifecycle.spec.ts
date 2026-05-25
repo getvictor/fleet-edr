@@ -110,6 +110,7 @@ test.describe.serial("session lifecycle", () => {
     }
   });
 
+  // spec:web-ui/logout-terminates-the-session/operator-logs-out
   test("explicit logout via DELETE /api/session is symmetric with login", async ({
     browser,
   }) => {

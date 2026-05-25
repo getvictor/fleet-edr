@@ -19,6 +19,7 @@ test.describe("oidc sign-in via local dex", () => {
     }
   });
 
+  // spec:web-ui/authenticated-entry-to-the-application/successful-login-routes-to-the-home-view
   test("analyst JIT-provisions on first sign-in + lands at /ui/", async ({
     page,
   }) => {

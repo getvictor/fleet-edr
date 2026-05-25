@@ -70,6 +70,7 @@ test.describe.serial("break-glass login failure reason", () => {
   // password check fails with ErrBadPassword; reasonForLoginErr maps
   // that to "password.mismatch". Wire shows the redacted
   // invalid_credentials; the audit row carries the precise reason.
+  // spec:web-ui/authenticated-entry-to-the-application/failed-login-shows-a-non-enumerating-error
   test("wrong password collapses to invalid_credentials on the wire; audit carries password.mismatch", async () => {
     // setupPage retains the VA + registered credential from
     // beforeAll. Drive the wrong-password login here.
