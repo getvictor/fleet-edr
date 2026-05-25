@@ -20,10 +20,22 @@ spectrace list-ids   [--specs-dir DIR] [--normative-only]
 
 ## Phased rollout
 
-The CI workflow at `.github/workflows/spectrace.yml` runs `check` in **advisory** mode: invalid references fail the
-build (catches typos and stale spec renames at zero backlog cost) but uncovered SHALL / MUST scenarios are reported
-without failing. Flip the workflow to `--strict` once the marker backlog is closed and every normative scenario has at
-least one reference.
+The CI workflow at `.github/workflows/spectrace.yml` runs `check --strict`: both invalid references and uncovered
+SHALL / MUST scenarios fail the build. The advisory phase finished with all 262 normative scenarios covered on main;
+the gate enforces 100% coverage from here.
+
+What this means for contributors:
+
+- Adding a new normative scenario (a `#### Scenario:` under a `### Requirement:` whose body contains SHALL or MUST)
+  requires at least one marker reference in the same PR. Otherwise the spectrace job fails.
+- Renaming a scenario heading changes the canonical-ID slug; every marker that referenced the old slug becomes an
+  invalid reference and must be updated in the same PR.
+- Deleting a scenario removes its denominator entry, but stale `// spec:<old-id>` markers in tests become invalid
+  references; clean them up in the same PR.
+
+`spectrace check` (no `--strict`) still works locally as the advisory variant: prints the coverage delta and the
+invalid-reference list without changing exit code on uncovered scenarios. Useful for iterating mid-PR before every
+marker is in place.
 
 ## Marker forms
 
