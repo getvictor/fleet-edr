@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -15,9 +16,18 @@ import (
 )
 
 const (
-	msgInternalError   = "internal error"
-	msgNotFound        = "not found"
-	msgInvalidJSONBody = "invalid JSON body"
+	// Error codes for the `{"error": "<code>"}` JSON envelope this handler writes on 4xx / 5xx responses. The codes are
+	// stable typed strings (server-rest-api JSON-response-format spec): clients dispatch on them without parsing the
+	// human-readable message that may accompany them in logs but is NOT part of the response body.
+	errInternal           = "internal"
+	errNotFound           = "not_found"
+	errInvalidJSONBody    = "invalid_json"
+	errHostIDRequired     = "host_id_required"
+	errInvalidPID         = "invalid_pid"
+	errInvalidAlertID     = "invalid_alert_id"
+	errInvalidStatus      = "invalid_status"
+	errInvalidStatusTrans = "invalid_status_transition"
+	errInvalidUser        = "invalid_user"
 
 	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
 	// without paging.
@@ -25,7 +35,20 @@ const (
 	// processTreeMaxLimit is the upper bound the handler enforces; values above this are clamped down. Prevents an operator from
 	// accidentally asking for the whole host's history in one query.
 	processTreeMaxLimit = 5000
+
+	// updateAlertStatusBodyCap bounds the PUT /api/alerts/{id} body so a malicious or buggy client can't exhaust server memory by
+	// streaming a multi-GiB body that json.NewDecoder would happily buffer. The legitimate payload is ~20 bytes ({"status":"open"}
+	// and the longest typed value); 1 MiB is generous headroom for forward-compatible field additions and gives a clean 413 path
+	// that scripted clients can dispatch on. Mirrors the same cap shape that response/operator/handler.go uses on /api/commands.
+	updateAlertStatusBodyCap = 1 << 20 // 1 MiB
 )
+
+// writeError emits a `{"error": "<code>"}` JSON body per the server-rest-api JSON-response-format requirement. Mirrors the pattern
+// in server/response/internal/operator/handler.go and server/identity/internal/audit/handler.go so all session-authenticated
+// endpoints surface failures with the same envelope a scripted client can dispatch on without parsing prose.
+func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, status int, code string) {
+	httpserver.NoStoreJSON(ctx, h.logger, w, status, map[string]string{"error": code})
+}
 
 // alertDetailResponse extends Alert with linked event IDs for the
 // detail endpoint.
@@ -82,7 +105,7 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	hosts, err := h.svc.ListHosts(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list hosts", "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if hosts == nil {
@@ -92,13 +115,13 @@ func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	hostID := r.PathValue("host_id")
 	if hostID == "" {
-		http.Error(w, "host_id required", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errHostIDRequired)
 		return
 	}
 
-	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{Type: "process", ID: hostID}) {
 		return
 	}
@@ -115,7 +138,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if roots == nil {
@@ -125,15 +148,15 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	hostID := r.PathValue("host_id")
 	pidStr := r.PathValue("pid")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
-		http.Error(w, "invalid pid", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPID)
 		return
 	}
 
-	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionProcessRead, identityapi.Resource{Type: "process", ID: hostID}) {
 		return
 	}
@@ -143,11 +166,11 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if detail == nil {
-		http.Error(w, msgNotFound, http.StatusNotFound)
+		h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 		return
 	}
 	h.writeJSON(w, r, detail)
@@ -170,7 +193,7 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts, err := h.svc.ListAlerts(ctx, f)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "list alerts", "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if alerts == nil {
@@ -180,24 +203,24 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid alert id", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidAlertID)
 		return
 	}
 
-	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert", ID: strconv.FormatInt(id, 10)}) {
 		return
 	}
 	alert, eventIDs, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
 		if errors.Is(err, api.ErrAlertNotFound) {
-			http.Error(w, msgNotFound, http.StatusNotFound)
+			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "get alert", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 	if eventIDs == nil {
@@ -207,17 +230,22 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid alert id", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidAlertID)
 		return
 	}
 
+	// MaxBytesReader caps the body so a malicious client cannot stream an unbounded JSON document to OOM the server. Decode then maps
+	// "request body too large" into the invalid_json envelope - the JSON shape doesn't distinguish the two failure modes, and the
+	// downstream client retry is the same regardless (fix the body, resend). See updateAlertStatusBodyCap for the cap rationale.
+	r.Body = http.MaxBytesReader(w, r.Body, updateAlertStatusBodyCap)
 	var body struct {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, msgInvalidJSONBody, http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidJSONBody)
 		return
 	}
 
@@ -230,11 +258,9 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	case string(api.AlertStatusResolved):
 		action = identityapi.ActionAlertResolve
 	default:
-		http.Error(w, "invalid status: must be open, acknowledged, or resolved", http.StatusBadRequest)
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidStatus)
 		return
 	}
-
-	ctx := r.Context()
 
 	// Phase 5: alert.resolve on a critical-severity alert requires a fresh auth event. Fetch severity before the gate so the chokepoint
 	// sees Resource.Severity. Other actions (Reopen, Acknowledge) don't need the read but the handler runs it uniformly — alerts are small
@@ -243,11 +269,11 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	preGate, _, err := h.svc.GetAlert(ctx, id)
 	if err != nil {
 		if errors.Is(err, api.ErrAlertNotFound) {
-			http.Error(w, msgNotFound, http.StatusNotFound)
+			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 			return
 		}
 		h.logger.ErrorContext(ctx, "pre-gate alert lookup", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 
@@ -262,17 +288,17 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	if _, err := h.svc.UpdateAlertStatus(ctx, id, api.AlertStatus(body.Status), userID); err != nil {
 		switch {
 		case errors.Is(err, api.ErrAlertNotFound):
-			http.Error(w, msgNotFound, http.StatusNotFound)
+			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
 			return
 		case errors.Is(err, api.ErrInvalidAlertTransition):
-			http.Error(w, "invalid status transition", http.StatusBadRequest)
+			h.writeError(ctx, w, http.StatusBadRequest, errInvalidStatusTrans)
 			return
 		case errors.Is(err, api.ErrInvalidUserUpdater):
-			http.Error(w, "invalid user", http.StatusBadRequest)
+			h.writeError(ctx, w, http.StatusBadRequest, errInvalidUser)
 			return
 		}
 		h.logger.ErrorContext(ctx, "update alert status", "id", id, "err", err)
-		http.Error(w, msgInternalError, http.StatusInternalServerError)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
 

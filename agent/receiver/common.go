@@ -13,6 +13,7 @@
 package receiver
 
 import (
+	"context"
 	"log/slog"
 	"sync/atomic"
 )
@@ -40,5 +41,28 @@ var logger atomic.Pointer[slog.Logger]
 func SetLogger(l *slog.Logger) {
 	if l != nil {
 		logger.Store(l)
+	}
+}
+
+// getLogger returns the package-level logger or slog.Default if none has been installed. Lives in common.go (rather than the
+// darwin/cgo receiver.go) so non-darwin builds can use it AND so tryDeliverEvent below is reachable from tests without CGo.
+func getLogger() *slog.Logger {
+	if l := logger.Load(); l != nil {
+		return l
+	}
+	return slog.Default()
+}
+
+// tryDeliverEvent does a non-blocking send of evt onto ch. When ch's buffer is full it logs a warning naming serviceName and DROPS
+// the event without blocking the caller. The production CGo onEvent callback uses this so a slow downstream consumer cannot
+// back-pressure into the XPC kernel side; tests exercise it directly to pin the drop-and-warn contract without needing a live
+// Mach service. The dropped-event arm is the agent-xpc-receiver "downstream consumer falls behind" scenario: the receiver MUST
+// keep reading subsequent events from the connector, so the send is non-blocking and the loss is surfaced via a warning rather
+// than a returned error.
+func tryDeliverEvent(ch chan<- Event, evt Event, serviceName string) {
+	select {
+	case ch <- evt:
+	default:
+		getLogger().WarnContext(context.Background(), "receiver event channel full", "service", serviceName)
 	}
 }

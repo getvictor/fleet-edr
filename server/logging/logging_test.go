@@ -41,6 +41,13 @@ func TestNew_Text(t *testing.T) {
 	assert.Error(t, json.Unmarshal([]byte(strings.TrimSpace(got)), &rec))
 }
 
+// spec:observability-instrumentation/structured-logs-carry-trace-correlation/log-level-is-honoured-for-export
+//
+// Pins the spec's "log level is honoured for export" clause: when the configured level is WARN, the handler MUST drop INFO/DEBUG
+// records before they reach the writer. The test uses the JSON handler with Level=warn, emits one record at INFO and one at WARN,
+// and asserts the INFO message is absent from the captured output while the WARN message is present. The handler we exercise here
+// is the stderr handler that wraps the writer the OTLP-bridge fan-out is layered onto (multiHandler in TestMultiHandler_FanOut),
+// so dropping at this layer transitively prevents export of the dropped record.
 func TestNew_LevelFiltering(t *testing.T) {
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{Level: "warn", Format: "json"})
@@ -64,6 +71,13 @@ func TestNew_InvalidFormat(t *testing.T) {
 	assert.ErrorContains(t, err, "xml")
 }
 
+// spec:observability-instrumentation/structured-logs-carry-trace-correlation/log-line-under-an-active-span
+//
+// Pins the spec's trace-correlation clause: a structured log record emitted under an active span MUST carry trace_id and span_id
+// fields matching the active SpanContext. The traceEnricher (logging.go) reads SpanContext from the request context and adds the
+// attrs to every record; this test seeds a valid SpanContext, emits one log line under it, and asserts the captured JSON record
+// contains the expected trace_id and span_id strings. Together with TestNew_JSONDefault's "no trace id when context has no span"
+// assertion (line 29), the enricher's both-sides contract is pinned.
 func TestNew_TraceEnrichment(t *testing.T) {
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{Level: "info", Format: "json"})

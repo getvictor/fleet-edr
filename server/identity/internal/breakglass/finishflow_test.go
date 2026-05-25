@@ -700,8 +700,16 @@ func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 	assert.Equal(t, "login.error", last.Payload["reason"])
 }
 
-// Per-IP rate-limit exhaustion. Covers the handler's tooMany path
-// + the rate.AllowIP false branch in handleBeginSetup.
+// spec:ui-authentication-session/login-attempts-are-rate-limited-and-audited/excess-login-attempts-from-one-ip
+//
+// Per-IP rate-limit exhaustion. The spec scenario requires that when an IP exceeds the configured per-minute cap, the next attempt
+// returns 429 with a Retry-After header AND the user store is not consulted. This test exercises the break-glass challenge endpoint
+// (the primary admin-login path in the OIDC+break-glass refactor; the legacy password-POST flow was retired) with a perIP=1 bucket:
+// first POST succeeds (whatever its inner outcome), second POST trips AllowIP=false in gateSetupRequest and the handler emits 429 +
+// Retry-After:60 + X-Edr-Auth-Reason:rate_limited BEFORE touching the user store. Pins the no-store-consulted clause structurally
+// because rate-limit rejection short-circuits in gateSetupRequest before any svc.* method runs.
+//
+// Covers the handler's tooMany path + the rate.AllowIP false branch in handleBeginSetup.
 func TestHandle_PerIPRateLimit(t *testing.T) {
 	t.Parallel()
 	db := testdb.Open(t)

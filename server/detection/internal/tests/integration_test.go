@@ -497,13 +497,16 @@ func TestIngest_InvalidJSONRejected(t *testing.T) {
 }
 
 // spec:server-event-ingestion/idempotent-submission-by-event-id/an-agent-retries-a-batch-after-a-network-failure
+// spec:agent-event-uploader/server-side-deduplication-makes-replay-safe/same-batch-is-delivered-twice
 //
 // The store's InsertEvents uses INSERT IGNORE so duplicate event_id collisions are dropped silently at the
 // events table. This test posts the same single-event batch twice and asserts the second response is still 200
-// and that the events table has exactly one row afterwards. CountEvents (the events table cardinality) is the
-// authoritative probe; hosts.event_count is a per-batch arrival counter that increments on every POST including
-// duplicates by design (see server/detection/internal/mysql/perf_test.go:59) and is NOT what the idempotency
-// spec scenario constrains.
+// and that the events table has exactly one row afterwards. The agent-event-uploader marker is the AGENT-side
+// view of the same property: the agent can safely retry a batch whose ack was lost in transit because the server
+// dedupes by event_id and still returns 2xx, so the agent's MarkUploaded path runs and the batch leaves the queue.
+// CountEvents (the events table cardinality) is the authoritative probe; hosts.event_count is a per-batch arrival
+// counter that increments on every POST including duplicates by design (see
+// server/detection/internal/mysql/perf_test.go:59) and is NOT what the idempotency spec scenario constrains.
 func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -842,6 +845,79 @@ func TestEngine_BatchProducesNoFindings(t *testing.T) {
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	assert.Empty(t, alerts, "a batch matching no rule must produce zero alerts")
+}
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
+//
+// LoadActive's replace-semantics is the path the spec calls out: an operator updates configuration; the rules
+// provider's ActiveRules() returns a smaller set; the engine swaps its rule list. The disabled rule is gone from
+// engine.rules so Evaluate never calls its Evaluate method, no findings are produced, and (the dedup-collapse-on-
+// reactivation question is out of scope here) no alerts land for the disabled rule against subsequent batches.
+// Two rules are active in phase 1; one is removed in phase 2; the test asserts the surviving rule keeps firing
+// against new process IDs while the removed rule produces NO new alerts on those same IDs.
+func TestEngine_OperatorDisablesNoisyRule(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	noisy := &multiPIDStub{id: "rule-noisy"}
+	quiet := &multiPIDStub{id: "rule-quiet"}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{noisy, quiet}})
+
+	// Phase 1: both rules active. Seed two process rows so multiPIDStub's findings have valid FK targets, and feed a
+	// batch whose triggers carry those processes' DB ids. Each rule sees both triggers, so we expect 4 alerts: the
+	// cross-product of {noisy, quiet} x {procA, procB}.
+	procA := mustInsertProcess(t, ctx, d, "host-a", 100)
+	procB := mustInsertProcess(t, ctx, d, "host-a", 101)
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trig-a-phase1", HostID: "host-a", TimestampNs: 1000, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procA, 10) + `}`)},
+		{EventID: "trig-b-phase1", HostID: "host-a", TimestampNs: 1001, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procB, 10) + `}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) >= 4
+	}, 5*time.Second, 50*time.Millisecond, "both rules should fire on both processes in phase 1")
+
+	// Phase 2: operator disables the noisy rule. LoadActive replaces engine.rules with just `quiet`. Seed two
+	// FRESH process rows so neither rule has prior alert dedup keys for those PIDs - this makes ruleA vs ruleB
+	// outcomes for the new batch distinguishable.
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{quiet}})
+	procC := mustInsertProcess(t, ctx, d, "host-a", 200)
+	procD := mustInsertProcess(t, ctx, d, "host-a", 201)
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trig-c-phase2", HostID: "host-a", TimestampNs: 2000, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procC, 10) + `}`)},
+		{EventID: "trig-d-phase2", HostID: "host-a", TimestampNs: 2001, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procD, 10) + `}`)},
+	})
+
+	// Wait for the phase-2 batch to drain through the processor so the assertion isn't racing the engine.
+	require.Eventually(t, func() bool {
+		n, err := d.Store().CountUnprocessed(ctx)
+		return err == nil && n == 0
+	}, 5*time.Second, 25*time.Millisecond, "processor must consume the phase-2 batch before the assertion")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+
+	var noisyOnNewPIDs, quietOnNewPIDs int
+	newPIDs := map[int64]struct{}{procC: {}, procD: {}}
+	for _, a := range alerts {
+		if _, fresh := newPIDs[a.ProcessID]; !fresh {
+			continue
+		}
+		switch a.RuleID {
+		case "rule-noisy":
+			noisyOnNewPIDs++
+		case "rule-quiet":
+			quietOnNewPIDs++
+		}
+	}
+	assert.Equal(t, 0, noisyOnNewPIDs, "disabled rule MUST produce no alerts on processes seen only in phase 2")
+	assert.Equal(t, 2, quietOnNewPIDs, "remaining rule MUST continue evaluating: 2 fresh processes -> 2 fresh alerts")
 }
 
 // spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-advertises-att-ck-techniques
@@ -2220,6 +2296,11 @@ func TestOperatorHTTP_UpdateAlertStatus_BadBody(t *testing.T) {
 }
 
 // spec:server-rest-api/update-alert-lifecycle-status/an-invalid-status-value-is-supplied
+// spec:server-rest-api/json-response-format-and-error-shape/an-endpoint-returns-an-error
+//
+// The second marker pins the cross-cutting JSON error envelope: every endpoint in this capability MUST surface
+// 4xx / 5xx with a body that parses as `{"error": "<stable typed code>"}`. The body-shape assertions below catch a
+// regression where a handler returns 400 with plain-text or an empty body and silently breaks scripted clients.
 func TestOperatorHTTP_UpdateAlertStatus_InvalidStatus(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2236,6 +2317,15 @@ func TestOperatorHTTP_UpdateAlertStatus_InvalidStatus(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// Error envelope: JSON object with a stable typed `error` code so scripted clients dispatch without parsing.
+	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json", "error responses MUST be JSON")
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var parsed map[string]string
+	require.NoError(t, json.Unmarshal(respBody, &parsed), "error body MUST be a parseable JSON object")
+	assert.Equal(t, "invalid_status", parsed["error"],
+		"JSON body MUST carry the exact stable typed code for this path so scripted clients can dispatch on it")
 }
 
 func TestOperatorHTTP_ProcessTree_RequiresHostID(t *testing.T) {
