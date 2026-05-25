@@ -2,10 +2,14 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+	"modernc.org/sqlite"
 )
 
 // spec:agent-event-queue/fifo-dequeue-of-pending-events/uploader-requests-a-batch
@@ -526,6 +530,23 @@ func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {
 		t.Fatalf("expected at least one lossy drop during cap pressure; metrics stub saw none")
 	}
 
+	// Prove the eviction actually touched the in-flight set rather than only dropping newer rows. Without this probe, a
+	// regression that flipped the eviction policy to drop newest-first would silently keep the test green - stub.hadLossy
+	// + Depth would both pass even though MarkUploaded's missing-row path is no longer exercised. The query has a fixed
+	// 5-placeholder shape because the test enqueues exactly 5 in-flight events; if that count ever changes, update the
+	// query alongside the loop above so the lint check below (require.Len matches the placeholder count) stays accurate.
+	require.Len(t, inflightIDs, 5, "in-flight ID count must match the hardcoded 5-placeholder query below")
+	var survivingInflight int
+	row := q.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE id IN (?, ?, ?, ?, ?)",
+		inflightIDs[0], inflightIDs[1], inflightIDs[2], inflightIDs[3], inflightIDs[4])
+	if err := row.Scan(&survivingInflight); err != nil {
+		t.Fatalf("count surviving in-flight rows: %v", err)
+	}
+	if survivingInflight == len(inflightIDs) {
+		t.Fatalf("expected cap enforcement to evict at least one in-flight row before MarkUploaded; all %d survived",
+			len(inflightIDs))
+	}
+
 	// Phase 3: ack the originally-dequeued IDs. Some MUST already be gone (the cap evicted them); MarkUploaded MUST
 	// still return nil so the uploader's happy path doesn't surface a failure for events the queue has chosen to drop.
 	if err := q.MarkUploaded(ctx, inflightIDs); err != nil {
@@ -582,5 +603,16 @@ func TestQueue_DiskFullDuringEnqueueReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("enqueue against an exhausted-page-count DB MUST return an error; got nil so the caller would " +
 			"believe the event was durable when it actually was not")
+	}
+	// Pin the specific SQLITE_FULL (code 13) error rather than "any non-nil error". The spec scenario is "disk is full", not
+	// "anything in the enqueue path can fail and we'll accept it" - a regression that returned a different sql error from the
+	// path (constraint violation, dropped connection, etc.) would silently pass under a loose nil-check.
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("expected modernc.org/sqlite's *sqlite.Error, got %T: %v", err, err)
+	}
+	const sqliteFullCode = 13
+	if got := sqliteErr.Code() & 0xff; got != sqliteFullCode {
+		t.Fatalf("expected SQLITE_FULL (code 13), got code=%d (%#x): %v", got, sqliteErr.Code(), err)
 	}
 }

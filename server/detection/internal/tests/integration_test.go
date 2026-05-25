@@ -2324,7 +2324,8 @@ func TestOperatorHTTP_UpdateAlertStatus_InvalidStatus(t *testing.T) {
 	require.NoError(t, err)
 	var parsed map[string]string
 	require.NoError(t, json.Unmarshal(respBody, &parsed), "error body MUST be a parseable JSON object")
-	assert.NotEmpty(t, parsed["error"], "JSON body MUST carry an `error` field with a stable typed code")
+	assert.Equal(t, "invalid_status", parsed["error"],
+		"JSON body MUST carry the exact stable typed code for this path so scripted clients can dispatch on it")
 }
 
 func TestOperatorHTTP_ProcessTree_RequiresHostID(t *testing.T) {

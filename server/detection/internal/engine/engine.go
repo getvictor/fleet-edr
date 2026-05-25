@@ -102,6 +102,10 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	ctx, span := tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
 	defer span.End()
+	// Stamp alert_count=0 up front so dashboards grouping by rule_id see a consistent attribute set across success and failure
+	// paths. The success path below overrides this with the actual count; the rule-error early-return below would otherwise
+	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal.
+	span.SetAttributes(attribute.Int("alert_count", 0))
 
 	findings, err := rule.Evaluate(ctx, live, e.store)
 	if err != nil {
