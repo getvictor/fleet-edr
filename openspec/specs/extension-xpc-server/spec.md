@@ -93,7 +93,7 @@ dictionary message containing a `data` field whose value is the raw JSON event b
 
 ### Requirement: Inbound policy update
 
-The system extension SHALL accept inbound XPC dictionary messages with `type = policy.update` and a `data` field
+The system extension SHALL accept inbound XPC dictionary messages with `type = application_control.update` and a `data` field
 containing raw policy JSON bytes from any validated peer. On receipt the extension MUST replace the active blocklist
 with the policy described by `data` and MUST persist that policy so it survives extension restart.
 
@@ -104,7 +104,7 @@ with the policy described by `data` and MUST persist that policy so it survives 
 - **THEN** the new blocklist becomes the active policy used by exec authorization
 - **AND** the new blocklist persists across a restart of the extension
 
-#### Scenario: A policy.update with no data is rejected
+#### Scenario: A policy update with no data is rejected
 
 - **GIVEN** a validated agent connection is open to the system extension
 - **WHEN** the agent sends a `policy.update` message with no `data` field or empty data

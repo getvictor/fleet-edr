@@ -53,7 +53,6 @@ let package = Package(
                 "extension/ESFSubscriber.swift",
                 "extension/NotificationClient.swift",
                 "extension/ProcessSnapshotEnumerator.swift",
-                "extension/XPCServer.swift",
                 "networkextension/Info.plist",
                 "networkextension/networkextension.entitlements",
                 "networkextension/main.swift",
@@ -66,6 +65,7 @@ let package = Package(
             ],
             sources: [
                 "extension/ApplicationControlStore.swift",
+                "extension/XPCServer.swift",
                 "extension/BlockNotification.swift",
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",
