@@ -174,8 +174,19 @@ func (r *Recorder) AlertCreated(ctx context.Context, ruleID, severity string) {
 	))
 }
 
-// ObserveDBQuery records the latency of a store method. `op` must be a bounded set of
-// stable short names ("insert_event", "update_host_last_seen"); don't pass dynamic data.
+// BoundedDBOps is the documented stable set of `op` values that may be passed to ObserveDBQuery. The list is enforced by
+// TestObserveDBQuery_OperationNamesAreBounded in metrics_test.go, which walks the server tree via go/ast and fails the
+// build if any non-test caller passes a string literal that isn't in this slice. The bound exists because the `op`
+// attribute lands on the OTel histogram as a cardinality dimension; a dynamic value (host id, table row, error
+// message) would inflate the time-series cardinality without bound and quickly exhaust the SigNoz aggregation budget.
+// Add a new entry here when you add a new ObserveDBQuery call site; the test will tell you which one is missing.
+var BoundedDBOps = []string{
+	"insert_events", // detection/internal/intake/handler.go: POST /api/events batch insert
+	"upsert_hosts",  // detection/internal/intake/handler.go: POST /api/events host last-seen update
+}
+
+// ObserveDBQuery records the latency of a store method. `op` must be a bounded set of stable short names; see
+// BoundedDBOps for the canonical set and the static-analyzer test that enforces it.
 func (r *Recorder) ObserveDBQuery(ctx context.Context, op string, d time.Duration) {
 	if r == nil || r.dbQueryDuration == nil {
 		return

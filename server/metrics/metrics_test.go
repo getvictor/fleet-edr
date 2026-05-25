@@ -2,6 +2,13 @@ package metrics
 
 import (
 	"context"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,4 +247,106 @@ func (g failingGauges) EnrolledHosts(context.Context) (int, error) {
 
 func (g failingGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 	return g.offline, nil
+}
+
+// spec:observability-instrumentation/db-query-latency-histogram/operation-names-are-bounded
+//
+// Walks every .go file under ../../ (the server module root) via go/ast and asserts that every literal string passed
+// as the second positional argument to a `.ObserveDBQuery(` call is in BoundedDBOps. The bounded-cardinality contract
+// the spec scenario describes is what keeps the `op` attribute from inflating SigNoz's time-series space without limit
+// when a contributor accidentally passes a dynamic value (host id, table row, error message). A failure here means
+// either (a) a new call site needs to be added to BoundedDBOps, or (b) someone passed a non-literal expression and the
+// `op` attribute is no longer statically bounded - both block merge.
+//
+// Test files are intentionally excluded from the walk: metrics_test.go itself passes synthetic ops like "op" and
+// "insert_event" to exercise the recorder, and policing those would couple test scaffolding to the production allowlist
+// for no operational gain.
+func TestObserveDBQuery_OperationNamesAreBounded(t *testing.T) {
+	t.Parallel()
+
+	allowed := make(map[string]struct{}, len(BoundedDBOps))
+	for _, op := range BoundedDBOps {
+		allowed[op] = struct{}{}
+	}
+
+	// Walk from the server module root. The metrics package lives at server/metrics/, so two dots up reaches server/.
+	root, err := filepath.Abs("../..")
+	require.NoError(t, err, "resolve server module root")
+
+	type bad struct {
+		path  string
+		line  int
+		value string // empty when the arg is a non-literal expression
+	}
+	var bads []bad
+
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			// Skip vendor + build dirs that would otherwise be scanned for their copies of std lib code.
+			switch d.Name() {
+			case "vendor", "node_modules", "tmp", ".git":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			// A parse failure here would also surface in `go build`; not the static analyzer's job to re-report it.
+			return nil
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "ObserveDBQuery" {
+				return true
+			}
+			// Signature is (ctx, op string, d time.Duration); the op argument is positional index 1.
+			if len(call.Args) < 2 {
+				return true
+			}
+			pos := fset.Position(call.Args[1].Pos())
+			lit, ok := call.Args[1].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				bads = append(bads, bad{path: pos.Filename, line: pos.Line})
+				return true
+			}
+			// Strip the surrounding quote pair without doing a full unquote: BasicLit.Value carries them verbatim.
+			value := strings.Trim(lit.Value, `"`)
+			if _, ok := allowed[value]; !ok {
+				bads = append(bads, bad{path: pos.Filename, line: pos.Line, value: value})
+			}
+			return true
+		})
+		return nil
+	})
+	require.NoError(t, walkErr)
+
+	if len(bads) == 0 {
+		return
+	}
+	var msg strings.Builder
+	msg.WriteString("ObserveDBQuery op argument violations (BoundedDBOps in metrics.go is the canonical set):\n")
+	for _, b := range bads {
+		rel, _ := filepath.Rel(root, b.path)
+		if b.value == "" {
+			fmt.Fprintf(&msg, "  %s:%d: non-literal `op` argument - the static-analyzer cannot prove bounded cardinality\n", rel, b.line)
+			continue
+		}
+		fmt.Fprintf(&msg, "  %s:%d: literal %q not in BoundedDBOps\n", rel, b.line, b.value)
+	}
+	t.Fatal(msg.String())
 }

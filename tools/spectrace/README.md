@@ -36,10 +36,18 @@ See `docs/testing-strategy.md` for the contract. The recognised shapes are:
   AST, so a `Spec` field consumed only by `assert.Equal(...)` is NOT a marker.
 - Playwright title prefix: `test("spec:<canonical-id> <name>", ...)`
 - Swift XCTest function name: `func test_spec_<id_with_slashes_and_dashes_replaced_by_underscores>(...)`
+- YAML comment marker (workflows + workflow-adjacent configs): `# spec:<canonical-id>` on its own line above the step
+  that enforces the scenario, or as a trailing comment on the step. Used by the release-packaging spec, whose scenarios
+  are enforced by `.github/workflows/*.yml` rather than Go tests.
+- Shell comment marker: `# spec:<canonical-id>` in `packaging/pkg/*.sh` and adjacent scripts whose body is the
+  scenario's enforcement surface (e.g. the uninstall script for the `operator-runs-the-uninstall-script` scenario).
 
 The scanner anchors on the literal `spec:` prefix (or `test_spec_` for Swift). Identifiers and strings containing those
 prefixes elsewhere in the file are not matched because they fail the slug-shape regex (at least three slash-separated
-segments of lowercase alphanumerics + dashes).
+segments of lowercase alphanumerics + dashes). Markdown files are intentionally NOT scanned even though `# spec:` would
+work syntactically: `docs/testing-strategy.md` carries illustrative marker examples that would inflate the coverage
+count if scanned. Add `.md` to the ext gate alongside a `docs/testing-strategy.md` skip-rule if that boundary ever
+needs to move.
 
 ## What this tool does NOT do (v1)
 

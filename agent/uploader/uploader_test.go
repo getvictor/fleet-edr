@@ -1,13 +1,16 @@
 package uploader
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -335,6 +338,70 @@ func openTestQueue(t *testing.T) *queue.Queue {
 	}
 	t.Cleanup(func() { _ = q.Close() })
 	return q
+}
+
+// spec:agent-event-uploader/permanent-client-errors-are-not-infinitely-retained/server-consistently-returns-4xx-for-a-malformed-event
+//
+// Pins the #253 quarantine contract: when the server returns a non-401 4xx for the same batch on every drain tick, the
+// uploader MUST stop retransmitting after a bounded number of attempts. Sequence:
+//
+//  1. Enqueue one event. Set ClientErrorQuarantineThreshold=3 so the test is fast.
+//  2. Stand up a 400-everytime server.
+//  3. Drive drainOnce in a loop. Each tick: dequeue (returns the row because uploaded=0), upload (fails with 400),
+//     RecordClientError bumps the row's client_error_count from 0->1, 1->2, 2->3 across the three ticks.
+//  4. On the 3rd tick, the post-bump value reaches the threshold; RecordClientError sets uploaded=1 in the same
+//     transaction and returns the row id as newly-quarantined. The audit-class log line fires once.
+//  5. A 4th drainOnce returns immediately because DequeueBatch filters on uploaded=0 - the row is no longer visible.
+//
+// The assertion that locks in "MUST NOT retransmit indefinitely" is: the server's request counter stops climbing
+// after the 3rd tick. The audit log line is asserted via a buffered slog handler.
+func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	if err := q.Enqueue(ctx, []byte(`{"event_id":"poison-1"}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadRequest) // permanent 4xx; non-401 so the quarantine path is exercised
+	}))
+	defer srv.Close()
+
+	auditLog := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(auditLog, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.ClientErrorQuarantineThreshold = 3
+	u := New(q, cfg, nil, logger)
+
+	// Three drains: each tick bumps the row's counter; the 3rd one trips the threshold + quarantines.
+	for i := range 3 {
+		if err := u.drainOnce(ctx); err == nil {
+			t.Fatalf("drain %d: expected an error (server is 400), got nil", i)
+		}
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("expected exactly 3 server requests across the 3 drain ticks, got %d", got)
+	}
+
+	// 4th drain: row is quarantined (uploaded=1), so dequeue is empty and the server is NOT contacted.
+	if err := u.drainOnce(ctx); err != nil {
+		t.Fatalf("post-quarantine drain MUST succeed cleanly with an empty queue, got: %v", err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("post-quarantine drain MUST NOT contact the server; request counter advanced to %d", got)
+	}
+
+	// Audit-class log line fired exactly once on the tick that crossed the threshold.
+	if got := auditLog.String(); !strings.Contains(got, "uploader.events_quarantined") {
+		t.Fatalf("expected audit log line tagged audit=uploader.events_quarantined, got:\n%s", got)
+	}
+	if got := strings.Count(auditLog.String(), "uploader.events_quarantined"); got != 1 {
+		t.Fatalf("audit log line MUST fire exactly once (only the drain tick that crossed the threshold); got %d occurrences", got)
+	}
 }
 
 // spec:agent-event-uploader/drain-on-shutdown/graceful-shutdown

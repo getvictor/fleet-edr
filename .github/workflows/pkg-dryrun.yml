@@ -61,6 +61,11 @@ jobs:
             echo "No relevant changes; skipping pkg dry-run."
           fi
 
+  # spec:release-packaging/dry-run-build-on-any-macos-runner/pull-request-runs-the-dry-run
+  #
+  # This workflow IS the spec scenario's enforcement surface: the `on: pull_request` trigger above + the dryrun job below
+  # exercise the full pkgbuild/productbuild flow on a stock macos-15 runner with zero signing secrets. A green dryrun job
+  # on every PR catches packaging-script regressions before they reach release.yml.
   dryrun:
     name: Pkg build dry-run
     needs: changes
@@ -101,6 +106,12 @@ jobs:
             CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/extension/edr/build/Debug" \
             build
 
+      # spec:release-packaging/dry-run-build-on-any-macos-runner/dry-run-does-not-contact-apple
+      #
+      # The --dry-run flag short-circuits build.sh's notarize + staple steps and uses ad-hoc signing (CODE_SIGN_IDENTITY=-)
+      # so no network call to Apple's notary is made. The `permissions: contents: read` job scope above also denies any
+      # secret access; APPLE_TEAM_ID is a literal team-id string, not a secret. The pkg-dryrun job structurally cannot
+      # contact Apple even if build.sh tried.
       - name: Run pkg build dry-run
         env:
           APPLE_TEAM_ID: FDG8Q7N4CC

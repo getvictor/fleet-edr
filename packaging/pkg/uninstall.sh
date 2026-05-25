@@ -1,5 +1,11 @@
 #!/bin/sh
-# Uninstall script for Fleet EDR.
+# spec:release-packaging/uninstall-path-is-deliverable/operator-runs-the-uninstall-script
+#
+# Uninstall script for Fleet EDR. THIS script IS the spec scenario's enforcement surface: it stops + unloads the agent's
+# LaunchDaemon (the launchctl bootout block below), deactivates the system extension (the systemextensionsctl call), and
+# removes the agent's binaries + runtime state. The package install path drops this script at
+# /Library/Application Support/com.fleetdm.edr/uninstall.sh so an operator (or the MDM) can invoke it without the
+# original signed installer.
 #
 # Installed by the pkg at /Library/Application Support/com.fleetdm.edr/
 # uninstall.sh so operators (or the MDM) can remove the agent without a

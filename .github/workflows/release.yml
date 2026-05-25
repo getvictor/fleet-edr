@@ -13,13 +13,20 @@
 name: release
 
 on:
+  # spec:release-packaging/real-release-build-is-gated-to-release-tag-refs/tag-push-triggers-a-real-build
+  #
+  # The `on: push: tags: 'v*'` trigger + the macos-pkg job's `environment: release-signing` gate together enforce the
+  # spec scenario: a push of a v* tag triggers this workflow against the protected environment, which decrypts the
+  # Developer ID certs and notarytool credentials, producing a signed + notarized + stapled pkg.
   push:
     tags:
       - 'v*'
-  # Manual trigger for dry-run / unsigned builds from a topic branch. The job
-  # below short-circuits to dry-run mode when triggered this way so a
-  # workflow_dispatch does NOT burn notary submissions or touch the
-  # release-signing environment secrets.
+  # spec:release-packaging/real-release-build-is-gated-to-release-tag-refs/manual-trigger-from-a-non-release-ref-does-not-sign
+  #
+  # Manual trigger for dry-run / unsigned builds from a topic branch. The DRY_RUN env on the macos-pkg job (below) is set
+  # to `--dry-run` whenever github.event_name == 'workflow_dispatch', and every signing/notarization step is guarded by
+  # `if: env.DRY_RUN == ''`. The protected release-signing environment grants secrets only when the workflow runs against
+  # the configured allowed refs; the dry-run guard is defense in depth.
   workflow_dispatch: {}
 
 # Top-level `permissions: {}` grants nothing (does not trigger Sonar
@@ -67,6 +74,15 @@ jobs:
           APPLE_DEV_ID_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_DEV_ID_INSTALLER_P12_PASSWORD }}
         run: ./packaging/pkg/ci-setup.sh
 
+      # spec:release-packaging/hardened-runtime-code-signing-of-executables/notary-accepts-the-package
+      # spec:release-packaging/hardened-runtime-code-signing-of-executables/system-extension-activates-on-a-sip-enabled-host
+      # spec:release-packaging/notarization-and-stapling/released-package-is-stapled
+      #
+      # build.sh's non-dry-run path: codesign every Mach-O with the hardened runtime + secure timestamp + per-bundle
+      # entitlements; submit the pkg to `notarytool submit --wait`; on acceptance, `stapler staple` the ticket. The notary
+      # accepting + the per-bundle entitlements being present in the signed bundle are what make the system extension load
+      # on a stock SIP-enabled host (the entitlements are restricted and only take effect once Apple's notary signs off).
+      # All three scenarios share this enforcement step.
       - name: Build, sign, notarize, staple pkg
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -83,12 +99,22 @@ jobs:
             ./packaging/pkg/build.sh "$RELEASE_TAG"
           fi
 
+      # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-and-signed-on-a-real-release
+      #
+      # The real-release branch (DRY_RUN empty) calls `sign.sh` with the Developer ID Installer identity loaded by the
+      # earlier ci-setup.sh step. sign.sh substitutes APPLE_TEAM_ID into the .mobileconfig templates and signs the result
+      # so MDM channels (Fleet, Jamf, Kandji, Intune, mosyle) accept the profiles as managed configuration.
       - name: Sign mobileconfig profiles
         if: env.DRY_RUN == ''
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ./packaging/profiles/sign.sh
 
+      # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-without-signing-on-a-dry-run
+      #
+      # The dry-run branch (workflow_dispatch from a topic branch) renders the same .mobileconfig templates with the
+      # literal APPLE_TEAM_ID hardcoded above but skips the signing step. Operators inspecting the dry-run artifacts can
+      # verify the team id substitution + template content without burning a Developer ID Installer signature.
       - name: Render unsigned profiles (dry-run)
         if: env.DRY_RUN != ''
         env:
