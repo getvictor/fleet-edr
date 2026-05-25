@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -555,11 +556,21 @@ func TestQueue_DiskFullDuringEnqueueReturnsError(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
 
-	// max_page_count = 4 with the default 4 KiB pages = 16 KiB cap. A 64 KiB payload cannot fit and triggers SQLITE_FULL on the first
-	// Enqueue. Reaching for the underlying *sql.DB is acceptable here because the test lives in the same package as Queue (no API
-	// change needed) and the PRAGMA is the standard SQLite knob for simulating ENOSPC without touching the host filesystem.
-	if _, err := q.db.ExecContext(ctx, "PRAGMA max_page_count = 4"); err != nil {
-		t.Fatalf("set max_page_count: %v", err)
+	// Snapshot the current page_count and pin max_page_count to it. SQLite's PRAGMA max_page_count silently FLOORS at the current
+	// page_count - setting it BELOW the current count is a no-op and returns whatever the current max already was. Without this
+	// floor-aware logic the prior version of the test (PRAGMA max_page_count = 4) could be a no-op on a schema large enough to
+	// already exceed 4 pages, leaving the subsequent Enqueue free to grow the DB and return nil - which is exactly the regression
+	// signature the spec scenario is supposed to catch.
+	var currentPages int64
+	if err := q.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&currentPages); err != nil {
+		t.Fatalf("read page_count: %v", err)
+	}
+	var capped int64
+	if err := q.db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA max_page_count = %d", currentPages)).Scan(&capped); err != nil {
+		t.Fatalf("set max_page_count to %d: %v", currentPages, err)
+	}
+	if capped != currentPages {
+		t.Fatalf("max_page_count silently floored to %d (asked for %d); test cannot reliably trigger SQLITE_FULL", capped, currentPages)
 	}
 
 	bigPayload := make([]byte, 64*1024)

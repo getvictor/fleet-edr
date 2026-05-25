@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -68,22 +67,18 @@ func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
 // spec:observability-instrumentation/trace-propagation-through-the-request-pipeline/detection-spans-carry-rule-context
 //
 // Per-rule spans MUST carry at least rule_id and an alert count attribute so downstream dashboards can group detection latency
-// by rule. The test registers a stub rule, installs an in-memory SpanRecorder as the global tracer provider, calls
-// Engine.Evaluate, then walks the recorder's captured spans for one with rule_id == stub's id and asserts the alert_count attr is
-// also present. stubRule returns zero findings so persistFinding is never reached (avoids needing a live mysql.Store); the test
-// pins attribute presence and value, not non-zero counts -- the alert-count contract is "the attr exists and is countable", and
-// 0 is a valid count.
+// by rule. The test registers a stub rule, installs an in-memory SpanRecorder via a LOCAL TracerProvider (without mutating
+// otel.SetTracerProvider, which Copilot flagged as racy under parallel package tests), calls Engine.Evaluate, then walks the
+// recorder's captured spans for one with rule_id == stub's id and asserts the alert_count attr is also present. stubRule returns
+// zero findings so persistFinding is never reached (avoids needing a live mysql.Store); the test pins attribute presence and value,
+// not non-zero counts -- the alert-count contract is "the attr exists and is countable", and 0 is a valid count.
 func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
-	prev := otel.GetTracerProvider()
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
-	otel.SetTracerProvider(tp)
-	t.Cleanup(func() {
-		_ = tp.Shutdown(context.Background())
-		otel.SetTracerProvider(prev)
-	})
-	// The Evaluate path uses the package-level tracer var captured at init from otel.Tracer("..."); reset it to point at the new
-	// provider so the spans we record are the ones the engine actually opens. Restore the original on cleanup.
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	// Override ONLY the package-level tracer var (no otel.SetTracerProvider call) so go test's package-parallel scheduler can't race
+	// this with another package's instrumentation. Restore on cleanup so the next test in this package sees the production tracer.
 	prevTracer := tracer
 	tracer = tp.Tracer("server/detection/engine")
 	t.Cleanup(func() { tracer = prevTracer })

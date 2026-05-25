@@ -35,6 +35,12 @@ const (
 	// processTreeMaxLimit is the upper bound the handler enforces; values above this are clamped down. Prevents an operator from
 	// accidentally asking for the whole host's history in one query.
 	processTreeMaxLimit = 5000
+
+	// updateAlertStatusBodyCap bounds the PUT /api/alerts/{id} body so a malicious or buggy client can't exhaust server memory by
+	// streaming a multi-GiB body that json.NewDecoder would happily buffer. The legitimate payload is ~20 bytes ({"status":"open"}
+	// and the longest typed value); 1 MiB is generous headroom for forward-compatible field additions and gives a clean 413 path
+	// that scripted clients can dispatch on. Mirrors the same cap shape that response/operator/handler.go uses on /api/commands.
+	updateAlertStatusBodyCap = 1 << 20 // 1 MiB
 )
 
 // writeError emits a `{"error": "<code>"}` JSON body per the server-rest-api JSON-response-format requirement. Mirrors the pattern
@@ -231,6 +237,10 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// MaxBytesReader caps the body so a malicious client cannot stream an unbounded JSON document to OOM the server. Decode then maps
+	// "request body too large" into the invalid_json envelope - the JSON shape doesn't distinguish the two failure modes, and the
+	// downstream client retry is the same regardless (fix the body, resend). See updateAlertStatusBodyCap for the cap rationale.
+	r.Body = http.MaxBytesReader(w, r.Body, updateAlertStatusBodyCap)
 	var body struct {
 		Status string `json:"status"`
 	}

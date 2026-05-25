@@ -2,10 +2,10 @@ package receiver
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,8 +38,9 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 	dropped := Event{Data: []byte("dropped")}
 
 	tryDeliverEvent(ch, first, "svc-xpc")
-	// Channel now full. The next call MUST drop without blocking - if the implementation regressed to a blocking
-	// send, the test would deadlock and fall back to the package-level timeout rather than this assertion.
+	// Channel now full. The next call MUST drop without blocking - if the implementation regressed to a blocking send, the test
+	// would otherwise deadlock until go test's package-level timeout (default 10m). Use a tight time.After timeout so a regression
+	// fails the test in a second instead of hanging the suite.
 	done := make(chan struct{})
 	go func() {
 		tryDeliverEvent(ch, dropped, "svc-xpc")
@@ -47,8 +48,8 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-context.Background().Done():
-		t.Fatal("unreachable: ctx.Background is never done")
+	case <-time.After(time.Second):
+		t.Fatal("tryDeliverEvent did not return within 1s on a full channel; non-blocking contract regressed")
 	}
 
 	// Surviving event in the channel is the first one; the dropped one was discarded.
