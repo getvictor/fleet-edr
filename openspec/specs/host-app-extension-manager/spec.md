@@ -108,6 +108,26 @@ extensions resume capture without operator action after the host comes back up.
 - **AND** the DNS proxy is still enabled
 - **AND** event capture resumes without operator action
 
+### Requirement: Subcommand parsing fails loudly on unknown input
+
+The host app SHALL refuse to interpret a malformed invocation as a valid action. A malformed invocation
+is any of: a subcommand that is not in the documented set (typo, deprecated name), an empty subcommand
+argument (`edr ""`, typically the result of a shell-expansion bug), or one or more extra positional
+arguments after a valid subcommand (`edr deactivate typo`). On any of these the host app MUST print a
+usage message that lists the documented subcommands and MUST exit with a non-zero status. The host app
+MUST NOT silently default malformed input to an activation request and MUST NOT silently drop extra
+positional arguments.
+
+#### Scenario: Unknown subcommand exits with usage and non-zero status
+
+- **GIVEN** the host app binary
+- **WHEN** an operator runs `edr` with any of these malformed forms: a subcommand the binary does not
+  recognise (for example a typo `deactvate`), an empty subcommand argument (`edr ""`), or extra
+  positional arguments after a valid subcommand (`edr deactivate typo`)
+- **THEN** the host app prints a usage message listing the documented subcommands
+- **AND** the host app exits with a non-zero status
+- **AND** the host app does NOT submit an activation request
+
 ### Requirement: Activation reports completion outcomes
 
 The host app SHALL report whether each activation completed immediately, completed but requires a reboot to take effect,

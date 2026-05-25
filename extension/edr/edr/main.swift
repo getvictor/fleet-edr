@@ -5,24 +5,23 @@ import os.log
 import SystemExtensions
 
 private let logger = Logger(subsystem: "com.fleetdm.edr", category: "main")
-private let esfExtensionID = "com.fleetdm.edr.securityextension"
-private let netExtensionID = "com.fleetdm.edr.networkextension"
 
+/// ExtensionManager submits activation or deactivation requests for both system extensions (the ESF
+/// system extension and the network extension) and aggregates their completion outcomes through a
+/// CompletionAggregator. On the activate path a successful aggregate chains into enableContentFilter;
+/// on the deactivate path or any failure the host app exits with the verdict's exit code.
 final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
-    private let action: String
-    private var pendingCount = 0
-    private var hadFailure = false
+    private let action: HostAppAction
+    private var aggregator: CompletionAggregator
 
-    init(action: String) {
+    init(action: HostAppAction) {
         self.action = action
+        self.aggregator = CompletionAggregator(expected: HostAppExtensionID.all.count)
     }
 
     func run() {
-        let extensionIDs = [esfExtensionID, netExtensionID]
-        pendingCount = extensionIDs.count
-
-        for extensionID in extensionIDs {
-            let request: OSSystemExtensionRequest = if action == "deactivate" {
+        for extensionID in HostAppExtensionID.all {
+            let request: OSSystemExtensionRequest = if action == .deactivate {
                 OSSystemExtensionRequest.deactivationRequest(
                     forExtensionWithIdentifier: extensionID, queue: .main)
             } else {
@@ -31,7 +30,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
             }
             request.delegate = self
             OSSystemExtensionManager.shared.submitRequest(request)
-            logger.info("\(self.action) request submitted for \(extensionID)")
+            logger.info("\(self.action.rawValue) request submitted for \(extensionID)")
         }
     }
 
@@ -51,37 +50,43 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         _ request: OSSystemExtensionRequest,
         didFinishWithResult result: OSSystemExtensionRequest.Result
     ) {
+        let outcome: CompletionOutcome
         switch result {
         case .completed:
-            logger.info("\(self.action) completed for \(request.identifier)")
+            logger.info("\(self.action.rawValue) completed for \(request.identifier)")
+            outcome = .completed
         case .willCompleteAfterReboot:
-            logger.info("\(self.action) will complete after reboot for \(request.identifier)")
+            logger.info("\(self.action.rawValue) will complete after reboot for \(request.identifier)")
+            outcome = .willCompleteAfterReboot
         @unknown default:
             logger.error("Unknown result for \(request.identifier): \(result.rawValue)")
-            hadFailure = true
+            outcome = .failed
         }
-
-        pendingCount -= 1
-        if pendingCount <= 0 {
-            if hadFailure {
-                exit(EXIT_FAILURE)
-            } else if action != "deactivate" {
-                enableContentFilter()
-            } else {
-                exit(EXIT_SUCCESS)
-            }
-        }
+        let complete = aggregator.record(outcome)
+        if complete { finalizeAggregate() }
     }
 
     func request(
         _ request: OSSystemExtensionRequest,
         didFailWithError error: Error
     ) {
-        logger.error("\(self.action) failed for \(request.identifier): \(error.localizedDescription)")
-        hadFailure = true
-        pendingCount -= 1
-        if pendingCount <= 0 {
-            exit(EXIT_FAILURE)
+        logger.error("\(self.action.rawValue) failed for \(request.identifier): \(error.localizedDescription)")
+        let complete = aggregator.record(.failed)
+        if complete { finalizeAggregate() }
+    }
+
+    /// finalizeAggregate is invoked once the aggregator has recorded every expected outcome. Decides
+    /// between chaining into enableContentFilter (activate-on-success) and exiting immediately (deactivate
+    /// or any failure), per the spec contract encoded in postAggregateStep. Named with the `Aggregate`
+    /// suffix because NSObject already declares a `finalize()` method that this method's body has nothing
+    /// to do with — the collision would be a compile error if both kept the same selector.
+    private func finalizeAggregate() {
+        let verdict = aggregator.verdict
+        switch postAggregateStep(for: action, verdict: verdict) {
+        case .enableContentFilter:
+            enableContentFilter()
+        case .exitImmediately:
+            exit(hostAppExitCode(for: verdict))
         }
     }
 }
@@ -95,12 +100,12 @@ private func enableContentFilter() {
         print("Loaded filter preferences, isEnabled=\(NEFilterManager.shared().isEnabled)")
 
         let filterConfig = NEFilterProviderConfiguration()
-        filterConfig.filterSockets = true
-        filterConfig.filterPackets = false
+        filterConfig.filterSockets = activateFilterConfig.filterSockets
+        filterConfig.filterPackets = activateFilterConfig.filterPackets
 
         NEFilterManager.shared().providerConfiguration = filterConfig
-        NEFilterManager.shared().localizedDescription = "Fleet EDR Network Monitor"
-        NEFilterManager.shared().isEnabled = true
+        NEFilterManager.shared().localizedDescription = activateFilterConfig.localizedDescription
+        NEFilterManager.shared().isEnabled = activateFilterConfig.isEnabled
 
         print("Saving filter preferences...")
         NEFilterManager.shared().saveToPreferences { error in
@@ -122,11 +127,11 @@ private func enableDNSProxy() {
         }
 
         let proxyConfig = NEDNSProxyProviderProtocol()
-        proxyConfig.providerBundleIdentifier = netExtensionID
+        proxyConfig.providerBundleIdentifier = activateDNSProxyConfig.providerBundleIdentifier
 
         NEDNSProxyManager.shared().providerProtocol = proxyConfig
-        NEDNSProxyManager.shared().localizedDescription = "Fleet EDR DNS Monitor"
-        NEDNSProxyManager.shared().isEnabled = true
+        NEDNSProxyManager.shared().localizedDescription = activateDNSProxyConfig.localizedDescription
+        NEDNSProxyManager.shared().isEnabled = activateDNSProxyConfig.isEnabled
 
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
@@ -203,29 +208,40 @@ private func runNotifyMode() {
     }
 }
 
-let action = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "activate"
+let positionalArgs = Array(CommandLine.arguments.dropFirst())
+guard let action = validateHostAppArgs(positionalArgs) else {
+    // Malformed CLI invocation: unrecognised subcommand, empty argument, OR extra positional arguments
+    // after the subcommand. All three collapse to the same fail-loudly contract: print usage to stderr,
+    // exit non-zero, so an operator's typo or shell-expansion bug can't silently become an unintended
+    // activation. `write(contentsOf:)` is the macOS-10.15.4+ replacement for the deprecated `write(_:)`;
+    // try? is appropriate here because we're already on the exit-FAILURE path and have nothing to do
+    // about a stderr write failure.
+    try? FileHandle.standardError.write(contentsOf: Data(hostAppUsage().utf8))
+    try? FileHandle.standardError.write(contentsOf: Data("\n".utf8))
+    exit(EXIT_FAILURE)
+}
 
 switch action {
-case "enable-filter":
+case .enableFilter:
     print("Enabling content filter...")
     enableContentFilter()
     dispatchMain()
-case "disable-filter":
+case .disableFilter:
     print("Disabling content filter...")
     disableContentFilter()
     dispatchMain()
-case "enable-dns-proxy":
+case .enableDNSProxy:
     print("Enabling DNS proxy...")
     enableDNSProxy()
     dispatchMain()
-case "disable-dns-proxy":
+case .disableDNSProxy:
     print("Disabling DNS proxy...")
     disableDNSProxy()
     dispatchMain()
-case "notify":
+case .notify:
     print("Starting Fleet EDR notification surface...")
     runNotifyMode()
-default:
+case .activate, .deactivate:
     let manager = ExtensionManager(action: action)
     manager.run()
     dispatchMain()
