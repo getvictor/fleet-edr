@@ -19,6 +19,8 @@ When adding tests, pick the style that matches the property under test:
 | **Property-based (PBT)** | Algebraic invariants over an input space larger than a table can reasonably cover | `pgregory.net/rapid` |
 | Fuzz | Untrusted input parsing (event JSON, policy diff, agent HTTP bodies) | `go test -fuzz` |
 | Integration | DB-backed behaviour, multi-step workflows | `testdb/full.Open` + a real MySQL via docker-compose |
+| **UI unit + component** | React component rendering, hooks, browser-facing logic (URL builders, fetch wrappers, state machines) | `vitest` + `@testing-library/react` + `@testing-library/jest-dom`, files at `ui/src/**/*.test.{ts,tsx}` |
+| UI end-to-end | Spec-level user journeys (login + dashboard + policy editor flows) | `@playwright/test` at `test/e2e/tests/**/*.spec.ts`, `task uat:e2e` |
 
 ### When to reach for PBT
 
@@ -38,6 +40,24 @@ in this codebase that already use or should use PBT:
   exactly the input minus the snapshot:true exec events, in the same order.
 - **Re-exec chain**: walking `previous_exec_id` from any leaf reaches the
   chain root in ≤ chain length steps without revisiting nodes.
+
+### UI testing convention
+
+UI tests live under `ui/src/**` as `*.test.{ts,tsx}` files co-located with the source. Run via `cd ui && npm test` (or
+`npm run test:coverage` for the LCOV that Sonar + codecov read). The conventions:
+
+- **Components**: `@testing-library/react`'s `render` + `screen` + user-event idioms. Mock the API layer via `vi.spyOn(api,
+  ...)` rather than stubbing global `fetch` — keeps the test scoped to the component's behaviour, not the HTTP wire shape.
+- **Hooks**: `renderHook` from `@testing-library/react`. The `act()` wrapper is required around state-setter calls.
+- **Pure-logic modules** (URL builders, parsers, validators): plain vitest `describe` / `it` with no React dependency.
+- **WebAuthn / browser globals**: stub via `vi.stubGlobal("navigator", { credentials: { create / get } })` or
+  `vi.spyOn(globalThis.location, "assign")`. Tear down in `afterEach(vi.restoreAllMocks)`.
+
+`ui/src/**` was excluded from Sonar's new-code coverage gate until vitest tests landed. The exclusion is now lifted; every
+new UI file must carry a `*.test.{ts,tsx}` sibling that exercises the non-trivial branches. The 80% new-code gate applies
+identically to UI + server code. Coverage is captured by V8 via vitest's coverage provider (`@vitest/coverage-v8`); the
+Playwright E2E run captures complementary V8 coverage of the running React bundle via `monocart-coverage-reports`, and
+Codecov takes the union.
 
 PBT does NOT replace example-based tests when:
 
