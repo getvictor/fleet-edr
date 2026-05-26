@@ -1,0 +1,22 @@
+{
+  "start_time": "2026-05-26T08:21:30.957351-05:00",
+  "end_time": "2026-05-26T08:54:27.725886-05:00",
+  "duration": 1976808850042,
+  "mode": "headless",
+  "host_count": 100,
+  "quiet_host_count": 80,
+  "active_host_count": 20,
+  "observation_count": 145504,
+  "error_count": 0,
+  "latency_p50": 0,
+  "latency_p95": 0,
+  "latency_p99": 0,
+  "latency_max": 0,
+  "observations_per_sec": 73.60549807175771,
+  "pass": true,
+  "pass_p99": 250000000,
+  "queue_depth_samples": 179900,
+  "queue_depth_p95": 6,
+  "queue_depth_p99": 6,
+  "queue_depth_max": 18
+}
