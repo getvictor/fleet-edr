@@ -33,6 +33,11 @@ func runReport(args []string) int {
 		return 2
 	}
 
+	// Promote --specs-dir / --root to repo-root-relative when cwd doesn't have them; matches the runCheck shape.
+	setFlags := userSetFlagNames(fs)
+	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	*rootDir = resolvePathFlag(*rootDir, setFlags["root"])
+
 	scenarios, markers, exitCode := loadScenariosAndMarkers(*specsDir, *rootDir)
 	if exitCode != 0 {
 		return exitCode

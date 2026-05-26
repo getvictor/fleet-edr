@@ -102,6 +102,13 @@ func runCheck(args []string) int {
 		return 2
 	}
 
+	// Promote --specs-dir / --root to their repo-root-relative form so spectrace works whether invoked from the repo
+	// top-level (CI shape) or a nested package (Copilot's PR #281 concern). Defaults bind to the repo root unconditionally
+	// because their literal cwd-relative meaning is rarely the intent; explicit values keep cwd-first semantics.
+	setFlags := userSetFlagNames(fs)
+	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	*rootDir = resolvePathFlag(*rootDir, setFlags["root"])
+
 	scenarios, markers, exitCode := loadScenariosAndMarkers(*specsDir, *rootDir)
 	if exitCode != 0 {
 		return exitCode
@@ -275,6 +282,7 @@ func runListIDs(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	*specsDir = resolvePathFlag(*specsDir, userSetFlagNames(fs)["specs-dir"])
 	scenarios, err := ParseAllSpecs(*specsDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spectrace: parse specs:", err)
