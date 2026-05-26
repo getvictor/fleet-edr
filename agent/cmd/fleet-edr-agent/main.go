@@ -133,7 +133,11 @@ func run() error {
 		return err
 	}
 	defer func() { _ = q.Close() }()
-	q.SetMetrics(metrics.New())
+	// The Recorder is the single OTel write surface; the queue uses it for QueueDropped, the uploader uses it for
+	// EventsDroppedTooLarge, and the queue-depth observable gauge reads q.Depth() on every collection cycle. metrics.New
+	// returns a no-op-safe Recorder when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+	rec := metrics.New(q)
+	q.SetMetrics(rec)
 
 	agentTransport, httpClient, err := newAgentHTTPClient(cfg, logger)
 	if err != nil {
@@ -148,6 +152,7 @@ func run() error {
 		Interval:   cfg.UploadInterval,
 		MaxRetries: uploaderMaxRetries,
 	}, httpClient, logger)
+	up.SetMetrics(rec)
 
 	// esfDispatcher bridges the commander (which wants a stable ApplicationControlSender across receiver reconnects) and the ESF
 	// receiver loop (which builds a fresh *receiver.Receiver on every connect). The loop's OnConnected hook publishes into the

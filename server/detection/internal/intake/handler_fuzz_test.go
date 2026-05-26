@@ -2,6 +2,7 @@ package intake
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,16 +12,21 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
+// spec:server-event-ingestion/per-request-event-count-limit/a-batch-with-too-many-events-is-rejected
+//
 // FuzzParseAndValidateIngestBody drives the parse + per-event validation half of POST /api/events with random body bytes.
 // The fuzz target asserts two invariants the spec contract makes on this surface:
 //
 //  1. Liveness: no input causes a panic, an unbounded allocation, or any other unrecoverable behavior. The harness wraps the
 //     call in a defer/recover sanity net so a panic surfaces as a test failure with the offending input attached.
 //  2. Contract: every (status, errCode) tuple is one of the documented set:
-//     {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch")}.
+//     {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
+//     (413, "too_many_events")}.
 //     Anything else (an undocumented status, a stray errCode, a 200 returned for a body that obviously isn't a well-formed
-//     []api.Event) is a finding. The 413 body-cap and the 500 store-insert paths are upstream / downstream of this function
-//     and are tested elsewhere; the fuzz keeps its blast radius to the parse + validate surface so the harness needs no DB.
+//     []api.Event) is a finding. The 413 body-byte cap is enforced upstream (readBodyWithCap) and the 500 store-insert path
+//     is downstream of this function; the fuzz keeps its blast radius to the parse + validate surface so the harness needs
+//     no DB. too_many_events is a 413 because the agent routes 413 into split-and-retry; see ParseAndValidateIngestBody's
+//     doc comment for why the count-cap shares the size-cap status (Copilot #276).
 //
 // Why the pinnedHostID is a fixed sentinel: the production middleware threads the token-bound HostID through context; the
 // fuzz only needs ONE host ID to exercise both the matching and the mismatching code paths (a fuzz-generated body's
@@ -50,19 +56,19 @@ func FuzzParseAndValidateIngestBody(f *testing.F) {
 	})
 }
 
-// assertValidOutput pins the (status, errCode) -> shape contract documented on ParseAndValidateIngestBody. Pulled out of
-// the FuzzFunc body so the test failure message can include the exact tuple AND so a future contract addition (new error
-// code) is a one-line edit here, not in the fuzz function.
+// assertValidOutput pins the (status, errCode) -> shape contract documented on ParseAndValidateIngestBody. Pulled out of the
+// FuzzFunc body so the test failure message can include the exact tuple AND so a future contract addition (new error code) is a
+// one-line edit here, not in the fuzz function.
+//
+// CodeRabbit #276 strengthening: the 200 oracle now re-validates the parsed events instead of only checking the body starts with
+// `[`. A regression that 200'd on `[{}]` (which should be missing_fields_at_0) or a 200 with a host_id != pinnedHostID would
+// have slipped through the previous oracle; the per-event field-population + host_id-match checks here pin the success contract
+// against the validation logic, not just against the wire shape.
 func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int, errCode string, pinnedHostID string) {
 	t.Helper()
-	_ = events // events shape is implicit in the success-vs-failure split below; per-event field assertions are tested separately
 
 	switch status {
 	case http.StatusOK:
-		// Success means the body parsed AND every event passed the per-event validation. A 200 on a body that's obviously not
-		// a JSON array of well-formed events would be a real finding; the fuzz cheaply guards against that by requiring an
-		// empty errCode on success and re-checking the body parses as a JSON array (the json.Unmarshal failure path is what
-		// emits invalid_json, so a 200 implies the unmarshal succeeded).
 		if errCode != "" {
 			t.Fatalf("status 200 returned with non-empty errCode %q for body %q", errCode, body)
 		}
@@ -71,6 +77,31 @@ func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int
 		trimmed := bytes.TrimSpace(body)
 		if len(trimmed) > 0 && trimmed[0] != '[' {
 			t.Fatalf("status 200 but body is not a JSON array: %q", body)
+		}
+		// Per-event field-population + host_id pin. The validation loop in ParseAndValidateIngestBody enforces these on every
+		// event; a 200 that returns events failing either check would be a contract regression.
+		for i, e := range events {
+			if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
+				t.Fatalf("status 200 returned event[%d] with empty required field (event_id=%q host_id=%q event_type=%q timestamp_ns=%d) for body %q",
+					i, e.EventID, e.HostID, e.EventType, e.TimestampNs, body)
+			}
+			if e.HostID != pinnedHostID {
+				t.Fatalf("status 200 returned event[%d] with host_id %q != pinned %q for body %q",
+					i, e.HostID, pinnedHostID, body)
+			}
+		}
+		if len(events) > MaxIngestEventsPerRequest {
+			t.Fatalf("status 200 returned %d events; exceeds MaxIngestEventsPerRequest=%d for body %q",
+				len(events), MaxIngestEventsPerRequest, body)
+		}
+		// Trailing-bytes pin: a 200 implies the body parses cleanly as []api.Event with no trailing content. json.Unmarshal
+		// rejects trailing bytes by contract (encoding/json package documentation), so using it as an independent oracle
+		// catches the case where the streaming decoder accepts content past the closing `]`. Without this check, the
+		// trailing-bytes seeds (`[]extra`, `[][]`, `[...]X`) silently pass because the events-slice contract on its own
+		// doesn't see the trailing material.
+		var reparsed []api.Event
+		if err := json.Unmarshal(body, &reparsed); err != nil {
+			t.Fatalf("status 200 but json.Unmarshal rejects the body: %v; body=%q", err, body)
 		}
 
 	case http.StatusBadRequest:
@@ -82,13 +113,17 @@ func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int
 			// Implies at least one event's host_id != pinnedHostID. We don't re-parse the body here to confirm — the parse
 			// produced events, then a validation step caught the mismatch. Trusting the function's own report.
 			_ = pinnedHostID
-		case errCode == "too_many_events":
-			// Implies the parsed array exceeded MaxIngestEventsPerRequest. Memory-amplification defense; the cap fires
-			// before the per-event validation loop.
 		case strings.HasPrefix(errCode, "missing_fields_at_"):
 			// Implies an event at some index missed one of {event_id, host_id, event_type, timestamp_ns}.
 		default:
 			t.Fatalf("status 400 returned with undocumented errCode %q for body %q", errCode, body)
+		}
+
+	case http.StatusRequestEntityTooLarge:
+		// The parse-helper emits 413 only for too_many_events; the 413 body_too_large path is upstream of this function in
+		// readBodyWithCap and never reaches the parse helper. A stray 413 errCode is a finding.
+		if errCode != "too_many_events" {
+			t.Fatalf("status 413 returned with undocumented errCode %q for body %q", errCode, body)
 		}
 
 	default:
@@ -154,6 +189,38 @@ func seedCorpus(f *testing.F) {
 	if utf8.ValidString("ñöß-host") {
 		f.Add([]byte(`[{"event_id":"e1","host_id":"ñöß-host","event_type":"exec","timestamp_ns":1,"payload":{}}]`))
 	}
+
+	// too_many_events seed (CodeRabbit #276): exercises the MaxIngestEventsPerRequest+1 rejection deterministically. Without
+	// this seed the only path that hit the cap was a fuzz-mutator coincidence. Building the array as a bytes.Buffer keeps the
+	// seed under a single allocation; ~10001 minimal events fit in well under 1 MiB on the wire.
+	f.Add(tooManyEventsBody())
+
+	// Trailing-bytes-after-`]` seeds. The streaming decoder (PR #276) rejects these via the `dec.Token() must return io.EOF`
+	// check that runs after the closing `]`. json.Unmarshal previously rejected the same inputs, so the contract is preserved
+	// across the shape change - these seeds make that preservation a TEST, not just an invariant in code review. A future
+	// change that drops the trailing-EOF check (e.g., to enable `dec.UseNumber()`, `dec.DisallowUnknownFields()`, or any
+	// other decoder mode that incidentally weakens the trailing-token assertion) would land here as a 200 instead of a 400,
+	// and the assertValidOutput oracle would surface it as a contract regression.
+	f.Add([]byte(`[]extra`))                                                                                   // trailing text after empty array
+	f.Add([]byte(`[][]`))                                                                                      // two top-level JSON arrays back-to-back
+	f.Add([]byte(`[{"event_id":"e","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1}]X`))     // trailing byte after well-formed happy-path event
+	f.Add([]byte(`[{"event_id":"e","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1}] true`)) // trailing JSON literal after happy-path event
+}
+
+// tooManyEventsBody emits a JSON array of MaxIngestEventsPerRequest+1 minimal-but-valid events. Lives outside seedCorpus so
+// f.Add takes one argument and the body construction stays linear. Every event matches the pinned host id so the rejection
+// path is the cap (too_many_events), not the per-event validation that fires earlier in the loop.
+func tooManyEventsBody() []byte {
+	var b bytes.Buffer
+	b.WriteByte('[')
+	for i := range MaxIngestEventsPerRequest + 1 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"event_id":"e%d","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1,"payload":{}}`, i)
+	}
+	b.WriteByte(']')
+	return b.Bytes()
 }
 
 // deepNestedArray returns a JSON body that nests n levels of `[`s before closing with n `]`s. Probes the decoder's

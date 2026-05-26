@@ -258,13 +258,16 @@ floor for any project that wants enterprise adoption.
   `codecov` job in `.github/workflows/test.yml` after `agent-test`,
   `server-test`, and `ui-test` finish; `CODECOV_TOKEN` lives in the
   `codecov` GitHub Environment (same pattern as `sonarcloud` and
-  `release-signing`). Two per-component flags (`agent` and `server`)
-  so the dashboard splits the Go binaries; the UI flag is intentionally
-  off until UI tests land (today `ui/src/**` is in the codecov.yml
-  `ignore` list to mirror `sonar.coverage.exclusions`). Project + patch
-  status thresholds in `codecov.yml` match SonarCloud's 80% /
-  80%-on-new-code gates so the two services agree.
-  `fail_ci_if_error: false` keeps a Codecov outage from blocking merges
+  `release-signing`). Three per-component flags (`agent`, `server`, `ui`)
+  so the dashboard splits the Go binaries from the React bundle; the UI
+  flag is fed by the Playwright E2E run's V8 coverage via
+  monocart-coverage-reports (vitest tests can upload to the same flag
+  once they land and Codecov takes the union). Per-PR PATCH gate stays
+  enforcing at 70% on new code; the PROJECT rollup is informational
+  (`informational: true` in `codecov.yml`) because Codecov's project
+  numbers drifted vs reality on this repo through the M13 stack and the
+  rollup gate became a chronic flake. SonarCloud's 80% new-code gate
+  remains the authoritative bar for per-PR coverage
 - [ ] **`go vet -vettool=fieldalignment`** -- catches struct padding waste in hot structs
 - [x] **`uber-go/nilaway`** -- inter-procedural nil-dereference static analysis. Catches
   panics that `staticcheck` and `govet -nilness` miss because nilaway tracks nilability
