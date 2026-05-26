@@ -334,17 +334,26 @@ func test_spec_extension_xpc_server_peer_validation_signing_required() throws { 
 `### Requirement:` whose body contains SHALL or MUST, then walks the codebase for matching markers. By default the
 check exits 0 unless a reference points to a non-existent canonical ID (which catches drift after a spec rename); with
 `--strict` it also fails when a SHALL / MUST scenario has zero references. The CI workflow at
-`.github/workflows/spectrace.yml` ships in advisory mode (no `--strict`); flip the gate when the marker backlog is
-closed. `tools/spectrace list-ids [--normative-only]` prints every canonical scenario ID so contributors can copy a
-marker without typing the slug.
+`.github/workflows/spectrace.yml` runs `check --strict` on every PR.
 
-`tools/spectrace report --format=md` (a Markdown coverage matrix with one row per scenario and one column per layer)
-is deferred to a follow-up: it is a presentation layer over the same data `check` already collects, and the M13 budget
-was the linter itself. The same applies to per-layer breakdown in the gap output.
+`tools/spectrace list-ids [--normative-only]` prints every canonical scenario ID so contributors can copy a marker
+without typing the slug.
 
-Rollout is phased so the gate never goes red on day one: advisory first (M13 v1 today), then "new code" gate (every
-scenario added or modified in a PR must be covered), then full gate via `--strict`. The same "new code" framing that
-SonarCloud uses.
+`tools/spectrace report --format=md [--output FILE]` (M13 v2, issue #233) renders the Markdown coverage matrix: one
+row per scenario, one column per layer (L0..L6), each cell linking to every marker that covers the scenario at that
+layer. An `Other` column appears when at least one row has a non-test enforcement marker (workflow YAML, packaging
+shell). `report` never gates; it is for humans and PR comments.
+
+`check --by-layer` annotates the gap report with the layer coverage profile per scenario; `check --new-code` scopes
+the gate to scenarios added or modified in the current PR (diff against the merge base, default `origin/main`),
+matching SonarCloud's "new code" framing.
+
+Rollout sequence (delivered):
+
+- M13 v1: advisory `check`, then `check --strict` once the marker backlog closed on main.
+- M13 v2: `report --format=md`, `check --by-layer`, `check --new-code`. `--new-code` is the recommended fallback if
+  a future spec restructure briefly inflates the uncovered set: it preserves the gate signal on the delta without
+  blocking the broader work.
 
 ## Minimum requirements per PR
 
