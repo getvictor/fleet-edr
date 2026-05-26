@@ -21,6 +21,44 @@ import (
 // Exported for tests that need to compose right-at-cap and over-cap bodies without duplicating the magic number.
 const MaxIngestBodyBytes = 10 * 1024 * 1024
 
+// MaxIngestEventsPerRequest caps the number of events the parser accepts in a single batch. Closes the memory-amplification angle that the 10 MB body cap doesn't on its own: a minimal event JSON is ~50 bytes on the wire but the in-memory api.Event representation (json.RawMessage payload + the four string headers) is several hundred bytes — so a 10 MB body of microscopic events could expand to ~140k entries and ~60-80 MB of heap before the downstream InsertEvents loop runs. The agent's defaultBatchSize is 100; 10k is two orders of magnitude of headroom for legitimate batching while capping the blast radius of a hostile or buggy peer.
+const MaxIngestEventsPerRequest = 10_000
+
+// ParseAndValidateIngestBody is the parse + per-event validation half of POST /api/events, lifted out of handleIngest so the
+// fuzz harness can drive it without a full HTTP server + Detection store. Returns (events, http.StatusOK, "") on success, or
+// (nil, 4xx, errCode) on parse / validation failure. The error codes are the same stable set the HTTP handler emits:
+// "invalid_json", "missing_fields_at_<i>", "host_id_mismatch", "too_many_events". The body-cap (413) check is upstream of
+// this function (in readBodyWithCap); the store-insert (5xx) is downstream of it. The fuzz contract is therefore: every
+// output MUST be one of {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
+// (400, "too_many_events")} — anything else is a finding.
+func ParseAndValidateIngestBody(body []byte, pinnedHostID string) (events []api.Event, status int, errCode string) {
+	if err := json.Unmarshal(body, &events); err != nil {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	// json.Unmarshal of the literal `null` succeeds with events=nil. Treat that as a parse-failure shape rather than as a
+	// valid empty batch — a caller that genuinely means "empty batch" sends `[]`, not `null`. Without this check the
+	// function would return 200 OK for a body that is not a JSON array, breaking the fuzz invariant "status 200 implies a
+	// JSON-array body" (Gemini #275).
+	if events == nil {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	// Per-batch event-count cap: defense against a body-cap-respecting attacker who packs the 10 MB body with thousands
+	// of microscopic events. The 10 MB byte cap doesn't bound the in-memory expansion (api.Event with its string headers
+	// is larger per-event than the JSON form), so this cap is what closes the memory-amplification path (CodeRabbit #275).
+	if len(events) > MaxIngestEventsPerRequest {
+		return nil, http.StatusBadRequest, "too_many_events"
+	}
+	for i, e := range events {
+		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
+			return nil, http.StatusBadRequest, "missing_fields_at_" + strconv.Itoa(i)
+		}
+		if e.HostID != pinnedHostID {
+			return nil, http.StatusBadRequest, "host_id_mismatch"
+		}
+	}
+	return events, http.StatusOK, ""
+}
+
 // BuildInfo is injected at startup so the readiness endpoint
 // advertises version + commit.
 type BuildInfo struct {
@@ -85,21 +123,10 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var events []api.Event
-	if err := json.Unmarshal(body, &events); err != nil {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_json")
+	events, status, errCode := ParseAndValidateIngestBody(body, pinnedHostID)
+	if status != http.StatusOK {
+		writeErr(ctx, h.logger, w, status, errCode)
 		return
-	}
-
-	for i, e := range events {
-		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
-			writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing_fields_at_"+strconv.Itoa(i))
-			return
-		}
-		if e.HostID != pinnedHostID {
-			writeErr(ctx, h.logger, w, http.StatusBadRequest, "host_id_mismatch")
-			return
-		}
 	}
 
 	insertStart := time.Now()
