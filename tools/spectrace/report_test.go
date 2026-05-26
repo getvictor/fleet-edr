@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -170,6 +171,15 @@ func TestFormatMarkerLink(t *testing.T) {
 func TestRunReport_UnsupportedFormat(t *testing.T) {
 	code := runReport([]string{"--format", "json"})
 	assert.Equal(t, 2, code)
+}
+
+// TestRunReport_WriteErrorReturnsExitCodeTwo exercises the bufio flush check added in response to CodeRabbit's PR #281 review.
+// We point --output at a path inside a NOT-existing directory; os.Create fails, openReportWriter returns the error, and
+// runReport must exit 2. Without the flush check the prior shape returned 0 on any IO failure during render or close.
+func TestRunReport_WriteErrorReturnsExitCodeTwo(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist-dir", "matrix.md")
+	code := runReport([]string{"--output", missing, "--specs-dir", "openspec/specs", "--root", "."})
+	assert.Equal(t, 2, code, "open --output under a missing directory must exit non-zero")
 }
 
 // TestMatrixHasOtherMarkers covers the column-on-demand decision. Cases drive both directions: an empty marker set, a set

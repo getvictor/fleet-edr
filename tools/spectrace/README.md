@@ -18,11 +18,16 @@ spectrace report   [--specs-dir DIR] [--root DIR] [--format md] [--output FILE] 
   - `--by-layer` annotates the gap report with the layer coverage profile (L0..L6, Other) for each scenario so a
     contributor reading the list can see "covered at L1 but missing L4." For the full per-cell detail with file:line
     links, use `spectrace report` instead.
-  - `--new-code` restricts the gate to scenarios added or modified in the current branch relative to `--base-ref`
-    (default `origin/main`). The diff is taken against the merge base, mirroring SonarCloud's "new code on this PR"
-    framing: an existing legacy gap doesn't block a PR that doesn't touch it, but a new gap added by the PR does.
-    Modifying the SHALL/MUST text in a requirement body promotes every scenario under that requirement into the
-    new-code set, so tightening a requirement forces its covering tests to be re-considered.
+  - `--new-code` restricts the gate to scenarios whose `spec.md` lines (heading or enclosing requirement body) changed
+    in the current branch relative to `--base-ref` (default `origin/main`). The diff is taken against the merge base,
+    mirroring SonarCloud's "new code on this PR" framing: an existing legacy gap doesn't block a PR that doesn't touch
+    it, but a new gap added by the PR does. Modifying the SHALL/MUST text in a requirement body promotes every
+    scenario under that requirement into the new-code set, so tightening a requirement forces its covering tests to be
+    re-considered. Scope is intentionally **spec-diff only**: a PR that deletes a marker in code without touching the
+    spec does NOT cause `--strict --new-code` to fire on the now-uncovered scenario. Use plain `--strict` to gate on
+    that shape; the rationale for the narrower scope is that a marker delete is usually intentional (the test moved or
+    the scenario merged) and a contributor renaming code paths shouldn't be forced to re-mark every scenario the file
+    touched.
 
 - `list-ids` prints the canonical scenario IDs, one per line, so contributors can copy a marker without typing the slug.
   `--normative-only` restricts the output to SHALL / MUST scenarios (the gateable set).

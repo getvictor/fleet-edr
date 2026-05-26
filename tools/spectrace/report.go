@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -44,7 +45,15 @@ func runReport(args []string) int {
 	}
 	defer closer()
 
-	renderMarkdownMatrix(w, scenarios, markers, *normativeOnly)
+	// Buffer the writer so a single Flush surfaces any IO error (broken pipe, disk full) instead of silently truncating
+	// the matrix. CodeRabbit flagged the unchecked write on PR #281: with raw os.Stdout, `spectrace report | head` would
+	// SIGPIPE mid-stream and exit 0; the buffered Flush returns the EPIPE so the caller sees exit 2.
+	bw := bufio.NewWriter(w)
+	renderMarkdownMatrix(bw, scenarios, markers, *normativeOnly)
+	if err := bw.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "spectrace report: write output: %v\n", err)
+		return 2
+	}
 	return 0
 }
 
@@ -199,9 +208,13 @@ func writeMatrixRows(w io.Writer, scenarios []Scenario, coverage map[string][]Ma
 	}
 }
 
-// indexMarkersByScenario groups markers by their canonical ID. Markers whose ID is not a canonical scenario (invalid refs,
-// `swift:` / `swift-ambiguous:` synthetic IDs) are dropped; they are reported by check, not by report. Within a group,
-// markers are sorted by (Layer, SourcePath, SourceLine) so cell rendering is deterministic.
+// indexMarkersByScenario groups markers by their canonical ID. Synthetic Swift IDs (`swift:` / `swift-ambiguous:` from
+// resolveSwiftMarker) are dropped because they cannot match any scenario row. Other invalid references (a typo'd ID, a
+// stale slug after a spec rename) are still indexed under their literal ID — they don't render because the row iteration
+// uses the canonical scenario list, not this map's key set. The check subcommand reports those typo'd markers separately
+// as invalid references, so leaving them in the map here is harmless and avoids re-threading the canonical set through
+// the report path. Within a group, markers are sorted by (Layer, SourcePath, SourceLine) so cell rendering is
+// deterministic. Copilot's comment-vs-behavior nit on PR #281.
 func indexMarkersByScenario(markers []Marker) map[string][]Marker {
 	out := make(map[string][]Marker)
 	for _, m := range markers {

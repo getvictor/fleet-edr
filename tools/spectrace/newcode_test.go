@@ -130,6 +130,15 @@ The system MUST do Y.
 	assert.Equal(t, 17, got[2].Start, "Gamma starts at the Second req heading")
 }
 
+// TestComputeNewCodeScenarioIDs_RejectsDashBaseRef pins the early-exit when --base-ref would shell out as a git option.
+// The function must short-circuit before invoking git so an attacker controlling the flag can't force `git merge-base
+// HEAD --help` (which opens a pager and could hang CI) or `--exec=<command>`-style abuses.
+func TestComputeNewCodeScenarioIDs_RejectsDashBaseRef(t *testing.T) {
+	_, err := computeNewCodeScenarioIDs(context.Background(), "openspec/specs", "-help")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --base-ref")
+}
+
 // TestComputeNewCodeScenarioIDs_E2E exercises the full git-diff path against a transient repo. We initialise a repo, commit
 // a baseline spec, then add one new requirement+scenario and modify a SHALL line under an existing requirement; the gate
 // must surface both the new scenario AND every scenario under the modified requirement (because a SHALL edit promotes the
@@ -213,6 +222,34 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+// TestValidateBaseRef pins the dash-prefix rejection added in response to Copilot's PR #281 review. The two legitimate-
+// looking refs (a branch name, a SHA) must pass; anything starting with `-` must be rejected because git would parse it
+// as an option flag. Git itself refuses to create refs starting with `-`, so this check has no false-positive surface.
+func TestValidateBaseRef(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseRef string
+		wantErr bool
+	}{
+		{"origin/main passes", "origin/main", false},
+		{"branch name passes", "main", false},
+		{"sha passes", "abc1234567", false},
+		{"leading dash is rejected", "-help", true},
+		{"leading double-dash is rejected", "--all", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBaseRef(tc.baseRef)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid --base-ref")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
 	}
 }
 

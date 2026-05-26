@@ -10,11 +10,18 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // defaultBaseRef is the merge-base parent the --new-code gate diffs against. `origin/main` mirrors how SonarCloud frames
 // "new code on this PR" against the target branch; for local runs without an origin remote, callers can pass --base-ref.
 const defaultBaseRef = "origin/main"
+
+// gitCommandTimeout caps every git subprocess this file spawns. CI typically completes git operations in well under a
+// second; the timeout exists so a misconfigured environment (credential prompt, hung network fetch, etc.) can't hang the
+// spectrace job indefinitely. Gemini called this out on PR #281; the cap is conservative so a legitimately slow `git diff`
+// on a very large spec.md still has plenty of headroom.
+const gitCommandTimeout = 30 * time.Second
 
 // scenarioRange records the line range a canonical scenario occupies in its spec.md, used to intersect against git-diff
 // hunks. The range is closed-closed in 1-based line numbers, matching git's `+a,b` hunk header convention. End is the line
@@ -37,11 +44,21 @@ func computeNewCodeScenarioIDs(ctx context.Context, specsDir, baseRef string) (m
 	if baseRef == "" {
 		baseRef = defaultBaseRef
 	}
-	mergeBase, err := gitMergeBase(ctx, baseRef)
+	if err := validateBaseRef(baseRef); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer cancel()
+
+	repoRoot, err := gitTopLevel(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("git rev-parse --show-toplevel: %w", err)
+	}
+	mergeBase, err := gitMergeBase(ctx, repoRoot, baseRef)
 	if err != nil {
 		return nil, fmt.Errorf("git merge-base HEAD %s: %w", baseRef, err)
 	}
-	changedFiles, err := gitChangedFiles(ctx, mergeBase, specsDir)
+	changedFiles, err := gitChangedFiles(ctx, repoRoot, mergeBase, specsDir)
 	if err != nil {
 		return nil, fmt.Errorf("git diff --name-only: %w", err)
 	}
@@ -50,11 +67,13 @@ func computeNewCodeScenarioIDs(ctx context.Context, specsDir, baseRef string) (m
 		if filepath.Base(file) != "spec.md" {
 			continue
 		}
-		hunks, err := gitDiffNewLineRanges(ctx, mergeBase, file)
+		hunks, err := gitDiffNewLineRanges(ctx, repoRoot, mergeBase, file)
 		if err != nil {
 			return nil, fmt.Errorf("git diff %s: %w", file, err)
 		}
-		ranges, err := parseSpecScenarioRanges(file)
+		// gitChangedFiles returns paths relative to the repo root; open from that root so spectrace works whether invoked
+		// from the repo top-level (CI shape) or a subdirectory (a contributor in their package).
+		ranges, err := parseSpecScenarioRanges(filepath.Join(repoRoot, file))
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", file, err)
 		}
@@ -65,6 +84,30 @@ func computeNewCodeScenarioIDs(ctx context.Context, specsDir, baseRef string) (m
 		}
 	}
 	return out, nil
+}
+
+// validateBaseRef rejects revisions that git would interpret as command-line options instead of a commit-ish reference.
+// `git merge-base HEAD --help` opens pager output and `--exec=...` style abuses become a remote-code-execution surface.
+// Refnames legitimately cannot start with `-` (git refuses them on creation), so this check has no false-positive
+// surface. Copilot flagged the option-injection risk on PR #281.
+func validateBaseRef(baseRef string) error {
+	if strings.HasPrefix(baseRef, "-") {
+		return fmt.Errorf("invalid --base-ref %q: revisions starting with '-' would be parsed as git options", baseRef)
+	}
+	return nil
+}
+
+// gitTopLevel resolves the working copy's root so subsequent git commands run with a stable Dir. Without this, running
+// spectrace from a subdirectory would pass `--specs-dir` relative to the subdirectory but `git diff -- <specsDir>` would
+// resolve <specsDir> relative to the subdirectory too, which usually works but breaks if --specs-dir is absolute or the
+// caller cd'd outside the worktree. Copilot called this out on PR #281.
+func gitTopLevel(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel") //nolint:gosec // args are literal
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // lineRange is a closed-closed range of new-side file lines (1-based).
@@ -83,24 +126,29 @@ func anyOverlap(start, end int, hunks []lineRange) bool {
 
 // gitMergeBase runs `git merge-base HEAD baseRef` and returns the resolved SHA. The merge-base is the right "branch point"
 // reference for a SonarCloud-style new-code diff: it excludes upstream changes that landed on baseRef after the branch
-// was cut, which would otherwise inflate the new-code set on a long-running branch.
-func gitMergeBase(ctx context.Context, baseRef string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "merge-base", "HEAD", baseRef) //nolint:gosec // baseRef is a CLI flag the operator supplies
-	out, err := cmd.Output()
+// was cut, which would otherwise inflate the new-code set on a long-running branch. CombinedOutput captures stderr so a
+// failure (missing remote, shallow clone) carries the actionable git error message in the returned error instead of a
+// bare `exit status 1`; Gemini called this out on PR #281.
+func gitMergeBase(ctx context.Context, repoRoot, baseRef string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "merge-base", "HEAD", baseRef) //nolint:gosec // baseRef passed validateBaseRef
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
 // gitChangedFiles returns the list of files changed between mergeBase and the working tree, filtered to those under
 // specsDir. We use `--diff-filter=ACMR` to drop deletions: a deleted scenario can't be uncovered because it's no longer
-// in the canonical set, so deletions don't contribute to the gate.
-func gitChangedFiles(ctx context.Context, mergeBase, specsDir string) ([]string, error) {
+// in the canonical set, so deletions don't contribute to the gate. cmd.Dir is the repo root so specsDir resolves
+// against the repo root regardless of where the caller invoked spectrace.
+func gitChangedFiles(ctx context.Context, repoRoot, mergeBase, specsDir string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "--diff-filter=ACMR", mergeBase, "--", specsDir) //nolint:gosec // args bounded
-	out, err := cmd.Output()
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	var files []string
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
@@ -116,12 +164,13 @@ var hunkHeaderRE = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // gitDiffNewLineRanges runs `git diff --unified=0 mergeBase -- file` and parses the @@ headers to return the changed
 // new-side line ranges. --unified=0 strips context so the ranges describe only added/modified lines, which is the precise
-// shape the gate needs.
-func gitDiffNewLineRanges(ctx context.Context, mergeBase, file string) ([]lineRange, error) {
+// shape the gate needs. cmd.Dir is the repo root so `file` resolves against the repo root regardless of cwd.
+func gitDiffNewLineRanges(ctx context.Context, repoRoot, mergeBase, file string) ([]lineRange, error) {
 	cmd := exec.CommandContext(ctx, "git", "diff", "--unified=0", mergeBase, "--", file) //nolint:gosec // args bounded
-	out, err := cmd.Output()
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return parseUnifiedDiffNewRanges(string(out)), nil
 }
