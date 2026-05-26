@@ -180,6 +180,15 @@ reviews:
     enabled: false
     auto_incremental_review: false
 
+  # Suppress the per-push "Review skipped" status comment CodeRabbit otherwise
+  # posts on every PR push when auto_review.enabled is false (a ~3.2 KB stub
+  # with the run-id + a "Trigger review" checkbox). The maintainer invokes
+  # CodeRabbit manually via `@coderabbitai review` on PRs that warrant it; the
+  # per-push stub is just noise that also trips poll-wait loops in tooling
+  # that watches for "is CodeRabbit done?". Manually-triggered reviews still
+  # post their walkthrough as expected.
+  review_status: false
+
   # ---- tools ---------------------------------------------------------------
   # CodeRabbit auto-detects file types — there's no need to disable
   # tools whose target language isn't in the repo (they simply don't
