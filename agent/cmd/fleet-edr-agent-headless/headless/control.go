@@ -37,6 +37,11 @@ const (
 	// controlSocketMode locks the unix socket to the running user only. The headless binary is single-user dev/test tooling; a more
 	// permissive mode would let any process on the host inject events.
 	controlSocketMode os.FileMode = 0o600
+
+	// HTTP header names + content types centralised so Sonar's S1192 (duplicated literal) doesn't trip across the three
+	// inject + state + error response paths. None of these are wire contracts that vary per call site.
+	contentTypeHeader = "Content-Type"
+	contentTypeJSON   = "application/json"
 )
 
 // startControlPlane binds a unix socket at socketPath and serves the control-plane HTTP API on it. Returns a shutdown function the
@@ -138,7 +143,7 @@ func handlePostEvent(
 	n := cnt.eventsInjected.Add(1)
 	cnt.lastInjectAtUnix.Store(time.Now().Unix())
 	logger.DebugContext(r.Context(), "control plane injected event", "events_injected", n)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeHeader, contentTypeJSON)
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{"events_injected": n})
 }
@@ -170,13 +175,13 @@ func handleGetState(
 		LastInjectAtUnix: cnt.lastInjectAtUnix.Load(),
 		QueueDepth:       depth,
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeHeader, contentTypeJSON)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // writeJSONError emits a small JSON error body so a client parsing the response can read .error without sniffing the body type.
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeHeader, contentTypeJSON)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

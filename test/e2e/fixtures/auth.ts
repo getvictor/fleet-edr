@@ -5,7 +5,7 @@
 
 import { Page } from "@playwright/test";
 import { openDB, resetDB, mintBootstrapToken } from "./db";
-import { installVirtualAuthenticator, uninstallVirtualAuthenticator, VirtualAuthenticator } from "./webauthn";
+import { installVirtualAuthenticator, VirtualAuthenticator } from "./webauthn";
 
 /**
  * BG_PASSWORD is the password registered during break-glass setup. Any string >=12 chars works; this one is shared across the L4
@@ -84,4 +84,5 @@ export async function resetHostData(
   `);
 }
 
-export { uninstallVirtualAuthenticator };
+// Re-export from the source module (Sonar S7763: `export { X }` of an imported name should use `export { X } from`).
+export { uninstallVirtualAuthenticator } from "./webauthn";

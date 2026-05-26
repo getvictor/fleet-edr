@@ -362,8 +362,10 @@ func (s *scaleTokenProvider) HostID() string { return s.hostID }
 // OnUnauthorized is intentionally a no-op in scale runs: a 401 from the server in headless mode is a setup/test bug
 // (mismatched enroll secret, server-side token revoke), not a re-enroll trigger. The scale runner aborts the host on
 // any persistent error path through the uploader's quarantine; the per-host LastError captures the diagnostic and the
-// run's pass gate flips. Sonar S1186 fix - explicit no-op comment per the rule (#277).
-func (s *scaleTokenProvider) OnUnauthorized(_ context.Context) {}
+// run's pass gate flips.
+func (s *scaleTokenProvider) OnUnauthorized(_ context.Context) {
+	// Intentional no-op; see method doc comment. Sonar S1186 requires the comment INSIDE the body, not just preceding.
+}
 
 func (s *scaleTokenProvider) Rotate(_ context.Context, _ string) error { return nil }
 

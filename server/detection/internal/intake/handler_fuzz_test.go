@@ -66,68 +66,75 @@ func FuzzParseAndValidateIngestBody(f *testing.F) {
 // against the validation logic, not just against the wire shape.
 func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int, errCode string, pinnedHostID string) {
 	t.Helper()
-
 	switch status {
 	case http.StatusOK:
-		if errCode != "" {
-			t.Fatalf("status 200 returned with non-empty errCode %q for body %q", errCode, body)
-		}
-		// Sanity: a 200 result implies the body started with [ (a JSON array). An empty body or a non-array would not have
-		// reached the loop. The body may have leading/trailing whitespace; trim before the prefix check.
-		trimmed := bytes.TrimSpace(body)
-		if len(trimmed) > 0 && trimmed[0] != '[' {
-			t.Fatalf("status 200 but body is not a JSON array: %q", body)
-		}
-		// Per-event field-population + host_id pin. The validation loop in ParseAndValidateIngestBody enforces these on every
-		// event; a 200 that returns events failing either check would be a contract regression.
-		for i, e := range events {
-			if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
-				t.Fatalf("status 200 returned event[%d] with empty required field (event_id=%q host_id=%q event_type=%q timestamp_ns=%d) for body %q",
-					i, e.EventID, e.HostID, e.EventType, e.TimestampNs, body)
-			}
-			if e.HostID != pinnedHostID {
-				t.Fatalf("status 200 returned event[%d] with host_id %q != pinned %q for body %q",
-					i, e.HostID, pinnedHostID, body)
-			}
-		}
-		if len(events) > MaxIngestEventsPerRequest {
-			t.Fatalf("status 200 returned %d events; exceeds MaxIngestEventsPerRequest=%d for body %q",
-				len(events), MaxIngestEventsPerRequest, body)
-		}
-		// Trailing-bytes pin: a 200 implies the body parses cleanly as []api.Event with no trailing content. json.Unmarshal
-		// rejects trailing bytes by contract (encoding/json package documentation), so using it as an independent oracle
-		// catches the case where the streaming decoder accepts content past the closing `]`. Without this check, the
-		// trailing-bytes seeds (`[]extra`, `[][]`, `[...]X`) silently pass because the events-slice contract on its own
-		// doesn't see the trailing material.
-		var reparsed []api.Event
-		if err := json.Unmarshal(body, &reparsed); err != nil {
-			t.Fatalf("status 200 but json.Unmarshal rejects the body: %v; body=%q", err, body)
-		}
-
+		assertOKContract(t, body, events, errCode, pinnedHostID)
 	case http.StatusBadRequest:
-		// Any of the documented 400 error codes is acceptable. The fuzz pins the SET of codes; a stray code is a finding.
-		switch {
-		case errCode == "invalid_json":
-			// Implies the JSON parse failed OR the body deserialized to nil (literal `null`, treated as a parse failure).
-		case errCode == "host_id_mismatch":
-			// Implies at least one event's host_id != pinnedHostID. We don't re-parse the body here to confirm — the parse
-			// produced events, then a validation step caught the mismatch. Trusting the function's own report.
-			_ = pinnedHostID
-		case strings.HasPrefix(errCode, "missing_fields_at_"):
-			// Implies an event at some index missed one of {event_id, host_id, event_type, timestamp_ns}.
-		default:
-			t.Fatalf("status 400 returned with undocumented errCode %q for body %q", errCode, body)
-		}
-
+		assertBadRequestErrCode(t, body, errCode, pinnedHostID)
 	case http.StatusRequestEntityTooLarge:
-		// The parse-helper emits 413 only for too_many_events; the 413 body_too_large path is upstream of this function in
-		// readBodyWithCap and never reaches the parse helper. A stray 413 errCode is a finding.
+		// 413 from the parse-helper is reserved for too_many_events; the body_too_large path is upstream and never reaches
+		// the parse helper. A stray 413 errCode is a finding.
 		if errCode != "too_many_events" {
 			t.Fatalf("status 413 returned with undocumented errCode %q for body %q", errCode, body)
 		}
-
 	default:
 		t.Fatalf("undocumented status %d (errCode %q) for body %q", status, errCode, body)
+	}
+}
+
+// assertOKContract pins the (200, "") contract: empty errCode, body starts with `[`, every event has its required fields
+// populated and host_id == pinnedHostID, count under the cap, and the body parses cleanly with json.Unmarshal (trailing-bytes
+// check; Unmarshal rejects content past the closing `]`). Extracted from assertValidOutput so the parent stays under Sonar
+// S3776's cognitive-complexity budget (assertValidOutput hit 23 vs 15 allowed pre-refactor).
+func assertOKContract(t *testing.T, body []byte, events []api.Event, errCode string, pinnedHostID string) {
+	t.Helper()
+	if errCode != "" {
+		t.Fatalf("status 200 returned with non-empty errCode %q for body %q", errCode, body)
+	}
+	// A 200 result implies the body started with [ (a JSON array). The body may have leading/trailing whitespace;
+	// trim before the prefix check.
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && trimmed[0] != '[' {
+		t.Fatalf("status 200 but body is not a JSON array: %q", body)
+	}
+	for i, e := range events {
+		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
+			t.Fatalf("status 200 returned event[%d] with empty required field (event_id=%q host_id=%q event_type=%q timestamp_ns=%d) for body %q",
+				i, e.EventID, e.HostID, e.EventType, e.TimestampNs, body)
+		}
+		if e.HostID != pinnedHostID {
+			t.Fatalf("status 200 returned event[%d] with host_id %q != pinned %q for body %q",
+				i, e.HostID, pinnedHostID, body)
+		}
+	}
+	if len(events) > MaxIngestEventsPerRequest {
+		t.Fatalf("status 200 returned %d events; exceeds MaxIngestEventsPerRequest=%d for body %q",
+			len(events), MaxIngestEventsPerRequest, body)
+	}
+	// Trailing-bytes pin: json.Unmarshal rejects content past the closing `]`, so using it as an independent oracle
+	// catches the case where the streaming decoder accepts trailing bytes. The trailing-bytes seeds (`[]extra`,
+	// `[][]`, `[...]X`) silently pass without this check.
+	var reparsed []api.Event
+	if err := json.Unmarshal(body, &reparsed); err != nil {
+		t.Fatalf("status 200 but json.Unmarshal rejects the body: %v; body=%q", err, body)
+	}
+}
+
+// assertBadRequestErrCode pins the 400-error-code vocabulary: only invalid_json, host_id_mismatch, and missing_fields_at_<i>
+// are acceptable codes; a stray errCode is a finding. The 4 documented branches are listed explicitly for clarity.
+func assertBadRequestErrCode(t *testing.T, body []byte, errCode string, pinnedHostID string) {
+	t.Helper()
+	switch {
+	case errCode == "invalid_json":
+		// Implies the JSON parse failed OR the body deserialized to nil (literal `null`, treated as a parse failure).
+	case errCode == "host_id_mismatch":
+		// Implies at least one event's host_id != pinnedHostID. We don't re-parse the body to confirm - the parse
+		// produced events, then a validation step caught the mismatch. Trusting the function's own report.
+		_ = pinnedHostID
+	case strings.HasPrefix(errCode, "missing_fields_at_"):
+		// Implies an event at some index missed one of {event_id, host_id, event_type, timestamp_ns}.
+	default:
+		t.Fatalf("status 400 returned with undocumented errCode %q for body %q", errCode, body)
 	}
 }
 

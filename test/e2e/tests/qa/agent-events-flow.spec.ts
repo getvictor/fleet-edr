@@ -51,8 +51,8 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
         // Exact-set assertion: the event_types in the DB must equal exactly what the scenario declared - no missing types and no
         // surprises (extra inserts would suggest the fixture leaked through to a wrong host, or the server's ingest accepted a
         // mistyped event_type).
-        const dbTypes = rows.map((r) => r.event_type).sort();
-        expect(dbTypes).toEqual(Object.keys(sc.expectedCounts).sort());
+        const dbTypes = rows.map((r) => r.event_type).sort((a, b) => a.localeCompare(b));
+        expect(dbTypes).toEqual(Object.keys(sc.expectedCounts).sort((a, b) => a.localeCompare(b)));
 
         // Exact-count per event_type: catches partial-ingest cases the presence-only check used to miss.
         for (const row of rows) {

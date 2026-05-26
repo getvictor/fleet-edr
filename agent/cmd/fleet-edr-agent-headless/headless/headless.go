@@ -156,8 +156,11 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Control plane: optional. When SocketPath is non-empty, start the server in a goroutine. Capture shutdown so we can call it
 	// explicitly between ctx.Done() and drainOnShutdown (see below); also keep a deferred call as a safety net in case Run returns
-	// before ctx.Done() fires. http.Server.Shutdown is idempotent so the double-call is safe.
-	shutdownControlPlane := func() {}
+	// before ctx.Done() fires. http.Server.Shutdown is idempotent so the double-call is safe. Default the closure to a no-op so
+	// the two call sites below don't have to nil-check (Sonar S1186 requires the comment INSIDE the body, not preceding).
+	shutdownControlPlane := func() {
+		// Intentional no-op default; replaced by startControlPlane's real shutdown closure when SocketPath is non-empty.
+	}
 	if opts.SocketPath != "" {
 		shutdown, err := startControlPlane(ctx, opts.SocketPath, recv, q, cnt, logger)
 		if err != nil {
