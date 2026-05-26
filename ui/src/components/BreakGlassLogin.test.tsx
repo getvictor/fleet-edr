@@ -63,7 +63,10 @@ describe("BreakGlassLogin form", () => {
 
 describe("BreakGlassLogin submit happy path", () => {
   it("calls breakglassBeginLogin → breakglassFinishLogin → navigates to the redirect", async () => {
-    const finishSpy = vi.spyOn(auth, "breakglassFinishLogin").mockResolvedValue({ redirect: "/ui/alerts" });
+    // Reconfigure the existing spy from beforeEach rather than re-installing it (Copilot #278: layered vi.spyOn on the
+    // same target can throw "already spied upon" on some vitest versions). vi.mocked is the standard handle.
+    const finishSpy = vi.mocked(auth.breakglassFinishLogin);
+    finishSpy.mockResolvedValue({ redirect: "/ui/alerts" });
     renderAt();
 
     fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "  ops@example.com  " } });
@@ -77,7 +80,7 @@ describe("BreakGlassLogin submit happy path", () => {
   });
 
   it("strips just /ui when the redirect is exactly /ui (no trailing slash)", async () => {
-    vi.spyOn(auth, "breakglassFinishLogin").mockResolvedValue({ redirect: "/ui" });
+    vi.mocked(auth.breakglassFinishLogin).mockResolvedValue({ redirect: "/ui" });
     renderAt();
     fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "ops@example.com" } });
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "pw" } });
@@ -87,7 +90,7 @@ describe("BreakGlassLogin submit happy path", () => {
   });
 
   it("does NOT strip a redirect that isn't /ui-prefixed (e.g. /uipreview)", async () => {
-    vi.spyOn(auth, "breakglassFinishLogin").mockResolvedValue({ redirect: "/uipreview" });
+    vi.mocked(auth.breakglassFinishLogin).mockResolvedValue({ redirect: "/uipreview" });
     renderAt();
     fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "ops@example.com" } });
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "pw" } });
@@ -107,7 +110,7 @@ describe("BreakGlassLogin error mapping", () => {
     ["email_rate_limited", /too many failed attempts for this email/i],
     ["assertion_parse_failed", /couldn't read your security-key response/i],
   ])("renders the directed copy for %s", async (reason, copyPattern) => {
-    vi.spyOn(auth, "breakglassBeginLogin").mockRejectedValue(
+    vi.mocked(auth.breakglassBeginLogin).mockRejectedValue(
       new auth.BreakglassError(401, reason),
     );
     renderAt();
@@ -118,7 +121,7 @@ describe("BreakGlassLogin error mapping", () => {
   });
 
   it("falls through to the generic message for an unmapped reason", async () => {
-    vi.spyOn(auth, "breakglassBeginLogin").mockRejectedValue(
+    vi.mocked(auth.breakglassBeginLogin).mockRejectedValue(
       new auth.BreakglassError(500, "some_unmapped_reason"),
     );
     renderAt();
@@ -129,7 +132,7 @@ describe("BreakGlassLogin error mapping", () => {
   });
 
   it("renders the WebAuthn-cancelled copy when startAuthentication throws NotAllowedError", async () => {
-    vi.spyOn(auth, "breakglassBeginLogin").mockRejectedValue(
+    vi.mocked(auth.breakglassBeginLogin).mockRejectedValue(
       new DOMException("user cancelled", "NotAllowedError"),
     );
     renderAt();
@@ -140,7 +143,7 @@ describe("BreakGlassLogin error mapping", () => {
   });
 
   it("renders the generic message for a non-BreakglassError non-NotAllowedError throw", async () => {
-    vi.spyOn(auth, "breakglassBeginLogin").mockRejectedValue(new Error("network gone"));
+    vi.mocked(auth.breakglassBeginLogin).mockRejectedValue(new Error("network gone"));
     renderAt();
     fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "ops@example.com" } });
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "pw" } });

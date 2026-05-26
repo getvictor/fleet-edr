@@ -25,8 +25,17 @@ const breakglassChallenge: ReauthChallenge = {
   reauthURL: "/api/auth/reauth",
 };
 
+// Save the originals once so afterEach can put them back. Without this, the prototype mutation below leaks across test
+// files in the same vitest worker and changes ReauthModal's render behaviour anywhere else HTMLDialogElement is used
+// (Copilot + CodeRabbit + Gemini #278). The eslint-disable-next-line silences @typescript-eslint/unbound-method: we're
+// not calling these references directly, just storing them for later prototype reassignment.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const originalShowModal = HTMLDialogElement.prototype.showModal;
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const originalClose = HTMLDialogElement.prototype.close;
+
 beforeEach(() => {
-  // showModal/close in jsdom default to throwing; provide stubs that match the real behaviour testing-library needs: the
+  // showModal/close in jsdom default to throwing; install stubs that match the real behaviour testing-library needs: the
   // `open` attribute MUST be set/unset so getByRole queries treat the dialog's children as accessible. Without that the
   // role-based queries fail with "no accessible roles" because a non-`open` dialog is treated as inert.
   HTMLDialogElement.prototype.showModal = function () {
@@ -39,6 +48,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Put back the originals so this file's prototype mutation doesn't bleed into other test files running in the same
+  // vitest worker. vi.restoreAllMocks() handles vi.spyOn spies but doesn't touch direct prototype assignments.
+  HTMLDialogElement.prototype.showModal = originalShowModal;
+  HTMLDialogElement.prototype.close = originalClose;
 });
 
 describe("ReauthModal", () => {

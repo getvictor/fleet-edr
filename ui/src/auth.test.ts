@@ -274,16 +274,26 @@ describe("reauthBreakglass", () => {
   });
 });
 
+// stubLocation replaces window.location with a synthetic object exposing only the fields reauthOIDC reads. We use
+// vi.stubGlobal rather than vi.spyOn(location, "assign") because jsdom's location.assign is non-configurable and spyOn
+// throws "Cannot redefine property: assign" (the CodeRabbit + Gemini #278 suggestion was tested and produces that
+// error). Replacing the whole location object DOES work in this jsdom because window.location itself is configurable;
+// afterEach -> vi.unstubAllGlobals() restores the original on teardown.
+function stubLocation(pathname: string, search = "", hash = ""): ReturnType<typeof vi.fn> {
+  const assignSpy = vi.fn();
+  vi.stubGlobal("location", {
+    origin: "https://edr.test",
+    pathname,
+    search,
+    hash,
+    assign: assignSpy,
+  });
+  return assignSpy;
+}
+
 describe("reauthOIDC", () => {
   it("redirects to the baseURL with next=<current path> when on a same-origin path", () => {
-    const assignSpy = vi.fn();
-    vi.stubGlobal("location", {
-      origin: "https://edr.test",
-      pathname: "/ui/alerts/42",
-      search: "?status=open",
-      hash: "",
-      assign: assignSpy,
-    });
+    const assignSpy = stubLocation("/ui/alerts/42", "?status=open");
     reauthOIDC("/api/auth/login?reauth=1");
     expect(assignSpy).toHaveBeenCalledTimes(1);
     const url = String(assignSpy.mock.calls[0]?.[0]);
@@ -292,30 +302,16 @@ describe("reauthOIDC", () => {
   });
 
   it("falls back to the default /api/auth/login?reauth=1 when baseURL is off-shape", () => {
-    const assignSpy = vi.fn();
-    vi.stubGlobal("location", {
-      origin: "https://edr.test",
-      pathname: "/ui/",
-      search: "",
-      hash: "",
-      assign: assignSpy,
-    });
-    // Off-shape baseURL: missing leading slash, would otherwise let a hostile server steer the redirect.
+    const assignSpy = stubLocation("/ui/");
+    // Off-shape baseURL: doesn't start with /, would otherwise let a hostile server steer the redirect.
     reauthOIDC("https://evil.example.com/login");
     expect(String(assignSpy.mock.calls[0]?.[0])).toContain("/api/auth/login?reauth=1");
     expect(String(assignSpy.mock.calls[0]?.[0])).not.toContain("evil.example.com");
   });
 
   it("omits next= when the current path itself fails the allowlist", () => {
-    const assignSpy = vi.fn();
-    vi.stubGlobal("location", {
-      origin: "https://edr.test",
-      // Pathname with a character outside the regex's allowlist - exercises the safeNext === "" branch.
-      pathname: "/ui/with space",
-      search: "",
-      hash: "",
-      assign: assignSpy,
-    });
+    // Pathname with a character outside the regex's allowlist - exercises the safeNext === "" branch.
+    const assignSpy = stubLocation("/ui/with space");
     reauthOIDC("/api/auth/login?reauth=1");
     expect(String(assignSpy.mock.calls[0]?.[0])).toBe("/api/auth/login?reauth=1");
   });

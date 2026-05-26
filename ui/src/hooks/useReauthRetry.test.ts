@@ -41,10 +41,17 @@ afterEach(() => {
 
 describe("useReauthRetry", () => {
   it("returns the wrapped result on success without opening the modal", async () => {
+    // Explicit <[], string> on useReauthRetry so result.current.call() returns Promise<string> rather than Promise<unknown>;
+    // without it, TypeScript can't narrow vi.fn().mockResolvedValue("ok") to a string-returning callable.
     const fn = vi.fn().mockResolvedValue("ok");
-    const { result } = renderHook(() => useReauthRetry(fn));
+    const { result } = renderHook(() => useReauthRetry<[], string>(fn));
 
-    const value = await act(async () => result.current.call());
+    // act(async () => ...) resolves to void; the async callback's return value is NOT propagated (Copilot #278). Capture
+    // the call's resolved value INSIDE the act callback so the assertion below reads the real value, not undefined.
+    let value: string | undefined;
+    await act(async () => {
+      value = await result.current.call();
+    });
     expect(value).toBe("ok");
     expect(fn).toHaveBeenCalledTimes(1);
     expect(result.current.modal.open).toBe(false);
@@ -136,7 +143,10 @@ describe("useReauthRetry", () => {
     });
 
     const [vA, vB] = await Promise.all([pA, pB]);
-    expect([vA, vB]).toEqual(["attempt-3", "attempt-4"]);
+    // Microtask order between pA's retry and pB's retry isn't guaranteed; the contract is that BOTH retries land and
+    // observe distinct attempt counts. Sort so a future scheduler change doesn't flip [vA, vB] order and flake the test
+    // (CodeRabbit #278).
+    expect([vA, vB].slice().sort()).toEqual(["attempt-3", "attempt-4"]);
     // fn ran 4 times total: 2 initial deny + 2 retries.
     expect(fn).toHaveBeenCalledTimes(4);
   });
@@ -146,7 +156,17 @@ describe("useReauthRetry", () => {
     const fn = vi.fn().mockRejectedValue(otherErr);
     const { result } = renderHook(() => useReauthRetry(fn));
 
-    await expect(act(async () => result.current.call())).rejects.toBe(otherErr);
+    // Capture the rejection inside act() so the assertion targets the call's promise, not the act-wrapper's void
+    // promise (Copilot #278). Without this, the rejects.toBe assertion is fragile across testing-library versions.
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.call();
+      } catch (err) {
+        caught = err;
+      }
+    });
+    expect(caught).toBe(otherErr);
     expect(result.current.modal.open).toBe(false);
     expect(result.current.modal.challenge).toBeNull();
   });

@@ -54,6 +54,10 @@ describe("Login next-param resolution", () => {
   });
 
   it("clicking Continue with the next prop hits /api/auth/login?next=<prop>", () => {
+    // vi.stubGlobal("location", { assign }) is used here (NOT vi.spyOn(location, "assign")) because in this jsdom version
+    // location.assign is a non-configurable property: vi.spyOn -> Object.defineProperty throws "Cannot redefine property:
+    // assign". The bots' #278 suggestion to switch to spyOn was tested and produces that error; the whole-location-replace
+    // approach is what actually works here. afterEach calls vi.unstubAllGlobals() so the stub doesn't leak.
     const assignSpy = vi.fn();
     vi.stubGlobal("location", { assign: assignSpy });
     renderAt({}, { next: "/ui/hosts/abc" });
@@ -62,6 +66,10 @@ describe("Login next-param resolution", () => {
   });
 
   it("falls back to the URL ?next when no prop is provided", () => {
+    // vi.stubGlobal("location", { assign }) is used here (NOT vi.spyOn(location, "assign")) because in this jsdom version
+    // location.assign is a non-configurable property: vi.spyOn -> Object.defineProperty throws "Cannot redefine property:
+    // assign". The bots' #278 suggestion to switch to spyOn was tested and produces that error; the whole-location-replace
+    // approach is what actually works here. afterEach calls vi.unstubAllGlobals() so the stub doesn't leak.
     const assignSpy = vi.fn();
     vi.stubGlobal("location", { assign: assignSpy });
     renderAt({ next: "/ui/alerts" });
@@ -70,6 +78,10 @@ describe("Login next-param resolution", () => {
   });
 
   it("falls back to the default /ui/ when neither is provided", () => {
+    // vi.stubGlobal("location", { assign }) is used here (NOT vi.spyOn(location, "assign")) because in this jsdom version
+    // location.assign is a non-configurable property: vi.spyOn -> Object.defineProperty throws "Cannot redefine property:
+    // assign". The bots' #278 suggestion to switch to spyOn was tested and produces that error; the whole-location-replace
+    // approach is what actually works here. afterEach calls vi.unstubAllGlobals() so the stub doesn't leak.
     const assignSpy = vi.fn();
     vi.stubGlobal("location", { assign: assignSpy });
     renderAt({});
@@ -78,6 +90,10 @@ describe("Login next-param resolution", () => {
   });
 
   it("drops an off-shape URL ?next (open-redirect defence)", () => {
+    // vi.stubGlobal("location", { assign }) is used here (NOT vi.spyOn(location, "assign")) because in this jsdom version
+    // location.assign is a non-configurable property: vi.spyOn -> Object.defineProperty throws "Cannot redefine property:
+    // assign". The bots' #278 suggestion to switch to spyOn was tested and produces that error; the whole-location-replace
+    // approach is what actually works here. afterEach calls vi.unstubAllGlobals() so the stub doesn't leak.
     const assignSpy = vi.fn();
     vi.stubGlobal("location", { assign: assignSpy });
     renderAt({ next: "//evil.example.com" });
@@ -97,6 +113,10 @@ describe("Login break-glass link", () => {
 
 describe("Login navigating state", () => {
   it("transitions the button to loading on click", () => {
+    // vi.stubGlobal("location", { assign }) is used here (NOT vi.spyOn(location, "assign")) because in this jsdom version
+    // location.assign is a non-configurable property: vi.spyOn -> Object.defineProperty throws "Cannot redefine property:
+    // assign". The bots' #278 suggestion to switch to spyOn was tested and produces that error; the whole-location-replace
+    // approach is what actually works here. afterEach calls vi.unstubAllGlobals() so the stub doesn't leak.
     const assignSpy = vi.fn();
     vi.stubGlobal("location", { assign: assignSpy });
     renderAt({});
