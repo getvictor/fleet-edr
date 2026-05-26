@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"modernc.org/sqlite"
 )
 
@@ -493,31 +493,13 @@ func TestQueue_DuplicateEventIDIsAccepted(t *testing.T) {
 func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {
 	q := openCappedQueue(t, 32*1024)
 	ctx := t.Context()
-	payload := make([]byte, 1024)
-	for i := range payload {
-		payload[i] = 'x'
-	}
+	payload := capRaceTestPayload()
 
 	var stub stubMetrics
 	q.SetMetrics(&stub)
 
-	// Phase 1: enqueue a small initial batch and dequeue it so the uploader has captured these IDs as "in-flight".
-	for range 5 {
-		if err := q.Enqueue(ctx, payload); err != nil {
-			t.Fatalf("initial enqueue: %v", err)
-		}
-	}
-	inflight, err := q.DequeueBatch(ctx, 10)
-	if err != nil {
-		t.Fatalf("dequeue in-flight batch: %v", err)
-	}
-	if len(inflight) != 5 {
-		t.Fatalf("expected 5 in-flight rows, got %d", len(inflight))
-	}
-	inflightIDs := make([]int64, len(inflight))
-	for i, e := range inflight {
-		inflightIDs[i] = e.ID
-	}
+	// Phase 1: capture an in-flight batch (5 rows dequeued but not yet acked).
+	inflightIDs := capRaceEnqueueInflight(t, q, ctx, payload, 5)
 
 	// Phase 2: enqueue enough additional events to force the cap to lossy-drop pending rows. The in-flight rows
 	// (oldest) are the first to go because nothing is marked uploaded yet.
@@ -530,22 +512,8 @@ func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {
 		t.Fatalf("expected at least one lossy drop during cap pressure; metrics stub saw none")
 	}
 
-	// Prove the eviction actually touched the in-flight set rather than only dropping newer rows. Without this probe, a
-	// regression that flipped the eviction policy to drop newest-first would silently keep the test green - stub.hadLossy
-	// + Depth would both pass even though MarkUploaded's missing-row path is no longer exercised. The query has a fixed
-	// 5-placeholder shape because the test enqueues exactly 5 in-flight events; if that count ever changes, update the
-	// query alongside the loop above so the lint check below (require.Len matches the placeholder count) stays accurate.
-	require.Len(t, inflightIDs, 5, "in-flight ID count must match the hardcoded 5-placeholder query below")
-	var survivingInflight int
-	row := q.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE id IN (?, ?, ?, ?, ?)",
-		inflightIDs[0], inflightIDs[1], inflightIDs[2], inflightIDs[3], inflightIDs[4])
-	if err := row.Scan(&survivingInflight); err != nil {
-		t.Fatalf("count surviving in-flight rows: %v", err)
-	}
-	if survivingInflight == len(inflightIDs) {
-		t.Fatalf("expected cap enforcement to evict at least one in-flight row before MarkUploaded; all %d survived",
-			len(inflightIDs))
-	}
+	// Verify the eviction actually touched the in-flight set rather than only dropping newer rows.
+	capRaceAssertInflightEvicted(t, q, ctx, inflightIDs)
 
 	// Phase 3: ack the originally-dequeued IDs. Some MUST already be gone (the cap evicted them); MarkUploaded MUST
 	// still return nil so the uploader's happy path doesn't surface a failure for events the queue has chosen to drop.
@@ -553,16 +521,70 @@ func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {
 		t.Fatalf("MarkUploaded on evicted-in-flight IDs MUST be a silent no-op, got: %v", err)
 	}
 
-	// Sanity check: at least one of the in-flight rows was evicted (verifies the test actually exercised the race
-	// rather than racing nobody). Counts both rows: the in-flight IDs that survived plus everything queued in Phase 2.
+	// 5 in-flight + 200 pressure = 205 rows enqueued. After lossy drops, depth MUST be strictly less than 205. If the
+	// cap didn't fire there's no race to test.
 	depth, err := q.Depth(ctx)
 	if err != nil {
 		t.Fatalf("depth: %v", err)
 	}
-	// 5 in-flight + 200 pressure = 205 rows enqueued. After lossy drops, depth MUST be strictly less than 205. If the
-	// cap didn't fire there's no race to test.
 	if depth >= 205 {
 		t.Fatalf("expected cap enforcement to drop rows; depth=%d still >= 205 enqueues", depth)
+	}
+}
+
+// capRaceTestPayload returns a 1 KiB payload of 'x' bytes the cap-eviction test enqueues at every level. Pulled out so
+// the test body stays under Sonar S3776's cognitive-complexity budget.
+func capRaceTestPayload() []byte {
+	payload := make([]byte, 1024)
+	for i := range payload {
+		payload[i] = 'x'
+	}
+	return payload
+}
+
+// capRaceEnqueueInflight enqueues `count` payload rows and immediately dequeues them so the test has a captured set of
+// "in-flight" IDs the uploader would still be working on when the cap fires. Returns the captured IDs.
+func capRaceEnqueueInflight(t *testing.T, q *Queue, ctx context.Context, payload []byte, count int) []int64 {
+	t.Helper()
+	for range count {
+		if err := q.Enqueue(ctx, payload); err != nil {
+			t.Fatalf("initial enqueue: %v", err)
+		}
+	}
+	inflight, err := q.DequeueBatch(ctx, count*2) // generous limit so partial returns surface as a test failure
+	if err != nil {
+		t.Fatalf("dequeue in-flight batch: %v", err)
+	}
+	if len(inflight) != count {
+		t.Fatalf("expected %d in-flight rows, got %d", count, len(inflight))
+	}
+	ids := make([]int64, len(inflight))
+	for i, e := range inflight {
+		ids[i] = e.ID
+	}
+	return ids
+}
+
+// capRaceAssertInflightEvicted verifies the cap's lossy-drop path touched the captured in-flight set rather than only dropping
+// newer rows. Without this probe, a regression that flipped the eviction policy to drop newest-first would silently keep the
+// test green: stub.hadLossy + Depth would both pass even though MarkUploaded's missing-row path is no longer exercised. The
+// IN-clause is composed dynamically so a future count change in the caller doesn't require a parallel SQL edit (the prior
+// hardcoded 5-placeholder shape was a footgun the require.Len lint check papered over).
+func capRaceAssertInflightEvicted(t *testing.T, q *Queue, ctx context.Context, inflightIDs []int64) {
+	t.Helper()
+	placeholders := strings.Repeat("?,", len(inflightIDs)-1) + "?"
+	args := make([]any, len(inflightIDs))
+	for i, id := range inflightIDs {
+		args[i] = id
+	}
+	var survivingInflight int
+	row := q.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE id IN ("+placeholders+")", args...) //nolint:gosec
+	if err := row.Scan(&survivingInflight); err != nil {
+		t.Fatalf("count surviving in-flight rows: %v", err)
+	}
+	if survivingInflight == len(inflightIDs) {
+		t.Fatalf("expected cap enforcement to evict at least one in-flight row before MarkUploaded; all %d survived",
+			len(inflightIDs))
 	}
 }
 

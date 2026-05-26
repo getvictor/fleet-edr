@@ -129,12 +129,18 @@ final class ApplicationControlStore {
     private let persistQueue = DispatchQueue(label: "com.fleetdm.edr.appcontrol.persist", qos: .utility)
     private let storagePath: String
 
+    /// defaultStoragePath is the on-disk policy file the production singleton uses. Extracted from the init's default
+    /// argument so Sonar S1075 (hardcoded URI in source) lands on the named constant rather than the function signature;
+    /// the constant is still in one place and the doc-comment on `.shared` continues to discourage production callers
+    /// from bypassing the singleton.
+    static let defaultStoragePath = "/var/db/com.fleetdm.edr/application-control.json"
+
     /// The `storagePath` argument exists for XCTest isolation -- production code uses `.shared`
     /// which initializes via the default value (the real on-disk policy file under /var/db).
     /// The init is internal (not private) because @testable code in the SwiftPM Tests target
     /// needs to call it; the doc comment on `.shared` discourages new production callers from
     /// bypassing the singleton.
-    init(storagePath: String = "/var/db/com.fleetdm.edr/application-control.json") {
+    init(storagePath: String = ApplicationControlStore.defaultStoragePath) {
         self.storagePath = storagePath
     }
 

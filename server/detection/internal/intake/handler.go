@@ -48,22 +48,39 @@ const MaxIngestEventsPerRequest = 10_000
 // but it's bounded to MaxIngestEventsPerRequest+1, not the entire body's worth.
 func ParseAndValidateIngestBody(body []byte, pinnedHostID string) (events []api.Event, status int, errCode string) {
 	dec := json.NewDecoder(bytes.NewReader(body))
+	if !readArrayOpen(dec) {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	events, status, errCode = streamDecodeEvents(dec, pinnedHostID)
+	if status != http.StatusOK {
+		return nil, status, errCode
+	}
+	if !readArrayCloseAndEOF(dec) {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	return events, http.StatusOK, ""
+}
 
-	// Opening token must be `[`. Anything else (`{`, null, primitive, garbage, EOF) is invalid_json. This subsumes the
-	// previous explicit nil-check on the literal `null` body: json.Decoder.Token() for `null` returns the nil Token, which
-	// fails the json.Delim type-assert below, so the same input still returns invalid_json.
+// readArrayOpen consumes the opening `[` token. Returns false for anything else (`{`, null, primitive, garbage, EOF). Subsumes
+// the previous explicit nil-check on the literal `null` body: json.Decoder.Token() for `null` returns the nil Token, which
+// fails the json.Delim type-assert below, so the same input still returns invalid_json. Extracted from
+// ParseAndValidateIngestBody so the parent stays under Sonar's S3776 cognitive-complexity budget.
+func readArrayOpen(dec *json.Decoder) bool {
 	tok, err := dec.Token()
 	if err != nil {
-		return nil, http.StatusBadRequest, "invalid_json"
+		return false
 	}
-	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
-		return nil, http.StatusBadRequest, "invalid_json"
-	}
+	delim, ok := tok.(json.Delim)
+	return ok && delim == '['
+}
 
+// streamDecodeEvents reads array elements one-at-a-time, applying the cap + per-event validation in a single pass. Returns
+// events on success or (status, errCode) on the first validation failure. The cap fires BEFORE the over-cap event is
+// allocated; the +1 conceptual margin (accept up to and including MaxIngestEventsPerRequest, reject the (Max+1)th before
+// decoding) keeps the heap-amplification path closed even on a body at the 10 MB upstream byte cap.
+func streamDecodeEvents(dec *json.Decoder, pinnedHostID string) ([]api.Event, int, string) {
+	var events []api.Event
 	for i := 0; dec.More(); i++ {
-		// Cap fires BEFORE the over-cap event is allocated. The +1 conceptual margin (we accept up to and including
-		// MaxIngestEventsPerRequest events, then reject the (Max+1)th before decoding) keeps the heap-amplification path
-		// closed even on a body whose byte count is at the 10 MB upstream cap.
 		if i >= MaxIngestEventsPerRequest {
 			return nil, http.StatusRequestEntityTooLarge, "too_many_events"
 		}
@@ -79,22 +96,23 @@ func ParseAndValidateIngestBody(body []byte, pinnedHostID string) (events []api.
 		}
 		events = append(events, e)
 	}
-
-	// Closing `]` must follow; anything else is malformed and surfaces as invalid_json. After the close, the decoder must
-	// reach io.EOF on the next token call - trailing bytes after the array are also invalid_json. The two checks together
-	// reject inputs like `[]extra` or `[][]` that json.Unmarshal would also reject.
-	tok, err = dec.Token()
-	if err != nil {
-		return nil, http.StatusBadRequest, "invalid_json"
-	}
-	if delim, ok := tok.(json.Delim); !ok || delim != ']' {
-		return nil, http.StatusBadRequest, "invalid_json"
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, http.StatusBadRequest, "invalid_json"
-	}
-
 	return events, http.StatusOK, ""
+}
+
+// readArrayCloseAndEOF verifies the array closes with `]` AND the decoder reaches io.EOF on the next token call. Trailing
+// bytes after the array are invalid_json (matching json.Unmarshal's contract). The two checks together reject inputs like
+// `[]extra` or `[][]`.
+func readArrayCloseAndEOF(dec *json.Decoder) bool {
+	tok, err := dec.Token()
+	if err != nil {
+		return false
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != ']' {
+		return false
+	}
+	_, err = dec.Token()
+	return errors.Is(err, io.EOF)
 }
 
 // BuildInfo is injected at startup so the readiness endpoint

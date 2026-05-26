@@ -37,11 +37,13 @@ UAT_COMMON_SH_LOADED=1
 uat_log() {
   local tag="$1"; shift
   printf '[%s] [%s] %s\n' "$(date '+%H:%M:%S')" "$tag" "$*" >&2
+  return 0
 }
 
 # uat_fail <tag> <msg...>: log then exit 1.
 uat_fail() {
-  uat_log "$1" "FAIL: ${*:2}"
+  local tag="$1"
+  uat_log "$tag" "FAIL: ${*:2}"
   exit 1
 }
 
@@ -68,6 +70,7 @@ uat_ssh_args() {
     -o "UserKnownHostsFile=$known_hosts"
     -o ConnectTimeout=10
   )
+  return 0
 }
 
 # uat_ssh <target> <cmd...>: run cmd over ssh on target. Honors $UAT_DRY_RUN.
