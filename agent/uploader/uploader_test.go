@@ -508,7 +508,7 @@ func TestUpload_413_SingleEventDrops_MetricAndAudit(t *testing.T) {
 //
 //	depth==1 because 400 doesn't drop the event (quarantine threshold default is 10, so the row stays queued).
 //	events_dropped_too_large==0 because the 413 path was not taken.
-//	The error returned from drainOnce is a *clientError, NOT a *bodyTooLargeError.
+//	The error returned from drainOnce is a *clientError, NOT a *requestEntityTooLargeError.
 func TestUpload_413NotMistakenForGeneric4xx(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -539,7 +539,7 @@ func TestUpload_413NotMistakenForGeneric4xx(t *testing.T) {
 // spec:agent-event-uploader/over-cap-server-responses-split-and-retry-the-batch/server-returns-413-for-a-multi-event-batch
 //
 // Pins the design where the server returns 413 (not 400) for `too_many_events` so the agent routes the rejection through
-// split-and-retry instead of the quarantine path (Copilot #276). The agent's bodyTooLargeError branch fires on any 413
+// split-and-retry instead of the quarantine path (Copilot #276). The agent's requestEntityTooLargeError branch fires on any 413
 // regardless of the diagnostic string, so this test mirrors the multi-event-split scenario but uses an over-cap event
 // count rather than over-cap body bytes - same 413, same recovery. Setup: 4-event batch, server returns 413 with
 // too_many_events when the body has >2 events. Expected: 1 x 413 followed by 2 x 200 on the halves, depth=0 after drain.

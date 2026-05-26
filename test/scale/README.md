@@ -82,13 +82,64 @@ Per-host scenarios show the YAML file path so a regression localised to one scen
 The plan's pass-criteria-tightening loop is: capture baseline -> compare against last commit -> file a follow-up when the
 p99 drifts > 10% upward. The baseline is hand-committed; the driver does not auto-update it.
 
+## Modes (#232 closure)
+
+The runner ships two load shapes selected via `--mode`:
+
+| Mode | What it measures | When to use |
+|---|---|---|
+| `direct` (default) | Server-side ingest p99 under fan-in (each host POSTs directly to `/api/events` via `fakeagent.PostDirect`) | Most baseline runs; v1 contract |
+| `headless` | Agent-side queue depth under fan-in (each host runs `headless.Run` with its own SQLite queue + uploader + control plane; the runner polls `/state` for queue_depth on every tick) | Catching uploader regressions (batch-size drift, backoff drift) that direct mode bypasses; #232 closure |
+
+The headless mode is gated by the same build tag as the `headless` package (`!darwin || !cgo`). On macOS dev boxes that
+default to CGO enabled, rebuild with `CGO_ENABLED=0` (the scaledriver build) or run the lane in a Linux container. On
+Linux the runner pre-flights `RLIMIT_NOFILE`: 100 headless hosts need at least 1000 file descriptors so the default 1024
+ceiling is borderline; raise with `ulimit -n 4096` for any non-trivial fan-out.
+
+Per-host fields populated only in headless mode:
+
+```json
+{
+  "events_injected": 211,     // /state events_injected counter at run end
+  "inject_errors": 0,         // /state inject_errors counter at run end
+  "queue_depth_max": 36       // per-host high-water mark across all /state polls
+}
+```
+
+Aggregate fields populated only in headless mode (with `omitempty` so a direct-mode report stays binary-identical to its
+v1 shape):
+
+```json
+{
+  "mode": "headless",
+  "queue_depth_samples": 72,
+  "queue_depth_p50": 18, "queue_depth_p95": 32, "queue_depth_p99": 36, "queue_depth_max": 36,
+  "pass_max_queue_depth": 0
+}
+```
+
+Set `--pass-max-queue-depth=N` to gate on max queue depth (any host crossing N flips `pass` to false). The default 0
+leaves the gate disabled until an operator has captured baseline values worth gating on.
+
+## SigNoz cross-check (optional)
+
+Pass `--signoz-url=http://localhost:8080` to enrich the report with the SigNoz-reported server-side p99 over the run's
+time window. The runner issues one v4 builder query against `http.server.duration` filtered by `service.name="fleet"`
+(the EDR dev pipeline's OTel service name) and records:
+
+```json
+{
+  "server_latency_p99": "8ms",
+  "client_server_delta_p99": "53ms"   // latency_p99 - server_latency_p99
+}
+```
+
+A large positive `client_server_delta_p99` points at network + balancer + agent-side queue time as the dominant
+contributor rather than server work. A failed SigNoz query is a soft error (`signoz_query_error` field), not a gate -
+the cross-check is a diagnostic, not a contract.
+
 ## What this layer does NOT do
 
-- **Queue depth on the agent**: v1 bypasses the M2 queue + uploader entirely by using `fakeagent.PostDirect`. A v2 lane
-  that drives `headless.Run` per host and polls `/state` for queue depth is a future iteration; the v1 measurement target
-  is the server's ingest p99 under fan-in, which the direct POST path measures honestly.
 - **MySQL CPU / row count growth**: the plan calls for these as observability outputs. They are not gates today;
   capturing them is an operator job during the baseline run (a SigNoz dashboard or `mysqladmin extended-status` snapshot).
   Promote to gates when a regression case justifies them.
-- **SigNoz cross-check**: client-observed latency is the gate. A future enhancement can pull server-side
-  `http.server.duration` p99 from SigNoz via its query API and compare.

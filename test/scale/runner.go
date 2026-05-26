@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,18 +40,58 @@ const (
 	defaultActiveIterationGap = 1 * time.Second
 	defaultPassP99            = 250 * time.Millisecond
 
-	jitterFloor        = 0.75 // multiplier floor for the per-host iteration gap; pairs with jitterRange below.
-	jitterRange        = 0.5  // multiplier added on top of floor (so the range is [floor, floor+range]).
-	enrollRetries      = 3
+	// defaultQueueDepthPollInterval is the cadence at which the headless-mode driver polls each agent's GET /state for
+	// queue_depth. 1 second is fast enough to catch a backed-up uploader on a 100-host fan-in (depth-build-up timescale is
+	// dominated by upload-interval = 1s in headless.Options) but slow enough to keep the poller's own CPU + FD usage
+	// negligible.
+	defaultQueueDepthPollInterval = time.Second
+
+	jitterFloor = 0.75 // multiplier floor for the per-host iteration gap; pairs with jitterRange below.
+	jitterRange = 0.5  // multiplier added on top of floor (so the range is [floor, floor+range]).
+	// enrollRetries was 3 with a fixed 500ms 429 gap; on a real server with the default 30/min per-IP rate limit and a 60s
+	// Retry-After header, 100 hosts firing /api/enroll simultaneously exhausted the 3-retry budget before the token bucket
+	// refilled (see baseline-direct-2026-05-26 attempt: 70/100 hosts dropped on enroll 429). Bumped to 10 with Retry-After
+	// honoured per attempt: worst-case 10 retries x 60s = 10 min of enroll-retry budget, more than enough for any sane
+	// per-IP cap. The cap doubles as a graceful failure mode: if the server is genuinely unreachable, 10 retries with the
+	// connection-error gap (200ms) still bound the worst-case enrollment phase to a few seconds.
+	enrollRetries      = 10
 	enrollRetryConnGap = 200 * time.Millisecond
-	enrollRetry429Gap  = 500 * time.Millisecond
+	enrollRetry429Gap  = 500 * time.Millisecond // fallback when Retry-After is missing / unparseable.
+	enrollRetryMaxGap  = 60 * time.Second       // ceiling on parsed Retry-After; protects against pathological server values.
 	httpClientTimeout  = 30 * time.Second
 	httpMaxIdle        = 1024
 	httpIdleTimeout    = 90 * time.Second
 
+	// enrollStaggerInterval is the per-host gap between initial /api/enroll attempts. Each host sleeps for
+	// `index * enrollStaggerInterval` before its first enroll; 600ms gives a 30/min rate-limited server plenty of
+	// time to refill its token bucket between arrivals (30/min = 1/2s steady, the bucket replenishes faster than we
+	// arrive). For small fan-outs (smoke tests at HostCount<=10), the cumulative stagger stays under a few seconds.
+	enrollStaggerInterval = 600 * time.Millisecond
+	// enrollStaggerWindow caps the cumulative stagger so a huge fan-out (1000+ hosts) doesn't push the last host out
+	// of the lane window. Beyond the cap every subsequent host fires immediately and relies on the retry-with-Retry-After
+	// path to absorb the 429s.
+	enrollStaggerWindow = 60 * time.Second
+
 	percentileP50 = 50
 	percentileP95 = 95
 	percentileP99 = 99
+)
+
+// Mode selects the load shape Run drives against the server.
+//
+//	ModeDirect (v1, default): each host POSTs directly to /api/events via fakeagent.PostDirect. Bypasses the agent's queue +
+//	  uploader entirely. Measures server-side ingest under fan-in.
+//	ModeHeadless (v2, #232): each host runs headless.Run with its own SQLite queue + uploader + control-plane socket, and a
+//	  background goroutine polls the agent's GET /state for queue_depth. Adds the agent path to the load shape so a
+//	  regression in the uploader (drift in batch size, backoff, etc.) shows up as rising queue depth that doesn't drain.
+type Mode string
+
+const (
+	// ModeDirect is the legacy/default v1 mode. An empty Mode also resolves to ModeDirect for backward compatibility.
+	ModeDirect Mode = "direct"
+	// ModeHeadless is the v2 mode that drives headless.Run per simulated host. Linux/non-CGO-darwin only because the
+	// headless package itself has a !darwin || !cgo build tag (the receiver stub is platform-gated).
+	ModeHeadless Mode = "headless"
 )
 
 // Options configures a Run. ServerURL and EnrollSecret are required; everything else has a defaulted zero value that produces a
@@ -91,14 +132,41 @@ type Options struct {
 
 	// PassP99 is the latency ceiling for the p99 ingest assertion. Defaults to 250ms per the plan.
 	PassP99 time.Duration
+
+	// Mode picks the load shape. Empty resolves to ModeDirect for backward compatibility (the v1 ingest-fan-in shape).
+	// ModeHeadless drives headless.Run per simulated host so the queue + uploader are in the load loop, and polls each
+	// agent's GET /state for queue_depth on QueueDepthPollInterval. See the Mode type comment for the trade-offs.
+	Mode Mode
+
+	// QueueDepthPollInterval is the cadence at which the headless-mode driver polls each agent's /state socket for
+	// queue_depth. Zero defaults to defaultQueueDepthPollInterval (1s). Ignored when Mode != ModeHeadless.
+	QueueDepthPollInterval time.Duration
+
+	// SigNozURL is the optional base URL of a SigNoz query API (e.g. "http://localhost:8080"). When non-empty, the
+	// post-run aggregation issues one query for the metric named by signozMetricHTTPServerDuration (currently
+	// "http.server.duration") p99 over the run's time window and records it in Report.ServerLatencyP99 +
+	// Report.ClientServerDeltaP99. A failed SigNoz query is a soft error: it surfaces in the report's SigNozQueryError
+	// field but does not flip the Pass gate, since the cross-check is an operator-facing diagnostic, not a contract.
+	SigNozURL string
+
+	// PassMaxQueueDepth optionally extends the pass criteria with a max-queue-depth ceiling. When > 0, the run fails if
+	// any host's max queue_depth crosses this value during the lane. Zero (the default) leaves the gate disabled until
+	// the operator has captured a baseline value worth gating on (per the M12 issue's "TBD; capture observed values
+	// first" guidance). Ignored when Mode != ModeHeadless.
+	PassMaxQueueDepth int64
 }
 
 // Report is the aggregate output of a Run. Every numeric field is computed across all simulated hosts; PerHost preserves the
 // per-host breakdown for triage when an aggregate gate fails.
+//
+// v2 fields (#232 headless mode): the QueueDepth* + ServerLatency* + ClientServerDelta* fields are populated only when the
+// run used Mode=ModeHeadless. Their JSON tags carry `,omitempty` so a direct-mode report still encodes to its original
+// shape - committed baselines stay binary-identical until a baseline is recaptured under the new mode.
 type Report struct {
 	StartTime          time.Time     `json:"start_time"`
 	EndTime            time.Time     `json:"end_time"`
 	Duration           time.Duration `json:"duration"`
+	Mode               Mode          `json:"mode,omitempty"`
 	HostCount          int           `json:"host_count"`
 	QuietHostCount     int           `json:"quiet_host_count"`
 	ActiveHostCount    int           `json:"active_host_count"`
@@ -113,6 +181,33 @@ type Report struct {
 	PassP99            time.Duration `json:"pass_p99"`
 	FailReasons        []string      `json:"fail_reasons,omitempty"`
 	PerHost            []HostReport  `json:"per_host"`
+
+	// v2 fields - headless mode only.
+
+	// QueueDepthSamples is the total number of /state polls aggregated into the percentile fields below. Zero when the
+	// run did not poll (direct mode) so a downstream reader can distinguish "headless run but the poller never sampled
+	// anything" from "direct run with no queue-depth data by design."
+	QueueDepthSamples int   `json:"queue_depth_samples,omitempty"`
+	QueueDepthP50     int64 `json:"queue_depth_p50,omitempty"`
+	QueueDepthP95     int64 `json:"queue_depth_p95,omitempty"`
+	QueueDepthP99     int64 `json:"queue_depth_p99,omitempty"`
+	QueueDepthMax     int64 `json:"queue_depth_max,omitempty"`
+
+	// PassMaxQueueDepth echoes the configured ceiling. Zero (the default) means the gate was disabled.
+	PassMaxQueueDepth int64 `json:"pass_max_queue_depth,omitempty"`
+
+	// ServerLatencyP99 is the SigNoz-reported http.server.request.duration p99 over the run's time window. nil when
+	// Options.SigNozURL was empty or the query failed; SigNozQueryError captures the latter.
+	ServerLatencyP99 *time.Duration `json:"server_latency_p99,omitempty"`
+
+	// ClientServerDeltaP99 is LatencyP99 - ServerLatencyP99 (network + balancer + agent-side queue time). Positive
+	// values mean the client observed more latency than the server measured; large positive deltas point at a balancer
+	// or queue-side problem, not server work.
+	ClientServerDeltaP99 *time.Duration `json:"client_server_delta_p99,omitempty"`
+
+	// SigNozQueryError is the soft error from the SigNoz cross-check, if any. Set so the operator can see why the
+	// cross-check didn't land without scanning logs.
+	SigNozQueryError string `json:"signoz_query_error,omitempty"`
 }
 
 // HostReport is one simulated host's contribution to the aggregate Report.
@@ -123,6 +218,20 @@ type HostReport struct {
 	ErrorCount       int           `json:"error_count"`
 	LastError        string        `json:"last_error,omitempty"`
 	LatencyP99       time.Duration `json:"latency_p99"`
+
+	// v2 fields - headless mode only. Mirror the omitempty pattern in Report so a direct-mode HostReport JSON-encodes
+	// to its v1 shape.
+
+	// EventsInjected is the final /state events_injected counter at run end. Reflects total envelopes the scenario
+	// feeder pushed into the agent's control plane.
+	EventsInjected int64 `json:"events_injected,omitempty"`
+
+	// InjectErrors is the final /state inject_errors counter. Non-zero means at least one POST /event failed
+	// (typically ErrBufferFull on a backed-up agent).
+	InjectErrors int64 `json:"inject_errors,omitempty"`
+
+	// QueueDepthMax is the high-water mark of queue_depth observed across all /state polls for this host.
+	QueueDepthMax int64 `json:"queue_depth_max,omitempty"`
 }
 
 // Run executes the scale load lane against opts.ServerURL for opts.Duration and returns an aggregate Report. ctx is the parent
@@ -130,21 +239,18 @@ type HostReport struct {
 // host goroutines are recorded into the Report (HostReport.LastError + Report.ErrorCount); they do NOT abort the lane, so a
 // transient server hiccup does not collapse the whole observation set.
 func Run(ctx context.Context, opts Options) (Report, error) {
-	if opts.ServerURL == "" {
-		return Report{}, errors.New("scale: ServerURL is required")
+	opts, err := validateOptions(opts)
+	if err != nil {
+		return Report{}, err
 	}
-	if opts.EnrollSecret == "" {
-		return Report{}, errors.New("scale: EnrollSecret is required")
-	}
-	opts = defaultOptions(opts)
-	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
-		return Report{}, fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
-	}
-	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
-		return Report{}, errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
-	}
-	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
-		return Report{}, errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
+	if opts.Mode == ModeHeadless {
+		// Linux ulimit fail-fast: each headless host opens a SQLite WAL + a unix socket + a small keepalive TCP pool, so
+		// the default 1024 RLIMIT_NOFILE on most Linux dev boxes exhausts mid-run on a 100-host lane. ulimitCheckForHeadless
+		// is a no-op on non-Linux (build-tagged).
+		if err := ulimitCheckForHeadless(opts.HostCount); err != nil {
+			return Report{}, err
+		}
+		return runHeadless(ctx, opts)
 	}
 
 	quiet, active, err := loadScenarios(opts)
@@ -153,6 +259,8 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	}
 
 	httpClient := buildHTTPClient(opts.AllowInsecureTLS)
+	// Mode is deliberately left empty for direct runs so the `omitempty` JSON tag drops it; that's the contract the v1
+	// committed baseline encodes (no "mode" key). Headless mode sets Mode explicitly in runHeadless (Copilot #277).
 	rep := Report{
 		StartTime: time.Now(),
 		HostCount: opts.HostCount,
@@ -191,7 +299,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	g, runCtx := errgroup.WithContext(runCtx)
 	for _, h := range hosts {
 		g.Go(func() error {
-			h.run(runCtx, opts.ServerURL, opts.EnrollSecret, httpClient)
+			h.run(runCtx, opts.ServerURL, opts.EnrollSecret, httpClient, opts.HostCount)
 			return nil
 		})
 	}
@@ -221,7 +329,18 @@ type hostState struct {
 
 // run drives one simulated host: enroll once, then loop PostDirect + sleep until ctx cancels. Errors are recorded into hostState
 // but do not abort the loop; a per-host backoff would smooth retries but adds complexity disproportionate to v1's goals.
-func (h *hostState) run(ctx context.Context, serverURL, enrollSecret string, client *http.Client) {
+//
+// Startup stagger: each host sleeps for `min(index * enrollStaggerInterval, enrollStaggerWindow)` before its first enroll
+// attempt so 100 host-goroutines firing simultaneously don't pile up at /api/enroll's per-IP rate limiter (the
+// baseline-direct attempt on 2026-05-26 dropped 70/100 hosts on enroll 429 with the previous zero-stagger shape). For a
+// small fan-out (smoke tests at HostCount<=10) the cumulative stagger stays under a few seconds; the hostCount parameter
+// is unused today but kept in the signature for symmetry with a future "scale stagger by count" variant.
+func (h *hostState) run(
+	ctx context.Context, serverURL, enrollSecret string, client *http.Client, hostCount int,
+) {
+	if err := staggeredEnrollStart(ctx, h.index, hostCount); err != nil {
+		return
+	}
 	token, err := enrollOne(ctx, client, serverURL, enrollSecret, h.hostID)
 	if err != nil {
 		h.recordErr("enroll: " + err.Error())
@@ -418,7 +537,7 @@ func enrollAttempt(ctx context.Context, client *http.Client, serverURL string, b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", enrollRetry429Gap, errors.New("HTTP 429 from /api/enroll")
+		return "", parseRetryAfter(resp.Header.Get("Retry-After")), errors.New("HTTP 429 from /api/enroll")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf("/api/enroll HTTP %d", resp.StatusCode)
@@ -434,6 +553,75 @@ func enrollAttempt(ctx context.Context, client *http.Client, serverURL string, b
 		return "", 0, errors.New("enroll response missing host_token")
 	}
 	return er.HostToken, 0, nil
+}
+
+// staggeredEnrollStart sleeps for `index * enrollStaggerInterval` so the initial /api/enroll burst from N host-goroutines
+// is spread out instead of piling up at the per-IP rate limiter in microseconds. The total spread for HostCount hosts is
+// `(HostCount-1) * enrollStaggerInterval`, capped at enrollStaggerWindow so a huge fan-out doesn't push the last host out
+// of the lane window. Returns ctx.Err() if cancelled mid-sleep so the caller can exit cleanly without attempting
+// enrollment against a dead context. The hostCount parameter is unused today but kept in the signature for symmetry with
+// the direct + headless call sites; a future "scale stagger by count" variant might consume it.
+func staggeredEnrollStart(ctx context.Context, index, _ int) error {
+	delay := min(time.Duration(index)*enrollStaggerInterval, enrollStaggerWindow)
+	if delay <= 0 {
+		return nil
+	}
+	return sleepCtx(ctx, delay)
+}
+
+// parseRetryAfter returns a clamped gap based on the server's Retry-After header. The server emits Retry-After in seconds
+// (per /api/enroll's 60-second rate-limit refill window); a missing or unparseable header falls back to
+// enrollRetry429Gap. The clamp at enrollRetryMaxGap defends against a pathological server returning a multi-hour value
+// that would silently stall the entire scale lane on the enrollment phase.
+func parseRetryAfter(raw string) time.Duration {
+	if raw == "" {
+		return enrollRetry429Gap
+	}
+	secs, err := strconv.Atoi(raw)
+	if err != nil || secs <= 0 {
+		return enrollRetry429Gap
+	}
+	gap := time.Duration(secs) * time.Second
+	if gap > enrollRetryMaxGap {
+		return enrollRetryMaxGap
+	}
+	return gap
+}
+
+// validateOptions performs every up-front argument check Run does at entry: required fields, value-range constraints, Mode
+// enum membership. Extracted from Run so the entry function stays under Sonar S3776's cognitive-complexity budget. Returns
+// the defaults-filled Options so the caller assigns it back as `opts, err := validateOptions(opts)`.
+func validateOptions(opts Options) (Options, error) {
+	if opts.ServerURL == "" {
+		return opts, errors.New("scale: ServerURL is required")
+	}
+	if opts.EnrollSecret == "" {
+		return opts, errors.New("scale: EnrollSecret is required")
+	}
+	opts = defaultOptions(opts)
+	// Reject unknown Mode values rather than silently falling back to direct. A typo like --mode=headles would otherwise
+	// run direct mode and invalidate the scale results while appearing successful (Copilot + CodeRabbit #277).
+	switch opts.Mode {
+	case ModeDirect, ModeHeadless:
+	default:
+		return opts, fmt.Errorf("scale: invalid Mode %q (allowed: %q, %q)", opts.Mode, ModeDirect, ModeHeadless)
+	}
+	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
+		return opts, fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
+	}
+	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
+		return opts, errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
+	}
+	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
+		return opts, errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
+	}
+	if opts.Mode == ModeHeadless && opts.QueueDepthPollInterval <= 0 {
+		// defaultOptions resolved zero -> defaultQueueDepthPollInterval, but a negative value passed in by a misconfigured
+		// caller would survive that and panic in time.NewTicker (CodeRabbit #277).
+		return opts, fmt.Errorf("scale: QueueDepthPollInterval must be > 0 in headless mode, got %s",
+			opts.QueueDepthPollInterval)
+	}
+	return opts, nil
 }
 
 func defaultOptions(o Options) Options {
@@ -454,6 +642,12 @@ func defaultOptions(o Options) Options {
 	}
 	if o.PassP99 == 0 {
 		o.PassP99 = defaultPassP99
+	}
+	if o.Mode == "" {
+		o.Mode = ModeDirect
+	}
+	if o.QueueDepthPollInterval == 0 {
+		o.QueueDepthPollInterval = defaultQueueDepthPollInterval
 	}
 	return o
 }
