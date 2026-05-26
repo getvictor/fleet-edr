@@ -16,12 +16,14 @@
 [![OSV-Scanner](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/osv-scanner.yml?branch=main&label=OSV-Scanner&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml)
 
 <!-- Supply chain -->
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12994/badge)](https://www.bestpractices.dev/projects/12994)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/getvictor/fleet-edr/badge)](https://scorecard.dev/viewer/?uri=github.com/getvictor/fleet-edr)
 [![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![cosign keyless](https://img.shields.io/badge/cosign-keyless-9cf?style=flat-square&logo=sigstore)](docs/best-practices.md#4-supply-chain-security)
 
-A macOS Endpoint Detection and Response (EDR) system. It provides
-real-time process monitoring, network attribution, behavioral detection, and response capabilities.
+Fleet EDR is an open-source endpoint detection and response system for macOS fleets. It gives security teams real-time visibility
+into process and network activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph,
+and ships response actions (kill, token rotation, app-control block) without a SaaS dependency.
 
 ## Operator docs
 

@@ -193,7 +193,10 @@ floor for any project that wants enterprise adoption.
   also pushed as a cosign attestation on the registry side
 - [x] **OpenSSF Scorecard** workflow + badge in README
   (`.github/workflows/scorecard.yml`)
-- [ ] **OpenSSF Best Practices Badge** (CII) -- silver minimum
+- [~] **OpenSSF Best Practices Badge** (CII): Passing badge shipped
+  (project #12994). Silver is gated on adding a second maintainer
+  (Silver requires two-person review and bus-factor >=2), so it stays
+  open until co-maintainer onboarding
 - [x] **CodeQL** SAST workflow (Go + TypeScript + Swift) at
   `.github/workflows/codeql.yml`
 - [ ] **Semgrep** with security rulesets (catches things golangci-lint / ESLint miss)
