@@ -183,7 +183,13 @@ func buildHostState(
 // enrollAndAllocate runs the per-host setup IO: enroll over HTTP, create temp dir for the SQLite WAL + control-plane
 // socket. The temp dir uses an "edrs" prefix kept short so the unix socket path fits AF_UNIX's 104-byte sun_path ceiling
 // on macOS dev boxes (Linux's limit is 108 bytes but the macOS constraint is the tighter one).
+//
+// Each host's enroll is preceded by a staggered sleep so 100 hosts don't pile up at /api/enroll's per-IP rate limiter at
+// once (same defense the direct-mode hostState.run uses; see staggeredEnrollStart's comment for the math + history).
 func enrollAndAllocate(ctx context.Context, st *headlessHostState, opts Options, httpClient *http.Client) error {
+	if err := staggeredEnrollStart(ctx, st.index, opts.HostCount); err != nil {
+		return fmt.Errorf("enroll stagger: %w", err)
+	}
 	token, err := enrollOne(ctx, httpClient, opts.ServerURL, opts.EnrollSecret, st.hostID)
 	if err != nil {
 		return fmt.Errorf("enroll: %w", err)

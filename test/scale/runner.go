@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,14 +46,31 @@ const (
 	// negligible.
 	defaultQueueDepthPollInterval = time.Second
 
-	jitterFloor        = 0.75 // multiplier floor for the per-host iteration gap; pairs with jitterRange below.
-	jitterRange        = 0.5  // multiplier added on top of floor (so the range is [floor, floor+range]).
-	enrollRetries      = 3
+	jitterFloor = 0.75 // multiplier floor for the per-host iteration gap; pairs with jitterRange below.
+	jitterRange = 0.5  // multiplier added on top of floor (so the range is [floor, floor+range]).
+	// enrollRetries was 3 with a fixed 500ms 429 gap; on a real server with the default 30/min per-IP rate limit and a 60s
+	// Retry-After header, 100 hosts firing /api/enroll simultaneously exhausted the 3-retry budget before the token bucket
+	// refilled (see baseline-direct-2026-05-26 attempt: 70/100 hosts dropped on enroll 429). Bumped to 10 with Retry-After
+	// honoured per attempt: worst-case 10 retries x 60s = 10 min of enroll-retry budget, more than enough for any sane
+	// per-IP cap. The cap doubles as a graceful failure mode: if the server is genuinely unreachable, 10 retries with the
+	// connection-error gap (200ms) still bound the worst-case enrollment phase to a few seconds.
+	enrollRetries      = 10
 	enrollRetryConnGap = 200 * time.Millisecond
-	enrollRetry429Gap  = 500 * time.Millisecond
+	enrollRetry429Gap  = 500 * time.Millisecond // fallback when Retry-After is missing / unparseable.
+	enrollRetryMaxGap  = 60 * time.Second       // ceiling on parsed Retry-After; protects against pathological server values.
 	httpClientTimeout  = 30 * time.Second
 	httpMaxIdle        = 1024
 	httpIdleTimeout    = 90 * time.Second
+
+	// enrollStaggerInterval is the per-host gap between initial /api/enroll attempts. Each host sleeps for
+	// `index * enrollStaggerInterval` before its first enroll; 600ms gives a 30/min rate-limited server plenty of
+	// time to refill its token bucket between arrivals (30/min = 1/2s steady, the bucket replenishes faster than we
+	// arrive). For small fan-outs (smoke tests at HostCount<=10), the cumulative stagger stays under a few seconds.
+	enrollStaggerInterval = 600 * time.Millisecond
+	// enrollStaggerWindow caps the cumulative stagger so a huge fan-out (1000+ hosts) doesn't push the last host out
+	// of the lane window. Beyond the cap every subsequent host fires immediately and relies on the retry-with-Retry-After
+	// path to absorb the 429s.
+	enrollStaggerWindow = 60 * time.Second
 
 	percentileP50 = 50
 	percentileP95 = 95
@@ -292,7 +310,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	g, runCtx := errgroup.WithContext(runCtx)
 	for _, h := range hosts {
 		g.Go(func() error {
-			h.run(runCtx, opts.ServerURL, opts.EnrollSecret, httpClient)
+			h.run(runCtx, opts.ServerURL, opts.EnrollSecret, httpClient, opts.HostCount)
 			return nil
 		})
 	}
@@ -322,7 +340,17 @@ type hostState struct {
 
 // run drives one simulated host: enroll once, then loop PostDirect + sleep until ctx cancels. Errors are recorded into hostState
 // but do not abort the loop; a per-host backoff would smooth retries but adds complexity disproportionate to v1's goals.
-func (h *hostState) run(ctx context.Context, serverURL, enrollSecret string, client *http.Client) {
+//
+// Startup stagger: each host sleeps for `(index / hostCount) * enrollStaggerWindow` before its first enroll attempt so 100
+// host-goroutines firing simultaneously don't pile up at /api/enroll's per-IP rate limiter (the baseline-direct attempt at
+// 2026-05-26 dropped 70/100 hosts on enroll 429 with the previous zero-stagger shape). hostCount is read off the runner's
+// configured count so a smaller test fan-out stays sub-second.
+func (h *hostState) run(
+	ctx context.Context, serverURL, enrollSecret string, client *http.Client, hostCount int,
+) {
+	if err := staggeredEnrollStart(ctx, h.index, hostCount); err != nil {
+		return
+	}
 	token, err := enrollOne(ctx, client, serverURL, enrollSecret, h.hostID)
 	if err != nil {
 		h.recordErr("enroll: " + err.Error())
@@ -519,7 +547,7 @@ func enrollAttempt(ctx context.Context, client *http.Client, serverURL string, b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", enrollRetry429Gap, errors.New("HTTP 429 from /api/enroll")
+		return "", parseRetryAfter(resp.Header.Get("Retry-After")), errors.New("HTTP 429 from /api/enroll")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf("/api/enroll HTTP %d", resp.StatusCode)
@@ -535,6 +563,39 @@ func enrollAttempt(ctx context.Context, client *http.Client, serverURL string, b
 		return "", 0, errors.New("enroll response missing host_token")
 	}
 	return er.HostToken, 0, nil
+}
+
+// staggeredEnrollStart sleeps for `index * enrollStaggerInterval` so the initial /api/enroll burst from N host-goroutines
+// is spread out instead of piling up at the per-IP rate limiter in microseconds. The total spread for HostCount hosts is
+// `(HostCount-1) * enrollStaggerInterval`, capped at enrollStaggerWindow so a huge fan-out doesn't push the last host out
+// of the lane window. Returns ctx.Err() if cancelled mid-sleep so the caller can exit cleanly without attempting
+// enrollment against a dead context. The hostCount parameter is unused today but kept in the signature for symmetry with
+// the direct + headless call sites; a future "scale stagger by count" variant might consume it.
+func staggeredEnrollStart(ctx context.Context, index, _ int) error {
+	delay := min(time.Duration(index)*enrollStaggerInterval, enrollStaggerWindow)
+	if delay <= 0 {
+		return nil
+	}
+	return sleepCtx(ctx, delay)
+}
+
+// parseRetryAfter returns a clamped gap based on the server's Retry-After header. The server emits Retry-After in seconds
+// (per /api/enroll's 60-second rate-limit refill window); a missing or unparseable header falls back to
+// enrollRetry429Gap. The clamp at enrollRetryMaxGap defends against a pathological server returning a multi-hour value
+// that would silently stall the entire scale lane on the enrollment phase.
+func parseRetryAfter(raw string) time.Duration {
+	if raw == "" {
+		return enrollRetry429Gap
+	}
+	secs, err := strconv.Atoi(raw)
+	if err != nil || secs <= 0 {
+		return enrollRetry429Gap
+	}
+	gap := time.Duration(secs) * time.Second
+	if gap > enrollRetryMaxGap {
+		return enrollRetryMaxGap
+	}
+	return gap
 }
 
 func defaultOptions(o Options) Options {
