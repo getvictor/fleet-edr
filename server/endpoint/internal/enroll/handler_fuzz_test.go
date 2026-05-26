@@ -73,11 +73,18 @@ func FuzzEnrollBody(f *testing.F) {
 		}
 		defer resp.Body.Close()
 
-		// Read the body so we can pin the error envelope's shape on every non-200 response. Cap the read at 4 KiB; the
-		// handler writes a tiny JSON object, anything larger is itself a finding.
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// Read the body so we can pin the error envelope's shape on every non-200 response. Cap the read at maxRespBody;
+		// the handler writes a tiny JSON object, anything larger is itself a finding. io.LimitReader returns EOF rather
+		// than a distinct "limit exceeded" error (see golang/go#51115), so a body that's >maxRespBody bytes would
+		// silently truncate and any prefix that happens to parse would be accepted. The +1 read + len check catches the
+		// oversize case explicitly (CodeRabbit #276).
+		const maxRespBody = 4096
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBody+1))
 		if err != nil {
 			t.Fatalf("read response body: %v", err)
+		}
+		if len(respBody) > maxRespBody {
+			t.Fatalf("response body exceeded %d bytes for input %q", maxRespBody, body)
 		}
 
 		assertEnrollOutputContract(t, body, resp.StatusCode, resp.Header.Get("Retry-After"), respBody)
@@ -106,7 +113,10 @@ func assertEnrollOutputContract(t *testing.T, body []byte, status int, retryAfte
 	}
 }
 
-// assertEnroll200 pins the success-response shape. Success implies the body parsed cleanly + every required field was populated + Service.Enroll returned a valid response. The response body is the enrollResponse JSON: {host_id, host_token, enrolled_at}.
+// assertEnroll200 pins the success-response shape. Success implies the body parsed cleanly + every required field was populated +
+// Service.Enroll returned a valid response. The response body is the enrollResponse JSON: {host_id, host_token, enrolled_at}.
+// All three fields are required; the EnrolledAt check (CodeRabbit #276) closes the gap where a regression that dropped
+// enrolled_at from the response wire shape would have slipped through.
 func assertEnroll200(t *testing.T, respBody []byte) {
 	t.Helper()
 	var ok enrollResponse
@@ -115,6 +125,9 @@ func assertEnroll200(t *testing.T, respBody []byte) {
 	}
 	if ok.HostID == "" || ok.HostToken == "" {
 		t.Fatalf("200 response has empty required field; body=%q", respBody)
+	}
+	if ok.EnrolledAt.IsZero() {
+		t.Fatalf("200 response missing enrolled_at; body=%q", respBody)
 	}
 }
 

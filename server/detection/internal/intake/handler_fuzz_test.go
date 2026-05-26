@@ -50,19 +50,19 @@ func FuzzParseAndValidateIngestBody(f *testing.F) {
 	})
 }
 
-// assertValidOutput pins the (status, errCode) -> shape contract documented on ParseAndValidateIngestBody. Pulled out of
-// the FuzzFunc body so the test failure message can include the exact tuple AND so a future contract addition (new error
-// code) is a one-line edit here, not in the fuzz function.
+// assertValidOutput pins the (status, errCode) -> shape contract documented on ParseAndValidateIngestBody. Pulled out of the
+// FuzzFunc body so the test failure message can include the exact tuple AND so a future contract addition (new error code) is a
+// one-line edit here, not in the fuzz function.
+//
+// CodeRabbit #276 strengthening: the 200 oracle now re-validates the parsed events instead of only checking the body starts with
+// `[`. A regression that 200'd on `[{}]` (which should be missing_fields_at_0) or a 200 with a host_id != pinnedHostID would
+// have slipped through the previous oracle; the per-event field-population + host_id-match checks here pin the success contract
+// against the validation logic, not just against the wire shape.
 func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int, errCode string, pinnedHostID string) {
 	t.Helper()
-	_ = events // events shape is implicit in the success-vs-failure split below; per-event field assertions are tested separately
 
 	switch status {
 	case http.StatusOK:
-		// Success means the body parsed AND every event passed the per-event validation. A 200 on a body that's obviously not
-		// a JSON array of well-formed events would be a real finding; the fuzz cheaply guards against that by requiring an
-		// empty errCode on success and re-checking the body parses as a JSON array (the json.Unmarshal failure path is what
-		// emits invalid_json, so a 200 implies the unmarshal succeeded).
 		if errCode != "" {
 			t.Fatalf("status 200 returned with non-empty errCode %q for body %q", errCode, body)
 		}
@@ -71,6 +71,22 @@ func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int
 		trimmed := bytes.TrimSpace(body)
 		if len(trimmed) > 0 && trimmed[0] != '[' {
 			t.Fatalf("status 200 but body is not a JSON array: %q", body)
+		}
+		// Per-event field-population + host_id pin. The validation loop in ParseAndValidateIngestBody enforces these on every
+		// event; a 200 that returns events failing either check would be a contract regression.
+		for i, e := range events {
+			if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
+				t.Fatalf("status 200 returned event[%d] with empty required field (event_id=%q host_id=%q event_type=%q timestamp_ns=%d) for body %q",
+					i, e.EventID, e.HostID, e.EventType, e.TimestampNs, body)
+			}
+			if e.HostID != pinnedHostID {
+				t.Fatalf("status 200 returned event[%d] with host_id %q != pinned %q for body %q",
+					i, e.HostID, pinnedHostID, body)
+			}
+		}
+		if len(events) > MaxIngestEventsPerRequest {
+			t.Fatalf("status 200 returned %d events; exceeds MaxIngestEventsPerRequest=%d for body %q",
+				len(events), MaxIngestEventsPerRequest, body)
 		}
 
 	case http.StatusBadRequest:
@@ -154,6 +170,27 @@ func seedCorpus(f *testing.F) {
 	if utf8.ValidString("ñöß-host") {
 		f.Add([]byte(`[{"event_id":"e1","host_id":"ñöß-host","event_type":"exec","timestamp_ns":1,"payload":{}}]`))
 	}
+
+	// too_many_events seed (CodeRabbit #276): exercises the MaxIngestEventsPerRequest+1 rejection deterministically. Without
+	// this seed the only path that hit the cap was a fuzz-mutator coincidence. Building the array as a bytes.Buffer keeps the
+	// seed under a single allocation; ~10001 minimal events fit in well under 1 MiB on the wire.
+	f.Add(tooManyEventsBody())
+}
+
+// tooManyEventsBody emits a JSON array of MaxIngestEventsPerRequest+1 minimal-but-valid events. Lives outside seedCorpus so
+// f.Add takes one argument and the body construction stays linear. Every event matches the pinned host id so the rejection
+// path is the cap (too_many_events), not the per-event validation that fires earlier in the loop.
+func tooManyEventsBody() []byte {
+	var b bytes.Buffer
+	b.WriteByte('[')
+	for i := range MaxIngestEventsPerRequest + 1 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"event_id":"e%d","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1,"payload":{}}`, i)
+	}
+	b.WriteByte(']')
+	return b.Bytes()
 }
 
 // deepNestedArray returns a JSON body that nests n levels of `[`s before closing with n `]`s. Probes the decoder's

@@ -1,6 +1,7 @@
 package intake
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,38 +25,67 @@ const MaxIngestBodyBytes = 10 * 1024 * 1024
 // MaxIngestEventsPerRequest caps the number of events the parser accepts in a single batch. Closes the memory-amplification angle that the 10 MB body cap doesn't on its own: a minimal event JSON is ~50 bytes on the wire but the in-memory api.Event representation (json.RawMessage payload + the four string headers) is several hundred bytes — so a 10 MB body of microscopic events could expand to ~140k entries and ~60-80 MB of heap before the downstream InsertEvents loop runs. The agent's defaultBatchSize is 100; 10k is two orders of magnitude of headroom for legitimate batching while capping the blast radius of a hostile or buggy peer.
 const MaxIngestEventsPerRequest = 10_000
 
-// ParseAndValidateIngestBody is the parse + per-event validation half of POST /api/events, lifted out of handleIngest so the
-// fuzz harness can drive it without a full HTTP server + Detection store. Returns (events, http.StatusOK, "") on success, or
+// ParseAndValidateIngestBody is the parse + per-event validation half of POST /api/events, lifted out of handleIngest so the fuzz
+// harness can drive it without a full HTTP server + Detection store. Returns (events, http.StatusOK, "") on success, or
 // (nil, 4xx, errCode) on parse / validation failure. The error codes are the same stable set the HTTP handler emits:
 // "invalid_json", "missing_fields_at_<i>", "host_id_mismatch", "too_many_events". The body-cap (413) check is upstream of
 // this function (in readBodyWithCap); the store-insert (5xx) is downstream of it. The fuzz contract is therefore: every
 // output MUST be one of {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
-// (400, "too_many_events")} — anything else is a finding.
+// (400, "too_many_events")} - anything else is a finding.
+//
+// Streaming-decode shape (CodeRabbit #276 follow-up to #275): the previous shape called json.Unmarshal(body, &events) which
+// fully materialises the []api.Event slice before len(events) is checked, so a 10 MB body of microscopic events still allocates
+// ~140k api.Event structs (~60-80 MB of heap) before the MaxIngestEventsPerRequest cap fires. The fix is to decode incrementally
+// with json.Decoder so the cap aborts the loop before the over-cap event is allocated. The per-event allocation still happens,
+// but it's bounded to MaxIngestEventsPerRequest+1, not the entire body's worth.
 func ParseAndValidateIngestBody(body []byte, pinnedHostID string) (events []api.Event, status int, errCode string) {
-	if err := json.Unmarshal(body, &events); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+
+	// Opening token must be `[`. Anything else (`{`, null, primitive, garbage, EOF) is invalid_json. This subsumes the
+	// previous explicit nil-check on the literal `null` body: json.Decoder.Token() for `null` returns the nil Token, which
+	// fails the json.Delim type-assert below, so the same input still returns invalid_json.
+	tok, err := dec.Token()
+	if err != nil {
 		return nil, http.StatusBadRequest, "invalid_json"
 	}
-	// json.Unmarshal of the literal `null` succeeds with events=nil. Treat that as a parse-failure shape rather than as a
-	// valid empty batch — a caller that genuinely means "empty batch" sends `[]`, not `null`. Without this check the
-	// function would return 200 OK for a body that is not a JSON array, breaking the fuzz invariant "status 200 implies a
-	// JSON-array body" (Gemini #275).
-	if events == nil {
+	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
 		return nil, http.StatusBadRequest, "invalid_json"
 	}
-	// Per-batch event-count cap: defense against a body-cap-respecting attacker who packs the 10 MB body with thousands
-	// of microscopic events. The 10 MB byte cap doesn't bound the in-memory expansion (api.Event with its string headers
-	// is larger per-event than the JSON form), so this cap is what closes the memory-amplification path (CodeRabbit #275).
-	if len(events) > MaxIngestEventsPerRequest {
-		return nil, http.StatusBadRequest, "too_many_events"
-	}
-	for i, e := range events {
+
+	for i := 0; dec.More(); i++ {
+		// Cap fires BEFORE the over-cap event is allocated. The +1 conceptual margin (we accept up to and including
+		// MaxIngestEventsPerRequest events, then reject the (Max+1)th before decoding) keeps the heap-amplification path
+		// closed even on a body whose byte count is at the 10 MB upstream cap.
+		if i >= MaxIngestEventsPerRequest {
+			return nil, http.StatusBadRequest, "too_many_events"
+		}
+		var e api.Event
+		if err := dec.Decode(&e); err != nil {
+			return nil, http.StatusBadRequest, "invalid_json"
+		}
 		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
 			return nil, http.StatusBadRequest, "missing_fields_at_" + strconv.Itoa(i)
 		}
 		if e.HostID != pinnedHostID {
 			return nil, http.StatusBadRequest, "host_id_mismatch"
 		}
+		events = append(events, e)
 	}
+
+	// Closing `]` must follow; anything else is malformed and surfaces as invalid_json. After the close, the decoder must
+	// reach io.EOF on the next token call - trailing bytes after the array are also invalid_json. The two checks together
+	// reject inputs like `[]extra` or `[][]` that json.Unmarshal would also reject.
+	tok, err = dec.Token()
+	if err != nil {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != ']' {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+
 	return events, http.StatusOK, ""
 }
 
