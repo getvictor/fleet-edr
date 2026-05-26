@@ -77,6 +77,33 @@ single HTTP request stays within the server's accepted body size and the network
 - **THEN** the uploader emits one or more requests of bounded size
 - **AND** events that did not fit in the first request remain queued for subsequent requests
 
+### Requirement: Over-cap server responses split-and-retry the batch
+
+The system MUST handle HTTP 413 (`body_too_large`) responses from the server by recursively splitting the in-memory batch in
+half and re-POSTing each half until either the half delivers (2xx) or a single-event batch still returns 413. A single-event
+413 is the only case where the event is dropped; in that case the uploader MUST emit a WARN log identifying the event id and
+increment a counter (`edr.agent.uploader.events_dropped_too_large`) so operators can dashboard the drop rate as a signal of
+misconfigured agents producing oversize events. The recursive split is bounded by `ceil(log2(N))` for a batch of N events, so
+a 10000-event batch recurses at most ~14 levels before reaching single-event leaves. The split-and-retry path is distinct
+from the quarantine path for generic 4xx responses (which counts consecutive drain-tick failures before sealing rows): a 413
+is a size signal, not a "the event is malformed" signal, so it must not consume the quarantine budget. Matches the recovery
+shape Splunk HEC and Elastic Beats implement.
+
+#### Scenario: Server returns 413 for a multi-event batch
+
+- **GIVEN** the uploader POSTs a batch of N>1 events whose body exceeds the server's per-request cap
+- **WHEN** the server returns HTTP 413 with the `body_too_large` diagnostic
+- **THEN** the uploader splits the batch into two halves and POSTs each half independently before the next drain tick
+- **AND** halves that deliver (2xx) are marked uploaded; halves that still return 413 recurse until a single-event leaf
+
+#### Scenario: Server returns 413 for a single-event batch
+
+- **GIVEN** the uploader POSTs a single-event batch and the event is itself larger than the server's per-request cap
+- **WHEN** the server returns HTTP 413 with the `body_too_large` diagnostic
+- **THEN** the event is dropped (marked uploaded so the queue stops surfacing it)
+- **AND** a WARN log line includes the event id
+- **AND** the `edr.agent.uploader.events_dropped_too_large` counter is incremented by one
+
 ### Requirement: Transient failures retry with backoff
 
 The system SHALL retry transient failures (server 5xx, network errors, timeouts) with exponential backoff up to a configured
