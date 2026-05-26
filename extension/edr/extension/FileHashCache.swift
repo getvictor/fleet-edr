@@ -79,6 +79,29 @@ final class FileHashCache {
         return hash
     }
 
+    /// lookupOrComputeWithDeadline is the AUTH_EXEC variant of lookupOrCompute. Reads the cache first (the common warm-case
+    /// path that costs no disk I/O). On a miss, attempts a synchronous chunked SHA-256 with a budget bounded by the kernel
+    /// deadline carried on es_message_t.deadline. A cache write happens only on a clean .computed outcome; .deadlineExceeded
+    /// and .readFailed leave the cache empty so the next exec retries.
+    ///
+    /// Why sync hashing replaces the previous lazy-fill ALLOW: the previous handler returned ALLOW on every cold cache and
+    /// kicked an async fill, meaning the first exec of any binary always slipped past BINARY rules. An attacker who only needs
+    /// one execution to win (drop, persist, reboot) defeated Application Control completely; an attacker mutating
+    /// (dev,inode,mtime) on every exec made the bypass deterministic. Sync compute on the AUTH callback thread is the only
+    /// honest way to enforce identity-based rules on the kernel's first-look event, with the deadline carrying the operator's
+    /// chosen latency budget. See #208.
+    func lookupOrComputeWithDeadline(path: String, stat fileStat: stat, deadlineMachAbs: UInt64) -> HashOutcome {
+        let key = Self.makeKey(from: fileStat)
+        if let cached = lock.withLock({ $0[key] }) {
+            return .computed(cached)
+        }
+        let outcome = Self.computeSHA256WithDeadline(path: path, expected: fileStat, deadlineMachAbs: deadlineMachAbs)
+        if case let .computed(hash) = outcome {
+            lock.withLock { $0[key] = hash }
+        }
+        return outcome
+    }
+
     /// startLazyFill triggers an asynchronous hash compute IF the cache
     /// does not already have an entry. Used by the AUTH_EXEC handler on
     /// cache miss so the next exec of the same binary hits the cache. Safe
@@ -166,5 +189,77 @@ final class FileHashCache {
             && expected.st_ino == actual.st_ino
             && expected.st_mtimespec.tv_sec == actual.st_mtimespec.tv_sec
             && expected.st_mtimespec.tv_nsec == actual.st_mtimespec.tv_nsec
+    }
+
+    /// safetyMarginNs is the headroom we reserve below the kernel-supplied AUTH_EXEC deadline. Hashing aborts and the caller
+    /// applies the snapshot's deadlineFallback posture once the remaining budget drops below this value. 500ms covers the
+    /// post-hash work (snapshot map lookup, kernel respond, optional event/notification dispatch) plus a margin for an
+    /// unlucky page-in stall before the kernel kills the ES client for missing its deadline.
+    private static let safetyMarginNs: UInt64 = 500_000_000
+
+    /// computeSHA256WithDeadline streams the file at path through SHA-256 in 64-KiB chunks, checking the remaining mach
+    /// absolute-time budget between chunks and aborting if the remaining budget would not cover safetyMarginNs of post-hash
+    /// work. Same TOCTOU re-stat guard as computeSHA256 -- a replace-between-AUTH-and-read returns .readFailed so the caller
+    /// does NOT poison the cache with a hash of the wrong file. The hashReadChunkBytes (64 KiB) chunk size is fine-grained
+    /// enough that even a multi-gigabyte binary yields multiple deadline checks per second of compute time; smaller chunks
+    /// would only increase syscall overhead without measurably tightening the abort window.
+    static func computeSHA256WithDeadline(path: String, expected: stat, deadlineMachAbs: UInt64) -> HashOutcome {
+        let url = URL(fileURLWithPath: path)
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            logger.warning("could not open file for hashing: \(path, privacy: .public)")
+            return .readFailed
+        }
+        defer { try? handle.close() }
+        var openedStat = stat()
+        let fd = handle.fileDescriptor
+        guard fstat(fd, &openedStat) == 0 else {
+            logger.warning("fstat failed on \(path, privacy: .public)")
+            return .readFailed
+        }
+        if !Self.statMatches(expected: expected, actual: openedStat) {
+            logger.warning("file replaced between AUTH and hash read: \(path, privacy: .public)")
+            return .readFailed
+        }
+        var hasher = SHA256()
+        while true {
+            if Self.machAbsNsRemaining(until: deadlineMachAbs) < Self.safetyMarginNs {
+                return .deadlineExceeded
+            }
+            do {
+                guard let chunk = try handle.read(upToCount: Self.hashReadChunkBytes), !chunk.isEmpty else {
+                    break
+                }
+                hasher.update(data: chunk)
+            } catch {
+                logger.warning("hash read failed: \(error.localizedDescription, privacy: .public)")
+                return .readFailed
+            }
+        }
+        let digest = hasher.finalize()
+        return .computed(digest.map { String(format: "%02x", $0) }.joined())
+    }
+
+    /// machTimebase is the per-process conversion ratio between mach absolute time units and nanoseconds. Initialised once
+    /// (mach_timebase_info is documented as constant for the lifetime of the process). nonisolated(unsafe) because the value
+    /// is set exactly once at first use and read-only thereafter; Swift 6's strict concurrency cannot prove this from the
+    /// type system, but the access pattern is correct.
+    private nonisolated(unsafe) static var machTimebase: mach_timebase_info_data_t = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return info
+    }()
+
+    /// machAbsNsRemaining returns ns of budget remaining until deadlineMachAbs. Returns 0 once the deadline has passed; the
+    /// caller treats "remaining < safetyMarginNs" as "do not start another chunk." The conversion uses UInt64 widening to
+    /// avoid an overflow on hours-long deadlines (Mac mach absolute time runs in single-digit-ns units, so a 1-hour offset
+    /// fits in UInt64 with headroom; doing the multiply in narrower types would not).
+    private static func machAbsNsRemaining(until deadlineMachAbs: UInt64) -> UInt64 {
+        let now = mach_absolute_time()
+        if now >= deadlineMachAbs {
+            return 0
+        }
+        let diff = deadlineMachAbs - now
+        let info = Self.machTimebase
+        return diff &* UInt64(info.numer) / UInt64(info.denom)
     }
 }

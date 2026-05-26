@@ -6,11 +6,20 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 // ApplicationControlSnapshot is the typed in-memory shape the AUTH_EXEC decision
 // engine (Step 3) consults on every exec. Rules are indexed by (rule_type,
 // identifier) so the precedence walk is O(1) per type. Phase 1 of the demo cut
-// only populates the BINARY map; the others are reserved for the follow-on
-// types (CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH) coming later.
+// only populated the BINARY map; the v0.1.0 close-out wires all five (CDHASH,
+// BINARY, SIGNINGID, TEAMID, plus the deferred CERTIFICATE/PATH carriers).
+//
+// deadlineFallback governs the verdict the AUTH_EXEC handler applies when sync
+// SHA-256 hashing for a BINARY rule consultation cannot complete within the
+// kernel deadline budget. Per-snapshot because each policy carries its own
+// posture on the wire (server/rules/api.SetApplicationControlPayload). Defaults
+// to FallbackPosture.defaultPosture (failClosed) when the payload omits the
+// field so older fan-out callers that haven't been recompiled against the new
+// shape still produce a safe-by-default behaviour.
 struct ApplicationControlSnapshot {
     let policyID: Int64
     let policyVersion: Int64
+    let deadlineFallback: FallbackPosture
     let binaryRules: [String: ApplicationControlRule]      // identifier (file SHA-256) -> rule
     let cdhashRules: [String: ApplicationControlRule]      // 40 hex
     let signingIDRules: [String: ApplicationControlRule]   // "<TeamID>:<bundle.id>" or "platform:<bundle.id>"
@@ -21,6 +30,7 @@ struct ApplicationControlSnapshot {
     static let empty = ApplicationControlSnapshot(
         policyID: 0,
         policyVersion: 0,
+        deadlineFallback: .defaultPosture,
         binaryRules: [:],
         cdhashRules: [:],
         signingIDRules: [:],
@@ -40,7 +50,7 @@ struct ApplicationControlSnapshot {
 /// ruleID is the stable string identifier (e.g. "app_control:42") the
 /// AUTH_EXEC handler echoes back in the `application_control_block` event
 /// so the server's alert mapping lands the alert under the same rule_id.
-struct ApplicationControlRule: Codable {
+struct ApplicationControlRule: Codable, Equatable {
     let ruleID: String
     let ruleType: String
     let identifier: String
@@ -64,14 +74,20 @@ struct ApplicationControlRule: Codable {
 
 /// ApplicationControlDocument is the on-the-wire shape of the snapshot.
 /// Identical to server/rules/api.SetApplicationControlPayload.
+///
+/// deadlineFallback is Optional because the field was added in v0.1.0; older
+/// agents and any captured pre-v0.1.0 payload on disk will not carry it. The
+/// makeSnapshot helper substitutes FallbackPosture.defaultPosture when nil.
 struct ApplicationControlDocument: Codable {
     let policyID: Int64
     let policyVersion: Int64
+    let deadlineFallback: FallbackPosture?
     let rules: [ApplicationControlRule]
 
     enum CodingKeys: String, CodingKey {
         case policyID = "policy_id"
         case policyVersion = "policy_version"
+        case deadlineFallback = "deadline_fallback"
         case rules
     }
 }
@@ -255,6 +271,7 @@ final class ApplicationControlStore {
         return ApplicationControlSnapshot(
             policyID: document.policyID,
             policyVersion: document.policyVersion,
+            deadlineFallback: document.deadlineFallback ?? .defaultPosture,
             binaryRules: binary,
             cdhashRules: cdhash,
             signingIDRules: signingID,

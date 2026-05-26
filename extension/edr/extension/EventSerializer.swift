@@ -139,6 +139,34 @@ struct OpenPayload: Codable, Sendable {
     }
 }
 
+/// ApplicationControlUndecidedPayload is the wire shape of the event the extension emits when AUTH_EXEC could not compute a
+/// BINARY hash within the kernel deadline budget (or the file was unreadable for the TOCTOU re-stat reasons enumerated in
+/// FileHashCache.computeSHA256WithDeadline) and the active snapshot's deadlineFallback drove the verdict. Operators consume
+/// these events to size their cold-cache rate before flipping the posture between failClosed / failOpen / auditOnly:
+///   - verdict carries the wire verdict ("allow" or "deny"). Operator dashboards group by this so the deny rate under
+///     failClosed is distinguishable from the allow rate under auditOnly.
+///   - reason carries the technical cause ("deadline" or "read_failed"). The two cases respond to different operator levers
+///     (raise the safety margin vs investigate why the file is unreadable).
+///   - fileSizeBytes is the size of the executable being authorised. Pairs with reason="deadline" to identify "we lose on
+///     binaries larger than N MB" workloads where a future macOS deadline change or a hash-precompute side channel could
+///     close the gap.
+struct ApplicationControlUndecidedPayload: Codable, Sendable {
+    let pid: pid_t
+    let path: String
+    let verdict: String
+    let reason: String
+    let fileSizeBytes: UInt64
+    let policyID: Int64
+    let policyVersion: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case pid, path, verdict, reason
+        case fileSizeBytes = "file_size_bytes"
+        case policyID = "policy_id"
+        case policyVersion = "policy_version"
+    }
+}
+
 /// ApplicationControlBlockPayload is the wire shape of the event the
 /// extension emits when AUTH_EXEC denies an exec. The server's
 /// `application_control_block` catalog rule decodes this payload and

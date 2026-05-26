@@ -101,20 +101,31 @@ final class ESFSubscriber: Sendable {
     ///
     /// Walks four rule types in fixed precedence: CDHASH → BINARY → SIGNINGID → TEAMID.
     /// CERTIFICATE and PATH stay deferred to Phase B (leaf-cert cache / Launch Services
-    /// indirection). Returns on the first match. Decisions:
-    ///   - Failsafe — if the exec target's `team_id` is our own, ALLOW unconditionally.
-    ///     Prevents a misconfigured rule from blocking the agent / extension / host app.
+    /// indirection). Returns on the first match. Decisions, in order:
+    ///   - Platform-binary carve-out: if the kernel sets target.is_platform_binary, ALLOW
+    ///     with cache:true. Prevents an admin who writes the SHA-256 of /sbin/launchd
+    ///     (or xpcproxy, fseventsd, kextd, sysextd, etc.) as a BINARY block rule from
+    ///     bricking the host. The kernel's own "this is on the Apple-signed system image"
+    ///     flag is the floor; the answer is intrinsic to the binary's identity so it is
+    ///     safe to cache for the file's (dev, inode, mtime) lifetime.
+    ///   - Self-allow failsafe: if team_id matches our extensionTeamID AND signing_id is
+    ///     on the Fleet bundle-id allowlist, ALLOW. Protects the agent / extensions /
+    ///     host app from a misconfigured rule. Uncached so future rules can target Fleet
+    ///     binaries for telemetry (e.g. DETECT) without a kernel cache stale-read.
     ///     Phase B replaces this with a server-pushed failsafe list.
-    ///   - First matching rule with `action=BLOCK` and `enforcement=PROTECT` → DENY.
-    ///   - First matching rule with any other enforcement → ALLOW (DETECT semantics arrive
-    ///     in the follow-on add-application-control-detect-mode change).
+    ///   - Precedence walk (CDHASH → BINARY → SIGNINGID → TEAMID): first matching rule
+    ///     with `action=BLOCK` and `enforcement=PROTECT` → DENY. Any other enforcement
+    ///     ALLOWs (DETECT semantics arrive in the follow-on detect-mode change). The
+    ///     BINARY layer needs the file's SHA-256; that hash is computed synchronously on
+    ///     the AUTH callback thread under a budget bounded by msg.deadline (closing the
+    ///     #208 first-exec cold-cache bypass). If the hash cannot complete in time the
+    ///     snapshot's deadlineFallback posture (fail-closed / fail-open / audit-only)
+    ///     drives the verdict and an application_control_undecided event lets operators
+    ///     audit the cold-cache rate.
     ///   - No match → ALLOW.
     ///
-    /// The walk is at most four constant-time map lookups. The file SHA-256 needed for the
-    /// BINARY map is fetched from the (inode, mtime) cache; a cold cache makes BINARY
-    /// silently miss for this exec (the cache fills off the callback so the next exec
-    /// catches). The leaf-cert SHA-256 needed for CERTIFICATE rules is NOT fetched here;
-    /// CERTIFICATE matching is gated to Phase B.
+    /// The leaf-cert SHA-256 needed for CERTIFICATE rules is NOT fetched here; CERTIFICATE
+    /// matching is gated to Phase B.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
         let target = msg.event.exec.target.pointee
@@ -122,6 +133,17 @@ final class ESFSubscriber: Sendable {
         let teamID = esTokenString(target.team_id)
         let signingID = esTokenString(target.signing_id)
         let fileStat = target.executable.pointee.stat
+
+        // Platform-binary carve-out: anything the kernel classifies as part of the Apple-signed system image (launchd, xpcproxy,
+        // fseventsd, kextd, sysextd, systemextensionsd, WindowServer, loginwindow, mds, ...) is ALLOWed unconditionally and the
+        // result is pinned into the kernel's per-(dev,inode,mtime) AUTH cache. This is the floor against an admin who pastes the
+        // SHA-256 of /sbin/launchd into a BINARY block rule and bricks the host on next boot. The kernel's own is_platform_binary
+        // flag is more conservative than a hand-curated path or signing-id allowlist would be, and the answer is intrinsic to the
+        // binary's identity, so caching the ALLOW is safe (mtime mutation forces a fresh decision).
+        if target.is_platform_binary {
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, true)
+            return
+        }
 
         // Self-allow failsafe: exempt the agent + extensions + host app from app-control enforcement so a misconfigured rule cannot
         // brick the EDR itself. Match BOTH team_id and the exhaustive Fleet bundle-id set; team_id alone would exempt every binary
@@ -132,63 +154,74 @@ final class ESFSubscriber: Sendable {
         }
 
         let snapshot = ApplicationControlStore.shared.currentSnapshot()
-        let tuple = buildAuthTuple(target: target, fileStat: fileStat, lazyFillPath: path)
-        // Sonar S1066: optional binding + condition co-located in one if so the deny branch is one block. Keep `denyPath` redacted in
-        // the log (no `privacy: .public`) so PII embedded in exec paths — usernames, project tokens — doesn't leak to os.log readers;
-        // the full path still flows on the block event payload for the server-side alert.
-        if let match = walkPrecedence(tuple: tuple, snapshot: snapshot),
-           match.rule.action == ApplicationControlAction.block,
-           match.rule.enforcement == ApplicationControlEnforcement.protect {
-            let denyRuleType = match.rule.ruleType
-            let denyID = match.matchedIdentifier
+        let tuple = buildAuthTuple(target: target, fileStat: fileStat, path: path)
+
+        // Only pay the sync-hash cost when the snapshot actually has BINARY rules to consult. The cheap CDHASH/SIGNINGID/TEAMID
+        // layers run unconditionally; the hash compute alone is the latency outlier (tens of ms on multi-MB binaries) and is
+        // wasted work when no BINARY rule could fire.
+        let hashOutcome: HashOutcome
+        if snapshot.binaryRules.isEmpty {
+            hashOutcome = .notNeeded
+        } else {
+            hashOutcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+                path: path,
+                stat: fileStat,
+                deadlineMachAbs: msg.deadline
+            )
+        }
+
+        let decision = decideAuthExec(
+            tuple: tuple,
+            snapshot: snapshot,
+            hashOutcome: hashOutcome,
+            posture: snapshot.deadlineFallback
+        )
+        dispatchAuthDecision(decision, message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path)
+    }
+
+    /// dispatchAuthDecision turns the pure-logic AuthDecision into the wire-level kernel response plus any event/notification
+    /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable (AuthExecDeciderTests)
+    /// and the wire dispatch stays one switch. The `path` value is the redacted (privacy: redacted) log identifier; the full path
+    /// flows on the block event payload for the server-side alert.
+    private func dispatchAuthDecision(
+        _ decision: AuthDecision,
+        message: UnsafePointer<es_message_t>,
+        target: es_process_t,
+        fileStat: stat,
+        snapshot: ApplicationControlSnapshot,
+        path: String
+    ) {
+        switch decision {
+        case .allow:
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
+        case .allowWithUndecidedAudit(let reason):
+            logger.warning("AUTH_EXEC ALLOW (undecided) path=\(path) reason=\(reason.rawValue, privacy: .public)")
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
+            emitUndecidedEvent(target: target, fileStat: fileStat, verdict: "allow", reason: reason, snapshot: snapshot)
+        case .deny(let rule, let matchedIdentifier):
+            let denyRuleType = rule.ruleType
+            let denyID = matchedIdentifier
             logger.warning(
                 "AUTH_EXEC DENIED path=\(path) type=\(denyRuleType, privacy: .public) id=\(denyID, privacy: .public)"
             )
             es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
-            emitBlockEvent(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
-            emitBlockNotification(target: target, rule: match.rule, matchedIdentifier: match.matchedIdentifier, snapshot: snapshot)
-            return
+            emitBlockEvent(target: target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: snapshot)
+            emitBlockNotification(target: target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: snapshot)
+        case .denyWithUndecidedAudit(let reason):
+            logger.warning("AUTH_EXEC DENIED (undecided) path=\(path) reason=\(reason.rawValue, privacy: .public)")
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
+            emitUndecidedEvent(target: target, fileStat: fileStat, verdict: "deny", reason: reason, snapshot: snapshot)
         }
-        es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
     }
 
-    /// AuthTuple captures the identifier values the decision walker compares against the
-    /// snapshot's per-type maps. Each field is optional: absent values mean "the target
-    /// has no value of this kind", and the precedence walker skips that map. Phase A
-    /// close-out wires CDHASH, BINARY, SIGNINGID, and TEAMID; CERTIFICATE + PATH stay
-    /// deferred and are absent here.
-    struct AuthTuple {
-        let cdhash: String?         // 40-char lowercase hex, only when target is hardened-runtime
-        let fileSHA256: String?     // 64-char lowercase hex, only when the FileHashCache is warm
-        let signingIDPrefixed: String? // "<TeamID>:<bundle.id>" or "platform:<bundle.id>"
-        let teamID: String?         // 10-char Apple Developer Team ID
-    }
-
-    /// PrecedenceMatch carries the rule that fired plus the actual identifier value from
-    /// the target that hit. The `matched_identifier` flows into the block event so the
-    /// alert pipeline can show "blocked by CDHASH rule matching <40 hex>" rather than just
-    /// the rule's own identifier (which is usually the same value but not always — a
-    /// TEAMID rule matches every binary signed by that team, so matched_identifier is the
-    /// rule's TeamID and the rule's own identifier are the same; for a CDHASH rule the two
-    /// are also the same; the distinction matters more for future PATH rules where the
-    /// rule's identifier is a glob and the matched value is the resolved path).
-    struct PrecedenceMatch {
-        let rule: ApplicationControlRule
-        let matchedIdentifier: String
-    }
-
-    /// buildAuthTuple reduces a Mach-O exec target to the four identifier values the
-    /// precedence walker reads. Side effect: when the file SHA-256 cache misses, kicks
-    /// the async lazy fill so the next exec of the same (inode, mtime) hits.
-    private func buildAuthTuple(target: es_process_t, fileStat: stat, lazyFillPath: String) -> AuthTuple {
+    /// buildAuthTuple reduces a Mach-O exec target to the three pure-identifier values the decider reads. The fourth identifier
+    /// (BINARY SHA-256) is supplied via HashOutcome at decide time so the hash compute can run on the AUTH callback thread
+    /// under a deadline budget; that responsibility lives in handleAuthExec, not here. The `path` argument is the resolved
+    /// executable path used for the SigningInfoFallback lookup when ESF redacts team_id on ad-hoc-signed extension hosts.
+    private func buildAuthTuple(target: es_process_t, fileStat: stat, path: String) -> AuthTuple {
         let esTeamID = esTokenString(target.team_id)
         let signingID = esTokenString(target.signing_id)
 
-        // CDHASH is a 20-byte raw array on es_process_t. Gate on Apple's Hardened Runtime
-        // (CS_RUNTIME = 0x00010000): per Santa's rationale, CDHash on non-hardened
-        // processes is not a reliable integrity check because pages are mapped lazily and
-        // the kernel does not re-verify post-load. CDHASH rules that nominally target a
-        // non-hardened binary silently no-op for this exec.
         let cdhash: String? = isHardenedRuntime(flags: target.codesigning_flags) ? cdhashHexString(from: target.cdhash) : nil
 
         // Resolve the canonical TeamID. For Developer-ID-signed targets on notarized release hosts ESF
@@ -208,7 +241,7 @@ final class ESFSubscriber: Sendable {
         if !esTeamID.isEmpty {
             teamID = esTeamID
         } else {
-            teamID = SigningInfoFallback.shared.teamID(forPath: lazyFillPath, fileStat: fileStat) ?? ""
+            teamID = SigningInfoFallback.shared.teamID(forPath: path, fileStat: fileStat) ?? ""
         }
 
         // SIGNINGID is prefixed: "<TeamID>:<bundle.id>" for third-party signed binaries,
@@ -230,40 +263,11 @@ final class ESFSubscriber: Sendable {
             signingIDPrefixed = nil
         }
 
-        let fileSHA256 = FileHashCache.shared.lookup(stat: fileStat)
-        if fileSHA256 == nil {
-            FileHashCache.shared.startLazyFill(path: lazyFillPath, stat: fileStat)
-        }
-
         return AuthTuple(
             cdhash: cdhash,
-            fileSHA256: fileSHA256,
             signingIDPrefixed: signingIDPrefixed,
             teamID: teamID.isEmpty ? nil : teamID
         )
-    }
-
-    /// walkPrecedence walks the snapshot's per-type maps in the fixed order CDHASH →
-    /// BINARY → SIGNINGID → TEAMID, returning on the first match. CERTIFICATE + PATH
-    /// stay deferred and are not consulted here even though their snapshot maps are
-    /// populated by ApplicationControlStore — Phase B activates them alongside the
-    /// leaf-cert cache and Launch Services edge cases. Private because it has no
-    /// caller outside handleAuthExec and a wider visibility would surface this
-    /// walker to anything that holds a snapshot reference.
-    private func walkPrecedence(tuple: AuthTuple, snapshot: ApplicationControlSnapshot) -> PrecedenceMatch? {
-        if let cdhash = tuple.cdhash, let rule = snapshot.cdhashRules[cdhash] {
-            return PrecedenceMatch(rule: rule, matchedIdentifier: cdhash)
-        }
-        if let sha = tuple.fileSHA256, let rule = snapshot.binaryRules[sha] {
-            return PrecedenceMatch(rule: rule, matchedIdentifier: sha)
-        }
-        if let signingID = tuple.signingIDPrefixed, let rule = snapshot.signingIDRules[signingID] {
-            return PrecedenceMatch(rule: rule, matchedIdentifier: signingID)
-        }
-        if let teamID = tuple.teamID, let rule = snapshot.teamIDRules[teamID] {
-            return PrecedenceMatch(rule: rule, matchedIdentifier: teamID)
-        }
-        return nil
     }
 
     /// emitBlockEvent serializes an application_control_block event for the
@@ -292,6 +296,33 @@ final class ESFSubscriber: Sendable {
             policyVersion: snapshot.policyVersion
         )
         if let data = serializer.serialize(eventType: "application_control_block", payload: payload) {
+            onEvent?(data)
+        }
+    }
+
+    /// emitUndecidedEvent serializes an application_control_undecided event for an AUTH_EXEC whose BINARY hash could not be
+    /// resolved within the kernel deadline budget (or the file was unreadable). Called after the kernel respond so the post-
+    /// respond cost does not eat into the deadline. The verdict argument carries "allow" (audit-only posture) or "deny"
+    /// (fail-closed posture); fail-open does NOT call this helper (no event by design, see FallbackPosture.failOpen).
+    private func emitUndecidedEvent(
+        target: es_process_t,
+        fileStat: stat,
+        verdict: String,
+        reason: UndecidedReason,
+        snapshot: ApplicationControlSnapshot
+    ) {
+        let pid = audit_token_to_pid(target.audit_token)
+        let path = esTokenString(target.executable.pointee.path)
+        let payload = ApplicationControlUndecidedPayload(
+            pid: pid,
+            path: path,
+            verdict: verdict,
+            reason: reason.rawValue,
+            fileSizeBytes: UInt64(fileStat.st_size),
+            policyID: snapshot.policyID,
+            policyVersion: snapshot.policyVersion
+        )
+        if let data = serializer.serialize(eventType: "application_control_undecided", payload: payload) {
             onEvent?(data)
         }
     }
@@ -442,8 +473,10 @@ final class ESFSubscriber: Sendable {
 private let csRuntimeFlag: UInt32 = 0x0001_0000
 
 /// isHardenedRuntime reports whether the codesigning_flags bitfield indicates Apple's Hardened Runtime. CDHASH rules only match
-/// hardened-runtime processes because CDHash on non-hardened processes is not a reliable integrity check (page mapping is lazy and
-/// not re-verified post-load). Mirrors Santa's behavior so a migrating Santa admin's mental model carries over.
+/// hardened-runtime processes because on non-hardened processes the kernel maps pages lazily and does not re-verify them post-load,
+/// which makes the CDHash ESF reports at exec an unreliable identity for the bytes that will eventually execute. This diverges from
+/// Santa, which enforces CDHASH on any signed binary regardless of the runtime flag; a migrating Santa admin should expect a CDHASH
+/// rule to no-op here against a non-hardened target until that target is rebuilt with the Hardened Runtime flag.
 private func isHardenedRuntime(flags: UInt32) -> Bool {
     return (flags & csRuntimeFlag) != 0
 }

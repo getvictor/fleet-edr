@@ -152,4 +152,101 @@ final class FileHashCacheTests: XCTestCase {
         FileHashCache.shared.startLazyFill(path: file.path, stat: file.stat)
         XCTAssertEqual(FileHashCache.shared.lookup(stat: file.stat), expected)
     }
+
+    // MARK: - lookupOrComputeWithDeadline (issue #208)
+
+    /// generousDeadlineMachAbs returns a mach absolute time several seconds in the future. Used by tests that want the
+    /// sync compute path to run to completion against a normal-sized payload. mach_absolute_time + (seconds in ns) /
+    /// (timebase numer/denom). Hardcoding the timebase ratio is fragile; we read it via mach_timebase_info to stay
+    /// portable across hardware (the ratio is 1/1 on Apple Silicon but is different on Intel).
+    private func generousDeadlineMachAbs(seconds: Double = 5) -> UInt64 {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let nowMachAbs = mach_absolute_time()
+        let offsetNs = UInt64(seconds * 1_000_000_000)
+        let offsetMachAbs = offsetNs * UInt64(info.denom) / UInt64(info.numer)
+        return nowMachAbs &+ offsetMachAbs
+    }
+
+    func testLookupOrComputeWithDeadlineReturnsComputedOnFirstCall() throws {
+        let payload = Data("auth-exec-sync-hash".utf8)
+        let file = try makeTempFile(bytes: payload)
+        let expected = expectedSHA256(of: payload)
+
+        let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+            path: file.path,
+            stat: file.stat,
+            deadlineMachAbs: generousDeadlineMachAbs()
+        )
+        XCTAssertEqual(outcome, .computed(expected))
+        // Cache populated for the warm-case path.
+        XCTAssertEqual(FileHashCache.shared.lookup(stat: file.stat), expected)
+    }
+
+    func testLookupOrComputeWithDeadlineReturnsCachedValueOnWarmHit() throws {
+        // Pre-seed the cache via the no-deadline path, then call the deadline variant with a deadline that has already
+        // expired. The cache hit must return .computed without doing any I/O; the deadlineExceeded branch must NOT fire
+        // because the hash was already available before the budget was consulted.
+        let payload = Data("warm-cache-hit".utf8)
+        let file = try makeTempFile(bytes: payload)
+        let expected = expectedSHA256(of: payload)
+        XCTAssertEqual(FileHashCache.shared.lookupOrCompute(path: file.path, stat: file.stat), expected)
+
+        let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+            path: file.path,
+            stat: file.stat,
+            deadlineMachAbs: 0
+        )
+        XCTAssertEqual(outcome, .computed(expected))
+    }
+
+    func testLookupOrComputeWithDeadlineReturnsDeadlineExceededOnZeroBudget() throws {
+        // Cold cache + deadline already passed: the first deadline check between chunks fires immediately and the
+        // helper returns .deadlineExceeded. The cache must stay empty so the next AUTH_EXEC retries the compute rather
+        // than being served a partial / wrong hash.
+        let payload = Data(repeating: 0x55, count: 128 * 1024) // >chunk size so the loop iterates at least twice
+        let file = try makeTempFile(bytes: payload)
+
+        let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+            path: file.path,
+            stat: file.stat,
+            deadlineMachAbs: 0
+        )
+        XCTAssertEqual(outcome, .deadlineExceeded)
+        XCTAssertNil(FileHashCache.shared.lookup(stat: file.stat))
+    }
+
+    func testLookupOrComputeWithDeadlineReturnsReadFailedOnMissingFile() {
+        // No file at this path -- the open-for-reading FileHandle path errors and we return .readFailed (distinct
+        // from .deadlineExceeded so the audit event carries the right `reason` tag).
+        var fakeStat = stat()
+        fakeStat.st_dev = 1
+        fakeStat.st_ino = 999_998
+        fakeStat.st_mtimespec.tv_sec = 0
+        fakeStat.st_mtimespec.tv_nsec = 0
+        let path = "/tmp/edr-fileHashCacheTests-deadline-missing-\(UUID().uuidString)"
+
+        let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+            path: path,
+            stat: fakeStat,
+            deadlineMachAbs: generousDeadlineMachAbs()
+        )
+        XCTAssertEqual(outcome, .readFailed)
+    }
+
+    func testLookupOrComputeWithDeadlineReturnsReadFailedOnInodeMismatch() throws {
+        // Same TOCTOU guard as lookupOrCompute: if the opened FD's (dev, inode, mtime) differs from the expected
+        // tuple, abort with .readFailed (treated as "hash unavailable, defer to posture") and leave the cache empty.
+        let file = try makeTempFile(bytes: Data("real-content".utf8))
+        var bogus = file.stat
+        bogus.st_ino = file.stat.st_ino &+ 7777
+
+        let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+            path: file.path,
+            stat: bogus,
+            deadlineMachAbs: generousDeadlineMachAbs()
+        )
+        XCTAssertEqual(outcome, .readFailed)
+        XCTAssertNil(FileHashCache.shared.lookup(stat: bogus))
+    }
 }

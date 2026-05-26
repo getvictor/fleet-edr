@@ -391,12 +391,68 @@ be used.
 
 ## Application control
 
-Application Control (the replacement for the singleton blocklist) is
-introduced in the `add-application-control` OpenSpec change. Phase 1
-deletes the legacy `/api/policy` endpoints and the `set_blocklist`
-command; the new REST surface, agent command, and decision engine land
-in later phases of that change. Until then there is no in-product
-allow/block surface.
+Application Control replaces the singleton blocklist with operator-managed
+policies (named, versioned, audited) containing typed rules. The AUTH_EXEC
+handler in the system extension consults the active snapshot on every exec
+and denies the first matching rule with `action=BLOCK` and
+`enforcement=PROTECT`. Precedence is CDHASH → BINARY → SIGNINGID → TEAMID.
+CERTIFICATE and PATH rules are accepted by the REST surface but deferred
+to Phase B (leaf-cert cache / Launch Services indirection).
+
+Two unconditional carve-outs run before any rule:
+
+1. **Platform-binary carve-out.** If the kernel sets
+   `target.is_platform_binary` (launchd, xpcproxy, fseventsd, kextd,
+   sysextd, WindowServer, etc.) the handler returns ALLOW with the kernel
+   cache pinned. An admin who pastes the SHA-256 of `/sbin/launchd` into a
+   BINARY rule will NOT brick the host: the carve-out fires before the
+   snapshot walk.
+2. **Self-allow failsafe.** The agent / extensions / host app (matched by
+   both Fleet's team_id and the exhaustive Fleet bundle-id allowlist)
+   ALLOW unconditionally. A misconfigured rule cannot block the EDR
+   itself.
+
+### BINARY rules and the deadline-fallback posture
+
+A BINARY rule matches the file's SHA-256. The hash is computed
+synchronously on the AUTH_EXEC callback thread, with the budget bounded
+by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety
+margin for the post-hash work. v0.1.0 closes the pre-RC bypass primitive
+where the first exec of any binary slipped past BINARY rules while the
+cache filled asynchronously (#208).
+
+If the hash cannot finish in time (large binary, slow disk, or the file
+is unreadable due to a TOCTOU replace between AUTH and read), the
+snapshot's `deadline_fallback` field drives the verdict:
+
+| Posture | Verdict on deadline / read failure | Event emitted | When to pick |
+|---|---|---|---|
+| `fail-closed` (default) | DENY | `application_control_undecided` with `verdict=deny` | High-assurance pilots. A binary the EDR cannot identify in time does not run. |
+| `fail-open` | ALLOW | none | Demo-equivalent posture. The cold-cache window stays open; pick this only if "no unexpected blocks" outweighs "no first-exec bypass." |
+| `audit-only` | ALLOW | `application_control_undecided` with `verdict=allow` | Tuning a fleet before flipping to `fail-closed`. Count how often the fallback fires without changing exec behaviour. |
+
+v0.1.0 wires the posture through the snapshot payload but does NOT yet
+persist a per-policy value in the database; every snapshot ships with
+`fail-closed`. The v0.1.x follow-up adds a DB column and the REST
+surface to set it per policy.
+
+### Upgrading from a v0.1.0-rc.* RC
+
+The cold-cache ALLOW path is removed. Pilots that ran the RC under that
+posture will, after upgrade, see the first exec of any unhashed binary
+either DENY (the v0.1.0 default) or take a small latency hit while the
+sync hash runs (tens of ms on typical multi-MB binaries; the safety
+margin is 500 ms below the kernel deadline). To preview the rate of
+fallback events before flipping a fleet, install the v0.1.x release
+that adds the per-policy posture knob and run with `audit-only` for a
+day; the `application_control_undecided` event stream gives the
+operator the rate.
+
+### Legacy endpoints
+
+The `add-application-control` OpenSpec change deleted the singleton
+`/api/policy` endpoints and the `set_blocklist` agent command. The new
+REST surface lives under `/api/v1/app-control/*`.
 
 The `EDR_LAUNCHAGENT_ALLOWLIST` env var is different: it tells the
 server's `persistence_launchagent` detection rule which LaunchAgent

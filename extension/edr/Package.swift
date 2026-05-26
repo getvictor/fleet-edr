@@ -83,6 +83,7 @@ let package = Package(
             sources: [
                 "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
+                "extension/AuthExecDecider.swift",
                 "extension/XPCServer.swift",
                 "extension/BlockNotification.swift",
                 "extension/EventSerializer.swift",

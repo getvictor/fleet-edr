@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "snapshot_heartbeat"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "snapshot_heartbeat"],
       "description": "Type of endpoint security event"
     },
     "payload": {
@@ -31,6 +31,7 @@
         { "$ref": "#/definitions/network_connect_payload" },
         { "$ref": "#/definitions/dns_query_payload" },
         { "$ref": "#/definitions/application_control_block_payload" },
+        { "$ref": "#/definitions/application_control_undecided_payload" },
         { "$ref": "#/definitions/snapshot_heartbeat_payload" }
       ]
     }
@@ -155,6 +156,20 @@
         "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
         "custom_msg": { "type": "string" },
         "custom_url": { "type": "string" },
+        "policy_id": { "type": "integer" },
+        "policy_version": { "type": "integer" }
+      }
+    },
+    "application_control_undecided_payload": {
+      "type": "object",
+      "description": "Emitted when AUTH_EXEC could not compute a BINARY hash within the kernel deadline budget (or the file was unreadable for the TOCTOU re-stat reasons in FileHashCache.computeSHA256WithDeadline) and the active snapshot's deadline_fallback drove the verdict. Operators consume these events to size their cold-cache rate before flipping the posture between fail-closed / fail-open / audit-only.",
+      "required": ["pid", "path", "verdict", "reason", "file_size_bytes", "policy_id", "policy_version"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": { "type": "string" },
+        "verdict": { "type": "string", "enum": ["allow", "deny"], "description": "Wire verdict the kernel received. \"deny\" only fires under fail-closed posture; \"allow\" fires under audit-only (fail-open emits no event by design)." },
+        "reason": { "type": "string", "enum": ["deadline", "read_failed"], "description": "Technical cause that prevented a hash decision. \"deadline\" means the budget headroom was exhausted before chunks finished streaming; \"read_failed\" means the file could not be opened, fstat failed, or a TOCTOU replace was detected between AUTH and read." },
+        "file_size_bytes": { "type": "integer", "description": "Size of the executable being authorised. Pairs with reason=\"deadline\" to identify large-binary workloads where the deadline budget is the bottleneck." },
         "policy_id": { "type": "integer" },
         "policy_version": { "type": "integer" }
       }
