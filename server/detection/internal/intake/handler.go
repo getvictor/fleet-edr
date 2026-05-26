@@ -21,6 +21,27 @@ import (
 // Exported for tests that need to compose right-at-cap and over-cap bodies without duplicating the magic number.
 const MaxIngestBodyBytes = 10 * 1024 * 1024
 
+// ParseAndValidateIngestBody is the parse + per-event validation half of POST /api/events, lifted out of handleIngest so the
+// fuzz harness can drive it without a full HTTP server + Detection store. Returns (events, http.StatusOK, "") on success, or
+// (nil, 4xx, errCode) on parse / validation failure. The error codes are the same stable set the HTTP handler emits:
+// "invalid_json", "missing_fields_at_<i>", "host_id_mismatch". The body-cap (413) check is upstream of this function (in
+// readBodyWithCap); the store-insert (5xx) is downstream of it. The fuzz contract is therefore: every output MUST be one of
+// {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch")} — anything else is a finding.
+func ParseAndValidateIngestBody(body []byte, pinnedHostID string) (events []api.Event, status int, errCode string) {
+	if err := json.Unmarshal(body, &events); err != nil {
+		return nil, http.StatusBadRequest, "invalid_json"
+	}
+	for i, e := range events {
+		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
+			return nil, http.StatusBadRequest, "missing_fields_at_" + strconv.Itoa(i)
+		}
+		if e.HostID != pinnedHostID {
+			return nil, http.StatusBadRequest, "host_id_mismatch"
+		}
+	}
+	return events, http.StatusOK, ""
+}
+
 // BuildInfo is injected at startup so the readiness endpoint
 // advertises version + commit.
 type BuildInfo struct {
@@ -85,21 +106,10 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var events []api.Event
-	if err := json.Unmarshal(body, &events); err != nil {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_json")
+	events, status, errCode := ParseAndValidateIngestBody(body, pinnedHostID)
+	if status != http.StatusOK {
+		writeErr(ctx, h.logger, w, status, errCode)
 		return
-	}
-
-	for i, e := range events {
-		if e.EventID == "" || e.HostID == "" || e.EventType == "" || e.TimestampNs == 0 {
-			writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing_fields_at_"+strconv.Itoa(i))
-			return
-		}
-		if e.HostID != pinnedHostID {
-			writeErr(ctx, h.logger, w, http.StatusBadRequest, "host_id_mismatch")
-			return
-		}
 	}
 
 	insertStart := time.Now()
