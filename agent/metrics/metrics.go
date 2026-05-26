@@ -15,6 +15,11 @@ import (
 
 const meterName = "github.com/fleetdm/edr/agent/metrics"
 
+// unitEvent is the OTel unit suffix shared by every per-event metric the agent emits. Centralising it lets the three
+// counters/gauges below stay in lock-step on the wire shape SigNoz uses to group dashboards (Sonar go:S1192 flagged the
+// previous shape where the literal "{event}" was repeated per instrument).
+const unitEvent = "{event}"
+
 // gaugeCallbackTimeout caps each observable-gauge callback so a wedged source (e.g. a SQLite WAL contention spike) cannot
 // hold the OTel collection cycle indefinitely. 2s mirrors the server-side gauges in server/metrics — long enough for a
 // stalled DB read to either complete or surface the timeout cleanly.
@@ -53,18 +58,18 @@ func NewWithMeter(depthSrc QueueDepthSource, m metric.Meter) *Recorder {
 	r.queueDropped, _ = m.Int64Counter(
 		"edr.agent.queue.dropped",
 		metric.WithDescription("Events dropped by the agent queue cap. Attribute `lossy=true` means data loss; `lossy=false` means already-delivered rows trimmed for space."),
-		metric.WithUnit("{event}"),
+		metric.WithUnit(unitEvent),
 	)
 	r.eventsDroppedTooLarge, _ = m.Int64Counter(
 		"edr.agent.uploader.events_dropped_too_large",
 		metric.WithDescription("Events the uploader dropped after a single-event batch was rejected by the server with HTTP 413 `body_too_large`. A non-zero rate indicates an agent producing events larger than the server's per-request cap."),
-		metric.WithUnit("{event}"),
+		metric.WithUnit(unitEvent),
 	)
 	if depthSrc != nil {
 		r.queueDepth, _ = m.Int64ObservableGauge(
 			"edr.agent.queue.depth",
 			metric.WithDescription("Number of events queued for upload (uploaded=0 rows). A rising value indicates the uploader is falling behind the producer."),
-			metric.WithUnit("{event}"),
+			metric.WithUnit(unitEvent),
 			metric.WithInt64Callback(func(ctx context.Context, obs metric.Int64Observer) error {
 				gaugeCtx, cancel := context.WithTimeout(ctx, gaugeCallbackTimeout)
 				defer cancel()
