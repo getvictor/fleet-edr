@@ -26,31 +26,36 @@ import (
 // Defaults pulled out as named constants so the mnd linter's blanket objection lands once and the CLI flag block stays
 // concise. None are security-sensitive; tweak via flags at the call site.
 const (
-	defaultHosts      = 100
-	defaultQuietRatio = 0.8
-	defaultDuration   = 5 * time.Minute
-	defaultQuietGap   = 5 * time.Second
-	defaultActiveGap  = 1 * time.Second
-	defaultPassP99    = 250 * time.Millisecond
-	exitFail          = 2
+	defaultHosts                  = 100
+	defaultQuietRatio             = 0.8
+	defaultDuration               = 5 * time.Minute
+	defaultQuietGap               = 5 * time.Second
+	defaultActiveGap              = 1 * time.Second
+	defaultPassP99                = 250 * time.Millisecond
+	defaultQueueDepthPollInterval = time.Second
+	exitFail                      = 2
 )
 
 // flagSet is the resolved CLI flag values + the runtime-only env-derived defaults. Parsing into a struct keeps run() under
 // the cognitive-complexity budget: flag boilerplate moves to parseFlags, run() becomes orchestration.
 type flagSet struct {
-	serverURL       string
-	enrollSecret    string
-	hostCount       int
-	quietRatio      float64
-	duration        time.Duration
-	quietGap        time.Duration
-	activeGap       time.Duration
-	passP99         time.Duration
-	allowInsecure   bool
-	scenarioDir     string
-	quietScenario   string
-	activeScenarios string
-	output          string
+	serverURL              string
+	enrollSecret           string
+	hostCount              int
+	quietRatio             float64
+	duration               time.Duration
+	quietGap               time.Duration
+	activeGap              time.Duration
+	passP99                time.Duration
+	allowInsecure          bool
+	scenarioDir            string
+	quietScenario          string
+	activeScenarios        string
+	output                 string
+	mode                   string
+	queueDepthPollInterval time.Duration
+	signozURL              string
+	passMaxQueueDepth      int64
 }
 
 func main() {
@@ -83,17 +88,21 @@ func run() error {
 		fs.hostCount, fs.quietRatio*100, fs.duration, fs.passP99, fs.serverURL)
 
 	rep, err := scale.Run(ctx, scale.Options{
-		ServerURL:           fs.serverURL,
-		EnrollSecret:        fs.enrollSecret,
-		HostCount:           fs.hostCount,
-		QuietRatio:          fs.quietRatio,
-		Duration:            fs.duration,
-		QuietScenarioPath:   quietPath,
-		ActiveScenarioPaths: activePaths,
-		QuietIterationGap:   fs.quietGap,
-		ActiveIterationGap:  fs.activeGap,
-		AllowInsecureTLS:    fs.allowInsecure,
-		PassP99:             fs.passP99,
+		ServerURL:              fs.serverURL,
+		EnrollSecret:           fs.enrollSecret,
+		HostCount:              fs.hostCount,
+		QuietRatio:             fs.quietRatio,
+		Duration:               fs.duration,
+		QuietScenarioPath:      quietPath,
+		ActiveScenarioPaths:    activePaths,
+		QuietIterationGap:      fs.quietGap,
+		ActiveIterationGap:     fs.activeGap,
+		AllowInsecureTLS:       fs.allowInsecure,
+		PassP99:                fs.passP99,
+		Mode:                   scale.Mode(fs.mode),
+		QueueDepthPollInterval: fs.queueDepthPollInterval,
+		SigNozURL:              fs.signozURL,
+		PassMaxQueueDepth:      fs.passMaxQueueDepth,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
@@ -147,6 +156,14 @@ func parseFlags() flagSet {
 		"test/efficacy/corpus/T1555.001-keychain-dump/scenario.yaml",
 	}, ","), "comma-separated active scenario paths cycled across active hosts")
 	flag.StringVar(&fs.output, "output", "", "write the JSON report to this file in addition to stdout")
+	flag.StringVar(&fs.mode, "mode", string(scale.ModeDirect),
+		"load shape: `direct` (v1 PostDirect against /api/events) or `headless` (v2 per-host headless.Run + queue-depth probe)")
+	flag.DurationVar(&fs.queueDepthPollInterval, "queue-depth-poll-interval", defaultQueueDepthPollInterval,
+		"cadence of GET /state polls in headless mode")
+	flag.StringVar(&fs.signozURL, "signoz-url", "",
+		"optional SigNoz base URL (e.g. http://localhost:8080); when set the report includes server-side p99 + client-vs-server delta")
+	flag.Int64Var(&fs.passMaxQueueDepth, "pass-max-queue-depth", 0,
+		"optional max-queue-depth ceiling; exit 2 if any host's max queue_depth exceeds this value (0 disables the gate)")
 	flag.Parse()
 	return fs
 }

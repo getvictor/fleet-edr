@@ -39,6 +39,12 @@ const (
 	defaultActiveIterationGap = 1 * time.Second
 	defaultPassP99            = 250 * time.Millisecond
 
+	// defaultQueueDepthPollInterval is the cadence at which the headless-mode driver polls each agent's GET /state for
+	// queue_depth. 1 second is fast enough to catch a backed-up uploader on a 100-host fan-in (depth-build-up timescale is
+	// dominated by upload-interval = 1s in headless.Options) but slow enough to keep the poller's own CPU + FD usage
+	// negligible.
+	defaultQueueDepthPollInterval = time.Second
+
 	jitterFloor        = 0.75 // multiplier floor for the per-host iteration gap; pairs with jitterRange below.
 	jitterRange        = 0.5  // multiplier added on top of floor (so the range is [floor, floor+range]).
 	enrollRetries      = 3
@@ -51,6 +57,23 @@ const (
 	percentileP50 = 50
 	percentileP95 = 95
 	percentileP99 = 99
+)
+
+// Mode selects the load shape Run drives against the server.
+//
+//	ModeDirect (v1, default): each host POSTs directly to /api/events via fakeagent.PostDirect. Bypasses the agent's queue +
+//	  uploader entirely. Measures server-side ingest under fan-in.
+//	ModeHeadless (v2, #232): each host runs headless.Run with its own SQLite queue + uploader + control-plane socket, and a
+//	  background goroutine polls the agent's GET /state for queue_depth. Adds the agent path to the load shape so a
+//	  regression in the uploader (drift in batch size, backoff, etc.) shows up as rising queue depth that doesn't drain.
+type Mode string
+
+const (
+	// ModeDirect is the legacy/default v1 mode. An empty Mode also resolves to ModeDirect for backward compatibility.
+	ModeDirect Mode = "direct"
+	// ModeHeadless is the v2 mode that drives headless.Run per simulated host. Linux/non-CGO-darwin only because the
+	// headless package itself has a !darwin || !cgo build tag (the receiver stub is platform-gated).
+	ModeHeadless Mode = "headless"
 )
 
 // Options configures a Run. ServerURL and EnrollSecret are required; everything else has a defaulted zero value that produces a
@@ -91,14 +114,41 @@ type Options struct {
 
 	// PassP99 is the latency ceiling for the p99 ingest assertion. Defaults to 250ms per the plan.
 	PassP99 time.Duration
+
+	// Mode picks the load shape. Empty resolves to ModeDirect for backward compatibility (the v1 ingest-fan-in shape).
+	// ModeHeadless drives headless.Run per simulated host so the queue + uploader are in the load loop, and polls each
+	// agent's GET /state for queue_depth on QueueDepthPollInterval. See the Mode type comment for the trade-offs.
+	Mode Mode
+
+	// QueueDepthPollInterval is the cadence at which the headless-mode driver polls each agent's /state socket for
+	// queue_depth. Zero defaults to defaultQueueDepthPollInterval (1s). Ignored when Mode != ModeHeadless.
+	QueueDepthPollInterval time.Duration
+
+	// SigNozURL is the optional base URL of a SigNoz query API (e.g. "http://localhost:8080"). When non-empty, the
+	// post-run aggregation issues one query for http.server.request.duration p99 over the run's time window and records
+	// it in Report.ServerLatencyP99 + Report.ClientServerDeltaP99. A failed SigNoz query is a soft error: it surfaces in
+	// the report's SigNozQueryError field but does not flip the Pass gate, since the cross-check is an operator-facing
+	// diagnostic, not a contract.
+	SigNozURL string
+
+	// PassMaxQueueDepth optionally extends the pass criteria with a max-queue-depth ceiling. When > 0, the run fails if
+	// any host's max queue_depth crosses this value during the lane. Zero (the default) leaves the gate disabled until
+	// the operator has captured a baseline value worth gating on (per the M12 issue's "TBD; capture observed values
+	// first" guidance). Ignored when Mode != ModeHeadless.
+	PassMaxQueueDepth int64
 }
 
 // Report is the aggregate output of a Run. Every numeric field is computed across all simulated hosts; PerHost preserves the
 // per-host breakdown for triage when an aggregate gate fails.
+//
+// v2 fields (#232 headless mode): the QueueDepth* + ServerLatency* + ClientServerDelta* fields are populated only when the
+// run used Mode=ModeHeadless. Their JSON tags carry `,omitempty` so a direct-mode report still encodes to its original
+// shape - committed baselines stay binary-identical until a baseline is recaptured under the new mode.
 type Report struct {
 	StartTime          time.Time     `json:"start_time"`
 	EndTime            time.Time     `json:"end_time"`
 	Duration           time.Duration `json:"duration"`
+	Mode               Mode          `json:"mode,omitempty"`
 	HostCount          int           `json:"host_count"`
 	QuietHostCount     int           `json:"quiet_host_count"`
 	ActiveHostCount    int           `json:"active_host_count"`
@@ -113,6 +163,33 @@ type Report struct {
 	PassP99            time.Duration `json:"pass_p99"`
 	FailReasons        []string      `json:"fail_reasons,omitempty"`
 	PerHost            []HostReport  `json:"per_host"`
+
+	// v2 fields - headless mode only.
+
+	// QueueDepthSamples is the total number of /state polls aggregated into the percentile fields below. Zero when the
+	// run did not poll (direct mode) so a downstream reader can distinguish "headless run but the poller never sampled
+	// anything" from "direct run with no queue-depth data by design."
+	QueueDepthSamples int   `json:"queue_depth_samples,omitempty"`
+	QueueDepthP50     int64 `json:"queue_depth_p50,omitempty"`
+	QueueDepthP95     int64 `json:"queue_depth_p95,omitempty"`
+	QueueDepthP99     int64 `json:"queue_depth_p99,omitempty"`
+	QueueDepthMax     int64 `json:"queue_depth_max,omitempty"`
+
+	// PassMaxQueueDepth echoes the configured ceiling. Zero (the default) means the gate was disabled.
+	PassMaxQueueDepth int64 `json:"pass_max_queue_depth,omitempty"`
+
+	// ServerLatencyP99 is the SigNoz-reported http.server.request.duration p99 over the run's time window. nil when
+	// Options.SigNozURL was empty or the query failed; SigNozQueryError captures the latter.
+	ServerLatencyP99 *time.Duration `json:"server_latency_p99,omitempty"`
+
+	// ClientServerDeltaP99 is LatencyP99 - ServerLatencyP99 (network + balancer + agent-side queue time). Positive
+	// values mean the client observed more latency than the server measured; large positive deltas point at a balancer
+	// or queue-side problem, not server work.
+	ClientServerDeltaP99 *time.Duration `json:"client_server_delta_p99,omitempty"`
+
+	// SigNozQueryError is the soft error from the SigNoz cross-check, if any. Set so the operator can see why the
+	// cross-check didn't land without scanning logs.
+	SigNozQueryError string `json:"signoz_query_error,omitempty"`
 }
 
 // HostReport is one simulated host's contribution to the aggregate Report.
@@ -123,6 +200,20 @@ type HostReport struct {
 	ErrorCount       int           `json:"error_count"`
 	LastError        string        `json:"last_error,omitempty"`
 	LatencyP99       time.Duration `json:"latency_p99"`
+
+	// v2 fields - headless mode only. Mirror the omitempty pattern in Report so a direct-mode HostReport JSON-encodes
+	// to its v1 shape.
+
+	// EventsInjected is the final /state events_injected counter at run end. Reflects total envelopes the scenario
+	// feeder pushed into the agent's control plane.
+	EventsInjected int64 `json:"events_injected,omitempty"`
+
+	// InjectErrors is the final /state inject_errors counter. Non-zero means at least one POST /event failed
+	// (typically ErrBufferFull on a backed-up agent).
+	InjectErrors int64 `json:"inject_errors,omitempty"`
+
+	// QueueDepthMax is the high-water mark of queue_depth observed across all /state polls for this host.
+	QueueDepthMax int64 `json:"queue_depth_max,omitempty"`
 }
 
 // Run executes the scale load lane against opts.ServerURL for opts.Duration and returns an aggregate Report. ctx is the parent
@@ -146,6 +237,15 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
 		return Report{}, errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
 	}
+	if opts.Mode == ModeHeadless {
+		// Linux ulimit fail-fast: each headless host opens a SQLite WAL + a unix socket + a small keepalive TCP pool, so
+		// the default 1024 RLIMIT_NOFILE on most Linux dev boxes exhausts mid-run on a 100-host lane. ulimitCheckForHeadless
+		// is a no-op on non-Linux (build-tagged).
+		if err := ulimitCheckForHeadless(opts.HostCount); err != nil {
+			return Report{}, err
+		}
+		return runHeadless(ctx, opts)
+	}
 
 	quiet, active, err := loadScenarios(opts)
 	if err != nil {
@@ -155,6 +255,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	httpClient := buildHTTPClient(opts.AllowInsecureTLS)
 	rep := Report{
 		StartTime: time.Now(),
+		Mode:      ModeDirect,
 		HostCount: opts.HostCount,
 		PassP99:   opts.PassP99,
 		PerHost:   make([]HostReport, opts.HostCount),
@@ -454,6 +555,12 @@ func defaultOptions(o Options) Options {
 	}
 	if o.PassP99 == 0 {
 		o.PassP99 = defaultPassP99
+	}
+	if o.Mode == "" {
+		o.Mode = ModeDirect
+	}
+	if o.QueueDepthPollInterval == 0 {
+		o.QueueDepthPollInterval = defaultQueueDepthPollInterval
 	}
 	return o
 }
