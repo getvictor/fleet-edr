@@ -572,6 +572,12 @@ func capRaceEnqueueInflight(t *testing.T, q *Queue, ctx context.Context, payload
 // hardcoded 5-placeholder shape was a footgun the require.Len lint check papered over).
 func capRaceAssertInflightEvicted(t *testing.T, q *Queue, ctx context.Context, inflightIDs []int64) {
 	t.Helper()
+	// Guard against the empty-slice case: strings.Repeat with a negative count panics. Today's only caller passes a
+	// non-empty slice (capRaceEnqueueInflight asserts len == count > 0), but a future caller refactor would otherwise
+	// turn a setup bug into a cryptic strings.Repeat panic instead of a clear test-fail (Gemini + Copilot #279).
+	if len(inflightIDs) == 0 {
+		t.Fatal("capRaceAssertInflightEvicted called with empty inflightIDs - setup didn't capture any in-flight rows")
+	}
 	placeholders := strings.Repeat("?,", len(inflightIDs)-1) + "?"
 	args := make([]any, len(inflightIDs))
 	for i, id := range inflightIDs {

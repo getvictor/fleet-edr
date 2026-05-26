@@ -132,7 +132,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
             )) as [Array<{ host_id: string; event_count: number | string }>, unknown];
             return rows
               .map((r) => `${r.host_id}=${String(r.event_count)}`)
-              .sort((a, b) => a.localeCompare(b))
+              .sort((a, b) => a.localeCompare(b, "en"))
               .join(",");
           },
           { timeout: 10_000, message: "hosts.event_count never converged to expected per-scenario counts" },
@@ -140,7 +140,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
         .toBe(
           driven
             .map((d) => `${d.hostId}=${String(d.expected)}`)
-            .sort((a, b) => a.localeCompare(b))
+            .sort((a, b) => a.localeCompare(b, "en"))
             .join(","),
         );
     } finally {
