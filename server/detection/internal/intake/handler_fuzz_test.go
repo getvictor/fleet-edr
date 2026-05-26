@@ -2,6 +2,7 @@ package intake
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -87,6 +88,15 @@ func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int
 		if len(events) > MaxIngestEventsPerRequest {
 			t.Fatalf("status 200 returned %d events; exceeds MaxIngestEventsPerRequest=%d for body %q",
 				len(events), MaxIngestEventsPerRequest, body)
+		}
+		// Trailing-bytes pin: a 200 implies the body parses cleanly as []api.Event with no trailing content. json.Unmarshal
+		// rejects trailing bytes by contract (encoding/json package documentation), so using it as an independent oracle
+		// catches the case where the streaming decoder accepts content past the closing `]`. Without this check, the
+		// trailing-bytes seeds (`[]extra`, `[][]`, `[...]X`) silently pass because the events-slice contract on its own
+		// doesn't see the trailing material.
+		var reparsed []api.Event
+		if err := json.Unmarshal(body, &reparsed); err != nil {
+			t.Fatalf("status 200 but json.Unmarshal rejects the body: %v; body=%q", err, body)
 		}
 
 	case http.StatusBadRequest:
@@ -175,6 +185,17 @@ func seedCorpus(f *testing.F) {
 	// this seed the only path that hit the cap was a fuzz-mutator coincidence. Building the array as a bytes.Buffer keeps the
 	// seed under a single allocation; ~10001 minimal events fit in well under 1 MiB on the wire.
 	f.Add(tooManyEventsBody())
+
+	// Trailing-bytes-after-`]` seeds. The streaming decoder (PR #276) rejects these via the `dec.Token() must return io.EOF`
+	// check that runs after the closing `]`. json.Unmarshal previously rejected the same inputs, so the contract is preserved
+	// across the shape change - these seeds make that preservation a TEST, not just an invariant in code review. A future
+	// change that drops the trailing-EOF check (e.g., to enable `dec.UseNumber()`, `dec.DisallowUnknownFields()`, or any
+	// other decoder mode that incidentally weakens the trailing-token assertion) would land here as a 200 instead of a 400,
+	// and the assertValidOutput oracle would surface it as a contract regression.
+	f.Add([]byte(`[]extra`))                                                                                   // trailing text after empty array
+	f.Add([]byte(`[][]`))                                                                                      // two top-level JSON arrays back-to-back
+	f.Add([]byte(`[{"event_id":"e","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1}]X`))     // trailing byte after well-formed happy-path event
+	f.Add([]byte(`[{"event_id":"e","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1}] true`)) // trailing JSON literal after happy-path event
 }
 
 // tooManyEventsBody emits a JSON array of MaxIngestEventsPerRequest+1 minimal-but-valid events. Lives outside seedCorpus so
