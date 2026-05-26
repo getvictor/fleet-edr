@@ -94,10 +94,10 @@ func TestQuerySigNozServerP99_HappyPath(t *testing.T) {
 	end := time.Now()
 	p99, err := querySigNozServerP99(context.Background(), srv.URL, start, end)
 	require.NoError(t, err)
-	// 12.34 ms == 12_340_000 ns; truncation in time.Duration(int(12.34)) drops the fraction so the result is 12 ms.
-	// We accept either the truncated or the precise value because parseSigNozFloat's float64 -> int truncation makes the
-	// integer-conversion shape part of the contract.
-	assert.Equal(t, 12*time.Millisecond, p99)
+	// 12.34 ms preserves precision through the conversion because querySigNozServerP99 multiplies by
+	// float64(time.Millisecond) BEFORE the time.Duration cast (Gemini + CodeRabbit #277). 12.34 * 1e6 ns/ms = 12_340_000 ns
+	// = 12.34 ms exactly.
+	assert.Equal(t, 12340*time.Microsecond, p99)
 }
 
 // TestQuerySigNozServerP99_NonOK pins the soft-error contract: a non-200 response from SigNoz returns an error containing

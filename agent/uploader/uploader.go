@@ -175,9 +175,9 @@ func (u *Uploader) drainOnce(ctx context.Context) error {
 //
 //  1. 2xx: MarkUploaded for every id in the batch, return nil.
 //  2. 401 (clientError with statusCode=401): leave queued (OnAuthFail has been signalled by doUpload), return the error.
-//  3. 413 (bodyTooLargeError) with len(batch) > 1: bisect the batch and recurse on each half. Halves that deliver are
+//  3. 413 (requestEntityTooLargeError) with len(batch) > 1: bisect the batch and recurse on each half. Halves that deliver are
 //     marked uploaded as part of their own recursive call; halves that still 413 recurse until single-event leaves.
-//  4. 413 (bodyTooLargeError) with len(batch) == 1: drop the event — MarkUploaded so the queue stops surfacing it, emit
+//  4. 413 (requestEntityTooLargeError) with len(batch) == 1: drop the event — MarkUploaded so the queue stops surfacing it, emit
 //     a WARN log with the event id, and increment the events_dropped_too_large counter. Per the spec, 413 does NOT
 //     consume the quarantine budget because the recovery shape differs (size signal, not "malformed event" signal).
 //  5. Other 4xx: route through recordClientErrorAndAudit (the existing #253 quarantine path).
@@ -215,7 +215,7 @@ func (u *Uploader) uploadBatch(ctx context.Context, batch []queue.QueuedEvent) e
 // splits or drops, other 4xx records-and-audits, 5xx/network logs-and-returns. Extracted so uploadBatch stays under the
 // cognitive-complexity budget (Sonar S3776).
 func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEvent, ids []int64, err error) error {
-	var tooLargeErr *bodyTooLargeError
+	var tooLargeErr *requestEntityTooLargeError
 	if errors.As(err, &tooLargeErr) {
 		return u.handleBodyTooLarge(ctx, batch)
 	}
@@ -261,22 +261,21 @@ func (u *Uploader) handleBodyTooLarge(ctx context.Context, batch []queue.QueuedE
 	}
 
 	mid := len(batch) / 2
-	firstErr := u.uploadBatch(ctx, batch[:mid])
-	if err := ctx.Err(); err != nil {
-		// Parent context cancelled between halves. The first-half outcome already landed (success → MarkUploaded;
-		// failure → batch stays queued). The second half stays queued for a future drain tick / next agent start.
-		if firstErr != nil {
-			return firstErr
-		}
-		return err
-	}
-	secondErr := u.uploadBatch(ctx, batch[mid:])
-	// Surface either half's failure to the caller; both failing is not common in practice (a real 413 storm converges
-	// on single-event leaves, which drop without erroring), so the first non-nil is informative enough.
-	if firstErr != nil {
+	if firstErr := u.uploadBatch(ctx, batch[:mid]); firstErr != nil {
+		// Fail-fast on a first-half error rather than attempting the second half (Gemini #277). The first-half failure
+		// is the dominant signal across every non-413 error mode: 401 means the token is stale and the second half
+		// would use the same token; a 5xx-after-retries means the server is unhappy with our request shape and the
+		// second half is the same shape; a network timeout means the connection itself is degraded. For 413, the
+		// first-half failure already routed back into handleBodyTooLarge via uploadBatch's recursion, so the second
+		// half's behaviour is independent of the first half's outcome and we never reach here on the 413 path.
 		return firstErr
 	}
-	return secondErr
+	if err := ctx.Err(); err != nil {
+		// Parent context cancelled between halves (the shutdown drain bounded by shutdownDrainTimeout). The first half
+		// already landed; the second half stays queued for the next drain tick / agent start.
+		return err
+	}
+	return u.uploadBatch(ctx, batch[mid:])
 }
 
 // dropOverSizeEvent is the single-event 413 drop path lifted out of handleBodyTooLarge so the parent stays linear (Sonar
@@ -342,7 +341,7 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 		// Don't retry client errors (4xx) - only server/network errors are retryable. 413 is its own non-retryable type because
 		// the caller (uploadBatch) branches into split-and-retry rather than the quarantine path; returning it from the retry
 		// loop preserves the typed-error chain that errors.As inspects upstream.
-		var tooLargeErr *bodyTooLargeError
+		var tooLargeErr *requestEntityTooLargeError
 		if errors.As(err, &tooLargeErr) {
 			return tooLargeErr
 		}
@@ -376,12 +375,17 @@ func (e *clientError) Error() string {
 	return fmt.Sprintf("server returned %d", e.statusCode)
 }
 
-// bodyTooLargeError represents an HTTP 413 (`body_too_large`) response. Kept distinct from clientError so the caller can
+// requestEntityTooLargeError represents an HTTP 413 (Request Entity Too Large) response. The server uses this status for
+// two diagnostics that share the same agent-side recovery shape - `body_too_large` (body bytes exceed the per-request
+// cap) and `too_many_events` (event count exceeds MaxIngestEventsPerRequest); both route through split-and-retry. Kept
+// distinct from clientError so the caller can
 // route to the split-and-retry recovery path without re-inspecting statusCode, and so a future addition of another
 // special-cased 4xx (e.g. 429 with Retry-After) follows the same typed-error pattern instead of growing a switch.
-type bodyTooLargeError struct{}
+type requestEntityTooLargeError struct{}
 
-func (*bodyTooLargeError) Error() string { return "server returned 413 body_too_large" }
+func (*requestEntityTooLargeError) Error() string {
+	return "server returned 413 (request entity too large)"
+}
 
 func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -416,7 +420,7 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 	// 413 is its own typed error so uploadBatch can route to the recursive split-and-retry recovery path without re-inspecting
 	// the status code. Per the spec, 413 must not consume the quarantine budget (size signal, not "malformed event" signal).
 	if resp.StatusCode == http.StatusRequestEntityTooLarge {
-		return &bodyTooLargeError{}
+		return &requestEntityTooLargeError{}
 	}
 
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {

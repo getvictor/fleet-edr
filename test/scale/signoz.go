@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -189,47 +190,65 @@ func querySigNozServerP99(ctx context.Context, baseURL string, start, end time.T
 	if !ok {
 		return 0, errors.New("signoz response has no series values")
 	}
-	// SigNoz reports OTel http.server.duration in milliseconds for the EDR server's instrumentation. If a different SigNoz
-	// install reports seconds (older Prometheus-style histograms), the operator's cross-check will look off by 1000x; the
-	// soft-error contract means the report still lands without flipping Pass.
-	return time.Duration(maxValue) * time.Millisecond, nil
+	// SigNoz reports OTel http.server.duration in milliseconds for the EDR server's instrumentation. Multiply the float
+	// AGAINST float64(time.Millisecond) before the time.Duration cast so fractional milliseconds (e.g. 12.34 ms) survive
+	// the conversion - the previous `time.Duration(maxValue) * time.Millisecond` shape truncated to 12 ms before
+	// scaling (Gemini + CodeRabbit #277). If a different SigNoz install reports seconds (older Prometheus-style
+	// histograms), the operator's cross-check will look off by 1000x; the soft-error contract means the report still
+	// lands without flipping Pass.
+	return time.Duration(maxValue * float64(time.Millisecond)), nil
 }
 
 // extractMaxValue walks every series x value in the response and returns the largest p99 value observed. SigNoz returns one
 // series per attribute combination; for a single-filter query the result is typically one series with one value (the
 // requested value-panel aggregate) but the parser handles multi-series shapes defensively. Returns (0, false) when no value
-// could be parsed.
+// could be parsed. The inner per-series loop is extracted to maxValueInSeries so this function stays under Sonar's S3776
+// cognitive-complexity budget (the original three-deep nested loop with mixed error/NaN handling was at 16 vs 15 allowed).
 func extractMaxValue(parsed signozQueryResponse) (float64, bool) {
 	var best float64
 	var found bool
 	for _, result := range parsed.Data.Result {
 		for _, series := range result.Series {
-			for _, v := range series.Values {
-				parsedVal, err := parseSigNozFloat(v.Value)
-				if err != nil || math.IsNaN(parsedVal) {
-					continue
-				}
-				if !found || parsedVal > best {
-					best = parsedVal
-					found = true
-				}
+			if v, ok := maxValueInSeries(series.Values); ok && (!found || v > best) {
+				best = v
+				found = true
 			}
 		}
 	}
 	return best, found
 }
 
+// maxValueInSeries returns the largest parseable, non-NaN value in a single series' Values slice. Splitting this out of
+// extractMaxValue's loop keeps the outer iteration linear (Sonar S3776). Returns (0, false) for an empty / all-NaN / all-
+// unparseable series.
+func maxValueInSeries(values []struct {
+	Value     string `json:"value"`
+	Timestamp int64  `json:"timestamp"`
+},
+) (float64, bool) {
+	var best float64
+	var found bool
+	for _, v := range values {
+		parsedVal, err := parseSigNozFloat(v.Value)
+		if err != nil || math.IsNaN(parsedVal) {
+			continue
+		}
+		if !found || parsedVal > best {
+			best = parsedVal
+			found = true
+		}
+	}
+	return best, found
+}
+
 // parseSigNozFloat parses one SigNoz numeric value. The query API returns numbers as strings ("NaN", "12.34") so the runner
-// uses a small helper rather than relying on json.Number tagging on the response struct.
+// uses a small helper rather than relying on json.Number tagging on the response struct. Uses strconv.ParseFloat over the
+// previous fmt.Sscanf shape: ParseFloat is the standard, much faster path for a known-shape float string (Gemini #277).
 func parseSigNozFloat(s string) (float64, error) {
 	if s == "" || s == "NaN" {
 		return math.NaN(), nil
 	}
-	var v float64
-	if _, err := fmt.Sscanf(s, "%f", &v); err != nil {
-		return 0, err
-	}
-	return v, nil
+	return strconv.ParseFloat(s, 64)
 }
 
 // truncateForError trims a possibly-large response body for inclusion in an error string. Avoids dumping a multi-MB SigNoz

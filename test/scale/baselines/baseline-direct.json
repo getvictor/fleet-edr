@@ -2,7 +2,6 @@
   "start_time": "2026-05-26T07:41:54.327901-05:00",
   "end_time": "2026-05-26T08:11:54.340436-05:00",
   "duration": 1800001183042,
-  "mode": "direct",
   "host_count": 100,
   "quiet_host_count": 80,
   "active_host_count": 20,

@@ -63,8 +63,12 @@ func TestM12_Smoke_Headless(t *testing.T) {
 	assert.Equal(t, 1, rep.QuietHostCount, "1 quiet (floor(3 * 0.6))")
 	assert.Equal(t, 2, rep.ActiveHostCount, "2 active (remainder)")
 	assert.Zero(t, rep.ErrorCount, "no errors under smoke load; PerHost has LastError per host on failure")
-	assert.Positive(t, rep.QueueDepthSamples, "headless mode must produce at least one /state poll sample")
-	assert.Positive(t, rep.ObservationCount, "every host should inject at least one envelope within the 5s window")
+	// Tighter lower bounds (CodeRabbit #277): expected ~75 queue-depth samples (3 hosts x 5s / 200ms = ~25 per host),
+	// expected ~15 observations (3 hosts x scenario replays per second). Set the floors at 20 samples + 5 observations
+	// so a regression that drops the poller cadence or breaks the scenario feeder lands here, not as a silently-passing
+	// `> 0` check. The previous baseline values establish what "healthy" looks like even under suite-wide slow MySQL.
+	assert.GreaterOrEqual(t, rep.QueueDepthSamples, 20, "headless mode must produce >= 20 /state poll samples (3 hosts x 5s / 200ms ~ 75)")
+	assert.GreaterOrEqual(t, rep.ObservationCount, 5, "every host should inject at least one envelope within the 5s window")
 	assert.True(t, rep.Pass, "smoke must pass; FailReasons=%v", rep.FailReasons)
 	// SigNoz cross-check is opt-in; the smoke does not set SigNozURL so the report must carry neither the value nor
 	// the soft-error field.

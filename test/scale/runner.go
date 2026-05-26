@@ -143,10 +143,10 @@ type Options struct {
 	QueueDepthPollInterval time.Duration
 
 	// SigNozURL is the optional base URL of a SigNoz query API (e.g. "http://localhost:8080"). When non-empty, the
-	// post-run aggregation issues one query for http.server.request.duration p99 over the run's time window and records
-	// it in Report.ServerLatencyP99 + Report.ClientServerDeltaP99. A failed SigNoz query is a soft error: it surfaces in
-	// the report's SigNozQueryError field but does not flip the Pass gate, since the cross-check is an operator-facing
-	// diagnostic, not a contract.
+	// post-run aggregation issues one query for the metric named by signozMetricHTTPServerDuration (currently
+	// "http.server.duration") p99 over the run's time window and records it in Report.ServerLatencyP99 +
+	// Report.ClientServerDeltaP99. A failed SigNoz query is a soft error: it surfaces in the report's SigNozQueryError
+	// field but does not flip the Pass gate, since the cross-check is an operator-facing diagnostic, not a contract.
 	SigNozURL string
 
 	// PassMaxQueueDepth optionally extends the pass criteria with a max-queue-depth ceiling. When > 0, the run fails if
@@ -239,21 +239,9 @@ type HostReport struct {
 // host goroutines are recorded into the Report (HostReport.LastError + Report.ErrorCount); they do NOT abort the lane, so a
 // transient server hiccup does not collapse the whole observation set.
 func Run(ctx context.Context, opts Options) (Report, error) {
-	if opts.ServerURL == "" {
-		return Report{}, errors.New("scale: ServerURL is required")
-	}
-	if opts.EnrollSecret == "" {
-		return Report{}, errors.New("scale: EnrollSecret is required")
-	}
-	opts = defaultOptions(opts)
-	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
-		return Report{}, fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
-	}
-	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
-		return Report{}, errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
-	}
-	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
-		return Report{}, errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
+	opts, err := validateOptions(opts)
+	if err != nil {
+		return Report{}, err
 	}
 	if opts.Mode == ModeHeadless {
 		// Linux ulimit fail-fast: each headless host opens a SQLite WAL + a unix socket + a small keepalive TCP pool, so
@@ -271,9 +259,10 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	}
 
 	httpClient := buildHTTPClient(opts.AllowInsecureTLS)
+	// Mode is deliberately left empty for direct runs so the `omitempty` JSON tag drops it; that's the contract the v1
+	// committed baseline encodes (no "mode" key). Headless mode sets Mode explicitly in runHeadless (Copilot #277).
 	rep := Report{
 		StartTime: time.Now(),
-		Mode:      ModeDirect,
 		HostCount: opts.HostCount,
 		PassP99:   opts.PassP99,
 		PerHost:   make([]HostReport, opts.HostCount),
@@ -341,10 +330,11 @@ type hostState struct {
 // run drives one simulated host: enroll once, then loop PostDirect + sleep until ctx cancels. Errors are recorded into hostState
 // but do not abort the loop; a per-host backoff would smooth retries but adds complexity disproportionate to v1's goals.
 //
-// Startup stagger: each host sleeps for `(index / hostCount) * enrollStaggerWindow` before its first enroll attempt so 100
-// host-goroutines firing simultaneously don't pile up at /api/enroll's per-IP rate limiter (the baseline-direct attempt at
-// 2026-05-26 dropped 70/100 hosts on enroll 429 with the previous zero-stagger shape). hostCount is read off the runner's
-// configured count so a smaller test fan-out stays sub-second.
+// Startup stagger: each host sleeps for `min(index * enrollStaggerInterval, enrollStaggerWindow)` before its first enroll
+// attempt so 100 host-goroutines firing simultaneously don't pile up at /api/enroll's per-IP rate limiter (the
+// baseline-direct attempt on 2026-05-26 dropped 70/100 hosts on enroll 429 with the previous zero-stagger shape). For a
+// small fan-out (smoke tests at HostCount<=10) the cumulative stagger stays under a few seconds; the hostCount parameter
+// is unused today but kept in the signature for symmetry with a future "scale stagger by count" variant.
 func (h *hostState) run(
 	ctx context.Context, serverURL, enrollSecret string, client *http.Client, hostCount int,
 ) {
@@ -596,6 +586,42 @@ func parseRetryAfter(raw string) time.Duration {
 		return enrollRetryMaxGap
 	}
 	return gap
+}
+
+// validateOptions performs every up-front argument check Run does at entry: required fields, value-range constraints, Mode
+// enum membership. Extracted from Run so the entry function stays under Sonar S3776's cognitive-complexity budget. Returns
+// the defaults-filled Options so the caller assigns it back as `opts, err := validateOptions(opts)`.
+func validateOptions(opts Options) (Options, error) {
+	if opts.ServerURL == "" {
+		return opts, errors.New("scale: ServerURL is required")
+	}
+	if opts.EnrollSecret == "" {
+		return opts, errors.New("scale: EnrollSecret is required")
+	}
+	opts = defaultOptions(opts)
+	// Reject unknown Mode values rather than silently falling back to direct. A typo like --mode=headles would otherwise
+	// run direct mode and invalidate the scale results while appearing successful (Copilot + CodeRabbit #277).
+	switch opts.Mode {
+	case ModeDirect, ModeHeadless:
+	default:
+		return opts, fmt.Errorf("scale: invalid Mode %q (allowed: %q, %q)", opts.Mode, ModeDirect, ModeHeadless)
+	}
+	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
+		return opts, fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
+	}
+	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
+		return opts, errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
+	}
+	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
+		return opts, errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
+	}
+	if opts.Mode == ModeHeadless && opts.QueueDepthPollInterval <= 0 {
+		// defaultOptions resolved zero -> defaultQueueDepthPollInterval, but a negative value passed in by a misconfigured
+		// caller would survive that and panic in time.NewTicker (CodeRabbit #277).
+		return opts, fmt.Errorf("scale: QueueDepthPollInterval must be > 0 in headless mode, got %s",
+			opts.QueueDepthPollInterval)
+	}
+	return opts, nil
 }
 
 func defaultOptions(o Options) Options {

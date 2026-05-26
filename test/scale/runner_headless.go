@@ -1,5 +1,10 @@
-//go:build !darwin || !cgo
+//go:build !windows && (!darwin || !cgo)
 
+// Build tag (Copilot #277): the previous `!darwin || !cgo` tag included Windows, but this file implements ModeHeadless
+// via unix-domain sockets (net.Listen / net.Dial "unix") which Windows doesn't support. Excluding windows here makes
+// `runner_headless_unsupported.go` the live runHeadless on Windows, which returns a clear error rather than failing at
+// runtime inside the dial. Linux + darwin-without-cgo are the only platforms where ModeHeadless is actually exercised
+// today; the build tag now matches reality.
 package scale
 
 import (
@@ -309,7 +314,12 @@ func (h *headlessHostState) pollState(ctx context.Context, interval time.Duratio
 		case <-ticker.C:
 			state, err := readControlState(ctx, client, h.socketPath)
 			if err != nil {
-				h.recordErr("poll /state: " + err.Error())
+				// Guard against false-positive error counts at end-of-run: when runCtx expires the in-flight readControlState
+				// returns context.Canceled. Recording that as a poll error would inflate Report.ErrorCount and flip Pass
+				// to false (Gemini #277). Only record when the context is still live - a real /state failure mid-run.
+				if ctx.Err() == nil {
+					h.recordErr("poll /state: " + err.Error())
+				}
 				continue
 			}
 			h.mu.Lock()
@@ -346,9 +356,15 @@ type scaleTokenProvider struct {
 	hostID string
 }
 
-func (s *scaleTokenProvider) Token() string                            { return s.token }
-func (s *scaleTokenProvider) HostID() string                           { return s.hostID }
-func (s *scaleTokenProvider) OnUnauthorized(_ context.Context)         {}
+func (s *scaleTokenProvider) Token() string  { return s.token }
+func (s *scaleTokenProvider) HostID() string { return s.hostID }
+
+// OnUnauthorized is intentionally a no-op in scale runs: a 401 from the server in headless mode is a setup/test bug
+// (mismatched enroll secret, server-side token revoke), not a re-enroll trigger. The scale runner aborts the host on
+// any persistent error path through the uploader's quarantine; the per-host LastError captures the diagnostic and the
+// run's pass gate flips. Sonar S1186 fix - explicit no-op comment per the rule (#277).
+func (s *scaleTokenProvider) OnUnauthorized(_ context.Context) {}
+
 func (s *scaleTokenProvider) Rotate(_ context.Context, _ string) error { return nil }
 
 // controlState mirrors the headless package's stateResponse so the scale runner can parse /state without importing the
@@ -389,10 +405,16 @@ func readControlState(ctx context.Context, client *http.Client, socketPath strin
 // unixSocketHTTPClient builds an HTTP client whose Transport dials the host's unix socket. The "host" portion of any URL
 // the client sees is ignored - net.Dialer in the Transport overrides the network/addr. A short Timeout keeps a hung
 // control plane from blocking the runner's wall clock; the call sites use parent context for cancellation too.
+//
+// DisableKeepAlives is true so each /state poll closes its connection immediately. Without this, the per-host poller
+// keeps a unix-socket FD open across the QueueDepthPollInterval ticks; at 100 hosts that's 100 idle FDs sitting in the
+// Transport's idle-conn pool, and the poller is the dominant FD-consuming code path. Closing per-call keeps the
+// headless lane comfortably under the ulimit budget (Gemini #277).
 func unixSocketHTTPClient(socketPath string) *http.Client {
 	return &http.Client{
 		Timeout: 2 * time.Second,
 		Transport: &http.Transport{
+			DisableKeepAlives: true,
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				var d net.Dialer
 				return d.DialContext(ctx, "unix", socketPath)
