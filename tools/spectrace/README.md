@@ -6,17 +6,55 @@ the codebase via the canonical-ID marker contract documented in `docs/testing-st
 ## Subcommands
 
 ```text
-spectrace check      [--specs-dir DIR] [--root DIR] [--strict]
-spectrace list-ids   [--specs-dir DIR] [--normative-only]
+spectrace check    [--specs-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]
+spectrace list-ids [--specs-dir DIR] [--normative-only]
+spectrace report   [--specs-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 ```
 
 - `check` walks every `#### Scenario:` under a `### Requirement:` whose body contains the RFC 2119 keywords SHALL or
   MUST, computes the canonical ID, and scans `*.go`, `*.ts`, `*.tsx`, `*.swift`, `*.yml`, `*.yaml`, and `*.sh` for
   matching markers. Prints the coverage delta to stdout and the gap list to stderr. Exit code is 0 unless an invalid
-  reference is present, or `--strict` is set and at least one normative scenario is uncovered.
+  reference is present, or `--strict` is set and at least one normative scenario in the gated set is uncovered.
+  - `--by-layer` annotates the gap report with the layer coverage profile (L0..L6, Other) for each scenario so a
+    contributor reading the list can see "covered at L1 but missing L4." For the full per-cell detail with file:line
+    links, use `spectrace report` instead.
+  - `--new-code` restricts the gate to scenarios whose `spec.md` lines (heading or enclosing requirement body) changed
+    in the current branch relative to `--base-ref` (default `origin/main`). The diff is taken against the merge base,
+    mirroring SonarCloud's "new code on this PR" framing: an existing legacy gap doesn't block a PR that doesn't touch
+    it, but a new gap added by the PR does. Modifying the SHALL/MUST text in a requirement body promotes every
+    scenario under that requirement into the new-code set, so tightening a requirement forces its covering tests to be
+    re-considered. Scope is intentionally **spec-diff only**: a PR that deletes a marker in code without touching the
+    spec does NOT cause `--strict --new-code` to fire on the now-uncovered scenario. Use plain `--strict` to gate on
+    that shape; the rationale for the narrower scope is that a marker delete is usually intentional (the test moved or
+    the scenario merged) and a contributor renaming code paths shouldn't be forced to re-mark every scenario the file
+    touched.
 
 - `list-ids` prints the canonical scenario IDs, one per line, so contributors can copy a marker without typing the slug.
   `--normative-only` restricts the output to SHALL / MUST scenarios (the gateable set).
+
+- `report` renders the Markdown coverage matrix: one row per scenario, one column per layer (L0..L6, plus an `Other`
+  column for non-test enforcement markers such as workflow YAML or packaging shell scripts, rendered only when needed).
+  Each cell is a comma-separated list of `[basename:line](path#Lline)` Markdown links pointing at every marker that
+  covers the scenario at that layer. `--output FILE` writes the matrix to a file instead of stdout. The subcommand
+  never gates; CI can grep the rendered matrix for empty cells if a presentation-layer gate is wanted later.
+
+### Layer classifier
+
+The layer assigned to a marker is derived from its repo-relative file path by `tools/spectrace/layer.go`:
+
+| Path prefix | Layer |
+|---|---|
+| `test/efficacy/...` | L6 (Detection efficacy) |
+| `test/e2e/tests/...` | L4 (Browser E2E) |
+| `test/integration/agentserver/...` | L3 (Headless agent + server) |
+| `test/integration/...` | L2 (Cross-context integration) |
+| `server/<context>/internal/tests/...` | L1 (Per-context integration) |
+| `**/*_test.go`, `*.test.ts(x)`, `**/Tests/*.swift` | L0 (Unit) |
+| Everything else (workflow YAML, packaging shell) | Other |
+
+L5 (System / VM) is intentionally not auto-detected: there is no path prefix that uniquely identifies an L5 test in
+this repo (the VM driver lives under `scripts/uat/` and runs scenarios out of `test/efficacy/corpus/.../attack.sh`). If
+a future L5 harness lands with its own path prefix, add the case to `ClassifyLayer` in `layer.go`.
 
 ## Phased rollout
 
@@ -60,16 +98,6 @@ segments of lowercase alphanumerics + dashes). Markdown files are intentionally 
 work syntactically: `docs/testing-strategy.md` carries illustrative marker examples that would inflate the coverage
 count if scanned. Add `.md` to the ext gate alongside a `docs/testing-strategy.md` skip-rule if that boundary ever
 needs to move.
-
-## What this tool does NOT do (v1)
-
-- **`report --format=md` coverage matrix.** Mentioned in `docs/testing-strategy.md` as a future shape; deferred to a
-  follow-up so the M13 budget stays on the linter. The same data the `check` command collects already feeds the gate.
-- **Per-layer columns** in the gap list (L0 vs L1 vs L4 etc). Today the marker location is reported as a file path;
-  classifying by layer would require either path heuristics or per-marker metadata. Not worth the complexity until the
-  backlog is small enough that a person reads the list.
-- **New-code gate semantics** (fail only on scenarios touched in the current PR). The `--strict` flag is the full-gate
-  toggle; a follow-up can add a `--new-code` flag once main has a non-trivial number of markers landed.
 
 ## Exclusion
 

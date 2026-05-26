@@ -2,22 +2,26 @@
 // SHALL / MUST `### Requirement:` in openspec/specs/<dir>/spec.md to a test marker somewhere in the codebase. The marker
 // syntax and the canonical-ID slug rule are documented in docs/testing-strategy.md.
 //
-// Two subcommands ship in v1:
+// Three subcommands ship:
 //
 //	tools/spectrace check         walks specs + sources, prints a coverage gap report, exits 1 on INVALID references and
-//	                              (with --strict) on uncovered SHALL / MUST scenarios.
+//	                              (with --strict) on uncovered SHALL / MUST scenarios. --new-code scopes the gate to
+//	                              scenarios added or modified in the current PR (via git diff against the merge base).
+//	                              --by-layer expands the gap output with the per-layer coverage profile so contributors
+//	                              can see which test rung is missing.
 //	tools/spectrace list-ids      prints every canonical scenario ID, one per line. Useful when authoring a test marker
 //	                              without typing the slug by hand.
-//
-// The `report --format=md` coverage matrix mentioned in docs/testing-strategy.md is intentionally deferred to a follow-up:
-// it's a presentation layer over the same data the check command already collects, and the M13 budget is the linter.
+//	tools/spectrace report        renders a Markdown coverage matrix (one row per scenario, one column per layer L0..L6
+//	                              and an optional Other column for non-test enforcement markers) to stdout or --output.
+//	                              No gating; the matrix is for humans + PR comments.
 //
 // Phased rollout matches the plan's "never goes red on day one" guidance: the CI workflow this binary feeds is advisory by
-// default (exit code is 0 when there are uncovered SHALL / MUST scenarios but no invalid references), and the --strict flag
-// is the future "full gate" toggle.
+// default (exit code is 0 when there are uncovered SHALL / MUST scenarios but no invalid references), --strict is the
+// "full gate" toggle, and --new-code is the SonarCloud-style "fail only on the delta this PR introduced" intermediate.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -42,6 +46,8 @@ func main() {
 		os.Exit(runCheck(rest))
 	case "list-ids":
 		os.Exit(runListIDs(rest))
+	case "report":
+		os.Exit(runReport(rest))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -56,13 +62,19 @@ func usage() {
 	fmt.Fprint(os.Stderr, `spectrace - openspec spec-to-test traceability linter
 
 Usage:
-  spectrace check      [--specs-dir DIR] [--root DIR] [--strict]
-  spectrace list-ids   [--specs-dir DIR] [--normative-only]
+  spectrace check    [--specs-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]
+  spectrace list-ids [--specs-dir DIR] [--normative-only]
+  spectrace report   [--specs-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
 Subcommands:
-  check       Walk specs and codebase; report uncovered scenarios and invalid references.
-              Exit code 0 unless --strict is set or invalid references are present.
-  list-ids    Print canonical scenario IDs, one per line.
+  check     Walk specs and codebase; report uncovered scenarios and invalid references.
+            Exit code 0 unless --strict is set or invalid references are present.
+            --by-layer  Annotate the gap report with per-layer coverage (L0..L6).
+            --new-code  Gate only on scenarios added or modified in the current PR (diff against --base-ref).
+            --base-ref  Git revision the merge base is computed against (default: origin/main).
+  list-ids  Print canonical scenario IDs, one per line.
+  report    Render the Markdown coverage matrix (one row per scenario, one column per layer).
+            Exit code 0 on a clean render; the subcommand never gates.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)
@@ -71,31 +83,39 @@ See docs/testing-strategy.md for the marker syntax and rollout plan.
 // runCheck loads every scenario from --specs-dir, every marker from --root, and reports the coverage diff. Exit codes:
 //
 //	0 = clean (or only advisory issues without --strict)
-//	1 = invalid references present, OR --strict and uncovered SHALL/MUST scenarios present
+//	1 = invalid references present, OR --strict and uncovered SHALL/MUST scenarios in the gated set
 //	2 = usage / IO error
+//
+// --new-code restricts the gated SHALL/MUST set to scenarios added or modified in the current branch relative to
+// --base-ref (default origin/main). The framing matches SonarCloud's "new code" gate: an unfixed legacy gap doesn't
+// block a PR that doesn't touch it, but a new gap added by the PR does. --by-layer expands the gap output with the
+// per-layer coverage profile per scenario so contributors can see which test rung is missing.
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	specsDir := fs.String("specs-dir", defaultSpecsDir, "root of the openspec/specs tree")
 	rootDir := fs.String("root", defaultRootDir, "root of the source tree to scan for markers")
 	strict := fs.Bool("strict", false, "exit non-zero if any SHALL/MUST scenario is uncovered")
+	byLayer := fs.Bool("by-layer", false, "annotate the gap report with per-layer coverage (L0..L6)")
+	newCode := fs.Bool("new-code", false, "gate only on scenarios added or modified in the current branch")
+	baseRef := fs.String("base-ref", defaultBaseRef, "git revision the merge base is computed against (for --new-code)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	scenarios, err := ParseAllSpecs(*specsDir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "spectrace: parse specs:", err)
-		return 2
+	// Promote --specs-dir / --root to their repo-root-relative form so spectrace works whether invoked from the repo
+	// top-level (CI shape) or a nested package (Copilot's PR #281 concern). Defaults bind to the repo root unconditionally
+	// because their literal cwd-relative meaning is rarely the intent; explicit values keep cwd-first semantics.
+	setFlags := userSetFlagNames(fs)
+	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	*rootDir = resolvePathFlag(*rootDir, setFlags["root"])
+
+	scenarios, markers, exitCode := loadScenariosAndMarkers(*specsDir, *rootDir)
+	if exitCode != 0 {
+		return exitCode
 	}
-	canonical, dupErr := buildCanonicalSet(scenarios)
-	if dupErr != nil {
-		fmt.Fprintln(os.Stderr, "spectrace:", dupErr)
-		return 2
-	}
-	markers, err := ScanMarkers(*rootDir, canonical)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "spectrace: scan markers:", err)
-		return 2
+	canonical := make(map[string]struct{}, len(scenarios))
+	for _, s := range scenarios {
+		canonical[s.ID] = struct{}{}
 	}
 
 	covered := make(map[string][]Marker, len(markers))
@@ -110,16 +130,75 @@ func runCheck(args []string) int {
 
 	uncoveredNormative, uncoveredAdvisory := splitUncovered(scenarios, covered)
 
+	gatedNormative := uncoveredNormative
+	if *newCode {
+		newCodeIDs, err := computeNewCodeScenarioIDs(context.Background(), *specsDir, *baseRef)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "spectrace --new-code:", err)
+			return 2
+		}
+		gatedNormative = filterByIDSet(uncoveredNormative, newCodeIDs)
+		fmt.Printf("spectrace: --new-code scope: %d scenarios touched in branch (vs %s)\n",
+			len(newCodeIDs), *baseRef)
+	}
+
 	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid)
+	if *byLayer {
+		printByLayer(scenarios, covered)
+	}
 
 	switch {
 	case len(invalid) > 0:
 		return 1
-	case *strict && len(uncoveredNormative) > 0:
+	case *strict && len(gatedNormative) > 0:
 		return 1
 	default:
 		return 0
 	}
+}
+
+// filterByIDSet keeps only scenarios whose ID is in the set. Used by --new-code to scope the gate to scenarios touched
+// by the current branch.
+func filterByIDSet(in []Scenario, ids map[string]struct{}) []Scenario {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := in[:0:0]
+	for _, s := range in {
+		if _, ok := ids[s.ID]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// printByLayer writes a per-scenario layer coverage map to stderr. Each line is `<id> [L0,L4]` listing the labels of the
+// layers that cover the scenario; empty brackets mean the scenario is uncovered. The output is intentionally compact so a
+// human skimming a 200-scenario report can scan it; for the full detail (with file:line links per cell), use
+// `spectrace report --format=md`.
+func printByLayer(scenarios []Scenario, covered map[string][]Marker) {
+	fmt.Fprintln(os.Stderr, "\nPer-layer coverage (--by-layer):")
+	for _, s := range scenarios {
+		fmt.Fprintf(os.Stderr, "  %s [%s]\n", s.ID, layerLabelsFor(covered[s.ID]))
+	}
+}
+
+// layerLabelsFor returns a comma-separated list of the unique layer labels that cover the scenario. Empty if no markers.
+func layerLabelsFor(markers []Marker) string {
+	seen := make(map[Layer]struct{}, len(markers))
+	for _, m := range markers {
+		seen[m.Layer] = struct{}{}
+	}
+	var labels []string
+	for _, l := range allTestLayers {
+		if _, ok := seen[l]; ok {
+			labels = append(labels, l.Label())
+		}
+	}
+	if _, ok := seen[LayerOther]; ok {
+		labels = append(labels, LayerOther.Label())
+	}
+	return strings.Join(labels, ",")
 }
 
 // buildCanonicalSet builds the lookup map used to validate marker references AND fails fast if two scenarios slug to the
@@ -203,6 +282,7 @@ func runListIDs(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	*specsDir = resolvePathFlag(*specsDir, userSetFlagNames(fs)["specs-dir"])
 	scenarios, err := ParseAllSpecs(*specsDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spectrace: parse specs:", err)

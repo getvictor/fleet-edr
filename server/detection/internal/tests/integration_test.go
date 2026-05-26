@@ -2062,11 +2062,21 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 				readTime = forkTime + 100 // = exit timestamp; inclusive read
 			}
 
-			// Wait for the initial events to land.
+			// Wait for ALL initial events to drain through the processor before snapshotting the row. The earlier shape
+			// only waited for GetProcessDetail to return non-nil, which fires as soon as the exec row exists; if the
+			// exit event hasn't been processed yet, `before` ends up with ExitTimeNs=nil and the post-heartbeat snapshot
+			// (taken after the processor catches up) shows ExitTimeNs set, which then trips the "heartbeat MUST NOT
+			// change exit_time_ns" assertion against the heartbeat for an exit the heartbeat had nothing to do with.
+			// Gating on CountUnprocessed==0 ensures both the exec and the exit (when there is one) are durably reflected
+			// in the read model before the snapshot. Pre-existing race surfaced on PR #281.
 			require.Eventually(t, func() bool {
+				n, err := d.Store().CountUnprocessed(ctx)
+				if err != nil || n != 0 {
+					return false
+				}
 				p, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
 				return err == nil && p != nil
-			}, 5*time.Second, 50*time.Millisecond)
+			}, 5*time.Second, 25*time.Millisecond, "initial events must drain and the row must be visible before snapshot")
 
 			// Snapshot the row's pre-heartbeat state.
 			before, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)

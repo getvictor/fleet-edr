@@ -12,11 +12,14 @@ import (
 
 // Marker is one reference to a spec ID found in the codebase. SourcePath is normalised to a forward-slash repo-relative
 // path (e.g. `test/scale/scale_test.go`) so report output is the same whether the caller invoked `spectrace check` with
-// `--root=.` or an absolute path.
+// `--root=.` or an absolute path. Layer is the test-pyramid rung the marker belongs to (see layer.go); it's populated by
+// ClassifyLayer at scan time so downstream consumers (the coverage matrix, the --by-layer gap output, the --new-code
+// filter) do not re-derive it.
 type Marker struct {
 	ID         string
 	SourcePath string
 	SourceLine int
+	Layer      Layer
 }
 
 // markerRE captures candidate IDs after the literal `spec:` prefix. The capture allows uppercase, underscores, and
@@ -145,16 +148,17 @@ func scanFile(r io.Reader, path string, isSwift bool, canonicalIDs map[string]st
 	var out []Marker
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	layer := ClassifyLayer(path)
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
 		line := scanner.Text()
 		for _, m := range markerRE.FindAllStringSubmatch(line, -1) {
-			out = append(out, Marker{ID: m[1], SourcePath: path, SourceLine: lineNo})
+			out = append(out, Marker{ID: m[1], SourcePath: path, SourceLine: lineNo, Layer: layer})
 		}
 		if isSwift {
 			for _, m := range swiftMarkerRE.FindAllStringSubmatch(line, -1) {
-				out = append(out, resolveSwiftMarker(m[1], path, lineNo, swiftIndex))
+				out = append(out, resolveSwiftMarker(m[1], path, lineNo, layer, swiftIndex))
 			}
 		}
 		_ = canonicalIDs // unused; reserved for future per-line validation hooks
@@ -170,15 +174,15 @@ func scanFile(r io.Reader, path string, isSwift bool, canonicalIDs map[string]st
 //	                                      is the failure shape when two canonical IDs share a Swift form (e.g. `foo-bar`
 //	                                      vs `foo/bar`); a non-deterministic "first match wins" would attribute coverage
 //	                                      to the wrong scenario across runs.
-func resolveSwiftMarker(body, path string, lineNo int, swiftIndex map[string][]string) Marker {
+func resolveSwiftMarker(body, path string, lineNo int, layer Layer, swiftIndex map[string][]string) Marker {
 	matches := swiftIndex[body]
 	switch len(matches) {
 	case 1:
-		return Marker{ID: matches[0], SourcePath: path, SourceLine: lineNo}
+		return Marker{ID: matches[0], SourcePath: path, SourceLine: lineNo, Layer: layer}
 	case 0:
-		return Marker{ID: "swift:" + body, SourcePath: path, SourceLine: lineNo}
+		return Marker{ID: "swift:" + body, SourcePath: path, SourceLine: lineNo, Layer: layer}
 	default:
-		return Marker{ID: "swift-ambiguous:" + body, SourcePath: path, SourceLine: lineNo}
+		return Marker{ID: "swift-ambiguous:" + body, SourcePath: path, SourceLine: lineNo, Layer: layer}
 	}
 }
 
