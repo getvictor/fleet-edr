@@ -77,11 +77,14 @@ func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int
 		// Any of the documented 400 error codes is acceptable. The fuzz pins the SET of codes; a stray code is a finding.
 		switch {
 		case errCode == "invalid_json":
-			// Implies the JSON parse failed. The body either isn't well-formed JSON OR doesn't deserialize into []api.Event.
+			// Implies the JSON parse failed OR the body deserialized to nil (literal `null`, treated as a parse failure).
 		case errCode == "host_id_mismatch":
 			// Implies at least one event's host_id != pinnedHostID. We don't re-parse the body here to confirm — the parse
 			// produced events, then a validation step caught the mismatch. Trusting the function's own report.
 			_ = pinnedHostID
+		case errCode == "too_many_events":
+			// Implies the parsed array exceeded MaxIngestEventsPerRequest. Memory-amplification defense; the cap fires
+			// before the per-event validation loop.
 		case strings.HasPrefix(errCode, "missing_fields_at_"):
 			// Implies an event at some index missed one of {event_id, host_id, event_type, timestamp_ns}.
 		default:
@@ -133,14 +136,20 @@ func seedCorpus(f *testing.F) {
     ]`))
 
 	// Adversarial / pathological shapes the fuzz engine might not synthesize on its own.
-	f.Add(deepNestedArray(64))                      // deeply-nested JSON arrays — JSON decoder stack
-	f.Add(bytes.Repeat([]byte{0}, 256))             // a NULL-byte block
-	f.Add([]byte(`["\xff"]`))                       // invalid UTF-8 inside a JSON string (\xff is not legal UTF-8)
+	f.Add(deepNestedArray(64))          // deeply-nested JSON arrays — JSON decoder stack
+	f.Add(bytes.Repeat([]byte{0}, 256)) // a NULL-byte block
+	// `["\xff"]` literal: the bytes on disk are the 8 ASCII characters [ " \ x f f " ]. Valid UTF-8 (no 0xFF byte ever
+	// hits the parser); the JSON decoder rejects the input because `\xff` is not a recognized JSON escape sequence. This
+	// seed exercises the escape-handling path, not the UTF-8-validity path.
+	f.Add([]byte(`["\xff"]`))
+	// Raw 0xFF byte inside the JSON string — actual invalid UTF-8 on the wire. The decoder's UTF-8 validity check
+	// catches this one (distinct path from the escape-sequence rejection above).
+	f.Add([]byte("[\"" + string([]byte{0xff}) + "\"]"))
 	f.Add([]byte("[\"\x00\"]"))                     // U+0000 in a JSON string — historically a parser footgun
 	f.Add([]byte("[{\"event_id\":\"e\x00nuls\"}]")) // NULs inside required-string field — exercise len()-vs-empty check
 	// Long string field (~64 KiB event_id) to exercise large-value paths within the body cap.
 	long := bytes.Repeat([]byte("a"), 64*1024)
-	f.Add([]byte(fmt.Sprintf(`[{"event_id":%q,"host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1,"payload":{}}]`, long)))
+	f.Add(fmt.Appendf(nil, `[{"event_id":%q,"host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1,"payload":{}}]`, long))
 	// Mixed-validity ASCII + UTF-8 in a host_id (assert the comparator handles non-ASCII without crashing).
 	if utf8.ValidString("ñöß-host") {
 		f.Add([]byte(`[{"event_id":"e1","host_id":"ñöß-host","event_type":"exec","timestamp_ns":1,"payload":{}}]`))
