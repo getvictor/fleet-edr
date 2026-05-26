@@ -234,6 +234,14 @@ func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEven
 	if errors.As(err, &clientErr) && u.cfg.ClientErrorQuarantineThreshold > 0 {
 		u.recordClientErrorAndAudit(ctx, ids, clientErr.statusCode, len(batch))
 	}
+	// Context cancellation / deadline is an EXPECTED outcome during graceful shutdown - the shutdown drain runs against a
+	// bounded WithTimeout context, and one truncated drain attempt on a degraded server is not an operator-actionable error
+	// (Gemini #276). Log at warn so dashboards keyed on uploader error rate don't false-trip on every shutdown.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		u.logger.WarnContext(ctx, "uploader upload aborted by context cancellation",
+			"err", err, "batch_size", len(batch))
+		return err
+	}
 	u.logger.ErrorContext(ctx, "uploader upload failed", "err", err, "batch_size", len(batch))
 	return err
 }
@@ -242,27 +250,26 @@ func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEven
 // each half is uploadBatch'd; a single-event batch is dropped (MarkUploaded + WARN log + metric increment). The drop path is
 // durable BEFORE the metric is recorded so a crash between MarkUploaded and the counter Add doesn't leave the queue and the
 // counter out of step.
+//
+// Shutdown-aware split (Gemini #276): between the two halves we honor `ctx.Err()` so the shutdown drain (bounded by
+// shutdownDrainTimeout) doesn't burn its budget POSTing the second half after the parent context already cancelled. If the
+// first half succeeded but the context cancels before the second, the second-half events stay queued (uploaded=0) for the
+// next agent start to pick up.
 func (u *Uploader) handleBodyTooLarge(ctx context.Context, batch []queue.QueuedEvent) error {
 	if len(batch) == 1 {
-		ev := batch[0]
-		if err := u.queue.MarkUploaded(ctx, []int64{ev.ID}); err != nil {
-			u.logger.ErrorContext(ctx, "uploader mark uploaded for dropped over-size event",
-				"err", err, "event_db_id", ev.ID)
-			return err
-		}
-		u.logger.WarnContext(ctx, "uploader dropped single event that exceeds server body cap",
-			"audit", "uploader.events_dropped_too_large",
-			"event_db_id", ev.ID,
-			"event_json_bytes", len(ev.EventJSON),
-		)
-		if u.metrics != nil {
-			u.metrics.EventsDroppedTooLarge(ctx, 1)
-		}
-		return nil
+		return u.dropOverSizeEvent(ctx, batch[0])
 	}
 
 	mid := len(batch) / 2
 	firstErr := u.uploadBatch(ctx, batch[:mid])
+	if err := ctx.Err(); err != nil {
+		// Parent context cancelled between halves. The first-half outcome already landed (success → MarkUploaded;
+		// failure → batch stays queued). The second half stays queued for a future drain tick / next agent start.
+		if firstErr != nil {
+			return firstErr
+		}
+		return err
+	}
 	secondErr := u.uploadBatch(ctx, batch[mid:])
 	// Surface either half's failure to the caller; both failing is not common in practice (a real 413 storm converges
 	// on single-event leaves, which drop without erroring), so the first non-nil is informative enough.
@@ -270,6 +277,33 @@ func (u *Uploader) handleBodyTooLarge(ctx context.Context, batch []queue.QueuedE
 		return firstErr
 	}
 	return secondErr
+}
+
+// dropOverSizeEvent is the single-event 413 drop path lifted out of handleBodyTooLarge so the parent stays linear (Sonar
+// S3776 cognitive-complexity budget) and the spec-required event_id extraction has one call site. The event_id is pulled
+// out of EventJSON via a minimal Unmarshal into a struct holding only the event_id field - if the JSON is malformed or the
+// field is missing, the log line carries an empty event_id and the queue row id (event_db_id) still uniquely identifies the
+// event for operators (Copilot #276 spec-compliance fix).
+func (u *Uploader) dropOverSizeEvent(ctx context.Context, ev queue.QueuedEvent) error {
+	if err := u.queue.MarkUploaded(ctx, []int64{ev.ID}); err != nil {
+		u.logger.ErrorContext(ctx, "uploader mark uploaded for dropped over-size event",
+			"err", err, "event_db_id", ev.ID)
+		return err
+	}
+	var meta struct {
+		EventID string `json:"event_id"`
+	}
+	_ = json.Unmarshal(ev.EventJSON, &meta) // best-effort; empty event_id is logged if the JSON is malformed
+	u.logger.WarnContext(ctx, "uploader dropped single event that exceeds server body cap",
+		"audit", "uploader.events_dropped_too_large",
+		"event_id", meta.EventID,
+		"event_db_id", ev.ID,
+		"event_json_bytes", len(ev.EventJSON),
+	)
+	if u.metrics != nil {
+		u.metrics.EventsDroppedTooLarge(ctx, 1)
+	}
+	return nil
 }
 
 // recordClientErrorAndAudit is the #253 poisoned-events bookkeeping path extracted out of drainOnce. Bumps the per-row

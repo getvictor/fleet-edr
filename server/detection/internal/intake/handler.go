@@ -27,11 +27,19 @@ const MaxIngestEventsPerRequest = 10_000
 
 // ParseAndValidateIngestBody is the parse + per-event validation half of POST /api/events, lifted out of handleIngest so the fuzz
 // harness can drive it without a full HTTP server + Detection store. Returns (events, http.StatusOK, "") on success, or
-// (nil, 4xx, errCode) on parse / validation failure. The error codes are the same stable set the HTTP handler emits:
-// "invalid_json", "missing_fields_at_<i>", "host_id_mismatch", "too_many_events". The body-cap (413) check is upstream of
-// this function (in readBodyWithCap); the store-insert (5xx) is downstream of it. The fuzz contract is therefore: every
+// (4xx/5xx, errCode) on parse / validation failure. The error codes are the same stable set the HTTP handler emits:
+// "invalid_json", "missing_fields_at_<i>", "host_id_mismatch", "too_many_events". The body-byte cap (413 body_too_large) is
+// upstream of this function (in readBodyWithCap); the store-insert (5xx) is downstream. The fuzz contract is therefore: every
 // output MUST be one of {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
-// (400, "too_many_events")} - anything else is a finding.
+// (413, "too_many_events")} - anything else is a finding.
+//
+// too_many_events is 413 not 400 (Copilot #276). The agent's uploader classifies 400 as a generic clientError that goes
+// through the #253 quarantine path, so a misconfigured agent posting an over-cap batch would have every event in the batch
+// sealed as "malformed" after the quarantine threshold instead of split-and-retried. Returning 413 routes the rejection
+// through the same split-and-retry recovery as the body-byte cap: the agent bisects the batch and re-posts each half, and
+// converges at single-event leaves (the rare case where one event alone exceeds the cap, dropped with the
+// events_dropped_too_large metric). Both 413 diagnostics (body_too_large + too_many_events) coexist; operator-facing logs
+// distinguish them via the errCode string while the wire status drives the same agent recovery shape.
 //
 // Streaming-decode shape (CodeRabbit #276 follow-up to #275): the previous shape called json.Unmarshal(body, &events) which
 // fully materialises the []api.Event slice before len(events) is checked, so a 10 MB body of microscopic events still allocates
@@ -57,7 +65,7 @@ func ParseAndValidateIngestBody(body []byte, pinnedHostID string) (events []api.
 		// MaxIngestEventsPerRequest events, then reject the (Max+1)th before decoding) keeps the heap-amplification path
 		// closed even on a body whose byte count is at the 10 MB upstream cap.
 		if i >= MaxIngestEventsPerRequest {
-			return nil, http.StatusBadRequest, "too_many_events"
+			return nil, http.StatusRequestEntityTooLarge, "too_many_events"
 		}
 		var e api.Event
 		if err := dec.Decode(&e); err != nil {

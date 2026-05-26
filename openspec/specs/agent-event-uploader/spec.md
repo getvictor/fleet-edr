@@ -79,15 +79,17 @@ single HTTP request stays within the server's accepted body size and the network
 
 ### Requirement: Over-cap server responses split-and-retry the batch
 
-The system MUST handle HTTP 413 (`body_too_large`) responses from the server by recursively splitting the in-memory batch in
-half and re-POSTing each half until either the half delivers (2xx) or a single-event batch still returns 413. A single-event
-413 is the only case where the event is dropped; in that case the uploader MUST emit a WARN log identifying the event id and
-increment a counter (`edr.agent.uploader.events_dropped_too_large`) so operators can dashboard the drop rate as a signal of
-misconfigured agents producing oversize events. The recursive split is bounded by `ceil(log2(N))` for a batch of N events, so
-a 10000-event batch recurses at most ~14 levels before reaching single-event leaves. The split-and-retry path is distinct
-from the quarantine path for generic 4xx responses (which counts consecutive drain-tick failures before sealing rows): a 413
-is a size signal, not a "the event is malformed" signal, so it must not consume the quarantine budget. Matches the recovery
-shape Splunk HEC and Elastic Beats implement.
+The system MUST handle HTTP 413 responses from the server by recursively splitting the in-memory batch in half and re-POSTing
+each half until either the half delivers (2xx) or a single-event batch still returns 413. The server emits 413 with two
+distinct diagnostics: `body_too_large` (body bytes exceed the server's request-size cap) and `too_many_events` (event count
+exceeds `MaxIngestEventsPerRequest`); both share the 413 status because both have the same recovery shape (bisect + retry).
+A single-event 413 is the only case where the event is dropped; in that case the uploader MUST emit a WARN log identifying
+the event id and increment a counter (`edr.agent.uploader.events_dropped_too_large`) so operators can dashboard the drop rate
+as a signal of misconfigured agents producing oversize events. The recursive split is bounded by `ceil(log2(N))` for a batch
+of N events, so a 10000-event batch recurses at most ~14 levels before reaching single-event leaves. The split-and-retry path
+is distinct from the quarantine path for generic 4xx responses (which counts consecutive drain-tick failures before sealing
+rows): a 413 is a size signal, not a "the event is malformed" signal, so it must not consume the quarantine budget. Matches
+the recovery shape Splunk HEC and Elastic Beats implement.
 
 #### Scenario: Server returns 413 for a multi-event batch
 

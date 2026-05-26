@@ -88,6 +88,28 @@ enforce the cap via a streaming reader and respond with 413 as soon as the cap i
 - **WHEN** the batch is otherwise well-formed
 - **THEN** the system reads the entire body, validates and persists every event, and returns HTTP 200
 
+### Requirement: Per-request event-count limit
+
+The system SHALL cap the number of events the parser accepts in a single batch at 10000 (`MaxIngestEventsPerRequest`).
+Bodies whose event count exceeds the cap MUST result in HTTP 413 with a typed `too_many_events` diagnostic, and no events
+from that batch are persisted. The status is 413 (not 400) so the agent uploader routes the rejection through its
+split-and-retry recovery path: the bisection converges on halves that fit under the cap, so a misconfigured agent producing
+oversize batches recovers without quarantining any events. The body-byte cap and the event-count cap share the same wire
+status (413) but carry distinct `error` strings (`body_too_large` vs `too_many_events`) so operator-facing logs distinguish
+"too big in bytes" from "too many events."
+
+The system MUST enforce the cap during streaming decode, so the over-cap event is never allocated. A naive `json.Unmarshal`
+followed by a `len(events)` check would let a 10 MB body of microscopic events allocate the full events slice (~60-80 MB of
+heap for ~140k api.Event structs) before the cap fires; the cap MUST be evaluated as the decoder advances through the array
+so the rejection happens before the (Max+1)th element is materialized.
+
+#### Scenario: A batch with too many events is rejected
+
+- **GIVEN** an authenticated agent submitting a JSON array with more than `MaxIngestEventsPerRequest` events
+- **WHEN** the parser advances past the cap
+- **THEN** the system responds with HTTP 413 and the body is `{"error":"too_many_events"}`
+- **AND** no events from that batch are persisted
+
 ### Requirement: Idempotent submission by event_id
 
 The system SHALL treat the `event_id` as the unique key for an event. A re-submission of an event with the same `event_id`

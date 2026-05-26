@@ -493,6 +493,8 @@ func TestUpload_413_SingleEventDrops_MetricAndAudit(t *testing.T) {
 	logStr := auditLog.String()
 	assert.Contains(t, logStr, "uploader.events_dropped_too_large",
 		"audit log line MUST carry the audit=uploader.events_dropped_too_large tag")
+	assert.Contains(t, logStr, "event_id=too-large-singleton",
+		"audit log line MUST identify the event_id per spec (Copilot #276); empty event_id is a contract regression")
 	assert.Equal(t, 1, strings.Count(logStr, "uploader.events_dropped_too_large"),
 		"audit log line MUST fire exactly once per drop")
 }
@@ -532,6 +534,109 @@ func TestUpload_413NotMistakenForGeneric4xx(t *testing.T) {
 	require.NoError(t, derr)
 	assert.Equal(t, int64(1), depth, "400 must NOT mark the row uploaded; the quarantine counter bumps but the row stays queued (default threshold=10)")
 	assert.Equal(t, int64(0), fm.droppedTooLarge.Load(), "400 must NOT touch the events_dropped_too_large counter")
+}
+
+// spec:agent-event-uploader/over-cap-server-responses-split-and-retry-the-batch/server-returns-413-for-a-multi-event-batch
+//
+// Pins the design where the server returns 413 (not 400) for `too_many_events` so the agent routes the rejection through
+// split-and-retry instead of the quarantine path (Copilot #276). The agent's bodyTooLargeError branch fires on any 413
+// regardless of the diagnostic string, so this test mirrors the multi-event-split scenario but uses an over-cap event
+// count rather than over-cap body bytes - same 413, same recovery. Setup: 4-event batch, server returns 413 with
+// too_many_events when the body has >2 events. Expected: 1 x 413 followed by 2 x 200 on the halves, depth=0 after drain.
+func TestUpload_413_TooManyEventsRoutedThroughSplit(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	for i := range 4 {
+		require.NoError(t, q.Enqueue(ctx, fmt.Appendf(nil, `{"event_id":"too-many-%d"}`, i)))
+	}
+
+	var success, rejected atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var arr []json.RawMessage
+		_ = json.Unmarshal(body, &arr)
+		if len(arr) > 2 {
+			rejected.Add(1)
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_, _ = w.Write([]byte(`{"error":"too_many_events"}`)) // diagnostic differs from body_too_large; status is the same
+			return
+		}
+		success.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.BatchSize = 4
+
+	fm := &fakeMetrics{}
+	u := New(q, cfg, nil, nil)
+	u.SetMetrics(fm)
+
+	require.NoError(t, u.drainOnce(ctx))
+
+	depth, err := q.Depth(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), depth, "too_many_events on 413 must route through split-and-retry, not quarantine")
+	assert.Equal(t, int32(1), rejected.Load(), "exactly one 413 (the initial over-cap batch)")
+	assert.Equal(t, int32(2), success.Load(), "exactly two 200s on the 2-event halves")
+	assert.Equal(t, int64(0), fm.droppedTooLarge.Load(), "no single-event 413 means no drop")
+}
+
+// TestUpload_413_ContextCancelBetweenHalves pins the shutdown-aware split (Gemini #276). When the parent context cancels
+// between the two halves of a recursive split, the second half MUST stay queued (uploaded=0) rather than burning the
+// shutdown drain budget on a server that's already known-bad. The first half's outcome is preserved.
+//
+// Setup: 2 events. The first POST (whole batch) returns 413, triggering a split. The first-half POST returns 200; before
+// the second-half POST fires, we cancel the context. drainOnce should return a context-cancelled error and the second-half
+// event MUST remain in the queue with uploaded=0.
+func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
+	q := openTestQueue(t)
+	parentCtx := t.Context()
+	require.NoError(t, q.Enqueue(parentCtx, []byte(`{"event_id":"first-half"}`)))
+	require.NoError(t, q.Enqueue(parentCtx, []byte(`{"event_id":"second-half"}`)))
+
+	cancelCtx, cancel := context.WithCancel(parentCtx)
+
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var arr []json.RawMessage
+		_ = json.Unmarshal(body, &arr)
+		n := posts.Add(1)
+		switch {
+		case n == 1 && len(arr) == 2:
+			// Initial 2-event POST: 413 forces the split.
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_, _ = w.Write([]byte(`{"error":"body_too_large"}`))
+		case n == 2 && len(arr) == 1:
+			// First-half POST: deliver, then cancel the parent context so the second half is skipped.
+			w.WriteHeader(http.StatusOK)
+			cancel()
+		default:
+			// If the second half ever fires the test has failed regardless of what we return.
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.BatchSize = 2
+
+	u := New(q, cfg, nil, nil)
+	err := u.drainOnce(cancelCtx)
+	require.Error(t, err, "drainOnce must surface the context-cancelled error from the skipped second half")
+	require.ErrorIs(t, err, context.Canceled, "the error MUST be context.Canceled, not a generic upload error")
+
+	// Core assertion: server must see exactly 2 POSTs (initial 413 + first-half), NOT 3. The skipped second-half POST is
+	// what proves the cancel guard works (Gemini #276). We deliberately don't assert queue depth here: the cancel races
+	// with the first half's MarkUploaded, so either both events stay queued (if cancel landed before the SQLite write) or
+	// only the second half stays queued (if MarkUploaded ran before cancel was observed). Either outcome is correct - the
+	// server's idempotent-by-event_id dedup contract handles any duplicate on the next drain tick.
+	assert.Equal(t, int32(2), posts.Load(),
+		"server MUST see exactly 2 POSTs (initial 413 + first-half); the second-half POST MUST be skipped after cancel")
 }
 
 // spec:agent-event-uploader/permanent-client-errors-are-not-infinitely-retained/server-consistently-returns-4xx-for-a-malformed-event

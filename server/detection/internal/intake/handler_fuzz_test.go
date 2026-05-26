@@ -12,16 +12,21 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
+// spec:server-event-ingestion/per-request-event-count-limit/a-batch-with-too-many-events-is-rejected
+//
 // FuzzParseAndValidateIngestBody drives the parse + per-event validation half of POST /api/events with random body bytes.
 // The fuzz target asserts two invariants the spec contract makes on this surface:
 //
 //  1. Liveness: no input causes a panic, an unbounded allocation, or any other unrecoverable behavior. The harness wraps the
 //     call in a defer/recover sanity net so a panic surfaces as a test failure with the offending input attached.
 //  2. Contract: every (status, errCode) tuple is one of the documented set:
-//     {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch")}.
+//     {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
+//     (413, "too_many_events")}.
 //     Anything else (an undocumented status, a stray errCode, a 200 returned for a body that obviously isn't a well-formed
-//     []api.Event) is a finding. The 413 body-cap and the 500 store-insert paths are upstream / downstream of this function
-//     and are tested elsewhere; the fuzz keeps its blast radius to the parse + validate surface so the harness needs no DB.
+//     []api.Event) is a finding. The 413 body-byte cap is enforced upstream (readBodyWithCap) and the 500 store-insert path
+//     is downstream of this function; the fuzz keeps its blast radius to the parse + validate surface so the harness needs
+//     no DB. too_many_events is a 413 because the agent routes 413 into split-and-retry; see ParseAndValidateIngestBody's
+//     doc comment for why the count-cap shares the size-cap status (Copilot #276).
 //
 // Why the pinnedHostID is a fixed sentinel: the production middleware threads the token-bound HostID through context; the
 // fuzz only needs ONE host ID to exercise both the matching and the mismatching code paths (a fuzz-generated body's
@@ -108,13 +113,17 @@ func assertValidOutput(t *testing.T, body []byte, events []api.Event, status int
 			// Implies at least one event's host_id != pinnedHostID. We don't re-parse the body here to confirm — the parse
 			// produced events, then a validation step caught the mismatch. Trusting the function's own report.
 			_ = pinnedHostID
-		case errCode == "too_many_events":
-			// Implies the parsed array exceeded MaxIngestEventsPerRequest. Memory-amplification defense; the cap fires
-			// before the per-event validation loop.
 		case strings.HasPrefix(errCode, "missing_fields_at_"):
 			// Implies an event at some index missed one of {event_id, host_id, event_type, timestamp_ns}.
 		default:
 			t.Fatalf("status 400 returned with undocumented errCode %q for body %q", errCode, body)
+		}
+
+	case http.StatusRequestEntityTooLarge:
+		// The parse-helper emits 413 only for too_many_events; the 413 body_too_large path is upstream of this function in
+		// readBodyWithCap and never reaches the parse helper. A stray 413 errCode is a finding.
+		if errCode != "too_many_events" {
+			t.Fatalf("status 413 returned with undocumented errCode %q for body %q", errCode, body)
 		}
 
 	default:
