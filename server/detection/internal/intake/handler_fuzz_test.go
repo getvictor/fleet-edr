@@ -121,7 +121,8 @@ func assertOKContract(t *testing.T, body []byte, events []api.Event, errCode str
 }
 
 // assertBadRequestErrCode pins the 400-error-code vocabulary: only invalid_json, host_id_mismatch, and missing_fields_at_<i>
-// are acceptable codes; a stray errCode is a finding. The 4 documented branches are listed explicitly for clarity.
+// are acceptable codes; a stray errCode is a finding. The three accepted codes have explicit branches; the default branch
+// fails the test on anything else (Copilot #279 - the prior phrasing implied 4 documented codes; there are 3 + a guard).
 func assertBadRequestErrCode(t *testing.T, body []byte, errCode string, pinnedHostID string) {
 	t.Helper()
 	switch {
