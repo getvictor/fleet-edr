@@ -59,6 +59,8 @@ type Rules struct {
 
 // New wires the rules context. Does NOT apply the schema (call
 // ApplySchema for that).
+//
+//nolint:contextcheck // boot-time wiring with no request context; context.Background is intentional in the WarnContext below
 func New(deps Deps) (*Rules, error) {
 	if deps.DB == nil {
 		return nil, errors.New("rules bootstrap: DB is required")
@@ -72,6 +74,15 @@ func New(deps Deps) (*Rules, error) {
 		return nil, errors.New("rules bootstrap: AuthZ is required")
 	}
 
+	// Warn at boot for each entry in DisabledRuleIDs that doesn't match a known rule. The boot still succeeds so a stale
+	// config (typo, removed rule reference) does not take a deployment down (per #238 design notes); the warn line is the
+	// operator-visible signal they need to fix the config. context.Background here because we're at bootstrap and have no
+	// request-scoped context; forbidigo requires the Context variant so the structured-log pipeline gets a context handle.
+	for _, unknown := range catalog.UnknownDisabledIDs(deps.RegistryOptions) {
+		logger.WarnContext(context.Background(),
+			"rules bootstrap: EDR_DISABLED_RULES references unknown rule_id (typo or rule has been removed?)",
+			"rule_id", unknown)
+	}
 	rules := catalog.New(deps.RegistryOptions)
 	svc := service.New(rules, logger)
 

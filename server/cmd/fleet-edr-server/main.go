@@ -292,6 +292,7 @@ func openRules(
 			LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
 			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
 			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
+			DisabledRuleIDs:               cfg.DisabledRuleIDs,
 		},
 		Audit:           identityCtx.AuditRecorder(),
 		AuthZ:           identityCtx.AuthZ(),

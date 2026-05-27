@@ -104,6 +104,13 @@ type Config struct {
 	// indicator.
 	SuspiciousExecParentAllowlist map[string]struct{}
 
+	// DisabledRuleIDs is the boot-time list of rule IDs to drop from the detection registry. Populated from EDR_DISABLED_RULES
+	// (comma-separated rule_id values). A disabled rule is gone from the engine's active set AND from Engine.Catalog() so
+	// tools/gen-rule-docs + the GET /api/rules surface stop listing it. Empty by default. Unknown IDs WARN at boot but never
+	// fail the boot, so a stale operator config doesn't take a deployment down. Hot reload is intentionally out of scope --
+	// see spec server-detection-rules-engine/operator-toggling-of-individual-rules for the boot-time contract.
+	DisabledRuleIDs []string
+
 	// HostTokenLifetime is the maximum age of an agent's bearer token before the verify path triggers an automatic rotation (issue #86).
 	// Populated from EDR_HOST_TOKEN_LIFETIME. Default 24h: short enough that an exfiltrated token has bounded value, long enough that the
 	// per-host rotation traffic is negligible.
@@ -348,6 +355,28 @@ func loadAllowlists(c *Config, getenv func(string) string) {
 	if allowlist := envparse.Allowlist(getenv("EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST")); allowlist != nil {
 		c.SuspiciousExecParentAllowlist = allowlist
 	}
+	if disabled := parseDisabledRuleIDs(getenv("EDR_DISABLED_RULES")); len(disabled) > 0 {
+		c.DisabledRuleIDs = disabled
+	}
+}
+
+// parseDisabledRuleIDs splits the EDR_DISABLED_RULES env var into a slice of rule IDs. Whitespace is trimmed; empty entries
+// are dropped. Returns nil for empty / whitespace-only input so the caller leaves the catalog default in place. We keep
+// duplicates verbatim (catalog.New treats DisabledRuleIDs as a set internally) so the operator-facing UnknownDisabledIDs
+// warning reports every literal value the operator typed.
+func parseDisabledRuleIDs(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	var out []string
+	for p := range strings.SplitSeq(v, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // loadLogConfig reads + validates the slog handler's level + format knobs. Lowercases for downstream consumers regardless of how the
