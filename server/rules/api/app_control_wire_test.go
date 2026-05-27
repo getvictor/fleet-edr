@@ -151,6 +151,17 @@ var severities = []api.Severity{
 	api.SeverityRuleCritical,
 }
 
+// fallbackPostures enumerates the validator-accepted FallbackPosture values plus the empty zero value. The empty case lives
+// here so the PBT explicitly covers the "policy struct has no posture set" path that the marshal substitutes with
+// DefaultFallbackPosture; the validator-accepted values cover the v0.1.x configurability path that arrives once the REST
+// surface lets operators set the posture per policy.
+var fallbackPostures = []api.FallbackPosture{
+	"",
+	api.FallbackPostureFailClosed,
+	api.FallbackPostureFailOpen,
+	api.FallbackPostureAuditOnly,
+}
+
 // genRule produces a random rule shape. Identifier is opaque to the payload codec (the per-rule_type identifier validator runs server-
 // side, not in the marshal helper), so we use a printable-ASCII string generator to exercise the JSON encoding path without dragging
 // in per-type format gymnastics.
@@ -211,6 +222,7 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		policyID := rapid.Int64Range(1, 1_000_000).Draw(t, "policy_id")
 		policyVersion := rapid.Int64Range(1, 1_000_000).Draw(t, "policy_version")
 		nRules := rapid.IntRange(0, 20).Draw(t, "n_rules")
+		posture := rapid.SampledFrom(fallbackPostures).Draw(t, "deadline_fallback")
 
 		rules := make([]api.ApplicationControlRule, 0, nRules)
 		for i := range nRules {
@@ -224,7 +236,7 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 			now = time.Unix(0, 0).UTC()
 		}
 
-		policy := api.ApplicationControlPolicy{ID: policyID, Version: policyVersion}
+		policy := api.ApplicationControlPolicy{ID: policyID, Version: policyVersion, DeadlineFallback: posture}
 		raw, err := api.MarshalSetApplicationControlPayload(policy, rules, now)
 		require.NoError(t, err)
 
@@ -232,6 +244,18 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &decoded))
 		assert.Equal(t, policyID, decoded.PolicyID)
 		assert.Equal(t, policyVersion, decoded.PolicyVersion)
+
+		// Posture invariant: the marshal substitutes DefaultFallbackPosture when the upstream policy has no value set
+		// (empty string today, or any future value the validator does not recognise). Validator-accepted values flow
+		// through verbatim. Either way the decoded wire field must be a validator-accepted posture so the extension
+		// snapshot decode cannot fail on an unknown literal.
+		expectedPosture := posture
+		if !api.IsValidFallbackPosture(expectedPosture) {
+			expectedPosture = api.DefaultFallbackPosture
+		}
+		assert.Equal(t, expectedPosture, decoded.DeadlineFallback)
+		assert.True(t, api.IsValidFallbackPosture(decoded.DeadlineFallback),
+			"wire posture %q must always pass the validator", decoded.DeadlineFallback)
 
 		// Build the expected post-filter view from the inputs and compare element-wise. The filter contract: drop disabled
 		// rules; drop rules whose expires_at is in the past relative to a non-zero `now`.
@@ -275,4 +299,108 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestMarshalSetApplicationControlPayload_DeadlineFallbackDefault pins the v0.1.0 contract: a policy whose DeadlineFallback
+// is the zero value (empty string) marshals to "fail-closed" on the wire. Pre-v0.1.0 callers that have not been recompiled
+// against the new ApplicationControlPolicy shape will leak that zero value through, and the extension snapshot must still
+// receive a safe-by-default posture.
+func TestMarshalSetApplicationControlPayload_DeadlineFallbackDefault(t *testing.T) {
+	raw, err := api.MarshalSetApplicationControlPayload(
+		api.ApplicationControlPolicy{ID: 1, Version: 1},
+		nil,
+		time.Time{},
+	)
+	require.NoError(t, err)
+	var decoded api.SetApplicationControlPayload
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	assert.Equal(t, api.FallbackPostureFailClosed, decoded.DeadlineFallback)
+	assert.Equal(t, api.DefaultFallbackPosture, decoded.DeadlineFallback,
+		"DefaultFallbackPosture must be the substituted value")
+}
+
+// TestMarshalSetApplicationControlPayload_DeadlineFallbackPassthrough confirms an explicitly-set policy posture survives
+// the marshal verbatim. Drives the v0.1.x follow-up that will start carrying real values through ApplicationControlPolicy
+// once the DB column lands; the test guarantees the wire path is ready to accept whatever value the REST surface validates.
+func TestMarshalSetApplicationControlPayload_DeadlineFallbackPassthrough(t *testing.T) {
+	cases := []struct {
+		name    string
+		posture api.FallbackPosture
+	}{
+		{"fail-closed", api.FallbackPostureFailClosed},
+		{"fail-open", api.FallbackPostureFailOpen},
+		{"audit-only", api.FallbackPostureAuditOnly},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := api.MarshalSetApplicationControlPayload(
+				api.ApplicationControlPolicy{ID: 1, Version: 1, DeadlineFallback: tc.posture},
+				nil,
+				time.Time{},
+			)
+			require.NoError(t, err)
+			var decoded api.SetApplicationControlPayload
+			require.NoError(t, json.Unmarshal(raw, &decoded))
+			assert.Equal(t, tc.posture, decoded.DeadlineFallback)
+		})
+	}
+}
+
+// TestMarshalSetApplicationControlPayload_DeadlineFallbackNormalizesInvalid pins that a non-empty but unrecognised posture is
+// substituted with DefaultFallbackPosture before it reaches the wire. The extension's FallbackPosture enum is strict; an
+// unknown literal would deactivate Application Control until the next valid push, so the marshal MUST never emit one.
+func TestMarshalSetApplicationControlPayload_DeadlineFallbackNormalizesInvalid(t *testing.T) {
+	cases := []string{"fail-close", "FAIL-CLOSED", "audit_only", "garbage", "FAIL-OPEN"}
+	for _, bad := range cases {
+		t.Run(bad, func(t *testing.T) {
+			raw, err := api.MarshalSetApplicationControlPayload(
+				api.ApplicationControlPolicy{ID: 1, Version: 1, DeadlineFallback: api.FallbackPosture(bad)},
+				nil,
+				time.Time{},
+			)
+			require.NoError(t, err)
+			var decoded api.SetApplicationControlPayload
+			require.NoError(t, json.Unmarshal(raw, &decoded))
+			assert.Equal(t, api.DefaultFallbackPosture, decoded.DeadlineFallback)
+			assert.True(t, api.IsValidFallbackPosture(decoded.DeadlineFallback))
+		})
+	}
+}
+
+// TestMarshalSetApplicationControlPayload_DeadlineFallbackWireKey pins the JSON key Swift's Decodable reads. A rename here
+// silently breaks the extension's snapshot decode; this test fails loudly when a rename happens.
+func TestMarshalSetApplicationControlPayload_DeadlineFallbackWireKey(t *testing.T) {
+	raw, err := api.MarshalSetApplicationControlPayload(
+		api.ApplicationControlPolicy{ID: 1, Version: 1, DeadlineFallback: api.FallbackPostureAuditOnly},
+		nil,
+		time.Time{},
+	)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Contains(t, got, "deadline_fallback")
+	assert.Equal(t, "audit-only", got["deadline_fallback"])
+}
+
+// TestIsValidFallbackPosture is the table-driven validator the v0.1.x REST surface will call before persisting an operator-
+// supplied posture. Pinning the enum membership here keeps the validator honest if the enum ever picks up a new value (the
+// invalid-case lines below must be updated to include the new constant).
+func TestIsValidFallbackPosture(t *testing.T) {
+	cases := []struct {
+		name    string
+		posture api.FallbackPosture
+		want    bool
+	}{
+		{"fail-closed", api.FallbackPostureFailClosed, true},
+		{"fail-open", api.FallbackPostureFailOpen, true},
+		{"audit-only", api.FallbackPostureAuditOnly, true},
+		{"empty", "", false},
+		{"misspelled fail-close", "fail-close", false},
+		{"uppercase", "FAIL-CLOSED", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, api.IsValidFallbackPosture(tc.posture))
+		})
+	}
 }

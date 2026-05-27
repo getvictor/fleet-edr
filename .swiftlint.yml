@@ -3,6 +3,7 @@ included:
 
 excluded:
   - extension/edr/build
+  - extension/edr/.build  # SwiftPM-generated runner.swift carries vendored SwiftLint violations we cannot edit.
 
 opt_in_rules:
   - closure_body_length

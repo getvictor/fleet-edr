@@ -250,6 +250,34 @@ const (
 	PolicyDefaultActionNone PolicyDefaultAction = "NONE"
 )
 
+// FallbackPosture is the policy-level verdict the extension applies when AUTH_EXEC could not compute a BINARY rule SHA-256
+// within the kernel deadline budget. Three options trade enforcement strictness against exec-startup latency and operator
+// visibility; see extension/edr/extension/AuthExecDecider.swift FallbackPosture for the per-case rationale. v0.1.0 ships
+// FallbackPostureFailClosed as the default for every snapshot; per-policy configurability arrives in the v0.1.x follow-up
+// that adds a DB column and the REST surface to set it.
+type FallbackPosture string
+
+const (
+	FallbackPostureFailClosed FallbackPosture = "fail-closed"
+	FallbackPostureFailOpen   FallbackPosture = "fail-open"
+	FallbackPostureAuditOnly  FallbackPosture = "audit-only"
+)
+
+// DefaultFallbackPosture is the value MarshalSetApplicationControlPayload substitutes when ApplicationControlPolicy carries
+// an empty DeadlineFallback (the v0.1.0 norm because no DB column persists the field yet). Centralised so the wire default
+// can move with the product without sweeping callers.
+const DefaultFallbackPosture = FallbackPostureFailClosed
+
+// IsValidFallbackPosture reports whether s names one of the documented enum values. Used by the REST validation surface that
+// arrives with the v0.1.x configurability follow-up.
+func IsValidFallbackPosture(s FallbackPosture) bool {
+	switch s {
+	case FallbackPostureFailClosed, FallbackPostureFailOpen, FallbackPostureAuditOnly:
+		return true
+	}
+	return false
+}
+
 // ApplicationControlPolicy mirrors a row in app_control_policies. Used by the REST surface for list/get responses and by the fan-out
 // code when constructing the `set_application_control` agent command. Rules is populated by GetWithRules and the rule listing
 // endpoints; bare Get omits it. AssignmentCount is a derived field every policy fetch path populates (GetPolicyByName,
@@ -258,17 +286,22 @@ const (
 // The seeded Default policy starts at 1 (its assignment to the seed all-hosts group); policies created via CreatePolicy start
 // at 0 and grow when Phase B opens up assignment editing.
 type ApplicationControlPolicy struct {
-	ID              int64                    `json:"id"`
-	Name            string                   `json:"name"`
-	Description     string                   `json:"description"`
-	Version         int64                    `json:"version"`
-	DefaultAction   PolicyDefaultAction      `json:"default_action"`
-	CreatedAt       time.Time                `json:"created_at"`
-	UpdatedAt       time.Time                `json:"updated_at"`
-	CreatedBy       string                   `json:"created_by"`
-	UpdatedBy       string                   `json:"updated_by"`
-	AssignmentCount int                      `json:"assignment_count"`
-	Rules           []ApplicationControlRule `json:"rules,omitempty"`
+	ID            int64               `json:"id"`
+	Name          string              `json:"name"`
+	Description   string              `json:"description"`
+	Version       int64               `json:"version"`
+	DefaultAction PolicyDefaultAction `json:"default_action"`
+	// DeadlineFallback is the per-policy posture the extension applies when AUTH_EXEC cannot compute a BINARY hash within the
+	// kernel deadline budget. v0.1.0 has no DB column for this field; CreatePolicy/UpdatePolicy ignore it and the marshal
+	// substitutes DefaultFallbackPosture (fail-closed) on empty values. The v0.1.x follow-up that adds DB persistence + a REST
+	// surface to set the posture will start carrying real values through here.
+	DeadlineFallback FallbackPosture          `json:"deadline_fallback,omitempty"`
+	CreatedAt        time.Time                `json:"created_at"`
+	UpdatedAt        time.Time                `json:"updated_at"`
+	CreatedBy        string                   `json:"created_by"`
+	UpdatedBy        string                   `json:"updated_by"`
+	AssignmentCount  int                      `json:"assignment_count"`
+	Rules            []ApplicationControlRule `json:"rules,omitempty"`
 }
 
 // ApplicationControlRule mirrors a row in app_control_rules.
@@ -579,9 +612,14 @@ const CommandTypeSetApplicationControl = "set_application_control"
 // same shape with its own private struct to avoid pulling
 // server/rules/api into the agent module graph.
 type SetApplicationControlPayload struct {
-	PolicyID      int64                       `json:"policy_id"`
-	PolicyVersion int64                       `json:"policy_version"`
-	Rules         []SetApplicationControlRule `json:"rules"`
+	PolicyID      int64 `json:"policy_id"`
+	PolicyVersion int64 `json:"policy_version"`
+	// DeadlineFallback governs the extension's verdict when AUTH_EXEC cannot compute a BINARY rule SHA-256 within the kernel
+	// deadline budget. Always populated by MarshalSetApplicationControlPayload (DefaultFallbackPosture when the upstream policy
+	// did not set one) so the extension's snapshot never has to fall back to its own internal default. Pre-v0.1.0 agents that
+	// decode this payload without the field present continue to substitute their own internal fail-closed default.
+	DeadlineFallback FallbackPosture             `json:"deadline_fallback"`
+	Rules            []SetApplicationControlRule `json:"rules"`
 }
 
 // SetApplicationControlRule is one row in the payload's rules array.
@@ -641,9 +679,20 @@ func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []App
 			CustomURL:   r.CustomURL,
 		})
 	}
+	// Normalise both the empty zero-value (the v0.1.0 norm: no DB column persists the field yet, so every fetched policy
+	// arrives with DeadlineFallback="") AND any non-empty but unrecognised value to DefaultFallbackPosture. The second branch
+	// is the defensive one: a stray bad value sneaking into the policy struct (typo on a future REST surface, copy-paste from
+	// an external feed, schema drift on the v0.1.x DB migration) must not reach the extension snapshot as a literal it cannot
+	// decode — the extension's FallbackPosture enum is strict, and a snapshot decode failure deactivates Application Control
+	// until the next valid push.
+	posture := p.DeadlineFallback
+	if !IsValidFallbackPosture(posture) {
+		posture = DefaultFallbackPosture
+	}
 	return json.Marshal(SetApplicationControlPayload{
-		PolicyID:      p.ID,
-		PolicyVersion: p.Version,
-		Rules:         entries,
+		PolicyID:         p.ID,
+		PolicyVersion:    p.Version,
+		DeadlineFallback: posture,
+		Rules:            entries,
 	})
 }
