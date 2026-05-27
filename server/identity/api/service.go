@@ -13,12 +13,10 @@ import (
 //
 // Implementation lives in server/identity/internal/service.
 //
-// Phase 5b retired the password-based Login method and the
-// `POST /api/session` route it backed. Sessions are now minted only by
-// the OIDC callback (server/identity/internal/oidc) and the break-
-// glass FinishLogin / FinishSetup paths (server/identity/internal/
-// breakglass). The remaining surface is session lifecycle, user lookup,
-// chokepoint actor loading, and reauth-window helpers.
+// Sessions are minted by the OIDC callback (server/identity/internal/oidc) and the break-glass FinishLogin / FinishSetup
+// paths (server/identity/internal/breakglass); there is no password-based login surface. The Service surface covers session
+// lifecycle (Logout, CleanupExpiredSessions, GetSession, MarkReauth), user lookup (GetUser, GetUserByEmail, UserExists),
+// chokepoint actor loading (LoadActor, IsFresh), and the first-boot admin seed (SeedAdmin).
 type Service interface {
 	// Logout deletes the session identified by the cookie token. Idempotent: returns nil if the session is already gone, so logout under
 	// network retry is safe.

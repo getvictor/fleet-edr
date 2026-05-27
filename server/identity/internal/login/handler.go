@@ -1,12 +1,12 @@
-// Login handler: GET /api/session (who-am-i) and DELETE /api/session
-// (logout). The Phase 4 OIDC + break-glass refactor replaced the
-// password-based POST /api/session login path with the dedicated
-// `/api/auth/login` (OIDC) and `/admin/break-glass` flows; the legacy
-// POST handler was retired in Phase 5b along with Service.Login.
+// Session handler: GET /api/session (who-am-i) and DELETE /api/session (logout). Sessions are minted upstream by the OIDC
+// callback (/api/auth/login + /api/auth/callback) and the break-glass FinishLogin / FinishSetup endpoints; this package
+// owns only the read + delete sides of the session lifecycle.
 //
-// This handler owns HTTP-flavoured concerns for the session-read +
-// session-delete surface: cookie parsing, audit log emission on
-// logout, and the session-JSON response shape returned by GET.
+// The package name is `login` for historical reasons (the password-based POST handler that used to live here is gone) and
+// is not renamed here to avoid touching every import site for a cosmetic gain.
+//
+// This handler owns HTTP-flavoured concerns for the session-read + session-delete surface: cookie parsing, audit log
+// emission on logout, and the session-JSON response shape returned by GET.
 
 package login
 
@@ -174,12 +174,10 @@ func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, s
 }
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {
-	// auth_method is read off the session pinned to ctx (Session middleware wired by App.tsx's authed routes). Every session in the system
-	// is now minted by either the OIDC callback or the break-glass FinishLogin path; if no session is on ctx the caller is misconfigured
-	// (this handler is GET /api/session, always behind Session middleware). The "local_password" fallback remains as a defense-in-depth
-	// default since reading it as the empty string would surface as "" in the wire response.
-	authMethod := "local_password"
-	if sess, ok := api.SessionFromContext(ctx); ok && sess.AuthMethod != "" {
+	// auth_method is read off the session pinned to ctx. handleGet is the only caller and it already returns 500 when
+	// SessionFromContext fails, so the lookup here always succeeds; the ok branch is the only reachable path.
+	var authMethod string
+	if sess, ok := api.SessionFromContext(ctx); ok {
 		authMethod = sess.AuthMethod
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
