@@ -11,11 +11,11 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 )
 
-// TestValidateRuleType_AcceptedAndDeferred covers the matrix of accepted / deferred / invalid rule_type values after the Phase A
-// close-out: BINARY, CDHASH, SIGNINGID, and TEAMID are accepted; CERTIFICATE and PATH remain gated as
-// ErrAppControlUnsupportedRuleType (Phase B unblocks them alongside the leaf-cert cache + Launch Services indirection); unknown /
-// empty values return ErrAppControlInvalidRuleType so REST callers can distinguish "not yet wired" from "not a real type".
-func TestValidateRuleType_AcceptedAndDeferred(t *testing.T) {
+// TestValidateRuleType_AcceptedAndRejected covers the full enum after the Phase B close-out (PR for #210): every wire-enum value
+// (BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH) is accepted by the validator. Only unknown / empty tokens return
+// ErrAppControlInvalidRuleType. ErrAppControlUnsupportedRuleType is retained on the api package for future use but no validator
+// branch produces it today.
+func TestValidateRuleType_AcceptedAndRejected(t *testing.T) {
 	cases := []struct {
 		name    string
 		rt      api.RuleType
@@ -25,8 +25,8 @@ func TestValidateRuleType_AcceptedAndDeferred(t *testing.T) {
 		{"cdhash accepted", api.RuleTypeCDHash, nil},
 		{"signing id accepted", api.RuleTypeSigningID, nil},
 		{"team id accepted", api.RuleTypeTeamID, nil},
-		{"certificate deferred", api.RuleTypeCertificate, api.ErrAppControlUnsupportedRuleType},
-		{"path deferred", api.RuleTypePath, api.ErrAppControlUnsupportedRuleType},
+		{"certificate accepted", api.RuleTypeCertificate, nil},
+		{"path accepted", api.RuleTypePath, nil},
 		{"unknown rejected", api.RuleType("BANANA"), api.ErrAppControlInvalidRuleType},
 		{"empty rejected", api.RuleType(""), api.ErrAppControlInvalidRuleType},
 	}
@@ -73,8 +73,9 @@ func TestValidateIdentifier_Binary(t *testing.T) {
 	}
 }
 
-// TestValidateIdentifier_AcceptedTypes pins the Phase A close-out additions: CDHASH, SIGNINGID, and TEAMID identifiers shaped
-// correctly return nil (the rule is created), and malformed identifiers return ErrAppControlInvalidIdentifier.
+// TestValidateIdentifier_AcceptedTypes pins identifier format checks for every wired rule type. CERTIFICATE + PATH joined the
+// accepted set in this PR (#210); the format checks themselves are unchanged from before -- the only delta is that a well-formed
+// identifier no longer triggers ErrAppControlUnsupportedRuleType.
 func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
 	cases := []struct {
 		name string
@@ -92,6 +93,14 @@ func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
 		{"signing id platform:bundle accepted", api.RuleTypeSigningID, "platform:com.apple.curl", true},
 		{"signing id missing colon rejected", api.RuleTypeSigningID, "EQHXZ8M8AVcom.google.Chrome", false},
 		{"signing id empty bundle rejected", api.RuleTypeSigningID, "EQHXZ8M8AV:", false},
+		{"certificate 64 hex accepted", api.RuleTypeCertificate, strings.Repeat("c", 64), true},
+		{"certificate 63 chars rejected", api.RuleTypeCertificate, strings.Repeat("c", 63), false},
+		{"certificate uppercase rejected", api.RuleTypeCertificate, strings.Repeat("C", 64), false},
+		{"path absolute accepted", api.RuleTypePath, "/usr/bin/ls", true},
+		{"path /tmp lowered accepted", api.RuleTypePath, "/tmp/foo", true},
+		{"path relative rejected", api.RuleTypePath, "usr/bin/ls", false},
+		{"path empty rejected", api.RuleTypePath, "", false},
+		{"path with .. rejected", api.RuleTypePath, "/var/foo/../../etc/sudoers", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,31 +111,6 @@ func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.ErrorIs(t, err, api.ErrAppControlInvalidIdentifier)
-		})
-	}
-}
-
-// TestValidateIdentifier_DeferredTypes pins the remaining types (CERTIFICATE, PATH) still gated as unsupported. The format check
-// fires first; on a well-formed value the validator still reports ErrAppControlUnsupportedRuleType so the REST handler returns
-// "not yet wired" rather than silently accepting the rule. Phase B unblocks these alongside the leaf-cert cache work.
-func TestValidateIdentifier_DeferredTypes(t *testing.T) {
-	cases := []struct {
-		name        string
-		rt          api.RuleType
-		id          string
-		wantErrType error
-	}{
-		{"certificate 64 hex unsupported", api.RuleTypeCertificate, strings.Repeat("c", 64), api.ErrAppControlUnsupportedRuleType},
-		{"certificate 63 chars format rejected", api.RuleTypeCertificate, strings.Repeat("c", 63), api.ErrAppControlInvalidIdentifier},
-		{"path absolute unsupported", api.RuleTypePath, "/usr/bin/ls", api.ErrAppControlUnsupportedRuleType},
-		{"path relative format rejected", api.RuleTypePath, "usr/bin/ls", api.ErrAppControlInvalidIdentifier},
-		{"path empty format rejected", api.RuleTypePath, "", api.ErrAppControlInvalidIdentifier},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := appcontrol.ValidateIdentifier(tc.rt, tc.id)
-			require.Error(t, err)
-			assert.ErrorIs(t, err, tc.wantErrType)
 		})
 	}
 }

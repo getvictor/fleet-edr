@@ -55,14 +55,20 @@ final class ESFSubscriber: Sendable {
         }
 
         logger.info("Subscribed to \(events.count) event types (including AUTH_EXEC)")
-        // Application Control Phase A close-out: AUTH_EXEC consults the
-        // ApplicationControlStore snapshot and denies execs matching any of
-        // four rule types in fixed precedence: CDHASH → BINARY → SIGNINGID →
-        // TEAMID. CERTIFICATE + PATH stay deferred to Phase B (leaf-cert cache
-        // / Launch Services indirection). Cache misses on the lazy file-hash
-        // cache return ALLOW silently for the BINARY type; the cache fills
-        // off the callback so the next exec of the same binary catches.
-        logger.info("Application Control active: AUTH_EXEC walks CDHASH/BINARY/SIGNINGID/TEAMID rules")
+        // Application Control Phase B close-out (PR for #210): AUTH_EXEC consults
+        // the ApplicationControlStore snapshot and denies execs matching any of
+        // the six wire-enum rule types in fixed Santa precedence:
+        //   CDHASH → BINARY → CERTIFICATE → SIGNINGID → TEAMID → PATH.
+        // CERTIFICATE matches the SHA-256 of the leaf signing certificate
+        // (SecCodeCopySigningInformation walk, cached per (inode, mtime) on first
+        // exec). PATH matches the canonical absolute path of the exec target,
+        // with /tmp + /var + /etc rewritten to /private/... to match the
+        // server-side persisted canonical form. Cache misses on the lazy file-
+        // hash cache use the snapshot's deadlineFallback posture for the BINARY
+        // layer only; the cheaper CERTIFICATE / SIGNINGID / TEAMID / PATH layers
+        // run unconditionally and a definitive deny on any of them dominates
+        // BINARY-layer uncertainty.
+        logger.info("Application Control active: AUTH_EXEC walks CDHASH/BINARY/CERTIFICATE/SIGNINGID/TEAMID/PATH rules")
     }
 
     func stop() {
@@ -91,10 +97,12 @@ final class ESFSubscriber: Sendable {
 
     /// AUTH_EXEC handler. Decision order: (1) platform-binary carve-out (#205) ALLOWs Apple system binaries with cache:true to
     /// avoid bricking the host on an admin-applied BINARY rule for launchd/xpcproxy/etc; (2) self-allow failsafe ALLOWs the
-    /// agent + extensions + host app uncached (team_id + bundle-id match); (3) decideAuthExec walks CDHASH → BINARY → SIGNINGID
-    /// → TEAMID. BINARY hashing runs synchronously under a budget derived from msg.deadline (#208 close-out); on deadline /
-    /// read failure the walk continues to SIGNINGID/TEAMID first, and only applies the snapshot's deadlineFallback posture
-    /// when no later rule matches. CERTIFICATE and PATH stay deferred to Phase B; the leaf-cert cache fill remains lazy.
+    /// agent + extensions + host app uncached (team_id + bundle-id match); (3) decideAuthExec walks CDHASH → BINARY →
+    /// CERTIFICATE → SIGNINGID → TEAMID → PATH (Phase B close-out, PR for #210). BINARY hashing runs synchronously under a
+    /// budget derived from msg.deadline (#208 close-out); on deadline / read failure the walk continues through every lower
+    /// layer first and only applies the snapshot's deadlineFallback posture when no later rule matches. CERTIFICATE +
+    /// SIGNINGID + TEAMID rely on SigningInfoFallback's cached SecCode walk; PATH uses canonicalizePath on the exec target
+    /// path so the in-memory comparison matches the server-side persisted canonical form verbatim.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
         let target = msg.event.exec.target.pointee
@@ -189,10 +197,11 @@ final class ESFSubscriber: Sendable {
         }
     }
 
-    /// buildAuthTuple reduces a Mach-O exec target to the three pure-identifier values the decider reads. The fourth identifier
+    /// buildAuthTuple reduces a Mach-O exec target to the five pure-identifier values the decider reads. The sixth identifier
     /// (BINARY SHA-256) is supplied via HashOutcome at decide time so the hash compute can run on the AUTH callback thread
     /// under a deadline budget; that responsibility lives in handleAuthExec, not here. The `path` argument is the resolved
-    /// executable path used for the SigningInfoFallback lookup when ESF redacts team_id on ad-hoc-signed extension hosts.
+    /// executable path used both for the SigningInfoFallback lookups (TeamID + leaf cert SHA-256) and for the canonical PATH
+    /// derivation. The leaf cert hash + canonical path joined the tuple when CERTIFICATE / PATH wired through (PR for #210).
     private func buildAuthTuple(target: es_process_t, fileStat: stat, path: String) -> AuthTuple {
         let esTeamID = esTokenString(target.team_id)
         let signingID = esTokenString(target.signing_id)
@@ -219,6 +228,12 @@ final class ESFSubscriber: Sendable {
             teamID = SigningInfoFallback.shared.teamID(forPath: path, fileStat: fileStat) ?? ""
         }
 
+        // Leaf certificate SHA-256 always comes from SigningInfoFallback -- ESF does not surface a cert hash directly, so
+        // there is no "ESF first, fallback on empty" pattern here. The cache key is shared with the TeamID lookup above so
+        // both fields cost one SecCode walk per (inode, mtime). Returns nil for unsigned / ad-hoc-signed binaries and any
+        // path SecCode rejects; the decider's optional binding skips the CERTIFICATE layer cleanly in those cases.
+        let leafCertSHA256 = SigningInfoFallback.shared.leafCertSHA256(forPath: path, fileStat: fileStat)
+
         // SIGNINGID prefix: "<TeamID>:<bundle.id>" for third-party signed binaries, "platform:<bundle.id>" for Apple platform
         // binaries. Under edr-dev's ad-hoc-extension redaction ESF reports is_platform_binary=true on every exec (#187), so
         // we use the fallback team_id (when present) to discriminate genuine Apple platform binaries from third-party ones.
@@ -233,10 +248,17 @@ final class ESFSubscriber: Sendable {
             signingIDPrefixed = nil
         }
 
+        // Canonical path: filepath.Clean equivalent + /tmp + /var + /etc rewritten to /private. MUST match the server-side
+        // CanonicalizePath rules exactly or rules persisted in canonical form never match what the AUTH callback computes.
+        // Nil result (empty / relative / `..`-containing -- all defensive against malformed ESF input) skips the PATH layer.
+        let canonicalPath = canonicalizePath(path)
+
         return AuthTuple(
             cdhash: cdhash,
+            leafCertSHA256: leafCertSHA256,
             signingIDPrefixed: signingIDPrefixed,
-            teamID: teamID.isEmpty ? nil : teamID
+            teamID: teamID.isEmpty ? nil : teamID,
+            canonicalPath: canonicalPath
         )
     }
 
@@ -436,61 +458,5 @@ final class ESFSubscriber: Sendable {
     }
 }
 
-/// csRuntimeFlag is the codesigning_flags bit set when a binary runs under Apple's Hardened Runtime. Defined here (rather than
-/// imported from <kern/cs_blobs.h>) because the Swift bridging headers do not surface the constant directly; the literal value
-/// is stable per the public macOS code-signing documentation. Lowercased to satisfy SwiftLint's identifier_name rule (CS_RUNTIME
-/// would be the literal C symbol but Swift conventions reject all-caps identifiers).
-private let csRuntimeFlag: UInt32 = 0x0001_0000
-
-/// isHardenedRuntime reports whether the codesigning_flags bitfield indicates Apple's Hardened Runtime. CDHASH rules only match
-/// hardened-runtime processes because on non-hardened processes the kernel maps pages lazily and does not re-verify them post-load,
-/// which makes the CDHash ESF reports at exec an unreliable identity for the bytes that will eventually execute. This diverges from
-/// Santa, which enforces CDHASH on any signed binary regardless of the runtime flag; a migrating Santa admin should expect a CDHASH
-/// rule to no-op here against a non-hardened target until that target is rebuilt with the Hardened Runtime flag.
-private func isHardenedRuntime(flags: UInt32) -> Bool {
-    return (flags & csRuntimeFlag) != 0
-}
-
-/// hexCharsPerByte is the fixed expansion ratio of a byte to its 2-char lowercase hex representation. Extracted so the capacity
-/// reserve in cdhashHexString is self-documenting (SwiftLint's no_magic_numbers rule would otherwise flag the literal `2`).
-private let hexCharsPerByte = 2
-
-/// hexDigitsLowercase is the lookup table cdhashHexString walks instead of calling String(format:"%02x", b). The format-string path
-/// bridges to Foundation and parses the format spec on every call; this matters because the helper runs inside AUTH_EXEC's
-/// kernel-deadline window. The table is private so it doesn't pollute symbol search at the module level.
-private let hexDigitsLowercase: [Character] = [
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"
-]
-
-/// hexLowNibbleMask is the bitmask used to extract the low 4 bits of a byte when looking up its hex digit in the
-/// hexDigitsLowercase table. Named so the no_magic_numbers SwiftLint rule doesn't flag the literal 0x0f.
-private let hexLowNibbleMask: UInt8 = 0x0f
-
-// swiftlint:disable large_tuple
-//
-// cdhashHexString lowercases-hex the 20-byte CDHash array from es_process_t.cdhash into the 40-char string the server's validator
-// + the snapshot's cdhashRules map index on. Returns nil when the cdhash is all zero (es_process_t conventions: unsigned binaries
-// report a zeroed cdhash, which is not a real identity).
-//
-// The parameter is a 20-element tuple because the C surface (es_process_t.cdhash) is a fixed-size array that Swift imports as a
-// homogeneous tuple. The large_tuple lint is disabled around this declaration because the shape is dictated by the ESF SDK and
-// cannot be reshaped without breaking the C bridge.
-private func cdhashHexString(from cdhash: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
-                                            UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)) -> String? {
-    var bytes = cdhash
-    return withUnsafeBytes(of: &bytes) { raw -> String? in
-        // All-zero cdhash means "no real CDHash present" — unsigned or otherwise unverifiable. Return nil so the precedence walker
-        // skips the CDHASH map for this exec rather than matching a rule whose identifier is "00…00" by coincidence.
-        if raw.allSatisfy({ $0 == 0 }) {
-            return nil
-        }
-        var s = ""
-        s.reserveCapacity(raw.count * hexCharsPerByte)
-        for b in raw {
-            s.append(hexDigitsLowercase[Int(b >> 4)])
-            s.append(hexDigitsLowercase[Int(b & hexLowNibbleMask)])
-        }
-        return s
-    }
-}
-// swiftlint:enable large_tuple
+// isHardenedRuntime + cdhashHexString helpers moved to CDHashHex.swift (PR for #210) to keep this file under SwiftLint's
+// file_length cap. The helpers are pure; ESFSubscriber consumes them via their public names.

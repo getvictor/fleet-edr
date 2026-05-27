@@ -333,41 +333,33 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 
 // spec:server-admin-surface/persist-and-fan-out-application-control-rules/unsupported-rule-type-is-rejected-without-persisting
 //
-// TestAppControl_CreateRule_RejectsUnsupportedTypes pins the rule_type gate after the Phase A close-out: CDHASH / SIGNINGID / TEAMID
-// are accepted (they pass through the validator and the unsupported-sentinel does not fire), while CERTIFICATE + PATH remain
-// deferred and continue to surface ErrAppControlUnsupportedRuleType so the REST surface is honest about what's wired today.
-// The Identifier per type is shape-valid so the format check passes; the test isolates the rule_type gate from the identifier gate.
-func TestAppControl_CreateRule_RejectsUnsupportedTypes(t *testing.T) {
+// TestAppControl_CreateRule_RejectsUnknownRuleType pins the rule_type gate for tokens that are not on the wire enum. After the
+// Phase B close-out (PR for #210) every named enum value -- BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH -- is wired,
+// so the only way to fall through to the gate is to submit a token the validator does not recognise. The store must reject
+// without persisting and surface ErrAppControlInvalidRuleType (not the retired ErrAppControlUnsupportedRuleType, which is reserved
+// for the future case where a value is added to the enum before the extension supports it).
+func TestAppControl_CreateRule_RejectsUnknownRuleType(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
-	for _, tc := range []struct {
-		rt         api.RuleType
-		identifier string
-	}{
-		{api.RuleTypeCertificate, strings.Repeat("c", 64)},
-		{api.RuleTypePath, "/usr/bin/ls"},
-	} {
-		t.Run(string(tc.rt), func(t *testing.T) {
-			_, err := store.CreateRule(ctx, api.CreateRuleRequest{
-				PolicyID:   p.ID,
-				RuleType:   tc.rt,
-				Identifier: tc.identifier,
-				Actor:      "demo-admin",
-				Reason:     "should be rejected as unsupported",
-			})
-			require.Error(t, err)
-			assert.ErrorIs(t, err, api.ErrAppControlUnsupportedRuleType)
-		})
-	}
+	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   p.ID,
+		RuleType:   api.RuleType("BANANA"),
+		Identifier: strings.Repeat("a", 64),
+		Actor:      "demo-admin",
+		Reason:     "unknown token should be rejected",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrAppControlInvalidRuleType)
 }
 
-// TestAppControl_CreateRule_AcceptsCDHashSigningIDTeamID is the positive companion to the unsupported-types test. CDHASH /
-// SIGNINGID / TEAMID rules MUST round-trip the validator + store + schema after the Phase A close-out — a deferred enum value
-// in the schema or a regressed validator would otherwise silently break creating these rule types via the REST handler.
-func TestAppControl_CreateRule_AcceptsCDHashSigningIDTeamID(t *testing.T) {
+// TestAppControl_CreateRule_AcceptsAllWiredTypes is the positive companion to the unknown-type test. Every rule type on the
+// wire enum MUST round-trip the validator + store + schema. A regression that re-introduced ErrAppControlUnsupportedRuleType
+// for CERTIFICATE / PATH (or that broke any other type's validator) would silently break creating these rule types via the
+// REST handler.
+func TestAppControl_CreateRule_AcceptsAllWiredTypes(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
@@ -381,6 +373,8 @@ func TestAppControl_CreateRule_AcceptsCDHashSigningIDTeamID(t *testing.T) {
 		{api.RuleTypeSigningID, "EQHXZ8M8AV:com.google.Chrome"},
 		{api.RuleTypeSigningID, "platform:com.apple.curl"},
 		{api.RuleTypeTeamID, "EQHXZ8M8AV"},
+		{api.RuleTypeCertificate, strings.Repeat("c", 64)},
+		{api.RuleTypePath, "/Applications/Foo.app/Contents/MacOS/Foo"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.rt)+"/"+tc.identifier, func(t *testing.T) {
@@ -389,7 +383,7 @@ func TestAppControl_CreateRule_AcceptsCDHashSigningIDTeamID(t *testing.T) {
 				RuleType:   tc.rt,
 				Identifier: tc.identifier,
 				Actor:      "demo-admin",
-				Reason:     "phase A acceptance",
+				Reason:     "all-wired acceptance",
 			})
 			require.NoError(t, err)
 			assert.NotZero(t, rule.ID)

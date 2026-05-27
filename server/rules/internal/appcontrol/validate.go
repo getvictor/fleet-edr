@@ -15,16 +15,16 @@ import (
 // future rename to a structured-error shape is a one-line change.
 const wrapFmt = "%w: %s"
 
-// ValidateRuleType reports whether rt is a recognized rule type. Phase A close-out accepts CDHASH, BINARY, SIGNINGID, and TEAMID.
-// CERTIFICATE and PATH stay gated (CERTIFICATE needs the leaf-cert cache plumbing Phase B brings; PATH needs Launch Services
-// indirection coverage Phase B brings); both return ErrAppControlUnsupportedRuleType so the operator audit log surfaces the
-// precise "not yet wired" cause rather than a generic invalid-type error.
+// ValidateRuleType reports whether rt is a recognized rule type. v0.1.0 accepts the full enum: BINARY, CDHASH, SIGNINGID, TEAMID
+// (Phase A close-out, PR #289), plus CERTIFICATE and PATH (Phase B close-out, this PR). CERTIFICATE matches against the SHA-256
+// of the leaf X.509 signing certificate -- the surgical level for compromised-Developer-ID incident response. PATH matches against
+// the canonical absolute path of the exec target; the validator's canonicalizePath is the single canonical-form authority and the
+// extension applies the same rules on the AUTH callback. ErrAppControlUnsupportedRuleType is retired: every wire-enum value is now
+// either accepted or invalid; an unknown token returns ErrAppControlInvalidRuleType.
 func ValidateRuleType(rt api.RuleType) error {
 	switch rt {
-	case api.RuleTypeBinary, api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeTeamID:
+	case api.RuleTypeBinary, api.RuleTypeCDHash, api.RuleTypeSigningID, api.RuleTypeCertificate, api.RuleTypeTeamID, api.RuleTypePath:
 		return nil
-	case api.RuleTypeCertificate, api.RuleTypePath:
-		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
 	default:
 		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidRuleType, rt)
 	}
@@ -48,8 +48,8 @@ var signingID = regexp.MustCompile(`^(?:[A-Z0-9]{10}|platform):[a-zA-Z0-9._-]+$`
 
 // ValidateIdentifier checks that the identifier value matches the format required by the rule type. Returns
 // ErrAppControlInvalidIdentifier with the expected-shape hint string (the raw identifier value is NOT included so this validator does
-// not turn unbounded admin input into log lines). Returns ErrAppControlUnsupportedRuleType if the type is on the enum but not yet
-// wired through validation.
+// not turn unbounded admin input into log lines). Returns ErrAppControlInvalidRuleType for tokens that aren't on the wire enum at
+// all; ErrAppControlUnsupportedRuleType is retired now that every wire enum value is wired through to the extension.
 func ValidateIdentifier(rt api.RuleType, identifier string) error {
 	switch rt {
 	case api.RuleTypeBinary:
@@ -66,7 +66,7 @@ func ValidateIdentifier(rt api.RuleType, identifier string) error {
 		if !hex64.MatchString(identifier) {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "CERTIFICATE rule identifier must be 64 lowercase hex characters")
 		}
-		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
+		return nil
 	case api.RuleTypeTeamID:
 		if !teamID.MatchString(identifier) {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, "TEAMID rule identifier must be 10 uppercase alphanumeric characters")
@@ -81,7 +81,7 @@ func ValidateIdentifier(rt api.RuleType, identifier string) error {
 		if _, err := canonicalizePath(identifier); err != nil {
 			return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidIdentifier, err.Error())
 		}
-		return fmt.Errorf(wrapFmt, api.ErrAppControlUnsupportedRuleType, rt)
+		return nil
 	default:
 		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidRuleType, rt)
 	}
