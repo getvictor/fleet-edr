@@ -35,7 +35,9 @@ jobs:
       scan-args: |-
         --recursive
         ./
-      # Don't fail the PR on a new CVE — we want visibility in the Security
-      # tab without blocking merges for upstream advisories we can't fix on
-      # our side. Flip to true once we've triaged the initial scan.
-      fail-on-vuln: false
+      # Block PRs on any new advisory across the dep tree. govulncheck (in
+      # go-vulncheck.yml) is the reachability-aware gate; OSV-Scanner is the
+      # wider net catching unreachable but still-known-bad deps. The initial
+      # 21-vuln backlog was cleared by bumping golang.org/x/{crypto,net,sys},
+      # so we can now gate without a perma-red baseline.
+      fail-on-vuln: true
