@@ -259,6 +259,31 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name: "EDR_DISABLED_RULES parsed and trimmed",
+			env: withExtra(minEnv, map[string]string{
+				// Mixed whitespace + an empty entry exercises splitCSV's trim/empty-skip the same way the allowlists above
+				// do. The rule_id values are not validated here -- the catalog filter accepts whatever the operator typed
+				// and bootstrap.New warns on unknown IDs at boot.
+				"EDR_DISABLED_RULES": "osascript_network_exec, sudoers_tamper,, suspicious_exec",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t,
+					[]string{"osascript_network_exec", "sudoers_tamper", "suspicious_exec"},
+					c.DisabledRuleIDs,
+					"EDR_DISABLED_RULES must trim whitespace and skip empty entries while preserving order")
+			},
+		},
+		{
+			name: "EDR_DISABLED_RULES empty leaves nil slice",
+			env:  minEnv,
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Nil(t, c.DisabledRuleIDs,
+					"unset env should leave the slice nil so the catalog ships every shipped rule")
+			},
+		},
+		{
 			name: "EDR_TRUSTED_PROXIES populates and trims",
 			env: withExtra(minEnv, map[string]string{
 				// Mixed CIDR forms + whitespace + an empty entry. CIDR validation is deferred to

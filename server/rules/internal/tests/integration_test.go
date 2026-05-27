@@ -10,6 +10,7 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -111,6 +112,36 @@ func TestCatalog_DisabledRuleIDsHonoredEndToEnd(t *testing.T) {
 	// Sanity: the rest of the catalog still appears so a regression that filtered the wrong subset is caught.
 	assert.Len(t, catalog, 8, "exactly one rule must have been filtered (9 shipped - 1 disabled)")
 	assert.Len(t, active, 8)
+}
+
+// TestBootstrap_WarnsOnUnknownDisabledRuleID covers the boot-time WARN path #238 added to bootstrap.New: a stale operator
+// config that references a rule_id which doesn't exist (typo or removed rule) must emit a WARN log line carrying the
+// offending rule_id as a structured attribute, without failing the boot. The test injects a slog handler that records
+// records into a buffer + asserts the WARN appears with the right attribute. Pairs with the catalog-level
+// TestUnknownDisabledIDs unit test which pins the diagnostic helper's inputs/outputs.
+func TestBootstrap_WarnsOnUnknownDisabledRuleID(t *testing.T) {
+	t.Parallel()
+	s := full.Open(t)
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(handler)
+	deps := rulesbootstrap.Deps{
+		DB:     s,
+		Logger: logger,
+		AuthZ:  allowAllAuthZ{},
+		RegistryOptions: rulesapi.RegistryOptions{
+			DisabledRuleIDs: []string{"suspicious_exec", "this-rule-does-not-exist", "another-typo"},
+		},
+	}
+	r, err := rulesbootstrap.New(deps)
+	require.NoError(t, err, "unknown rule_id MUST NOT fail boot per #238 design")
+	require.NoError(t, r.ApplySchema(t.Context()))
+	out := buf.String()
+	assert.Contains(t, out, "EDR_DISABLED_RULES references unknown rule_id")
+	assert.Contains(t, out, "rule_id=this-rule-does-not-exist")
+	assert.Contains(t, out, "rule_id=another-typo")
+	assert.NotContains(t, out, "rule_id=suspicious_exec",
+		"a real rule MUST NOT trigger the unknown-rule WARN")
 }
 
 // TestContentService_ActiveRules surfaces every shipped rule through the engine-facing interface. The exact roster lives in

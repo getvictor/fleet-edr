@@ -355,28 +355,9 @@ func loadAllowlists(c *Config, getenv func(string) string) {
 	if allowlist := envparse.Allowlist(getenv("EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST")); allowlist != nil {
 		c.SuspiciousExecParentAllowlist = allowlist
 	}
-	if disabled := parseDisabledRuleIDs(getenv("EDR_DISABLED_RULES")); len(disabled) > 0 {
+	if disabled := splitCSV(getenv("EDR_DISABLED_RULES")); len(disabled) > 0 {
 		c.DisabledRuleIDs = disabled
 	}
-}
-
-// parseDisabledRuleIDs splits the EDR_DISABLED_RULES env var into a slice of rule IDs. Whitespace is trimmed; empty entries
-// are dropped. Returns nil for empty / whitespace-only input so the caller leaves the catalog default in place. We keep
-// duplicates verbatim (catalog.New treats DisabledRuleIDs as a set internally) so the operator-facing UnknownDisabledIDs
-// warning reports every literal value the operator typed.
-func parseDisabledRuleIDs(v string) []string {
-	if strings.TrimSpace(v) == "" {
-		return nil
-	}
-	var out []string
-	for p := range strings.SplitSeq(v, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out
 }
 
 // loadLogConfig reads + validates the slog handler's level + format knobs. Lowercases for downstream consumers regardless of how the
