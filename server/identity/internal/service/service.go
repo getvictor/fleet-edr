@@ -180,21 +180,11 @@ func toAPIUser(u *users.User) api.User {
 // shape. The plaintext ID stays internal; the api type carries only what
 // callers (middleware + cross-context tests) legitimately need to read.
 // Caller guarantees s is non-nil.
-//
-// Legacy session rows inserted before the auth_method column existed
-// can land here with an empty AuthMethod string when the column DEFAULT
-// did not apply (e.g. a row inserted via a path that explicitly listed
-// columns). Surface those as "local_password" so middleware does not
-// have to repeat the fallback at every read site.
 func toAPISession(s *sessions.Session) *api.Session {
-	authMethod := s.AuthMethod
-	if authMethod == "" {
-		authMethod = "local_password"
-	}
 	return &api.Session{
 		UserID:     s.UserID,
 		IdentityID: s.IdentityID,
-		AuthMethod: authMethod,
+		AuthMethod: s.AuthMethod,
 		CreatedAt:  s.CreatedAt,
 		LastSeenAt: s.LastSeenAt,
 		LastAuthAt: s.LastAuthAt,

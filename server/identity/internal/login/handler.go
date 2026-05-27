@@ -174,13 +174,14 @@ func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, s
 }
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {
-	// auth_method is read off the session pinned to ctx (Session middleware wired by App.tsx's authed routes). Every session in the system
-	// is now minted by either the OIDC callback or the break-glass FinishLogin path; if no session is on ctx the caller is misconfigured
-	// (this handler is GET /api/session, always behind Session middleware). The "local_password" fallback remains as a defense-in-depth
-	// default since reading it as the empty string would surface as "" in the wire response.
-	authMethod := "local_password"
-	if sess, ok := api.SessionFromContext(ctx); ok && sess.AuthMethod != "" {
+	// auth_method is read off the session pinned to ctx (Session middleware wired by App.tsx's authed routes). handleGet runs only
+	// behind that middleware, so SessionFromContext must succeed; the !ok branch is a wiring bug we surface to logs but treat as
+	// "no auth_method available" rather than papering over with a synthetic default.
+	var authMethod string
+	if sess, ok := api.SessionFromContext(ctx); ok {
 		authMethod = sess.AuthMethod
+	} else {
+		h.logger.ErrorContext(ctx, "writeSessionJSON without Session on ctx -- middleware wiring broken")
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
 		User:       userResponse{ID: u.ID, Email: u.Email},
