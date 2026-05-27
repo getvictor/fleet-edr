@@ -38,7 +38,9 @@ type User struct {
 //
 // AuthMethod records how the session was minted: "local_password" for break-glass-issued sessions, "oidc" for
 // IdP-authenticated sessions. The chokepoint's actor.AuthMethod field reflects the persisted column value verbatim.
-// IdentityID FKs into the identities table; nil for break-glass-issued sessions which have no identity row.
+// IdentityID FKs into the identities table; OIDC sessions + break-glass FinishSetup always populate it, while
+// FinishLogin can leave it nil when the local_password identity row can't be resolved at session-mint time and tests
+// that don't track identities omit it. The column is nullable to admit both shapes.
 type Session struct {
 	UserID     int64
 	IdentityID *int64

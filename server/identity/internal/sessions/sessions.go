@@ -52,8 +52,9 @@ var ErrNotFound = errors.New("sessions: not found or expired")
 //
 // AuthMethod records how the session was minted ("local_password" for break-glass-issued, "oidc" for IdP-authenticated).
 // The chokepoint reads it through Service.LoadActor so actor.AuthMethod reflects the persisted column value verbatim.
-// IdentityID FKs into the identities table; nullable because break-glass sessions have no identity row, and tests that
-// don't track identities can omit it.
+// IdentityID FKs into the identities table; the column is nullable so the FinishLogin path (which leaves it NULL when
+// the local_password identity row can't be resolved at mint time) and tests that don't track identities can persist
+// valid rows. OIDC + break-glass FinishSetup always populate it.
 //
 // LastAuthAt records the most recent authentication event for this session
 // — initial login, OIDC reauth callback, or break-glass reauth POST.

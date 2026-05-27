@@ -178,7 +178,9 @@ func toAPIUser(u *users.User) api.User {
 
 // toAPISession converts the internal sessions.Session row to the api.Session shape. The plaintext ID stays internal; the
 // api type carries only what callers (middleware + cross-context tests) legitimately need to read. Caller guarantees s is
-// non-nil; this helper is a value-copy with field renames, no validation.
+// non-nil; this helper is a value-copy with field renames, no validation. AuthMethod is passed through verbatim because
+// sessions.Store.Create is the single INSERT site and normalises "" to "local_password" before the row hits the DB; the
+// MySQL schema also pins NOT NULL DEFAULT 'local_password' as a belt-and-braces second invariant.
 func toAPISession(s *sessions.Session) *api.Session {
 	return &api.Session{
 		UserID:     s.UserID,

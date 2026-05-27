@@ -174,14 +174,11 @@ func (h *Handler) resolveLogoutActor(ctx context.Context, raw []byte) (*int64, s
 }
 
 func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u api.User, csrfToken []byte) {
-	// auth_method is read off the session pinned to ctx (Session middleware wired by App.tsx's authed routes). handleGet runs only
-	// behind that middleware, so SessionFromContext must succeed; the !ok branch is a wiring bug we surface to logs but treat as
-	// "no auth_method available" rather than papering over with a synthetic default.
+	// auth_method is read off the session pinned to ctx. handleGet is the only caller and it already returns 500 when
+	// SessionFromContext fails, so the lookup here always succeeds; the ok branch is the only reachable path.
 	var authMethod string
 	if sess, ok := api.SessionFromContext(ctx); ok {
 		authMethod = sess.AuthMethod
-	} else {
-		h.logger.ErrorContext(ctx, "writeSessionJSON without Session on ctx -- middleware wiring broken")
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
 		User:       userResponse{ID: u.ID, Email: u.Email},
