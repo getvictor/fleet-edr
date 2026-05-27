@@ -426,6 +426,13 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 		severity = api.SeverityRuleMedium
 	}
 
+	// Persist PATH identifiers in their canonical form (filepath.Clean + /tmp,/var,/etc → /private). The extension's AUTH_EXEC
+	// walker queries against the canonical form, so a literal `/tmp/foo` persisted as-is would never match (Gemini PR #290).
+	persistIdentifier, normErr := NormalizeIdentifier(req.RuleType, req.Identifier)
+	if normErr != nil {
+		return api.ApplicationControlRule{}, fmt.Errorf("%w: %s", api.ErrAppControlInvalidIdentifier, normErr.Error())
+	}
+
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf(errBeginTxFmt, err)
@@ -438,7 +445,7 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
 		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?, ?, ?)`
 	res, err := tx.ExecContext(ctx, insert,
-		req.PolicyID, req.RuleType, req.Identifier, severity,
+		req.PolicyID, req.RuleType, persistIdentifier, severity,
 		req.CustomMsg, req.CustomURL, req.Comment, req.Actor,
 	)
 	if err != nil {
@@ -887,6 +894,23 @@ func validateBulkUpsertRequest(req api.BulkUpsertRulesRequest) error {
 	return nil
 }
 
+// normalizeBulkUpsertItems returns a copy of items with PATH identifiers in canonical form. Every other rule type is returned
+// unchanged. Callers MUST run validateBulkUpsertItems first so the canonicalizePath call below cannot fail on malformed input
+// in practice; the error path is defensive. Added on PR #290 (#210) for the bulk paste-many path; CreateRule has the same
+// normalization step inline.
+func normalizeBulkUpsertItems(items []api.BulkUpsertRuleItem) ([]api.BulkUpsertRuleItem, error) {
+	out := make([]api.BulkUpsertRuleItem, len(items))
+	copy(out, items)
+	for i := range out {
+		canon, err := NormalizeIdentifier(out[i].RuleType, out[i].Identifier)
+		if err != nil {
+			return nil, fmt.Errorf(errBulkItemFmt, i, fmt.Errorf("%w: %s", api.ErrAppControlInvalidIdentifier, err.Error()))
+		}
+		out[i].Identifier = canon
+	}
+	return out, nil
+}
+
 // validateBulkUpsertItems runs the per-item shape checks AND the in-batch duplicate-key guard. CodeRabbit on PR #190 flagged a
 // duplicate key in the same batch as a count-correctness bug: without this guard, the second occurrence of the same
 // (rule_type, identifier) tuple would be classified as Insert because the preflight only sees pre-batch state.
@@ -1030,6 +1054,17 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 	if err := validateBulkUpsertItems(req.Items); err != nil {
 		return api.BulkUpsertResult{}, err
 	}
+	// Normalize PATH identifiers to their canonical form (filepath.Clean + /tmp,/var,/etc → /private) so the persisted row
+	// matches what the extension's AUTH_EXEC walker computes from the exec target's path. Without this, a paste-many import
+	// of `/tmp/foo` lands as `/tmp/foo` in the DB but the extension queries `/private/tmp/foo` and the rule silently never
+	// fires (Gemini PR #290). Replaces both req.Items + the working slice so collectExistingBulkKeys + the INSERT loop both
+	// see canonical identifiers; the in-batch duplicate guard already ran on raw input so two canonical-form duplicates
+	// (e.g. `/tmp/foo` and `/private/tmp/foo` pasted in the same batch) collide as expected at the DB unique-key gate.
+	normalized, err := normalizeBulkUpsertItems(req.Items)
+	if err != nil {
+		return api.BulkUpsertResult{}, err
+	}
+	req.Items = normalized
 
 	// Sort a copy so the caller's slice stays intact + lock ordering on rule rows is deterministic across concurrent batches.
 	sortedItems := make([]api.BulkUpsertRuleItem, len(req.Items))

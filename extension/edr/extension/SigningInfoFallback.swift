@@ -133,20 +133,23 @@ final class SigningInfoFallback {
 
     /// extractLeafCertSHA256 SHA-256s the DER bytes of the binary's leaf certificate (kSecCodeInfoCertificates[0]) and returns
     /// the 64-char lowercase hex digest. Returns nil for unsigned / ad-hoc-signed binaries (no certificate chain) or when the
-    /// chain decode produces zero certs (defensive; never happens in practice for a signed binary).
+    /// chain decode produces zero certs (defensive; never happens in practice for a signed binary). Gemini flagged the
+    /// SecCertificateCopyData forced cast on PR #290; the conditional bind below treats a nil return defensively even though
+    /// SecCertificateCopyData is documented as non-failing for a valid SecCertificate.
     private func extractLeafCertSHA256(from info: [String: Any]) -> String? {
-        guard let certs = info[kSecCodeInfoCertificates as String] as? [SecCertificate], let leaf = certs.first else {
+        guard let certs = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
+              let leaf = certs.first,
+              let der = SecCertificateCopyData(leaf) as Data? else {
             return nil
         }
-        let der = SecCertificateCopyData(leaf) as Data
         let digest = SHA256.hash(data: der)
         return digestToHex(digest)
     }
 
     /// digestToHex renders a SHA-256 digest as 64 lowercase hex characters. Uses the explicit nibble-lookup pattern instead
     /// of String(format: "%02x", _) so the hex render is allocation-conscious and SwiftLint's no_magic_numbers rule has no
-    /// literal `2` to flag. Mirrors the cdhashHexString shape in ESFSubscriber.swift; if a third hex consumer lands, lift
-    /// this into a shared helper file.
+    /// literal `2` to flag. Mirrors the cdhashHexString shape in CDHashHex.swift; if a third hex consumer lands, lift this
+    /// + cdhashHexString into a shared helper file.
     private func digestToHex(_ digest: SHA256.Digest) -> String {
         var s = ""
         s.reserveCapacity(SHA256.byteCount * digestHexCharsPerByte)

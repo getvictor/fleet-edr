@@ -355,6 +355,41 @@ func TestAppControl_CreateRule_RejectsUnknownRuleType(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrAppControlInvalidRuleType)
 }
 
+// TestAppControl_CreateRule_PathPersistsCanonical pins the canonicalization-on-persist contract Gemini surfaced on PR #290.
+// An operator who creates a PATH rule for `/tmp/foo` MUST see `/private/tmp/foo` round-trip from the store; the extension's
+// AUTH_EXEC walker queries against the canonical form, so persisting the raw `/tmp/foo` would silently make every such rule
+// a no-op against the dev VM's actual exec targets.
+func TestAppControl_CreateRule_PathPersistsCanonical(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"slash-tmp rewritten to /private/tmp", "/tmp/canonical-tmp-target", "/private/tmp/canonical-tmp-target"},
+		{"slash-var rewritten to /private/var", "/var/db/canonical-var-target", "/private/var/db/canonical-var-target"},
+		{"already-canonical /private path passes through", "/private/etc/canonical-private-target", "/private/etc/canonical-private-target"},
+		{"non-symlink path passes through", "/usr/bin/canonical-usr-target", "/usr/bin/canonical-usr-target"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+				PolicyID:   p.ID,
+				RuleType:   api.RuleTypePath,
+				Identifier: tc.in,
+				Actor:      "demo-admin",
+				Reason:     "PR #290 path canonical persist",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, rule.Identifier)
+		})
+	}
+}
+
 // TestAppControl_CreateRule_AcceptsAllWiredTypes is the positive companion to the unknown-type test. Every rule type on the
 // wire enum MUST round-trip the validator + store + schema. A regression that re-introduced ErrAppControlUnsupportedRuleType
 // for CERTIFICATE / PATH (or that broke any other type's validator) would silently break creating these rule types via the

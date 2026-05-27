@@ -58,7 +58,7 @@ enum UndecidedReason: String, Sendable {
 /// honours every wire-enum rule type.
 struct AuthTuple: Equatable, Sendable {
     /// 40-char lowercase hex CDHash, only when the target runs under Apple's Hardened Runtime (CS_RUNTIME); see the comment on
-    /// isHardenedRuntime in ESFSubscriber.swift for the lazy-page-mapping rationale.
+    /// isHardenedRuntime in CDHashHex.swift for the lazy-page-mapping rationale.
     let cdhash: String?
     /// 64-char lowercase hex SHA-256 of the leaf X.509 signing cert. nil when the binary is unsigned, ad-hoc-signed, or
     /// SecCode can't read the on-disk binary. Populated by SigningInfoFallback.leafCertSHA256 once per (inode, mtime).
@@ -181,6 +181,18 @@ private func matchLowerLayers(tuple: AuthTuple, snapshot: ApplicationControlSnap
     return nil
 }
 
+/// macOSPrivatePrefixes lists the absolute-path prefixes that macOS exposes as `/private/...` symlinks (the `/tmp`, `/var`,
+/// `/etc` triple, stable on every macOS version that has shipped Endpoint Security). canonicalizePath rewrites a path
+/// starting with any of these into the `/private`-prefixed form to match Foundation's `realpath(3)` output and the
+/// server-side Go canonicaliser. Hoisted to file scope so the rewrite loop runs without allocating a fresh array per
+/// AUTH_EXEC call (Copilot PR #290) AND so SonarCloud's swift:S1075 hardcoded-URI heuristic has one named constant to look
+/// at rather than three inline literals.
+private let macOSPrivatePrefixes: [String] = ["/tmp", "/var", "/etc"]
+
+/// privatePrefix is the rewrite target each macOSPrivatePrefixes entry is lifted under. Same purpose for swift:S1075 as
+/// macOSPrivatePrefixes above.
+private let privatePrefix = "/private"
+
 /// canonicalizePath returns the macOS-canonical form of an absolute path, matching the server-side
 /// `server/rules/internal/appcontrol/CanonicalizePath` rules verbatim: rejects empty / relative / `..`-containing paths,
 /// collapses redundant slashes (filepath.Clean equivalent), and rewrites the /tmp, /var, /etc symlinks into their
@@ -207,9 +219,9 @@ func canonicalizePath(_ path: String) -> String? {
         segments.append(s)
     }
     let cleaned = "/" + segments.joined(separator: "/")
-    for prefix in ["/tmp", "/var", "/etc"] {
+    for prefix in macOSPrivatePrefixes {
         if cleaned == prefix || cleaned.hasPrefix(prefix + "/") {
-            return "/private" + cleaned
+            return privatePrefix + cleaned
         }
     }
     return cleaned

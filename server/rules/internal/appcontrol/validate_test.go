@@ -115,8 +115,40 @@ func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
 	}
 }
 
-// TestCanonicalizePath covers the macOS-specific /tmp, /var, /etc rewrites every PATH rule depends on. The validator path is exercised
-// today; the Phase-A PATH-rule decision engine will consume the same helper.
+// TestNormalizeIdentifier pins the canonicalization-on-persist contract added in response to Gemini's HIGH on PR #290.
+// PATH rules must persist in canonical form so the extension's AUTH_EXEC walker (which canonicalises the exec target the
+// same way) matches the rule. Every other rule type is returned unchanged. The test covers both: PATH gets the /private
+// rewrite, and BINARY/CDHASH/SIGNINGID/TEAMID/CERTIFICATE pass through verbatim.
+func TestNormalizeIdentifier(t *testing.T) {
+	cases := []struct {
+		name string
+		rt   api.RuleType
+		in   string
+		want string
+	}{
+		{"path /tmp rewritten to /private/tmp", api.RuleTypePath, "/tmp/foo", "/private/tmp/foo"},
+		{"path /var rewritten to /private/var", api.RuleTypePath, "/var/db/x", "/private/var/db/x"},
+		{"path /usr unchanged", api.RuleTypePath, "/usr/bin/ls", "/usr/bin/ls"},
+		{"path redundant slashes collapsed", api.RuleTypePath, "/usr//bin///ls", "/usr/bin/ls"},
+		{"binary identifier passes through", api.RuleTypeBinary, strings.Repeat("a", 64), strings.Repeat("a", 64)},
+		{"cdhash identifier passes through", api.RuleTypeCDHash, strings.Repeat("b", 40), strings.Repeat("b", 40)},
+		{"signing id passes through", api.RuleTypeSigningID, "EQHXZ8M8AV:com.google.Chrome", "EQHXZ8M8AV:com.google.Chrome"},
+		{"team id passes through", api.RuleTypeTeamID, "EQHXZ8M8AV", "EQHXZ8M8AV"},
+		{"certificate passes through", api.RuleTypeCertificate, strings.Repeat("c", 64), strings.Repeat("c", 64)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := appcontrol.NormalizeIdentifier(tc.rt, tc.in)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestCanonicalizePath covers the macOS-specific /tmp, /var, /etc rewrites every PATH rule depends on. Exercised by both the
+// validator (input validation) and the persist-time canonicalizer (NormalizeIdentifier); the Swift-side canonicalizePath in
+// AuthExecDecider.swift MUST stay in lockstep with this table or the persisted rule never matches the AUTH_EXEC walker's
+// canonical form.
 func TestCanonicalizePath(t *testing.T) {
 	cases := []struct {
 		name string

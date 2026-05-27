@@ -46,10 +46,26 @@ var teamID = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 // The bundle.id portion is ASCII alphanumeric with `.`, `_`, `-`.
 var signingID = regexp.MustCompile(`^(?:[A-Z0-9]{10}|platform):[a-zA-Z0-9._-]+$`)
 
+// NormalizeIdentifier returns the canonical persist-ready form of an identifier for the given rule type. For PATH rules this is
+// the macOS-canonical form (filepath.Clean + /tmp,/var,/etc → /private rewrite); the extension queries against the canonical form
+// at AUTH_EXEC time, so persisting any other shape (e.g. the operator's literal `/tmp/foo`) silently breaks rule match. For every
+// other rule type the identifier is returned unchanged. Callers MUST run ValidateIdentifier first so they can return a typed
+// validation error; this function assumes the identifier already passed validation and panics through canonicalizePath's error
+// only when invoked on invalid input (operationally impossible after ValidateIdentifier succeeds). Gemini flagged the missing
+// normalization step on PR #290 (#210).
+func NormalizeIdentifier(rt api.RuleType, identifier string) (string, error) {
+	if rt != api.RuleTypePath {
+		return identifier, nil
+	}
+	return canonicalizePath(identifier)
+}
+
 // ValidateIdentifier checks that the identifier value matches the format required by the rule type. Returns
 // ErrAppControlInvalidIdentifier with the expected-shape hint string (the raw identifier value is NOT included so this validator does
 // not turn unbounded admin input into log lines). Returns ErrAppControlInvalidRuleType for tokens that aren't on the wire enum at
-// all; ErrAppControlUnsupportedRuleType is retired now that every wire enum value is wired through to the extension.
+// all; ErrAppControlUnsupportedRuleType is retired now that every wire enum value is wired through to the extension. For PATH rules
+// the format check is the canonicalization-can-succeed check; callers persist the canonical form via NormalizeIdentifier so the
+// extension's AUTH_EXEC walker matches against the same string.
 func ValidateIdentifier(rt api.RuleType, identifier string) error {
 	switch rt {
 	case api.RuleTypeBinary:

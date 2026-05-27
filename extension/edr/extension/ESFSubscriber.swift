@@ -459,4 +459,5 @@ final class ESFSubscriber: Sendable {
 }
 
 // isHardenedRuntime + cdhashHexString helpers moved to CDHashHex.swift (PR for #210) to keep this file under SwiftLint's
-// file_length cap. The helpers are pure; ESFSubscriber consumes them via their public names.
+// file_length cap. The helpers are pure; ESFSubscriber consumes them via their module-internal symbols (Swift's implicit
+// `internal` access — no explicit modifier is required since both files compile into the same module).
