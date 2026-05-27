@@ -104,6 +104,13 @@ type Config struct {
 	// indicator.
 	SuspiciousExecParentAllowlist map[string]struct{}
 
+	// DisabledRuleIDs is the boot-time list of rule IDs to drop from the detection registry. Populated from EDR_DISABLED_RULES
+	// (comma-separated rule_id values). A disabled rule is gone from the engine's active set AND from Engine.Catalog() so
+	// tools/gen-rule-docs + the GET /api/rules surface stop listing it. Empty by default. Unknown IDs WARN at boot but never
+	// fail the boot, so a stale operator config doesn't take a deployment down. Hot reload is intentionally out of scope --
+	// see spec server-detection-rules-engine/operator-toggling-of-individual-rules for the boot-time contract.
+	DisabledRuleIDs []string
+
 	// HostTokenLifetime is the maximum age of an agent's bearer token before the verify path triggers an automatic rotation (issue #86).
 	// Populated from EDR_HOST_TOKEN_LIFETIME. Default 24h: short enough that an exfiltrated token has bounded value, long enough that the
 	// per-host rotation traffic is negligible.
@@ -347,6 +354,9 @@ func loadAllowlists(c *Config, getenv func(string) string) {
 	}
 	if allowlist := envparse.Allowlist(getenv("EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST")); allowlist != nil {
 		c.SuspiciousExecParentAllowlist = allowlist
+	}
+	if disabled := splitCSV(getenv("EDR_DISABLED_RULES")); len(disabled) > 0 {
+		c.DisabledRuleIDs = disabled
 	}
 }
 

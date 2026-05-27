@@ -530,6 +530,33 @@ persistence drops, credential access) catch the same actor through
 different signal, but the residual coverage gap is worth knowing
 about.
 
+`EDR_DISABLED_RULES` is the **whole-rule** disable knob. When an
+allowlist isn't expressive enough to silence a noisy rule for a
+given environment, set the comma-separated list of `rule_id` values
+(the IDs printed by `GET /api/rules`) to drop them from the engine
+at boot. Example: a fleet whose admin workflow runs AppleScript
+that curls from a vendor URL might disable
+`osascript_network_exec` outright until a follow-up tunes the rule:
+
+```sh
+EDR_DISABLED_RULES=osascript_network_exec
+```
+
+The rule is then gone from the engine's active set AND from
+`GET /api/rules`, so dashboards, alerts, and `tools/gen-rule-docs`
+all stop referencing it. The disable is **boot-time only** — apply
+a new value by restarting the server; hot reload is intentionally
+out of scope per the spec contract. Unknown rule IDs in the list
+log a WARN at boot (`EDR_DISABLED_RULES references unknown
+rule_id...`) but don't fail the boot, so a stale config doesn't
+take a deployment down.
+
+Prefer the allowlist knobs above when they're expressive enough —
+they silence the noise without giving up the rule's coverage for
+genuinely-malicious inputs. Reach for `EDR_DISABLED_RULES` only
+when the rule is wrong for the environment and an allowlist would
+let through too much.
+
 ## Common troubleshooting
 
 **Readyz says `db: error`.**
