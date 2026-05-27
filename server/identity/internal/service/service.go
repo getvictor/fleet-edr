@@ -176,10 +176,9 @@ func toAPIUser(u *users.User) api.User {
 	}
 }
 
-// toAPISession converts the internal sessions.Session row to the api.Session
-// shape. The plaintext ID stays internal; the api type carries only what
-// callers (middleware + cross-context tests) legitimately need to read.
-// Caller guarantees s is non-nil.
+// toAPISession converts the internal sessions.Session row to the api.Session shape. The plaintext ID stays internal; the
+// api type carries only what callers (middleware + cross-context tests) legitimately need to read. Caller guarantees s is
+// non-nil; this helper is a value-copy with field renames, no validation.
 func toAPISession(s *sessions.Session) *api.Session {
 	return &api.Session{
 		UserID:     s.UserID,

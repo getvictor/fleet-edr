@@ -32,9 +32,9 @@ type sessionResponse struct {
 	AuthMethod string `json:"auth_method"`
 }
 
-// setupServer wires the GET + DELETE /api/session handler stack the way main.go does. Returns the HTTP server + the users / sessions
-// stores so tests can seed users and mint sessions directly via the underlying stores (the Phase 5b cleanup retired POST /api/session,
-// so there is no longer a wire-level path to mint a session here).
+// setupServer wires the GET + DELETE /api/session handler stack the way main.go does. Returns the HTTP server + the users /
+// sessions stores so tests can seed users and mint sessions directly via the underlying stores; there is no password-based
+// login wire path, so this is the only way to put a session row in front of the handler.
 func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -66,8 +66,8 @@ func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store)
 	return srv, us, ss
 }
 
-// sessionCookie creates a user and a session row via the underlying stores and returns a cookie pointing at it. Replaces the
-// pre-Phase-5b POST /api/session login path that is no longer wired.
+// sessionCookie creates a user and a session row via the underlying stores and returns a cookie pointing at it -- the
+// test-only mint path that stands in for the production OIDC callback / break-glass FinishLogin entry points.
 func sessionCookie(t *testing.T, us *users.Store, ss *sessions.Store) *http.Cookie {
 	t.Helper()
 	u, err := us.Create(t.Context(), users.CreateRequest{

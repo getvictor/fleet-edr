@@ -3,8 +3,7 @@
 // CSRF token that the JS attaches as X-CSRF-Token on unsafe methods.
 // Sessions are minted server-side by the OIDC callback (after the
 // "Continue with Okta" full-page redirect) or by the break-glass
-// FinishLogin/FinishSetup flows; the legacy POST /api/session password
-// path was retired in Phase 5b. GET /api/session returns the cookie's
+// FinishLogin / FinishSetup flows. GET /api/session returns the cookie's
 // session JSON shape (including the CSRF token) and is the UI's
 // session-probe endpoint.
 import type {

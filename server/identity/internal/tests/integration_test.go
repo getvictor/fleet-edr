@@ -86,9 +86,9 @@ func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, user.ID, user2.ID)
 }
 
-// TestService_SessionLifecycle exercises the post-Phase-5b session surface (Logout + GetSession + UserExists). Sessions are minted via
-// the sessions store directly because Phase 5b retired Service.Login + the POST /api/session HTTP path; production sessions now come
-// from the OIDC callback or break-glass FinishLogin/FinishSetup flows, both of which have their own integration tests.
+// TestService_SessionLifecycle exercises the session surface (Logout + GetSession + UserExists). Sessions are minted via the
+// sessions store directly because there is no password-based login HTTP path; production sessions come from the OIDC callback
+// or break-glass FinishLogin / FinishSetup flows, both of which have their own integration tests.
 func TestService_SessionLifecycle(t *testing.T) {
 	t.Parallel()
 	id, db := newIdentityWithDB(t)

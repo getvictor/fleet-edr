@@ -1,12 +1,12 @@
-// Login handler: GET /api/session (who-am-i) and DELETE /api/session
-// (logout). The Phase 4 OIDC + break-glass refactor replaced the
-// password-based POST /api/session login path with the dedicated
-// `/api/auth/login` (OIDC) and `/admin/break-glass` flows; the legacy
-// POST handler was retired in Phase 5b along with Service.Login.
+// Session handler: GET /api/session (who-am-i) and DELETE /api/session (logout). Sessions are minted upstream by the OIDC
+// callback (/api/auth/login + /api/auth/callback) and the break-glass FinishLogin / FinishSetup endpoints; this package
+// owns only the read + delete sides of the session lifecycle.
 //
-// This handler owns HTTP-flavoured concerns for the session-read +
-// session-delete surface: cookie parsing, audit log emission on
-// logout, and the session-JSON response shape returned by GET.
+// The package name is `login` for historical reasons (the password-based POST handler that used to live here is gone) and
+// is not renamed here to avoid touching every import site for a cosmetic gain.
+//
+// This handler owns HTTP-flavoured concerns for the session-read + session-delete surface: cookie parsing, audit log
+// emission on logout, and the session-JSON response shape returned by GET.
 
 package login
 

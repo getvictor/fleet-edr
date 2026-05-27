@@ -383,8 +383,9 @@ func (i *Identity) CSRFMiddleware() func(http.Handler) http.Handler { return i.c
 // summarising the auth modes the deployment honours.
 func (i *Identity) OIDCEnabled() bool { return i.oidcHandler != nil }
 
-// RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured). Phase 5b
-// retired POST /api/session; sessions are now minted by the OIDC callback or the break-glass FinishLogin / FinishSetup endpoints.
+// RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured).
+// Sessions are minted by the OIDC callback or the break-glass FinishLogin / FinishSetup endpoints; there is no
+// password-based login surface.
 func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterPublicRoutes(mux)
 	if i.oidcHandler != nil {
@@ -418,8 +419,8 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 	return i.breakglassHandler.AllowlistMiddleware
 }
 
-// RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), and the Phase 5 break-glass
-// reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
+// RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), and the
+// break-glass reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
