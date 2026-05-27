@@ -204,20 +204,30 @@ final class FileHashCache {
     /// enough that even a multi-gigabyte binary yields multiple deadline checks per second of compute time; smaller chunks
     /// would only increase syscall overhead without measurably tightening the abort window.
     static func computeSHA256WithDeadline(path: String, expected: stat, deadlineMachAbs: UInt64) -> HashOutcome {
+        // Pre-budget short-circuit: skip the open + fstat syscalls when there is already no budget headroom for a single chunk
+        // plus the post-hash work. Saves the worst-case path resolution / fstat / unsafe-fd churn from eating into the kernel
+        // deadline on cold-miss execs that arrived already late.
+        if Self.machAbsNsRemaining(until: deadlineMachAbs) < Self.safetyMarginNs {
+            return .deadlineExceeded
+        }
+        // Paths interpolate at default (private) privacy in the warning lines below: exec paths can carry usernames, project
+        // tokens, or other PII into unified logging and a public-classified path on the AUTH_EXEC hot path is a recurring
+        // PII leak (Copilot + CodeRabbit both flagged it on the v0.1.0 close-out review). The full path still flows on the
+        // emitted application_control_block / application_control_undecided event payload for the server-side alert.
         let url = URL(fileURLWithPath: path)
         guard let handle = try? FileHandle(forReadingFrom: url) else {
-            logger.warning("could not open file for hashing: \(path, privacy: .public)")
+            logger.warning("could not open file for hashing: \(path)")
             return .readFailed
         }
         defer { try? handle.close() }
         var openedStat = stat()
         let fd = handle.fileDescriptor
         guard fstat(fd, &openedStat) == 0 else {
-            logger.warning("fstat failed on \(path, privacy: .public)")
+            logger.warning("fstat failed on \(path)")
             return .readFailed
         }
         if !Self.statMatches(expected: expected, actual: openedStat) {
-            logger.warning("file replaced between AUTH and hash read: \(path, privacy: .public)")
+            logger.warning("file replaced between AUTH and hash read: \(path)")
             return .readFailed
         }
         var hasher = SHA256()
@@ -231,7 +241,7 @@ final class FileHashCache {
                 }
                 hasher.update(data: chunk)
             } catch {
-                logger.warning("hash read failed: \(error.localizedDescription, privacy: .public)")
+                logger.warning("hash read failed on \(path)")
                 return .readFailed
             }
         }
@@ -250,9 +260,10 @@ final class FileHashCache {
     }()
 
     /// machAbsNsRemaining returns ns of budget remaining until deadlineMachAbs. Returns 0 once the deadline has passed; the
-    /// caller treats "remaining < safetyMarginNs" as "do not start another chunk." The conversion uses UInt64 widening to
-    /// avoid an overflow on hours-long deadlines (Mac mach absolute time runs in single-digit-ns units, so a 1-hour offset
-    /// fits in UInt64 with headroom; doing the multiply in narrower types would not).
+    /// caller treats "remaining < safetyMarginNs" as "do not start another chunk." Uses trap-on-overflow `*` (not `&*`) so an
+    /// unexpectedly large `diff * numer` panics fail-loud rather than wrapping silently and returning a wrong remaining-budget
+    /// that could be read as "plenty of headroom" when there is none. Under normal ES deadlines (single-digit seconds) the
+    /// multiply is far below UInt64.max; the trap is a last-resort safety net, not a routine path.
     private static func machAbsNsRemaining(until deadlineMachAbs: UInt64) -> UInt64 {
         let now = mach_absolute_time()
         if now >= deadlineMachAbs {
@@ -260,6 +271,6 @@ final class FileHashCache {
         }
         let diff = deadlineMachAbs - now
         let info = Self.machTimebase
-        return diff &* UInt64(info.numer) / UInt64(info.denom)
+        return diff * UInt64(info.numer) / UInt64(info.denom)
     }
 }

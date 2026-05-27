@@ -5,7 +5,6 @@
 // #205 (platform-binary semantics deferred to ESFSubscriber wire) and #208 (BINARY sync hash
 // fallback posture).
 
-import Foundation
 @testable import EDRExtensionLogic
 import XCTest
 
@@ -61,12 +60,7 @@ final class AuthExecDeciderTests: XCTestCase {
 
     func testNoMatchOnEmptySnapshotReturnsAllow() {
         let tuple = AuthTuple(cdhash: "c0", signingIDPrefixed: "ABC:org.test", teamID: "ABCDEFGHIJ")
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
-        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: makeSnapshot(), hashOutcome: .notNeeded)
         XCTAssertEqual(decision, .allow)
     }
 
@@ -76,10 +70,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let rule = makeRule(ruleType: ApplicationControlRuleType.cdhash, identifier: "cdhashvalue")
         let tuple = AuthTuple(cdhash: "cdhashvalue", signingIDPrefixed: nil, teamID: nil)
         let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(cdhashRules: ["cdhashvalue": rule]),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
+            tuple: tuple, snapshot: makeSnapshot(cdhashRules: ["cdhashvalue": rule]), hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "cdhashvalue"))
     }
@@ -93,8 +84,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let decision = decideAuthExec(
             tuple: tuple,
             snapshot: makeSnapshot(cdhashRules: ["cdhashvalue": cdhashRule], binaryRules: ["shaRaceCondition": binaryRule]),
-            hashOutcome: .deadlineExceeded,
-            posture: .failClosed
+            hashOutcome: .deadlineExceeded
         )
         XCTAssertEqual(decision, .deny(rule: cdhashRule, matchedIdentifier: "cdhashvalue"))
     }
@@ -108,10 +98,7 @@ final class AuthExecDeciderTests: XCTestCase {
         )
         let tuple = AuthTuple(cdhash: "cdhashvalue", signingIDPrefixed: nil, teamID: nil)
         let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(cdhashRules: ["cdhashvalue": rule]),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
+            tuple: tuple, snapshot: makeSnapshot(cdhashRules: ["cdhashvalue": rule]), hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .allow)
     }
@@ -122,10 +109,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let rule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "shavalue")
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(binaryRules: ["shavalue": rule]),
-            hashOutcome: .computed("shavalue"),
-            posture: .failClosed
+            tuple: tuple, snapshot: makeSnapshot(binaryRules: ["shavalue": rule]), hashOutcome: .computed("shavalue")
         )
         XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "shavalue"))
     }
@@ -136,8 +120,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let decision = decideAuthExec(
             tuple: tuple,
             snapshot: makeSnapshot(signingIDRules: ["ABC:org.bad": signRule]),
-            hashOutcome: .computed("nonMatchingSha"),
-            posture: .failClosed
+            hashOutcome: .computed("nonMatchingSha")
         )
         XCTAssertEqual(decision, .deny(rule: signRule, matchedIdentifier: "ABC:org.bad"))
     }
@@ -149,96 +132,98 @@ final class AuthExecDeciderTests: XCTestCase {
         let teamRule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: "ABCDEFGHIJ")
         let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(teamIDRules: ["ABCDEFGHIJ": teamRule]),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
+            tuple: tuple, snapshot: makeSnapshot(teamIDRules: ["ABCDEFGHIJ": teamRule]), hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .deny(rule: teamRule, matchedIdentifier: "ABCDEFGHIJ"))
     }
 
     // MARK: - Deadline-exceeded posture matrix
+    //
+    // The posture only applies AFTER the precedence walk continues past an unavailable BINARY
+    // layer (.deadlineExceeded / .readFailed) and SIGNINGID + TEAMID both fail to match. A
+    // definitive lower-precedence DENY beats BINARY uncertainty.
 
-    func testDeadlineExceededFailClosedDeniesWithUndecidedAudit() {
-        let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: "ABC:org.test", teamID: "ABCDEFGHIJ")
-        // SIGNINGID + TEAMID rules exist; under failClosed the deadline-exceeded path is the
-        // verdict and the later layers are NOT consulted. Tests guarantee BINARY uncertainty
-        // dominates any post-BINARY precedence match.
-        let signRule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.test")
-        let teamRule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
+    func testDeadlineExceededFailClosedNoLowerRuleDeniesWithUndecidedAudit() {
+        let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(
             deadlineFallback: .failClosed,
-            binaryRules: ["anyShaWeCantSee": binaryRule],
-            signingIDRules: ["ABC:org.test": signRule],
-            teamIDRules: ["ABCDEFGHIJ": teamRule]
+            binaryRules: ["anyShaWeCantSee": binaryRule]
         )
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: snapshot,
-            hashOutcome: .deadlineExceeded,
-            posture: snapshot.deadlineFallback
-        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .deadlineExceeded)
         XCTAssertEqual(decision, .denyWithUndecidedAudit(reason: .deadline))
     }
 
-    func testDeadlineExceededFailOpenAllowsSilently() {
-        let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: "ABC:org.test", teamID: "ABCDEFGHIJ")
+    func testDeadlineExceededFailOpenNoLowerRuleAllowsSilently() {
+        let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(
             deadlineFallback: .failOpen,
             binaryRules: ["anyShaWeCantSee": binaryRule]
         )
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: snapshot,
-            hashOutcome: .deadlineExceeded,
-            posture: snapshot.deadlineFallback
-        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .deadlineExceeded)
         XCTAssertEqual(decision, .allow)
     }
 
-    func testDeadlineExceededAuditOnlyAllowsAndEmitsUndecidedAudit() {
+    func testDeadlineExceededAuditOnlyNoLowerRuleAllowsAndEmitsUndecidedAudit() {
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(
             deadlineFallback: .auditOnly,
             binaryRules: ["anyShaWeCantSee": binaryRule]
         )
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: snapshot,
-            hashOutcome: .deadlineExceeded,
-            posture: snapshot.deadlineFallback
-        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .deadlineExceeded)
         XCTAssertEqual(decision, .allowWithUndecidedAudit(reason: .deadline))
+    }
+
+    // MARK: - Lower-precedence rules dominate BINARY uncertainty (Gemini critical)
+
+    // Gemini Code Assist flagged the prior behaviour as a security bypass: under fail-open or
+    // audit-only postures, a hash timeout would short-circuit the walk and silently disable any
+    // SIGNINGID / TEAMID block rules. The corrected semantic continues the walk and only applies
+    // the posture when no later layer matches.
+
+    func testDeadlineExceededFailOpenStillEnforcesSigningIDBlock() {
+        let signRule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.bad")
+        let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
+        let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: "ABC:org.bad", teamID: nil)
+        let snapshot = makeSnapshot(
+            deadlineFallback: .failOpen,
+            binaryRules: ["anyShaWeCantSee": binaryRule],
+            signingIDRules: ["ABC:org.bad": signRule]
+        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .deadlineExceeded)
+        XCTAssertEqual(decision, .deny(rule: signRule, matchedIdentifier: "ABC:org.bad"))
+    }
+
+    func testReadFailedAuditOnlyStillEnforcesTeamIDBlock() {
+        let teamRule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
+        let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
+        let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: "ABCDEFGHIJ")
+        let snapshot = makeSnapshot(
+            deadlineFallback: .auditOnly,
+            binaryRules: ["anyShaWeCantSee": binaryRule],
+            teamIDRules: ["ABCDEFGHIJ": teamRule]
+        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .readFailed)
+        XCTAssertEqual(decision, .deny(rule: teamRule, matchedIdentifier: "ABCDEFGHIJ"))
     }
 
     // MARK: - Read-failed posture matrix
 
-    func testReadFailedFailClosedDeniesWithUndecidedAudit() {
+    func testReadFailedFailClosedNoLowerRuleDeniesWithUndecidedAudit() {
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(deadlineFallback: .failClosed, binaryRules: ["anyShaWeCantSee": binaryRule])
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: snapshot,
-            hashOutcome: .readFailed,
-            posture: snapshot.deadlineFallback
-        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .readFailed)
         XCTAssertEqual(decision, .denyWithUndecidedAudit(reason: .readFailed))
     }
 
-    func testReadFailedAuditOnlyAllowsAndEmitsUndecidedAudit() {
+    func testReadFailedAuditOnlyNoLowerRuleAllowsAndEmitsUndecidedAudit() {
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(deadlineFallback: .auditOnly, binaryRules: ["anyShaWeCantSee": binaryRule])
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: snapshot,
-            hashOutcome: .readFailed,
-            posture: snapshot.deadlineFallback
-        )
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .readFailed)
         XCTAssertEqual(decision, .allowWithUndecidedAudit(reason: .readFailed))
     }
 
@@ -248,10 +233,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let rule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.bad")
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: "ABC:org.bad", teamID: nil)
         let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(signingIDRules: ["ABC:org.bad": rule]),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
+            tuple: tuple, snapshot: makeSnapshot(signingIDRules: ["ABC:org.bad": rule]), hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "ABC:org.bad"))
     }
@@ -260,10 +242,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let rule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
         let tuple = AuthTuple(cdhash: nil, signingIDPrefixed: nil, teamID: "ABCDEFGHIJ")
         let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(teamIDRules: ["ABCDEFGHIJ": rule]),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
+            tuple: tuple, snapshot: makeSnapshot(teamIDRules: ["ABCDEFGHIJ": rule]), hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "ABCDEFGHIJ"))
     }
@@ -277,8 +256,7 @@ final class AuthExecDeciderTests: XCTestCase {
         let decision = decideAuthExec(
             tuple: tuple,
             snapshot: makeSnapshot(cdhashRules: ["cdhashfirst": cdRule], signingIDRules: ["ABC:org.bad": signRule]),
-            hashOutcome: .notNeeded,
-            posture: .failClosed
+            hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .deny(rule: cdRule, matchedIdentifier: "cdhashfirst"))
     }

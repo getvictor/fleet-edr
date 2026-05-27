@@ -431,6 +431,14 @@ snapshot's `deadline_fallback` field drives the verdict:
 | `fail-open` | ALLOW | none | Demo-equivalent posture. The cold-cache window stays open; pick this only if "no unexpected blocks" outweighs "no first-exec bypass." |
 | `audit-only` | ALLOW | `application_control_undecided` with `verdict=allow` | Tuning a fleet before flipping to `fail-closed`. Count how often the fallback fires without changing exec behaviour. |
 
+On `deadline-exceeded` or `read-failed` outcomes the SHA-256 cache is
+NOT populated, so subsequent execs of the same binary retry the hash
+computation. Repeated `application_control_undecided` events for the
+same `path` therefore indicate either a binary that consistently blows
+the 500 ms safety margin (size + disk-read combination) or a TOCTOU
+race the agent is hitting deterministically; the path + `file_size_bytes`
+fields are the disambiguator.
+
 v0.1.0 wires the posture through the snapshot payload but does NOT yet
 persist a per-policy value in the database; every snapshot ships with
 `fail-closed`. The v0.1.x follow-up adds a DB column and the REST

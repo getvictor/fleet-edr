@@ -1,4 +1,3 @@
-import Foundation
 import os
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "AuthExecDecider")
@@ -90,28 +89,34 @@ enum AuthDecision: Equatable, Sendable {
 ///
 /// Precedence: CDHASH > BINARY > SIGNINGID > TEAMID. CERTIFICATE + PATH stay deferred to Phase B and are not consulted here.
 /// Each layer returns on first match. The BINARY layer is gated on hashOutcome: if .computed, walk the BINARY map; if
-/// .deadlineExceeded or .readFailed, terminate the walk with the posture's verdict (BINARY's "could-have-fired" uncertainty
-/// dominates anything SIGNINGID/TEAMID would say, so continuing past it would mis-rank the precedence). If .notNeeded, skip
-/// BINARY entirely and continue the walk normally.
+/// .deadlineExceeded or .readFailed the walk CONTINUES to SIGNINGID/TEAMID first -- a definitive lower-precedence DENY
+/// dominates the BINARY layer's "could-have-fired" uncertainty (the operator's snapshot tells us the binary identifies as
+/// signing-id X / team Y; a block rule on X or Y is a real verdict the kernel can act on). Only after SIGNINGID/TEAMID
+/// produce no match does the snapshot's deadlineFallback posture apply to the unresolved BINARY decision. .notNeeded skips
+/// BINARY entirely and continues normally (snapshot has no BINARY rules so the fallback posture has nothing to govern).
+///
+/// Posture flows from snapshot.deadlineFallback directly -- this function does not take a separate posture parameter, so a
+/// caller cannot accidentally evaluate one snapshot's rule maps under a different fallback. (Previous signatures took the
+/// parameter explicitly; the round-trip through snapshot already pins the posture, so the parameter was a footgun.)
 func decideAuthExec(
     tuple: AuthTuple,
     snapshot: ApplicationControlSnapshot,
-    hashOutcome: HashOutcome,
-    posture: FallbackPosture
+    hashOutcome: HashOutcome
 ) -> AuthDecision {
     if let cdhash = tuple.cdhash, let rule = snapshot.cdhashRules[cdhash] {
         return verdict(for: rule, identifier: cdhash)
     }
 
+    var unresolvedBinaryReason: UndecidedReason?
     switch hashOutcome {
     case .computed(let sha):
         if let rule = snapshot.binaryRules[sha] {
             return verdict(for: rule, identifier: sha)
         }
     case .deadlineExceeded:
-        return applyPosture(posture, reason: .deadline)
+        unresolvedBinaryReason = .deadline
     case .readFailed:
-        return applyPosture(posture, reason: .readFailed)
+        unresolvedBinaryReason = .readFailed
     case .notNeeded:
         break
     }
@@ -121,6 +126,10 @@ func decideAuthExec(
     }
     if let teamID = tuple.teamID, let rule = snapshot.teamIDRules[teamID] {
         return verdict(for: rule, identifier: teamID)
+    }
+
+    if let reason = unresolvedBinaryReason {
+        return applyPosture(snapshot.deadlineFallback, reason: reason)
     }
     return .allow
 }

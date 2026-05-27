@@ -4,19 +4,11 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFSubscriber")
 
-/// Our Apple Developer Team ID. The self-allow failsafe (AUTH_EXEC) requires both
-/// this team_id AND a fleetSelfAllowSigningIDs membership; matching team_id alone
-/// would exempt every binary signed by Fleet (including any legacy or unrelated
-/// utility sharing the cert). Phase B replaces this with a server-pushed failsafe
-/// list so operators can extend it without an agent re-release.
+/// Self-allow failsafe inputs: AUTH_EXEC exempts Fleet's own components from app-control enforcement only when target.team_id
+/// matches extensionTeamID AND target.signing_id is in fleetSelfAllowSigningIDs. Team-id-only would exempt every binary Fleet
+/// has ever signed. Phase B replaces both with a server-pushed allowlist so operators can extend without an agent re-release.
 private let extensionTeamID = "FDG8Q7N4CC"
 
-/// fleetSelfAllowSigningIDs is the exhaustive set of Fleet EDR bundle identifiers the
-/// AUTH_EXEC failsafe exempts from app-control enforcement: the agent daemon, the two
-/// system extensions, and the host app. A binary whose signing_id is NOT on this list
-/// is subject to the precedence walker even if signed by extensionTeamID. Hardcoded
-/// for the Phase A close-out; Phase B server-pushes the same list so operators can
-/// extend it for in-house tooling without an agent re-release.
 private let fleetSelfAllowSigningIDs: Set<String> = [
     "com.fleetdm.edr.agent",
     "com.fleetdm.edr.securityextension",
@@ -97,35 +89,12 @@ final class ESFSubscriber: Sendable {
         }
     }
 
-    /// AUTH_EXEC handler: application-control decision walk.
-    ///
-    /// Walks four rule types in fixed precedence: CDHASH → BINARY → SIGNINGID → TEAMID.
-    /// CERTIFICATE and PATH stay deferred to Phase B (leaf-cert cache / Launch Services
-    /// indirection). Returns on the first match. Decisions, in order:
-    ///   - Platform-binary carve-out: if the kernel sets target.is_platform_binary, ALLOW
-    ///     with cache:true. Prevents an admin who writes the SHA-256 of /sbin/launchd
-    ///     (or xpcproxy, fseventsd, kextd, sysextd, etc.) as a BINARY block rule from
-    ///     bricking the host. The kernel's own "this is on the Apple-signed system image"
-    ///     flag is the floor; the answer is intrinsic to the binary's identity so it is
-    ///     safe to cache for the file's (dev, inode, mtime) lifetime.
-    ///   - Self-allow failsafe: if team_id matches our extensionTeamID AND signing_id is
-    ///     on the Fleet bundle-id allowlist, ALLOW. Protects the agent / extensions /
-    ///     host app from a misconfigured rule. Uncached so future rules can target Fleet
-    ///     binaries for telemetry (e.g. DETECT) without a kernel cache stale-read.
-    ///     Phase B replaces this with a server-pushed failsafe list.
-    ///   - Precedence walk (CDHASH → BINARY → SIGNINGID → TEAMID): first matching rule
-    ///     with `action=BLOCK` and `enforcement=PROTECT` → DENY. Any other enforcement
-    ///     ALLOWs (DETECT semantics arrive in the follow-on detect-mode change). The
-    ///     BINARY layer needs the file's SHA-256; that hash is computed synchronously on
-    ///     the AUTH callback thread under a budget bounded by msg.deadline (closing the
-    ///     #208 first-exec cold-cache bypass). If the hash cannot complete in time the
-    ///     snapshot's deadlineFallback posture (fail-closed / fail-open / audit-only)
-    ///     drives the verdict and an application_control_undecided event lets operators
-    ///     audit the cold-cache rate.
-    ///   - No match → ALLOW.
-    ///
-    /// The leaf-cert SHA-256 needed for CERTIFICATE rules is NOT fetched here; CERTIFICATE
-    /// matching is gated to Phase B.
+    /// AUTH_EXEC handler. Decision order: (1) platform-binary carve-out (#205) ALLOWs Apple system binaries with cache:true to
+    /// avoid bricking the host on an admin-applied BINARY rule for launchd/xpcproxy/etc; (2) self-allow failsafe ALLOWs the
+    /// agent + extensions + host app uncached (team_id + bundle-id match); (3) decideAuthExec walks CDHASH → BINARY → SIGNINGID
+    /// → TEAMID. BINARY hashing runs synchronously under a budget derived from msg.deadline (#208 close-out); on deadline /
+    /// read failure the walk continues to SIGNINGID/TEAMID first, and only applies the snapshot's deadlineFallback posture
+    /// when no later rule matches. CERTIFICATE and PATH stay deferred to Phase B; the leaf-cert cache fill remains lazy.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
         let target = msg.event.exec.target.pointee
@@ -170,47 +139,53 @@ final class ESFSubscriber: Sendable {
             )
         }
 
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: snapshot,
-            hashOutcome: hashOutcome,
-            posture: snapshot.deadlineFallback
-        )
-        dispatchAuthDecision(decision, message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path)
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
+        dispatchAuthDecision(decision, context: AuthDispatchContext(
+            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
+        ))
+    }
+
+    /// AuthDispatchContext bundles the fields dispatchAuthDecision needs into a single argument so the function stays under
+    /// SwiftLint's function_parameter_count limit. Fields are wire-side (es_process_t / stat) and live here rather than in
+    /// AuthExecDecider.swift because they pull in EndpointSecurity types the SwiftPM test target deliberately excludes.
+    private struct AuthDispatchContext {
+        let message: UnsafePointer<es_message_t>
+        let target: es_process_t
+        let fileStat: stat
+        let snapshot: ApplicationControlSnapshot
+        let path: String
     }
 
     /// dispatchAuthDecision turns the pure-logic AuthDecision into the wire-level kernel response plus any event/notification
-    /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable (AuthExecDeciderTests)
-    /// and the wire dispatch stays one switch. The `path` value is the redacted (privacy: redacted) log identifier; the full path
-    /// flows on the block event payload for the server-side alert.
-    private func dispatchAuthDecision(
-        _ decision: AuthDecision,
-        message: UnsafePointer<es_message_t>,
-        target: es_process_t,
-        fileStat: stat,
-        snapshot: ApplicationControlSnapshot,
-        path: String
-    ) {
+    /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable
+    /// (AuthExecDeciderTests) and the wire dispatch stays one switch.
+    private func dispatchAuthDecision(_ decision: AuthDecision, context: AuthDispatchContext) {
         switch decision {
         case .allow:
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, false)
         case .allowWithUndecidedAudit(let reason):
-            logger.warning("AUTH_EXEC ALLOW (undecided) path=\(path) reason=\(reason.rawValue, privacy: .public)")
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
-            emitUndecidedEvent(target: target, fileStat: fileStat, verdict: "allow", reason: reason, snapshot: snapshot)
-        case .deny(let rule, let matchedIdentifier):
-            let denyRuleType = rule.ruleType
-            let denyID = matchedIdentifier
-            logger.warning(
-                "AUTH_EXEC DENIED path=\(path) type=\(denyRuleType, privacy: .public) id=\(denyID, privacy: .public)"
+            logger.warning("AUTH_EXEC ALLOW (undecided) reason=\(reason.rawValue, privacy: .public)")
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, false)
+            emitUndecidedEvent(
+                target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot
             )
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
-            emitBlockEvent(target: target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: snapshot)
-            emitBlockNotification(target: target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: snapshot)
+        case .deny(let rule, let matchedIdentifier):
+            logger.warning(
+                "AUTH_EXEC DENIED type=\(rule.ruleType, privacy: .public) id=\(matchedIdentifier, privacy: .public)"
+            )
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
+            emitBlockEvent(
+                target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
+            )
+            emitBlockNotification(
+                target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
+            )
         case .denyWithUndecidedAudit(let reason):
-            logger.warning("AUTH_EXEC DENIED (undecided) path=\(path) reason=\(reason.rawValue, privacy: .public)")
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_DENY, false)
-            emitUndecidedEvent(target: target, fileStat: fileStat, verdict: "deny", reason: reason, snapshot: snapshot)
+            logger.warning("AUTH_EXEC DENIED (undecided) reason=\(reason.rawValue, privacy: .public)")
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
+            emitUndecidedEvent(
+                target: context.target, fileStat: context.fileStat, verdict: "deny", reason: reason, snapshot: context.snapshot
+            )
         }
     }
 
@@ -244,14 +219,9 @@ final class ESFSubscriber: Sendable {
             teamID = SigningInfoFallback.shared.teamID(forPath: path, fileStat: fileStat) ?? ""
         }
 
-        // SIGNINGID is prefixed: "<TeamID>:<bundle.id>" for third-party signed binaries,
-        // "platform:<bundle.id>" for Apple platform binaries (those whose is_platform_binary flag is set).
-        // The server's validator accepts both shapes. Under the ad-hoc-extension redaction described above
-        // ESF reports is_platform_binary=true even for unambiguously third-party binaries (Developer ID
-        // signed `gh` was the issue #187 reproducer); the fallback team_id is what separates a genuine
-        // Apple platform binary (real `platform:` prefix) from a third-party one that should carry the
-        // "<TeamID>:<bundle.id>" prefix. Without that branch the SIGNINGID walk on edr-dev would lose its
-        // discriminator alongside TEAMID.
+        // SIGNINGID prefix: "<TeamID>:<bundle.id>" for third-party signed binaries, "platform:<bundle.id>" for Apple platform
+        // binaries. Under edr-dev's ad-hoc-extension redaction ESF reports is_platform_binary=true on every exec (#187), so
+        // we use the fallback team_id (when present) to discriminate genuine Apple platform binaries from third-party ones.
         let signingIDPrefixed: String?
         if signingID.isEmpty {
             signingIDPrefixed = nil

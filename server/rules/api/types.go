@@ -679,8 +679,14 @@ func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []App
 			CustomURL:   r.CustomURL,
 		})
 	}
+	// Normalise both the empty zero-value (the v0.1.0 norm: no DB column persists the field yet, so every fetched policy
+	// arrives with DeadlineFallback="") AND any non-empty but unrecognised value to DefaultFallbackPosture. The second branch
+	// is the defensive one: a stray bad value sneaking into the policy struct (typo on a future REST surface, copy-paste from
+	// an external feed, schema drift on the v0.1.x DB migration) must not reach the extension snapshot as a literal it cannot
+	// decode — the extension's FallbackPosture enum is strict, and a snapshot decode failure deactivates Application Control
+	// until the next valid push.
 	posture := p.DeadlineFallback
-	if posture == "" {
+	if !IsValidFallbackPosture(posture) {
 		posture = DefaultFallbackPosture
 	}
 	return json.Marshal(SetApplicationControlPayload{
