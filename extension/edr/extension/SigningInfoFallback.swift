@@ -39,12 +39,13 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 final class SigningInfoFallback {
     static let shared = SigningInfoFallback()
 
-    /// CacheKey pins a cached signing-info entry to a specific (inode, mtime) tuple so a binary swap that
-    /// preserves the path but changes the contents is observed as a cache miss. Stores mtime as separate
-    /// sec / nsec fields to mirror FileHashCache.swift's CacheKey exactly: same invalidation contract,
-    /// same shape, and no scalar multiplication that would trip SwiftLint's no_magic_numbers rule on the
-    /// nanoseconds-per-second constant.
+    /// CacheKey pins a cached signing-info entry to a specific (device, inode, mtime) tuple so a binary
+    /// swap that preserves the path but changes the contents is observed as a cache miss. `device` is
+    /// required because (inode, mtime) is only unique within a filesystem -- two binaries on different
+    /// volumes can share an inode number and collide their SigningInfo, misapplying CERTIFICATE / TEAMID /
+    /// SIGNINGID rules. CodeRabbit MAJOR on PR #290. Shape mirrors FileHashCache.swift's Key for parity.
     struct CacheKey: Hashable {
+        let device: Int32
         let inode: UInt64
         let mtimeSec: Int64
         let mtimeNsec: Int64
@@ -79,6 +80,7 @@ final class SigningInfoFallback {
     /// rule maps are non-empty) pays the SecCode cost exactly once.
     private func signingInfo(forPath path: String, fileStat: stat) -> SigningInfo {
         let key = CacheKey(
+            device: fileStat.st_dev,
             inode: fileStat.st_ino,
             mtimeSec: Int64(fileStat.st_mtimespec.tv_sec),
             mtimeNsec: Int64(fileStat.st_mtimespec.tv_nsec),

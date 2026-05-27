@@ -178,8 +178,13 @@ final class ESFSubscriber: Sendable {
                 target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot
             )
         case .deny(let rule, let matchedIdentifier):
+            // matchedIdentifier is .private to honor the "no PII in log statements" coding guideline. For BINARY/CDHASH/
+            // CERTIFICATE this is a hex digest -- not PII but uniform privacy keeps the log policy simple; for PATH (added
+            // in PR #290 for #210) it's an absolute filesystem path that IS PII and MUST stay out of the public log. The
+            // full identifier still flows to the server in the application_control_block event payload (where the project
+            // guideline explicitly permits file paths). CodeRabbit MAJOR on PR #290.
             logger.warning(
-                "AUTH_EXEC DENIED type=\(rule.ruleType, privacy: .public) id=\(matchedIdentifier, privacy: .public)"
+                "AUTH_EXEC DENIED type=\(rule.ruleType, privacy: .public) id=\(matchedIdentifier, privacy: .private)"
             )
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
             emitBlockEvent(

@@ -344,6 +344,11 @@ func TestAppControl_CreateRule_RejectsUnknownRuleType(t *testing.T) {
 	ctx := t.Context()
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
+	// Snapshot the rule count before the rejected create so the assertion below pins the "no persistence on rejected
+	// rule_type" contract from openspec/specs/server-admin-surface/spec.md. CodeRabbit minor on PR #290: without this,
+	// a regression that ignored the validator's error and persisted the row anyway would still pass the test.
+	rulesBefore, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
 	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
 		PolicyID:   p.ID,
 		RuleType:   api.RuleType("BANANA"),
@@ -353,6 +358,9 @@ func TestAppControl_CreateRule_RejectsUnknownRuleType(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlInvalidRuleType)
+	rulesAfter, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Len(t, rulesAfter, len(rulesBefore), "rejected rule_type must not persist a row")
 }
 
 // TestAppControl_CreateRule_PathPersistsCanonical pins the canonicalization-on-persist contract Gemini surfaced on PR #290.
