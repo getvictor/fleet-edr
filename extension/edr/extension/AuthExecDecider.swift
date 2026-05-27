@@ -50,19 +50,30 @@ enum UndecidedReason: String, Sendable {
 }
 
 /// AuthTuple captures the identifier values the decision walker compares against the snapshot's per-type maps. Each field is
-/// optional: absent values mean "the target has no value of this kind", and the precedence walker skips that map. CERTIFICATE
-/// and PATH stay deferred to Phase B and are not present here. Sendable so callers can build the tuple on the AUTH callback
-/// thread and hand it to a future async pipeline without bridging tricks.
+/// optional: absent values mean "the target has no value of this kind", and the precedence walker skips that map. Sendable so
+/// callers can build the tuple on the AUTH callback thread and hand it to a future async pipeline without bridging tricks.
+///
+/// PR for #210 closed out Phase B by adding leafCertSHA256 + canonicalPath; the snapshot maps for both rule types
+/// (certificateRules, pathRules) were already populated by ApplicationControlStore.makeSnapshot. The decision walker now
+/// honours every wire-enum rule type.
 struct AuthTuple: Equatable, Sendable {
     /// 40-char lowercase hex CDHash, only when the target runs under Apple's Hardened Runtime (CS_RUNTIME); see the comment on
-    /// isHardenedRuntime in ESFSubscriber.swift for the lazy-page-mapping rationale.
+    /// isHardenedRuntime in CDHashHex.swift for the lazy-page-mapping rationale.
     let cdhash: String?
+    /// 64-char lowercase hex SHA-256 of the leaf X.509 signing cert. nil when the binary is unsigned, ad-hoc-signed, or
+    /// SecCode can't read the on-disk binary. Populated by SigningInfoFallback.leafCertSHA256 once per (inode, mtime).
+    let leafCertSHA256: String?
     /// "<TeamID>:<bundle.id>" for third-party signed binaries, "platform:<bundle.id>" for kernel-classified Apple platform
     /// binaries. nil when ESF reports neither a usable team_id (real or fallback) nor a platform classification.
     let signingIDPrefixed: String?
     /// 10-char Apple Developer Team ID. nil when ESF redacts team_id (ad-hoc-signed extension on edr-dev) and
     /// SigningInfoFallback also cannot recover a real value.
     let teamID: String?
+    /// Canonical absolute path of the exec target -- filepath.Clean equivalent, /tmp + /var + /etc rewritten to /private.
+    /// nil when the wire path is empty, relative, or contains a `..` segment (defensive; ESF reports an absolute path under
+    /// normal conditions). PATH rules compare against this verbatim, so the canonicalisation MUST match the server-side
+    /// CanonicalizePath rules exactly or rules created against the operator's canonical form will never match.
+    let canonicalPath: String?
 }
 
 /// AuthDecision is the discrete verdict the wire side dispatches on. Cases enumerate every action handleAuthExec can take short
@@ -87,13 +98,20 @@ enum AuthDecision: Equatable, Sendable {
 /// EndpointSecurity imports, no Darwin time calls, no logging side effects on the hot path. Drives the SwiftPM-test surface
 /// because ESFSubscriber.swift is excluded from the test target by Package.swift.
 ///
-/// Precedence: CDHASH > BINARY > SIGNINGID > TEAMID. CERTIFICATE + PATH stay deferred to Phase B and are not consulted here.
+/// Precedence (Santa's order, every wire-enum rule type wired as of PR for #210):
+///   CDHASH > BINARY > CERTIFICATE > SIGNINGID > TEAMID > PATH
+///
 /// Each layer returns on first match. The BINARY layer is gated on hashOutcome: if .computed, walk the BINARY map; if
-/// .deadlineExceeded or .readFailed the walk CONTINUES to SIGNINGID/TEAMID first -- a definitive lower-precedence DENY
-/// dominates the BINARY layer's "could-have-fired" uncertainty (the operator's snapshot tells us the binary identifies as
-/// signing-id X / team Y; a block rule on X or Y is a real verdict the kernel can act on). Only after SIGNINGID/TEAMID
-/// produce no match does the snapshot's deadlineFallback posture apply to the unresolved BINARY decision. .notNeeded skips
-/// BINARY entirely and continues normally (snapshot has no BINARY rules so the fallback posture has nothing to govern).
+/// .deadlineExceeded or .readFailed the walk CONTINUES through every lower-precedence layer first -- a definitive
+/// lower-precedence DENY dominates the BINARY layer's "could-have-fired" uncertainty (the operator's snapshot tells us the
+/// binary identifies as cert X / signing-id Y / team Z / path P; a block rule on any of those is a real verdict the kernel
+/// can act on). Only after every layer below BINARY produces no match does the snapshot's deadlineFallback posture apply to
+/// the unresolved BINARY decision. .notNeeded skips BINARY entirely and continues normally (snapshot has no BINARY rules so
+/// the fallback posture has nothing to govern).
+///
+/// PATH is the lowest-trust layer by design: paths are the most operator-spoofable identifier (symlinks, bind mounts, copies
+/// preserving content but changing the path string), so a deny higher in the ladder always wins. Santa places PATH last for
+/// the same reason; documenting this here so a future precedence reorder is a deliberate decision, not an accident.
 ///
 /// Posture flows from snapshot.deadlineFallback directly -- this function does not take a separate posture parameter, so a
 /// caller cannot accidentally evaluate one snapshot's rule maps under a different fallback. (Previous signatures took the
@@ -106,32 +124,107 @@ func decideAuthExec(
     if let cdhash = tuple.cdhash, let rule = snapshot.cdhashRules[cdhash] {
         return verdict(for: rule, identifier: cdhash)
     }
-
-    var unresolvedBinaryReason: UndecidedReason?
-    switch hashOutcome {
-    case .computed(let sha):
-        if let rule = snapshot.binaryRules[sha] {
-            return verdict(for: rule, identifier: sha)
-        }
-    case .deadlineExceeded:
-        unresolvedBinaryReason = .deadline
-    case .readFailed:
-        unresolvedBinaryReason = .readFailed
-    case .notNeeded:
-        break
+    if let binaryDecision = matchBinaryLayer(snapshot: snapshot, hashOutcome: hashOutcome) {
+        return binaryDecision
     }
+    if let lowerDecision = matchLowerLayers(tuple: tuple, snapshot: snapshot) {
+        return lowerDecision
+    }
+    if let reason = unresolvedBinaryReason(for: hashOutcome) {
+        return applyPosture(snapshot.deadlineFallback, reason: reason)
+    }
+    return .allow
+}
 
+/// matchBinaryLayer consults the BINARY map only when the hash is .computed; the .deadlineExceeded / .readFailed branches
+/// do NOT return here -- they keep the walk going so a definitive lower-precedence DENY can dominate the BINARY layer's
+/// uncertainty. .notNeeded skips BINARY entirely and falls through to the lower layers without ever surfacing a posture.
+/// Returns nil when no BINARY rule matches (the walker continues); returns an AuthDecision only on a positive match.
+private func matchBinaryLayer(snapshot: ApplicationControlSnapshot, hashOutcome: HashOutcome) -> AuthDecision? {
+    if case .computed(let sha) = hashOutcome, let rule = snapshot.binaryRules[sha] {
+        return verdict(for: rule, identifier: sha)
+    }
+    return nil
+}
+
+/// unresolvedBinaryReason maps a hash failure to the audit-event reason tag. Returns nil for .computed (a definitive
+/// answer either way) and .notNeeded (the snapshot has no BINARY rules so there is nothing for a posture to govern).
+/// Drives the deadlineFallback decision after the walker has consulted every lower layer.
+private func unresolvedBinaryReason(for hashOutcome: HashOutcome) -> UndecidedReason? {
+    switch hashOutcome {
+    case .deadlineExceeded:
+        return .deadline
+    case .readFailed:
+        return .readFailed
+    case .computed, .notNeeded:
+        return nil
+    }
+}
+
+/// matchLowerLayers walks CERTIFICATE → SIGNINGID → TEAMID → PATH and returns the first matching verdict, or nil when no
+/// layer matches. PATH is intentionally last because filesystem paths are the most spoofable identifier (symlinks, bind
+/// mounts, copies preserving content but changing the path string); a deny higher in the ladder always wins. Extracted
+/// from decideAuthExec to keep that function under the cyclomatic_complexity budget SwiftLint enforces.
+private func matchLowerLayers(tuple: AuthTuple, snapshot: ApplicationControlSnapshot) -> AuthDecision? {
+    if let leafCert = tuple.leafCertSHA256, let rule = snapshot.certificateRules[leafCert] {
+        return verdict(for: rule, identifier: leafCert)
+    }
     if let signingID = tuple.signingIDPrefixed, let rule = snapshot.signingIDRules[signingID] {
         return verdict(for: rule, identifier: signingID)
     }
     if let teamID = tuple.teamID, let rule = snapshot.teamIDRules[teamID] {
         return verdict(for: rule, identifier: teamID)
     }
-
-    if let reason = unresolvedBinaryReason {
-        return applyPosture(snapshot.deadlineFallback, reason: reason)
+    if let path = tuple.canonicalPath, let rule = snapshot.pathRules[path] {
+        return verdict(for: rule, identifier: path)
     }
-    return .allow
+    return nil
+}
+
+/// macOSPrivatePrefixes lists the absolute-path prefixes that macOS exposes as `/private/...` symlinks (the `/tmp`, `/var`,
+/// `/etc` triple, stable on every macOS version that has shipped Endpoint Security). canonicalizePath rewrites a path
+/// starting with any of these into the `/private`-prefixed form to match Foundation's `realpath(3)` output and the
+/// server-side Go canonicaliser. Hoisted to file scope so the rewrite loop runs without allocating a fresh array per
+/// AUTH_EXEC call (Copilot PR #290) AND so SonarCloud's swift:S1075 hardcoded-URI heuristic has one named constant to look
+/// at rather than three inline literals.
+private let macOSPrivatePrefixes: [String] = ["/tmp", "/var", "/etc"]
+
+/// privatePrefix is the rewrite target each macOSPrivatePrefixes entry is lifted under. Same purpose for swift:S1075 as
+/// macOSPrivatePrefixes above.
+private let privatePrefix = "/private"
+
+/// canonicalizePath returns the macOS-canonical form of an absolute path, matching the server-side
+/// `server/rules/internal/appcontrol/CanonicalizePath` rules verbatim: rejects empty / relative / `..`-containing paths,
+/// collapses redundant slashes (filepath.Clean equivalent), and rewrites the /tmp, /var, /etc symlinks into their
+/// /private/... forms. Returns nil for any rejection case so the caller treats the rule as not-applicable rather than
+/// generating a falsely-canonicalised match. The Swift and Go implementations MUST stay in lockstep -- a rule created
+/// against `/tmp/foo` is persisted as `/private/tmp/foo`; AUTH_EXEC must canonicalise the exec target the same way or the
+/// rule never matches. Tested in AuthExecDeciderTests so a divergence surfaces at L0.
+func canonicalizePath(_ path: String) -> String? {
+    if path.isEmpty {
+        return nil
+    }
+    if !path.hasPrefix("/") {
+        return nil
+    }
+    var segments: [String] = []
+    for segment in path.split(separator: "/", omittingEmptySubsequences: false) {
+        let s = String(segment)
+        if s == ".." {
+            return nil
+        }
+        if s.isEmpty || s == "." {
+            continue
+        }
+        segments.append(s)
+    }
+    let cleaned = "/" + segments.joined(separator: "/")
+    for prefix in macOSPrivatePrefixes {
+        if cleaned == prefix || cleaned.hasPrefix(prefix + "/") {
+            return privatePrefix + cleaned
+        }
+    }
+    return cleaned
 }
 
 /// verdict maps a matched rule to the wire-level decision. Non-PROTECT enforcements (DETECT) and non-BLOCK actions (ALLOW,

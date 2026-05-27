@@ -5,10 +5,13 @@
 // validators, and the lookup paths the REST handler and the agent
 // fan-out consume.
 //
-// The demo cut enforces only the BINARY rule type; the validator
-// returns ErrAppControlUnsupportedRuleType for every other value on
-// the rule_type enum so the REST surface can reject those types with
-// a stable typed error. The remaining types come online one at a
-// time as their decision-engine branches and ESF-side identifier
-// extractors land in the extension.
+// v0.1.0 ships every wire-enum rule type wired through to the
+// extension's AUTH_EXEC walker: BINARY, CDHASH, SIGNINGID, TEAMID
+// (Phase A close-out, PR #289), plus CERTIFICATE and PATH (Phase B
+// close-out, PR for #210). The validator's only rejection branch is
+// ErrAppControlInvalidRuleType for tokens that aren't on the enum at
+// all. ErrAppControlUnsupportedRuleType is retained on the api
+// package for the future case where a new wire-enum value lands
+// before its extension-side support; no validator branch produces it
+// today.
 package appcontrol

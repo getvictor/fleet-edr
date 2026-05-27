@@ -112,14 +112,18 @@ admin push can reconcile, and MUST record the fan-out count in the audit payload
 Every mutation request body MUST carry a non-empty `reason`. The operator identity (`actor`) is NOT carried in the body;
 it is derived from the authenticated session context and recorded in the audit row in the form `user:<id>`. The
 POST (create) body MUST additionally carry `rule_type` and `identifier`; PATCH and DELETE accept partial mutations against
-the existing rule and do not need either. `rule_type` MUST be one of the supported uppercase tokens (`BINARY`, `CDHASH`,
-`SIGNINGID`, `TEAMID`; `CERTIFICATE` and `PATH` exist on the wire enum but are not yet enforced and currently surface
-as an unsupported-rule-type error). `identifier` MUST satisfy the format rules for the declared `rule_type`:
+the existing rule and do not need either. `rule_type` MUST be one of the supported uppercase tokens: `BINARY`, `CDHASH`,
+`SIGNINGID`, `CERTIFICATE`, `TEAMID`, `PATH`. `identifier` MUST satisfy the format rules for the declared `rule_type`:
 
 - `BINARY`: 64 lowercase hex characters (SHA-256 of the executable file).
 - `CDHASH`: 40 lowercase hex characters (Code Directory hash).
 - `SIGNINGID`: `<TeamID>:<bundle.id>` or `platform:<bundle.id>` for Apple platform binaries.
+- `CERTIFICATE`: 64 lowercase hex characters (SHA-256 of the leaf X.509 signing certificate; same value
+  `codesign -d --extract-certificates` + `shasum -a 256` against the index-0 cert produces).
 - `TEAMID`: 10-character alphanumeric Apple Developer Team ID (e.g. `EQHXZ8M8AV`).
+- `PATH`: absolute canonical filesystem path. The validator normalises redundant slashes and rewrites the macOS
+  `/tmp`, `/var`, `/etc` symlinks into their `/private/...` forms; relative paths, empty strings, and paths containing
+  `..` segments are rejected.
 
 A request that violates the rule-type or identifier constraints MUST be rejected with `400 Bad Request` and the policy
 MUST NOT be modified.
@@ -144,8 +148,8 @@ MUST NOT be modified.
 #### Scenario: Unsupported rule type is rejected without persisting
 
 - **GIVEN** any current policy
-- **WHEN** the operator POSTs a rule whose `rule_type` is not in the supported set (e.g., `CERTIFICATE` or `PATH` in the
-  current cut, both of which exist on the enum but lack validators)
+- **WHEN** the operator POSTs a rule whose `rule_type` is not a member of the supported set (an unknown uppercase token,
+  e.g. `BANANA`; the supported set is `BINARY`, `CDHASH`, `SIGNINGID`, `CERTIFICATE`, `TEAMID`, `PATH`)
 - **THEN** the server returns `400 Bad Request`
 - **AND** the persisted policy is unchanged
 
