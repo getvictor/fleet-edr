@@ -167,7 +167,7 @@ boot until the credential is stored — once it is, the banner is silent.
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env logs server \
-    | grep -A 4 BREAK-GLASS
+    | grep -B 1 -A 4 BREAK-GLASS
 ```
 
 Expected output:
@@ -177,7 +177,7 @@ Expected output:
 BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)
   Email: admin@fleet-edr.local
   URL:   https://edr.example.com/admin/break-glass/setup?token=<random>
-  TTL:   1h
+  TTL:   1h0m0s
 ================================================================
 ```
 

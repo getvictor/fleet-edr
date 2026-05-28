@@ -699,7 +699,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 |-----------------------------------|---------|-------|------|
 | Detection content + response      | 6.5     | 38    | 17%  |
 | Cross-platform reach              | 1       | 8     | 12%  |
-| AuthN / AuthZ / crypto            | 13      | 25    | 52%  |
+| AuthN / AuthZ / crypto            | 15.5    | 25    | 62%  |
 | Supply-chain security             | 15.5    | 27    | 57%  |
 | Code quality + static analysis    | 15      | 22    | 68%  |
 | Testing                           | 7       | 19    | 37%  |
@@ -738,10 +738,11 @@ from 42% to 54% and unblocked the rest of that section's doc items.
 opened §13 Compliance + privacy from 0% to 8% — that section was the
 last fully-empty area on the checklist.
 
-RBAC + MFA on the UI shipped: OIDC PKCE for the day-to-day path
-(`server/identity/internal/oidc`), WebAuthn-mandatory break-glass for
-IdP-down recovery (`server/identity/internal/breakglass`), and a five-role
-OPA / Rego chokepoint (`server/identity/internal/authz`). The remaining
+RBAC + MFA on the UI shipped, lifting §3 from 52% to 62%: OIDC PKCE for
+the day-to-day path (`server/identity/internal/oidc`), WebAuthn-mandatory
+break-glass for IdP-down recovery (`server/identity/internal/breakglass`),
+and a five-role OPA / Rego chokepoint (`server/identity/internal/authz`).
+The remaining
 big gaps that buyers ask about are the rest of the §12 community-signals
 checklist (CODE_OF_CONDUCT, CODEOWNERS, PR template, OpenSSF CII Best
 Practices badge), the detection-content surface (ATT&CK mapping is wired

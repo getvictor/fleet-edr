@@ -58,7 +58,7 @@ one-line comment explaining how.
 
 Step 2 - TS: `cd ui && npx ts-prune`. Same triage.
 
-Step 3 - Schema / config: search internal/config struct fields against actual reads in the code; flag
+Step 3 - Schema / config: search server/config + agent/config struct fields against actual reads in the code; flag
 unused.
 
 Step 4 - Routes: list every HTTP route registered in server/ and confirm at least one client

@@ -58,7 +58,7 @@ table names, env vars, ports) and every link target. Verify each one against the
 - File paths via `ls` or Read
 - Symbol names via `grep -r` or Grep tool
 - Commands via Taskfile.yml / Makefile lookup
-- Env vars / ports / DSNs via internal/config and docker-compose*.yml
+- Env vars / ports / DSNs via server/config + agent/config and docker-compose*.yml
 - External URLs via HEAD request
 
 Group findings into Broken / Renamed / Stale. Open separate PRs per category. Do NOT rewrite tone or

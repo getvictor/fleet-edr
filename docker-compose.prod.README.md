@@ -44,7 +44,7 @@ automation against a real Let's Encrypt-issued cert should drop it.
 
 The first-boot break-glass redemption URL prints to stderr until the
 admin redeems it; capture with `docker compose -f docker-compose.prod.yml
---env-file .env logs server | grep -A 4 BREAK-GLASS`. Open the URL in a
+--env-file .env logs server | grep -B 1 -A 4 BREAK-GLASS`. Open the URL in a
 browser within the TTL (default 1h) to set a password and register a
 WebAuthn credential. See `docs/install-server.md` for the full first-boot
 flow.
