@@ -33,8 +33,8 @@ type sessionResponse struct {
 }
 
 // setupServer wires the GET + DELETE /api/session handler stack the way main.go does. Returns the HTTP server + the users / sessions
-// stores so tests can seed users and mint sessions directly via the underlying stores (the Phase 5b cleanup retired POST /api/session,
-// so there is no longer a wire-level path to mint a session here).
+// stores so tests can seed users and mint sessions directly via the underlying stores (there is no wire-level path to mint a session
+// — no POST /api/session).
 func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store) {
 	t.Helper()
 	db := testdb.Open(t)

@@ -1,4 +1,4 @@
-// ReauthModal — Phase 5 inline reauth prompt. Wired by useReauthRetry
+// ReauthModal — inline reauth prompt. Wired by useReauthRetry
 // when a destructive action lands on a stale session: the chokepoint
 // returns 403 + reauth_required, the hook catches it, this modal
 // renders, and on completion the original mutation retries once.

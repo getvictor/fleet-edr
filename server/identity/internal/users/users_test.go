@@ -151,8 +151,8 @@ func TestCount(t *testing.T) {
 	assert.Equal(t, int64(1), n)
 }
 
-// HashPassword + SetHashedPassword: the Phase 4b split that lets the break-glass redemption flow run argon2id BEFORE BeginTxx, keeping
-// the ~30ms hash off the transaction's lock window.
+// HashPassword + SetHashedPassword: split so the break-glass redemption flow can run argon2id BEFORE BeginTxx, keeping the ~30ms hash
+// off the transaction's lock window.
 func TestHashPassword_AndSetHashedPassword(t *testing.T) {
 	t.Parallel()
 	db := testdb.Open(t)

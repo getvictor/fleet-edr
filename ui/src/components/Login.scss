@@ -94,7 +94,7 @@
   }
 }
 
-// Phase 5b reauth modal: native <dialog> opened via showModal() so
+// Reauth modal: native <dialog> opened via showModal() so
 // the browser provides the backdrop, focus trap, and Escape-to-
 // cancel for free. The dialog reuses the .login-card visual scaffold
 // from the SSO + break-glass login pages so the ceremony feels

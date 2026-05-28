@@ -11,8 +11,8 @@ import (
 )
 
 // ValidatePassword enforces a rune-counted ≥ 12 floor. A regression that bytes-counted instead of rune-counted would let an operator
-// satisfy the floor with three 4-byte runes; a regression that dropped the floor entirely would re-open the wave-0 weak-password
-// surface that motivated Phase 4 in the first place.
+// satisfy the floor with three 4-byte runes; dropping the floor entirely would re-open the weak-password surface this validator
+// exists to prevent.
 func TestValidatePassword(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

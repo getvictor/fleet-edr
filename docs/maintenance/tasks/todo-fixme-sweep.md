@@ -16,7 +16,7 @@ that way.
 All committed source files in `server/`, `agent/`, `internal/`, `ui/`, `extension/`, `test/`, `tools/`, `scripts/`, `schema/`,
 plus `Taskfile.yml`, `lefthook.yml`, `docker-compose*.yml`, and committed Markdown.
 
-Excludes: `claude/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g. anything under `dist/`).
+Excludes: `ai/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g. anything under `dist/`).
 
 ## Steps
 
@@ -60,7 +60,7 @@ Run the TODO/FIXME sweep defined in docs/maintenance/tasks/todo-fixme-sweep.md.
 
 Find every TODO/FIXME/XXX/HACK/DEPRECATED in committed source (server/, agent/, internal/, ui/src,
 extension/edr, test/, tools/, scripts/, schema/, Taskfile.yml, lefthook.yml, docker-compose*.yml,
-committed Markdown). Exclude claude/, tmp/, node_modules/, generated dirs.
+committed Markdown). Exclude ai/, tmp/, node_modules/, generated dirs.
 
 For each hit, apply the verdict matrix in the task file: Fix now / File issue / Delete / Rewrite as
 plain comment. Hard rule: no bare TODO survives the sweep - every remaining one must link to an issue

@@ -4,10 +4,9 @@ import os
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ApplicationControlStore")
 
 // ApplicationControlSnapshot is the typed in-memory shape the AUTH_EXEC decision
-// engine (Step 3) consults on every exec. Rules are indexed by (rule_type,
-// identifier) so the precedence walk is O(1) per type. Phase 1 of the demo cut
-// only populated the BINARY map; the v0.1.0 close-out wires all five (CDHASH,
-// BINARY, SIGNINGID, TEAMID, plus the deferred CERTIFICATE/PATH carriers).
+// engine consults on every exec. Rules are indexed by (rule_type, identifier)
+// so the precedence walk is O(1) per type. All five (CDHASH, BINARY, SIGNINGID,
+// TEAMID, plus the deferred CERTIFICATE/PATH carriers) are populated.
 //
 // deadlineFallback governs the verdict the AUTH_EXEC handler applies when sync
 // SHA-256 hashing for a BINARY rule consultation cannot complete within the

@@ -13,12 +13,12 @@ import (
 //
 // Implementation lives in server/identity/internal/service.
 //
-// Phase 5b retired the password-based Login method and the
-// `POST /api/session` route it backed. Sessions are now minted only by
-// the OIDC callback (server/identity/internal/oidc) and the break-
-// glass FinishLogin / FinishSetup paths (server/identity/internal/
-// breakglass). The remaining surface is session lifecycle, user lookup,
-// chokepoint actor loading, and reauth-window helpers.
+// There is no password-based Login method or `POST /api/session` route.
+// Sessions are minted only by the OIDC callback (server/identity/
+// internal/oidc) and the break-glass FinishLogin / FinishSetup paths
+// (server/identity/internal/breakglass). The remaining surface is
+// session lifecycle, user lookup, chokepoint actor loading, and reauth-
+// window helpers.
 type Service interface {
 	// Logout deletes the session identified by the cookie token. Idempotent: returns nil if the session is already gone, so logout under
 	// network retry is safe.
@@ -52,10 +52,10 @@ type Service interface {
 	//
 	// authMethod records how the session was authenticated
 	// ('local_password' for break-glass, 'oidc' for SSO).
-	// sessionFresh is the Phase 5 reauth-window flag (true when
-	// last_auth_at is within the reauth window); the chokepoint's
-	// destructive-action rules deny with reason="reauth_required"
-	// when the role grants the action but sessionFresh is false.
+	// sessionFresh is the reauth-window flag (true when last_auth_at
+	// is within the reauth window); the chokepoint's destructive-action
+	// rules deny with reason="reauth_required" when the role grants the
+	// action but sessionFresh is false.
 	LoadActor(ctx context.Context, userID int64, authMethod string, sessionFresh bool) (*Actor, error)
 
 	// UpdateLastAuthAt stamps the session's freshness timestamp to
@@ -68,10 +68,10 @@ type Service interface {
 	// OIDC reauth does NOT use this method: the OIDC callback always
 	// mints a fresh session on a successful exchange (whose
 	// Create-time last_auth_at is NOW() automatically). The previous
-	// session is orphaned and reaped on its absolute expiry. This was
-	// an explicit Phase 5a tradeoff to avoid threading session-
-	// continuity through the OIDC state cookie; revisit if the orphan
-	// rate becomes a concern at scale.
+	// session is orphaned and reaped on its absolute expiry. Explicit
+	// tradeoff to avoid threading session-continuity through the OIDC
+	// state cookie; revisit if the orphan rate becomes a concern at
+	// scale.
 	UpdateLastAuthAt(ctx context.Context, sessionToken []byte) error
 
 	// IsFresh reports whether the session's last_auth_at falls within the configured reauth window. The Session middleware reads it at

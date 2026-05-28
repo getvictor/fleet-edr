@@ -81,8 +81,8 @@ export function AlertList() {
     return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
   };
 
-  // Phase 5: alert.resolve on a critical-severity alert is reauth-
-  // gated; the chokepoint denies stale sessions with 403 +
+  // alert.resolve on a critical-severity alert is reauth-gated;
+  // the chokepoint denies stale sessions with 403 +
   // reauth_required. Wrap the mutation through useReauthRetry so the
   // operator gets an inline reauth prompt (modal) and the original
   // call retries on success. Other status transitions (acknowledge,

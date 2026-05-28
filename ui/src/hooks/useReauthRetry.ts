@@ -1,4 +1,4 @@
-// useReauthRetry — Phase 5 reauth retry wrapper. Wraps an async
+// useReauthRetry — reauth retry wrapper. Wraps an async
 // mutation; on ReauthRequiredError, opens a per-flow reauth prompt
 // (rendered by the caller via the returned `modal` props) and
 // retries the original call once the operator completes the

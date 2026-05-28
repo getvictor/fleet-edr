@@ -10,7 +10,7 @@ import {
   reauthOIDC,
 } from "./auth";
 
-// The auth.ts surface covers the pre-auth break-glass + OIDC redirect helpers shipped in Phase 4c. These tests pin the
+// The auth.ts surface covers the pre-auth break-glass + OIDC redirect helpers. These tests pin the
 // observable contract of each helper: URL shape, fetch wire shape (method + headers + body + credentials), error mapping
 // (BreakglassError carries the X-Edr-Auth-Reason header verbatim or the http_<status> fallback), and the post-call
 // navigation side effects (reauthOIDC's globalThis.location.assign). The WebAuthn-ceremony calls into

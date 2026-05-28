@@ -1,4 +1,4 @@
-// Phase 4c break-glass login page. Operator arrives via the
+// Break-glass login page. Operator arrives via the
 // "Break-glass login" footer link on /ui/login (or by typing
 // /admin/break-glass directly, which the server 302s to
 // /ui/admin/break-glass).

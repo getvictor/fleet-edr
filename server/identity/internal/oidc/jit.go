@@ -20,8 +20,8 @@ import (
 // same email) wins the insert, and the loser sees this code.
 const mysqlErrDupEntry = 1062
 
-// DefaultJITRole is the role JIT-provisioned OIDC users are bound to. Per the spec (Phase 4.3): the lowest-privilege role available,
-// so a freshly-provisioned operator can read but cannot mutate. An admin promotes them later via the wave-2 admin surface.
+// DefaultJITRole is the role JIT-provisioned OIDC users are bound to. The lowest-privilege role available, so a freshly-provisioned
+// operator can read but cannot mutate. An admin promotes them later via the wave-2 admin surface.
 const DefaultJITRole = "analyst"
 
 // ErrUnknownIdentity is returned by ProvisionOrFind when JIT is disabled (allowJIT=false) and the OIDC subject does not match an

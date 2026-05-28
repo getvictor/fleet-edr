@@ -93,7 +93,7 @@ func TestGet_ActiveRoundTrip(t *testing.T) {
 	assert.Equal(t, created.CSRFToken, got.CSRFToken)
 }
 
-// Phase 4 added IdentityID + AuthMethod columns. Round-trip both through Create -> Get to pin the schema + scan path. A regression
+// Sessions carry IdentityID + AuthMethod columns. Round-trip both through Create -> Get to pin the schema + scan path. A regression
 // here would silently strip OIDC sessions of their identity link (breaking later admin queries that pivot on identities) or default
 // every session to local_password (breaking authz rules that branch on auth_method).
 func TestGet_IdentityIDAndAuthMethodRoundTrip(t *testing.T) {
@@ -280,7 +280,7 @@ func TestTouch_ThrottleSkipsRecentWrites(t *testing.T) {
 	assert.True(t, got2.After(created.LastSeenAt), "touch past throttle must advance last_seen_at")
 }
 
-// TestUpdateLastAuthAt_StampsAndBumpsLastSeen pins the contract Phase 5 relies on: a successful reauth resets BOTH freshness and idle
+// TestUpdateLastAuthAt_StampsAndBumpsLastSeen pins the reauth contract: a successful reauth resets BOTH freshness and idle
 // timers. IsFresh flips back to true; idle countdown restarts.
 func TestUpdateLastAuthAt_StampsAndBumpsLastSeen(t *testing.T) {
 	t.Parallel()

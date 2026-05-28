@@ -47,8 +47,8 @@ Cache-Control: no-store
 {"error": "forbidden"}
 ```
 
-When the deny is `reauth_required` (Phase 5: destructive action on a
-session past the freshness window), the body is structured so the
+When the deny is `reauth_required` (destructive action on a session
+past the freshness window), the body is structured so the
 UI can prompt for re-authentication inline:
 
 ```http

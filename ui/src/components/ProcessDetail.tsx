@@ -95,8 +95,8 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     return () => { clearInterval(timer); };
   }, [killCommand]);
 
-  // Phase 5: kill_process is reauth-gated by the chokepoint when the
-  // session is stale. Same pattern for alert.resolve on critical
+  // kill_process is reauth-gated by the chokepoint when the session
+  // is stale. Same pattern for alert.resolve on critical
   // alerts. Wrap both mutations through useReauthRetry so the
   // operator gets an inline reauth modal + the action retries on
   // success. Non-gated mutations (e.g. alert.acknowledge or kill on

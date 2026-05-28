@@ -3,10 +3,10 @@
 // CSRF token that the JS attaches as X-CSRF-Token on unsafe methods.
 // Sessions are minted server-side by the OIDC callback (after the
 // "Continue with Okta" full-page redirect) or by the break-glass
-// FinishLogin/FinishSetup flows; the legacy POST /api/session password
-// path was retired in Phase 5b. GET /api/session returns the cookie's
-// session JSON shape (including the CSRF token) and is the UI's
-// session-probe endpoint.
+// FinishLogin/FinishSetup flows. There is no POST /api/session
+// password path. GET /api/session returns the cookie's session JSON
+// shape (including the CSRF token) and is the UI's session-probe
+// endpoint.
 import type {
   HostSummary,
   TreeResponse,
@@ -46,9 +46,9 @@ export interface ReauthChallenge {
 }
 
 // ReauthRequiredError is thrown whenever the server returns
-// 403 + body { error: "reauth_required", challenge: {...} }. Phase 5
-// gates destructive actions on a fresh-auth window; callers don't
-// invoke this directly — they wrap their mutation through
+// 403 + body { error: "reauth_required", challenge: {...} }. The
+// server gates destructive actions on a fresh-auth window; callers
+// don't invoke this directly — they wrap their mutation through
 // useReauthRetry, which catches the error, runs the per-flow
 // challenge, and retries the original call.
 export class ReauthRequiredError extends Error {
@@ -185,7 +185,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Unauthorized401Error();
   }
   if (res.status === HTTP_STATUS_FORBIDDEN) {
-    // Phase 5: the chokepoint denies destructive actions outside the
+    // The chokepoint denies destructive actions outside the
     // reauth window with 403 + { error: "reauth_required",
     // challenge: { auth_method, reauth_url } }. Disambiguate from a
     // regular forbidden (which is genuinely "your role does not

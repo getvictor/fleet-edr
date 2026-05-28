@@ -1,8 +1,7 @@
 // Login handler: GET /api/session (who-am-i) and DELETE /api/session
-// (logout). The Phase 4 OIDC + break-glass refactor replaced the
-// password-based POST /api/session login path with the dedicated
-// `/api/auth/login` (OIDC) and `/admin/break-glass` flows; the legacy
-// POST handler was retired in Phase 5b along with Service.Login.
+// (logout). Sessions are minted by the dedicated `/api/auth/login`
+// (OIDC) and `/admin/break-glass` flows; there is no password-based
+// POST /api/session login path or Service.Login.
 //
 // This handler owns HTTP-flavoured concerns for the session-read +
 // session-delete surface: cookie parsing, audit log emission on

@@ -97,9 +97,9 @@ type SeededUser struct {
 // auth_method is hardcoded to "oidc" because that's the JIT-provisioned
 // path's session class (break-glass goes through a distinct flow with
 // its own helper). last_auth_at is set to NOW() by sessions.Store so
-// the chokepoint's freshness gate (Phase 5 reauth window) returns true
-// for destructive actions; tests that need a stale session age the
-// row directly.
+// the chokepoint's freshness gate (reauth window) returns true for
+// destructive actions; tests that need a stale session age the row
+// directly.
 func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
 	t.Helper()
 	ctx := t.Context()
@@ -142,9 +142,9 @@ func SeedJITUser(t *testing.T, db *sqlx.DB, email, role string) SeededUser {
 }
 
 // AgeSession backdates a seeded session's last_auth_at column so the
-// chokepoint's freshness gate (Phase 5 reauth window) returns false.
-// Used to verify that a destructive action that would normally be
-// granted denies with reauth_required when the session is stale.
+// chokepoint's freshness gate (reauth window) returns false. Used to
+// verify that a destructive action that would normally be granted
+// denies with reauth_required when the session is stale.
 //
 // The interval uses MICROSECOND granularity so callers can age the
 // session by any duration the sessions table's TIMESTAMP(6) column

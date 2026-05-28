@@ -382,7 +382,7 @@ func (s *Service) FinishLogin(ctx context.Context, req FinishLoginRequest) (*ses
 
 // VerifyLogin runs the same credential checks FinishLogin runs (signed
 // assertion → password → sign-count regression) but does NOT mint a new
-// session. Phase 5's reauth flow uses it to stamp last_auth_at on the
+// session. The reauth flow uses it to stamp last_auth_at on the
 // EXISTING session instead of issuing a fresh cookie. The break-glass
 // session a reauth runs against is already bound to req.User; minting
 // a new one would orphan the old row + invalidate any in-flight CSRF

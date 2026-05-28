@@ -50,7 +50,7 @@ func Session(svc api.Service, logger *slog.Logger) func(http.Handler) http.Handl
 			ctx = api.WithSession(ctx, sess)
 			ctx = api.WithActor(ctx, actor)
 			next.ServeHTTP(w, r.WithContext(ctx))
-			// Phase 5 sliding-extension: stamp last_seen_at after the handler returns so the request itself isn't blocked
+			// Sliding-extension: stamp last_seen_at after the handler returns so the request itself isn't blocked
 			// on the write. TouchSession is throttled internally — most calls are a no-op against the cached LastSeenAt.
 			// The returned value is plumbed back onto sess so a touch that DID write updates the cache for downstream
 			// code-paths that hold the session reference (e.g. an audit emit reading sess.LastSeenAt). Errors are logged +
@@ -112,7 +112,7 @@ func resolveActor(
 	if authMethod == "" {
 		authMethod = "local_password"
 	}
-	// Phase 5: Actor.SessionFresh is computed from the session's last_auth_at and the configured reauth window. The chokepoint reads it
+	// Actor.SessionFresh is computed from the session's last_auth_at and the configured reauth window. The chokepoint reads it
 	// via input.actor.session_fresh to gate destructive actions; everywhere else the value is informational.
 	actor, err := svc.LoadActor(ctx, sess.UserID, authMethod, svc.IsFresh(sess))
 	switch {

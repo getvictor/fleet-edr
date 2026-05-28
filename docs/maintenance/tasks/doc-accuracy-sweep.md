@@ -13,7 +13,7 @@ because the prose form is unstructured.
 
 ## Scope
 
-Every committed Markdown file outside `claude/`, `tmp/`, `node_modules/`, and `.git/`. Read each one and verify:
+Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/`. Read each one and verify:
 
 - File / directory paths still exist (e.g. `server/detection/internal/...`).
 - Function / type / table names referenced in code-style backticks still exist (`grep -r` or LSP).
@@ -30,7 +30,7 @@ Every committed Markdown file outside `claude/`, `tmp/`, `node_modules/`, and `.
 
 ## Steps
 
-1. List all markdown files in scope: `git ls-files '*.md' | grep -v claude/ | grep -v tmp/`.
+1. List all markdown files in scope: `git ls-files '*.md' | grep -v ai/ | grep -v tmp/`.
 2. For each file, extract every backticked identifier and every `<path>` or `[link](url)`. A short script in `tmp/` that
    parses these is cheaper than re-eyeballing each doc.
 3. Verify each reference. Group findings into:
@@ -50,8 +50,8 @@ touched, write a brief note in `docs/maintenance/log.md` with date and "no findi
 ```text
 Run the doc accuracy sweep defined in docs/maintenance/tasks/doc-accuracy-sweep.md.
 
-Scope: every committed Markdown file outside claude/, tmp/, node_modules/, .git/. List them with
-`git ls-files '*.md' | grep -vE '^(claude|tmp)/'`.
+Scope: every committed Markdown file outside ai/, tmp/, node_modules/, .git/. List them with
+`git ls-files '*.md' | grep -vE '^(ai|tmp)/'`.
 
 For each file, find every backticked identifier (function names, type names, file paths, command names,
 table names, env vars, ports) and every link target. Verify each one against the current repo state:

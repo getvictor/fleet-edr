@@ -25,7 +25,7 @@ import (
 // /admin/break-glass for the assertion cookie to round-trip between the GET-challenge POST and the POST-login.
 const cookiePath = "/admin/break-glass"
 
-// reauthCookiePath scopes the Phase 5 reauth challenge cookie to /api/auth/reauth. The login challenge cookie at cookiePath is path-
+// reauthCookiePath scopes the reauth challenge cookie to /api/auth/reauth. The login challenge cookie at cookiePath is path-
 // scoped to /admin/break-glass and would NOT round-trip on the reauth POST (browsers only send a cookie when the request path matches
 // the cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name keeps the two flows independent — an operator running a
 // break-glass login in one tab and a reauth in another won't have one flow's cookie clobber the other's.
@@ -62,7 +62,7 @@ const authReasonHeader = "X-Edr-Auth-Reason"
 // NewHandler; mount via RegisterPublicRoutes.
 type Handler struct {
 	svc        *Service
-	identity   api.Service // used by Phase 5 reauth POST to stamp last_auth_at
+	identity   api.Service // used by the reauth POST to stamp last_auth_at
 	signingKey []byte
 	rates      *RateLimits
 	allowlist  *Allowlist
@@ -115,8 +115,7 @@ func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
 	return h.allowlist.Middleware(next)
 }
 
-// RegisterPublicRoutes mounts the break-glass routes onto mux.
-// Phase 4c shape:
+// RegisterPublicRoutes mounts the break-glass routes onto mux. Route shape:
 //
 //	GET  /admin/break-glass            → 302 /ui/admin/break-glass (UI page)
 //	GET  /admin/break-glass/setup      → 302 /ui/admin/break-glass/setup (UI)
@@ -148,7 +147,7 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /admin/break-glass", wrap(h.handleFinishLogin))
 }
 
-// RegisterAuthedRoutes mounts the Phase 5 break-glass reauth surface.
+// RegisterAuthedRoutes mounts the break-glass reauth surface.
 // Both routes assume the operator already has a valid session — they
 // run BEHIND the session + CSRF middleware. Calling this method without
 // a non-nil HandlerOptions.Identity panics, so a misconfigured wiring
@@ -581,8 +580,8 @@ func (h *Handler) gateReauthRequest(w http.ResponseWriter, r *http.Request) (*ap
 }
 
 // handleReauthChallenge issues a fresh assertion challenge for the
-// operator on the current session. Phase 5 reauth flow: an authed
-// operator hit a destructive action that's outside the reauth window;
+// operator on the current session. Reauth flow: an authed operator hit
+// a destructive action that's outside the reauth window;
 // the UI calls this endpoint to get assertion options + a signed
 // challenge cookie before prompting the authenticator.
 //

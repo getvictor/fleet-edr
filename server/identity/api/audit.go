@@ -39,7 +39,7 @@ const (
 	AuditEnrollmentRevoke      AuditAction = "enrollment.revoke"
 	AuditEnrollmentRotateToken AuditAction = "enrollment.rotate_token"
 
-	// Break-glass flow (Phase 4b). Action names match the spec scenario language verbatim: dashboards filter on the literal strings,
+	// Break-glass flow. Action names match the spec scenario language verbatim: dashboards filter on the literal strings,
 	// so any rename is a contract break. The flow is distinct from auth.login.* because the recovery path needs a dedicated row category
 	// for retention + alerting (a successful break-glass login is rare and inherently noteworthy).
 	AuditAuthBreakglassBootstrap AuditAction = "auth.breakglass.bootstrap"
@@ -48,8 +48,7 @@ const (
 
 	// Application Control mutations (rules context). The payload records actor reason, rule type / identifier, policy version post-bump,
 	// and fan-out counts (fanout_hosts / fanout_failed) so SIEM dashboards can trace which hosts received the rule. Stable wire strings
-	// mirrored by AuthZ Actions of the same names. The five non-create actions are added by the Phase A close-out follow-on (PR-1b)
-	// that wires the full PATCH/DELETE/POST REST surface.
+	// mirrored by AuthZ Actions of the same names.
 	AuditAppControlRuleCreate     AuditAction = "application_control.rule_create"
 	AuditAppControlRuleUpdate     AuditAction = "application_control.rule_update"
 	AuditAppControlRuleDelete     AuditAction = "application_control.rule_delete"
@@ -112,11 +111,11 @@ type AuditEvent struct {
 // orders of magnitude smaller than event ingest, so synchronous is
 // the right default.
 //
-// Phase 3 carves out an async path for chokepoint emissions on
-// read-action allow events; see AsyncAuditWriter and IsReadAction
-// below. Sync remains the default for everything else (denies, writes,
-// auth outcomes, break-glass) so the durability invariant stays
-// intact on the events reviewers actually need post-incident.
+// An async path is carved out for chokepoint emissions on read-action
+// allow events; see AsyncAuditWriter and IsReadAction below. Sync
+// remains the default for everything else (denies, writes, auth
+// outcomes, break-glass) so the durability invariant stays intact on
+// the events reviewers actually need post-incident.
 type AuditRecorder interface {
 	Record(ctx context.Context, e AuditEvent) error
 }

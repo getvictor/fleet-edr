@@ -5,7 +5,7 @@
 // Sync is the default for every write/deny/auth event (see
 // AuditRecorder's doc comment). The async path applies only to
 // chokepoint emissions where the action is a read action AND the
-// decision was Allow=true AND the actor is non-break-glass. Phase 3's
+// decision was Allow=true AND the actor is non-break-glass.
 // audit.read_sampling further filters those events at the chokepoint
 // before they reach Submit.
 //

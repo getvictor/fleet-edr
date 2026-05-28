@@ -28,11 +28,10 @@ test.describe("anonymous entry to the application", () => {
     await page.goto("/ui/");
     await page.waitForURL((url) => url.pathname.includes("/login"), { timeout: 10_000 });
 
-    // Phase 4c rebuilt the landing login page as SSO-only with a break-glass footer link (per
-    // ui/src/components/Login.tsx). The pre-4c email+password form moved to /admin/break-glass. Asserting on
-    // both controls catches a regression that drops either: SSO disappearing breaks every operator's normal
-    // sign-in path; the break-glass link disappearing breaks the credential-recovery path that's the only way
-    // back in when the IdP is down.
+    // The landing login page is SSO-only with a break-glass footer link (per ui/src/components/Login.tsx); the
+    // password form lives at /admin/break-glass. Asserting on both controls catches a regression that drops
+    // either: SSO disappearing breaks every operator's normal sign-in path; the break-glass link disappearing
+    // breaks the credential-recovery path that's the only way back in when the IdP is down.
     await expect(page.getByRole("button", { name: /continue with single sign-on/i })).toBeVisible({
       timeout: 5_000,
     });

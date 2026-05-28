@@ -28,7 +28,7 @@ For each existing ADR:
 
 - Re-read it as if encountering for the first time. Does it still describe how the codebase works *today*?
 - Check `git log --since=3.months docs/adr/` - were any ADRs amended? Why? Does the body match the amendment?
-- Check `git grep -nE 'see ADR-[0-9]+|ADR-[0-9]+' -- ':!docs/adr/' ':!claude/'`. References from prose / code should still be
+- Check `git grep -nE 'see ADR-[0-9]+|ADR-[0-9]+' -- ':!docs/adr/' ':!ai/'`. References from prose / code should still be
   accurate.
 - If the decision is no longer in force, mark `Status: Superseded by ADR-XXXX` (or `Status: Deprecated`). Never silently delete an
   ADR - keep the historical record.

@@ -1,7 +1,6 @@
-// Phase 4c login page: a single "Continue with Okta" call-to-action
-// + a small "Break-glass login" footer link. Replaces the Phase
-// 1-3 email/password form. Real users authenticate via OIDC; only
-// the recovery account uses break-glass.
+// Login page: a single "Continue with Okta" call-to-action + a small
+// "Break-glass login" footer link. Real users authenticate via OIDC;
+// only the recovery account uses break-glass.
 //
 // Error rendering: when the OIDC callback handler fails (state
 // mismatch, unknown subject, exchange failure, etc.) it 302s back

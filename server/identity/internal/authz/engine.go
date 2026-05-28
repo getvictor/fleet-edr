@@ -56,7 +56,7 @@ type Engine struct {
 	registered map[api.Action]struct{}
 }
 
-// Options bundles the optional Phase 3 dependencies. Zero values are valid: a nil AsyncRead degrades to fully-synchronous audit;
+// Options bundles the optional async-audit dependencies. Zero values are valid: a nil AsyncRead degrades to fully-synchronous audit;
 // ReadSamplingRate=0 means "audit zero non-carve-out read-allow events" (the wave-1 default).
 type Options struct {
 	AsyncRead        api.AsyncAuditWriter
@@ -182,7 +182,7 @@ func (e *Engine) engineErrorDecision(ctx context.Context, actor *api.Actor, acti
 // is explicit on this — we want both signals when both fail, not a
 // false negative cascading from one).
 //
-// Phase 3 hybrid path: when the decision is an allow on a non-audit
+// Async-read hybrid path: when the decision is an allow on a non-audit
 // read action by a non-break-glass actor, the chokepoint consults
 // the read-sampling rate; included events go to the async writer
 // (when configured) so the privileged-route hot path doesn't wait on

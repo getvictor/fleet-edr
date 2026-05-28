@@ -104,9 +104,9 @@ func (s *service) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 // row has been deleted out from under a still-valid session — the
 // caller (session middleware) maps it to a 401 + cookie clear.
 //
-// sessionFresh is the Phase 5 reauth-window flag the middleware
-// computes from sess.LastAuthAt; the chokepoint's destructive-action
-// rules read it via Actor.SessionFresh.
+// sessionFresh is the reauth-window flag the middleware computes from
+// sess.LastAuthAt; the chokepoint's destructive-action rules read it
+// via Actor.SessionFresh.
 func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string, sessionFresh bool) (*api.Actor, error) {
 	u, err := s.users.Get(ctx, userID)
 	if errors.Is(err, users.ErrNotFound) {

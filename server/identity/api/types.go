@@ -37,19 +37,17 @@ type User struct {
 // CSRFToken is exposed as raw bytes because the CSRF middleware compares
 // it via constant-time compare against the decoded X-Csrf-Token header.
 //
-// AuthMethod records how the session was minted. Phase 4 unhardcodes
-// the wave-1 placeholder so the chokepoint's actor.AuthMethod field
-// reflects ground truth ("local_password" for break-glass /
-// password-authenticated sessions, "oidc" for IdP-authenticated
-// ones). IdentityID FKs into the identities table; nil for legacy
-// password rows that pre-date Phase 4.
+// AuthMethod records how the session was minted: "local_password" for
+// break-glass / password-authenticated sessions, "oidc" for IdP-
+// authenticated ones. IdentityID FKs into the identities table; nil
+// for legacy password rows that pre-date the identities table.
 type Session struct {
 	UserID     int64
 	IdentityID *int64
 	AuthMethod string
 	CreatedAt  time.Time
 	LastSeenAt time.Time
-	// LastAuthAt records the most recent authentication event for this session — initial login or a successful reauth (Phase 5).
+	// LastAuthAt records the most recent authentication event for this session — initial login or a successful reauth.
 	// The chokepoint reads it through Service.LoadActor to decide whether the actor is "fresh enough" to perform destructive actions (host
 	// commands, critical alert resolves) without re-prompting.
 	LastAuthAt time.Time
@@ -60,12 +58,12 @@ type Session struct {
 // Error sentinels returned across the api boundary. Callers compare with
 // errors.Is.
 //
-// Phase 5b retired the password-based Login method, so the wrap chain
-// that used to thread ErrUserNotFound + ErrBadPassword through a parent
-// ErrInvalidCredentials is gone. ErrUserNotFound remains because the
-// session middleware reads it (a deleted user under a still-valid
-// session manifests as ErrUserNotFound, mapped to invalid_session in
-// the wire response).
+// There is no password-based Login method, so there is no wrap chain
+// from ErrUserNotFound + ErrBadPassword through a parent
+// ErrInvalidCredentials. ErrUserNotFound remains because the session
+// middleware reads it (a deleted user under a still-valid session
+// manifests as ErrUserNotFound, mapped to invalid_session in the wire
+// response).
 var (
 	ErrUserNotFound    = errors.New("identity: user not found")
 	ErrSessionNotFound = errors.New("identity: session not found or expired")
@@ -130,7 +128,7 @@ func WithSessionForTest(ctx context.Context, s *Session) context.Context {
 
 // Role is the operator-visible RBAC role. Five rows are seeded as builtin (super_admin, admin, senior_analyst, analyst, auditor);
 // the admin API refuses to delete any row whose IsBuiltin is true. The permissions a role grants are NOT persisted on this row -- they
-// live in the OPA / Rego policy bundle the Phase-2 AuthZ engine evaluates against.
+// live in the OPA / Rego policy bundle the AuthZ engine evaluates against.
 type Role struct {
 	ID          string    `json:"id"`
 	DisplayName string    `json:"display_name"`

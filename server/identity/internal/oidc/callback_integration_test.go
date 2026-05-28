@@ -279,7 +279,7 @@ func TestHandleLogin_SetsCookieAndRedirects(t *testing.T) {
 }
 
 // HandleLogin?reauth=1 forces the IdP to re-prompt for credentials by setting prompt=login on the authorize URL. Without it,
-// an IdP that's mid-session would silently re-issue a token, defeating the Phase 5 freshness model. Pin here so a regression in
+// an IdP that's mid-session would silently re-issue a token, defeating the reauth freshness model. Pin here so a regression in
 // withPromptLogin or in handleLogin's branch surfaces immediately.
 func TestHandleLogin_ReauthSetsPromptLogin(t *testing.T) {
 	t.Parallel()

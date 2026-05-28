@@ -107,7 +107,7 @@ func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 	assert.Empty(t, asyncRec.snapshot(), "audit.read does not take the async path")
 }
 
-// Deny on a read action at rate=0.0 always writes sync. Denies are the security signal Phase 6's dashboard pivots on; sampling them
+// Deny on a read action at rate=0.0 always writes sync. Denies are the security signal the audit dashboard pivots on; sampling them
 // would defeat the dashboard.
 func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)

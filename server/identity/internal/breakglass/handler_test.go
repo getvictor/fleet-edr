@@ -413,7 +413,7 @@ func withSession(sess *api.Session) func(http.Handler) http.Handler {
 	}
 }
 
-// newHandlerWithIdentity wires the same handler newHandler builds plus the identity stub the Phase 5 reauth POST needs. Returns the
+// newHandlerWithIdentity wires the same handler newHandler builds plus the identity stub the reauth POST needs. Returns the
 // handler, db, audit recorder, AND a *stubIdentity so the test can configure the UpdateLastAuthAt return value if it wants to drive
 // the success path (none of the failure-mode tests below need to).
 func newHandlerWithIdentity(t *testing.T) (*breakglass.Handler, *sqlx.DB, *recAudit, *stubIdentity) {

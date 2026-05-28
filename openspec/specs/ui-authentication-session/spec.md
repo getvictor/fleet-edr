@@ -31,8 +31,8 @@ The system SHALL mint a session cookie on a successful operator login. The login
 
 Both paths set the session cookie with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`. The per-session
 CSRF token is NOT returned in the login-success response body; the UI reads it from `GET /api/session` once the cookie
-is set, which keeps the login-handler response shapes aligned across the two entry points. The legacy `POST /api/session`
-password-form endpoint was retired in Phase 5b and is not part of this contract.
+is set, which keeps the login-handler response shapes aligned across the two entry points. There is no `POST /api/session`
+password-form endpoint; sessions are minted only via the OIDC callback or the break-glass surface.
 
 #### Scenario: Successful login
 
