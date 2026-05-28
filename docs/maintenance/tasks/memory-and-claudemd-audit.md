@@ -60,8 +60,9 @@ the index. Detail belongs in the per-topic files it points to.
 ## Output
 
 - A PR for any `CLAUDE.md` changes (it's committed).
-- Direct edits to MEMORY.md (it's per-user, not committed). Note the changes in `docs/maintenance/log.md` so the cadence is
-  auditable.
+- Direct edits to MEMORY.md (it's per-user, not committed).
+- A dated entry in `docs/maintenance/log.md` on every run, whether the audit found changes or not -
+  the log is the audit trail proving the cadence is being honoured.
 
 ## Prompt template
 
@@ -93,4 +94,5 @@ Time budget 45 minutes. Do NOT add new rules in this sweep - additions go throug
 - [ ] Every MEMORY.md entry verified or removed.
 - [ ] No conflict between the two; no duplication.
 - [ ] MEMORY.md index entries are one line each.
-- [ ] PR opened for CLAUDE.md changes; MEMORY.md changes logged with date.
+- [ ] PR opened for CLAUDE.md changes.
+- [ ] Dated entry appended to `docs/maintenance/log.md` (mandatory on every run, regardless of findings).

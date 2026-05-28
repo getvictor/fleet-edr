@@ -42,8 +42,8 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 
 ## Output
 
-A PR (or set of PRs) with a body section "Doc accuracy sweep - `<YYYY-MM-DD>`" listing every reference touched. If nothing was
-touched, write a brief note in `docs/maintenance/log.md` with date and "no findings" so the cadence is auditable.
+A PR (or set of PRs) with a body section "Doc accuracy sweep - `<YYYY-MM-DD>`" listing every reference touched. Every run appends
+a dated entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
 
 ## Prompt template
 
