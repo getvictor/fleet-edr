@@ -141,10 +141,11 @@ var schemaStatements = []string{
 	)`,
 	// sessions backs UI cookie auth. id stores SHA-256(token), where token is 32 random bytes (~256 bits of entropy). The plaintext token
 	// lives only in the cookie; preimage resistance means a DB dump does not yield replayable credentials. csrf_token is 32 random bytes;
-	// compared constant-time against X-Csrf-Token header on unsafe methods. identity_id records which authn identity issued the session
-	// (NULL for legacy local-password sessions); auth_method records the flow that produced the session. fk_sessions_user CASCADE:
-	// deleting a user kills every session. fk_sessions_identity CASCADE: deleting an identity (e.g. SSO subject rebind, break-glass
-	// credential rotation) kills the derived sessions; sessions with NULL identity_id are unaffected.
+	// compared constant-time against X-Csrf-Token header on unsafe methods. identity_id records which authn identity issued the session;
+	// the column is nullable so sessions minted without an identity link (FinishLogin fallback when the local_password identity row
+	// cannot be resolved, plus tests that don't track identities) can persist a row. auth_method records the flow that produced the
+	// session. fk_sessions_user CASCADE: deleting a user kills every session. fk_sessions_identity CASCADE: deleting an identity (e.g.
+	// SSO subject rebind, break-glass credential rotation) kills the derived sessions; sessions with NULL identity_id are unaffected.
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id            VARBINARY(32)  PRIMARY KEY,
 		user_id       BIGINT         NOT NULL,

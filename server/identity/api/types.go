@@ -30,17 +30,17 @@ type User struct {
 }
 
 // Session is the server-side session record without the bearer token.
-// The plaintext token is the cookie value, returned only at Login (in
-// LoginResult.SessionToken) and never persisted server-side. The DB
-// stores SHA-256 of the token; sessions store does the digest internally.
+// The plaintext token is the cookie value (set by the OIDC callback or the break-glass FinishLogin / FinishSetup endpoints)
+// and never persisted server-side. The DB stores SHA-256 of the token; sessions store does the digest internally.
 //
 // CSRFToken is exposed as raw bytes because the CSRF middleware compares
 // it via constant-time compare against the decoded X-Csrf-Token header.
 //
-// AuthMethod records how the session was minted: "local_password" for
-// break-glass / password-authenticated sessions, "oidc" for IdP-
-// authenticated ones. IdentityID FKs into the identities table; nil
-// for legacy password rows that pre-date the identities table.
+// AuthMethod records how the session was minted: "local_password" for break-glass-issued sessions, "oidc" for
+// IdP-authenticated sessions. The chokepoint's actor.AuthMethod field reflects the persisted column value verbatim.
+// IdentityID FKs into the identities table; OIDC sessions + break-glass FinishSetup always populate it, while
+// FinishLogin can leave it nil when the local_password identity row can't be resolved at session-mint time and tests
+// that don't track identities omit it. The column is nullable to admit both shapes.
 type Session struct {
 	UserID     int64
 	IdentityID *int64
@@ -55,15 +55,10 @@ type Session struct {
 	CSRFToken  []byte
 }
 
-// Error sentinels returned across the api boundary. Callers compare with
-// errors.Is.
-//
-// There is no password-based Login method, so there is no wrap chain
-// from ErrUserNotFound + ErrBadPassword through a parent
-// ErrInvalidCredentials. ErrUserNotFound remains because the session
-// middleware reads it (a deleted user under a still-valid session
-// manifests as ErrUserNotFound, mapped to invalid_session in the wire
-// response).
+// Error sentinels returned across the api boundary. Callers compare with errors.Is. ErrUserNotFound is read by the session
+// middleware: a deleted user under a still-valid session manifests as ErrUserNotFound, which maps to invalid_session on the
+// wire. ErrSessionNotFound covers expired or unknown sessions (also surfaced as invalid_session). ErrAlreadySeeded is
+// returned by the first-boot seed path to keep the admin-creation flow idempotent across restarts.
 var (
 	ErrUserNotFound    = errors.New("identity: user not found")
 	ErrSessionNotFound = errors.New("identity: session not found or expired")

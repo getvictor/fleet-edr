@@ -102,19 +102,14 @@ func resolveSession(
 }
 
 // resolveActor builds the per-request actor (user row + live role bindings). A user-row deletion under a still-valid session manifests
-// as ErrUserNotFound; we treat it as an invalid session. authMethod reads the value the session was minted with; legacy sessions
-// inserted before the column existed default to "local_password".
+// as ErrUserNotFound; we treat it as an invalid session.
 func resolveActor(
 	ctx context.Context, w http.ResponseWriter,
 	svc api.Service, logger *slog.Logger, sess *api.Session,
 ) (*api.Actor, bool) {
-	authMethod := sess.AuthMethod
-	if authMethod == "" {
-		authMethod = "local_password"
-	}
 	// Actor.SessionFresh is computed from the session's last_auth_at and the configured reauth window. The chokepoint reads it
 	// via input.actor.session_fresh to gate destructive actions; everywhere else the value is informational.
-	actor, err := svc.LoadActor(ctx, sess.UserID, authMethod, svc.IsFresh(sess))
+	actor, err := svc.LoadActor(ctx, sess.UserID, sess.AuthMethod, svc.IsFresh(sess))
 	switch {
 	case errors.Is(err, api.ErrUserNotFound):
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
