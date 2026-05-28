@@ -37,7 +37,7 @@ List every trust boundary the system actually has, today, by inspection of the c
 | Agent ↔ server (HTTP/mTLS) | `agent/uploader` + `server/endpoint/internal/enroll` + `server/endpoint/internal/middleware` |
 | Server ↔ MySQL | `server/*/internal/mysql` |
 | Server ↔ UI (browser session) | `server/identity/middleware` + `ui/src/` |
-| Server ↔ admin API | `server/admin/` |
+| Server ↔ operator REST surface | per-context `server/<bounded-context>/internal/operator/` (`detection`, `rules`, `endpoint`, `response`) plus `server/identity/internal/{login,oidc,breakglass,middleware}` for the auth boundary |
 | Install / enroll secret distribution | `packaging/` + `/etc/fleet-edr.conf` |
 | Fleet → EDR install | Fleet install script + signed `.pkg` + `.mobileconfig` |
 

@@ -17,7 +17,7 @@ thing where only one is wired".
 - TypeScript: dead components, dead exports, orphan files in `ui/src/`. Use `ts-prune` or `knip`.
 - Swift: rarely used but worth a pass - orphan files in `extension/edr/`.
 - SQL: migrations that reference columns / tables nobody reads any more.
-- Config: keys in `internal/config` with no consumer.
+- Config: keys in `server/config` (and `agent/config` for the agent daemon) with no consumer.
 - HTTP routes: registered handlers with no client (UI / agent / curl).
 - Skills / slash commands: see [`claude-config-audit`](claude-config-audit.md), don't duplicate.
 
@@ -58,7 +58,7 @@ one-line comment explaining how.
 
 Step 2 - TS: `cd ui && npx ts-prune`. Same triage.
 
-Step 3 - Schema / config: search internal/config struct fields against actual reads in the code; flag
+Step 3 - Schema / config: search server/config + agent/config struct fields against actual reads in the code; flag
 unused.
 
 Step 4 - Routes: list every HTTP route registered in server/ and confirm at least one client

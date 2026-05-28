@@ -157,37 +157,49 @@ Expect:
 If `db.status` is `error` / `unavailable`, MySQL isn't reachable. Check
 `docker compose logs mysql`.
 
-### Capture the admin password
+### Redeem the break-glass admin account
 
-The server seeds a single admin account on first boot. The password
-prints to the log exactly once:
+The server seeds a single break-glass admin row on first boot with a
+NULL password. cmd/main prints a one-shot redemption URL to stderr;
+the operator opens that URL in a browser to set a password and register
+a WebAuthn credential (atomic redemption). The URL prints on every
+boot until the credential is stored — once it is, the banner is silent.
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env logs server \
-    | grep -A 1 SEEDED
+    | grep -B 1 -A 4 BREAK-GLASS
 ```
 
 Expected output:
 
 ```text
 ================================================================
-SEEDED ADMIN USER (captured once — save the password now)
-  Email:    admin@fleet-edr.local
-  Password: <random>
+BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)
+  Email: admin@fleet-edr.local
+  URL:   https://edr.example.com/admin/break-glass/setup?token=<random>
+  TTL:   1h0m0s
 ================================================================
 ```
 
-Paste the password into your secret store. If you miss it you have to
-stop the server, delete the admin row from MySQL, and restart to
-re-seed. Don't lose it.
+Open the URL within the TTL (default 1h, tunable via
+`EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL`). The form takes a password
+(≥ 12 runes) and prompts the authenticator to register a WebAuthn
+credential; the three writes (token consume + password set + credential
+persist) commit in a single transaction so a partial failure leaves the
+token reusable. If the redemption window lapses, restart the server —
+a fresh token + URL print on every boot until the credential lands.
 
 ### Log into the UI
 
-Open `https://edr.example.com/ui/` (or `https://localhost:8088/ui/`
-when running `task dev:server` locally — accept the self-signed cert
-warning once if mkcert isn't installed). Sign in with
-`admin@fleet-edr.local` + the password above. The hosts page should be
-empty; that changes when the first agent enrolls.
+Production deployments authenticate via OIDC: open
+`https://edr.example.com/ui/` and follow "Continue with single sign-on"
+into your IdP. The break-glass account at `/admin/break-glass` exists
+for IdP-down recovery only.
+
+Local dev (`task dev:server`, `https://localhost:8088/ui/` — accept the
+self-signed cert once if mkcert isn't installed) typically uses the
+seeded break-glass account because no production IdP is configured.
+The hosts page is empty until the first agent enrolls.
 
 ## Configuration reference
 
@@ -203,7 +215,6 @@ unset uses the documented default.
 | `EDR_TLS_KEY_FILE` | **yes** | - | PEM key (pair with cert) |
 | `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
-| `EDR_LOGIN_RATE_PER_MIN` | no | 6 | Per-IP UI login rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
 | `EDR_RETENTION_INTERVAL` | no | 1h | How often the retention job runs |
 | `EDR_LAUNCHAGENT_ALLOWLIST` | no | - | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |

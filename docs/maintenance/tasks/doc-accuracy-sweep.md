@@ -18,7 +18,7 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 - File / directory paths still exist (e.g. `server/detection/internal/...`).
 - Function / type / table names referenced in code-style backticks still exist (`grep -r` or LSP).
 - Commands (`task ...`, `go test ...`, `make ...`) still work or at least still resolve to a target.
-- Ports, env vars, DSNs match `Taskfile.yml`, `docker-compose*.yml`, and `internal/config`.
+- Ports, env vars, DSNs match `Taskfile.yml`, `docker-compose*.yml`, and `server/config` (plus `agent/config` for agent-side knobs).
 - External URLs return 200 (not just exist; some redirect to login walls).
 - "See `<file>`" cross-references actually exist.
 
@@ -58,7 +58,7 @@ table names, env vars, ports) and every link target. Verify each one against the
 - File paths via `ls` or Read
 - Symbol names via `grep -r` or Grep tool
 - Commands via Taskfile.yml / Makefile lookup
-- Env vars / ports / DSNs via internal/config and docker-compose*.yml
+- Env vars / ports / DSNs via server/config + agent/config and docker-compose*.yml
 - External URLs via HEAD request
 
 Group findings into Broken / Renamed / Stale. Open separate PRs per category. Do NOT rewrite tone or

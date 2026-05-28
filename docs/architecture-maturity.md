@@ -116,12 +116,17 @@ custom tooling or arch-go capabilities the project doesn't ship.
   (`fk_alerts_updated_by`) and replaced it with the
   `identity.api.UserExists` code-level check. Schema review on every
   DDL change is the gate; arch-go doesn't see DDL.
-- **Wire format (`schema/events.json`) is the contract between three
-  codebases (Go agent, Swift extension, Go server).** Changes to it
-  require coordinated PR work across all three. Review heuristic:
-  any change to `schema/events.json` that doesn't include
-  corresponding changes in `agent/wire/`, `server/detection/api/wire/`,
-  and the Swift extension is incomplete.
+- **Wire format (`schema/events.json`) is the contract between two
+  codebases (Swift extension, Go server) plus the Go agent that
+  shuttles bytes between them.** Changes to it require coordinated PR
+  work. Review heuristic: any change to `schema/events.json` that
+  doesn't include corresponding changes in `server/detection/api/wire/`
+  (server-side decode/encode) and the Swift extension's event
+  serializer is incomplete. The agent itself stores events as opaque
+  `json.RawMessage` in its SQLite queue and re-emits them verbatim, so
+  it generally doesn't need a wire/ package of its own — but new
+  fields the agent has to read (`agent_version`, `host_id`) still
+  require an `agent/uploader` change.
 - **`bootstrap` is for production wiring.** Production importers of
   `<X>/bootstrap` are `cmd/fleet-edr-{server,ingest}` and
   `<X>/testkit`. Tests at `<X>/internal/tests/` and

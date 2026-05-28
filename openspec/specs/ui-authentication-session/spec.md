@@ -9,7 +9,8 @@ prompt for credentials or rely on long-lived bearer tokens stored in the browser
 operator console.
 
 The capability uses an HTTP-only session cookie that the browser cannot read from JavaScript, paired with a per-session
-CSRF token that the operator's UI code reads from the login response and echoes on every state-changing request. The cookie
+CSRF token that the operator's UI code reads from `GET /api/session` (once the cookie is set) and echoes on every
+state-changing request. The cookie
 authenticates the request, the CSRF header proves the request originated from the legitimate UI, and the server-side row
 backing the cookie can be revoked at any time by deleting the row. Sessions are persisted in the database, so restarting
 the server does not invalidate them; revocation goes through the row, not the process lifecycle. The endpoints are
