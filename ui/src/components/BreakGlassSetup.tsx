@@ -1,4 +1,4 @@
-// Phase 4c break-glass setup page: token-driven redemption form.
+// Break-glass setup page: token-driven redemption form.
 // Operator arrives via the printed redemption URL → server 302s to
 // /ui/admin/break-glass/setup?token=X → this page mounts.
 //
@@ -28,10 +28,10 @@ import {
 } from "../auth";
 import "./Login.scss";
 
-// MIN_PASSWORD_RUNES mirrors the server-side validator (Phase 4
-// decision D: length-only ≥ 12). Live counter shows the operator
-// how close they are without revealing the exact policy on the
-// server side (server is the source of truth).
+// MIN_PASSWORD_RUNES mirrors the server-side validator (length-only
+// ≥ 12). Live counter shows the operator how close they are without
+// revealing the exact policy on the server side (server is the
+// source of truth).
 const MIN_PASSWORD_RUNES = 12;
 
 // Friendly labels for the wire reasons returned by the redemption

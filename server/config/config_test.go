@@ -542,7 +542,7 @@ func withExtra(base, extra map[string]string) map[string]string {
 	return out
 }
 
-// TestLoad_AuditEnvKnobs covers the Phase 3 read-sampling + async-queue env knobs in isolation. Mirrors the pattern in TestLoad so a
+// TestLoad_AuditEnvKnobs covers the read-sampling + async-queue env knobs in isolation. Mirrors the pattern in TestLoad so a
 // regression on either parser surfaces with a focused failure message rather than a single-line "test failed".
 func TestLoad_AuditEnvKnobs(t *testing.T) {
 	certFile, keyFile := writeTestCert(t)

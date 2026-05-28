@@ -11,9 +11,8 @@ import (
 // Mandatory WebAuthn places this account in the "with MFA" bucket;
 // 12 sits comfortably above the CIS floor and matches OWASP.
 //
-// No zxcvbn entropy gate in wave 1 (decision D in the Phase 4 plan):
-// WebAuthn carries the cryptographic factor; the password is the
-// shoulder-surf defense gate.
+// No zxcvbn entropy gate in wave 1: WebAuthn carries the cryptographic
+// factor and the password is the shoulder-surf defense gate.
 const MinPasswordRunes = 12
 
 // ErrPasswordTooShort signals a redemption attempt with a password below MinPasswordRunes runes. Caller surfaces a directed reason

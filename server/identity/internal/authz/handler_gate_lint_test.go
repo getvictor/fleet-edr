@@ -22,9 +22,8 @@ import (
 // identityapi.HTTPGate wrapper).
 //
 // A privileged route registered without a chokepoint call is the
-// exact regression Phase 6's audit dashboard cannot recover from
-// post-flip; "you forgot the Allow call" must fail at PR time, not
-// in production.
+// exact regression the audit dashboard cannot recover from post-flip;
+// "you forgot the Allow call" must fail at PR time, not in production.
 //
 // Scope: this lint runs against the wave-1 operator surface
 // (identity audit, detection, rules, response, endpoint operator

@@ -3,9 +3,9 @@
 # instance instead of a real Okta tenant when running `task
 # dev:server:qa-oidc`.
 #
-# Four static users are pre-provisioned so an operator can walk
-# section B of `claude/qa/user-management.md` end-to-end without
-# clicking through Okta's signup. All four share the same password
+# Four static users are pre-provisioned so an operator can walk the
+# user-management QA flows end-to-end without clicking through Okta's
+# signup. All four share the same password
 # (qa-password-123); the bcrypt hashes below were generated with
 # `htpasswd -bnBC 10 "" qa-password-123 | tr -d ':\n'`.
 #

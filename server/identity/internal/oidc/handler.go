@@ -119,8 +119,8 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // (off-site URLs, javascript: schemes) are dropped silently and the
 // flow falls through to defaultRedirect.
 //
-// Phase 5: ?reauth=1 forces the IdP to re-prompt for credentials by
-// appending prompt=login to the authorize URL. The callback flow is
+// ?reauth=1 forces the IdP to re-prompt for credentials by appending
+// prompt=login to the authorize URL. The callback flow is
 // unchanged — a successful reauth mints a fresh session whose
 // last_auth_at = NOW(), implicitly resetting the freshness window.
 // The previous session row is orphaned (cleaned up on its absolute
@@ -146,7 +146,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authorizeURL, http.StatusFound)
 }
 
-// withPromptLogin returns the authorize URL with prompt=login set. Used by Phase 5's reauth flow so the IdP rejects its existing
+// withPromptLogin returns the authorize URL with prompt=login set. Used by the reauth flow so the IdP rejects its existing
 // session for this request and forces a fresh credential prompt; without it, an IdP that's mid-session would silently re-issue a
 // token, defeating the freshness model. RFC 6749 / OIDC core both reserve `prompt`; conformant IdPs honour it. Non-conformant ones
 // will silently issue a token from their existing session — flag in the operator runbook.

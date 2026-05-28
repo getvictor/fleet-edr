@@ -63,9 +63,8 @@ func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 	return id, s
 }
 
-// TestSeedAdmin_FirstBootCreatesAndIsIdempotent walks the seed-admin path. Phase 4b: SeedAdmin returns a NULL-password break-glass
-// row; the redemption URL banner lives in cmd/main, not in seed.Admin. Second call is idempotent on the same DB (returns the same
-// row).
+// TestSeedAdmin_FirstBootCreatesAndIsIdempotent walks the seed-admin path. SeedAdmin returns a NULL-password break-glass row; the
+// redemption URL banner lives in cmd/main, not in seed.Admin. Second call is idempotent on the same DB (returns the same row).
 func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	id := newIdentity(t)
@@ -76,9 +75,9 @@ func TestSeedAdmin_FirstBootCreatesAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotZero(t, user.ID)
 	assert.NotEmpty(t, user.Email)
-	assert.Empty(t, pw, "Phase 4b removed the password return value")
+	assert.Empty(t, pw, "SeedAdmin returns no password (banner lives in cmd/main)")
 	assert.Empty(t, stderr.String(),
-		"Phase 4b: redemption banner is emitted by cmd/main, not by seed.Admin")
+		"redemption banner is emitted by cmd/main, not by seed.Admin")
 
 	// Second call returns the same row (idempotent on container restart).
 	user2, _, err := id.Service().SeedAdmin(ctx, &stderr)

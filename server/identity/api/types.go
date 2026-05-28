@@ -47,7 +47,7 @@ type Session struct {
 	AuthMethod string
 	CreatedAt  time.Time
 	LastSeenAt time.Time
-	// LastAuthAt records the most recent authentication event for this session — initial login or a successful reauth (Phase 5).
+	// LastAuthAt records the most recent authentication event for this session — initial login or a successful reauth.
 	// The chokepoint reads it through Service.LoadActor to decide whether the actor is "fresh enough" to perform destructive actions (host
 	// commands, critical alert resolves) without re-prompting.
 	LastAuthAt time.Time
@@ -123,7 +123,7 @@ func WithSessionForTest(ctx context.Context, s *Session) context.Context {
 
 // Role is the operator-visible RBAC role. Five rows are seeded as builtin (super_admin, admin, senior_analyst, analyst, auditor);
 // the admin API refuses to delete any row whose IsBuiltin is true. The permissions a role grants are NOT persisted on this row -- they
-// live in the OPA / Rego policy bundle the Phase-2 AuthZ engine evaluates against.
+// live in the OPA / Rego policy bundle the AuthZ engine evaluates against.
 type Role struct {
 	ID          string    `json:"id"`
 	DisplayName string    `json:"display_name"`

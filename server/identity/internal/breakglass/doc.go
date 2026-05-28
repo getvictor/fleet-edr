@@ -1,6 +1,5 @@
 // Package breakglass implements the hardened admin-recovery login
-// surface introduced in Phase 4b of the user-management work. The
-// surface is the only path back into the system when OIDC is broken,
+// surface. It is the only path back into the system when OIDC is broken,
 // so it has to be both reachable (no transitive OIDC dependency) and
 // defensible (it does not leak its own existence to off-allowlist
 // scanners, requires a hardware authenticator, and rate-limits every
@@ -11,9 +10,9 @@
 //  1. **Bootstrap token redemption** — first-boot prints a one-shot
 //     redemption URL (not a plaintext password) to stderr. The
 //     operator visits the URL within the configured TTL, sets a
-//     password (length-only ≥ 12 — see decision D in the Phase 4
-//     plan: WebAuthn carries the cryptographic factor; the password
-//     is the shoulder-surf gate), and registers a WebAuthn
+//     password (length-only ≥ 12; WebAuthn carries the cryptographic
+//     factor and the password is the shoulder-surf gate), and
+//     registers a WebAuthn
 //     credential. All three writes (token consume + password set +
 //     credential persist) commit in a single transaction so a
 //     partial failure leaves the token reusable.

@@ -20,9 +20,8 @@ interface TopNavProps {
   // + logout UI.
   readonly user?: { id: number; email: string };
   // authMethod is the session's authn flow ("oidc" / "local_password").
-  // Phase 4c shows a small badge when the session was minted via the
-  // break-glass flow so an operator who hit the recovery surface knows
-  // they are NOT in a normal SSO session.
+  // When the session was minted via the break-glass flow, a small badge
+  // signals that the operator is NOT in a normal SSO session.
   readonly authMethod?: string;
   readonly onLogout?: () => void;
 }

@@ -1,8 +1,8 @@
 // Package identities owns the `identities` table — the (provider,
 // subject) → user_id mapping that lets the same user authenticate via
-// multiple flows (local password, OIDC, future api_token). Phase 4a
-// uses it to look up an OIDC subject's user on callback and to insert
-// a new (provider='oidc', subject=<sub>) row during JIT provisioning.
+// multiple flows (local password, OIDC, future api_token). Used to
+// look up an OIDC subject's user on callback and to insert a new
+// (provider='oidc', subject=<sub>) row during JIT provisioning.
 //
 // The table's UNIQUE(provider, subject) ensures a given IdP subject
 // resolves to exactly one local user; the wave-1 schema also CASCADEs

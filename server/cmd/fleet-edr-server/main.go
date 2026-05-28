@@ -368,9 +368,8 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 		// pre-existing row. Nothing to do.
 		return
 	}
-	// Phase 4b: print the redemption URL banner when the admin account has no registered WebAuthn credentials yet. Idempotent across
-	// container restarts: a fresh deployment prints on every boot until the operator redeems; once the credential is stored, this is
-	// silent.
+	// Print the redemption URL banner when the admin account has no registered WebAuthn credentials yet. Idempotent across container
+	// restarts: a fresh deployment prints on every boot until the operator redeems; once the credential is stored, this is silent.
 	bg := identityCtx.BreakglassService()
 	if bg == nil {
 		return

@@ -161,12 +161,12 @@ type Config struct {
 	AuthAllowNoOIDC bool
 
 	// SessionSigningKey is the HMAC key the OIDC state cookie uses to sign + verify per-flow secrets (state, nonce, PKCE verifier).
-	// Phase 5 will reuse the same key for signed session metadata. Populated from EDR_SESSION_SIGNING_KEY (or EDR_SESSION_SIGNING_KEY_FILE
+	// The same key may be reused for signed session metadata. Populated from EDR_SESSION_SIGNING_KEY (or EDR_SESSION_SIGNING_KEY_FILE
 	// for docker-secret mounts). Required when OIDC is enabled; validated at boot to be at least 32 bytes.
 	SessionSigningKey []byte
 
-	// Phase 4b break-glass surface knobs. Empty / zero values fall
-	// through to the per-package defaults documented at each field.
+	// Break-glass surface knobs. Empty / zero values fall through to
+	// the per-package defaults documented at each field.
 
 	// BreakglassBootstrapTokenTTL bounds how long the redemption URL printed at first boot stays redeemable. Default 1h. Shorter caps the
 	// value of an exfiltrated stderr log; longer gives a busy operator more time to redeem before re-launching.
@@ -185,12 +185,11 @@ type Config struct {
 	// when the break-glass surface is enabled; production typically pins the externally reachable HTTPS URL.
 	BreakglassRPOrigins []string
 
-	// Phase 5 session timeouts + reauth window. All zero-valued
-	// fields fall through to the sessions package defaults
-	// (Normal: 8h idle / 24h absolute; Break-glass: 15m idle / 1h
-	// absolute; reauth window: 30m). Operators tune these per
-	// deployment via the corresponding env vars; the package
-	// defaults match the wave-1 spec.
+	// Session timeouts + reauth window. All zero-valued fields fall
+	// through to the sessions package defaults (Normal: 8h idle /
+	// 24h absolute; Break-glass: 15m idle / 1h absolute; reauth
+	// window: 30m). Operators tune these per deployment via the
+	// corresponding env vars.
 	//
 	// SessionIdleTimeout is the inactivity cap for OIDC-minted
 	// sessions. Idle = NOW() - last_seen_at; the middleware slides
@@ -499,7 +498,7 @@ func validLogLevel(lvl string) bool {
 	return false
 }
 
-// loadBreakglassConfig reads the Phase 4b break-glass surface knobs. All fields are optional; the bootstrap layer treats an unset RPID
+// loadBreakglassConfig reads the break-glass surface knobs. All fields are optional; the bootstrap layer treats an unset RPID
 // as "break-glass not configured" and falls back to a localhost default for dev workflows so an operator running `task dev:server`
 // gets a working surface without explicit env vars. Production deployments MUST set EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS;
 // the bootstrap layer enforces that with a refuse-to-start error.
@@ -517,7 +516,7 @@ func loadBreakglassConfig(c *Config, getenv func(string) string, errs *[]error) 
 	}
 }
 
-// loadSessionTimeouts reads the Phase 5 session-timeout knobs. Every field is optional; bootstrap passes zero values through to the
+// loadSessionTimeouts reads the session-timeout knobs. Every field is optional; bootstrap passes zero values through to the
 // sessions package which substitutes its documented defaults (8h/24h normal, 15m/1h break-glass, 30m reauth window).
 func loadSessionTimeouts(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveDuration(getenv,

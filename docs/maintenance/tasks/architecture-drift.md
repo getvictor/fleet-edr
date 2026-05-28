@@ -82,6 +82,8 @@ deserves an ADR amendment, not silence.
 - One PR per refactor that's small enough to land safely.
 - Issues filed for each refactor that's not.
 - A short note in the audit summary on whether ADR-0004 still describes intent or needs amending.
+- A dated entry in `docs/maintenance/log.md` on every run, whether findings landed or not - the
+  "no findings" outcome is itself signal that arch-go and the test layout are doing their job.
 
 ## Prompt template
 
@@ -104,8 +106,9 @@ Step 6 - check migration files for cross-context references.
 For each finding, decide: small enough to refactor in this PR / file an issue / amend ADR-0004 / accept
 and document the exception. Open one PR for the refactors and a tracking issue listing the rest.
 
-Hard rule: if no findings rise above noise, write that finding into docs/maintenance/log.md with date.
-The "no findings" outcome is itself signal - it means arch-go and the test layout are doing their job.
+Hard rule: every run appends a dated entry to docs/maintenance/log.md - even if no findings rise
+above noise. The "no findings" outcome is itself signal that arch-go and the test layout are doing
+their job.
 ```
 
 ## Definition of done

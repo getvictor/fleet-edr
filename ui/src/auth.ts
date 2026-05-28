@@ -1,4 +1,4 @@
-// Phase 4c authentication helpers — break-glass redemption + login,
+// Pre-auth authentication helpers — break-glass redemption + login,
 // OIDC redirect URL builder. The existing api.ts handles the
 // authenticated /api/* surface; this module covers the pre-auth
 // /admin/break-glass/* + /api/auth/* paths the operator hits before
@@ -191,7 +191,7 @@ export async function breakglassFinishLogin(
   );
 }
 
-// reauthBreakglass runs the Phase 5 break-glass reauth ceremony
+// reauthBreakglass runs the break-glass reauth ceremony
 // against the operator's CURRENT session: WebAuthn assertion against
 // /api/auth/reauth/challenge → password + assertion submitted to
 // /api/auth/reauth → server stamps last_auth_at on the existing row.

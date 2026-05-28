@@ -27,9 +27,9 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 // spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/recovery-after-a-lost-password
 //
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
-// The Phase 4b flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
+// The flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
 //
-// The spec was rewritten in PR #267 to describe the Phase 4b break-glass admin + redemption-URL flow (issue #257). Both
+// The spec was rewritten in PR #267 to describe the break-glass admin + redemption-URL flow (issue #257). Both
 // scenarios this test pins reduce to the same structural property: "if the users table is empty when the seeder runs,
 // a break-glass admin row is inserted with the well-known email + NULL password + is_breakglass=1 + super_admin binding,
 // and the seed function itself does NOT write a password banner". For first-startup-seed the precondition is "fresh
@@ -46,9 +46,9 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	assert.Equal(t, seed.DefaultAdminEmail, u.Email)
-	assert.True(t, u.IsBreakglass, "Phase 4b admin must be break-glass")
-	assert.Empty(t, pw, "Phase 4b removed the password return value")
-	assert.Empty(t, stderr.String(), "Phase 4b: banner is emitted by cmd/main, not by seed")
+	assert.True(t, u.IsBreakglass, "seeded admin must be break-glass")
+	assert.Empty(t, pw, "Admin returns no password (banner is emitted by cmd/main)")
+	assert.Empty(t, stderr.String(), "banner is emitted by cmd/main, not by seed")
 
 	// Verify the super_admin binding is present so the chokepoint grants the admin every action on first login. Without this, /api/hosts
 	// and every other privileged route 403s with no_matching_rule (the bug QA surfaced).
@@ -65,7 +65,7 @@ func TestAdmin_SeedsOnEmptyTable(t *testing.T) {
 //
 // Pins the no-duplicate-account-on-rerun clause: a second seed against a populated DB returns the same
 // row instead of inserting another, AND the rbac binding count stays at 1 (no banner check needed
-// since Phase 4b moved the banner emission to cmd/main, but the "no banner is emitted" clause is
+// since banner emission lives in cmd/main, but the "no banner is emitted" clause is
 // structural here: the seed function never writes to stderr on a no-op path).
 //
 // Idempotent: a second seed against the same DB returns the existing row instead of attempting another insert AND does not duplicate

@@ -18,9 +18,9 @@
 #       .role_id     "super_admin" | "admin" | ...
 #       .scope_type  "global" | "host_group" | "host"
 #       .scope_id    string ("*" for deployment-wide; concrete id otherwise)
-#   input.actor.session_fresh  bool (Phase 5 reauth-window flag; wave-1
-#                              default is false, so policies that gate
-#                              on it default to deny — the safe side)
+#   input.actor.session_fresh  bool (reauth-window flag; default is
+#                              false, so policies that gate on it
+#                              default to deny — the safe side)
 #   input.action               string from server/identity/api.RegisteredActions
 #   input.resource.type        "host" | "alert" | "policy" | ...
 #   input.resource.id          string ("*" for deployment-wide; concrete id otherwise)
@@ -44,7 +44,7 @@ default decision := {"allow": false, "reason": "no_matching_rule"}
 #   - actor has a binding with scope_type == "global"
 #   - role's grant list contains the action OR the wildcard "*"
 #   - the action does NOT require a fresh auth event, OR the actor's
-#     session_fresh is true (Phase 5 reauth window)
+#     session_fresh is true (reauth window)
 decision := {"allow": true, "reason": "granted"} if {
 	granted_via_global
 	not requires_fresh_auth(input.action, input.resource)
@@ -56,7 +56,7 @@ decision := {"allow": true, "reason": "granted"} if {
 	input.actor.session_fresh
 }
 
-# Phase 5 reauth-required deny: only fires when the role WOULD have
+# Reauth-required deny: only fires when the role WOULD have
 # granted the action via a deployment-wide binding but the actor's
 # session is stale. Layered on top of granted_via_global so an actor
 # without the role sees no_matching_rule (the actually-correct reason)
@@ -83,7 +83,7 @@ requires_fresh_auth("alert.resolve", resource) if {
 
 # Non-deployment scopes (host_group, host) are persisted in role_bindings
 # but the resolver isn't shipped yet. Deny with a distinguishable
-# reason so the Phase 6 dashboard can show "this would have been
+# reason so the audit dashboard can show "this would have been
 # allowed under wave-2 host-scope work" as a separate dimension.
 # Only fires when no deployment-wide binding granted the action.
 decision := {"allow": false, "reason": "scope_not_yet_supported"} if {

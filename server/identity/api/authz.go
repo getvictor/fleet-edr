@@ -1,9 +1,8 @@
-// Authorization chokepoint surface. Phase 2 of the user-management
-// rollout introduces a single AuthZ engine every privileged handler
-// in detection / rules / response / endpoint / identity calls before
-// performing a side effect. The engine is OPA / Rego under the hood
-// (see server/identity/internal/authz); this file is the public
-// boundary other contexts depend on.
+// Authorization chokepoint surface. A single AuthZ engine every
+// privileged handler in detection / rules / response / endpoint /
+// identity calls before performing a side effect. The engine is OPA /
+// Rego under the hood (see server/identity/internal/authz); this file
+// is the public boundary other contexts depend on.
 //
 // The product is a single-instance deployment, so wave-1 honours
 // `scope_type='global'` only (meaning "deployment-wide"). Bindings
@@ -36,8 +35,8 @@ const (
 	ActionHostRead    Action = "host.read"
 	ActionProcessRead Action = "process.read"
 
-	// Host destructive actions. The reauth window from Phase 5 will
-	// gate these on actor.session_fresh once that lands.
+	// Host destructive actions. The reauth window gates these on
+	// actor.session_fresh.
 	ActionHostIsolate     Action = "host.isolate"
 	ActionHostKillProcess Action = "host.kill_process"
 	ActionHostRunScript   Action = "host.run_script"
@@ -54,8 +53,8 @@ const (
 	ActionEnrollmentRevoke      Action = "enrollment.revoke"
 	ActionEnrollmentRotateToken Action = "enrollment.rotate_token"
 
-	// User management. Wired up in wave 1 as part of the break-glass flow (Phase 4); the constants exist now so the action registry + Rego
-	// policy stay coherent across phases.
+	// User management. Wired up in wave 1 as part of the break-glass flow; the constants exist so the action registry + Rego policy
+	// stay coherent.
 	ActionUserRead   Action = "user.read"
 	ActionUserInvite Action = "user.invite"
 
@@ -111,15 +110,15 @@ func RegisteredActions() []Action {
 type Resource struct {
 	Type string `json:"type,omitempty"`
 	ID   string `json:"id,omitempty"`
-	// Severity is set only on alert-typed resources; it conditions the reauth-required gate. Phase 5: alert.resolve when
-	// severity=="critical" requires actor.session_fresh; lower severities pass through. Empty string for non-alert resources, and
-	// `omitempty` keeps OPA's input.resource map from carrying a meaningless field for them.
+	// Severity is set only on alert-typed resources; it conditions the reauth-required gate. alert.resolve when severity=="critical"
+	// requires actor.session_fresh; lower severities pass through. Empty string for non-alert resources, and `omitempty` keeps OPA's
+	// input.resource map from carrying a meaningless field for them.
 	Severity string `json:"severity,omitempty"`
 }
 
 // Decision is the chokepoint's response. Reason is the policy-supplied
-// label; the audit row records it verbatim so the Phase 6 dashboard
-// (and any future SIEM exporter) has a stable filter dimension.
+// label; the audit row records it verbatim so the audit dashboard (and
+// any future SIEM exporter) has a stable filter dimension.
 //
 // Standard reason values:
 //
@@ -156,12 +155,12 @@ const (
 // Actor is built once by session middleware and threaded through
 // context.Context. The chokepoint reads Actor.* + Roles to evaluate
 // every authorization decision. RoleBinding is the read shape from
-// types.go (Phase 1).
+// types.go.
 //
-// SessionFresh is populated once the Phase 5 reauth window lands; the
-// wave-1 default is false. Destructive-action policies that gate on
-// SessionFresh therefore default to deny in wave 1, which is the safe
-// direction.
+// SessionFresh is populated by the reauth-window gate; the default is
+// false until the session middleware sets it. Destructive-action
+// policies that gate on SessionFresh therefore default to deny, which
+// is the safe direction.
 type Actor struct {
 	UserID       int64         `json:"user_id"`
 	IsBreakglass bool          `json:"is_breakglass"`

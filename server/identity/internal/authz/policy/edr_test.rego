@@ -154,9 +154,9 @@ test_global_grant_wins_over_host_scope_deny if {
 	d == {"allow": true, "reason": "granted"}
 }
 
-# --- Phase 5 reauth window: destructive actions deny with
-#     reauth_required when the role grants the action but session
-#     freshness is stale. Lower severities pass through.
+# --- Reauth window: destructive actions deny with reauth_required
+#     when the role grants the action but session freshness is stale.
+#     Lower severities pass through.
 
 test_admin_can_isolate_host_when_session_fresh if {
 	d := authz.decision with input as {

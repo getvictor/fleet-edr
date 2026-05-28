@@ -1,5 +1,5 @@
 // Package oidc implements the OpenID Connect Authorization Code +
-// PKCE flow that backs Phase 4's primary authentication path.
+// PKCE flow that backs the primary authentication path.
 //
 // Wire shape:
 //

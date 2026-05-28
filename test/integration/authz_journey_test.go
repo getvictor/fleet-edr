@@ -27,8 +27,7 @@ import (
 //  2. A senior_analyst attempts the same -> chokepoint allows; the
 //     response is 201 + a command id; the row lands in commands.
 //  3. A senior_analyst with a stale session attempts the same ->
-//     chokepoint denies with reauth_required (Phase 5 freshness
-//     gate).
+//     chokepoint denies with reauth_required (freshness gate).
 //  4. An auditor reads /api/audit-events -> sees the deny + allow
 //     authz.host.isolate rows. The auditor subtest seeds its own
 //     analyst + senior_analyst pair and emits the deny/allow chain

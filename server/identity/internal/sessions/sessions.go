@@ -17,9 +17,9 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// Phase 5 lifetime defaults: idle (inactivity) + absolute (hard cap) per session class. Normal sessions get the lenient pair; break-
-// glass sessions get the strict pair so a stolen recovery cookie expires before the end of an incident shift. The pre-Phase-5 flat 12h
-// DefaultTTL is gone — every caller is now class-aware.
+// Lifetime defaults: idle (inactivity) + absolute (hard cap) per session class. Normal sessions get the lenient pair; break-glass
+// sessions get the strict pair so a stolen recovery cookie expires before the end of an incident shift. Every caller is class-aware;
+// there is no flat TTL.
 const (
 	DefaultIdleTimeout               = 8 * time.Hour
 	DefaultAbsoluteTimeout           = 24 * time.Hour
@@ -57,9 +57,9 @@ var ErrNotFound = errors.New("sessions: not found or expired")
 // valid rows. OIDC + break-glass FinishSetup always populate it.
 //
 // LastAuthAt records the most recent authentication event for this session
-// — initial login, OIDC reauth callback, or break-glass reauth POST.
-// Phase 5's chokepoint reads it via Store.IsFresh / Actor.SessionFresh
-// to gate destructive actions.
+// — initial login, OIDC reauth callback, or break-glass reauth POST. The
+// chokepoint reads it via Store.IsFresh / Actor.SessionFresh to gate
+// destructive actions.
 type Session struct {
 	ID         []byte
 	UserID     int64
@@ -138,8 +138,8 @@ func New(db *sqlx.DB, opts Options) *Store {
 	return &Store{db: db, normal: normal, breakglass: bg, reauthWin: rw, now: now}
 }
 
-// timeoutsFor returns the (idle, absolute) pair appropriate to the session's auth_method. Phase 4 design pins
-// auth_method=='local_password' to the break-glass surface; OIDC sessions get the normal pair.
+// timeoutsFor returns the (idle, absolute) pair appropriate to the session's auth_method. auth_method=='local_password' pins to the
+// break-glass surface; OIDC sessions get the normal pair.
 func (s *Store) timeoutsFor(authMethod string) Timeouts {
 	if authMethod == "local_password" {
 		return s.breakglass
@@ -147,8 +147,8 @@ func (s *Store) timeoutsFor(authMethod string) Timeouts {
 	return s.normal
 }
 
-// CreateOptions carry the per-session metadata Phase 4 records on the row. Zero AuthMethod defaults to "local_password" for legacy
-// callers; nil IdentityID is valid (legacy + tests).
+// CreateOptions carry the per-session metadata recorded on the row. Zero AuthMethod defaults to "local_password" for legacy callers;
+// nil IdentityID is valid (legacy + tests).
 type CreateOptions struct {
 	IdentityID *int64
 	AuthMethod string
@@ -160,7 +160,7 @@ type CreateOptions struct {
 // active cookies. opts pins identity_id + auth_method for the chokepoint to consume
 // later via the session middleware.
 //
-// Phase 5: expires_at is the absolute cap (created_at + Timeouts.Absolute) for the
+// expires_at is the absolute cap (created_at + Timeouts.Absolute) for the
 // session's class. The idle cap is enforced at Get time against last_seen_at, not
 // stored on the row. last_auth_at is initialised to NOW() since a fresh session is
 // definitionally fresh.
@@ -210,7 +210,7 @@ func nullInt64Ptr(p *int64) any {
 // Both surfaces map to the same 401 invalid_session in the middleware so a stale row
 // is indistinguishable from a nonexistent one.
 //
-// Phase 5: idle (last_seen_at + Timeouts.Idle) and absolute (created_at +
+// Idle (last_seen_at + Timeouts.Idle) and absolute (created_at +
 // Timeouts.Absolute) caps are enforced in Go after the row is fetched. The class-
 // specific timeout pair depends on auth_method (break-glass uses the strict pair).
 // Doing the comparison in Go keeps the SQL identical for both classes; the post-

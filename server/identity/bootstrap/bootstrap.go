@@ -31,8 +31,8 @@ type Deps struct {
 	DB           *sqlx.DB
 	Logger       *slog.Logger
 	CookieSecure bool
-	// Session timeouts (Phase 5). Per-class idle + absolute caps replace the pre-Phase-5 flat TTL. Zero means use the sessions package
-	// defaults: normal 8h idle / 24h absolute, break-glass 15m / 1h.
+	// Session timeouts: per-class idle + absolute caps. Zero means use the sessions package defaults: normal 8h idle / 24h absolute,
+	// break-glass 15m / 1h.
 	SessionIdle               time.Duration
 	SessionAbsolute           time.Duration
 	BreakglassSessionIdle     time.Duration
@@ -51,21 +51,21 @@ type Deps struct {
 	// uses the audit package default (8192).
 	AuditAsyncQueueCap int
 
-	// OIDC carries the Phase-4a auth knobs. When OIDC.Issuer is empty, the OIDC handler + routes are not constructed (break-glass-only
+	// OIDC carries the OIDC auth knobs. When OIDC.Issuer is empty, the OIDC handler + routes are not constructed (break-glass-only
 	// deployment); cfg validation upstream is responsible for refusing to boot if the operator did not opt into that mode.
 	OIDC OIDCDeps
 	// SessionSigningKey is the HMAC key the OIDC state cookie reuses (per spec). Required when OIDC.Issuer is set; ignored otherwise.
-	// 32+ bytes recommended. Phase 4b reuses the same key for the break-glass challenge cookie.
+	// 32+ bytes recommended. The break-glass challenge cookie reuses the same key.
 	SessionSigningKey []byte
 
-	// Breakglass carries the Phase 4b break-glass surface knobs. When Breakglass.RPID is empty AND OIDC is configured, the break-glass
-	// surface is not constructed (operator opted out by not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC is also
-	// unconfigured, the bootstrap layer falls through to a localhost default so dev workflows have a working surface.
+	// Breakglass carries the break-glass surface knobs. When Breakglass.RPID is empty AND OIDC is configured, the break-glass surface is
+	// not constructed (operator opted out by not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC is also unconfigured, the
+	// bootstrap layer falls through to a localhost default so dev workflows have a working surface.
 	Breakglass BreakglassDeps
 }
 
-// BreakglassDeps is the per-deployment configuration the Phase 4b break-glass surface needs. Lifted out of Deps so further
-// break-glass-related additions don't keep widening the parent struct.
+// BreakglassDeps is the per-deployment configuration the break-glass surface needs. Lifted out of Deps so further break-glass-related
+// additions don't keep widening the parent struct.
 type BreakglassDeps struct {
 	BootstrapTokenTTL time.Duration
 	IPAllowlist       []string
@@ -211,7 +211,7 @@ type breakglassDeps struct {
 	users      *users.Store
 	identities *identities.Store
 	audit      *audit.Store
-	identity   api.Service // for the Phase 5 reauth POST endpoint
+	identity   api.Service // for the reauth POST endpoint
 }
 
 // buildBreakglass constructs the break-glass Service + Handler. Returns (nil, nil, nil) when the deployment opted out (no RP ID + OIDC
@@ -396,8 +396,8 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	}
 }
 
-// BreakglassService exposes the Phase 4b break-glass service so cmd/main can call IssueSetupToken on first boot. Returns nil when the
-// deployment opted out of the break-glass surface.
+// BreakglassService exposes the break-glass service so cmd/main can call IssueSetupToken on first boot. Returns nil when the deployment
+// opted out of the break-glass surface.
 func (i *Identity) BreakglassService() *breakglass.Service {
 	return i.breakglassService
 }

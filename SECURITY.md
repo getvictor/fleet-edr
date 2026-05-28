@@ -48,7 +48,7 @@ project and do not need to be reported privately:
 - Denial of service from a single authorised host against its own server
   (e.g. flooding `/api/events` with valid tokens). DoS that affects other
   hosts in the same deployment is in scope.
-- Findings against `claude/`, scratch, or `tmp/` directories — these are
+- Findings against `ai/`, scratch, or `tmp/` directories — these are
   developer aids, not shipped artifacts.
 
 Thank you for helping keep Fleet EDR's users safe.

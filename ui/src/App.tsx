@@ -17,8 +17,8 @@ type AuthState =
   | { status: "anon" }
   | { status: "authed"; user: SessionInfo["user"]; authMethod: string };
 
-// Phase 4c: routes are top-level. /ui/login (and the break-glass
-// pages) are public; /ui/* otherwise probes /api/session and gates
+// Routes are top-level. /ui/login (and the break-glass pages) are
+// public; /ui/* otherwise probes /api/session and gates
 // rendering on a live session. The auth-state switch lives inside
 // the router so route changes can drive re-checks (e.g. after a
 // successful break-glass login the operator lands on /ui/ and the
