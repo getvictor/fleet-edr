@@ -18,7 +18,7 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 - File / directory paths still exist (e.g. `server/detection/internal/...`).
 - Function / type / table names referenced in code-style backticks still exist (`grep -r` or LSP).
 - Commands (`task ...`, `go test ...`, `make ...`) still work or at least still resolve to a target.
-- Ports, env vars, DSNs match `Taskfile.yml`, `docker-compose*.yml`, and `internal/config`.
+- Ports, env vars, DSNs match `Taskfile.yml`, `docker-compose*.yml`, and `server/config` (plus `agent/config` for agent-side knobs).
 - External URLs return 200 (not just exist; some redirect to login walls).
 - "See `<file>`" cross-references actually exist.
 

@@ -29,12 +29,14 @@ testable, and mapped to a public taxonomy.
   flight under the `add-application-control` OpenSpec change; phase 1 removes the
   legacy singleton blocklist.
 - [x] Response action: command queue (kill, rotate_token) with ack/complete lifecycle
-- [~] **MITRE ATT&CK mapping** on every rule. Each detection rule implements
-  `Techniques()` returning the ATT&CK technique IDs it maps to
-  (`server/detection/rule.go`); the engine threads them onto every alert so
-  they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`,
-  `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export
-  (`server/admin/admin.go` `navigatorTechnique`). **Demoted to `[~]`**:
+- [~] **MITRE ATT&CK mapping** on every rule. The `Rule` interface in
+  `server/rules/api/types.go` requires a `Techniques()` method returning
+  the ATT&CK technique IDs the rule maps to; each catalog rule under
+  `server/rules/internal/catalog/` implements it, and the engine threads
+  the IDs onto every alert so they survive the rule lifecycle. Surfaced
+  in the UI (`AttackCoverage.tsx`, `RuleDetail.tsx`) and exposed as an
+  ATT&CK Navigator JSON export (`server/rules/internal/operator/handler.go`
+  `navigatorTechnique`). **Demoted to `[~]`**:
   ATT&CK v19 (April 2026) split Defense Evasion into the new Stealth and
   Defense Impairment tactics and revoked ~13 technique IDs into new parents
   (e.g. "Clear Windows Event Logs" → T1685/005). Current rule mappings have
@@ -136,19 +138,25 @@ assumptions baked in.
 - [x] Argon2id host-token hashing for enrollment (with deterministic token-id index for
   fast lookup)
 - [x] Constant-time comparison for secrets (`subtle.ConstantTimeCompare` for CSRF tokens)
-- [x] HTTP-only, Secure, SameSite session cookies (`server/authn/`)
+- [x] HTTP-only, Secure, SameSite session cookies (`server/identity/internal/{login,middleware,sessions}/`)
 - [x] CSRF protection on unsafe methods (per-session token in header)
 - [x] Bearer-token authentication for agents (`HostToken` middleware)
-- [x] Rate limiting on login and enrollment endpoints
+- [x] Rate limiting on enrollment (`EDR_ENROLL_RATE_PER_MIN`) and the break-glass surface
+  (internal per-IP / per-email / per-setup buckets in `server/identity/internal/breakglass`)
 - [x] TLS 1.3 by default; TLS 1.2 only with explicit opt-in for legacy pilots
 - [x] Restricted TLS 1.2 cipher suites (forward-secrecy AEAD only)
 - [x] HSTS with `includeSubDomains`, two-year max-age
 - [x] Reload TLS cert + key on `SIGHUP` without dropping connections
 - [x] Refusal of `X-Forwarded-For` until a trusted-proxy allowlist exists
 - [x] Audit logging of auth outcomes with span attributes
-- [ ] **Multi-factor authentication** (TOTP first, WebAuthn second)
-- [ ] **SSO**: SAML 2.0 and OIDC for enterprise identity providers
-- [ ] **RBAC** with role definitions (admin, analyst, read-only) and per-route gates
+- [x] **Multi-factor authentication** (WebAuthn-mandatory on the break-glass surface
+  in `server/identity/internal/breakglass`; MFA on the day-to-day OIDC path is
+  enforced upstream by the IdP)
+- [~] **SSO**: OIDC PKCE shipped (`server/identity/internal/oidc`); SAML 2.0 still
+  unimplemented
+- [x] **RBAC** with five built-in roles (super_admin, admin, senior_analyst, analyst,
+  auditor) and an OPA / Rego chokepoint on every privileged route
+  (`server/identity/api/{authz.go,types.go}`, `server/identity/internal/authz/`)
 - [ ] **Mutual TLS for agent <-> server** (today is bearer-only; mTLS pins the agent
   identity at the transport layer)
 - [ ] **Certificate pinning** in the agent (refuse rotation that bypasses pin)
@@ -730,12 +738,13 @@ from 42% to 54% and unblocked the rest of that section's doc items.
 opened §13 Compliance + privacy from 0% to 8% — that section was the
 last fully-empty area on the checklist.
 
-The remaining big gaps that buyers ask about are RBAC + MFA on the UI
-(§3, the highest-severity item left in the top-3 missing list now that
-LICENSE, the threat model, and CONTRIBUTING.md have shipped), the rest
-of the §12 community-signals checklist (CODE_OF_CONDUCT, CODEOWNERS, PR
-template, OpenSSF CII Best Practices badge), the detection-content
-surface (ATT&CK mapping is wired but Sigma / YARA / IOC management
-still wait for v1.1), and the AI-era hygiene that enterprise
-procurement is starting to ask for (CISA Secure by Design, OWASP LLM
-Top 10, AI provenance policy).
+RBAC + MFA on the UI shipped: OIDC PKCE for the day-to-day path
+(`server/identity/internal/oidc`), WebAuthn-mandatory break-glass for
+IdP-down recovery (`server/identity/internal/breakglass`), and a five-role
+OPA / Rego chokepoint (`server/identity/internal/authz`). The remaining
+big gaps that buyers ask about are the rest of the §12 community-signals
+checklist (CODE_OF_CONDUCT, CODEOWNERS, PR template, OpenSSF CII Best
+Practices badge), the detection-content surface (ATT&CK mapping is wired
+but Sigma / YARA / IOC management still wait for v1.1), and the AI-era
+hygiene that enterprise procurement is starting to ask for (CISA Secure
+by Design, OWASP LLM Top 10, AI provenance policy).

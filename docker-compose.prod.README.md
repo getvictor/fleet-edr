@@ -42,8 +42,12 @@ curl -sk https://localhost:8088/readyz | jq .
 `-k` bypasses cert verification for the local self-signed probe; production
 automation against a real Let's Encrypt-issued cert should drop it.
 
-Seeded admin email + password are printed once on server boot: `docker compose
--f docker-compose.prod.yml --env-file .env logs server | head -20`.
+The first-boot break-glass redemption URL prints to stderr until the
+admin redeems it; capture with `docker compose -f docker-compose.prod.yml
+--env-file .env logs server | grep -A 4 BREAK-GLASS`. Open the URL in a
+browser within the TTL (default 1h) to set a password and register a
+WebAuthn credential. See `docs/install-server.md` for the full first-boot
+flow.
 
 ## Upgrade
 
