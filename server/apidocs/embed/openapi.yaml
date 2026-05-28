@@ -182,50 +182,15 @@ paths:
           description: Missing or invalid host token
 
   /api/session:
-    post:
-      tags: [Session]
-      summary: Log in with email + password
-      description: |
-        Validates credentials, creates a session row, sets `edr_session`
-        cookie, returns the user + CSRF token. Rate-limited per-IP at
-        `EDR_LOGIN_RATE_PER_MIN` (default 6).
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
-      responses:
-        "200":
-          description: Logged in
-          headers:
-            Set-Cookie:
-              description: Session cookie (HttpOnly, Secure, SameSite=Lax)
-              schema:
-                type: string
-                example: edr_session=<opaque>; Path=/; HttpOnly; Secure; SameSite=Lax
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LoginResponse"
-        "400":
-          description: Malformed request
-        "401":
-          description: Wrong email or password
-        "429":
-          description: Rate limited
-          headers:
-            Retry-After:
-              description: Seconds to wait before retrying.
-              schema: {type: integer}
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
     get:
       tags: [Session]
       summary: Get the current session
+      description: |
+        Returns the authenticated user + per-session CSRF token. The
+        session cookie itself is minted upstream by the OIDC callback
+        (`GET /api/auth/callback`) or the break-glass FinishLogin /
+        FinishSetup endpoints; there is no password-based
+        `POST /api/session`.
       security:
         - SessionCookie: []
       responses:
@@ -234,7 +199,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LoginResponse"
+                $ref: "#/components/schemas/SessionResponse"
         "401":
           description: Not logged in
     delete:
@@ -674,16 +639,18 @@ components:
       in: cookie
       name: edr_session
       description: |
-        HttpOnly cookie set by `POST /api/session`. The browser
-        attaches it automatically.
+        HttpOnly cookie minted by the OIDC callback
+        (`GET /api/auth/callback`) or the break-glass
+        FinishLogin / FinishSetup endpoints. The browser attaches it
+        automatically on subsequent requests.
     CSRF:
       type: apiKey
       in: header
       name: X-CSRF-Token
       description: |
         Required on unsafe methods (`POST`, `PUT`, `DELETE`) for
-        session-cookie-authenticated endpoints. Value comes from the
-        login response's `csrf_token` field.
+        session-cookie-authenticated endpoints. Value comes from
+        `GET /api/session`'s `csrf_token` field.
 
   parameters:
     HostID:
@@ -748,14 +715,7 @@ components:
           description: Opaque bearer token. Store securely; do not log.
         enrolled_at: {type: string, format: date-time}
 
-    LoginRequest:
-      type: object
-      required: [email, password]
-      properties:
-        email: {type: string, format: email}
-        password: {type: string, format: password}
-
-    LoginResponse:
+    SessionResponse:
       type: object
       required: [user, csrf_token]
       properties:

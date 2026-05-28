@@ -70,9 +70,14 @@ Endpoints that require a host token:
 
 ### Session cookie + CSRF (browsers)
 
-The admin UI posts `/api/session` with email + password. The
-response sets `edr_session` (HttpOnly, Secure, SameSite=Lax) and
-returns a `csrf_token` the UI stores client-side. Subsequent unsafe
+Operators authenticate via OIDC (`GET /api/auth/login` redirects to the
+configured IdP; the callback at `GET /api/auth/callback` mints the
+session) or, when the IdP is unreachable, the break-glass surface
+(`/admin/break-glass` for login, `/admin/break-glass/setup` for the
+first-boot redemption flow). Both paths set `edr_session` (HttpOnly,
+Secure, SameSite=Lax) directly; there is no password-based
+`POST /api/session` endpoint. The UI reads the per-session CSRF token
+from `GET /api/session` once the cookie is set. Subsequent unsafe
 requests (`POST`, `PUT`, `DELETE`) carry:
 
 ```text
@@ -103,15 +108,18 @@ Endpoints that require the session cookie:
 
 ## Rate limits
 
-Two IP-scoped buckets guard the auth boundary:
+The enroll surface is rate-limited:
 
 | Endpoint | Knob | Default |
 |---|---|---|
 | `POST /api/enroll` | `EDR_ENROLL_RATE_PER_MIN` | 30/min/IP |
-| `POST /api/session` | `EDR_LOGIN_RATE_PER_MIN` | 6/min/IP |
 
 Over-limit requests return `429 Too Many Requests` with a
-`Retry-After` header.
+`Retry-After` header. The break-glass surface (`/admin/break-glass`,
+`/admin/break-glass/setup`) carries its own per-IP, per-email, and
+per-setup-bucket rate limits internal to the break-glass package; the
+OIDC redirect path is not rate limited at the EDR boundary (the IdP
+owns abuse controls upstream).
 
 Ingestion (`POST /api/events`), command polling, and UI read
 endpoints are not rate limited. If you proxy thousands of agents
