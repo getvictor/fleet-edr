@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -59,47 +60,30 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 
 	cases := []struct {
 		name string
-		raw  api.NullRawJSON
+		cs   codeSigningJSON
 		want bool
 	}{
-		{"empty slice (DB NULL)", nil, false},
-		{"json null literal", api.NullRawJSON("null"), false},
-		{"malformed JSON", api.NullRawJSON("{not json"), false},
-		{
-			"platform binary",
-			api.NullRawJSON(`{"team_id":"","signing_id":"com.apple.installd","flags":0,"is_platform_binary":true}`),
-			true,
-		},
-		{
-			"allowlisted team",
-			api.NullRawJSON(`{"team_id":"VENDORALLOW","signing_id":"x","flags":0,"is_platform_binary":false}`),
-			true,
-		},
-		{
-			"unknown team, no allowlist hit",
-			api.NullRawJSON(`{"team_id":"EVILCORP1","signing_id":"x","flags":0,"is_platform_binary":false}`),
-			false,
-		},
+		{"platform binary", codeSigningJSON{IsPlatformBinary: true}, true},
+		{"allowlisted team", codeSigningJSON{TeamID: "VENDORALLOW", IsPlatformBinary: false}, true},
+		{"unknown team, no allowlist hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
+		{"unsigned (empty team, not platform)", codeSigningJSON{IsPlatformBinary: false}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, r.allowed(tc.raw))
+			assert.Equal(t, tc.want, r.allowed(tc.cs))
 		})
 	}
 
-	// AllowedTeamIDs=nil branch: any non-platform writer falls through to the "not allowed" return. Separated from the table above because
-	// it's the rule's default-construction shape.
+	// AllowedTeamIDs=nil branch: any non-platform instigator falls through to the "not allowed" return — the rule's
+	// default-construction shape.
 	rNoList := &PrivilegeLaunchdPlistWrite{}
-	assert.False(t, rNoList.allowed(
-		api.NullRawJSON(`{"team_id":"X","is_platform_binary":false}`),
-	))
+	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}))
 }
 
-// TestPrivilegeLaunchdPlistWrite_MalformedPayload exercises the json.Unmarshal failure path inside evalEvent. The fast-path
-// bytes.Contains gate lets the malformed payload through (the magic substring is present), then unmarshal fails and the rule drops the
-// event silently. We bypass the fixture harness because MySQL's JSON column rejects malformed payloads at InsertEvents — this branch
-// only fires in-memory if a downstream batcher hands us a partial buffer.
+// TestPrivilegeLaunchdPlistWrite_MalformedPayload exercises the json.Unmarshal failure path inside evalEvent: a btm_launch_item_add
+// event with a truncated payload is dropped silently. Bypasses the fixture harness because MySQL's JSON column rejects malformed
+// payloads at InsertEvents — this branch only fires in-memory if a downstream batcher hands us a partial buffer.
 func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -109,32 +93,60 @@ func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
 		EventID:     "ldp-malformed",
 		HostID:      "fixture-host",
 		TimestampNs: 1,
-		EventType:   "open",
-		Payload:     json.RawMessage(`{"path":"/Library/LaunchDaemons/x.plist", "flags":`),
+		EventType:   "btm_launch_item_add",
+		Payload:     json.RawMessage(`{"item_type":"daemon","item_path":`),
 	}
 	findings, err := r.Evaluate(ctx, []api.Event{evt}, stubGraphReader{})
 	require.NoError(t, err)
 	assert.Empty(t, findings, "malformed payload must be dropped silently")
 }
 
-// TestPrivilegeLaunchdPlistWrite_OpenRaceWithoutProcess covers the proc==nil race guard. The fixture
-// negative_open_without_process.json exercises the same branch via Replay (above); this Go-level test uses the stub GraphReader
-// (returning nil for GetProcessByPID) so the rule sees a missing process row without needing the live detection persistence layer.
-func TestPrivilegeLaunchdPlistWrite_OpenRaceWithoutProcess(t *testing.T) {
+// TestPrivilegeLaunchdPlistWrite_FiresWithoutProcessRow pins the robustness improvement over the old open-based rule: the BTM event
+// carries the instigator's code-signing inline, so a daemon registered by a non-platform instigator FIRES even when its process row
+// hasn't materialised (stubGraphReader returns nil for GetProcessByPID). The old rule dropped the finding on a missing row; this one
+// only loses the optional process-tree link (ProcessID == 0).
+func TestPrivilegeLaunchdPlistWrite_FiresWithoutProcessRow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	r := &PrivilegeLaunchdPlistWrite{}
 
 	evt := api.Event{
-		EventID:     "ldp-race",
+		EventID:     "ldp-noproc",
 		HostID:      "fixture-host",
 		TimestampNs: 1,
-		EventType:   "open",
-		Payload:     json.RawMessage(`{"pid":99999,"path":"/Library/LaunchDaemons/com.race.plist","flags":1}`),
+		EventType:   "btm_launch_item_add",
+		Payload: json.RawMessage(`{"item_type":"daemon","item_path":"/Library/LaunchDaemons/com.x.plist",` +
+			`"managed":false,"instigator_pid":4242,"instigator_code_signing":{"team_id":"","is_platform_binary":false}}`),
 	}
 	findings, err := r.Evaluate(ctx, []api.Event{evt}, stubGraphReader{})
 	require.NoError(t, err)
-	assert.Empty(t, findings, "race against process materialisation must skip silently")
+	require.Len(t, findings, 1, "decision uses inline instigator signing; a missing process row must not drop the finding")
+	assert.Equal(t, int64(0), findings[0].ProcessID, "best-effort process link is 0 when the row is absent")
+}
+
+// TestBtmLaunchItemAddPayload_RoundTrip is the wire round-trip PBT (CLAUDE.md: new wire struct → Marshal ∘ Unmarshal == identity)
+// for the btm_launch_item_add payload the rule decodes.
+func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		in := btmLaunchItemAddPayload{
+			ItemType:       rapid.SampledFrom([]string{"daemon", "agent", "login_item", "app", "user_item"}).Draw(rt, "item_type"),
+			ItemPath:       rapid.String().Draw(rt, "item_path"),
+			ExecutablePath: rapid.String().Draw(rt, "executable_path"),
+			Managed:        rapid.Bool().Draw(rt, "managed"),
+			InstigatorPID:  rapid.Int().Draw(rt, "instigator_pid"),
+		}
+		if rapid.Bool().Draw(rt, "has_cs") {
+			in.InstigatorCodeSigning = &codeSigningJSON{
+				TeamID:           rapid.String().Draw(rt, "team_id"),
+				IsPlatformBinary: rapid.Bool().Draw(rt, "is_platform_binary"),
+			}
+		}
+		b, err := json.Marshal(in)
+		require.NoError(rt, err)
+		var out btmLaunchItemAddPayload
+		require.NoError(rt, json.Unmarshal(b, &out))
+		assert.Equal(rt, in, out)
+	})
 }
 
 // Compile-time check that detection/testkit is referenced (other tests in this package use Replay; the import sits at file scope

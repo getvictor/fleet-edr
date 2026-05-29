@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "snapshot_heartbeat"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "snapshot_heartbeat", "btm_launch_item_add"],
       "description": "Type of endpoint security event"
     },
     "payload": {
@@ -32,7 +32,8 @@
         { "$ref": "#/definitions/dns_query_payload" },
         { "$ref": "#/definitions/application_control_block_payload" },
         { "$ref": "#/definitions/application_control_undecided_payload" },
-        { "$ref": "#/definitions/snapshot_heartbeat_payload" }
+        { "$ref": "#/definitions/snapshot_heartbeat_payload" },
+        { "$ref": "#/definitions/btm_launch_item_add_payload" }
       ]
     }
   },
@@ -45,6 +46,24 @@
         "signing_id": { "type": "string" },
         "flags": { "type": "integer" },
         "is_platform_binary": { "type": "boolean" }
+      }
+    },
+    "btm_launch_item_add_payload": {
+      "type": "object",
+      "required": ["item_type", "item_path"],
+      "properties": {
+        "item_type": {
+          "type": "string",
+          "enum": ["user_item", "app", "login_item", "agent", "daemon"],
+          "description": "BTM launch-item type (es_btm_item_type_t). 'daemon' = system-domain LaunchDaemon (T1543.004), 'agent' = LaunchAgent, 'login_item' = login item."
+        },
+        "item_path": { "type": "string", "description": "Filesystem path of the launch item (the plist), from es_btm_launch_item_t.item_url." },
+        "executable_path": { "type": "string", "description": "Optional. POSIX executable path from the launchd plist, when available." },
+        "legacy": { "type": "boolean", "description": "True iff a legacy plist-based launch item rather than an SMAppService registration." },
+        "managed": { "type": "boolean", "description": "True iff managed by MDM. Managed daemons are operator-deployed and skipped by detection rules." },
+        "uid": { "type": "integer", "description": "User ID the item is registered for." },
+        "instigator_pid": { "type": "integer", "description": "Optional. PID of the process that registered the item (es_event_btm_launch_item_add_t.instigator)." },
+        "instigator_code_signing": { "$ref": "#/definitions/code_signing" }
       }
     },
     "exec_payload": {

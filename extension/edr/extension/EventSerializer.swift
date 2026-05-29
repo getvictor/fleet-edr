@@ -198,6 +198,28 @@ struct ApplicationControlBlockPayload: Codable, Sendable {
     }
 }
 
+struct BtmLaunchItemAddPayload: Codable, Sendable {
+    let itemType: String
+    let itemPath: String
+    let executablePath: String
+    let legacy: Bool
+    let managed: Bool
+    let uid: uid_t
+    let instigatorPid: pid_t
+    let instigatorCodeSigning: CodeSigning?
+
+    enum CodingKeys: String, CodingKey {
+        case itemType = "item_type"
+        case itemPath = "item_path"
+        case executablePath = "executable_path"
+        case legacy
+        case managed
+        case uid
+        case instigatorPid = "instigator_pid"
+        case instigatorCodeSigning = "instigator_code_signing"
+    }
+}
+
 // MARK: - Event envelope
 
 struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {

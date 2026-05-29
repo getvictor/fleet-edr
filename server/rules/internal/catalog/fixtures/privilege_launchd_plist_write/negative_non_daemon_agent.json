@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-agent",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6300,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "agent",
+        "item_path": "/Users/victor/Library/LaunchAgents/com.unsigned.agent.plist",
+        "managed": false,
+        "instigator_pid": 9700,
+        "instigator_code_signing": {"team_id": "", "signing_id": "", "flags": 0, "is_platform_binary": false}
+      }
+    }
+  ]
+}

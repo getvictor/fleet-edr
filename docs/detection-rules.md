@@ -1,7 +1,7 @@
 # Detection rules
 
-This page is generated from `tools/gen-rule-docs` by walking the
-`detection.Rule.Doc()` method on every rule registered in
+This page is generated from `tools/gen-rule-docs` by reading the
+`rulesapi.RuleMetadata.Doc` field on every rule registered in
 `server/cmd/fleet-edr-server/main.go`. To refresh after changing a
 rule's documentation, run:
 
@@ -21,8 +21,9 @@ Hand-edits to this file get overwritten on the next regeneration.
 | [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | T1566.001, T1059.004 |
 | [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper (osascript → curl/wget → temp exec) | critical | T1059.002, T1105 |
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain dump (security dump-keychain) | high | T1555.001 |
-| [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon plist drop (/Library/LaunchDaemons write) | high | T1543.004 |
+| [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence (BTM daemon registration) | high | T1543.004 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*) | high | T1548.003 |
+| [`application_control_block`](#application_control_block) | Application control block | medium |  |
 
 ## suspicious_exec
 
@@ -211,39 +212,39 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 
 ## privilege_launchd_plist_write
 
-**LaunchDaemon plist drop (/Library/LaunchDaemons write)**  
-Flags a non-platform-binary write to any *.plist directly under /Library/LaunchDaemons.
+**LaunchDaemon persistence (BTM daemon registration)**  
+Flags a system-domain LaunchDaemon registered with Background Task Management by a non-Apple, non-allowlisted process.
 
 | | |
 | --- | --- |
 | Rule ID | `privilege_launchd_plist_write` |
 | Severity | `high` |
 | ATT&CK | [`T1543.004`](https://attack.mitre.org/techniques/T1543/004/) |
-| Event types | `open` |
+| Event types | `btm_launch_item_add` |
 
 ### Description
 
-Detects the canonical system-domain persistence drop: writing a plist into `/Library/LaunchDaemons/`. Once that lands, the next `launchctl bootstrap system/<name>` (or a reboot) gives the attacker root-running persistence.
+Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a reboot) gives the attacker root-running persistence.
 
-Paired with `persistence_launchagent` — that rule catches user-domain LaunchAgent activation via `launchctl load`, this one catches the system-domain drop step. We catch this at the file-write rather than the activation step because LaunchDaemon activation is often deferred until reboot.
+Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so it catches the drop regardless of mechanism — including atomic temp-file+rename and `cp` by an Apple-signed binary, which a file-write rule misses.
 
-To stay high-precision, writes by Apple-signed platform binaries (installd, system_installd, sysadminctl, package post-flight scripts) are skipped — they're the legitimate path. Non-Apple MDM agents (Munki, JumpCloud, Kandji's daemon) need their team ID allowlisted.
+Paired with `persistence_launchagent` (user-domain LaunchAgents). To stay high-precision, registrations by Apple platform binaries, MDM-managed items, and allowlisted vendor team IDs are skipped.
 
 ### Configuration
 
 | Env var | Type | Default | Description |
 | --- | --- | --- | --- |
-| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | `csv-team-ids` | _(unset)_ | Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose code-signed binaries may write to /Library/LaunchDaemons silently. |
+| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | `csv-team-ids` | _(unset)_ | Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose LaunchDaemon registrations are accepted silently. |
 
 ### Known false-positive sources
 
-- Non-Apple MDM agent installations dropping their own LaunchDaemon. Allowlist the agent's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.
+- Non-Apple vendor app installing its own LaunchDaemon (Docker, a VPN, an MDM agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.
 - Custom in-house pkg installers signed by your developer team — same allowlist applies.
 
 ### Limitations
 
-- Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.
-- Drops via Apple platform binaries (e.g. `sudo cp` where cp is Apple-signed) are skipped here — pair with suspicious_exec for parent-shell visibility.
+- BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).
+- Registrations with no attributable instigator process (boot-time, launchd-internal) are skipped to stay high-precision.
 
 ## sudoers_tamper
 
@@ -278,4 +279,19 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 ### Limitations
 
 - Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.
+
+## application_control_block
+
+**Application control block**  
+Surfaces every AUTH_EXEC denial from the extension as an alert in the unified view.
+
+| | |
+| --- | --- |
+| Rule ID | `application_control_block` |
+| Severity | `medium` |
+| Event types | `application_control_block` |
+
+### Description
+
+The extension's AUTH_EXEC decision walker denies execs that match an admin-defined application-control rule. Every such denial emits an `application_control_block` event that this built-in rule maps to an alert with `source='application_control'`. The alert carries the matched rule's identifier, severity, and operator-supplied custom message. The dedup key (source, host_id, rule_id, process_id) means repeated blocks of the same binary by the same rule on the same process collapse into one alert row.
 

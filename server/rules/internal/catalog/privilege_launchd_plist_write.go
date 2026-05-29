@@ -1,45 +1,40 @@
 package catalog
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// PrivilegeLaunchdPlistWrite fires on a write-mode `open(2)` against any
-// `*.plist` directly under `/Library/LaunchDaemons/`. That directory is
-// the canonical drop site for system-domain LaunchDaemons (T1543.004) —
-// once a plist lands there, the next `launchctl bootstrap system/<name>`
-// (or a reboot) gives the attacker root-running persistence.
+// PrivilegeLaunchdPlistWrite fires when a system-domain LaunchDaemon is
+// registered with Background Task Management (BTM) by a non-Apple,
+// non-allowlisted process — the canonical system-domain persistence
+// vector (T1543.004). Registering a LaunchDaemon gives the attacker a
+// root-running launch item on the next `launchctl bootstrap system/<name>`
+// or reboot.
 //
-// The rule is paired with `persistence_launchagent` (T1543.001), which
-// catches the activation step for user-domain LaunchAgents via
-// `launchctl load`. We deliberately catch this one at the file-write
-// step rather than the activation step because LaunchDaemon activation
-// is often deferred to reboot; the drop is the moment we want to surface.
+// The rule keys on `ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD`
+// (`item_type == "daemon"`), surfaced by the extension as a
+// `btm_launch_item_add` event (ADR-0008). BTM is the high-level signal
+// macOS 13+ emits when launchd registers the item, regardless of how the
+// plist landed on disk — so unlike the previous `open`-based rule it also
+// catches atomic temp-file+rename drops and `cp` by a platform binary.
 //
-// To stay high-precision we skip writers Apple itself signs as platform
-// binaries (installd, system_installd, sysadminctl, package install
-// post-flight scripts run as root, etc.) — those are the legitimate
-// path for shipping a daemon. Operators with a non-Apple MDM agent that
-// writes here (Munki, JumpCloud, Kandji's own daemon) can allowlist
-// the agent's team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.
-//
-// Known limitations, documented for the operator runbook:
-//   - Atomic writes via temp-file + rename: ESF NOTIFY_OPEN sees the
-//     temp file, not the destination, so the rule misses these. We
-//     don't subscribe to NOTIFY_RENAME today; tracked as a future
-//     extension change.
-//   - Drops via Apple platform binaries (e.g. attacker uses `sudo cp`
-//     where `cp` is a platform binary): skipped here, but the parent
-//     shell's exec is captured by suspicious_exec / process tree.
+// Precision: the BTM event carries the instigator process inline, so the
+// decision reads the instigator's code-signing directly (no pid→process
+// correlation, which also removes the open-vs-exec race the old rule had).
+// We skip:
+//   - `managed` items (MDM-deployed daemons are operator-legitimate),
+//   - instigators Apple signs as platform binaries (installd, etc.),
+//   - instigators whose team ID is on EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST,
+//   - events with no instigator (boot-time / launchd-internal registrations
+//     we cannot attribute) — high-precision skip, matching the old rule's
+//     "no process row → no finding" guard.
 type PrivilegeLaunchdPlistWrite struct {
-	// AllowedTeamIDs is the set of code-signing team IDs whose writes to /Library/LaunchDaemons should be silently accepted. Keep it small
-	// — every entry is a deployment-trusted vendor.
+	// AllowedTeamIDs is the set of code-signing team IDs whose LaunchDaemon registrations are silently accepted. Keep it small
+	// — every entry is a deployment-trusted vendor (Munki, JumpCloud, Kandji, an in-house signing team, etc.).
 	AllowedTeamIDs map[string]struct{}
 }
 
@@ -53,64 +48,50 @@ func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1
 // the generated docs/detection-rules.md.
 func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "LaunchDaemon plist drop (/Library/LaunchDaemons write)",
-		Summary: "Flags a non-platform-binary write to any *.plist directly under /Library/LaunchDaemons.",
-		Description: "Detects the canonical system-domain persistence drop: writing a plist into " +
-			"`/Library/LaunchDaemons/`. Once that lands, the next `launchctl bootstrap system/<name>` (or a reboot) " +
-			"gives the attacker root-running persistence.\n\n" +
-			"Paired with `persistence_launchagent` — that rule catches user-domain LaunchAgent activation via " +
-			"`launchctl load`, this one catches the system-domain drop step. We catch this at the file-write rather " +
-			"than the activation step because LaunchDaemon activation is often deferred until reboot.\n\n" +
-			"To stay high-precision, writes by Apple-signed platform binaries (installd, system_installd, " +
-			"sysadminctl, package post-flight scripts) are skipped — they're the legitimate path. Non-Apple MDM " +
-			"agents (Munki, JumpCloud, Kandji's daemon) need their team ID allowlisted.",
+		Title:   "LaunchDaemon persistence (BTM daemon registration)",
+		Summary: "Flags a system-domain LaunchDaemon registered with Background Task Management by a non-Apple, non-allowlisted process.",
+		Description: "Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered " +
+			"with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a " +
+			"reboot) gives the attacker root-running persistence.\n\n" +
+			"Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so it " +
+			"catches the drop regardless of mechanism — including atomic temp-file+rename and `cp` by an Apple-signed " +
+			"binary, which a file-write rule misses.\n\n" +
+			"Paired with `persistence_launchagent` (user-domain LaunchAgents). To stay high-precision, registrations by " +
+			"Apple platform binaries, MDM-managed items, and allowlisted vendor team IDs are skipped.",
 		Severity:   api.SeverityHigh,
-		EventTypes: []string{"open"},
+		EventTypes: []string{"btm_launch_item_add"},
 		FalsePositives: []string{
-			"Non-Apple MDM agent installations dropping their own LaunchDaemon. Allowlist the agent's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
+			"Non-Apple vendor app installing its own LaunchDaemon (Docker, a VPN, an MDM agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
 			"Custom in-house pkg installers signed by your developer team — same allowlist applies.",
 		},
 		Limitations: []string{
-			"Atomic-rename writes (temp file + rename onto the destination) are missed; the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
-			"Drops via Apple platform binaries (e.g. `sudo cp` where cp is Apple-signed) are skipped here — pair with suspicious_exec for parent-shell visibility.",
+			"BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).",
+			"Registrations with no attributable instigator process (boot-time, launchd-internal) are skipped to stay high-precision.",
 		},
 		Config: []api.ConfigKnob{
 			{
 				EnvVar:      "EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST",
 				Type:        "csv-team-ids",
 				Default:     "",
-				Description: "Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose code-signed binaries may write to /Library/LaunchDaemons silently.",
+				Description: "Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose LaunchDaemon registrations are accepted silently.",
 			},
 		},
 	}
 }
 
-// launchDaemonPath matches a plist directly under /Library/LaunchDaemons. The trailing `[^/]+` excludes nested paths (e.g.
-// /Library/LaunchDaemons/foo/bar.plist isn't a real LaunchDaemon location) so the rule stays focused on the actual drop site.
-var launchDaemonPath = regexp.MustCompile(`^/Library/LaunchDaemons/[^/]+\.plist$`)
-
-// launchDaemonsBytes is the substring fast-path filter applied to the raw JSON payload before json.Unmarshal. ESF NOTIFY_OPEN
-// fires on every file open in the kernel — thousands per second on a busy host — and well over 99.99% of those opens never touch
-// /Library/LaunchDaemons. Skipping the JSON decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal
-// per open" to "one bytes.Contains per open". The substring can over-match (e.g. an open whose `path` happens to mention the directory
-// name elsewhere in the JSON), but launchDaemonPath.MatchString below tightens it to the canonical drop site, so the gate is purely an
-// optimisation, not a correctness check.
-var launchDaemonsBytes = []byte("/Library/LaunchDaemons/")
-
-// Bits 0 and 1 of the open(2) flags hold the access mode: O_RDONLY=0, O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits
-// means the file descriptor can be written. This matches the kernel's interpretation regardless of whether higher bits (O_CREAT,
-// O_TRUNC, O_APPEND, ...) are set, so a `cp -c` (which uses O_WRONLY|O_CREAT|O_TRUNC = 0x601 on Darwin) and a plain `cat > foo.plist`
-// (O_WRONLY|O_CREAT|O_TRUNC) both trip the check.
-const openAccessModeMask = 0x3
-
-type openPayload struct {
-	PID   int    `json:"pid"`
-	Path  string `json:"path"`
-	Flags int    `json:"flags"`
+// btmLaunchItemAddPayload mirrors the extension's btm_launch_item_add wire shape (schema/events.json). The rule reads item_type +
+// managed (the gate) and the instigator's code-signing (the precision filter); item_path / executable_path / instigator_pid are
+// surfaced in the finding.
+type btmLaunchItemAddPayload struct {
+	ItemType              string           `json:"item_type"`
+	ItemPath              string           `json:"item_path"`
+	ExecutablePath        string           `json:"executable_path"`
+	Managed               bool             `json:"managed"`
+	InstigatorPID         int              `json:"instigator_pid"`
+	InstigatorCodeSigning *codeSigningJSON `json:"instigator_code_signing"`
 }
 
-// codeSigningJSON mirrors the extension's CodeSigning struct on the wire. We only consume team_id + is_platform_binary; signing_id and
-// flags stay on the row but the rule doesn't read them.
+// codeSigningJSON mirrors the extension's CodeSigning wire struct. We only consume team_id + is_platform_binary.
 type codeSigningJSON struct {
 	TeamID           string `json:"team_id"`
 	IsPlatformBinary bool   `json:"is_platform_binary"`
@@ -135,68 +116,62 @@ func (r *PrivilegeLaunchdPlistWrite) Evaluate(
 func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	ctx context.Context, evt api.Event, s api.GraphReader,
 ) (*api.Finding, error) {
-	if evt.EventType != "open" {
+	if evt.EventType != "btm_launch_item_add" {
 		return nil, nil
 	}
-	// Substring fast-path: skip the JSON decode for the overwhelming majority of opens that don't touch /Library/LaunchDaemons at all.
-	// See launchDaemonsBytes for the rationale.
-	if !bytes.Contains(evt.Payload, launchDaemonsBytes) {
-		return nil, nil
-	}
-	var p openPayload
+	var p btmLaunchItemAddPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
-		// Malformed open events are noise from a misbehaving extension
-		// build, not a detection signal. Drop and move on.
+		// Malformed BTM events are noise from a misbehaving extension build, not a detection signal. Drop and move on.
 		return nil, nil
 	}
-	if !launchDaemonPath.MatchString(p.Path) {
+	// System-domain LaunchDaemons only (T1543.004). LaunchAgents / login items are other techniques, handled elsewhere.
+	if p.ItemType != "daemon" {
 		return nil, nil
 	}
-	if p.Flags&openAccessModeMask == 0 {
-		// Read-only open. Tools like `plutil -p` enumerate plists
-		// constantly; firing on those would bury operators in noise.
+	// MDM-managed daemons are operator-deployed by definition.
+	if p.Managed {
 		return nil, nil
 	}
-
-	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
-	if err != nil {
-		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
-	}
-	if proc == nil {
-		// Defensive: the open event landed before the writer's exec row materialised. Same race as credential_keychain_dump;
-		// the processor loop normally lands the row first, so this is a guard, not a regular drop path.
+	// No attributable instigator → cannot confirm a non-Apple writer; skip to stay high-precision (matches the old rule's
+	// "no process row → no finding" behaviour).
+	if p.InstigatorCodeSigning == nil {
 		return nil, nil
 	}
-	if r.allowed(proc.CodeSigning) {
+	if r.allowed(*p.InstigatorCodeSigning) {
 		return nil, nil
 	}
 
+	// Best-effort process-tree link: correlate the instigator PID to a process row for the finding's ProcessID. The DECISION
+	// above does not depend on this (the instigator's signing rides inline), so a missing row only costs the UI link, never
+	// the detection — unlike the old open-based rule, where a missing row dropped the finding entirely.
+	var processID int64
+	if proc, err := s.GetProcessByPID(ctx, evt.HostID, p.InstigatorPID, evt.TimestampNs); err != nil {
+		return nil, fmt.Errorf("get process pid %d: %w", p.InstigatorPID, err)
+	} else if proc != nil {
+		processID = proc.ID
+	}
+
+	writer := p.ExecutablePath
+	if writer == "" {
+		writer = fmt.Sprintf("pid %d", p.InstigatorPID)
+	}
 	return &api.Finding{
 		HostID:   evt.HostID,
 		RuleID:   r.ID(),
 		Severity: api.SeverityHigh,
-		Title:    "LaunchDaemon plist drop",
+		Title:    "LaunchDaemon persistence",
 		Description: fmt.Sprintf(
-			"%s wrote %s — non-Apple persistence drop in system LaunchDaemons (MITRE T1543.004)",
-			proc.Path, p.Path,
+			"%s registered system LaunchDaemon %s — non-Apple persistence (MITRE T1543.004)",
+			writer, p.ItemPath,
 		),
-		ProcessID: proc.ID,
+		ProcessID: processID,
 		EventIDs:  []string{evt.EventID},
 	}, nil
 }
 
-// allowed returns true when the writing process's code-signing identity is on the operator's allowlist or is a platform binary.
-// Both branches short-circuit the finding. NullRawJSON is a json.RawMessage alias; both an empty slice (DB NULL → api.NullRawJSON.Scan
-// zeros it) and the literal JSON value `null` (4 bytes) mean "no code_signing on the process row" — typically an unsigned binary,
-// which we treat as in-scope so the finding fires.
-func (r *PrivilegeLaunchdPlistWrite) allowed(raw api.NullRawJSON) bool {
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return false
-	}
-	var cs codeSigningJSON
-	if err := json.Unmarshal(raw, &cs); err != nil {
-		return false
-	}
+// allowed returns true when the instigator's code-signing identity is a platform binary or on the operator's team-ID allowlist —
+// both short-circuit the finding.
+func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON) bool {
 	if cs.IsPlatformBinary {
 		return true
 	}

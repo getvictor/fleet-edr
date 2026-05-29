@@ -1,0 +1,16 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-noinst",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6400,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "daemon",
+        "item_path": "/Library/LaunchDaemons/com.bootitem.plist",
+        "managed": false,
+        "instigator_pid": 0
+      }
+    }
+  ]
+}
