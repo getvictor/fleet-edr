@@ -88,7 +88,7 @@ jobs:
       # Install task so the CI entry point matches what developers run locally.
       # Keeps `task lint:go` as the single source of truth for how to invoke
       # golangci-lint across the project (paths, build tags, flags).
-      - uses: go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
+      - uses: go-task/setup-task@01a4adf9db2d14c1de7a560f09170b6e0df736aa # v2.1.0
         with:
           version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -102,7 +102,7 @@ jobs:
       # is patch-version-specific; a floating v2.11 can resolve to a newer patch
       # whose API has drifted, which surfaces only when `task lint:install` calls
       # `golangci-lint custom`.
-      - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+      - uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
           version: v2.11.3
           install-only: "true"
