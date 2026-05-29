@@ -11,7 +11,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 extension ESFSubscriber {
     func handleOpen(_ msg: es_message_t) {
         let pid = audit_token_to_pid(msg.process.pointee.audit_token)
-        let path = String(cString: msg.event.open.file.pointee.path.data)
+        let path = esTokenString(msg.event.open.file.pointee.path)
         let flags = msg.event.open.fflag
 
         let payload = OpenPayload(pid: pid, path: path, flags: Int(flags))
@@ -35,12 +35,12 @@ extension ESFSubscriber {
         switch create.destination_type {
         case ES_DESTINATION_TYPE_NEW_PATH:
             // New file: ES reports the parent directory and the new filename separately; join them.
-            let dir = String(cString: create.destination.new_path.dir.pointee.path.data)
+            let dir = esTokenString(create.destination.new_path.dir.pointee.path)
             let filename = esTokenString(create.destination.new_path.filename)
             path = dir.hasSuffix("/") ? dir + filename : dir + "/" + filename
         case ES_DESTINATION_TYPE_EXISTING_FILE:
             // Pre-existing file clobbered via O_CREAT; ES resolves the full path directly.
-            path = String(cString: create.destination.existing_file.pointee.path.data)
+            path = esTokenString(create.destination.existing_file.pointee.path)
         default:
             return
         }
