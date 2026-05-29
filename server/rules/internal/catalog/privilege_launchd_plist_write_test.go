@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,20 @@ func (stubGraphReader) GetChildProcesses(context.Context, string, int, api.TimeR
 	return nil, nil
 }
 func (stubGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process, error) {
+	return nil, nil
+}
+
+// errGraphReader returns an error from GetProcessByPID, to prove the rule's best-effort process correlation does NOT
+// abort Evaluate (which would drop every finding for the whole batch).
+type errGraphReader struct{}
+
+func (errGraphReader) GetProcessByPID(context.Context, string, int, int64) (*api.Process, error) {
+	return nil, errors.New("graph unavailable")
+}
+func (errGraphReader) GetChildProcesses(context.Context, string, int, api.TimeRange) ([]api.Process, error) {
+	return nil, nil
+}
+func (errGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process, error) {
 	return nil, nil
 }
 
@@ -122,6 +137,28 @@ func TestPrivilegeLaunchdPlistWrite_FiresWithoutProcessRow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "decision uses inline instigator signing; a missing process row must not drop the finding")
 	assert.Equal(t, int64(0), findings[0].ProcessID, "best-effort process link is 0 when the row is absent")
+}
+
+// TestPrivilegeLaunchdPlistWrite_ProcessLookupErrorStillFires pins that process-tree correlation is TRULY best-effort: a
+// GetProcessByPID error must not abort Evaluate (the engine swallows rule errors, so that would silently drop every finding
+// for the batch). The finding fires with ProcessID == 0.
+func TestPrivilegeLaunchdPlistWrite_ProcessLookupErrorStillFires(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := &PrivilegeLaunchdPlistWrite{}
+
+	evt := api.Event{
+		EventID:     "ldp-err",
+		HostID:      "fixture-host",
+		TimestampNs: 1,
+		EventType:   "btm_launch_item_add",
+		Payload: json.RawMessage(`{"item_type":"daemon","item_path":"/Library/LaunchDaemons/com.x.plist",` +
+			`"managed":false,"instigator_pid":4242,"instigator_code_signing":{"team_id":"","is_platform_binary":false}}`),
+	}
+	findings, err := r.Evaluate(ctx, []api.Event{evt}, errGraphReader{})
+	require.NoError(t, err, "a GetProcessByPID error must not abort Evaluate")
+	require.Len(t, findings, 1, "best-effort correlation error must not drop the finding")
+	assert.Equal(t, int64(0), findings[0].ProcessID)
 }
 
 // TestBtmLaunchItemAddPayload_RoundTrip is the wire round-trip PBT (CLAUDE.md: new wire struct → Marshal ∘ Unmarshal == identity)

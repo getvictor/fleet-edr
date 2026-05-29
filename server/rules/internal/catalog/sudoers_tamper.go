@@ -93,9 +93,9 @@ var sudoersPath = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`
 // open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
 var sudoersBytes = []byte("/etc/sudoers")
 
-// sudoersOpenPayload mirrors the open event shape we care about. Local to this rule rather than a shared package symbol so the
-// privilege_launchd_plist_write rule (in flight on another branch) can keep its own copy without merge collisions; both can dedupe
-// once both rules are on main.
+// sudoersOpenPayload mirrors the open event shape we care about. Local to this rule: the sibling
+// privilege_launchd_plist_write rule no longer consumes open events (it keys on BTM registration per ADR-0008), so
+// there is no shared open-payload type to extract. The identical Evaluate fan-out is shared via evalEachEvent.
 type sudoersOpenPayload struct {
 	PID   int    `json:"pid"`
 	Path  string `json:"path"`
@@ -130,17 +130,7 @@ const sudoersWriteIntentMask = 0x400 | 0x8 | 0x200
 func (r *SudoersTamper) Evaluate(
 	ctx context.Context, events []api.Event, s api.GraphReader,
 ) ([]api.Finding, error) {
-	var findings []api.Finding
-	for _, evt := range events {
-		f, err := r.evalEvent(ctx, evt, s)
-		if err != nil {
-			return nil, err
-		}
-		if f != nil {
-			findings = append(findings, *f)
-		}
-	}
-	return findings, nil
+	return evalEachEvent(ctx, events, s, r.evalEvent)
 }
 
 func (r *SudoersTamper) evalEvent(

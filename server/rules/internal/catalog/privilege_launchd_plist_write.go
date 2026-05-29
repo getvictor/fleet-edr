@@ -100,17 +100,7 @@ type codeSigningJSON struct {
 func (r *PrivilegeLaunchdPlistWrite) Evaluate(
 	ctx context.Context, events []api.Event, s api.GraphReader,
 ) ([]api.Finding, error) {
-	var findings []api.Finding
-	for _, evt := range events {
-		f, err := r.evalEvent(ctx, evt, s)
-		if err != nil {
-			return nil, err
-		}
-		if f != nil {
-			findings = append(findings, *f)
-		}
-	}
-	return findings, nil
+	return evalEachEvent(ctx, events, s, r.evalEvent)
 }
 
 func (r *PrivilegeLaunchdPlistWrite) evalEvent(
@@ -144,11 +134,13 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	// Best-effort process-tree link: correlate the instigator PID to a process row for the finding's ProcessID. The DECISION
 	// above does not depend on this (the instigator's signing rides inline), so a missing row only costs the UI link, never
 	// the detection — unlike the old open-based rule, where a missing row dropped the finding entirely.
+	// Best-effort process-tree link only: the DECISION rode inline above, so neither a missing row nor a lookup error
+	// may drop the finding. Skip the query for an invalid/zero instigator PID (kernel task, exited, unattributed).
 	var processID int64
-	if proc, err := s.GetProcessByPID(ctx, evt.HostID, p.InstigatorPID, evt.TimestampNs); err != nil {
-		return nil, fmt.Errorf("get process pid %d: %w", p.InstigatorPID, err)
-	} else if proc != nil {
-		processID = proc.ID
+	if p.InstigatorPID > 0 {
+		if proc, err := s.GetProcessByPID(ctx, evt.HostID, p.InstigatorPID, evt.TimestampNs); err == nil && proc != nil {
+			processID = proc.ID
+		}
 	}
 
 	writer := p.ExecutablePath

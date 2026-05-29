@@ -447,9 +447,7 @@ final class ESFSubscriber: Sendable {
         return args
     }
 
-    // Internal (not private) so the BTM handler split into ESFSubscriber+BTM.swift can extract the instigator's
-    // code-signing - same module-internal sharing rationale as `serializer`.
-    func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
+    private func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
         let teamID = process.team_id.data.map { String(cString: $0) }
         let signingID = process.signing_id.data.map { String(cString: $0) }
 

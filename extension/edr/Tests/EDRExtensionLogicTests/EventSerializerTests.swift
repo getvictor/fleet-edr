@@ -99,6 +99,37 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertTrue(json.contains("\"snapshot\":true"), "startup-snapshot exec must carry snapshot:true, got: \(json)")
     }
 
+    func testBtmLaunchItemAddPayloadRoundTripAndWireKeys() throws {
+        // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes, with a present-but-unsigned
+        // instigator (empty team/signing, is_platform_binary=false) so the server distinguishes it from "no instigator".
+        let payload = BtmLaunchItemAddPayload(
+            itemType: "daemon",
+            itemPath: "/Library/LaunchDaemons/com.evil.persistence.plist",
+            executablePath: "/tmp/dropper",
+            legacy: true,
+            managed: false,
+            uid: 0,
+            instigatorPid: 4242,
+            instigatorCodeSigning: CodeSigning(teamID: "", signingID: "", flags: 0, isPlatformBinary: false)
+        )
+        let encoded = try encoder.encode(payload)
+        let json = String(data: encoded, encoding: .utf8) ?? ""
+        for key in ["\"item_type\":\"daemon\"", "\"item_path\":", "\"executable_path\":",
+                    "\"managed\":false", "\"instigator_pid\":4242", "\"instigator_code_signing\":",
+                    "\"is_platform_binary\":false"] {
+            XCTAssertTrue(json.contains(key), "missing wire key \(key) in: \(json)")
+        }
+        let decoded = try decoder.decode(BtmLaunchItemAddPayload.self, from: encoded)
+        XCTAssertEqual(decoded.itemType, payload.itemType)
+        XCTAssertEqual(decoded.itemPath, payload.itemPath)
+        XCTAssertEqual(decoded.executablePath, payload.executablePath)
+        XCTAssertEqual(decoded.legacy, payload.legacy)
+        XCTAssertEqual(decoded.managed, payload.managed)
+        XCTAssertEqual(decoded.uid, payload.uid)
+        XCTAssertEqual(decoded.instigatorPid, payload.instigatorPid)
+        XCTAssertEqual(decoded.instigatorCodeSigning?.isPlatformBinary, false)
+    }
+
     func testExecPayloadOmitsOptionalSigningAndHashes() throws {
         // Unsigned binaries lack code_signing / sha256 / cdhash. Verify the JSON
         // omits the keys entirely rather than emitting nulls -- the server's

@@ -24,7 +24,11 @@ extension ESFSubscriber {
         case ES_BTM_ITEM_TYPE_LOGIN_ITEM: itemType = "login_item"
         case ES_BTM_ITEM_TYPE_AGENT: itemType = "agent"
         case ES_BTM_ITEM_TYPE_DAEMON: itemType = "daemon"
-        default: itemType = "unknown"
+        default:
+            // A future es_btm_item_type_t we don't map yet. "unknown" is in the wire schema enum; log it so the gap is
+            // observable rather than silently dropped (the server filters to "daemon" today).
+            itemType = "unknown"
+            logger.error("btm_launch_item_add unmapped es_btm_item_type_t rawValue=\(item.item_type.rawValue)")
         }
 
         let itemPath = esTokenString(item.item_url)
@@ -34,8 +38,18 @@ extension ESFSubscriber {
         var instigatorPID: pid_t = 0
         var instigatorCodeSigning: CodeSigning?
         if let instigator = event.instigator {
-            instigatorPID = audit_token_to_pid(instigator.pointee.audit_token)
-            instigatorCodeSigning = extractCodeSigning(from: instigator.pointee)
+            let proc = instigator.pointee
+            instigatorPID = audit_token_to_pid(proc.audit_token)
+            // Build signing inline rather than via extractCodeSigning (which returns nil for unsigned binaries): a
+            // PRESENT instigator must always carry a CodeSigning so the server can distinguish "unsigned writer"
+            // (fires - the prime attacker case) from "no instigator" (skipped). team_id / signing_id are empty for an
+            // unsigned writer; is_platform_binary comes straight from ESF.
+            instigatorCodeSigning = CodeSigning(
+                teamID: esTokenString(proc.team_id),
+                signingID: esTokenString(proc.signing_id),
+                flags: proc.codesigning_flags,
+                isPlatformBinary: proc.is_platform_binary
+            )
         }
 
         let payload = BtmLaunchItemAddPayload(

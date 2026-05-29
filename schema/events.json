@@ -54,8 +54,8 @@
       "properties": {
         "item_type": {
           "type": "string",
-          "enum": ["user_item", "app", "login_item", "agent", "daemon"],
-          "description": "BTM launch-item type (es_btm_item_type_t). 'daemon' = system-domain LaunchDaemon (T1543.004), 'agent' = LaunchAgent, 'login_item' = login item."
+          "enum": ["user_item", "app", "login_item", "agent", "daemon", "unknown"],
+          "description": "BTM launch-item type (es_btm_item_type_t). 'daemon' = system-domain LaunchDaemon (T1543.004), 'agent' = LaunchAgent, 'login_item' = login item. 'unknown' is the extension's fallback for a future es_btm_item_type_t case it does not yet map."
         },
         "item_path": { "type": "string", "description": "Filesystem path of the launch item (the plist), from es_btm_launch_item_t.item_url." },
         "executable_path": { "type": "string", "description": "Optional. POSIX executable path from the launchd plist, when available." },
