@@ -42,7 +42,7 @@ time, not a single mutable "current view".
 | [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted |
 | [0006](0006-otel-only-metrics.md) | OpenTelemetry is the only metrics pipeline; no Prometheus /metrics | Accepted |
 | [0007](0007-xpc-peer-validation-libxpc-only.md) | XPC peer validation via libxpc code-signing requirement; no audit_token layer | Accepted |
-| [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Proposed |
+| [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Accepted |
 
 ## Tooling
 

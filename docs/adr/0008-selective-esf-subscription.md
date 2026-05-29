@@ -40,10 +40,13 @@ Two ESF mechanics constrain the design and rule out the naive fixes:
    `NOTIFY_OPEN` (the call returns success but events keep flowing). So there is no clean "keep the open firehose but mute
    the noise per path." The only levers for OPEN are whole-path muting (which also mutes exec for that path) or not
    subscribing to OPEN.
-2. **Target-path muting + inversion is global across event types, and EXEC's target is the executable.** Inverting
-   target-path muting to "select only `/Library/LaunchDaemons`" would also mute `AUTH_EXEC` for every exec outside those
-   dirs, breaking exec authorization and Application Control. Per-event-type target muting (`es_mute_path_events`) for
-   CREATE/WRITE/RENAME avoids this, since those events honor per-event muting (unlike OPEN).
+2. **Target-path muting + inversion is client-global, and EXEC's target is the executable.** `es_invert_muting`
+   inverts a mute type (e.g. target-path) across the *entire* `es_client_t`, and `es_mute_path_events` only mutes by
+   the *process* path, not the target path - so there is no per-event-type target-path muting on a single client.
+   Inverting target-path muting to "select only `/Library/LaunchDaemons`" on a client that also handles `AUTH_EXEC`
+   would filter `AUTH_EXEC` (whose target is the executable) by that same list, breaking exec authorization and
+   Application Control. The only way to get target-path-selective file monitoring without touching `AUTH_EXEC` is a
+   **dedicated second ES client** for file events (target-path inversion lives on that client alone).
 
 The project targets macOS 13+ (ADR-0002), so BTM events and all muting/inversion APIs are available.
 
@@ -56,9 +59,15 @@ The extension moves to **selective, source-side ESF subscription**:
    replacing the file-write proxy in `privilege_launchd_plist_write`. BTM is lower-volume and catches drops the
    file-write rule misses (atomic temp-file + rename, `cp` by a platform binary).
 3. **For file-tamper rules with no BTM equivalent (`sudoers_tamper`): subscribe to `NOTIFY_CREATE` / `NOTIFY_WRITE`
-   (+ `RENAME`) with per-event-type inverted TARGET-path muting scoped to the sensitive directories only.** Never global
-   target-path inversion (it would mute `AUTH_EXEC`). Call `es_unmute_all_target_paths` before inverting.
-4. **Keep `EXEC` / `FORK` / `EXIT` as the process-graph backbone**, unchanged.
+   (+ `RENAME`) on a DEDICATED second ES client with inverted TARGET-path muting scoped to the sensitive directories
+   only** (`es_unmute_all_target_paths`, mute the watched dirs, then `es_invert_muting` for target-path on that client).
+   Never invert target-path muting on the primary client - it would mute `AUTH_EXEC`.
+4. **Keep `AUTH_EXEC` / `NOTIFY_EXEC` / `FORK` / `EXIT` (and BTM) on the primary client**, with no target-path inversion.
+
+This yields **two ES clients**: a primary client (process graph + AUTH_EXEC + BTM, normal muting) and a dedicated
+file-tamper client (CREATE/WRITE/RENAME, target-path inverted). Two clients is the only way to combine target-path-
+selective file monitoring with unfiltered exec authorization, and it cleanly separates blocking-auth from high-volume
+file telemetry - standard practice for mature ESF sensors.
 
 The watched-path set for (3) starts **hardcoded in the extension**, documented as mirroring the rules' target paths. A
 server-pushed set (riding the existing Application Control XPC snapshot) is the intended end-state once the set grows;
@@ -87,6 +96,9 @@ that is a separate decision, not this ADR.
   unit-testable (Xcode-only target).
 - New extension code + wire surface: a BTM payload struct, a corpus fixture, and a new/changed server rule keyed on the
   BTM event rather than `open`.
+- **Two ES clients to manage** (lifecycle, subscribe sets, mute configs, and the per-client AUTH deadline budget) instead
+  of one. The split is forced by the client-global inversion constraint above; it is standard ESF-sensor practice but is
+  more moving parts than today's single client.
 
 ## Alternatives considered
 
