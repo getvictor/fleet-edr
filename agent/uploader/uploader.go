@@ -169,7 +169,10 @@ func (u *Uploader) drainUntilCaughtUp(ctx context.Context) {
 			return
 		}
 		n, err := u.drainBatch(ctx)
-		if err != nil || n < u.cfg.BatchSize {
+		// n == 0 terminates on an empty queue regardless of BatchSize. BatchSize is validated positive in
+		// production, but the explicit check keeps the loop from spinning maxBatchesPerTick times if it is ever
+		// constructed with a misconfigured BatchSize <= 0 (where n < BatchSize would be false for an empty dequeue).
+		if err != nil || n == 0 || n < u.cfg.BatchSize {
 			return
 		}
 	}
