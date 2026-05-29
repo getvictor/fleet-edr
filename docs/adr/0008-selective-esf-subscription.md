@@ -1,6 +1,6 @@
 # 0008. Selective Endpoint Security subscription: BTM for persistence, no broad NOTIFY_OPEN
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-05-29
 - Deciders: getvictor
 
