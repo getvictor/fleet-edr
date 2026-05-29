@@ -27,7 +27,7 @@ extension ESFSubscriber {
     /// miss the canonical "drop a new file" attack without it. We re-emit it as an `open` event with synthetic
     /// write-mode flags so those rules fire unchanged and the server keeps the path filtering -- the same division of
     /// labour as handleOpen (the extension forwards everything; the rules decide). NOTIFY_CREATE is high-volume like
-    /// NOTIFY_OPEN; extension-side es_mute_path muting for both is tracked as a follow-up.
+    /// NOTIFY_OPEN; extension-side es_mute_path muting for both is tracked as a follow-up (#301).
     func handleCreate(_ msg: es_message_t) {
         let pid = audit_token_to_pid(msg.process.pointee.audit_token)
         let create = msg.event.create
