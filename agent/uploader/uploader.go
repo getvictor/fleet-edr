@@ -18,8 +18,15 @@ import (
 )
 
 const (
-	// defaultBatchSize is the per-tick upload cap.
+	// defaultBatchSize is the per-batch dequeue cap.
 	defaultBatchSize = 100
+
+	// maxBatchesPerTick bounds the catch-up burst within a single tick. When the queue holds a backlog (e.g. after an
+	// event storm), a fixed one-batch-per-tick loop drains at only BatchSize/Interval events/sec and can take many
+	// minutes to catch up, pushing detection latency well past SLA because fresh events sit behind the backlog in the
+	// FIFO queue. Draining back-to-back while batches come back full lets the uploader run at server-limited speed; the
+	// cap keeps a deep backlog from starving shutdown or monopolising a degraded link.
+	maxBatchesPerTick = 50
 
 	// defaultMaxRetries is the per-batch retry cap before the uploader gives
 	// up and falls through to the next drain tick.
@@ -147,7 +154,26 @@ func (u *Uploader) Run(ctx context.Context) error {
 			cancel()
 			return ctx.Err()
 		case <-ticker.C:
-			_ = u.drainOnce(ctx)
+			u.drainUntilCaughtUp(ctx)
+		}
+	}
+}
+
+// drainUntilCaughtUp drains batches back-to-back until the queue is caught up (a dequeue returns fewer than BatchSize
+// rows), an error occurs (back off to the next tick), or the per-tick cap is hit. A full batch means more events are
+// almost certainly waiting, so this lets the uploader catch up at server-limited speed under backlog while still idling
+// at a single short batch per tick once drained.
+func (u *Uploader) drainUntilCaughtUp(ctx context.Context) {
+	for range maxBatchesPerTick {
+		if ctx.Err() != nil {
+			return
+		}
+		n, err := u.drainBatch(ctx)
+		// n == 0 terminates on an empty queue regardless of BatchSize. BatchSize is validated positive in
+		// production, but the explicit check keeps the loop from spinning maxBatchesPerTick times if it is ever
+		// constructed with a misconfigured BatchSize <= 0 (where n < BatchSize would be false for an empty dequeue).
+		if err != nil || n == 0 || n < u.cfg.BatchSize {
+			return
 		}
 	}
 }
@@ -158,16 +184,25 @@ func (u *Uploader) Drain(ctx context.Context) error {
 	return u.drainOnce(ctx)
 }
 
+// drainOnce uploads a single batch, returning only the error. Retained as the error-only entrypoint for Drain and the
+// shutdown-drain path; drainUntilCaughtUp uses drainBatch when it needs the dequeued count.
 func (u *Uploader) drainOnce(ctx context.Context) error {
+	_, err := u.drainBatch(ctx)
+	return err
+}
+
+// drainBatch dequeues and uploads a single batch, returning the number of events dequeued so callers can tell a full
+// batch (more likely waiting) from a short one (queue caught up). An empty queue returns (0, nil).
+func (u *Uploader) drainBatch(ctx context.Context) (int, error) {
 	batch, err := u.queue.DequeueBatch(ctx, u.cfg.BatchSize)
 	if err != nil {
 		u.logger.ErrorContext(ctx, "uploader dequeue", "err", err)
-		return err
+		return 0, err
 	}
 	if len(batch) == 0 {
-		return nil
+		return 0, nil
 	}
-	return u.uploadBatch(ctx, batch)
+	return len(batch), u.uploadBatch(ctx, batch)
 }
 
 // uploadBatch is the per-batch send path. Marshals the in-memory events, POSTs the body, and dispatches on the

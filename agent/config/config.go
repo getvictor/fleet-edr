@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	defaultXPCService    = "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc"
-	defaultNetXPCService = "group.com.fleetdm.edr.networkextension"
+	defaultXPCService = "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc"
+	// Team-prefixed (globally resolvable) Mach service. An app-group-scoped name (group.*) is only reachable by
+	// processes holding that app-group entitlement, which the agent does not, so the agent could never connect.
+	defaultNetXPCService = "FDG8Q7N4CC.com.fleetdm.edr.networkextension.xpc"
 	defaultQueueDBPath   = "/var/db/fleet-edr/events.db"
 
 	// defaultPruneAge is the default for EDR_PRUNE_AGE: drop uploaded events

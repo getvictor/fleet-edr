@@ -4,7 +4,13 @@
 <dict>
 	<key>MachServices</key>
 	<dict>
+		<!-- App-group-scoped service the NetworkExtension framework requires (matches NEMachServiceName below). -->
 		<key>group.com.fleetdm.edr.networkextension</key>
+		<true/>
+		<!-- Team-prefixed, globally resolvable Mach service the Go agent connects to for the event channel. The
+		     app-group name above is only reachable by processes holding the app-group entitlement, which the agent
+		     does not; the team-prefixed name is reachable by any peer that satisfies the listener's code-signing pin. -->
+		<key>FDG8Q7N4CC.com.fleetdm.edr.networkextension.xpc</key>
 		<true/>
 	</dict>
 	<key>NEProviderClasses</key>

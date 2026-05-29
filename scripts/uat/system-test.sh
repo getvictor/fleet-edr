@@ -229,22 +229,22 @@ if [[ -z "$SCENARIO_ID" ]]; then
 fi
 uat_log driver "loaded scenario_id=$SCENARIO_ID within_seconds=$SCENARIO_WINDOW"
 
-# Hostname used to look up the VM's host_id on the server. The scenarios use
-# `uname -n` on the VM to seed the agent's hostname; we mirror that here so
-# the lookup matches.
-VM_HOSTNAME="${UAT_VM_HOSTNAME:-$(uat_ssh "$VM_SSH_TARGET" "uname -n" | tr -d '[:space:]' || echo "")}"
-if [[ -z "$VM_HOSTNAME" ]]; then
+# The agent enrols under the Mac's hardware UUID (IOPlatformUUID), and
+# /api/hosts (api.HostSummary) is keyed by that host_id with NO hostname field,
+# so we resolve the UUID on the VM and match the enrolment poll on host_id.
+VM_HOST_ID="${UAT_VM_HOST_ID:-$(uat_ssh "$VM_SSH_TARGET" "ioreg -rd1 -c IOPlatformExpertDevice | awk '/IOPlatformUUID/{print \$NF}' | tr -dc '[:alnum:]-'" || echo "")}"
+if [[ -z "$VM_HOST_ID" ]]; then
   if [[ "$UAT_DRY_RUN" == "1" ]]; then
-    VM_HOSTNAME="dry-run-host.local"
+    VM_HOST_ID="00000000-0000-0000-0000-DRYRUNDRYRUN"
   else
-    uat_log driver "could not resolve VM hostname via uname -n; set UAT_VM_HOSTNAME explicitly"
+    uat_log driver "could not resolve VM hardware UUID via ioreg; set UAT_VM_HOST_ID explicitly"
     exit 1
   fi
 fi
-uat_log driver "polling for enrolment of host hostname=$VM_HOSTNAME"
-HOST_ID=$(uat_wait_for_host_enrolment "$VM_HOSTNAME" 30 || true)
+uat_log driver "polling for enrolment of host host_id=$VM_HOST_ID"
+HOST_ID=$(uat_wait_for_host_enrolment "$VM_HOST_ID" 30 || true)
 if [[ -z "$HOST_ID" ]]; then
-  uat_log driver "host $VM_HOSTNAME did not enrol within 30s"
+  uat_log driver "host $VM_HOST_ID did not enrol within 30s"
   exit 2
 fi
 uat_log driver "host enrolled host_id=$HOST_ID"
