@@ -1,11 +1,18 @@
 # T1543.004 Create or Modify System Process: Launch Daemon.
 #
-# Synthetic dropper (a non-platform-binary, here at /tmp/raw_dropper) writes a
-# plist under /Library/LaunchDaemons/. The privilege_launchd_plist_write rule
-# fires on the open event with write-mode flags against a LaunchDaemons path
-# AND the writer process is unsigned / non-Apple-platform. Mirrors the
-# positive_unsigned_writer fixture.
-name: "T1543.004 launchd plist write from /tmp/raw_dropper"
+# A non-platform-binary instigator (/tmp/raw_dropper) registers a system
+# LaunchDaemon, surfaced via Background Task Management
+# (ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, item_type=daemon). The
+# privilege_launchd_plist_write rule fires on the unmanaged daemon registration
+# by a non-Apple, non-allowlisted instigator (ADR-0008). Mirrors the
+# positive_daemon_unsigned_instigator fixture.
+#
+# NOTE (L5/VM to confirm): this scenario asserts the RULE CONTRACT — the BTM
+# instigator is the non-platform dropper. The real BTM instigator for a legacy
+# `launchctl bootstrap` may instead be launchctl/launchd (a platform binary);
+# the edr-qa run must confirm the attribution and, if it differs, the rule's
+# discriminator moves from the instigator to the daemon executable.
+name: "T1543.004 LaunchDaemon registration by /tmp/raw_dropper"
 host:
   id: AAAA1543-0004-0000-0000-000000000004
   hostname: efficacy-t1543-004.local
@@ -25,7 +32,10 @@ timeline:
     uid: 0
     gid: 0
   - at: 20ms
-    type: open
-    pid: 4544
-    path: /Library/LaunchDaemons/com.synth.persistence.plist
-    flags: 1537
+    type: btm_launch_item_add
+    item_type: daemon
+    item_path: /Library/LaunchDaemons/com.synth.persistence.plist
+    executable_path: /tmp/raw_dropper
+    instigator_pid: 4544
+    instigator_team_id: ""
+    instigator_is_platform_binary: false

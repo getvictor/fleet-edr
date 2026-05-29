@@ -211,18 +211,16 @@ step_credential_keychain_dump() {
 }
 
 step_privilege_launchd_plist_write() {
-  step_header "LaunchDaemon plist write by non-platform binary" "privilege_launchd_plist_write"
-  # Rule trigger: write-mode open() to /Library/LaunchDaemons/<name>.plist
-  # by a process whose code-signing is_platform_binary=false AND whose
-  # team_id is not in EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST. cp / dd / tee /
-  # /bin/bash are all platform binaries and DO NOT fire the rule. We
-  # build a tiny Go writer in the runbook's working dir; an unsigned local
-  # binary is the closest stand-in for "an attacker dropper" without
-  # smuggling actual malware.
+  step_header "LaunchDaemon registration via BTM" "privilege_launchd_plist_write"
+  # Rule trigger (ADR-0008): ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD with item_type=daemon, surfaced when launchd
+  # registers a system LaunchDaemon. We write a plist into /Library/LaunchDaemons, `launchctl bootstrap` it (the BTM
+  # trigger), then bootout + remove it. The daemon's executable is this locally-built, non-Apple binary, run with a
+  # `daemon` arg that no-ops so launchd launching it cannot recurse.
   #
-  # The rule itself ships in B3 round 2 (PR #38). On a server that
-  # predates that PR the dropper still runs cleanly, but no alert
-  # fires — the runbook step is forward-compatible.
+  # IMPORTANT: BTM fires at REGISTRATION, not at the file write — a plain write+remove (the pre-ADR-0008 behaviour) no
+  # longer triggers detection. The BTM instigator for a `launchctl bootstrap` is expected to be launchctl/launchd; the
+  # rule's instigator-vs-executable discriminator is being confirmed on the edr-qa VM (see ADR-0008 and the efficacy
+  # scenario note).
   if ! command -v go >/dev/null 2>&1; then
     echo "[runbook] go not installed — skipping privilege_launchd_plist_write step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no Go toolchain on this host)")
@@ -233,25 +231,41 @@ step_privilege_launchd_plist_write() {
   cat > "$src" <<'GO'
 package main
 
-// Synthetic dropper for the EDR runbook. Writes a placeholder plist into
-// /Library/LaunchDaemons/ to exercise the privilege_launchd_plist_write
-// rule, then removes the file. Compiled locally so it lacks Apple's
-// platform-binary flag — that's the bit the rule actually keys on.
+// Synthetic LaunchDaemon-persistence dropper for the EDR runbook. Writes a plist into /Library/LaunchDaemons and
+// registers it with launchd (Background Task Management) to exercise privilege_launchd_plist_write (T1543.004), then
+// bootouts + removes it. Compiled locally so the daemon's executable lacks Apple's platform-binary flag.
 import (
 	"log"
 	"os"
+	"os/exec"
 )
 
 func main() {
-	const target = "/Library/LaunchDaemons/com.synthetic.edr-runbook.plist"
-	const body = `<?xml version="1.0" encoding="UTF-8"?>
+	// When launchd actually launches the registered daemon it runs us with the "daemon" arg; no-op so we never recurse.
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		return
+	}
+	const label = "com.synthetic.edr-runbook"
+	const target = "/Library/LaunchDaemons/" + label + ".plist"
+	self, err := os.Executable()
+	if err != nil {
+		log.Fatalf("executable path: %v", err)
+	}
+	body := `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.synthetic.edr-runbook</string>
+  <key>Label</key><string>` + label + `</string>
+  <key>ProgramArguments</key><array><string>` + self + `</string><string>daemon</string></array>
 </dict></plist>
 `
 	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
-		log.Fatalf("write: %v", err)
+		log.Fatalf("write plist: %v", err)
 	}
+	// Register with launchd -> emits NOTIFY_BTM_LAUNCH_ITEM_ADD (item_type=daemon), the persistence signal.
+	if out, e := exec.Command("/bin/launchctl", "bootstrap", "system", target).CombinedOutput(); e != nil {
+		log.Printf("bootstrap (non-fatal): %v: %s", e, out)
+	}
+	// Cleanup: unregister + remove so the host returns to a clean state.
+	_ = exec.Command("/bin/launchctl", "bootout", "system/"+label).Run()
 	if err := os.Remove(target); err != nil {
 		log.Printf("cleanup remove: %v", err)
 	}
@@ -263,13 +277,9 @@ GO
     return 0
   fi
   if [[ "$(id -u)" -ne 0 ]]; then
-    echo "[runbook] this step needs root to write into /Library/LaunchDaemons; trying sudo -n"
-    # -n (non-interactive) bails immediately when sudo would otherwise
-    # prompt for a password. The runbook is meant to be invoked over SSH
-    # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive
-    # password prompt would deadlock the entire script — every other step
-    # past this one would never run. Operators who need this step on a
-    # host without NOPASSWD can re-run the whole script under `sudo`.
+    echo "[runbook] this step needs root to register a LaunchDaemon; trying sudo -n"
+    # -n (non-interactive) bails immediately when sudo would otherwise prompt for a password. The runbook runs over SSH
+    # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive prompt would deadlock the whole script.
     if ! sudo -n "$bin"; then
       echo "[runbook] sudo -n unavailable or dropper failed — alert may not have fired"
       EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no NOPASSWD sudo)")
@@ -278,7 +288,7 @@ GO
   else
     "$bin" || echo "[runbook] dropper failed — alert may not have fired"
   fi
-  EXPECTED_ALERTS+=("privilege_launchd_plist_write — synthetic-dropper wrote /Library/LaunchDaemons/com.synthetic.edr-runbook.plist")
+  EXPECTED_ALERTS+=("privilege_launchd_plist_write — registered + removed LaunchDaemon com.synthetic.edr-runbook via launchctl bootstrap")
   return 0
 }
 
