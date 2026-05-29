@@ -21,7 +21,9 @@ private let fleetSelfAllowSigningIDs: Set<String> = [
 final class ESFSubscriber: Sendable {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private nonisolated(unsafe) var client: OpaquePointer!
-    private let serializer = EventSerializer()
+    // Internal (not private) so the file-event handlers split into ESFSubscriber+FileEvents.swift can reach it; that
+    // split keeps this file under SwiftLint's file_length / type_body_length caps (same rationale as CDHashHex.swift).
+    let serializer = EventSerializer()
     nonisolated(unsafe) var onEvent: ((Data) -> Void)?
 
     init() {
@@ -45,7 +47,11 @@ final class ESFSubscriber: Sendable {
             ES_EVENT_TYPE_NOTIFY_EXEC,  // notification: records allowed execs (fires after AUTH allows)
             ES_EVENT_TYPE_NOTIFY_FORK,
             ES_EVENT_TYPE_NOTIFY_EXIT,
-            ES_EVENT_TYPE_NOTIFY_OPEN
+            ES_EVENT_TYPE_NOTIFY_OPEN,
+            // Creating a NEW file fires NOTIFY_CREATE, not NOTIFY_OPEN, so write-to-sensitive-path rules keyed on
+            // `open` events (privilege_launchd_plist_write, sudoers_tamper) miss the canonical "drop a new file"
+            // attack without this. See handleCreate.
+            ES_EVENT_TYPE_NOTIFY_CREATE
         ]
 
         let subResult = es_subscribe(client, events, UInt32(events.count))
@@ -90,6 +96,8 @@ final class ESFSubscriber: Sendable {
             handleExit(msg)
         case ES_EVENT_TYPE_NOTIFY_OPEN:
             handleOpen(msg)
+        case ES_EVENT_TYPE_NOTIFY_CREATE:
+            handleCreate(msg)
         default:
             break
         }
@@ -419,19 +427,6 @@ final class ESFSubscriber: Sendable {
 
         if let data = serializer.serialize(eventType: "exit", payload: payload) {
             logger.debug("exit pid=\(pid) code=\(exitCode)")
-            onEvent?(data)
-        }
-    }
-
-    private func handleOpen(_ msg: es_message_t) {
-        let pid = audit_token_to_pid(msg.process.pointee.audit_token)
-        let path = String(cString: msg.event.open.file.pointee.path.data)
-        let flags = msg.event.open.fflag
-
-        let payload = OpenPayload(pid: pid, path: path, flags: Int(flags))
-
-        if let data = serializer.serialize(eventType: "open", payload: payload) {
-            logger.debug("open pid=\(pid) path=\(path)")
             onEvent?(data)
         }
     }
