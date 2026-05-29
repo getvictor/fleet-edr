@@ -11,7 +11,10 @@ private let peerCodeSigningRequirement = "anchor apple generic and certificate l
 /// Network events are broadcast to all connected peers as XPC dictionaries
 /// with a "data" key containing raw JSON bytes.
 final class XPCServer {
-    static let shared = XPCServer(serviceName: "group.com.fleetdm.edr.networkextension")
+    // Team-prefixed Mach service (globally resolvable), NOT the app-group-scoped name: the Go agent does not hold the
+    // app-group entitlement, so a group.* name is unreachable from it. The app-group name stays as NEMachServiceName in
+    // Info.plist for the NetworkExtension framework, which Apple requires to be app-group-scoped.
+    static let shared = XPCServer(serviceName: "FDG8Q7N4CC.com.fleetdm.edr.networkextension.xpc")
 
     private let serviceName: String
     private var listener: xpc_connection_t?

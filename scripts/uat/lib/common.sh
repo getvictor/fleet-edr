@@ -70,6 +70,26 @@ uat_ssh_args() {
     -o "UserKnownHostsFile=$known_hosts"
     -o ConnectTimeout=10
   )
+  # UAT_SSH_KEY pins a single identity. Without it, an operator with several
+  # keys loaded in ssh-agent offers them all and the VM cuts the connection
+  # past MaxAuthTries ("Too many authentication failures") before reaching the
+  # right one. IdentitiesOnly=yes restricts ssh to exactly this key.
+  if [[ -n "${UAT_SSH_KEY:-}" ]]; then
+    UAT_SSH_ARGS+=(-i "$UAT_SSH_KEY" -o IdentitiesOnly=yes)
+  fi
+  return 0
+}
+
+# uat_curl_args: populate UAT_CURL_ARGS with the curl flags shared by every
+# REST call. UAT_INSECURE=1 adds -k to skip TLS verification, for the local
+# flavour where the server is `task dev:server` with a self-signed cert the VM
+# does not trust (and whose SAN does not cover the host's LAN IP). Never set
+# UAT_INSECURE against a real release server.
+uat_curl_args() {
+  UAT_CURL_ARGS=(-sS --fail-with-body)
+  if [[ "${UAT_INSECURE:-0}" == "1" ]]; then
+    UAT_CURL_ARGS+=(-k)
+  fi
   return 0
 }
 
@@ -142,6 +162,7 @@ uat_server_warmup() {
   fi
 
   UAT_COOKIE_HEADER=(-H "Cookie: edr_session=$EDR_SESSION_COOKIE")
+  uat_curl_args
 
   # GET /api/session is session-protected; a successful response confirms the
   # cookie is valid AND returns the CSRF token in the body. A 401 here means
@@ -150,7 +171,7 @@ uat_server_warmup() {
   local body
   body="${UAT_TMPDIR:-/tmp}/session-body"
   local http_code
-  http_code=$(curl -sS --fail-with-body \
+  http_code=$(curl "${UAT_CURL_ARGS[@]}" \
     -o "$body" -w '%{http_code}' \
     "${UAT_COOKIE_HEADER[@]}" \
     "$EDR_SERVER_URL/api/session") || http_code=000
@@ -177,7 +198,8 @@ uat_server_get() {
     return 0
   fi
   local http_code
-  http_code=$(curl -sS --fail-with-body \
+  uat_curl_args
+  http_code=$(curl "${UAT_CURL_ARGS[@]}" \
     -o "$out" -w '%{http_code}' \
     "${UAT_COOKIE_HEADER[@]}" \
     "$EDR_SERVER_URL$path") || http_code=000
@@ -274,18 +296,19 @@ uat_wait_for_extension() {
   return 1
 }
 
-# uat_wait_for_host_enrolment <hostname> <within_seconds>: poll the server's
-# /api/hosts list until a host with the matching hostname (or hardware
+# uat_wait_for_host_enrolment <host_id> <within_seconds>: poll the server's
+# /api/hosts list until the host with the matching host_id (the Mac's hardware
 # UUID) appears. The driver uses this after PKG install to make sure the
 # agent actually enrolled rather than silently failing on a bad
 # enroll_secret. Returns the host's UUID on success via stdout.
 #
 # Response shape: /api/hosts writes []api.HostSummary directly to the body
 # (per server/detection/internal/operator/handler.go handleListHosts), so
-# the JSON root is a TOP-LEVEL array, NOT `{hosts: [...]}`. jq iterates
-# `.[]?` at the root.
+# the JSON root is a TOP-LEVEL array, NOT `{hosts: [...]}`. api.HostSummary is
+# {host_id, event_count, last_seen_ns} -- there is NO hostname field, so the
+# match is on host_id. jq iterates `.[]?` at the root.
 uat_wait_for_host_enrolment() {
-  local hostname="$1" within="$2"
+  local want_host_id="$1" within="$2"
   local deadline
   deadline=$(( $(date +%s) + within ))
   local body
@@ -293,8 +316,8 @@ uat_wait_for_host_enrolment() {
   while (( $(date +%s) < deadline )); do
     if uat_server_get "/api/hosts" "$body"; then
       local host_id
-      host_id=$(jq -r --arg h "$hostname" \
-        '.[]? | select(.hostname == $h) | .host_id' \
+      host_id=$(jq -r --arg h "$want_host_id" \
+        '.[]? | select(.host_id == $h) | .host_id' \
         "$body" | head -1)
       if [[ -n "$host_id" && "$host_id" != "null" ]]; then
         echo "$host_id"

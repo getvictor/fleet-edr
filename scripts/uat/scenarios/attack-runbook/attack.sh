@@ -43,6 +43,9 @@ uat_log attack-runbook "executing runbook on VM"
 # EDR_RUNBOOK_PACE_SECONDS=0 so the runbook fires the seven attacks back to
 # back. The system-test driver's polling window (120s per rule per
 # expected.yaml) absorbs the ingest + detection latency afterwards.
-uat_ssh "$UAT_VM_SSH_TARGET" "EDR_RUNBOOK_PACE_SECONDS=0 bash /tmp/attack-runbook.sh"
+# Prepend /usr/local/bin so the runbook's `command -v go` (privilege_launchd_plist_write step) finds a Go toolchain
+# installed there; a non-login SSH shell otherwise sees only /usr/bin:/bin:/usr/sbin:/sbin. $PATH is single-quoted so
+# it expands on the VM, not locally.
+uat_ssh "$UAT_VM_SSH_TARGET" 'PATH=/usr/local/bin:$PATH EDR_RUNBOOK_PACE_SECONDS=0 bash /tmp/attack-runbook.sh'
 
 uat_log attack-runbook "runbook complete"

@@ -298,6 +298,59 @@ func TestUpload_BoundedBatchSize(t *testing.T) {
 	}
 }
 
+// TestUpload_DrainUntilCaughtUp pins the backlog catch-up behaviour: a single tick drains batches back-to-back until
+// the queue is empty (a short batch signals caught-up), instead of one BatchSize batch per tick. Regression guard for
+// the fixed-rate uploader that drained a large backlog at only BatchSize/Interval events per second (~12 minutes for a
+// ~1.5M-event backlog), pushing fresh events behind the backlog in the FIFO queue and past the detection SLA.
+func TestUpload_DrainUntilCaughtUp(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+
+	const enqueued = 10
+	for i := range enqueued {
+		if err := q.Enqueue(ctx, []byte(fmt.Sprintf(`{"event_id":"catchup-%d"}`, i))); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+
+	// atomic because the httptest handler runs on its own goroutine; int64 avoids the gosec int->int32 lint.
+	var requests, events atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			return
+		}
+		var batch []json.RawMessage
+		if err := json.Unmarshal(body, &batch); err != nil {
+			t.Errorf("unmarshal: %v", err)
+			return
+		}
+		requests.Add(1)
+		events.Add(int64(len(batch)))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.BatchSize = 3
+
+	u := New(q, cfg, nil, nil)
+	u.drainUntilCaughtUp(ctx)
+
+	// 10 events at BatchSize=3 => batches of 3,3,3,1 within a single tick; the short final batch stops the loop.
+	if got := events.Load(); got != enqueued {
+		t.Fatalf("expected all %d events uploaded in one tick, got %d", enqueued, got)
+	}
+	if got := requests.Load(); got != 4 {
+		t.Fatalf("expected 4 back-to-back batches (3,3,3,1), got %d", got)
+	}
+	if depth, _ := q.Depth(ctx); depth != 0 {
+		t.Fatalf("expected queue fully drained in one tick, got depth %d", depth)
+	}
+}
+
 // spec:agent-event-uploader/401-triggers-re-enrollment/401-is-treated-as-non-retryable-within-the-cycle
 //
 // MaxRetries=5 but a single 401 must NOT consume the retry budget. Pinned by attempts.Load()==1: only
