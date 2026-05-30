@@ -53,11 +53,12 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 		Description: "Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered " +
 			"with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a " +
 			"reboot) gives the attacker root-running persistence.\n\n" +
-			"Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so it " +
-			"catches the drop regardless of mechanism — including atomic temp-file+rename and `cp` by an Apple-signed " +
-			"binary, which a file-write rule misses.\n\n" +
-			"Paired with `persistence_launchagent` (user-domain LaunchAgents). To stay high-precision, registrations by " +
-			"Apple platform binaries, MDM-managed items, and allowlisted vendor team IDs are skipped.",
+			"Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so the " +
+			"registration is caught no matter how the plist landed on disk (direct write, atomic temp-file+rename, copy), " +
+			"which a file-write rule can miss.\n\n" +
+			"The decision keys on the process that registered the item (the BTM instigator). To stay high-precision, " +
+			"registrations whose instigator is an Apple platform binary, an MDM-managed item, or an allowlisted vendor " +
+			"team ID are skipped. Paired with `persistence_launchagent` (user-domain LaunchAgents).",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"btm_launch_item_add"},
 		FalsePositives: []string{
@@ -131,11 +132,9 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 		return nil, nil
 	}
 
-	// Best-effort process-tree link: correlate the instigator PID to a process row for the finding's ProcessID. The DECISION
-	// above does not depend on this (the instigator's signing rides inline), so a missing row only costs the UI link, never
-	// the detection — unlike the old open-based rule, where a missing row dropped the finding entirely.
-	// Best-effort process-tree link only: the DECISION rode inline above, so neither a missing row nor a lookup error
-	// may drop the finding. Skip the query for an invalid/zero instigator PID (kernel task, exited, unattributed).
+	// Best-effort process-tree link: correlate the instigator PID to a process row so the finding carries a ProcessID for the UI.
+	// The DECISION rode inline above (the instigator's code-signing), so neither a missing row nor a lookup error may drop the
+	// finding, and the zero/invalid-PID case (kernel task, exited, unattributed) simply skips the query.
 	var processID int64
 	if p.InstigatorPID > 0 {
 		if proc, err := s.GetProcessByPID(ctx, evt.HostID, p.InstigatorPID, evt.TimestampNs); err == nil && proc != nil {
@@ -143,21 +142,27 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 		}
 	}
 
-	writer := p.ExecutablePath
-	if writer == "" {
-		writer = fmt.Sprintf("pid %d", p.InstigatorPID)
+	// Attribute the registration to the INSTIGATOR (the process that asked BTM to register the item), not to
+	// p.ExecutablePath: executable_path is the binary the daemon will run, not the actor that registered it, so naming
+	// it as the writer misattributes registrations performed by a separate process (e.g. launchctl).
+	description := fmt.Sprintf(
+		"Non-Apple instigator (pid %d) registered system LaunchDaemon %s: persistence (MITRE T1543.004)",
+		p.InstigatorPID, p.ItemPath,
+	)
+	if p.ExecutablePath != "" {
+		description = fmt.Sprintf(
+			"Non-Apple instigator (pid %d) registered system LaunchDaemon %s (executable %s): persistence (MITRE T1543.004)",
+			p.InstigatorPID, p.ItemPath, p.ExecutablePath,
+		)
 	}
 	return &api.Finding{
-		HostID:   evt.HostID,
-		RuleID:   r.ID(),
-		Severity: api.SeverityHigh,
-		Title:    "LaunchDaemon persistence",
-		Description: fmt.Sprintf(
-			"%s registered system LaunchDaemon %s — non-Apple persistence (MITRE T1543.004)",
-			writer, p.ItemPath,
-		),
-		ProcessID: processID,
-		EventIDs:  []string{evt.EventID},
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    api.SeverityHigh,
+		Title:       "LaunchDaemon persistence",
+		Description: description,
+		ProcessID:   processID,
+		EventIDs:    []string{evt.EventID},
 	}, nil
 }
 

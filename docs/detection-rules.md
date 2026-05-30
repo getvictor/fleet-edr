@@ -226,9 +226,9 @@ Flags a system-domain LaunchDaemon registered with Background Task Management by
 
 Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a reboot) gives the attacker root-running persistence.
 
-Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so it catches the drop regardless of mechanism — including atomic temp-file+rename and `cp` by an Apple-signed binary, which a file-write rule misses.
+Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so the registration is caught no matter how the plist landed on disk (direct write, atomic temp-file+rename, copy), which a file-write rule can miss.
 
-Paired with `persistence_launchagent` (user-domain LaunchAgents). To stay high-precision, registrations by Apple platform binaries, MDM-managed items, and allowlisted vendor team IDs are skipped.
+The decision keys on the process that registered the item (the BTM instigator). To stay high-precision, registrations whose instigator is an Apple platform binary, an MDM-managed item, or an allowlisted vendor team ID are skipped. Paired with `persistence_launchagent` (user-domain LaunchAgents).
 
 ### Configuration
 

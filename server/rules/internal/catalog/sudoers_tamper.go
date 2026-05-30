@@ -93,9 +93,9 @@ var sudoersPath = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`
 // open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
 var sudoersBytes = []byte("/etc/sudoers")
 
-// sudoersOpenPayload mirrors the open event shape we care about. Local to this rule: the sibling
-// privilege_launchd_plist_write rule no longer consumes open events (it keys on BTM registration per ADR-0008), so
-// there is no shared open-payload type to extract. The identical Evaluate fan-out is shared via evalEachEvent.
+// sudoersOpenPayload mirrors the open event shape we care about. Local to this rule: the sibling privilege_launchd_plist_write rule
+// no longer consumes open events (it keys on BTM registration per ADR-0008), so there is no shared open-payload type to extract. The
+// identical Evaluate fan-out is shared via evalEachEvent.
 type sudoersOpenPayload struct {
 	PID   int    `json:"pid"`
 	Path  string `json:"path"`
