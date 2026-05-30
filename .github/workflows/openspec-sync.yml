@@ -1,0 +1,77 @@
+name: OpenSpec sync
+
+# Behavior changes MUST update the spec. This gate fails a PR that touches a high-signal behavior-bearing path (a
+# detection rule, the event wire schema, or the detection DDL) without also touching openspec/ (a canonical spec edit
+# under openspec/specs/** and/or an openspec/changes/ proposal). It is a backstop, not an exhaustive behavior detector:
+# the paths are scoped tightly to ones that are almost always an observable behavior change, so false positives are
+# rare. A genuine refactor / comment / perf change with no behavior delta opts out with the `skip-openspec` label or a
+# `[skip-openspec]` tag in the PR title. Authoring-time reminders live in .github/copilot-instructions.md, the PR
+# template, and CLAUDE.md; this is the only one that blocks.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openspec-sync:
+    name: OpenSpec updated for behavior changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "Not a pull_request event; nothing to enforce."
+            exit 0
+          fi
+
+          # Escape hatch for a non-behavioral touch (refactor, comment, perf) of a behavior path.
+          if [[ ",$PR_LABELS," == *",skip-openspec,"* ]] || [[ "$PR_TITLE" == *"[skip-openspec]"* ]]; then
+            echo "skip-openspec opt-out present (label or [skip-openspec] in title); not enforcing."
+            exit 0
+          fi
+
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+
+          # Behavior-bearing paths: the detection rule catalog (rule logic), the event wire schema, and the detection
+          # DDL (persistence semantics). Test files and fixtures under the catalog are not behavior changes.
+          BEHAVIOR='^server/rules/internal/catalog/.*\.go$|^schema/events\.json$|^server/detection/bootstrap/schema\.go$'
+          behavior_files=$(echo "$files" | grep -E "$BEHAVIOR" | grep -vE '_test\.go$|/fixtures/' || true)
+
+          if [[ -z "$behavior_files" ]]; then
+            echo "No behavior-bearing files changed; nothing to enforce."
+            exit 0
+          fi
+
+          if echo "$files" | grep -qE '^openspec/'; then
+            echo "Behavior change accompanied by an openspec/ update. OK. Behavior files:"
+            echo "$behavior_files"
+            exit 0
+          fi
+
+          echo "::error::Behavior-bearing files changed without any openspec/ update."
+          {
+            echo "These files are an observable behavior change:"
+            echo "$behavior_files"
+            echo
+            echo "Update the spec in the same PR: edit openspec/specs/** (and add an openspec/changes/ proposal)."
+            echo "If this is a refactor / comment / perf change with NO behavior delta, add the 'skip-openspec' label"
+            echo "or put [skip-openspec] in the PR title."
+          } >&2
+          exit 1

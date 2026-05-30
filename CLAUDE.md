@@ -80,6 +80,11 @@ traceability.
 
 Minimum requirements per PR:
 
+- **Behavior changes update the spec.** Any observable behavior change (bug fix, feature, detection rule, wire/event
+  shape, API, persistence semantics) MUST update `openspec/specs/**` in the same PR, and add an `openspec/changes/`
+  proposal for non-trivial deltas. The `OpenSpec sync` CI gate (`.github/workflows/openspec-sync.yml`) enforces this for
+  the highest-signal paths (`server/rules/internal/catalog/`, `schema/events.json`, `server/detection/bootstrap/schema.go`);
+  a genuine no-behavior-delta touch opts out with the `skip-openspec` label or `[skip-openspec]` in the PR title.
 - New wire-format struct or event field: PBT round-trip (`Marshal . Unmarshal == identity`).
 - New detection rule under `server/rules/internal/catalog/`: ship `test/efficacy/corpus/T<MITRE-id>/scenario.yaml`
   plus `expected.yaml`. Add `attack.sh` when system / VM coverage is needed.

@@ -276,6 +276,8 @@ func TestStore_CountAlerts(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
+// spec:server-detection-rules-engine/persisted-alert-schema/an-alert-with-no-attributable-process-omits-the-process-link
+// spec:server-detection-rules-engine/alert-dedup-by-subject/process-less-findings-dedup-on-a-rule-supplied-subject
 // TestStore_InsertAlert_ProcessLess covers the ADR-0008-amendment persistence path: a process-less alert (ProcessID 0, a rule-supplied
 // Subject) persists with a NULL process_id (no fk_alerts_process violation) and dedups on subject rather than process_id. The same
 // daemon registration dedups; a different one produces a second alert; the row reads back with ProcessID 0 via the read-path COALESCE.

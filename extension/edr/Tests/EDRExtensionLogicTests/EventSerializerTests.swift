@@ -99,6 +99,7 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertTrue(json.contains("\"snapshot\":true"), "startup-snapshot exec must carry snapshot:true, got: \(json)")
     }
 
+    // spec:endpoint-event-collection/launch-item-registration-event-capture/a-launchdaemon-is-registered-via-background-task-management
     func testBtmLaunchItemAddPayloadRoundTripAndWireKeys() throws {
         // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes. Models the real ground-truth
         // (ai/btm-attribution): the DECISION input is executable_code_signing (here an unsigned dropper, which fires),

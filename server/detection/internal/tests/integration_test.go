@@ -743,7 +743,7 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	assert.Equal(t, api.JSONStringSlice{"T9999"}, a.Techniques, "alert.techniques = stub rule's declared MITRE list")
 }
 
-// spec:server-detection-rules-engine/alert-dedup-by-host-rule-process/a-rule-re-fires-on-the-same-process-in-a-later-batch
+// spec:server-detection-rules-engine/alert-dedup-by-subject/a-rule-re-fires-on-the-same-process-in-a-later-batch
 func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
