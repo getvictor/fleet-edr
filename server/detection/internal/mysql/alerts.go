@@ -41,6 +41,12 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	// ProcessID, and application-control) defaults to the process_id string, preserving the historical
 	// (source, host_id, rule_id, process_id) dedup. Process-less callers (BTM persistence) supply a namespaced Subject.
 	if a.Subject == "" {
+		// A process-less alert (ProcessID 0) MUST supply its own dedup Subject: defaulting to "0" would collapse every
+		// process-less alert for the same (source, host_id, rule_id) into one row. Treat the omission as a programming
+		// error rather than silently mis-deduplicating (Gemini).
+		if a.ProcessID == 0 {
+			return 0, false, fmt.Errorf("insert alert for rule %s on host %s: process-less alert requires a non-empty Subject", a.RuleID, a.HostID)
+		}
 		a.Subject = strconv.FormatInt(a.ProcessID, 10)
 	}
 

@@ -107,5 +107,8 @@ private func satisfiesAppleAnchor(_ code: SecStaticCode) -> Bool {
           let req = requirement else {
         return false
     }
-    return SecStaticCodeCheckValidity(code, [], req) == errSecSuccess
+    // .noNetworkAccess restricts validation to LOCAL checks. An Endpoint Security callback thread must never block on an
+    // OCSP/CRL revocation fetch: that network traffic can itself trigger ESF events and deadlock the extension (Gemini
+    // CRITICAL). "anchor apple" is satisfiable entirely from the on-disk chain, so local-only is sufficient.
+    return SecStaticCodeCheckValidity(code, .noNetworkAccess, req) == errSecSuccess
 }

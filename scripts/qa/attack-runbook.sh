@@ -217,10 +217,10 @@ step_privilege_launchd_plist_write() {
   # trigger), then bootout + remove it. The daemon's executable is this locally-built, non-Apple binary, run with a
   # `daemon` arg that no-ops so launchd launching it cannot recurse.
   #
-  # IMPORTANT: BTM fires at REGISTRATION, not at the file write — a plain write+remove (the pre-ADR-0008 behaviour) no
-  # longer triggers detection. The BTM instigator for a `launchctl bootstrap` is expected to be launchctl/launchd; the
-  # rule's instigator-vs-executable discriminator is being confirmed on the edr-qa VM (see ADR-0008 and the efficacy
-  # scenario note).
+  # IMPORTANT: BTM fires at REGISTRATION, not at the file write: a plain write+remove (the pre-ADR-0008 behaviour) no
+  # longer triggers detection. The rule keys on the REGISTERED EXECUTABLE's code-signing, not the instigator (the BTM
+  # instigator for a `launchctl bootstrap` is Apple's smd, ground-truthed on edr-dev), so this locally-built, unsigned
+  # daemon executable fires regardless of the platform-binary instigator (see ADR-0008 and its 2026-05-29 amendment).
   if ! command -v go >/dev/null 2>&1; then
     echo "[runbook] go not installed — skipping privilege_launchd_plist_write step"
     EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no Go toolchain on this host)")

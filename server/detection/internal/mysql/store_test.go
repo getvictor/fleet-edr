@@ -314,6 +314,14 @@ func TestStore_InsertAlert_ProcessLess(t *testing.T) {
 	got, err := s.GetAlert(ctx, id1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), got.ProcessID, "process-less alert reads back ProcessID 0 (NULL coalesced)")
+
+	// A process-less alert that forgets its Subject is a programming error: defaulting to "0" would collapse every such
+	// alert for the same (source, host, rule) into one row. InsertAlert rejects it rather than mis-deduplicating.
+	_, _, errNoSubject := s.InsertAlert(ctx, api.Alert{
+		HostID: "h", RuleID: "privilege_launchd_plist_write", Severity: api.SeverityHigh,
+		Title: "T", Description: "D", ProcessID: 0, Subject: "",
+	}, []string{})
+	require.Error(t, errNoSubject, "process-less alert with empty Subject must be rejected, not deduped to '0'")
 }
 
 func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
