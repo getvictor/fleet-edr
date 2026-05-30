@@ -227,7 +227,10 @@ step_privilege_launchd_plist_write() {
     return 0
   fi
   local src="$WORKDIR/synthetic_dropper.go"
-  local bin="$WORKDIR/synthetic_dropper"
+  # Unique binary path per run. BTM keys its launch-item identity (and thus whether a registration emits a fresh
+  # NOTIFY_BTM_LAUNCH_ITEM_ADD) on the registered executable path: re-registering an executable path BTM already knows
+  # is silent. A per-run path guarantees a fresh ADD every run, complementing the per-run label in the dropper below.
+  local bin="$WORKDIR/synthetic_dropper_$(date +%s)_$$"
   cat > "$src" <<'GO'
 package main
 
@@ -235,9 +238,11 @@ package main
 // registers it with launchd (Background Task Management) to exercise privilege_launchd_plist_write (T1543.004), then
 // bootouts + removes it. Compiled locally so the daemon's executable lacks Apple's platform-binary flag.
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"time"
 )
 
 func main() {
@@ -245,8 +250,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
 		return
 	}
-	const label = "com.synthetic.edr-runbook"
-	const target = "/Library/LaunchDaemons/" + label + ".plist"
+	// Unique label per run. BTM deduplicates at the source: re-registering a (label, executable) it already knows emits
+	// no fresh ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, so a fixed label fires the rule only on the host's first-ever
+	// run and silently no-ops afterwards. A per-run label also gives a unique alert subject (the item path) so the
+	// server's (source, host, rule, subject) dedup does not collapse this run's alert onto a prior run's row, which
+	// would fall outside the L5 driver's "alerts since scenario start" polling window.
+	label := fmt.Sprintf("com.synthetic.edr-runbook.%d", time.Now().UnixNano())
+	target := "/Library/LaunchDaemons/" + label + ".plist"
 	self, err := os.Executable()
 	if err != nil {
 		log.Fatalf("executable path: %v", err)
@@ -264,6 +274,11 @@ func main() {
 	if out, e := exec.Command("/bin/launchctl", "bootstrap", "system", target).CombinedOutput(); e != nil {
 		log.Printf("bootstrap (non-fatal): %v: %s", e, out)
 	}
+	// BTM delivers NOTIFY_BTM_LAUNCH_ITEM_ADD asynchronously. Booting the item out in the same instant coalesces the
+	// registration away before the kernel emits the ADD, so the extension never sees it (ground-truthed on edr-qa: a
+	// back-to-back bootstrap+bootout produced no event, a bootstrap with a multi-second settle did). Let the ADD land
+	// before cleaning up.
+	time.Sleep(3 * time.Second)
 	// Cleanup: unregister + remove so the host returns to a clean state.
 	_ = exec.Command("/bin/launchctl", "bootout", "system/"+label).Run()
 	if err := os.Remove(target); err != nil {
