@@ -250,7 +250,6 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 			SigningID        string `json:"signing_id"`
 			Flags            int    `json:"flags"`
 			IsPlatformBinary bool   `json:"is_platform_binary"`
-			IsNotarized      bool   `json:"is_notarized,omitempty"`
 		}
 		out := struct {
 			ItemType              string       `json:"item_type"`
@@ -279,7 +278,6 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 				SigningID:        "",
 				Flags:            0,
 				IsPlatformBinary: ev.ExecutableIsPlatformBinary,
-				IsNotarized:      ev.ExecutableIsNotarized,
 			}
 		}
 		// Emit the forensic instigator_code_signing only for a present instigator (PID > 0).

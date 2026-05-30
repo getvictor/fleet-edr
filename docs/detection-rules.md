@@ -213,7 +213,7 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 ## privilege_launchd_plist_write
 
 **LaunchDaemon persistence (BTM daemon registration)**  
-Flags a system-domain LaunchDaemon whose registered executable is not Apple-platform, not notarized, and not allowlisted.
+Flags a system-domain LaunchDaemon whose registered executable is not an Apple platform binary and not allowlisted.
 
 | | |
 | --- | --- |
@@ -230,7 +230,7 @@ Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather 
 
 The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who registered it: a `launchctl bootstrap` is always instigated by Apple's `smd`, so the instigator cannot discriminate. A daemon whose executable is an Apple platform binary, MDM-managed, or signed by an allowlisted vendor team ID is skipped; an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` (user-domain LaunchAgents).
 
-Note: the rule also trusts a notarized executable, but the agent does not yet report notarization status, so today a notarized but non-allowlisted vendor daemon will alert until its team ID is allowlisted.
+Notarization is deliberately NOT a trust signal: it is an automated Apple scan, not an endorsement (Apple has notarized malware), and is not checkable network-free on the ES callback thread. Trust is the operator's team-ID allowlist; notarization, if ever used, belongs in a server-side reputation layer off the hot path.
 
 ### Configuration
 
@@ -240,8 +240,8 @@ Note: the rule also trusts a notarized executable, but the agent does not yet re
 
 ### Known false-positive sources
 
-- Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST. (Notarization-based auto-trust is planned but the agent does not emit notarization status yet, so allowlisting is required today.)
-- Custom in-house pkg installers whose daemon executable is signed but not notarized: allowlist your developer team ID.
+- Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.
+- Custom in-house pkg installers signed by a non-allowlisted developer team: allowlist that team ID.
 
 ### Limitations
 

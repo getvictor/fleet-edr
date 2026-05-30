@@ -3,8 +3,8 @@
 # A system LaunchDaemon is registered via Background Task Management
 # (ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, item_type=daemon) whose registered
 # executable (/tmp/raw_dropper) is unsigned/ad-hoc. The privilege_launchd_plist_write
-# rule fires on the unmanaged daemon registration of a non-Apple, non-notarized,
-# non-allowlisted executable (ADR-0008 + its 2026-05-29 amendment). Mirrors the
+# rule fires on the unmanaged daemon registration of a non-Apple, non-allowlisted
+# executable (ADR-0008 + its 2026-05-29 amendment). Mirrors the
 # positive_daemon_unsigned_executable fixture.
 #
 # Ground-truthed on edr-dev (ai/btm-attribution/experiment.md): the BTM instigator
@@ -39,7 +39,6 @@ timeline:
     executable_code_signing_present: true
     executable_team_id: ""
     executable_is_platform_binary: false
-    executable_is_notarized: false
     instigator_pid: 93
     instigator_team_id: ""
     instigator_is_platform_binary: true

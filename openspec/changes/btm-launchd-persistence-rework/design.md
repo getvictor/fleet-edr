@@ -13,9 +13,11 @@ the result as `executable_code_signing`. `SecStaticCodeCheckValidity` runs with 
 thread never blocks on an OCSP/CRL fetch. This also sidesteps the #187 ad-hoc-extension ESF signing redaction, since
 `SecStaticCode` reads the signature from disk rather than trusting the (redacted) ESF process fields.
 
-The rule allows (skips) an executable that is an Apple platform binary, notarized, MDM-managed, or signed by an
-allowlisted team ID; everything else fires. `is_notarized` is wired through the contract but the extension does not yet
-populate it (planned `SecAssessment` enhancement); v1 relies on the platform-binary check plus the team-ID allowlist.
+The rule allows (skips) an executable that is an Apple platform binary, MDM-managed, or signed by an allowlisted team ID;
+everything else fires. Notarization is deliberately NOT a trust signal: it is an automated Apple scan, not an endorsement
+(Apple has notarized malware), and a prototype confirmed it is not checkable network-free in-process
+(`SecAssessmentTicketLookup` is not public; `SecAssessment`/Gatekeeper can hit the network, the ES-thread deadlock Gemini
+flagged). Trust is the team-ID allowlist; notarization/reputation, if ever pursued, belongs server-side off the hot path.
 
 ## Process-optional alerts and subject dedup
 

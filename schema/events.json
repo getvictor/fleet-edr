@@ -45,8 +45,7 @@
         "team_id": { "type": "string" },
         "signing_id": { "type": "string" },
         "flags": { "type": "integer" },
-        "is_platform_binary": { "type": "boolean" },
-        "is_notarized": { "type": "boolean", "description": "Optional. True iff the binary passes a Gatekeeper notarization assessment. Populated for a BTM item's executable_code_signing; absent (false) elsewhere." }
+        "is_platform_binary": { "type": "boolean" }
       }
     },
     "btm_launch_item_add_payload": {

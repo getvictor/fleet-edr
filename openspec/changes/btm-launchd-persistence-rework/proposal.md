@@ -12,9 +12,11 @@ Two reviews (Copilot, Gemini) plus the ground-truth converge on the corrected de
 amendment (PR #305):
 
 1. **Discriminate on the registered executable**, not the instigator: the rule fires when the registered executable is
-   not an Apple platform binary, not notarized, not MDM-managed, and not on the operator's team-ID allowlist. The
-   extension evaluates the executable's code-signing out-of-band (`SecStaticCode`), because the BTM event carries
-   signing for the instigator/app processes but not for the to-be-launched executable.
+   not an Apple platform binary, not MDM-managed, and not on the operator's team-ID allowlist. The extension evaluates
+   the executable's code-signing out-of-band (`SecStaticCode`), because the BTM event carries signing for the
+   instigator/app processes but not for the to-be-launched executable. Notarization is deliberately NOT a trust signal
+   (Apple notarizes malware, and it is not checkable network-free on the ES thread); if ever used it belongs in a
+   server-side reputation layer.
 2. **Process-optional alerts**: the registered executable has no live process at registration and the instigator (`smd`)
    is not the attacker, so a persistence alert carries no process link. `alerts.process_id` becomes a nullable
    enrichment FK, and alert dedup moves from `(source, host, rule, process_id)` to `(source, host, rule, subject)` so
@@ -33,9 +35,10 @@ amendment (PR #305):
 ## Impact
 
 - Schema: `alerts.process_id` becomes nullable; a `subject` column carries the dedup identity; `uk_alerts_dedup` keys on
-  `subject`. The repo has no migration framework (CREATE TABLE IF NOT EXISTS); existing pilot DBs require a reset, per
-  the established pre-1.0 pattern.
-- Wire: `schema/events.json` gains `btm_launch_item_add_payload.executable_code_signing`.
-- Validation: L0 unit + L1 integration + L6 efficacy green; runtime-confirmed on edr-dev. Real-world confirmation of the
-  "trusted notarized vendor daemon" path is pending the edr-qa L5 run on a notarized build (ESF signing is redacted on
-  the ad-hoc edr-dev extension, issue #187).
+  `subject`. Existing dev DBs auto-migrate via the `applyAdditiveAlters` stop-gap in `server/detection/bootstrap`
+  (idempotent ADD COLUMN + MODIFY + self-converging index swap); a production migration runner remains issue #115.
+- Wire: `schema/events.json` gains `btm_launch_item_add_payload.executable_code_signing` (team ID, signing ID,
+  platform-binary flag).
+- Validation: L0 unit + L1 integration + L6 efficacy green; runtime-confirmed on edr-dev. An edr-qa L5 run on the
+  notarized build re-confirms the full pipeline where ESF process signing is not redacted (issue #187). Notarization is
+  not a trust signal (see design.md).

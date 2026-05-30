@@ -12,9 +12,9 @@ import (
 
 // PrivilegeLaunchdPlistWrite fires when a system-domain LaunchDaemon is
 // registered with Background Task Management (BTM) whose REGISTERED
-// EXECUTABLE is not Apple-platform, not notarized, and not on the
-// operator's team-ID allowlist — the canonical system-domain persistence
-// vector (T1543.004). Registering a LaunchDaemon gives the attacker a
+// EXECUTABLE is not an Apple platform binary and not on the operator's
+// team-ID allowlist: the canonical system-domain persistence vector
+// (T1543.004). Registering a LaunchDaemon gives the attacker a
 // root-running launch item on the next `launchctl bootstrap system/<name>`
 // or reboot.
 //
@@ -29,9 +29,8 @@ import (
 // discriminate (ground-truthed on edr-dev). We skip:
 //   - `managed` items (MDM-deployed daemons are operator-legitimate),
 //   - executables Apple signs as platform binaries,
-//   - notarized executables (Apple-vetted vendor daemons),
 //   - executables whose team ID is on EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST,
-//   - registrations whose executable code-signing we cannot read — a
+//   - registrations whose executable code-signing we cannot read: a
 //     high-precision skip.
 //
 // The alert is process-optional: the registered executable has no live
@@ -54,7 +53,7 @@ func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1
 func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   "LaunchDaemon persistence (BTM daemon registration)",
-		Summary: "Flags a system-domain LaunchDaemon whose registered executable is not Apple-platform, not notarized, and not allowlisted.",
+		Summary: "Flags a system-domain LaunchDaemon whose registered executable is not an Apple platform binary and not allowlisted.",
 		Description: "Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered " +
 			"with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a " +
 			"reboot) gives the attacker root-running persistence.\n\n" +
@@ -66,13 +65,14 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 			"executable is an Apple platform binary, MDM-managed, or signed by an allowlisted vendor team ID is skipped; " +
 			"an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` (user-domain " +
 			"LaunchAgents).\n\n" +
-			"Note: the rule also trusts a notarized executable, but the agent does not yet report notarization status, so " +
-			"today a notarized but non-allowlisted vendor daemon will alert until its team ID is allowlisted.",
+			"Notarization is deliberately NOT a trust signal: it is an automated Apple scan, not an endorsement (Apple has " +
+			"notarized malware), and is not checkable network-free on the ES callback thread. Trust is the operator's " +
+			"team-ID allowlist; notarization, if ever used, belongs in a server-side reputation layer off the hot path.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"btm_launch_item_add"},
 		FalsePositives: []string{
-			"Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST. (Notarization-based auto-trust is planned but the agent does not emit notarization status yet, so allowlisting is required today.)",
-			"Custom in-house pkg installers whose daemon executable is signed but not notarized: allowlist your developer team ID.",
+			"Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
+			"Custom in-house pkg installers signed by a non-allowlisted developer team: allowlist that team ID.",
 		},
 		Limitations: []string{
 			"BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).",
@@ -102,12 +102,11 @@ type btmLaunchItemAddPayload struct {
 	InstigatorCodeSigning *codeSigningJSON `json:"instigator_code_signing"`
 }
 
-// codeSigningJSON mirrors the extension's CodeSigning wire struct. The executable decision consumes team_id, is_platform_binary,
-// and is_notarized; the instigator copy carries the same shape but is forensic-only.
+// codeSigningJSON mirrors the extension's CodeSigning wire struct. The executable decision consumes team_id and
+// is_platform_binary; the instigator copy carries the same shape but is forensic-only.
 type codeSigningJSON struct {
 	TeamID           string `json:"team_id"`
 	IsPlatformBinary bool   `json:"is_platform_binary"`
-	IsNotarized      bool   `json:"is_notarized,omitempty"`
 }
 
 func (r *PrivilegeLaunchdPlistWrite) Evaluate(
@@ -185,12 +184,12 @@ func launchDaemonSubject(itemPath string) string {
 	return "launchdaemon:sha256:" + hex.EncodeToString(sum[:])
 }
 
-// allowed returns true when the registered executable's code-signing identity is trusted: an Apple platform binary, a
-// notarized binary, or a binary signed by a team ID on the operator's allowlist. Any of these short-circuits the finding.
-// IsNotarized is honored here for forward-compatibility, but the extension does not populate it yet (planned SecAssessment
-// enhancement); until it does, trust in production comes from the platform-binary flag and the team-ID allowlist.
+// allowed returns true when the registered executable's code-signing identity is trusted: an Apple platform binary, or a
+// binary signed by a team ID on the operator's allowlist. Either short-circuits the finding. Notarization is deliberately
+// not a trust signal here (Apple notarizes malware, and it is not checkable network-free on the ES thread); operator
+// trust is the team-ID allowlist, and any notarization/reputation scoring belongs server-side off the hot path.
 func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON) bool {
-	if cs.IsPlatformBinary || cs.IsNotarized {
+	if cs.IsPlatformBinary {
 		return true
 	}
 	if r.AllowedTeamIDs == nil {

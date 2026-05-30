@@ -78,10 +78,9 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 		want bool
 	}{
 		{"platform binary", codeSigningJSON{IsPlatformBinary: true}, true},
-		{"notarized vendor", codeSigningJSON{TeamID: "UNKNOWNTEAM", IsNotarized: true}, true},
 		{"allowlisted team", codeSigningJSON{TeamID: "VENDORALLOW", IsPlatformBinary: false}, true},
-		{"unknown team, not notarized, no allowlist hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
-		{"ad-hoc / unsigned (empty team, not platform, not notarized)", codeSigningJSON{IsPlatformBinary: false}, false},
+		{"unknown team, no allowlist hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
+		{"ad-hoc / unsigned (empty team, not platform)", codeSigningJSON{IsPlatformBinary: false}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -177,7 +176,6 @@ func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
 			in.ExecutableCodeSigning = &codeSigningJSON{
 				TeamID:           rapid.String().Draw(rt, "exec_team_id"),
 				IsPlatformBinary: rapid.Bool().Draw(rt, "exec_is_platform"),
-				IsNotarized:      rapid.Bool().Draw(rt, "exec_is_notarized"),
 			}
 		}
 		if rapid.Bool().Draw(rt, "has_instigator_cs") {

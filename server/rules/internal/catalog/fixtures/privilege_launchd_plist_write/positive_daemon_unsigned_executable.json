@@ -10,7 +10,7 @@
         "item_path": "/Library/LaunchDaemons/com.unsigned.persistence.plist",
         "executable_path": "/tmp/raw_dropper",
         "managed": false,
-        "executable_code_signing": {"team_id": "", "signing_id": "", "flags": 0, "is_platform_binary": false, "is_notarized": false},
+        "executable_code_signing": {"team_id": "", "signing_id": "", "flags": 0, "is_platform_binary": false},
         "instigator_pid": 93,
         "instigator_code_signing": {"team_id": "", "signing_id": "com.apple.xpc.smd", "flags": 0, "is_platform_binary": true}
       }
