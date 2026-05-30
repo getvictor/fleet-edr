@@ -213,7 +213,7 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 ## privilege_launchd_plist_write
 
 **LaunchDaemon persistence (BTM daemon registration)**  
-Flags a system-domain LaunchDaemon registered with Background Task Management by a non-Apple, non-allowlisted process.
+Flags a system-domain LaunchDaemon whose registered executable is not Apple-platform, not notarized, and not allowlisted.
 
 | | |
 | --- | --- |
@@ -228,7 +228,7 @@ Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaem
 
 Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so the registration is caught no matter how the plist landed on disk (direct write, atomic temp-file+rename, copy), which a file-write rule can miss.
 
-The decision keys on the process that registered the item (the BTM instigator). To stay high-precision, registrations whose instigator is an Apple platform binary, an MDM-managed item, or an allowlisted vendor team ID are skipped. Paired with `persistence_launchagent` (user-domain LaunchAgents).
+The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who registered it: a `launchctl bootstrap` is always instigated by Apple's `smd`, so the instigator cannot discriminate. A daemon whose executable is an Apple platform binary, notarized, MDM-managed, or signed by an allowlisted vendor team ID is skipped; an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` (user-domain LaunchAgents).
 
 ### Configuration
 
@@ -238,13 +238,13 @@ The decision keys on the process that registered the item (the BTM instigator). 
 
 ### Known false-positive sources
 
-- Non-Apple vendor app installing its own LaunchDaemon (Docker, a VPN, an MDM agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.
-- Custom in-house pkg installers signed by your developer team — same allowlist applies.
+- Non-Apple vendor app installing its own non-notarized LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST; notarized vendor daemons are accepted automatically.
+- Custom in-house pkg installers whose daemon executable is signed but not notarized — allowlist your developer team ID.
 
 ### Limitations
 
 - BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).
-- Registrations with no attributable instigator process (boot-time, launchd-internal) are skipped to stay high-precision.
+- Registrations whose executable code-signing cannot be read (executable absent or unreadable at registration) are skipped to stay high-precision.
 
 ## sudoers_tamper
 

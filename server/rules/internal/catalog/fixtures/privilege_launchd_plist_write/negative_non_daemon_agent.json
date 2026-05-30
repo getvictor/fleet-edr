@@ -8,9 +8,9 @@
       "payload": {
         "item_type": "agent",
         "item_path": "/Users/victor/Library/LaunchAgents/com.unsigned.agent.plist",
+        "executable_path": "/tmp/agentd",
         "managed": false,
-        "instigator_pid": 9700,
-        "instigator_code_signing": {"team_id": "", "signing_id": "", "flags": 0, "is_platform_binary": false}
+        "executable_code_signing": {"team_id": "", "signing_id": "", "flags": 0, "is_platform_binary": false}
       }
     }
   ]

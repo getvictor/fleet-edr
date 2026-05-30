@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-nosig",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6400,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "daemon",
+        "item_path": "/Library/LaunchDaemons/com.unreadable.plist",
+        "executable_path": "/tmp/gone",
+        "managed": false,
+        "instigator_pid": 93,
+        "instigator_code_signing": {"team_id": "", "signing_id": "com.apple.xpc.smd", "flags": 0, "is_platform_binary": true}
+      }
+    }
+  ]
+}

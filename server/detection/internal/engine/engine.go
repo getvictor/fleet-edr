@@ -150,6 +150,7 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 		Title:       f.Title,
 		Description: f.Description,
 		ProcessID:   f.ProcessID,
+		Subject:     f.Subject,
 		Techniques:  f.Techniques,
 	}, f.EventIDs)
 	if err != nil {

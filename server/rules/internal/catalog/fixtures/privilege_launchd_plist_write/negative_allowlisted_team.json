@@ -8,9 +8,9 @@
       "payload": {
         "item_type": "daemon",
         "item_path": "/Library/LaunchDaemons/com.allowed.vendor.plist",
+        "executable_path": "/Library/Allowed/helperd",
         "managed": false,
-        "instigator_pid": 9500,
-        "instigator_code_signing": {"team_id": "FIXTURE-ALLOW", "signing_id": "x", "flags": 0, "is_platform_binary": false}
+        "executable_code_signing": {"team_id": "FIXTURE-ALLOW", "signing_id": "com.allowed.helperd", "flags": 0, "is_platform_binary": false}
       }
     }
   ]

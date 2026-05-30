@@ -9,29 +9,32 @@ import (
 )
 
 // PrivilegeLaunchdPlistWrite fires when a system-domain LaunchDaemon is
-// registered with Background Task Management (BTM) by a non-Apple,
-// non-allowlisted process — the canonical system-domain persistence
+// registered with Background Task Management (BTM) whose REGISTERED
+// EXECUTABLE is not Apple-platform, not notarized, and not on the
+// operator's team-ID allowlist — the canonical system-domain persistence
 // vector (T1543.004). Registering a LaunchDaemon gives the attacker a
 // root-running launch item on the next `launchctl bootstrap system/<name>`
 // or reboot.
 //
 // The rule keys on `ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD`
 // (`item_type == "daemon"`), surfaced by the extension as a
-// `btm_launch_item_add` event (ADR-0008). BTM is the high-level signal
-// macOS 13+ emits when launchd registers the item, regardless of how the
-// plist landed on disk — so unlike the previous `open`-based rule it also
-// catches atomic temp-file+rename drops and `cp` by a platform binary.
+// `btm_launch_item_add` event (ADR-0008 and its 2026-05-29 amendment). BTM
+// fires on registration regardless of how the plist landed on disk.
 //
-// Precision: the BTM event carries the instigator process inline, so the
-// decision reads the instigator's code-signing directly (no pid→process
-// correlation, which also removes the open-vs-exec race the old rule had).
-// We skip:
+// The decision rides the REGISTERED EXECUTABLE's code-signing, NOT the BTM
+// instigator: a `launchctl bootstrap` registration is instigated by Apple's
+// `smd`, so the instigator is always a platform binary and cannot
+// discriminate (ground-truthed on edr-dev). We skip:
 //   - `managed` items (MDM-deployed daemons are operator-legitimate),
-//   - instigators Apple signs as platform binaries (installd, etc.),
-//   - instigators whose team ID is on EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST,
-//   - events with no instigator (boot-time / launchd-internal registrations
-//     we cannot attribute) — high-precision skip, matching the old rule's
-//     "no process row → no finding" guard.
+//   - executables Apple signs as platform binaries,
+//   - notarized executables (Apple-vetted vendor daemons),
+//   - executables whose team ID is on EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST,
+//   - registrations whose executable code-signing we cannot read — a
+//     high-precision skip.
+//
+// The alert is process-optional: the registered executable has no live
+// process at registration and the instigator is not the attacker, so the
+// finding carries no ProcessID and dedups on the item path.
 type PrivilegeLaunchdPlistWrite struct {
 	// AllowedTeamIDs is the set of code-signing team IDs whose LaunchDaemon registrations are silently accepted. Keep it small
 	// — every entry is a deployment-trusted vendor (Munki, JumpCloud, Kandji, an in-house signing team, etc.).
@@ -49,25 +52,27 @@ func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1
 func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   "LaunchDaemon persistence (BTM daemon registration)",
-		Summary: "Flags a system-domain LaunchDaemon registered with Background Task Management by a non-Apple, non-allowlisted process.",
+		Summary: "Flags a system-domain LaunchDaemon whose registered executable is not Apple-platform, not notarized, and not allowlisted.",
 		Description: "Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered " +
 			"with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a " +
 			"reboot) gives the attacker root-running persistence.\n\n" +
 			"Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so the " +
 			"registration is caught no matter how the plist landed on disk (direct write, atomic temp-file+rename, copy), " +
 			"which a file-write rule can miss.\n\n" +
-			"The decision keys on the process that registered the item (the BTM instigator). To stay high-precision, " +
-			"registrations whose instigator is an Apple platform binary, an MDM-managed item, or an allowlisted vendor " +
-			"team ID are skipped. Paired with `persistence_launchagent` (user-domain LaunchAgents).",
+			"The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who registered it: a `launchctl " +
+			"bootstrap` is always instigated by Apple's `smd`, so the instigator cannot discriminate. A daemon whose " +
+			"executable is an Apple platform binary, notarized, MDM-managed, or signed by an allowlisted vendor team ID is " +
+			"skipped; an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` " +
+			"(user-domain LaunchAgents).",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"btm_launch_item_add"},
 		FalsePositives: []string{
-			"Non-Apple vendor app installing its own LaunchDaemon (Docker, a VPN, an MDM agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
-			"Custom in-house pkg installers signed by your developer team — same allowlist applies.",
+			"Non-Apple vendor app installing its own non-notarized LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST; notarized vendor daemons are accepted automatically.",
+			"Custom in-house pkg installers whose daemon executable is signed but not notarized — allowlist your developer team ID.",
 		},
 		Limitations: []string{
 			"BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).",
-			"Registrations with no attributable instigator process (boot-time, launchd-internal) are skipped to stay high-precision.",
+			"Registrations whose executable code-signing cannot be read (executable absent or unreadable at registration) are skipped to stay high-precision.",
 		},
 		Config: []api.ConfigKnob{
 			{
@@ -81,21 +86,24 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 }
 
 // btmLaunchItemAddPayload mirrors the extension's btm_launch_item_add wire shape (schema/events.json). The rule reads item_type +
-// managed (the gate) and the instigator's code-signing (the precision filter); item_path / executable_path / instigator_pid are
-// surfaced in the finding.
+// managed (the gate) and the REGISTERED EXECUTABLE's code-signing (the precision filter). instigator_pid / instigator_code_signing
+// are forensic context only (the instigator is Apple's smd for launchctl-bootstrap registrations, so they cannot discriminate).
 type btmLaunchItemAddPayload struct {
 	ItemType              string           `json:"item_type"`
 	ItemPath              string           `json:"item_path"`
 	ExecutablePath        string           `json:"executable_path"`
 	Managed               bool             `json:"managed"`
+	ExecutableCodeSigning *codeSigningJSON `json:"executable_code_signing"`
 	InstigatorPID         int              `json:"instigator_pid"`
 	InstigatorCodeSigning *codeSigningJSON `json:"instigator_code_signing"`
 }
 
-// codeSigningJSON mirrors the extension's CodeSigning wire struct. We only consume team_id + is_platform_binary.
+// codeSigningJSON mirrors the extension's CodeSigning wire struct. The executable decision consumes team_id, is_platform_binary,
+// and is_notarized; the instigator copy carries the same shape but is forensic-only.
 type codeSigningJSON struct {
 	TeamID           string `json:"team_id"`
 	IsPlatformBinary bool   `json:"is_platform_binary"`
+	IsNotarized      bool   `json:"is_notarized,omitempty"`
 }
 
 func (r *PrivilegeLaunchdPlistWrite) Evaluate(
@@ -104,8 +112,10 @@ func (r *PrivilegeLaunchdPlistWrite) Evaluate(
 	return evalEachEvent(ctx, events, s, r.evalEvent)
 }
 
+// evalEvent ignores ctx + GraphReader: the decision is process-optional and rides the event payload alone (no
+// pid->process correlation). The parameters are kept to satisfy the evalEachEvent evaluator signature.
 func (r *PrivilegeLaunchdPlistWrite) evalEvent(
-	ctx context.Context, evt api.Event, s api.GraphReader,
+	_ context.Context, evt api.Event, _ api.GraphReader,
 ) (*api.Finding, error) {
 	if evt.EventType != "btm_launch_item_add" {
 		return nil, nil
@@ -123,53 +133,41 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	if p.Managed {
 		return nil, nil
 	}
-	// No attributable instigator → cannot confirm a non-Apple writer; skip to stay high-precision (matches the old rule's
-	// "no process row → no finding" behaviour).
-	if p.InstigatorCodeSigning == nil {
+	// The decision rides the REGISTERED EXECUTABLE's code-signing, not the instigator (which is Apple's smd for a
+	// launchctl-bootstrap registration; ADR-0008 amendment). No executable signing → we cannot classify the binary →
+	// skip to stay high-precision (the executable is normally present and readable at registration).
+	if p.ExecutableCodeSigning == nil {
 		return nil, nil
 	}
-	if r.allowed(*p.InstigatorCodeSigning) {
+	if r.allowed(*p.ExecutableCodeSigning) {
 		return nil, nil
 	}
 
-	// Best-effort process-tree link: correlate the instigator PID to a process row so the finding carries a ProcessID for the UI.
-	// The DECISION rode inline above (the instigator's code-signing), so neither a missing row nor a lookup error may drop the
-	// finding, and the zero/invalid-PID case (kernel task, exited, unattributed) simply skips the query.
-	var processID int64
-	if p.InstigatorPID > 0 {
-		if proc, err := s.GetProcessByPID(ctx, evt.HostID, p.InstigatorPID, evt.TimestampNs); err == nil && proc != nil {
-			processID = proc.ID
-		}
-	}
-
-	// Attribute the registration to the INSTIGATOR (the process that asked BTM to register the item), not to
-	// p.ExecutablePath: executable_path is the binary the daemon will run, not the actor that registered it, so naming
-	// it as the writer misattributes registrations performed by a separate process (e.g. launchctl).
-	description := fmt.Sprintf(
-		"Non-Apple instigator (pid %d) registered system LaunchDaemon %s: persistence (MITRE T1543.004)",
-		p.InstigatorPID, p.ItemPath,
-	)
-	if p.ExecutablePath != "" {
-		description = fmt.Sprintf(
-			"Non-Apple instigator (pid %d) registered system LaunchDaemon %s (executable %s): persistence (MITRE T1543.004)",
-			p.InstigatorPID, p.ItemPath, p.ExecutablePath,
-		)
+	// Process-optional alert (ADR-0008 amendment): the registered executable has no live process at registration, and
+	// the instigator (smd) is not the attacker, so there is no useful process link. ProcessID stays 0; the dedup Subject
+	// is the item path so distinct daemons produce distinct alerts rather than colliding on process_id.
+	executable := p.ExecutablePath
+	if executable == "" {
+		executable = "(unknown executable)"
 	}
 	return &api.Finding{
-		HostID:      evt.HostID,
-		RuleID:      r.ID(),
-		Severity:    api.SeverityHigh,
-		Title:       "LaunchDaemon persistence",
-		Description: description,
-		ProcessID:   processID,
-		EventIDs:    []string{evt.EventID},
+		HostID:   evt.HostID,
+		RuleID:   r.ID(),
+		Severity: api.SeverityHigh,
+		Title:    "LaunchDaemon persistence",
+		Description: fmt.Sprintf(
+			"Untrusted executable %s registered as system LaunchDaemon %s: persistence (MITRE T1543.004)",
+			executable, p.ItemPath,
+		),
+		Subject:  "launchdaemon:" + p.ItemPath,
+		EventIDs: []string{evt.EventID},
 	}, nil
 }
 
-// allowed returns true when the instigator's code-signing identity is a platform binary or on the operator's team-ID allowlist —
-// both short-circuit the finding.
+// allowed returns true when the registered executable's code-signing identity is trusted: an Apple platform binary, a
+// notarized binary, or a binary signed by a team ID on the operator's allowlist. Any of these short-circuits the finding.
 func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON) bool {
-	if cs.IsPlatformBinary {
+	if cs.IsPlatformBinary || cs.IsNotarized {
 		return true
 	}
 	if r.AllowedTeamIDs == nil {

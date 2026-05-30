@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,8 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// stubGraphReader is a no-op GraphReader for rule paths that don't actually query the process graph. The malformed-payload test never
-// reaches a graph call because the JSON unmarshal fails before that.
+// stubGraphReader is a no-op GraphReader. The rule is process-optional (ADR-0008 amendment): its decision rides the
+// event payload alone, so it never queries the graph. Evaluate still takes a GraphReader, hence the stub.
 type stubGraphReader struct{}
 
 func (stubGraphReader) GetProcessByPID(context.Context, string, int, int64) (*api.Process, error) {
@@ -25,20 +24,6 @@ func (stubGraphReader) GetChildProcesses(context.Context, string, int, api.TimeR
 	return nil, nil
 }
 func (stubGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process, error) {
-	return nil, nil
-}
-
-// errGraphReader returns an error from GetProcessByPID, to prove the rule's best-effort process correlation does NOT
-// abort Evaluate (which would drop every finding for the whole batch).
-type errGraphReader struct{}
-
-func (errGraphReader) GetProcessByPID(context.Context, string, int, int64) (*api.Process, error) {
-	return nil, errors.New("graph unavailable")
-}
-func (errGraphReader) GetChildProcesses(context.Context, string, int, api.TimeRange) ([]api.Process, error) {
-	return nil, nil
-}
-func (errGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process, error) {
 	return nil, nil
 }
 
@@ -63,10 +48,9 @@ func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
 	assert.Equal(t, []string{"T1543.004"}, r.Techniques())
 }
 
-// TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases pins the contract of the allowed() helper for the small surface area of code-signing
-// values the engine hands it. Exercising these directly (rather than via fixtures) covers the JSON-error and "null literal" branches
-// without having to fabricate a process row whose code_signing column carries malformed bytes — MySQL's JSON column type rejects those
-// at insert.
+// TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases pins the contract of the allowed() helper over the executable's code-signing: an
+// Apple platform binary, a notarized binary, or an allowlisted team ID is trusted; an ad-hoc/unsigned or unknown-vendor executable is
+// not. Exercised directly so the notarization + allowlist branches are covered without fabricating a fixture per branch.
 func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 	t.Parallel()
 	r := &PrivilegeLaunchdPlistWrite{
@@ -79,9 +63,10 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 		want bool
 	}{
 		{"platform binary", codeSigningJSON{IsPlatformBinary: true}, true},
+		{"notarized vendor", codeSigningJSON{TeamID: "UNKNOWNTEAM", IsNotarized: true}, true},
 		{"allowlisted team", codeSigningJSON{TeamID: "VENDORALLOW", IsPlatformBinary: false}, true},
-		{"unknown team, no allowlist hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
-		{"unsigned (empty team, not platform)", codeSigningJSON{IsPlatformBinary: false}, false},
+		{"unknown team, not notarized, no allowlist hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
+		{"ad-hoc / unsigned (empty team, not platform, not notarized)", codeSigningJSON{IsPlatformBinary: false}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,15 +75,14 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 		})
 	}
 
-	// AllowedTeamIDs=nil branch: any non-platform instigator falls through to the "not allowed" return — the rule's
+	// AllowedTeamIDs=nil branch: any non-platform, non-notarized executable falls through to "not allowed" — the rule's
 	// default-construction shape.
 	rNoList := &PrivilegeLaunchdPlistWrite{}
 	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}))
 }
 
 // TestPrivilegeLaunchdPlistWrite_MalformedPayload exercises the json.Unmarshal failure path inside evalEvent: a btm_launch_item_add
-// event with a truncated payload is dropped silently. Bypasses the fixture harness because MySQL's JSON column rejects malformed
-// payloads at InsertEvents — this branch only fires in-memory if a downstream batcher hands us a partial buffer.
+// event with a truncated payload is dropped silently rather than erroring the batch.
 func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -116,53 +100,55 @@ func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
 	assert.Empty(t, findings, "malformed payload must be dropped silently")
 }
 
-// TestPrivilegeLaunchdPlistWrite_FiresWithoutProcessRow pins the robustness improvement over the old open-based rule: the BTM event
-// carries the instigator's code-signing inline, so a daemon registered by a non-platform instigator FIRES even when its process row
-// hasn't materialised (stubGraphReader returns nil for GetProcessByPID). The old rule dropped the finding on a missing row; this one
-// only loses the optional process-tree link (ProcessID == 0).
-func TestPrivilegeLaunchdPlistWrite_FiresWithoutProcessRow(t *testing.T) {
+// TestPrivilegeLaunchdPlistWrite_FiresOnUnsignedExecutable pins the corrected decision (ADR-0008 amendment): the rule keys on the
+// REGISTERED EXECUTABLE's code-signing, not the instigator. Here the instigator is Apple's smd (a platform binary) — which the old
+// instigator-gated rule would have skipped — but the executable is unsigned, so the rule fires. The alert is process-optional
+// (ProcessID 0) and dedups on the item path.
+func TestPrivilegeLaunchdPlistWrite_FiresOnUnsignedExecutable(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	r := &PrivilegeLaunchdPlistWrite{}
 
 	evt := api.Event{
-		EventID:     "ldp-noproc",
+		EventID:     "ldp-fire",
 		HostID:      "fixture-host",
 		TimestampNs: 1,
 		EventType:   "btm_launch_item_add",
 		Payload: json.RawMessage(`{"item_type":"daemon","item_path":"/Library/LaunchDaemons/com.x.plist",` +
-			`"managed":false,"instigator_pid":4242,"instigator_code_signing":{"team_id":"","is_platform_binary":false}}`),
+			`"executable_path":"/tmp/x","managed":false,` +
+			`"executable_code_signing":{"team_id":"","is_platform_binary":false},` +
+			`"instigator_pid":93,"instigator_code_signing":{"signing_id":"com.apple.xpc.smd","is_platform_binary":true}}`),
 	}
 	findings, err := r.Evaluate(ctx, []api.Event{evt}, stubGraphReader{})
 	require.NoError(t, err)
-	require.Len(t, findings, 1, "decision uses inline instigator signing; a missing process row must not drop the finding")
-	assert.Equal(t, int64(0), findings[0].ProcessID, "best-effort process link is 0 when the row is absent")
+	require.Len(t, findings, 1, "an unsigned executable registered as a system daemon must fire regardless of the smd instigator")
+	assert.Equal(t, int64(0), findings[0].ProcessID, "process-optional: a BTM persistence alert carries no process link")
+	assert.Equal(t, "launchdaemon:/Library/LaunchDaemons/com.x.plist", findings[0].Subject, "dedup subject is the item path")
+	assert.Contains(t, findings[0].Description, "/tmp/x", "description names the registered executable")
 }
 
-// TestPrivilegeLaunchdPlistWrite_ProcessLookupErrorStillFires pins that process-tree correlation is TRULY best-effort: a
-// GetProcessByPID error must not abort Evaluate (the engine swallows rule errors, so that would silently drop every finding
-// for the batch). The finding fires with ProcessID == 0.
-func TestPrivilegeLaunchdPlistWrite_ProcessLookupErrorStillFires(t *testing.T) {
+// TestPrivilegeLaunchdPlistWrite_SkipsWhenExecutableSigningAbsent pins the high-precision skip when the extension could not read the
+// registered executable's signing (object absent): with no decision input the rule must not fire.
+func TestPrivilegeLaunchdPlistWrite_SkipsWhenExecutableSigningAbsent(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	r := &PrivilegeLaunchdPlistWrite{}
 
 	evt := api.Event{
-		EventID:     "ldp-err",
+		EventID:     "ldp-nosig",
 		HostID:      "fixture-host",
 		TimestampNs: 1,
 		EventType:   "btm_launch_item_add",
 		Payload: json.RawMessage(`{"item_type":"daemon","item_path":"/Library/LaunchDaemons/com.x.plist",` +
-			`"managed":false,"instigator_pid":4242,"instigator_code_signing":{"team_id":"","is_platform_binary":false}}`),
+			`"executable_path":"/tmp/x","managed":false,"instigator_pid":93}`),
 	}
-	findings, err := r.Evaluate(ctx, []api.Event{evt}, errGraphReader{})
-	require.NoError(t, err, "a GetProcessByPID error must not abort Evaluate")
-	require.Len(t, findings, 1, "best-effort correlation error must not drop the finding")
-	assert.Equal(t, int64(0), findings[0].ProcessID)
+	findings, err := r.Evaluate(ctx, []api.Event{evt}, stubGraphReader{})
+	require.NoError(t, err)
+	assert.Empty(t, findings, "no executable code-signing => cannot classify => skip")
 }
 
 // TestBtmLaunchItemAddPayload_RoundTrip is the wire round-trip PBT (CLAUDE.md: new wire struct → Marshal ∘ Unmarshal == identity)
-// for the btm_launch_item_add payload the rule decodes.
+// for the btm_launch_item_add payload the rule decodes, including the executable_code_signing decision input.
 func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		in := btmLaunchItemAddPayload{
@@ -172,10 +158,17 @@ func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
 			Managed:        rapid.Bool().Draw(rt, "managed"),
 			InstigatorPID:  rapid.Int().Draw(rt, "instigator_pid"),
 		}
-		if rapid.Bool().Draw(rt, "has_cs") {
+		if rapid.Bool().Draw(rt, "has_exec_cs") {
+			in.ExecutableCodeSigning = &codeSigningJSON{
+				TeamID:           rapid.String().Draw(rt, "exec_team_id"),
+				IsPlatformBinary: rapid.Bool().Draw(rt, "exec_is_platform"),
+				IsNotarized:      rapid.Bool().Draw(rt, "exec_is_notarized"),
+			}
+		}
+		if rapid.Bool().Draw(rt, "has_instigator_cs") {
 			in.InstigatorCodeSigning = &codeSigningJSON{
-				TeamID:           rapid.String().Draw(rt, "team_id"),
-				IsPlatformBinary: rapid.Bool().Draw(rt, "is_platform_binary"),
+				TeamID:           rapid.String().Draw(rt, "inst_team_id"),
+				IsPlatformBinary: rapid.Bool().Draw(rt, "inst_is_platform"),
 			}
 		}
 		b, err := json.Marshal(in)

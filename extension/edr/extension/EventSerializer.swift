@@ -205,6 +205,9 @@ struct BtmLaunchItemAddPayload: Codable, Sendable {
     let legacy: Bool
     let managed: Bool
     let uid: uid_t
+    // executableCodeSigning is the server rule's decision input (ADR-0008 amendment): the code-signing of the registered
+    // executable, evaluated out-of-band via SecStaticCode. nil when executable_path is empty or unreadable.
+    let executableCodeSigning: CodeSigning?
     let instigatorPid: pid_t
     let instigatorCodeSigning: CodeSigning?
 
@@ -215,6 +218,7 @@ struct BtmLaunchItemAddPayload: Codable, Sendable {
         case legacy
         case managed
         case uid
+        case executableCodeSigning = "executable_code_signing"
         case instigatorPid = "instigator_pid"
         case instigatorCodeSigning = "instigator_code_signing"
     }

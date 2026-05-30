@@ -8,9 +8,9 @@
       "payload": {
         "item_type": "daemon",
         "item_path": "/Library/LaunchDaemons/com.vendor.mdm-agent.plist",
+        "executable_path": "/Library/MDM/agentd",
         "managed": true,
-        "instigator_pid": 9400,
-        "instigator_code_signing": {"team_id": "MDMVENDOR1", "signing_id": "x", "flags": 0, "is_platform_binary": false}
+        "executable_code_signing": {"team_id": "MDMVENDOR1", "signing_id": "com.vendor.agentd", "flags": 0, "is_platform_binary": false}
       }
     }
   ]

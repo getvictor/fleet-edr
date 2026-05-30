@@ -63,14 +63,23 @@ var schemaStatements = []string{
 		severity     ENUM('low', 'medium', 'high', 'critical') NOT NULL,
 		title        VARCHAR(512) NOT NULL,
 		description  TEXT         NOT NULL,
-		process_id   BIGINT       NOT NULL,
+		-- process_id is a NULLABLE enrichment link (ADR-0008 amendment). Persistence alerts keyed on BTM registration
+		-- have no useful live attacker process (the BTM instigator is Apple's smd), so they carry a NULL process_id; the
+		-- evidence of record is the registered item, not a process. A NULL value on the FK column is permitted.
+		process_id   BIGINT       NULL,
+		-- subject is the dedup identity, set by the engine: the process_id as a string for process-backed alerts (which
+		-- preserves the prior (source, host_id, rule_id, process_id) dedup), or a rule-supplied key (e.g.
+		-- "launchdaemon:<plist>") for process-less alerts. NOT NULL so the unique key dedups (a NULL in the key would not).
+		-- VARCHAR(255), not 512: it rides the uk_alerts_dedup unique key, which must stay under InnoDB's 3072-byte cap
+		-- alongside host_id(255) + rule_id(64) at utf8mb4. 255 chars covers a process_id string or a namespaced path key.
+		subject      VARCHAR(255) NOT NULL DEFAULT '',
 		techniques   JSON         NULL,
 		status       ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
 		updated_by   BIGINT       NULL,
 		created_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 		updated_at   TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 		resolved_at  TIMESTAMP(6) NULL,
-		UNIQUE KEY uk_alerts_dedup (source, host_id, rule_id, process_id),
+		UNIQUE KEY uk_alerts_dedup (source, host_id, rule_id, subject),
 		INDEX idx_alerts_host (host_id),
 		INDEX idx_alerts_status_created (status, created_at),
 		INDEX idx_alerts_updated_by (updated_by),

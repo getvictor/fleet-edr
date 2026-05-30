@@ -138,20 +138,25 @@ func (s JSONStringSlice) Value() (driver.Value, error) {
 
 // Alert is a persisted detection finding.
 type Alert struct {
-	ID          int64           `db:"id" json:"id"`
-	HostID      string          `db:"host_id" json:"host_id"`
-	RuleID      string          `db:"rule_id" json:"rule_id"`
-	Source      string          `db:"source" json:"source"`
-	Severity    string          `db:"severity" json:"severity"`
-	Title       string          `db:"title" json:"title"`
-	Description string          `db:"description" json:"description"`
-	ProcessID   int64           `db:"process_id" json:"process_id"`
-	Techniques  JSONStringSlice `db:"techniques" json:"techniques,omitempty"`
-	Status      AlertStatus     `db:"status" json:"status"`
-	CreatedAt   time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time       `db:"updated_at" json:"updated_at"`
-	ResolvedAt  *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
-	UpdatedBy   *int64          `db:"updated_by" json:"updated_by,omitempty"`
+	ID          int64  `db:"id" json:"id"`
+	HostID      string `db:"host_id" json:"host_id"`
+	RuleID      string `db:"rule_id" json:"rule_id"`
+	Source      string `db:"source" json:"source"`
+	Severity    string `db:"severity" json:"severity"`
+	Title       string `db:"title" json:"title"`
+	Description string `db:"description" json:"description"`
+	// ProcessID is the enrichment link to processes(id); 0 for process-less alerts (e.g. BTM-registration persistence,
+	// where the attacker has no live process). Reads COALESCE the nullable column back to 0.
+	ProcessID int64 `db:"process_id" json:"process_id"`
+	// Subject is the internal dedup identity (see schema.go); not exposed on the API. A blank Subject in a hand-built
+	// Alert is defaulted to the ProcessID string by InsertAlert.
+	Subject    string          `db:"subject" json:"-"`
+	Techniques JSONStringSlice `db:"techniques" json:"techniques,omitempty"`
+	Status     AlertStatus     `db:"status" json:"status"`
+	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
+	ResolvedAt *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
+	UpdatedBy  *int64          `db:"updated_by" json:"updated_by,omitempty"`
 }
 
 // AlertSource records what subsystem emitted an alert. The schema's `source` ENUM mirrors this set. Including source in the alert
@@ -202,8 +207,13 @@ type Finding struct {
 	Title       string
 	Description string
 	ProcessID   int64
-	EventIDs    []string
-	Techniques  []string
+	// Subject overrides the dedup identity. Leave blank for process-backed findings: the engine defaults it to the
+	// ProcessID, preserving the historical (source, host_id, rule_id, process_id) dedup. A process-less finding (e.g. BTM
+	// persistence, ProcessID == 0) MUST set a stable, namespaced Subject (e.g. "launchdaemon:<plist>") so distinct items
+	// produce distinct alerts rather than colliding on process_id 0.
+	Subject    string
+	EventIDs   []string
+	Techniques []string
 }
 
 // TimeRange is the [from, to] nanosecond window every graph query takes. The canonical type lives in server/httpserver because the

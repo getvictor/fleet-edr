@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-notarized",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4300,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "daemon",
+        "item_path": "/Library/LaunchDaemons/com.vendor.notarized.plist",
+        "executable_path": "/Library/Vendor/helperd",
+        "managed": false,
+        "executable_code_signing": {"team_id": "VENDOR1234", "signing_id": "com.vendor.helperd", "flags": 0, "is_platform_binary": false, "is_notarized": true}
+      }
+    }
+  ]
+}

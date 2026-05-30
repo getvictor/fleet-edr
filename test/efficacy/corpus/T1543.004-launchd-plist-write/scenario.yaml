@@ -1,18 +1,18 @@
 # T1543.004 Create or Modify System Process: Launch Daemon.
 #
-# A non-platform-binary instigator (/tmp/raw_dropper) registers a system
-# LaunchDaemon, surfaced via Background Task Management
-# (ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, item_type=daemon). The
-# privilege_launchd_plist_write rule fires on the unmanaged daemon registration
-# by a non-Apple, non-allowlisted instigator (ADR-0008). Mirrors the
-# positive_daemon_unsigned_instigator fixture.
+# A system LaunchDaemon is registered via Background Task Management
+# (ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, item_type=daemon) whose registered
+# executable (/tmp/raw_dropper) is unsigned/ad-hoc. The privilege_launchd_plist_write
+# rule fires on the unmanaged daemon registration of a non-Apple, non-notarized,
+# non-allowlisted executable (ADR-0008 + its 2026-05-29 amendment). Mirrors the
+# positive_daemon_unsigned_executable fixture.
 #
-# NOTE (L5/VM to confirm): this scenario asserts the RULE CONTRACT — the BTM
-# instigator is the non-platform dropper. The real BTM instigator for a legacy
-# `launchctl bootstrap` may instead be launchctl/launchd (a platform binary);
-# the edr-qa run must confirm the attribution and, if it differs, the rule's
-# discriminator moves from the instigator to the daemon executable.
-name: "T1543.004 LaunchDaemon registration by /tmp/raw_dropper"
+# Ground-truthed on edr-dev (ai/btm-attribution/experiment.md): the BTM instigator
+# for a `launchctl bootstrap` is Apple's smd (a platform binary), so the decision
+# rides the REGISTERED EXECUTABLE's code-signing, not the instigator. This scenario
+# models that exactly: a platform-binary instigator (smd-like) plus an unsigned
+# executable, which must still fire.
+name: "T1543.004 LaunchDaemon registration of an unsigned executable"
 host:
   id: AAAA1543-0004-0000-0000-000000000004
   hostname: efficacy-t1543-004.local
@@ -36,6 +36,10 @@ timeline:
     item_type: daemon
     item_path: /Library/LaunchDaemons/com.synth.persistence.plist
     executable_path: /tmp/raw_dropper
-    instigator_pid: 4544
+    executable_code_signing_present: true
+    executable_team_id: ""
+    executable_is_platform_binary: false
+    executable_is_notarized: false
+    instigator_pid: 93
     instigator_team_id: ""
-    instigator_is_platform_binary: false
+    instigator_is_platform_binary: true

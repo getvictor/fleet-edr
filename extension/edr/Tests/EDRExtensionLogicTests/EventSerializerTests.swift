@@ -100,8 +100,9 @@ final class EventSerializerTests: XCTestCase {
     }
 
     func testBtmLaunchItemAddPayloadRoundTripAndWireKeys() throws {
-        // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes, with a present-but-unsigned
-        // instigator (empty team/signing, is_platform_binary=false) so the server distinguishes it from "no instigator".
+        // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes. Models the real ground-truth
+        // (ai/btm-attribution): the DECISION input is executable_code_signing (here an unsigned dropper, which fires),
+        // while the instigator is Apple's smd (a platform binary) and is forensic-only.
         let payload = BtmLaunchItemAddPayload(
             itemType: "daemon",
             itemPath: "/Library/LaunchDaemons/com.evil.persistence.plist",
@@ -109,14 +110,15 @@ final class EventSerializerTests: XCTestCase {
             legacy: true,
             managed: false,
             uid: 0,
-            instigatorPid: 4242,
-            instigatorCodeSigning: CodeSigning(teamID: "", signingID: "", flags: 0, isPlatformBinary: false)
+            executableCodeSigning: CodeSigning(teamID: "", signingID: "", flags: 0, isPlatformBinary: false),
+            instigatorPid: 93,
+            instigatorCodeSigning: CodeSigning(teamID: "", signingID: "com.apple.xpc.smd", flags: 0, isPlatformBinary: true)
         )
         let encoded = try encoder.encode(payload)
         let json = String(data: encoded, encoding: .utf8) ?? ""
         for key in ["\"item_type\":\"daemon\"", "\"item_path\":", "\"executable_path\":",
-                    "\"managed\":false", "\"instigator_pid\":4242", "\"instigator_code_signing\":",
-                    "\"is_platform_binary\":false"] {
+                    "\"managed\":false", "\"executable_code_signing\":", "\"instigator_pid\":93",
+                    "\"instigator_code_signing\":", "\"is_platform_binary\":false"] {
             XCTAssertTrue(json.contains(key), "missing wire key \(key) in: \(json)")
         }
         let decoded = try decoder.decode(BtmLaunchItemAddPayload.self, from: encoded)
@@ -126,8 +128,9 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertEqual(decoded.legacy, payload.legacy)
         XCTAssertEqual(decoded.managed, payload.managed)
         XCTAssertEqual(decoded.uid, payload.uid)
+        XCTAssertEqual(decoded.executableCodeSigning?.isPlatformBinary, false, "unsigned executable -> decision input fires")
         XCTAssertEqual(decoded.instigatorPid, payload.instigatorPid)
-        XCTAssertEqual(decoded.instigatorCodeSigning?.isPlatformBinary, false)
+        XCTAssertEqual(decoded.instigatorCodeSigning?.isPlatformBinary, true, "instigator smd is platform; forensic only")
     }
 
     func testExecPayloadOmitsOptionalSigningAndHashes() throws {

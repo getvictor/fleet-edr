@@ -42,6 +42,6 @@ rules:
     expect: alert
     description: /usr/bin/security dump-keychain
   - rule_id: privilege_launchd_plist_write
-    severity: critical
+    severity: high
     expect: alert
-    description: synthetic non-platform-binary writes /Library/LaunchDaemons/*.plist
+    description: unsigned synthetic daemon executable registered into /Library/LaunchDaemons via launchctl bootstrap (BTM)

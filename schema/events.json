@@ -45,7 +45,8 @@
         "team_id": { "type": "string" },
         "signing_id": { "type": "string" },
         "flags": { "type": "integer" },
-        "is_platform_binary": { "type": "boolean" }
+        "is_platform_binary": { "type": "boolean" },
+        "is_notarized": { "type": "boolean", "description": "Optional. True iff the binary passes a Gatekeeper notarization assessment. Populated for a BTM item's executable_code_signing; absent (false) elsewhere." }
       }
     },
     "btm_launch_item_add_payload": {
@@ -59,10 +60,11 @@
         },
         "item_path": { "type": "string", "description": "Filesystem path of the launch item (the plist), from es_btm_launch_item_t.item_url." },
         "executable_path": { "type": "string", "description": "Optional. POSIX executable path from the launchd plist, when available." },
+        "executable_code_signing": { "$ref": "#/definitions/code_signing", "description": "Optional. Code-signing of the registered executable (executable_path), evaluated out-of-band by the extension via SecStaticCode. This is the rule's decision input (the instigator is Apple's smd for launchctl-bootstrap registrations and cannot discriminate)." },
         "legacy": { "type": "boolean", "description": "True iff a legacy plist-based launch item rather than an SMAppService registration." },
         "managed": { "type": "boolean", "description": "True iff managed by MDM. Managed daemons are operator-deployed and skipped by detection rules." },
         "uid": { "type": "integer", "description": "User ID the item is registered for." },
-        "instigator_pid": { "type": "integer", "description": "Optional. PID of the process that registered the item (es_event_btm_launch_item_add_t.instigator)." },
+        "instigator_pid": { "type": "integer", "description": "Optional. PID of the process that registered the item (es_event_btm_launch_item_add_t.instigator). Forensic context only: for a launchctl-bootstrap registration the instigator is Apple's smd." },
         "instigator_code_signing": { "$ref": "#/definitions/code_signing" }
       }
     },

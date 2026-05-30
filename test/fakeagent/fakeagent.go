@@ -96,16 +96,22 @@ type Event struct {
 	QueryType         string   `json:"query_type,omitempty"`
 	ResponseAddresses []string `json:"response_addresses,omitempty"`
 
-	// btm_launch_item_add specifics. InstigatorTeamID / InstigatorIsPlatformBinary populate the nested
-	// instigator_code_signing object, which buildPayload emits only when InstigatorPID > 0 (a present instigator).
-	ItemType                   string `json:"item_type,omitempty"`
-	ItemPath                   string `json:"item_path,omitempty"`
-	ExecutablePath             string `json:"executable_path,omitempty"`
-	Legacy                     bool   `json:"legacy,omitempty"`
-	Managed                    bool   `json:"managed,omitempty"`
-	InstigatorPID              int    `json:"instigator_pid,omitempty"`
-	InstigatorTeamID           string `json:"instigator_team_id,omitempty"`
-	InstigatorIsPlatformBinary bool   `json:"instigator_is_platform_binary,omitempty"`
+	// btm_launch_item_add specifics. The rule's decision input is the registered executable's code-signing:
+	// ExecutableCodeSigningPresent emits the executable_code_signing object (set false to model "signing unreadable",
+	// which the rule skips); ExecutableTeamID / ExecutableIsPlatformBinary / ExecutableIsNotarized fill it. The
+	// Instigator* fields populate the forensic-only instigator_code_signing object (emitted when InstigatorPID > 0).
+	ItemType                     string `json:"item_type,omitempty"`
+	ItemPath                     string `json:"item_path,omitempty"`
+	ExecutablePath               string `json:"executable_path,omitempty"`
+	Legacy                       bool   `json:"legacy,omitempty"`
+	Managed                      bool   `json:"managed,omitempty"`
+	ExecutableCodeSigningPresent bool   `json:"executable_code_signing_present,omitempty"`
+	ExecutableTeamID             string `json:"executable_team_id,omitempty"`
+	ExecutableIsPlatformBinary   bool   `json:"executable_is_platform_binary,omitempty"`
+	ExecutableIsNotarized        bool   `json:"executable_is_notarized,omitempty"`
+	InstigatorPID                int    `json:"instigator_pid,omitempty"`
+	InstigatorTeamID             string `json:"instigator_team_id,omitempty"`
+	InstigatorIsPlatformBinary   bool   `json:"instigator_is_platform_binary,omitempty"`
 }
 
 // Assertion is the M4/M10 detection-assertion shape. Parsed by M3 for forward compatibility but not consumed.
