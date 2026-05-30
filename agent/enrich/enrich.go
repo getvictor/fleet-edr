@@ -2,8 +2,8 @@
 // uploaded. Today it has a single job: fill a btm_launch_item_add event's
 // executable_code_signing from the on-disk signing of the registered
 // executable, which the sandboxed system extension cannot read on a
-// SIP-enabled host (ADR-0008, 2026-05-29 amendment). The agent — an
-// unsandboxed root daemon — can, and doing it here keeps signing evaluation
+// SIP-enabled host (ADR-0008, 2026-05-29 amendment). The agent (an
+// unsandboxed root daemon) can, and doing it here keeps signing evaluation
 // off the Endpoint Security callback thread.
 //
 // The JSON surgery is platform-neutral and fully unit-tested by injecting a
@@ -33,7 +33,7 @@ const btmEventType = "btm_launch_item_add"
 //   - non-btm events, malformed JSON, a missing payload, or a missing
 //     executable_path are passed through untouched;
 //   - an already-present, non-null executable_code_signing is left as-is
-//     (the source — e.g. a synthetic test feed — stays authoritative);
+//     (the source, e.g. a synthetic test feed, stays authoritative);
 //   - when eval reports the executable is unreadable, the field stays unset so
 //     the rule treats it as "cannot classify" and skips.
 //

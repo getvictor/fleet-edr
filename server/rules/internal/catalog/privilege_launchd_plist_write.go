@@ -37,8 +37,8 @@ import (
 // process at registration and the instigator is not the attacker, so the
 // finding carries no ProcessID and dedups on the item path.
 type PrivilegeLaunchdPlistWrite struct {
-	// AllowedTeamIDs is the set of code-signing team IDs whose LaunchDaemon registrations are silently accepted. Keep it small
-	// — every entry is a deployment-trusted vendor (Munki, JumpCloud, Kandji, an in-house signing team, etc.).
+	// AllowedTeamIDs is the set of code-signing team IDs whose LaunchDaemon registrations are silently accepted. Keep it
+	// small: every entry is a deployment-trusted vendor (Munki, JumpCloud, Kandji, an in-house signing team, etc.).
 	AllowedTeamIDs map[string]struct{}
 }
 

@@ -1,7 +1,7 @@
 // Package codesign reads the on-disk code-signing identity of a macOS
 // executable (or bundle) via the Security framework's SecStaticCode APIs.
 //
-// It exists so the agent — an unsandboxed root LaunchDaemon — can compute the
+// It exists so the agent (an unsandboxed root LaunchDaemon) can compute the
 // code-signing of a BTM-registered executable that the sandboxed system
 // extension cannot read on a SIP-enabled host. Doing the evaluation here, off
 // the Endpoint Security callback thread, also keeps any signing-validation

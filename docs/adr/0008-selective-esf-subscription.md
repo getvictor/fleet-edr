@@ -69,7 +69,7 @@ The 2026-05-29 amendment (revised-decision 4, and the implementation bullet) pla
 `privilege_launchd_plist_write` never fired: the extension's `executable_code_signing` was absent because
 `SecStaticCodeCreateWithPath` failed. The extension is a `sysextd`-managed system extension, and a SIP-enabled host
 **enforces its sandbox**, which denies the read of the BTM-registered executable (the extension is handed the path but
-not read access — unlike an `AUTH_EXEC` target, where `SigningInfoFallback` already works because the exec context grants
+not read access, unlike an `AUTH_EXEC` target, where `SigningInfoFallback` already works because the exec context grants
 it). edr-dev (SIP off) could not reproduce the miss: with SIP off the sandbox is not enforced, so the same extension code
 reads the file and the evaluation succeeds. That SIP-on/SIP-off split is the whole finding.
 
@@ -82,7 +82,7 @@ synthetic test feed, or a future source that can supply it) is left untouched, a
 field unset so the rule skips (high-precision). The extension now ships `executable_path` and a nil signing.
 
 This is also the safer architecture independent of the sandbox: it lifts signing validation **off the Endpoint Security
-callback thread**, where a network-touching check (revocation, notarization) could deadlock the extension — the class
+callback thread**, where a network-touching check (revocation, notarization) could deadlock the extension: the class
 Gemini flagged. It matches top-tier macOS-EDR practice: signing / reputation work lives in the privileged daemon, off the
 kernel callback path, never inline on the AUTH/NOTIFY handler. The agent uses the Security framework directly
 (`SecStaticCode`, `kSecCSNoNetworkAccess`, `anchor apple` for the platform-binary flag) rather than shelling out to

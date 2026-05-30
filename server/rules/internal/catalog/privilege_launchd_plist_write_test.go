@@ -43,7 +43,7 @@ func (stubGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process
 }
 
 // TestPrivilegeLaunchdPlistWrite_Fixtures runs every fixture case under fixtures/privilege_launchd_plist_write/ as its own sub-test.
-// Add a new case by dropping a *.json file in that directory — no Go edits needed.
+// Add a new case by dropping a *.json file in that directory; no Go edits needed.
 func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
 	t.Parallel()
 	r := &PrivilegeLaunchdPlistWrite{
@@ -90,7 +90,7 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 		})
 	}
 
-	// AllowedTeamIDs=nil branch: any non-platform executable falls through to "not allowed" — the rule's
+	// AllowedTeamIDs=nil branch: any non-platform executable falls through to "not allowed", the rule's
 	// default-construction shape.
 	rNoList := &PrivilegeLaunchdPlistWrite{}
 	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}))
@@ -116,8 +116,8 @@ func TestPrivilegeLaunchdPlistWrite_MalformedPayload(t *testing.T) {
 }
 
 // TestPrivilegeLaunchdPlistWrite_FiresOnUnsignedExecutable pins the corrected decision (ADR-0008 amendment): the rule keys on the
-// REGISTERED EXECUTABLE's code-signing, not the instigator. Here the instigator is Apple's smd (a platform binary) — which the old
-// instigator-gated rule would have skipped — but the executable is unsigned, so the rule fires. The alert is process-optional
+// REGISTERED EXECUTABLE's code-signing, not the instigator. Here the instigator is Apple's smd (a platform binary), which the old
+// instigator-gated rule would have skipped, but the executable is unsigned, so the rule fires. The alert is process-optional
 // (ProcessID 0) and dedups on the item path.
 func TestPrivilegeLaunchdPlistWrite_FiresOnUnsignedExecutable(t *testing.T) {
 	t.Parallel()

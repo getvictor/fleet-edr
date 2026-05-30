@@ -303,7 +303,7 @@ GO
   else
     "$bin" || echo "[runbook] dropper failed — alert may not have fired"
   fi
-  EXPECTED_ALERTS+=("privilege_launchd_plist_write — registered + removed LaunchDaemon com.synthetic.edr-runbook via launchctl bootstrap")
+  EXPECTED_ALERTS+=("privilege_launchd_plist_write: registered + removed LaunchDaemon com.synthetic.edr-runbook via launchctl bootstrap")
   return 0
 }
 

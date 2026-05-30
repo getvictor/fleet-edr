@@ -42,7 +42,7 @@ func TestEvaluate(t *testing.T) {
 
 	t.Run("non-Apple binary is readable but not a platform binary", func(t *testing.T) {
 		// The test binary is a real Mach-O the Go toolchain ad-hoc signs on Apple Silicon: it carries no Developer team
-		// ID and is not Apple-anchored. This is the attacker shape the rule fires on — present and readable, but untrusted.
+		// ID and is not Apple-anchored. This is the attacker shape the rule fires on: present and readable, but untrusted.
 		self, err := os.Executable()
 		if err != nil {
 			t.Skipf("os.Executable unavailable: %v", err)

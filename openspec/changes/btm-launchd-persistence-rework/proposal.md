@@ -15,7 +15,7 @@ amendment (PR #305):
    not an Apple platform binary, not MDM-managed, and not on the operator's team-ID allowlist. The registered
    executable's code-signing is evaluated out-of-band (`SecStaticCode`) by the **agent**, because the BTM event carries
    signing for the instigator/app processes but not for the to-be-launched executable, and a SIP-enabled host's
-   extension sandbox cannot read the registered executable (the agent, an unsandboxed root daemon, can — and runs the
+   extension sandbox cannot read the registered executable (the agent, an unsandboxed root daemon, can, and runs the
    check off the ES callback thread). Notarization is deliberately NOT a trust signal (Apple notarizes malware, and it
    is not checkable network-free on the ES thread); if ever used it belongs in a server-side reputation layer.
 2. **Process-optional alerts**: the registered executable has no live process at registration and the instigator (`smd`)

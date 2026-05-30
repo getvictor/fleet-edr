@@ -86,7 +86,7 @@ import "unsafe"
 // empty or SecStaticCode cannot open the file (absent / unreadable): the
 // server rule treats a missing executable_code_signing as "cannot classify"
 // and skips, staying high-precision. A present-but-unsigned binary returns a
-// Result with empty TeamID / SigningID and IsPlatformBinary=false — the prime
+// Result with empty TeamID / SigningID and IsPlatformBinary=false: the prime
 // attacker case (an ad-hoc / unsigned dropper) the rule fires on.
 //
 // Mirrors the proven SecCode form in the extension's SigningInfoFallback.swift
