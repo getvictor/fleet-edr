@@ -1,4 +1,4 @@
-# Copilot review instructions — Fleet EDR
+# Copilot review instructions: Fleet EDR
 
 Fleet EDR is a standalone macOS EDR (Swift Endpoint Security extension + Go agent + Go server + React UI + JSON event
 schema). When reviewing a pull request, apply these repo-specific checks in addition to the usual ones.
@@ -6,9 +6,9 @@ schema). When reviewing a pull request, apply these repo-specific checks in addi
 ## Always flag: behavior changes that do not update the spec
 
 The behavioral contract lives in `openspec/specs/**/spec.md` and is enforced against tests by `tools/spectrace`. If a PR
-changes observable behavior — a detection rule (`server/rules/internal/catalog/**`), the event wire schema
-(`schema/events.json`), the detection DDL / persistence semantics (`server/detection/**`), an API/wire shape, or the
-extension's emitted events — and does NOT update `openspec/specs/**` (and ideally add an `openspec/changes/` proposal),
+changes observable behavior (a detection rule under `server/rules/internal/catalog/**`, the event wire schema
+`schema/events.json`, the detection DDL / persistence semantics under `server/detection/**`, an API/wire shape, or the
+extension's emitted events) and does NOT update `openspec/specs/**` (and ideally add an `openspec/changes/` proposal),
 flag it as a missing spec update. A new or renamed `### Requirement:` / `#### Scenario:` MUST also have at least one test
 carrying its canonical `spec:<id>` marker, and a renamed scenario MUST update every marker referencing the old slug.
 
@@ -20,7 +20,7 @@ required. The opt-out is never a license to skip the spec for a real behavior ch
 ## Repo conventions (do not flag these as issues)
 
 - Go 1.22+ integer range (`for i := range N` where `N` is an `int`) compiles and is the project's preferred form. Do NOT
-  claim it "doesn't compile" — that has been a recurring false positive.
+  claim it "doesn't compile": that has been a recurring false positive.
 - No em-dashes in code, comments, or docs (use `:` or ` - `).
 - Line wrap is 140 characters for Go and Markdown; SwiftLint allows 150. Do not flag lines under those limits.
 - The macOS deployment target is 26.x and the product minimum is macOS 13+ (ADR-0002); do not flag missing

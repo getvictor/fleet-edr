@@ -60,6 +60,18 @@ wire format, changing anything in `extension/edr/`, or modifying a SHALL / MUST 
 - Branch off `main`. Keep the diff focused; large refactors should be split into reviewable chunks.
 - Write a PR description that explains the *why*, not just the *what*. Link the issue it closes.
 - A PR is ready to merge when CI is green, the SonarCloud quality gate is green, and at least one maintainer has approved.
+- **Behavior changes update the spec.** A PR touching a detection rule, `schema/events.json`, or the detection DDL must
+  update `openspec/specs/**`; the `OpenSpec sync` CI gate enforces it. A no-behavior touch of those paths (comment,
+  refactor, gofmt, dep bump) asserts `no-behavior-change` (label or `[no-behavior-change]` in the PR title) to clear the
+  gate: an auditable claim a reviewer verifies, never a way to skip the spec for a real behavior change. The label is a
+  one-time repo setup:
+
+  ```sh
+  gh label create no-behavior-change \
+    --description "PR asserts it changes no observable behavior (clears the OpenSpec sync gate)" \
+    --color ededed
+  ```
+
 - Do **not** add `Co-Authored-By` lines to commits. AI-assisted code is welcome; the assistant is a tool, not a co-author.
 - Sign your commits if you can (`git commit -S`); we do not require this today, but plan to.
 
