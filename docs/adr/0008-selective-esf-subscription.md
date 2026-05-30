@@ -1,6 +1,6 @@
 # 0008. Selective Endpoint Security subscription: BTM for persistence, no broad NOTIFY_OPEN
 
-- Status: Accepted (amended 2026-05-29; see Amendment below)
+- Status: Accepted (amended 2026-05-29 and 2026-05-30; see Amendments below)
 - Date: 2026-05-29
 - Deciders: getvictor
 
@@ -31,10 +31,11 @@ attacker process. A direct capture on edr-dev (SIP off) of a real `btm_launch_it
    `alerts.process_id` must be **nullable**; the evidence of record is the item + executable, with any correlated process
    as enrichment. This supersedes the implicit "every alert has a NOT-NULL process_id" assumption in
    `server/detection/bootstrap/schema.go`.
-4. **The extension must evaluate the executable out-of-band.** BTM carries code-signing only for the `instigator` / `app`
+4. **The executable must be evaluated out-of-band.** BTM carries code-signing only for the `instigator` / `app`
    *processes*, never for the to-be-launched executable. The decision input (2) therefore requires a `SecStaticCode`
-   evaluation of `executable_path` in the extension (or a server-side correlation to the executable's first exec). The
-   `codesign` / `spctl` capture confirms the out-of-band classification is clean and decisive.
+   evaluation of `executable_path`. The `codesign` / `spctl` capture confirms the out-of-band classification is clean and
+   decisive. (Superseded by the 2026-05-30 amendment on *where* it runs: in the **agent**, not the extension, because a
+   SIP-enabled host's extension sandbox denies the read.)
 
 ### Correction to the original Decision text
 
@@ -50,11 +51,54 @@ observing the copier.
   `managed` decision; drop the `ProcessID == 0` finding path.
 - Schema: make `alerts.process_id` nullable (migration + dedup-key NULL handling + insert / query / UI), or carry a
   separate process-less alert path.
-- Extension: add the `SecStaticCode` evaluation of `executable_path` to the BTM payload (new wire field), since the
-  event provides no executable signing inline.
+- Add the `SecStaticCode` evaluation of `executable_path` to the BTM payload (new wire field), since the event provides
+  no executable signing inline. (See the 2026-05-30 amendment: the evaluation lands in the agent, not the extension.)
 - L5 `scripts/uat/scenarios/attack-runbook/expected.yaml`: the `expect: alert` + `severity: critical` assertion only
   holds once the discriminator is the executable; align severity (`high`) and re-confirm the expectation against the
   reworked rule on a notarized build.
+
+## Amendment 2026-05-30: evaluate the executable's signing in the agent, and notarization is not a trust signal
+
+Two refinements to the 2026-05-29 amendment, both forced by what the SIP-on QE VM (edr-qa) showed once the reworked rule
+ran on a notarized build.
+
+### Ground-truth: the extension cannot read the registered executable on a SIP-enabled host
+
+The 2026-05-29 amendment (revised-decision 4, and the implementation bullet) placed the `SecStaticCode` evaluation of
+`executable_path` **in the extension**. On edr-qa (SIP on, the pilot-customer simulation) the reworked
+`privilege_launchd_plist_write` never fired: the extension's `executable_code_signing` was absent because
+`SecStaticCodeCreateWithPath` failed. The extension is a `sysextd`-managed system extension, and a SIP-enabled host
+**enforces its sandbox**, which denies the read of the BTM-registered executable (the extension is handed the path but
+not read access — unlike an `AUTH_EXEC` target, where `SigningInfoFallback` already works because the exec context grants
+it). edr-dev (SIP off) could not reproduce the miss: with SIP off the sandbox is not enforced, so the same extension code
+reads the file and the evaluation succeeds. That SIP-on/SIP-off split is the whole finding.
+
+### Revised decision: the agent evaluates the executable's signing, off the ES callback thread
+
+The evaluation moves from the extension to the **agent**, which is an unsandboxed root LaunchDaemon and can read the
+registered executable on every host (SIP on or off). The agent fills `executable_code_signing` on the
+`btm_launch_item_add` event before upload, **fill-if-missing and non-destructive**: a pre-populated value (e.g. a
+synthetic test feed, or a future source that can supply it) is left untouched, and an unreadable executable leaves the
+field unset so the rule skips (high-precision). The extension now ships `executable_path` and a nil signing.
+
+This is also the safer architecture independent of the sandbox: it lifts signing validation **off the Endpoint Security
+callback thread**, where a network-touching check (revocation, notarization) could deadlock the extension — the class
+Gemini flagged. It matches top-tier macOS-EDR practice: signing / reputation work lives in the privileged daemon, off the
+kernel callback path, never inline on the AUTH/NOTIFY handler. The agent uses the Security framework directly
+(`SecStaticCode`, `kSecCSNoNetworkAccess`, `anchor apple` for the platform-binary flag) rather than shelling out to
+`codesign` / `spctl`. The extension's evaluation path (`evaluateExecutableSigning` + `satisfiesAppleAnchor`) is removed so
+there is a single source of truth. (`agent/codesign`, `agent/enrich`.)
+
+### Notarization is not a trust signal
+
+Revised-decision 2 (2026-05-29) framed the discriminator as "signature / **notarization**". Notarization is withdrawn as a
+trust input. It is an automated Apple malware scan, not an endorsement (Apple has notarized malware: Shlayer, adload), and
+it is not checkable network-free in-process on the agent's enqueue path or the ES thread (`SecAssessmentTicketLookup` is
+not public; `SecAssessment` / Gatekeeper can hit the network). Trust is deterministic and network-free: an Apple
+**platform binary** (`anchor apple`) or a **team ID on the operator's allowlist** (`EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`).
+The `is_notarized` wire field was removed. Notarization / reputation scoring, if ever pursued, belongs in a server-side
+layer off the hot path. The 2026-05-29 capture's `spctl -t install -> rejected` line remains accurate as ground-truth
+about that specific binary; it is just no longer a decision input.
 
 ## Context
 
