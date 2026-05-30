@@ -12,6 +12,11 @@ extension's emitted events — and does NOT update `openspec/specs/**` (and idea
 flag it as a missing spec update. A new or renamed `### Requirement:` / `#### Scenario:` MUST also have at least one test
 carrying its canonical `spec:<id>` marker, and a renamed scenario MUST update every marker referencing the old slug.
 
+The `OpenSpec sync` CI gate has a `no-behavior-change` opt-out (label or `[no-behavior-change]` in the title) for the
+case where a behavior-path file changed but the change is genuinely non-behavioral (comment, refactor, gofmt, dep bump).
+If a PR uses that opt-out but the diff DOES change observable behavior, flag it: the assertion is wrong and the spec is
+required. The opt-out is never a license to skip the spec for a real behavior change.
+
 ## Repo conventions (do not flag these as issues)
 
 - Go 1.22+ integer range (`for i := range N` where `N` is an `int`) compiles and is the project's preferred form. Do NOT

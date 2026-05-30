@@ -2,11 +2,16 @@ name: OpenSpec sync
 
 # Behavior changes MUST update the spec. This gate fails a PR that touches a high-signal behavior-bearing path (a
 # detection rule, the event wire schema, or the detection DDL) without also touching openspec/ (a canonical spec edit
-# under openspec/specs/** and/or an openspec/changes/ proposal). It is a backstop, not an exhaustive behavior detector:
-# the paths are scoped tightly to ones that are almost always an observable behavior change, so false positives are
-# rare. A genuine refactor / comment / perf change with no behavior delta opts out with the `skip-openspec` label or a
-# `[skip-openspec]` tag in the PR title. Authoring-time reminders live in .github/copilot-instructions.md, the PR
-# template, and CLAUDE.md; this is the only one that blocks.
+# under openspec/specs/** and/or an openspec/changes/ proposal).
+#
+# The gate fires on PATH, not on actual behavior, so it has false positives: a comment fix, refactor, gofmt, or dep bump
+# in one of these files touches the path without changing behavior, and there is nothing to spec. The opt-out exists ONLY
+# for that case. It is NOT a way to skip updating the spec for a real behavior change. To make that unambiguous (and
+# auditable), the opt-out is an explicit assertion that the PR changes NO observable behavior: the `no-behavior-change`
+# label or a `[no-behavior-change]` tag in the title. When used, the gate emits a ::notice:: naming the flagged files so
+# a reviewer (and Copilot, per .github/copilot-instructions.md) MUST confirm the assertion; misusing it on a behavior
+# change is a process violation. Authoring-time reminders live in .github/copilot-instructions.md, the PR template, and
+# CLAUDE.md; this is the only one that blocks.
 
 on:
   pull_request:
@@ -41,12 +46,6 @@ jobs:
             exit 0
           fi
 
-          # Escape hatch for a non-behavioral touch (refactor, comment, perf) of a behavior path.
-          if [[ ",$PR_LABELS," == *",skip-openspec,"* ]] || [[ "$PR_TITLE" == *"[skip-openspec]"* ]]; then
-            echo "skip-openspec opt-out present (label or [skip-openspec] in title); not enforcing."
-            exit 0
-          fi
-
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
 
           # Behavior-bearing paths: the detection rule catalog (rule logic), the event wire schema, and the detection
@@ -65,13 +64,29 @@ jobs:
             exit 0
           fi
 
+          # Behavior-path files changed with NO openspec update. This is a violation UNLESS the PR explicitly asserts it
+          # changes no observable behavior (the only legitimate reason these paths can change without a spec). The
+          # assertion is auditable: the ::notice:: below names the files so a reviewer must confirm there is truly no
+          # behavior delta. This is NOT a way to skip the spec for a real behavior change.
+          if [[ ",$PR_LABELS," == *",no-behavior-change,"* ]] || [[ "$PR_TITLE" == *"[no-behavior-change]"* ]]; then
+            {
+              echo "::notice::OpenSpec gate: PR asserts 'no-behavior-change' for these behavior-path files. A reviewer MUST confirm no observable behavior changed; if it did, an openspec/ update is required."
+              echo "Files asserted non-behavioral:"
+              echo "$behavior_files"
+            }
+            exit 0
+          fi
+
           echo "::error::Behavior-bearing files changed without any openspec/ update."
           {
             echo "These files are an observable behavior change:"
             echo "$behavior_files"
             echo
-            echo "Update the spec in the same PR: edit openspec/specs/** (and add an openspec/changes/ proposal)."
-            echo "If this is a refactor / comment / perf change with NO behavior delta, add the 'skip-openspec' label"
-            echo "or put [skip-openspec] in the PR title."
+            echo "Update the spec in the same PR: edit openspec/specs/** (and add an openspec/changes/ proposal),"
+            echo "with a spec:<id> test marker for any new or renamed scenario."
+            echo
+            echo "ONLY if this PR changes no observable behavior (a comment / refactor / gofmt / dep bump in one of"
+            echo "these files), assert that with the 'no-behavior-change' label or [no-behavior-change] in the PR title."
+            echo "Do NOT use that to skip the spec for a real behavior change."
           } >&2
           exit 1
