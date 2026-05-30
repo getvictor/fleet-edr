@@ -228,7 +228,9 @@ Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaem
 
 Keyed on the high-level `BTM_LAUNCH_ITEM_ADD` event (`item_type=daemon`) rather than a raw file write, so the registration is caught no matter how the plist landed on disk (direct write, atomic temp-file+rename, copy), which a file-write rule can miss.
 
-The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who registered it: a `launchctl bootstrap` is always instigated by Apple's `smd`, so the instigator cannot discriminate. A daemon whose executable is an Apple platform binary, notarized, MDM-managed, or signed by an allowlisted vendor team ID is skipped; an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` (user-domain LaunchAgents).
+The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who registered it: a `launchctl bootstrap` is always instigated by Apple's `smd`, so the instigator cannot discriminate. A daemon whose executable is an Apple platform binary, MDM-managed, or signed by an allowlisted vendor team ID is skipped; an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` (user-domain LaunchAgents).
+
+Note: the rule also trusts a notarized executable, but the agent does not yet report notarization status, so today a notarized but non-allowlisted vendor daemon will alert until its team ID is allowlisted.
 
 ### Configuration
 
@@ -238,8 +240,8 @@ The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who regist
 
 ### Known false-positive sources
 
-- Non-Apple vendor app installing its own non-notarized LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST; notarized vendor daemons are accepted automatically.
-- Custom in-house pkg installers whose daemon executable is signed but not notarized — allowlist your developer team ID.
+- Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST. (Notarization-based auto-trust is planned but the agent does not emit notarization status yet, so allowlisting is required today.)
+- Custom in-house pkg installers whose daemon executable is signed but not notarized: allowlist your developer team ID.
 
 ### Limitations
 
@@ -293,5 +295,5 @@ Surfaces every AUTH_EXEC denial from the extension as an alert in the unified vi
 
 ### Description
 
-The extension's AUTH_EXEC decision walker denies execs that match an admin-defined application-control rule. Every such denial emits an `application_control_block` event that this built-in rule maps to an alert with `source='application_control'`. The alert carries the matched rule's identifier, severity, and operator-supplied custom message. The dedup key (source, host_id, rule_id, process_id) means repeated blocks of the same binary by the same rule on the same process collapse into one alert row.
+The extension's AUTH_EXEC decision walker denies execs that match an admin-defined application-control rule. Every such denial emits an `application_control_block` event that this built-in rule maps to an alert with `source='application_control'`. The alert carries the matched rule's identifier, severity, and operator-supplied custom message. The dedup key (source, host_id, rule_id, subject), where an app-control alert's subject is its process id, means repeated blocks of the same binary by the same rule on the same process collapse into one alert row.
 

@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -61,14 +63,16 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 			"which a file-write rule can miss.\n\n" +
 			"The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who registered it: a `launchctl " +
 			"bootstrap` is always instigated by Apple's `smd`, so the instigator cannot discriminate. A daemon whose " +
-			"executable is an Apple platform binary, notarized, MDM-managed, or signed by an allowlisted vendor team ID is " +
-			"skipped; an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` " +
-			"(user-domain LaunchAgents).",
+			"executable is an Apple platform binary, MDM-managed, or signed by an allowlisted vendor team ID is skipped; " +
+			"an ad-hoc, unsigned, or unknown-vendor executable fires. Paired with `persistence_launchagent` (user-domain " +
+			"LaunchAgents).\n\n" +
+			"Note: the rule also trusts a notarized executable, but the agent does not yet report notarization status, so " +
+			"today a notarized but non-allowlisted vendor daemon will alert until its team ID is allowlisted.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"btm_launch_item_add"},
 		FalsePositives: []string{
-			"Non-Apple vendor app installing its own non-notarized LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST; notarized vendor daemons are accepted automatically.",
-			"Custom in-house pkg installers whose daemon executable is signed but not notarized — allowlist your developer team ID.",
+			"Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST. (Notarization-based auto-trust is planned but the agent does not emit notarization status yet, so allowlisting is required today.)",
+			"Custom in-house pkg installers whose daemon executable is signed but not notarized: allowlist your developer team ID.",
 		},
 		Limitations: []string{
 			"BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).",
@@ -159,13 +163,32 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 			"Untrusted executable %s registered as system LaunchDaemon %s: persistence (MITRE T1543.004)",
 			executable, p.ItemPath,
 		),
-		Subject:  "launchdaemon:" + p.ItemPath,
+		Subject:  launchDaemonSubject(p.ItemPath),
 		EventIDs: []string{evt.EventID},
 	}, nil
 }
 
+// subjectColumnLimit mirrors alerts.subject VARCHAR(255) (server/detection/bootstrap/schema.go). A dedup subject longer
+// than the column would fail the INSERT or silently truncate (and then collide), dropping the finding.
+const subjectColumnLimit = 255
+
+// launchDaemonSubject builds the process-less dedup subject for a LaunchDaemon registration. It keeps the human-readable
+// "launchdaemon:<item path>" form for the common case, and falls back to a fixed-length SHA-256 of the path when the
+// readable form would overflow alerts.subject. The hash is stable per item path, so dedup still collapses repeat
+// registrations of the same daemon while keeping distinct daemons distinct.
+func launchDaemonSubject(itemPath string) string {
+	subject := "launchdaemon:" + itemPath
+	if len(subject) <= subjectColumnLimit {
+		return subject
+	}
+	sum := sha256.Sum256([]byte(itemPath))
+	return "launchdaemon:sha256:" + hex.EncodeToString(sum[:])
+}
+
 // allowed returns true when the registered executable's code-signing identity is trusted: an Apple platform binary, a
 // notarized binary, or a binary signed by a team ID on the operator's allowlist. Any of these short-circuits the finding.
+// IsNotarized is honored here for forward-compatibility, but the extension does not populate it yet (planned SecAssessment
+// enhancement); until it does, trust in production comes from the platform-binary flag and the team-ID allowlist.
 func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON) bool {
 	if cs.IsPlatformBinary || cs.IsNotarized {
 		return true

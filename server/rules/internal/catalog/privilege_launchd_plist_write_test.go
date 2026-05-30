@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,20 @@ import (
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
+
+// TestLaunchDaemonSubject pins the dedup-subject bound: a short item path stays human-readable, while a path that would
+// overflow alerts.subject VARCHAR(255) falls back to a stable hashed subject so the alert INSERT cannot fail or collide.
+func TestLaunchDaemonSubject(t *testing.T) {
+	t.Parallel()
+	short := "/Library/LaunchDaemons/com.x.plist"
+	assert.Equal(t, "launchdaemon:"+short, launchDaemonSubject(short), "short path stays human-readable")
+
+	long := "/Library/LaunchDaemons/" + strings.Repeat("a", 300) + ".plist"
+	got := launchDaemonSubject(long)
+	assert.LessOrEqual(t, len(got), subjectColumnLimit, "long path must fit alerts.subject VARCHAR(255)")
+	assert.True(t, strings.HasPrefix(got, "launchdaemon:sha256:"), "long path falls back to a hashed subject")
+	assert.Equal(t, got, launchDaemonSubject(long), "hashing is stable for the same path")
+}
 
 // stubGraphReader is a no-op GraphReader. The rule is process-optional (ADR-0008 amendment): its decision rides the
 // event payload alone, so it never queries the graph. Evaluate still takes a GraphReader, hence the stub.

@@ -214,6 +214,16 @@ func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
 		// Runtime; NULL otherwise. The agent only emits cdhash for HR processes (issue #68 / PR #185) so non-HR rows skip
 		// it. Persisted alongside sha256 so incident response can correlate by either hash.
 		`ALTER TABLE processes ADD COLUMN cdhash VARCHAR(40) NULL`,
+		// ADR-0008 amendment: process-optional alerts. `subject` is the dedup identity; `process_id` becomes a nullable
+		// enrichment FK; the unique key moves off `process_id` onto `subject`. ADD COLUMN is idempotent via error 1060;
+		// the MODIFY is a no-op when re-run (process_id is already NULL); the index swap is a single self-converging
+		// statement that always ends on the `subject` key (DROP the existing uk_alerts_dedup, ADD it back on subject), so
+		// it is safe to re-run on every boot and on a fresh DB whose CREATE TABLE already built the new key. It is one
+		// statement only because it is an atomic index rename, not the independent-additive-clauses case the function
+		// comment warns against.
+		`ALTER TABLE alerts ADD COLUMN subject VARCHAR(255) NOT NULL DEFAULT ''`,
+		`ALTER TABLE alerts MODIFY COLUMN process_id BIGINT NULL`,
+		`ALTER TABLE alerts DROP INDEX uk_alerts_dedup, ADD UNIQUE KEY uk_alerts_dedup (source, host_id, rule_id, subject)`,
 	}
 	for _, stmt := range alters {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
