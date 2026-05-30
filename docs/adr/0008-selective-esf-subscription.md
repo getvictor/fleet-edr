@@ -1,8 +1,60 @@
 # 0008. Selective Endpoint Security subscription: BTM for persistence, no broad NOTIFY_OPEN
 
-- Status: Accepted
+- Status: Accepted (amended 2026-05-29; see Amendment below)
 - Date: 2026-05-29
 - Deciders: getvictor
+
+## Amendment 2026-05-29: BTM attribution ground-truth (edr-dev) and the discriminator / persistence model
+
+The original Decision left two things unspecified that the implementation (#304) then got wrong, both flagged in review
+(Copilot, Gemini): (1) what the rule discriminates on, and (2) how a persistence alert is persisted when there is no live
+attacker process. A direct capture on edr-dev (SIP off) of a real `btm_launch_item_add` for
+`launchctl bootstrap system <plist>` settles both. Raw event:
+
+- `item_type=daemon`, `legacy=true`, `managed=false`, `executable_path=<non-Apple daemon binary>`
+- `instigator = /usr/libexec/smd` (`com.apple.xpc.smd`), an Apple platform binary; `app = nil`
+- out-of-band on the executable: `codesign` -> ad-hoc / linker-signed, no TeamIdentifier; `spctl -t install` -> rejected (not notarized)
+
+(Full record: `ai/btm-attribution/experiment.md`.)
+
+### Revised decisions
+
+1. **Do NOT gate on the BTM instigator's code-signing.** `launchctl bootstrap` delegates registration to `smd`, so the
+   instigator is an Apple platform binary for *every* legacy LaunchDaemon registration, attack or not. The instigator is
+   not the attacker, and `app` is nil for this vector. An instigator `is_platform_binary` gate suppresses the canonical
+   attack. (Implementation note: #304 shipped exactly this gate; it must change.)
+2. **Discriminate on the registered item.** The signal is the `executable_path`'s signature / notarization, evaluated
+   out-of-band, plus `managed == false` and path. A non-notarized / ad-hoc executable registered as an unmanaged system
+   daemon is high-precision malicious; a Developer-ID + notarized vendor daemon (or `managed == true`) is benign.
+3. **Persistence alerts are process-optional.** The BTM event exposes no useful attacker process (only `smd`), and a
+   large class of real persistence has no live process at all (reboot-time registration, an exited dropper, MDM).
+   `alerts.process_id` must be **nullable**; the evidence of record is the item + executable, with any correlated process
+   as enrichment. This supersedes the implicit "every alert has a NOT-NULL process_id" assumption in
+   `server/detection/bootstrap/schema.go`.
+4. **The extension must evaluate the executable out-of-band.** BTM carries code-signing only for the `instigator` / `app`
+   *processes*, never for the to-be-launched executable. The decision input (2) therefore requires a `SecStaticCode`
+   evaluation of `executable_path` in the extension (or a server-side correlation to the executable's first exec). The
+   `codesign` / `spctl` capture confirms the out-of-band classification is clean and decisive.
+
+### Correction to the original Decision text
+
+Decision item 2 below claims BTM "catches drops the file-write rule misses (atomic temp-file + rename, `cp` by a platform
+binary)." The atomic-rename point stands (BTM fires on registration regardless of how the plist landed). The "`cp` by a
+platform binary" framing is wrong and is withdrawn: BTM does not fire on the `cp`, it fires on the registration, whose
+instigator is `smd` regardless. Robustness comes from keying on registration + the registered executable, not from
+observing the copier.
+
+### Implications for the implementation (#304)
+
+- `privilege_launchd_plist_write`: replace the instigator-signing gate with an executable notarization / signature +
+  `managed` decision; drop the `ProcessID == 0` finding path.
+- Schema: make `alerts.process_id` nullable (migration + dedup-key NULL handling + insert / query / UI), or carry a
+  separate process-less alert path.
+- Extension: add the `SecStaticCode` evaluation of `executable_path` to the BTM payload (new wire field), since the
+  event provides no executable signing inline.
+- L5 `scripts/uat/scenarios/attack-runbook/expected.yaml`: the `expect: alert` + `severity: critical` assertion only
+  holds once the discriminator is the executable; align severity (`high`) and re-confirm the expectation against the
+  reworked rule on a notarized build.
 
 ## Context
 
