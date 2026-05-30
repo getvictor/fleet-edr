@@ -58,6 +58,11 @@ func BtmExecutableSigning(data []byte, eval Evaluator) []byte {
 	if err := json.Unmarshal(payloadRaw, &payload); err != nil {
 		return data
 	}
+	// A JSON-null payload unmarshals to a nil map; writing executable_code_signing into it below would panic. A
+	// btm_launch_item_add with a null payload is degenerate, so pass it through untouched.
+	if payload == nil {
+		return data
+	}
 
 	// Already provided (non-null) -> trust the source, do nothing.
 	if cs, present := payload["executable_code_signing"]; present && !isJSONNull(cs) {

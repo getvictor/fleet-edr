@@ -64,8 +64,9 @@ func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
 }
 
 // TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases pins the contract of the allowed() helper over the executable's code-signing: an
-// Apple platform binary, a notarized binary, or an allowlisted team ID is trusted; an ad-hoc/unsigned or unknown-vendor executable is
-// not. Exercised directly so the notarization + allowlist branches are covered without fabricating a fixture per branch.
+// Apple platform binary or an allowlisted team ID is trusted; an ad-hoc/unsigned or unknown-vendor executable is not. Notarization
+// is deliberately not a trust signal (see the rule doc). Exercised directly so the platform-binary + allowlist branches are covered
+// without fabricating a fixture per branch.
 func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 	t.Parallel()
 	r := &PrivilegeLaunchdPlistWrite{
@@ -89,7 +90,7 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 		})
 	}
 
-	// AllowedTeamIDs=nil branch: any non-platform, non-notarized executable falls through to "not allowed" — the rule's
+	// AllowedTeamIDs=nil branch: any non-platform executable falls through to "not allowed" — the rule's
 	// default-construction shape.
 	rNoList := &PrivilegeLaunchdPlistWrite{}
 	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}))

@@ -206,7 +206,8 @@ struct BtmLaunchItemAddPayload: Codable, Sendable {
     let managed: Bool
     let uid: uid_t
     // executableCodeSigning is the server rule's decision input (ADR-0008 amendment): the code-signing of the registered
-    // executable, evaluated out-of-band via SecStaticCode. nil when executable_path is empty or unreadable.
+    // executable, evaluated out-of-band via SecStaticCode. The extension always emits nil here (its sandbox cannot read
+    // the registered executable on a SIP-enabled host); the agent fills it from the on-disk binary before upload.
     let executableCodeSigning: CodeSigning?
     let instigatorPid: pid_t
     let instigatorCodeSigning: CodeSigning?

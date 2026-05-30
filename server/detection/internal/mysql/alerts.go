@@ -128,8 +128,12 @@ func isDuplicateKeyErr(err error) bool {
 // from InsertAlert to keep the main path under the cognitive complexity limit.
 func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, bool, error) {
 	var existingID int64
+	// FOR UPDATE makes this a locking (current) read rather than a consistent snapshot read. We only reach here after the
+	// INSERT hit a duplicate-key error, i.e. a concurrent transaction inserted and committed this (source, host_id,
+	// rule_id, subject) row; under REPEATABLE READ a plain SELECT could miss that row against this transaction's MVCC
+	// snapshot. The locking read sees the latest committed row (Gemini).
 	if err := tx.GetContext(ctx, &existingID,
-		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND subject = ?",
+		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND subject = ? FOR UPDATE",
 		a.Source, a.HostID, a.RuleID, a.Subject,
 	); err != nil {
 		return 0, false, fmt.Errorf("lookup duplicate alert: %w", err)

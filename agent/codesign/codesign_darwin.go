@@ -28,7 +28,11 @@ static void edr_copy_cfstring(CFStringRef s, char *buf, size_t buflen) {
     if (s == NULL) {
         return;
     }
-    CFStringGetCString(s, buf, (CFIndex)buflen, kCFStringEncodingUTF8);
+    // On failure (e.g. the buffer cannot hold the string + its NUL) CFStringGetCString leaves buf's contents undefined,
+    // so a later C.GoString could read past the data. Re-NUL the buffer on failure to keep it a valid empty C string.
+    if (!CFStringGetCString(s, buf, (CFIndex)buflen, kCFStringEncodingUTF8)) {
+        buf[0] = '\0';
+    }
 }
 
 static edr_signing_t edr_evaluate_signing(const char *path) {
