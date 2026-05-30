@@ -16,6 +16,20 @@ private let fleetSelfAllowSigningIDs: Set<String> = [
     "com.fleetdm.edr"
 ]
 
+/// authWorkerConcurrency bounds how many AUTH_EXEC decisions hash/decide in parallel off the ES delivery thread (#298). The
+/// ES client delivers AUTH messages on a single serial queue; running the SecCode walk + SHA-256 inline there lets one slow
+/// hash stall (and, past the kernel deadline, fail-closed DENY) every queued exec. Offloading to this many concurrent workers
+/// breaks that head-of-line blocking while staying low enough not to trade it for a disk-I/O storm during the cold-cache /
+/// dual-client window an in-place extension upgrade creates (the original incident). 4 is a conservative, tunable default.
+private let authWorkerConcurrency = 4
+
+/// RetainedAuthMessage carries an es_retain_message'd AUTH_EXEC message across the OperationQueue boundary into the decision
+/// worker (#298). @unchecked Sendable asserts the hand-off is safe: the producer retains the message and the single worker is
+/// its sole owner until it responds and es_release_message's it, so there is no shared mutation of the pointee.
+private struct RetainedAuthMessage: @unchecked Sendable {
+    let message: UnsafePointer<es_message_t>
+}
+
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
 final class ESFSubscriber: Sendable {
@@ -25,6 +39,18 @@ final class ESFSubscriber: Sendable {
     // split keeps this file under SwiftLint's file_length / type_body_length caps (same rationale as CDHashHex.swift).
     let serializer = EventSerializer()
     nonisolated(unsafe) var onEvent: ((Data) -> Void)?
+
+    // authDecisionQueue runs the expensive AUTH_EXEC decision (SecCode walk + SHA-256 + kernel respond) off the ES serial
+    // delivery thread so one slow hash cannot serialize every other exec (#298). OperationQueue caps in-flight work at
+    // authWorkerConcurrency without spawning a thread per queued item. nonisolated(unsafe): OperationQueue is thread-safe; the
+    // annotation only tells Swift 6 this immutable shared reference is intentional.
+    nonisolated(unsafe) let authDecisionQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.fleetdm.edr.authexec.decision"
+        queue.maxConcurrentOperationCount = authWorkerConcurrency
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
 
     init() {
         var rawClient: OpaquePointer?
@@ -83,6 +109,10 @@ final class ESFSubscriber: Sendable {
 
     func stop() {
         es_unsubscribe_all(client)
+        // Drain in-flight AUTH decisions before deleting the client: each holds a retained message it must still respond to
+        // and release, and es_respond on a deleted client is undefined. Operations are deadline-bounded, so this returns
+        // promptly (#298).
+        authDecisionQueue.waitUntilAllOperationsAreFinished()
         es_delete_client(client)
     }
 
@@ -112,9 +142,11 @@ final class ESFSubscriber: Sendable {
     /// AUTH_EXEC handler. Decision order: (1) platform-binary carve-out (#205) ALLOWs Apple system binaries with cache:true to
     /// avoid bricking the host on an admin-applied BINARY rule for launchd/xpcproxy/etc; (2) self-allow failsafe ALLOWs the
     /// agent + extensions + host app uncached (team_id + bundle-id match); (3) decideAuthExec walks CDHASH → BINARY →
-    /// CERTIFICATE → SIGNINGID → TEAMID → PATH (Phase B close-out, PR for #210). BINARY hashing runs synchronously under a
-    /// budget derived from msg.deadline (#208 close-out); on deadline / read failure the walk continues through every lower
-    /// layer first and only applies the snapshot's deadlineFallback posture when no later rule matches. CERTIFICATE +
+    /// CERTIFICATE → SIGNINGID → TEAMID → PATH (Phase B close-out, PR for #210). The platform-binary and self-allow ALLOWs
+    /// respond inline (no I/O); everything past them runs on a bounded worker queue off the ES serial delivery thread so a slow
+    /// hash cannot serialize other execs (#298). BINARY hashing stays bounded by msg.deadline (#208 close-out); on deadline /
+    /// read failure the walk continues through every lower layer first and only applies the snapshot's deadlineFallback posture
+    /// when no later rule matches. CERTIFICATE +
     /// SIGNINGID + TEAMID rely on SigningInfoFallback's cached SecCode walk; PATH uses canonicalizePath on the exec target
     /// path so the in-memory comparison matches the server-side persisted canonical form verbatim.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
@@ -144,27 +176,44 @@ final class ESFSubscriber: Sendable {
             return
         }
 
-        let snapshot = ApplicationControlStore.shared.currentSnapshot()
-        let tuple = buildAuthTuple(target: target, fileStat: fileStat, path: path)
+        // Everything past here may walk SecCode (TeamID / leaf-cert fallback) and stream a SHA-256 over the target — tens of
+        // ms on a multi-MB binary — and it currently runs inline on the kernel's single serial AUTH delivery thread. Offload it
+        // to a bounded worker so one slow hash cannot serialize (and, once a queued exec burns its deadline, fail-closed DENY)
+        // every other exec on the host (#298). es_retain_message keeps the message valid past this callback; the worker walks
+        // the tuple, hashes, decides, responds, and es_release_message's it. The decision logic, the deadline budget, and the
+        // fail-closed/open posture are all unchanged — only the thread they run on moves.
+        es_retain_message(message)
+        let retained = RetainedAuthMessage(message: message)
+        let deadline = msg.deadline
+        authDecisionQueue.addOperation { [self] in
+            defer { es_release_message(retained.message) }
+            // Re-derive the C structs from the retained message inside the worker rather than capturing them: es_process_t /
+            // stat are non-Sendable and their fields point into the message buffer, which is alive only because we retained it.
+            let target = retained.message.pointee.event.exec.target.pointee
+            let fileStat = target.executable.pointee.stat
 
-        // Only pay the sync-hash cost when the snapshot actually has BINARY rules to consult. The cheap CDHASH/SIGNINGID/TEAMID
-        // layers run unconditionally; the hash compute alone is the latency outlier (tens of ms on multi-MB binaries) and is
-        // wasted work when no BINARY rule could fire.
-        let hashOutcome: HashOutcome
-        if snapshot.binaryRules.isEmpty {
-            hashOutcome = .notNeeded
-        } else {
-            hashOutcome = FileHashCache.shared.lookupOrComputeWithDeadline(
-                path: path,
-                stat: fileStat,
-                deadlineMachAbs: msg.deadline
-            )
+            let snapshot = ApplicationControlStore.shared.currentSnapshot()
+            let tuple = buildAuthTuple(target: target, fileStat: fileStat, path: path)
+
+            // Only pay the hash cost when the snapshot actually has BINARY rules to consult. The cheap CDHASH/SIGNINGID/TEAMID
+            // layers run unconditionally; the hash compute alone is the latency outlier and is wasted work when no BINARY rule
+            // could fire.
+            let hashOutcome: HashOutcome
+            if snapshot.binaryRules.isEmpty {
+                hashOutcome = .notNeeded
+            } else {
+                hashOutcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+                    path: path,
+                    stat: fileStat,
+                    deadlineMachAbs: deadline
+                )
+            }
+
+            let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
+            dispatchAuthDecision(decision, context: AuthDispatchContext(
+                message: retained.message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
+            ))
         }
-
-        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
-        dispatchAuthDecision(decision, context: AuthDispatchContext(
-            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
-        ))
     }
 
     /// AuthDispatchContext bundles the fields dispatchAuthDecision needs into a single argument so the function stays under
@@ -214,155 +263,6 @@ final class ESFSubscriber: Sendable {
                 target: context.target, fileStat: context.fileStat, verdict: "deny", reason: reason, snapshot: context.snapshot
             )
         }
-    }
-
-    /// buildAuthTuple reduces a Mach-O exec target to the five pure-identifier values the decider reads. The sixth identifier
-    /// (BINARY SHA-256) is supplied via HashOutcome at decide time so the hash compute can run on the AUTH callback thread
-    /// under a deadline budget; that responsibility lives in handleAuthExec, not here. The `path` argument is the resolved
-    /// executable path used both for the SigningInfoFallback lookups (TeamID + leaf cert SHA-256) and for the canonical PATH
-    /// derivation. The leaf cert hash + canonical path joined the tuple when CERTIFICATE / PATH wired through (PR for #210).
-    private func buildAuthTuple(target: es_process_t, fileStat: stat, path: String) -> AuthTuple {
-        let esTeamID = esTokenString(target.team_id)
-        let signingID = esTokenString(target.signing_id)
-
-        let cdhash: String? = isHardenedRuntime(flags: target.codesigning_flags) ? cdhashHexString(from: target.cdhash) : nil
-
-        // Resolve the canonical TeamID. For Developer-ID-signed targets on notarized release hosts ESF
-        // reports the real team_id and the fallback branch is skipped; the fallback still fires for
-        // ad-hoc-signed or unsigned targets even there and correctly returns nil. On the edr-dev VM the
-        // extension itself is ad-hoc-signed (`codesign -d` reports `adhoc, linker-signed`); ESF responds
-        // by redacting target.team_id="" and forcing target.is_platform_binary=true for EVERY exec the
-        // client sees -- a per-client policy on ESF clients whose host extension is not Developer-ID-signed
-        // + notarized, not a per-binary CS_PLATFORM_BINARY classification. Quantified on a fresh queue:
-        // 393/393 exec events redacted (see issue #187). Without a fallback every TEAMID rule on edr-dev
-        // is effectively dead and every SIGNINGID rule degrades to the `platform:<bundle.id>` shape
-        // regardless of who actually signed the binary. SigningInfoFallback reads the binary via
-        // SecCodeCopySigningInformation -- the same path `codesign -dvv` walks -- and caches the result
-        // per (inode, mtime). The fix on a real release host is to notarize the extension; until then the
-        // fallback keeps edr-dev usable for end-to-end QA.
-        let teamID: String
-        if !esTeamID.isEmpty {
-            teamID = esTeamID
-        } else {
-            teamID = SigningInfoFallback.shared.teamID(forPath: path, fileStat: fileStat) ?? ""
-        }
-
-        // Leaf certificate SHA-256 always comes from SigningInfoFallback -- ESF does not surface a cert hash directly, so
-        // there is no "ESF first, fallback on empty" pattern here. The cache key is shared with the TeamID lookup above so
-        // both fields cost one SecCode walk per (inode, mtime). Returns nil for unsigned / ad-hoc-signed binaries and any
-        // path SecCode rejects; the decider's optional binding skips the CERTIFICATE layer cleanly in those cases.
-        let leafCertSHA256 = SigningInfoFallback.shared.leafCertSHA256(forPath: path, fileStat: fileStat)
-
-        // SIGNINGID prefix: "<TeamID>:<bundle.id>" for third-party signed binaries, "platform:<bundle.id>" for Apple platform
-        // binaries. Under edr-dev's ad-hoc-extension redaction ESF reports is_platform_binary=true on every exec (#187), so
-        // we use the fallback team_id (when present) to discriminate genuine Apple platform binaries from third-party ones.
-        let signingIDPrefixed: String?
-        if signingID.isEmpty {
-            signingIDPrefixed = nil
-        } else if !teamID.isEmpty {
-            signingIDPrefixed = "\(teamID):\(signingID)"
-        } else if target.is_platform_binary {
-            signingIDPrefixed = "platform:\(signingID)"
-        } else {
-            signingIDPrefixed = nil
-        }
-
-        // Canonical path: filepath.Clean equivalent + /tmp + /var + /etc rewritten to /private. MUST match the server-side
-        // CanonicalizePath rules exactly or rules persisted in canonical form never match what the AUTH callback computes.
-        // Nil result (empty / relative / `..`-containing -- all defensive against malformed ESF input) skips the PATH layer.
-        let canonicalPath = canonicalizePath(path)
-
-        return AuthTuple(
-            cdhash: cdhash,
-            leafCertSHA256: leafCertSHA256,
-            signingIDPrefixed: signingIDPrefixed,
-            teamID: teamID.isEmpty ? nil : teamID,
-            canonicalPath: canonicalPath
-        )
-    }
-
-    /// emitBlockEvent serializes an application_control_block event for the
-    /// just-denied AUTH_EXEC and hands it to the upload pipeline via
-    /// onEvent. Called after the DENY response so the kernel is already
-    /// unblocked; the JSON encode + XPC handoff happen off the callback's
-    /// deadline.
-    private func emitBlockEvent(
-        target: es_process_t,
-        rule: ApplicationControlRule,
-        matchedIdentifier: String,
-        snapshot: ApplicationControlSnapshot
-    ) {
-        let pid = audit_token_to_pid(target.audit_token)
-        let path = esTokenString(target.executable.pointee.path)
-        let payload = ApplicationControlBlockPayload(
-            pid: pid,
-            path: path,
-            ruleID: rule.ruleID,
-            ruleType: rule.ruleType,
-            identifier: matchedIdentifier,
-            severity: rule.severity,
-            customMsg: rule.customMsg,
-            customURL: rule.customURL,
-            policyID: snapshot.policyID,
-            policyVersion: snapshot.policyVersion
-        )
-        if let data = serializer.serialize(eventType: "application_control_block", payload: payload) {
-            onEvent?(data)
-        }
-    }
-
-    /// emitUndecidedEvent serializes an application_control_undecided event for an AUTH_EXEC whose BINARY hash could not be
-    /// resolved within the kernel deadline budget (or the file was unreadable). Called after the kernel respond so the post-
-    /// respond cost does not eat into the deadline. The verdict argument carries "allow" (audit-only posture) or "deny"
-    /// (fail-closed posture); fail-open does NOT call this helper (no event by design, see FallbackPosture.failOpen).
-    private func emitUndecidedEvent(
-        target: es_process_t,
-        fileStat: stat,
-        verdict: String,
-        reason: UndecidedReason,
-        snapshot: ApplicationControlSnapshot
-    ) {
-        let pid = audit_token_to_pid(target.audit_token)
-        let path = esTokenString(target.executable.pointee.path)
-        let payload = ApplicationControlUndecidedPayload(
-            pid: pid,
-            path: path,
-            verdict: verdict,
-            reason: reason.rawValue,
-            fileSizeBytes: UInt64(fileStat.st_size),
-            policyID: snapshot.policyID,
-            policyVersion: snapshot.policyVersion
-        )
-        if let data = serializer.serialize(eventType: "application_control_undecided", payload: payload) {
-            onEvent?(data)
-        }
-    }
-
-    /// emitBlockNotification fires the desktop-notification XPC
-    /// message to the host app's listener. Called after the DENY
-    /// response so the kernel is already unblocked; the alert is
-    /// post-hoc UX. Fire-and-forget — NotificationClient swallows
-    /// errors so a missing host app (the LaunchAgent hasn't
-    /// started yet, or the user logged out) doesn't slow the
-    /// AUTH_EXEC handler down.
-    private func emitBlockNotification(
-        target: es_process_t,
-        rule: ApplicationControlRule,
-        matchedIdentifier: String,
-        snapshot: ApplicationControlSnapshot
-    ) {
-        let path = esTokenString(target.executable.pointee.path)
-        let payload = BlockNotificationPayload(
-            ruleID: rule.ruleID,
-            ruleType: rule.ruleType,
-            identifier: matchedIdentifier,
-            customMsg: rule.customMsg,
-            customURL: rule.customURL,
-            binaryPath: path,
-            policyID: snapshot.policyID,
-            policyVersion: snapshot.policyVersion
-        )
-        NotificationClient.shared.notify(payload)
     }
 
     private func handleExec(_ msg: es_message_t) {
