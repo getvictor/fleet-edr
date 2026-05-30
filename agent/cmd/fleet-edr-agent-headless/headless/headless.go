@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fleetdm/edr/agent/codesign"
+	"github.com/fleetdm/edr/agent/enrich"
 	"github.com/fleetdm/edr/agent/enrollment"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
@@ -194,8 +196,11 @@ func pumpEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, lo
 			if !ok {
 				return
 			}
-			if err := q.Enqueue(ctx, ev.Data); err != nil {
-				logger.WarnContext(ctx, "enqueue failed", "err", err, "event_bytes", len(ev.Data))
+			// Mirror the production agent: fill a btm_launch_item_add event's executable_code_signing on darwin. The
+			// linux headless build's codesign.Evaluate is a no-op stub, so synthetic events keep their pre-set signing.
+			data := enrich.BtmExecutableSigning(ev.Data, codesign.Evaluate)
+			if err := q.Enqueue(ctx, data); err != nil {
+				logger.WarnContext(ctx, "enqueue failed", "err", err, "event_bytes", len(data))
 			}
 		}
 	}

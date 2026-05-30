@@ -12,11 +12,12 @@ Two reviews (Copilot, Gemini) plus the ground-truth converge on the corrected de
 amendment (PR #305):
 
 1. **Discriminate on the registered executable**, not the instigator: the rule fires when the registered executable is
-   not an Apple platform binary, not MDM-managed, and not on the operator's team-ID allowlist. The extension evaluates
-   the executable's code-signing out-of-band (`SecStaticCode`), because the BTM event carries signing for the
-   instigator/app processes but not for the to-be-launched executable. Notarization is deliberately NOT a trust signal
-   (Apple notarizes malware, and it is not checkable network-free on the ES thread); if ever used it belongs in a
-   server-side reputation layer.
+   not an Apple platform binary, not MDM-managed, and not on the operator's team-ID allowlist. The registered
+   executable's code-signing is evaluated out-of-band (`SecStaticCode`) by the **agent**, because the BTM event carries
+   signing for the instigator/app processes but not for the to-be-launched executable, and a SIP-enabled host's
+   extension sandbox cannot read the registered executable (the agent, an unsandboxed root daemon, can — and runs the
+   check off the ES callback thread). Notarization is deliberately NOT a trust signal (Apple notarizes malware, and it
+   is not checkable network-free on the ES thread); if ever used it belongs in a server-side reputation layer.
 2. **Process-optional alerts**: the registered executable has no live process at registration and the instigator (`smd`)
    is not the attacker, so a persistence alert carries no process link. `alerts.process_id` becomes a nullable
    enrichment FK, and alert dedup moves from `(source, host, rule, process_id)` to `(source, host, rule, subject)` so
@@ -29,8 +30,9 @@ amendment (PR #305):
 - **Alert dedup** (`server-detection-rules-engine`): the dedup key is now `(source, host, rule, subject)`. For a
   process-backed finding the subject is its process id (preserving the historical dedup); a process-less finding's
   firing rule supplies the subject (the registered launch item).
-- **Launch-item registration event** (`endpoint-event-collection`): the extension emits `btm_launch_item_add` carrying
-  the registered executable's code-signing (`executable_code_signing`), evaluated out-of-band.
+- **Launch-item registration event** (`endpoint-event-collection`): the extension emits `btm_launch_item_add`; the
+  registered executable's code-signing (`executable_code_signing`) is evaluated out-of-band by the agent and added
+  before upload.
 
 ## Impact
 

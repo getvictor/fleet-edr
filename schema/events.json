@@ -59,7 +59,7 @@
         },
         "item_path": { "type": "string", "description": "Filesystem path of the launch item (the plist), from es_btm_launch_item_t.item_url." },
         "executable_path": { "type": "string", "description": "Optional. POSIX executable path from the launchd plist, when available." },
-        "executable_code_signing": { "$ref": "#/definitions/code_signing", "description": "Optional. Code-signing of the registered executable (executable_path), evaluated out-of-band by the extension via SecStaticCode. This is the rule's decision input (the instigator is Apple's smd for launchctl-bootstrap registrations and cannot discriminate)." },
+        "executable_code_signing": { "$ref": "#/definitions/code_signing", "description": "Optional. Code-signing of the registered executable (executable_path), evaluated via SecStaticCode by the agent (the extension's sandbox cannot read the registered executable on a SIP-enabled host, so the agent fills this field before upload). This is the rule's decision input (the instigator is Apple's smd for launchctl-bootstrap registrations and cannot discriminate)." },
         "legacy": { "type": "boolean", "description": "True iff a legacy plist-based launch item rather than an SMAppService registration." },
         "managed": { "type": "boolean", "description": "True iff managed by MDM. Managed daemons are operator-deployed and skipped by detection rules." },
         "uid": { "type": "integer", "description": "User ID the item is registered for." },

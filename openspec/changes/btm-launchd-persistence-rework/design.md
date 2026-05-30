@@ -7,11 +7,19 @@ Full rationale and the captured ground-truth live in the ADR-0008 amendment (PR 
 
 The BTM event (`es_event_btm_launch_item_add_t`) exposes code-signing only for the `instigator` and `app` **processes**,
 never for the to-be-launched executable. For a `launchctl bootstrap` the instigator is Apple's `smd`, so it cannot
-discriminate. The extension therefore evaluates the registered `executable_path` out-of-band via `SecStaticCode`
-(`SecStaticCodeCreateWithPath` + `SecCodeCopySigningInformation`, `anchor apple` for the platform-binary flag) and emits
-the result as `executable_code_signing`. `SecStaticCodeCheckValidity` runs with `.noNetworkAccess` so an ES callback
-thread never blocks on an OCSP/CRL fetch. This also sidesteps the #187 ad-hoc-extension ESF signing redaction, since
-`SecStaticCode` reads the signature from disk rather than trusting the (redacted) ESF process fields.
+discriminate. The registered `executable_path` is therefore evaluated out-of-band via `SecStaticCode`
+(`SecStaticCodeCreateWithPath` + `SecCodeCopySigningInformation`, `anchor apple` for the platform-binary flag), emitted
+as `executable_code_signing`. `SecStaticCodeCheckValidity` runs with `kSecCSNoNetworkAccess` so the evaluation never
+blocks on an OCSP/CRL fetch. This also sidesteps the #187 ad-hoc-extension ESF signing redaction, since `SecStaticCode`
+reads the signature from disk rather than trusting the (redacted) ESF process fields.
+
+The evaluation runs in the **agent**, not the system extension. A SIP-enabled host enforces the extension's sandbox,
+which denies the read of the BTM-registered executable (ground-truthed on edr-qa: the extension gets the path but not
+read access, and `SecStaticCodeCreateWithPath` fails); the agent is an unsandboxed root daemon and can read it. Doing it
+in the agent also moves signing validation off the ES callback thread entirely, which is where a network-touching check
+would otherwise risk the deadlock Gemini flagged. The agent fills `executable_code_signing` on the
+`btm_launch_item_add` event before upload (fill-if-missing: a pre-populated value, e.g. from a synthetic test feed, is
+left untouched).
 
 The rule allows (skips) an executable that is an Apple platform binary, MDM-managed, or signed by an allowlisted team ID;
 everything else fires. Notarization is deliberately NOT a trust signal: it is an automated Apple scan, not an endorsement
