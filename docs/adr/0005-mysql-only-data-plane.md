@@ -103,10 +103,10 @@ the EDR's primary store stays MySQL.
   who have built their on-call rotation around Postgres semantics have to
   learn the MySQL equivalents (ProxySQL, GTID replication, `mysqldump` +
   `mysqlbinlog`).
-- The in-process idempotent-`ALTER` pattern doesn't generalise off MySQL.
-  If a future ADR replaces it with versioned migrations (see
-  best-practices.md §10 unchecked item), the migration tool must speak
-  MySQL specifically.
+- The in-process idempotent-`ALTER` pattern didn't generalise off MySQL.
+  ADR-0009 has since replaced it with versioned migrations via goose
+  (`goose.DialectMySQL`), MySQL-specific by the same single-store reasoning
+  recorded here; a port off MySQL would also re-target the goose dialect.
 
 ## Alternatives considered
 

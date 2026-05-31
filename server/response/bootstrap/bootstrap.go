@@ -3,18 +3,19 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/jmoiron/sqlx"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/agent"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 	"github.com/fleetdm/edr/server/response/internal/operator"
 	"github.com/fleetdm/edr/server/response/internal/service"
+	responsemigrations "github.com/fleetdm/edr/server/response/migrations"
 )
 
 // Heartbeat is the closure cmd/main supplies so response.Service can advance the host's last-seen-ns on every /api/commands poll
@@ -77,24 +78,23 @@ func New(deps Deps) (*Response, error) {
 	}, nil
 }
 
-// ApplySchema runs the DDL statements response owns. Idempotent (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
-// other contexts' ApplySchema is not load-bearing.
+// ApplySchema applies response's goose migration corpus. Idempotent (goose skips already-applied versions). No cross-context FKs;
+// ordering with other contexts' ApplySchema is not load-bearing.
 func (r *Response) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, r.db)
 }
 
-// ApplySchema is the package-level form: applies response's DDL against the given DB without requiring a fully constructed *Response.
-// Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service dependencies.
+// ApplySchema is the package-level form: applies response's goose migration corpus against the given DB without requiring a fully
+// constructed *Response. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's
+// service dependencies. Idempotent (goose skips already-applied versions), so a second call on an already-migrated DB is a no-op.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("response ApplySchema: db must not be nil")
 	}
-	for _, stmt := range schemaStatements {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("response schema apply: %w", err)
-		}
-	}
-	return nil
+	return runner.Up(ctx, db, responsemigrations.FS, runner.Options{
+		Context:   "response",
+		TableName: "response_goose_db_version",
+	})
 }
 
 // Service exposes the public api.Service for cross-context callers. endpoint and rules consume Service.Insert as a method value
