@@ -27,12 +27,14 @@ final class FileTamperSubscriber: Sendable {
 
     /// watchedTargets is the fixed sensitive-path set this client observes after inversion. /etc is a symlink to /private/etc
     /// on macOS and ESF reports the resolved (/private/etc) form, so both spellings are muted defensively. LITERAL pins
-    /// /etc/sudoers exactly; PREFIX covers every direct child of /etc/sudoers.d/. Mirrors the server sudoersPath regex.
+    /// /etc/sudoers exactly; PREFIX covers everything under /etc/sudoers.d/. A TARGET_PREFIX matches all descendants sharing
+    /// the prefix, so the trailing slash keeps it from also matching siblings like /etc/sudoers.d.bak; the server sudoersPath
+    /// regex further narrows to direct children of the directory.
     private static let watchedTargets: [(path: String, type: es_mute_path_type_t)] = [
         ("/private/etc/sudoers", ES_MUTE_PATH_TYPE_TARGET_LITERAL),
         ("/etc/sudoers", ES_MUTE_PATH_TYPE_TARGET_LITERAL),
-        ("/private/etc/sudoers.d", ES_MUTE_PATH_TYPE_TARGET_PREFIX),
-        ("/etc/sudoers.d", ES_MUTE_PATH_TYPE_TARGET_PREFIX)
+        ("/private/etc/sudoers.d/", ES_MUTE_PATH_TYPE_TARGET_PREFIX),
+        ("/etc/sudoers.d/", ES_MUTE_PATH_TYPE_TARGET_PREFIX)
     ]
 
     init() {
@@ -49,13 +51,17 @@ final class FileTamperSubscriber: Sendable {
 
     func start() {
         // Configure muting + inversion BEFORE subscribing so there is never a window where this client sees the unscoped
-        // write/create/rename firehose. es_unmute_all_target_paths clears the default target-path mute set first (the SDK's
+        // create/write firehose. es_unmute_all_target_paths clears the default target-path mute set first (the SDK's
         // documented prerequisite for inverting target-path muting); then mute the watched paths; then invert so the muted
         // set becomes the ONLY observed set.
         es_unmute_all_target_paths(client)
+        // A mute failure leaves that target unobserved after inversion (a silent coverage gap), so treat it as fatal —
+        // consistent with the invert + subscribe failures below. The watched set is a fixed list of valid absolute paths,
+        // so a failure here means a misconfigured client, not a bad path.
         Self.watchedTargets.forEach { target in
-            if es_mute_path(client, target.path, target.type) != ES_RETURN_SUCCESS {
+            guard es_mute_path(client, target.path, target.type) == ES_RETURN_SUCCESS else {
                 logger.error("file-tamper mute failed for \(target.path, privacy: .public)")
+                exit(EXIT_FAILURE)
             }
         }
         guard es_invert_muting(client, ES_MUTE_INVERSION_TYPE_TARGET_PATH) == ES_RETURN_SUCCESS else {
@@ -90,7 +96,9 @@ final class FileTamperSubscriber: Sendable {
         // Reusing the `open` event type keeps the wire format + the rule unchanged.
         let payload = OpenPayload(pid: pid, path: path, flags: Int(O_WRONLY | O_CREAT | O_TRUNC))
         if let data = serializer.serialize(eventType: "open", payload: payload) {
-            logger.debug("file-tamper type=\(msg.event_type.rawValue) pid=\(pid) path=\(path)")
+            // path is .private: exec/file paths can carry usernames or project tokens, and the "no PII in logs" guideline
+            // applies on this hot path. The full path still flows to the server in the event payload for the rule.
+            logger.debug("file-tamper type=\(msg.event_type.rawValue, privacy: .public) pid=\(pid, privacy: .public) path=\(path, privacy: .private)")
             onEvent?(data)
         }
     }

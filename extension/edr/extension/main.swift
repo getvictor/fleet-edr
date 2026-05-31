@@ -16,7 +16,7 @@ let serializer = EventSerializer()
 subscriber.onEvent = { data in server.send(data: data) }
 subscriber.start()
 
-// Dedicated, target-muted file-tamper client (#301, ADR-0008). It watches /etc/sudoers* for CREATE/WRITE/RENAME via
+// Dedicated, target-muted file-tamper client (#301, ADR-0008). It watches /etc/sudoers* for CREATE/WRITE via
 // inverted target-path muting and lives on its own ES client — separate from `subscriber` above — so the client-global
 // target-path inversion never filters the primary client's AUTH_EXEC (whose target is the executable). Its events flow into
 // the same XPC pipeline; the server's sudoers_tamper rule consumes them as `open` (write-mode) events.

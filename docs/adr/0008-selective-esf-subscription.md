@@ -102,7 +102,7 @@ about that specific binary; it is just no longer a decision input.
 
 ## Amendment 2026-05-31: selective subscription implemented (steps 2-3), RENAME deferred
 
-Decision steps 2 and 3 shipped in #301:
+Decision steps 2 and 3 shipped in PR #307 (the implementing PR for #301):
 
 - **`sudoers_tamper` moved to a dedicated file-tamper client (step 2).** A second, NOTIFY-only `es_client_t`
   (`FileTamperSubscriber`) subscribes to `NOTIFY_CREATE` + `NOTIFY_WRITE`, calls `es_unmute_all_target_paths`, mutes
