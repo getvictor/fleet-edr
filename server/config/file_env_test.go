@@ -27,7 +27,7 @@ func TestFileBackedGetenv_FileWins(t *testing.T) {
 		}
 		return ""
 	}
-	get := fileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	get := FileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	assert.Equal(t, "real-secret", get("EDR_ENROLL_SECRET"),
 		"empty env + _FILE set must read the file (trimming trailing newline)")
 }
@@ -42,14 +42,14 @@ func TestFileBackedGetenv_DirectEnvBeatsFile(t *testing.T) {
 		}
 		return ""
 	}
-	get := fileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	get := FileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	assert.Equal(t, "env-wins", get("EDR_ENROLL_SECRET"),
 		"a real env var wins; _FILE path is never touched")
 }
 
 func TestFileBackedGetenv_NeitherSetReturnsEmpty(t *testing.T) {
 	base := func(string) string { return "" }
-	get := fileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	get := FileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	assert.Empty(t, get("EDR_ENROLL_SECRET"))
 }
 
@@ -64,7 +64,7 @@ func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
 		}
 		return ""
 	}
-	get := fileBackedGetenv(base, logger)
+	get := FileBackedGetenv(base, logger)
 	assert.Empty(t, get("EDR_ENROLL_SECRET"))
 	assert.Contains(t, buf.String(), "failed to read *_FILE env var")
 }
@@ -80,7 +80,7 @@ func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
 		}
 		return ""
 	}
-	get := fileBackedGetenv(base, nil)
+	get := FileBackedGetenv(base, nil)
 	assert.NotPanics(t, func() { _ = get("EDR_ENROLL_SECRET") })
 	assert.Empty(t, get("EDR_ENROLL_SECRET"))
 }
@@ -123,7 +123,7 @@ func TestFileBackedGetenv_TrimsOnlyOuterWhitespace(t *testing.T) {
 		}
 		return ""
 	}
-	get := fileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	get := FileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	got := get("EDR_DSN")
 	assert.True(t, strings.HasPrefix(got, "root:pw 1@tcp"))
 	assert.NotContains(t, got, "\n")
