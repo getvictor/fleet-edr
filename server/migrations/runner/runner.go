@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 
@@ -43,8 +44,17 @@ type Options struct {
 // wraps the whole boot migration sequence in a single MySQL advisory lock at the cmd layer (see the HA arc) so exactly one replica
 // applies migrations during a cutover; goose's tracking table then makes every other replica's apply a no-op.
 func Up(ctx context.Context, db *sqlx.DB, fsys fs.FS, opts Options) error {
-	if db == nil {
+	// Context is validated first so every subsequent error carries a meaningful prefix instead of " migrations: ...".
+	if opts.Context == "" {
+		return errors.New("migrations: context name must not be empty")
+	}
+	// db.DB is the underlying *sql.DB goose runs against; a zero-value sqlx.DB (db != nil but db.DB == nil) would panic inside
+	// goose.NewProvider, so guard both.
+	if db == nil || db.DB == nil {
 		return fmt.Errorf("%s migrations: db must not be nil", opts.Context)
+	}
+	if fsys == nil {
+		return fmt.Errorf("%s migrations: fsys must not be nil", opts.Context)
 	}
 	if opts.TableName == "" {
 		return fmt.Errorf("%s migrations: table name must not be empty", opts.Context)

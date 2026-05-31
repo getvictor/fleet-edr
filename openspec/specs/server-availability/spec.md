@@ -17,11 +17,15 @@ for the design rationale, and `docs/adr/0009-migrations-via-goose.md` for the mi
 
 ### Requirement: Schema is managed by versioned forward-only per-context migrations
 
-The system SHALL apply each bounded context's database schema as an ordered corpus of versioned migration files, recording the
-applied versions in a per-context tracking table so that already-applied migrations are never re-run. Applying a context's corpus
-SHALL be idempotent: a boot whose corpus carries no new migration relative to the tracking table MUST make no schema change and
-MUST succeed. Migrations SHALL be forward-only; the system MUST NOT depend on down-migrations for recovery (the documented
-rollback path is restore-from-backup).
+The system SHALL apply database schema through versioned, forward-only migration files applied at boot rather than by re-running
+idempotent DDL in process. A bounded context whose schema is managed this way owns an ordered migration corpus and a dedicated
+tracking table recording applied versions, so already-applied migrations are never re-run. Applying such a corpus SHALL be
+idempotent: a boot whose corpus carries no new migration relative to the tracking table MUST make no schema change and MUST
+succeed. Migrations SHALL be forward-only; the system MUST NOT depend on down-migrations for recovery (the documented rollback
+path is restore-from-backup).
+
+The conversion to this mechanism is staged across the v0.1.0 migration arc: the response and endpoint contexts are managed this
+way today; identity, detection, and rules follow in the #115 rollout.
 
 #### Scenario: Applying a baseline on a fresh database creates its tables
 

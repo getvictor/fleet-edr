@@ -41,8 +41,10 @@ func count(t *testing.T, db *sqlx.DB, query string) int {
 
 func tableExists(t *testing.T, db *sqlx.DB, name string) bool {
 	t.Helper()
-	return count(t, db,
-		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '`+name+`'`) == 1
+	var n int
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`, name).Scan(&n))
+	return n == 1
 }
 
 func TestUp(t *testing.T) {
@@ -83,6 +85,32 @@ func TestUp(t *testing.T) {
 			runner.Options{Context: "runnertest", TableName: testTable})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "db must not be nil")
+	})
+
+	t.Run("nil db.DB is rejected", func(t *testing.T) {
+		t.Parallel()
+		// A zero-value sqlx.DB is non-nil but its underlying *sql.DB is nil; goose would panic on it.
+		err := runner.Up(context.Background(), &sqlx.DB{}, migrationsFS(t),
+			runner.Options{Context: "runnertest", TableName: testTable})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "db must not be nil")
+	})
+
+	t.Run("nil fsys is rejected", func(t *testing.T) {
+		t.Parallel()
+		db := testdb.Open(t)
+		err := runner.Up(t.Context(), db, nil,
+			runner.Options{Context: "runnertest", TableName: testTable})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "fsys must not be nil")
+	})
+
+	t.Run("empty context is rejected", func(t *testing.T) {
+		t.Parallel()
+		err := runner.Up(context.Background(), nil, migrationsFS(t),
+			runner.Options{TableName: testTable})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "context name must not be empty")
 	})
 
 	t.Run("empty table name is rejected", func(t *testing.T) {

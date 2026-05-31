@@ -460,8 +460,9 @@ genuine differentiator versus most competitors.
 - [x] Local Docker Compose with `mysql_test` for parallel test isolation
 - [x] **Versioned migrations** via [goose](https://github.com/pressly/goose), embedded in the server binary, per-context
   directories with per-context `<context>_goose_db_version` tracking tables, forward-only, tiered (expand-contract for Tier 2).
-  Replaces the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations. See ADR-0009 and
-  `ai/migrations/recommendation.md`
+  Adopted in ADR-0009 to replace the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations.
+  Rollout is staged: the response and endpoint contexts are converted; identity, detection, and rules convert in the #115
+  follow-up. See ADR-0009 and `ai/migrations/recommendation.md`
 - [-] **PostgreSQL alternative** -- **will not do**. Supporting two RDBMSes doubles
   migration testing, query tuning, and store-layer surface for a small team. MySQL 8.4
   covers what the data plane needs; customers who require Postgres can stand up a CDC
