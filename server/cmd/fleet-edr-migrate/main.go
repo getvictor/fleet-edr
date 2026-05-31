@@ -17,6 +17,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/bootstrap"
+	"github.com/fleetdm/edr/server/config"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
@@ -42,16 +43,19 @@ func migrations() []migration {
 }
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	// Read EDR_DSN at the top wiring boundary, with the same Docker-secret-style EDR_DSN_FILE fallback the server's config.Load
+	// honours, so a migrate run in a compose stack that mounts the DSN as a secret works exactly like the server (Copilot review,
+	// PR #309). Reading here rather than inside run keeps the env lookup off the context-carrying call path.
+	getenv := config.FileBackedGetenv(os.Getenv, nil) //nolint:forbidigo // env read at the cmd wiring boundary (migrate entrypoint); see issue #172
+	if err := run(context.Background(), getenv("EDR_DSN")); err != nil {
 		fmt.Fprintf(os.Stderr, "fleet-edr-migrate: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	dsn := os.Getenv("EDR_DSN") //nolint:forbidigo // EDR_DSN is read at the cmd wiring boundary (the migrate entrypoint); see issue #172
+func run(ctx context.Context, dsn string) error {
 	if dsn == "" {
-		return errors.New("EDR_DSN must be set")
+		return errors.New("EDR_DSN (or EDR_DSN_FILE) must be set")
 	}
 	db, err := bootstrap.OpenDB(ctx, dsn)
 	if err != nil {

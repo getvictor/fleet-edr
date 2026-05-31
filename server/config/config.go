@@ -245,7 +245,7 @@ func defaults() Config {
 // file's trimmed contents are used as the value. Wired here so docker-compose
 // + `secrets:` mounts work without plaintext in the compose env block.
 func Load() (*Config, error) {
-	return loadFrom(fileBackedGetenv(os.Getenv, slog.Default())) //nolint:forbidigo // approved config-load boundary; loadFrom takes a getenv fn so tests inject (issue #172)
+	return loadFrom(FileBackedGetenv(os.Getenv, slog.Default())) //nolint:forbidigo // approved config-load boundary; loadFrom takes a getenv fn so tests inject (issue #172)
 }
 
 // loadFrom is the testable core of Load; it takes a lookup function so tests can provide a fake env.

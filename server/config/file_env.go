@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
-// fileBackedGetenv wraps an env lookup with Docker-secret-style `*_FILE`
+// FileBackedGetenv wraps an env lookup with Docker-secret-style `*_FILE`
 // fallback: when `KEY` is unset or empty but `KEY_FILE` points at a readable
 // file, the file's trimmed contents become the value of `KEY`. This lets
 // operators stand up the server from a docker-compose stack that mounts
 // secrets at /run/secrets/* without ever putting the raw value in a compose
 // env block or a shell history.
+//
+// Exported so sibling entrypoints that read a single config var without running
+// the full Config.Load (e.g. cmd/fleet-edr-migrate reading EDR_DSN) honour the
+// same `*_FILE` convention the server does.
 //
 // The wrapper is a plain decorator: every existing validator keeps calling
 // getenv(KEY); it does not need to know the `_FILE` variant exists. Cycle
@@ -23,7 +27,7 @@ import (
 // Errors reading a `_FILE` path are logged and treated as "value unset" so
 // the existing required-var validator then reports the canonical "required
 // env var X is not set" rather than a less actionable read-file error.
-func fileBackedGetenv(base func(string) string, logger *slog.Logger) func(string) string {
+func FileBackedGetenv(base func(string) string, logger *slog.Logger) func(string) string {
 	if logger == nil {
 		logger = slog.Default()
 	}
