@@ -23,12 +23,29 @@ private let fleetSelfAllowSigningIDs: Set<String> = [
 /// dual-client window an in-place extension upgrade creates (the original incident). 4 is a conservative, tunable default.
 private let authWorkerConcurrency = 4
 
-/// RetainedAuthMessage carries an es_retain_message'd AUTH_EXEC message across the OperationQueue boundary into the decision
-/// worker (#298). @unchecked Sendable asserts the hand-off is safe: the producer retains the message and the single worker is
-/// its sole owner until it responds and es_release_message's it, so there is no shared mutation of the pointee.
-private struct RetainedAuthMessage: @unchecked Sendable {
+/// RetainedAuthMessage owns an es_retain_message'd AUTH_EXEC message for the lifetime of a decision worker (#298). RAII: init
+/// retains, deinit releases, exactly once — so the message is released whether the operation runs to completion or is ever
+/// dropped before responding (a struct + `defer` would leak the message on the drop/cancel path, Gemini). final + @unchecked
+/// Sendable: the worker is the sole owner between retain and release, so there is no shared mutation of the pointee.
+private final class RetainedAuthMessage: @unchecked Sendable {
     let message: UnsafePointer<es_message_t>
+    init(_ message: UnsafePointer<es_message_t>) {
+        self.message = message
+        es_retain_message(message)
+    }
+    deinit {
+        es_release_message(message)
+    }
 }
+
+/// maxAuthDecisionBacklog caps how many AUTH_EXEC decisions may be queued/in-flight on authDecisionQueue before handleAuthExec
+/// decides inline instead of offloading (#298). maxConcurrentOperationCount bounds parallel WORKERS, not queue DEPTH; without
+/// this cap an exec storm would es_retain_message + enqueue without limit, growing an unbounded backlog of retained messages
+/// whose deadlines expire while they wait (CodeRabbit). On saturation we degrade to the pre-#298 inline path for the excess —
+/// strictly no worse than the old serial behaviour, and self-limiting since the kernel blocks each exec'ing thread until we
+/// respond. 128 is far above normal concurrent-exec depth. handleAuthExec runs on the single serial ES delivery thread, so
+/// reading operationCount here is race-free.
+private let maxAuthDecisionBacklog = 128
 
 /// ESFSubscriber manages the Endpoint Security client and subscribes to
 /// process lifecycle events (exec, fork, exit, open).
@@ -150,12 +167,9 @@ final class ESFSubscriber: Sendable {
     /// SIGNINGID + TEAMID rely on SigningInfoFallback's cached SecCode walk; PATH uses canonicalizePath on the exec target
     /// path so the in-memory comparison matches the server-side persisted canonical form verbatim.
     private func handleAuthExec(_ message: UnsafePointer<es_message_t>) {
-        let msg = message.pointee
-        let target = msg.event.exec.target.pointee
-        let path = esTokenString(target.executable.pointee.path)
+        let target = message.pointee.event.exec.target.pointee
         let teamID = esTokenString(target.team_id)
         let signingID = esTokenString(target.signing_id)
-        let fileStat = target.executable.pointee.stat
 
         // Platform-binary carve-out: anything the kernel classifies as part of the Apple-signed system image (launchd, xpcproxy,
         // fseventsd, kextd, sysextd, systemextensionsd, WindowServer, loginwindow, mds, ...) is ALLOWed unconditionally and the
@@ -179,41 +193,53 @@ final class ESFSubscriber: Sendable {
         // Everything past here may walk SecCode (TeamID / leaf-cert fallback) and stream a SHA-256 over the target — tens of
         // ms on a multi-MB binary — and it currently runs inline on the kernel's single serial AUTH delivery thread. Offload it
         // to a bounded worker so one slow hash cannot serialize (and, once a queued exec burns its deadline, fail-closed DENY)
-        // every other exec on the host (#298). es_retain_message keeps the message valid past this callback; the worker walks
-        // the tuple, hashes, decides, responds, and es_release_message's it. The decision logic, the deadline budget, and the
-        // fail-closed/open posture are all unchanged — only the thread they run on moves.
-        es_retain_message(message)
-        let retained = RetainedAuthMessage(message: message)
-        let deadline = msg.deadline
-        authDecisionQueue.addOperation { [self] in
-            defer { es_release_message(retained.message) }
-            // Re-derive the C structs from the retained message inside the worker rather than capturing them: es_process_t /
-            // stat are non-Sendable and their fields point into the message buffer, which is alive only because we retained it.
-            let target = retained.message.pointee.event.exec.target.pointee
-            let fileStat = target.executable.pointee.stat
-
-            let snapshot = ApplicationControlStore.shared.currentSnapshot()
-            let tuple = buildAuthTuple(target: target, fileStat: fileStat, path: path)
-
-            // Only pay the hash cost when the snapshot actually has BINARY rules to consult. The cheap CDHASH/SIGNINGID/TEAMID
-            // layers run unconditionally; the hash compute alone is the latency outlier and is wasted work when no BINARY rule
-            // could fire.
-            let hashOutcome: HashOutcome
-            if snapshot.binaryRules.isEmpty {
-                hashOutcome = .notNeeded
-            } else {
-                hashOutcome = FileHashCache.shared.lookupOrComputeWithDeadline(
-                    path: path,
-                    stat: fileStat,
-                    deadlineMachAbs: deadline
-                )
-            }
-
-            let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
-            dispatchAuthDecision(decision, context: AuthDispatchContext(
-                message: retained.message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
-            ))
+        // every other exec on the host (#298). Under a saturated backlog, decide inline rather than growing an unbounded queue
+        // of retained messages — strictly no worse than the pre-#298 serial path. The decision logic, the deadline budget, and
+        // the fail-closed/open posture are all unchanged — only the thread they run on moves.
+        if authDecisionQueue.operationCount >= maxAuthDecisionBacklog {
+            decideAndRespond(message)
+            return
         }
+        let retained = RetainedAuthMessage(message)
+        authDecisionQueue.addOperation { [self, retained] in
+            // retained releases the message in deinit when this operation is freed — after decideAndRespond has responded,
+            // exactly once, and even if the operation is ever dropped before running.
+            decideAndRespond(retained.message)
+        }
+    }
+
+    /// decideAndRespond runs the full AUTH_EXEC decision for `message` and responds to the kernel: re-derive the target, walk
+    /// the identifier tuple, hash under the deadline budget when BINARY rules exist, decide, and dispatch the verdict +
+    /// telemetry. Called on the bounded worker for the offloaded common case, and inline on the ES delivery thread for the
+    /// saturated-backlog fallback (#298). `message` must be valid for the call — guaranteed by RetainedAuthMessage on the
+    /// worker path and by the live ES callback on the inline path. C structs are re-derived here (not captured): es_process_t /
+    /// stat are non-Sendable and their fields point into the message buffer.
+    private func decideAndRespond(_ message: UnsafePointer<es_message_t>) {
+        let target = message.pointee.event.exec.target.pointee
+        let fileStat = target.executable.pointee.stat
+        let path = esTokenString(target.executable.pointee.path)
+
+        let snapshot = ApplicationControlStore.shared.currentSnapshot()
+        let tuple = buildAuthTuple(target: target, fileStat: fileStat, path: path)
+
+        // Only pay the hash cost when the snapshot actually has BINARY rules to consult. The cheap CDHASH/SIGNINGID/TEAMID
+        // layers run unconditionally; the hash compute alone is the latency outlier and is wasted work when no BINARY rule
+        // could fire.
+        let hashOutcome: HashOutcome
+        if snapshot.binaryRules.isEmpty {
+            hashOutcome = .notNeeded
+        } else {
+            hashOutcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+                path: path,
+                stat: fileStat,
+                deadlineMachAbs: message.pointee.deadline
+            )
+        }
+
+        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
+        dispatchAuthDecision(decision, context: AuthDispatchContext(
+            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
+        ))
     }
 
     /// AuthDispatchContext bundles the fields dispatchAuthDecision needs into a single argument so the function stays under
