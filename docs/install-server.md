@@ -214,6 +214,7 @@ unset uses the documented default.
 | `EDR_TLS_CERT_FILE` | **yes** | - | PEM cert. Unconditionally required; the server has no plaintext-HTTP mode (issue #140) |
 | `EDR_TLS_KEY_FILE` | **yes** | - | PEM key (pair with cert) |
 | `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
+| `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
 | `EDR_RETENTION_INTERVAL` | no | 1h | How often the retention job runs |

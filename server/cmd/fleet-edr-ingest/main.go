@@ -134,5 +134,7 @@ func run() error {
 	}); err != nil {
 		return err
 	}
-	return httpserver.RunAndShutdown(ctx, srv, logger)
+	// The ingest binary shuts down immediately on SIGTERM (nil drain, 0 delay). Graceful-drain wiring for the ingest tier is a
+	// follow-up to the server's (server-availability arc); nil/0 preserves the prior immediate-shutdown behavior with no regression.
+	return httpserver.RunAndShutdown(ctx, srv, logger, nil, 0)
 }

@@ -27,3 +27,68 @@ mechanism across the change's first two PRs.
 - **WHEN** the system applies that corpus again
 - **THEN** the apply succeeds without error
 - **AND** no migration is re-run and the schema is unchanged
+
+### Requirement: The server holds no in-process state that survives a request lifetime
+
+The server SHALL NOT retain in-process state that outlives a single request and that a peer replica would need to serve a
+subsequent request correctly. Durable state SHALL live in the shared MySQL store; per-request state MAY ride in signed cookies;
+short-lived per-replica performance caches are permitted only when losing them on a restart is harmless. This invariant is what
+lets any replica behind the load balancer serve any request and lets a replica restart without customer-visible state loss. It is
+enforced at review time against `docs/adr/0010-stateless-server.md`; there is no runtime test.
+
+### Requirement: SIGTERM produces a load-balancer-drainable graceful shutdown
+
+On SIGTERM the server SHALL begin draining before it closes its listener: it SHALL report not-ready on its readiness probe so a
+load balancer removes the replica from rotation, SHALL keep serving in-flight and newly-accepted requests for a bounded drain
+window, and SHALL then stop accepting new connections and wait for in-flight requests to finish up to a bounded shutdown deadline.
+The process SHALL exit within the drain window plus the shutdown deadline. The drain window is operator-configurable and MAY be
+zero to disable the wait.
+
+#### Scenario: Readiness reports not-ready once draining begins
+
+- **GIVEN** a running server whose readiness probe reports ready
+- **WHEN** the server begins draining on SIGTERM
+- **THEN** the readiness probe reports not-ready with HTTP 503
+- **AND** it does so regardless of whether the database check would otherwise pass
+
+#### Scenario: In-flight requests complete before the listener closes
+
+- **GIVEN** a server draining on SIGTERM with a request in flight
+- **WHEN** the drain window elapses and graceful shutdown runs
+- **THEN** the in-flight request completes successfully before the process exits
+
+#### Scenario: The process exits within the drain plus shutdown deadline
+
+- **GIVEN** a server draining on SIGTERM
+- **WHEN** the drain window and the shutdown grace deadline elapse
+- **THEN** the process has exited
+
+### Requirement: First-boot admin seed is safe under concurrent replica boot
+
+When multiple replicas boot concurrently against a fresh database, the first-boot break-glass admin seed SHALL produce exactly one
+admin row and every replica's seed SHALL succeed. The replica that loses the create race SHALL adopt the existing row rather than
+failing its boot.
+
+#### Scenario: Two replicas seeding concurrently produce exactly one admin row
+
+- **GIVEN** a fresh database and two replicas running the admin seed concurrently
+- **WHEN** both seed attempts run
+- **THEN** both succeed
+- **AND** exactly one break-glass admin row exists
+
+### Requirement: Replica identity is observable via service.instance.id
+
+Every replica SHALL attach a `service.instance.id` resource attribute to the telemetry it emits so an operator can tell replicas
+apart in the observability backend. The identifier SHALL be stable for the lifetime of the process.
+
+#### Scenario: Every emitted span carries the service instance id
+
+- **GIVEN** a configured telemetry resource for a replica with a service instance id set
+- **WHEN** the resource is built
+- **THEN** it carries a non-empty `service.instance.id` attribute
+
+#### Scenario: The service instance id is stable for the process lifetime
+
+- **GIVEN** a running replica
+- **WHEN** its service instance id is read more than once
+- **THEN** the same value is returned each time

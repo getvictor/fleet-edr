@@ -102,7 +102,12 @@ func run() error {
 		return err
 	}
 
-	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx)
+	// drain is the process-wide graceful-shutdown signal: SIGTERM flips it so /readyz reports 503 and the load balancer drains this
+	// replica before RunAndShutdown closes the listener. Shared between the detection intake handler (which serves /readyz) and
+	// RunAndShutdown below.
+	drain := &httpserver.DrainState{}
+
+	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining)
 	if err != nil {
 		return err
 	}
@@ -164,7 +169,7 @@ func run() error {
 	if err := configureTLS(ctx, logger, srv, cfg); err != nil {
 		return err
 	}
-	return httpserver.RunAndShutdown(ctx, srv, logger)
+	return httpserver.RunAndShutdown(ctx, srv, logger, drain, cfg.ShutdownDrain)
 }
 
 func openIdentity(
@@ -219,6 +224,7 @@ func openDetection(
 	db *sqlx.DB,
 	cfg *config.Config,
 	identityCtx *identitybootstrap.Identity,
+	isDraining func() bool,
 ) (*detectionbootstrap.Detection, error) {
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,
@@ -238,6 +244,7 @@ func openDetection(
 		UserExists:           identityCtx.Service().UserExists,
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
+		IsDraining:           isDraining,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)

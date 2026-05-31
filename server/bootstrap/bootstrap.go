@@ -12,8 +12,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/fleetdm/edr/internal/observability"
 	"github.com/fleetdm/edr/server/config"
@@ -23,6 +26,12 @@ import (
 // otelFlushTimeout caps the OTel exporter flush so a dead collector cannot
 // stall server shutdown.
 const otelFlushTimeout = 5 * time.Second
+
+// instanceID returns this process's OTel service.instance.id. It is generated once (sync.OnceValue) and stable for the process
+// lifetime, so every span and metric the binary emits carries the same replica identifier — which is what lets an operator tell
+// replicas apart in the backend behind a load balancer (server-availability: replica identity). A random UUID is used rather than
+// the hostname so the identifier is unique even when two replicas share a hostname (e.g. host-network pods).
+var instanceID = sync.OnceValue(uuid.NewString)
 
 // Env is the bundle of ready-to-use primitives returned by Init.
 //
@@ -60,8 +69,9 @@ func Init(opts Options) (context.Context, *Env, error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	shutdownOTel, err := observability.Init(ctx, observability.OptionsFromEnv(observability.Options{
-		ServiceName:    opts.ServiceName,
-		ServiceVersion: opts.ServiceVersion,
+		ServiceName:       opts.ServiceName,
+		ServiceVersion:    opts.ServiceVersion,
+		ServiceInstanceID: instanceID(),
 	}))
 	if err != nil {
 		cancel()

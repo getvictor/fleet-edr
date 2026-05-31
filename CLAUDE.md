@@ -128,6 +128,10 @@ Layered on the global guide. Project-specific:
 - Sentence case for headings.
 - No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-` with surrounding spaces).
 - Don't run `task db:reset` without explicit user permission.
+- Stateless server (ADR-0010): the server holds no in-process state that survives a request lifetime and that a peer replica
+  would need to serve the next request. Durable cross-request state goes in MySQL; per-request state may ride in signed cookies;
+  a new in-process map / channel / queue holding shared state is a review defect unless it carries a "per-replica perf cache,
+  safe to lose" note. The app tier is multi-replica behind a load balancer (the server-availability arc).
 - Go 1.22+ integer range expressions (`for i := range N` where `N` is an `int`) are valid project style and the
   modernize linter prefers them over `for i := 0; i < N; i++`. Copilot + CodeRabbit have re-flagged this pattern as
   "doesn't compile" on multiple PRs (#239 most recently); the claim is false and the finding should be skipped.
