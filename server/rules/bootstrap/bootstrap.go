@@ -10,11 +10,13 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
 	"github.com/fleetdm/edr/server/rules/internal/service"
+	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 )
 
 // Deps bundles what New needs to wire the rules context. cmd/main owns the *sqlx.DB handle and shares it across every context's
@@ -113,8 +115,9 @@ func New(deps Deps) (*Rules, error) {
 	}, nil
 }
 
-// ApplySchema runs the DDL statements rules owns and seeds the `Default` application control policy. Idempotent (CREATE TABLE IF NOT
-// EXISTS + INSERT IGNORE on the seed). No cross-context FKs; ordering with other contexts' ApplySchema is not load-bearing.
+// ApplySchema applies the rules context's goose migration corpus and seeds the `Default` application control policy. Idempotent
+// (goose skips applied versions + INSERT IGNORE on the seed). No cross-context FKs; ordering with other contexts' ApplySchema is
+// not load-bearing.
 func (r *Rules) ApplySchema(ctx context.Context) error {
 	if err := ApplySchema(ctx, r.db); err != nil {
 		return err
@@ -126,18 +129,17 @@ func (r *Rules) ApplySchema(ctx context.Context) error {
 	return nil
 }
 
-// ApplySchema is the package-level form: applies rules' DDL against the given DB without requiring a fully constructed *Rules. Used by
-// server/testdb so tests can apply every context's schema without faking out each bootstrap's service dependencies.
+// ApplySchema is the package-level form: applies rules' goose migration corpus against the given DB without requiring a fully
+// constructed *Rules. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service
+// dependencies. Idempotent (goose skips already-applied versions), so a second call on an already-migrated DB is a no-op.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("rules ApplySchema: db must not be nil")
 	}
-	for _, stmt := range schemaStatements {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("rules schema apply: %w", err)
-		}
-	}
-	return nil
+	return runner.Up(ctx, db, rulesmigrations.FS, runner.Options{
+		Context:   "rules",
+		TableName: "rules_goose_db_version",
+	})
 }
 
 // ContentService exposes the public api.RuleProvider. detection.Engine (still living at server/detection/) consumes this to load its

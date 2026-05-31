@@ -14,9 +14,11 @@ stack (PR 1 -> 2) and the HA-foundation stack (PR 3 -> 4) run in parallel from m
 
 ## PR 2: convert identity + detection + rules + standalone migrate CLI
 
-- [ ] identity, detection, rules: `migrations/00001_initial.sql` + `embed.go`; delegate; delete `schema.go`
-- [ ] `cmd/fleet-edr-migrate` standalone CLI + smoke test
-- [ ] OpenSpec sync gate: `[no-behavior-change]` for the byte-identical `server/detection/bootstrap/schema.go` touch
+- [x] identity, detection, rules: `migrations/00001_initial.sql` + `embed.go`; delegate; delete `schema.go`
+- [x] retire the legacy `applyAdditiveAlters` runner in detection (its ALTERs are already folded into the CREATE TABLE)
+- [x] `cmd/fleet-edr-migrate` standalone CLI + smoke test
+- [x] OpenSpec sync gate satisfied by the spec/best-practices update (the gate passes on any `openspec/` change), not the
+  `[no-behavior-change]` opt-out
 
 ## PR 3: ADR-0010 stateless + drain-then-shutdown + concurrent-boot safety
 

@@ -23,6 +23,8 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/users"
+	identitymigrations "github.com/fleetdm/edr/server/identity/migrations"
+	"github.com/fleetdm/edr/server/migrations/runner"
 )
 
 // Deps bundles what New needs to wire the identity context. cmd/main owns
@@ -334,9 +336,9 @@ func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, e
 	}), nil
 }
 
-// ApplySchema runs the DDL statements identity owns and seeds the
+// ApplySchema applies identity's goose migration corpus and seeds the
 // built-in roles. Idempotent: re-running against a populated DB is
-// safe (CREATE TABLE IF NOT EXISTS + INSERT IGNORE for the seed).
+// safe (goose skips applied versions + INSERT IGNORE for the seed).
 //
 // The cross-context FK fk_alerts_updated_by that used to require
 // identity ApplySchema run before detection's was dropped in favour
@@ -346,21 +348,21 @@ func (i *Identity) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, i.db)
 }
 
-// ApplySchema is the package-level form: applies identity's DDL
-// against the given DB, then seeds the five built-in roles. Used by
-// server/testdb so tests can apply every context's schema without
-// faking out each bootstrap's service dependencies.
+// ApplySchema is the package-level form: applies identity's goose migration corpus against the given DB, then seeds the five
+// built-in roles. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service
+// dependencies.
 //
-// The roles seed runs after DDL because it requires the tables it
-// populates. INSERT IGNORE so re-running on a populated DB is a no-op.
+// The roles seed runs after the migrations because it requires the tables they create. INSERT IGNORE so re-running on a populated
+// DB is a no-op; goose itself skips already-applied versions.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("identity ApplySchema: db must not be nil")
 	}
-	for _, stmt := range schemaStatements {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("identity schema create: %w", err)
-		}
+	if err := runner.Up(ctx, db, identitymigrations.FS, runner.Options{
+		Context:   "identity",
+		TableName: "identity_goose_db_version",
+	}); err != nil {
+		return err
 	}
 	if err := seed.Roles(ctx, db); err != nil {
 		return fmt.Errorf("identity seed roles: %w", err)

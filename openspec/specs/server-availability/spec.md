@@ -24,8 +24,7 @@ idempotent: a boot whose corpus carries no new migration relative to the trackin
 succeed. Migrations SHALL be forward-only; the system MUST NOT depend on down-migrations for recovery (the documented rollback
 path is restore-from-backup).
 
-The conversion to this mechanism is staged across the v0.1.0 migration arc: the response and endpoint contexts are managed this
-way today; identity, detection, and rules follow in the #115 rollout.
+Every bounded context that owns database tables (identity, endpoint, rules, response, detection) is managed this way.
 
 #### Scenario: Applying a baseline on a fresh database creates its tables
 

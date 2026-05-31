@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -19,7 +18,9 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/operator"
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
 	"github.com/fleetdm/edr/server/detection/internal/service"
+	detectionmigrations "github.com/fleetdm/edr/server/detection/migrations"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/migrations/runner"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -169,79 +170,21 @@ func (d *Detection) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, d.db)
 }
 
-// ApplySchema is the package-level form: applies detection's DDL against the given DB without requiring a fully constructed
-// *Detection. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service
-// dependencies.
+// ApplySchema is the package-level form: applies detection's goose migration corpus against the given DB without requiring a fully
+// constructed *Detection. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's
+// service dependencies. Idempotent (goose skips already-applied versions), so a second call on an already-migrated DB is a no-op.
+//
+// The pre-goose additive-ALTER runner that bridged stale dev DBs is gone (#115): its ALTERs were already folded into the processes
+// CREATE TABLE, so the goose baseline produces the full current schema. A dev DB that predates the fold is recreated with
+// `task db:reset`, not auto-migrated.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("detection ApplySchema: db must not be nil")
 	}
-	for _, stmt := range schemaStatements {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("detection schema apply: %w", err)
-		}
-	}
-	return applyAdditiveAlters(ctx, db)
-}
-
-// MySQL error numbers we treat as "already applied" for additive ALTER statements. Documented at
-// https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html.
-const (
-	mysqlDuplicateColumn = 1060
-	mysqlDuplicateKey    = 1061
-)
-
-// applyAdditiveAlters runs ALTER TABLE statements that add columns to tables already
-// populated by an earlier deployment. The product hasn't shipped (no migration story
-// yet -- issue #115), but dev DBs survive across branches and we want a `task dev:server`
-// to work without a `task db:reset` after a schema bump on a feature branch.
-//
-// Statements run one-clause-at-a-time. Combining multiple ADD COLUMN / ADD INDEX clauses
-// into a single ALTER fails atomically: if one clause was already applied by a previous
-// pass and another is new, MySQL rejects the whole statement and isAlreadyAppliedError
-// would skip past it, permanently stranding the un-applied clauses. Splitting into one
-// statement per clause makes each idempotent in isolation (per review on PR #180).
-//
-// When the product ships, this whole function moves to a real migration runner (#115).
-func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
-	alters := []string{
-		// issue #173: snapshot-aware TTL reconciliation. is_snapshot marks rows originated by the extension's baseline pass;
-		// last_seen_ns is bumped by agent heartbeats. Index supports the heartbeat UPDATE's WHERE predicate.
-		`ALTER TABLE processes ADD COLUMN is_snapshot BOOL NOT NULL DEFAULT FALSE`,
-		`ALTER TABLE processes ADD COLUMN last_seen_ns BIGINT NULL`,
-		`ALTER TABLE processes ADD INDEX idx_processes_snapshot_lastseen (is_snapshot, last_seen_ns)`,
-		// task 11.3.2: cdhash on every exec event. 40 hex chars (sha1 of the CDDirectory blob) when the binary is Hardened
-		// Runtime; NULL otherwise. The agent only emits cdhash for HR processes (issue #68 / PR #185) so non-HR rows skip
-		// it. Persisted alongside sha256 so incident response can correlate by either hash.
-		`ALTER TABLE processes ADD COLUMN cdhash VARCHAR(40) NULL`,
-		// NOTE: the alerts process-optional/subject change (ADR-0008 amendment) is NOT migrated here. The product has not
-		// shipped a release (no existing prod DBs), so the new schema lives only in schema.go's CREATE TABLE; a dev DB
-		// carrying the old alerts shape is handled with `task db:reset`, not a migration. A real migration runner is
-		// issue #115, to be wired before the first release.
-	}
-	for _, stmt := range alters {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			if isAlreadyAppliedError(err) {
-				continue
-			}
-			return fmt.Errorf("detection additive alter: %w", err)
-		}
-	}
-	return nil
-}
-
-// isAlreadyAppliedError matches MySQL errors that mean "this ALTER is a no-op because the change already exists." Uses errors.As
-// against go-sql-driver's typed *mysql.MySQLError so a future message format change can't silently break the idempotency contract --
-// substring-matching err.Error() was brittle (per review on PR #180). Mirrors the pattern in server/identity/internal/seed/admin.go.
-func isAlreadyAppliedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var mErr *mysqldriver.MySQLError
-	if errors.As(err, &mErr) {
-		return mErr.Number == mysqlDuplicateColumn || mErr.Number == mysqlDuplicateKey
-	}
-	return false
+	return runner.Up(ctx, db, detectionmigrations.FS, runner.Options{
+		Context:   "detection",
+		TableName: "detection_goose_db_version",
+	})
 }
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is
