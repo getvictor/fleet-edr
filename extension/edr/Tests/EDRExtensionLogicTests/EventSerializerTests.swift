@@ -99,6 +99,41 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertTrue(json.contains("\"snapshot\":true"), "startup-snapshot exec must carry snapshot:true, got: \(json)")
     }
 
+    // spec:endpoint-event-collection/launch-item-registration-event-capture/a-launchdaemon-is-registered-via-background-task-management
+    func testBtmLaunchItemAddPayloadRoundTripAndWireKeys() throws {
+        // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes. Models the real ground-truth
+        // (ai/btm-attribution): the DECISION input is executable_code_signing (here an unsigned dropper, which fires),
+        // while the instigator is Apple's smd (a platform binary) and is forensic-only.
+        let payload = BtmLaunchItemAddPayload(
+            itemType: "daemon",
+            itemPath: "/Library/LaunchDaemons/com.evil.persistence.plist",
+            executablePath: "/tmp/dropper",
+            legacy: true,
+            managed: false,
+            uid: 0,
+            executableCodeSigning: CodeSigning(teamID: "", signingID: "", flags: 0, isPlatformBinary: false),
+            instigatorPid: 93,
+            instigatorCodeSigning: CodeSigning(teamID: "", signingID: "com.apple.xpc.smd", flags: 0, isPlatformBinary: true)
+        )
+        let encoded = try encoder.encode(payload)
+        let json = String(data: encoded, encoding: .utf8) ?? ""
+        for key in ["\"item_type\":\"daemon\"", "\"item_path\":", "\"executable_path\":",
+                    "\"managed\":false", "\"executable_code_signing\":", "\"instigator_pid\":93",
+                    "\"instigator_code_signing\":", "\"is_platform_binary\":false"] {
+            XCTAssertTrue(json.contains(key), "missing wire key \(key) in: \(json)")
+        }
+        let decoded = try decoder.decode(BtmLaunchItemAddPayload.self, from: encoded)
+        XCTAssertEqual(decoded.itemType, payload.itemType)
+        XCTAssertEqual(decoded.itemPath, payload.itemPath)
+        XCTAssertEqual(decoded.executablePath, payload.executablePath)
+        XCTAssertEqual(decoded.legacy, payload.legacy)
+        XCTAssertEqual(decoded.managed, payload.managed)
+        XCTAssertEqual(decoded.uid, payload.uid)
+        XCTAssertEqual(decoded.executableCodeSigning?.isPlatformBinary, false, "unsigned executable -> decision input fires")
+        XCTAssertEqual(decoded.instigatorPid, payload.instigatorPid)
+        XCTAssertEqual(decoded.instigatorCodeSigning?.isPlatformBinary, true, "instigator smd is platform; forensic only")
+    }
+
     func testExecPayloadOmitsOptionalSigningAndHashes() throws {
         // Unsigned binaries lack code_signing / sha256 / cdhash. Verify the JSON
         // omits the keys entirely rather than emitting nulls -- the server's

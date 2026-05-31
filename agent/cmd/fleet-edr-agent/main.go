@@ -14,8 +14,10 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/enrich"
 	"github.com/fleetdm/edr/agent/enrollment"
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/logging"
@@ -367,10 +369,14 @@ func startReceiverLoop(
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
+			// Fill a btm_launch_item_add event's executable_code_signing from the on-disk signing of the registered
+			// executable: the sandboxed extension cannot read it on a SIP-enabled host, so the agent (unsandboxed root,
+			// off the ES callback thread) computes it here. No-op for every other event and on the linux headless build.
+			data := enrich.BtmExecutableSigning(evt.Data, codesign.Evaluate)
 			if updateTable {
-				updateProcTable(pt, evt.Data)
+				updateProcTable(pt, data)
 			}
-			if err := q.Enqueue(ctx, evt.Data); err != nil {
+			if err := q.Enqueue(ctx, data); err != nil {
 				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		},

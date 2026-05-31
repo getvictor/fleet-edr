@@ -99,6 +99,14 @@ export async function promote(
 // processes(id), so we seed a minimal process row first. processes
 // itself has no FK constraints, so any host_id + pid + fork_time_ns
 // combination is fine.
+//
+// alerts.subject is the dedup identity (ADR-0008 amendment); the unique
+// key is (source, host_id, rule_id, subject), NOT process_id. For a
+// process-backed alert the engine sets subject = the process_id string,
+// so this raw-SQL seed must do the same: omitting it defaults subject
+// to '' and a second seed for the same host+rule collides on
+// uk_alerts_dedup. Each seed creates a fresh process row, so the
+// per-process subject keeps re-seeds (Playwright retries) distinct.
 export async function seedCriticalAlert(
   db: Connection,
   opts: { hostId: string; ruleId: string; title: string },
@@ -110,9 +118,9 @@ export async function seedCriticalAlert(
   );
   const processId = (procResult[0] as { insertId: number }).insertId;
   const alertResult = await db.query(
-    `INSERT INTO alerts (host_id, rule_id, severity, title, description, process_id)
-     VALUES (?, ?, 'critical', ?, 'Seeded by Playwright reauth-modal spec', ?)`,
-    [opts.hostId, opts.ruleId, opts.title, processId],
+    `INSERT INTO alerts (host_id, rule_id, severity, title, description, process_id, subject)
+     VALUES (?, ?, 'critical', ?, 'Seeded by Playwright reauth-modal spec', ?, ?)`,
+    [opts.hostId, opts.ruleId, opts.title, processId, String(processId)],
   );
   return (alertResult[0] as { insertId: number }).insertId;
 }

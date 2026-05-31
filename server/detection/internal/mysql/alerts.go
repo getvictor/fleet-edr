@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -20,7 +21,7 @@ const alertEventsBatchSize = 500
 
 // InsertAlert creates an alert and links it to the given event IDs.
 // If a duplicate alert exists (same source, host_id, rule_id,
-// process_id), the insert is skipped and the existing alert ID is
+// subject), the insert is skipped and the existing alert ID is
 // returned. Returns the alert ID and whether it was newly created.
 //
 // Callers SHOULD set a.Source; a blank Source defaults to
@@ -36,6 +37,18 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if a.Source == "" {
 		a.Source = api.AlertSourceDetection
 	}
+	// Subject is the dedup identity. A blank Subject (every process-backed caller, e.g. catalog rules that only set
+	// ProcessID, and application-control) defaults to the process_id string, preserving the historical
+	// (source, host_id, rule_id, process_id) dedup. Process-less callers (BTM persistence) supply a namespaced Subject.
+	if a.Subject == "" {
+		// A process-less alert (ProcessID 0) MUST supply its own dedup Subject: defaulting to "0" would collapse every
+		// process-less alert for the same (source, host_id, rule_id) into one row. Treat the omission as a programming
+		// error rather than silently mis-deduplicating (Gemini).
+		if a.ProcessID == 0 {
+			return 0, false, fmt.Errorf("insert alert for rule %s on host %s: process-less alert requires a non-empty Subject", a.RuleID, a.HostID)
+		}
+		a.Subject = strconv.FormatInt(a.ProcessID, 10)
+	}
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -43,10 +56,12 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// NULLIF(process_id, 0) stores a process-less alert's link as NULL (there is no processes(id) = 0 row, so a literal 0
+	// would violate fk_alerts_process). Dedup is on `subject`, not process_id.
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, process_id, techniques)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.ProcessID, a.Techniques,
+		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, process_id, subject, techniques)
+		VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)`,
+		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.ProcessID, a.Subject, a.Techniques,
 	)
 	if err != nil {
 		if isDuplicateKeyErr(err) {
@@ -109,13 +124,17 @@ func isDuplicateKeyErr(err error) bool {
 	return mysqlErr.Number == mysqlErrDuplicateKey
 }
 
-// attachEventsToExistingAlert handles the dedup branch when (source, host_id, rule_id, process_id) already has an alert row. Extracted
+// attachEventsToExistingAlert handles the dedup branch when (source, host_id, rule_id, subject) already has an alert row. Extracted
 // from InsertAlert to keep the main path under the cognitive complexity limit.
 func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, bool, error) {
 	var existingID int64
+	// FOR UPDATE makes this a locking (current) read rather than a consistent snapshot read. We only reach here after the
+	// INSERT hit a duplicate-key error, i.e. a concurrent transaction inserted and committed this (source, host_id,
+	// rule_id, subject) row; under REPEATABLE READ a plain SELECT could miss that row against this transaction's MVCC
+	// snapshot. The locking read sees the latest committed row (Gemini).
 	if err := tx.GetContext(ctx, &existingID,
-		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND process_id = ?",
-		a.Source, a.HostID, a.RuleID, a.ProcessID,
+		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND subject = ? FOR UPDATE",
+		a.Source, a.HostID, a.RuleID, a.Subject,
 	); err != nil {
 		return 0, false, fmt.Errorf("lookup duplicate alert: %w", err)
 	}
@@ -136,7 +155,7 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 		limit = 100
 	}
 
-	query := `SELECT id, host_id, rule_id, source, severity, title, description, process_id,
+	query := `SELECT id, host_id, rule_id, source, severity, title, description, COALESCE(process_id, 0) AS process_id,
 	          techniques, status, created_at, updated_at, resolved_at, updated_by
 	          FROM alerts WHERE 1=1`
 	var args []any
@@ -177,7 +196,7 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 func (s *Store) GetAlert(ctx context.Context, id int64) (api.Alert, error) {
 	var a api.Alert
 	err := s.db.GetContext(ctx, &a,
-		`SELECT id, host_id, rule_id, source, severity, title, description, process_id,
+		`SELECT id, host_id, rule_id, source, severity, title, description, COALESCE(process_id, 0) AS process_id,
 		        techniques, status, created_at, updated_at, resolved_at, updated_by
 		 FROM alerts WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {

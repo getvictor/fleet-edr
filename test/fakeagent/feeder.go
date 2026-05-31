@@ -244,6 +244,52 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 		return json.Marshal(struct {
 			PID int `json:"pid"`
 		}{ev.PID})
+	case "btm_launch_item_add":
+		type codeSigning struct {
+			TeamID           string `json:"team_id"`
+			SigningID        string `json:"signing_id"`
+			Flags            int    `json:"flags"`
+			IsPlatformBinary bool   `json:"is_platform_binary"`
+		}
+		out := struct {
+			ItemType              string       `json:"item_type"`
+			ItemPath              string       `json:"item_path"`
+			ExecutablePath        string       `json:"executable_path,omitempty"`
+			Legacy                bool         `json:"legacy,omitempty"`
+			Managed               bool         `json:"managed,omitempty"`
+			UID                   int          `json:"uid,omitempty"`
+			ExecutableCodeSigning *codeSigning `json:"executable_code_signing,omitempty"`
+			InstigatorPID         int          `json:"instigator_pid,omitempty"`
+			InstigatorCodeSigning *codeSigning `json:"instigator_code_signing,omitempty"`
+		}{
+			ItemType:       ev.ItemType,
+			ItemPath:       ev.ItemPath,
+			ExecutablePath: ev.ExecutablePath,
+			Legacy:         ev.Legacy,
+			Managed:        ev.Managed,
+			UID:            ev.UID,
+			InstigatorPID:  ev.InstigatorPID,
+		}
+		// Emit executable_code_signing (the rule's decision input) only when present: the rule distinguishes
+		// "present-but-untrusted" (fires) from "signing unreadable" (skipped) by this object's presence.
+		if ev.ExecutableCodeSigningPresent {
+			out.ExecutableCodeSigning = &codeSigning{
+				TeamID:           ev.ExecutableTeamID,
+				SigningID:        "",
+				Flags:            0,
+				IsPlatformBinary: ev.ExecutableIsPlatformBinary,
+			}
+		}
+		// Emit the forensic instigator_code_signing only for a present instigator (PID > 0).
+		if ev.InstigatorPID > 0 {
+			out.InstigatorCodeSigning = &codeSigning{
+				TeamID:           ev.InstigatorTeamID,
+				SigningID:        "",
+				Flags:            0,
+				IsPlatformBinary: ev.InstigatorIsPlatformBinary,
+			}
+		}
+		return json.Marshal(out)
 	default:
 		// knownEventTypes guarded the YAML loader, so reaching this is a bug in the library, not a user-input issue.
 		return nil, fmt.Errorf("buildPayload: unhandled event_type %q", ev.Type)

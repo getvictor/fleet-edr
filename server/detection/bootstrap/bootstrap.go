@@ -214,6 +214,10 @@ func applyAdditiveAlters(ctx context.Context, db *sqlx.DB) error {
 		// Runtime; NULL otherwise. The agent only emits cdhash for HR processes (issue #68 / PR #185) so non-HR rows skip
 		// it. Persisted alongside sha256 so incident response can correlate by either hash.
 		`ALTER TABLE processes ADD COLUMN cdhash VARCHAR(40) NULL`,
+		// NOTE: the alerts process-optional/subject change (ADR-0008 amendment) is NOT migrated here. The product has not
+		// shipped a release (no existing prod DBs), so the new schema lives only in schema.go's CREATE TABLE; a dev DB
+		// carrying the old alerts shape is handled with `task db:reset`, not a migration. A real migration runner is
+		// issue #115, to be wired before the first release.
 	}
 	for _, stmt := range alters {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

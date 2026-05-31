@@ -51,7 +51,11 @@ final class ESFSubscriber: Sendable {
             // Creating a NEW file fires NOTIFY_CREATE, not NOTIFY_OPEN, so write-to-sensitive-path rules keyed on
             // `open` events (privilege_launchd_plist_write, sudoers_tamper) miss the canonical "drop a new file"
             // attack without this. See handleCreate.
-            ES_EVENT_TYPE_NOTIFY_CREATE
+            ES_EVENT_TYPE_NOTIFY_CREATE,
+            // Launch-item persistence (T1543.004 LaunchDaemons) is detected via BTM registration rather than raw file
+            // writes: lower volume, and robust to atomic-rename / `cp` drops a file-write rule misses. See
+            // handleBtmLaunchItemAdd (ADR-0008).
+            ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD
         ]
 
         let subResult = es_subscribe(client, events, UInt32(events.count))
@@ -98,6 +102,8 @@ final class ESFSubscriber: Sendable {
             handleOpen(msg)
         case ES_EVENT_TYPE_NOTIFY_CREATE:
             handleCreate(msg)
+        case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
+            handleBtmLaunchItemAdd(msg)
         default:
             break
         }

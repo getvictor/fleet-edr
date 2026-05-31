@@ -20,8 +20,9 @@ import (
 // events: every accepted block event becomes a finding, with the
 // rule_id and severity copied straight from the payload. Source is
 // stamped AlertSourceApplicationControl so the dedup key
-// (source, host_id, rule_id, process_id) keeps app-control alerts
-// distinct from any catalog-rule id collision.
+// (source, host_id, rule_id, subject) keeps app-control alerts
+// distinct from any catalog-rule id collision. These alerts are
+// process-backed, so the engine sets subject to the process id.
 type ApplicationControlBlock struct{}
 
 // applicationControlBlockEventType is the well-known event_type the extension emits when an AUTH_EXEC is denied. Stable wire-shape
@@ -43,8 +44,8 @@ func (r *ApplicationControlBlock) Doc() api.Documentation {
 			"application-control rule. Every such denial emits an `application_control_block` event that this " +
 			"built-in rule maps to an alert with `source='application_control'`. The alert carries the matched " +
 			"rule's identifier, severity, and operator-supplied custom message. The dedup key " +
-			"(source, host_id, rule_id, process_id) means repeated blocks of the same binary by the same rule on " +
-			"the same process collapse into one alert row.",
+			"(source, host_id, rule_id, subject), where an app-control alert's subject is its process id, means " +
+			"repeated blocks of the same binary by the same rule on the same process collapse into one alert row.",
 		Severity:   api.SeverityMedium,
 		EventTypes: []string{applicationControlBlockEventType},
 	}

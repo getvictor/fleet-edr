@@ -1,0 +1,27 @@
+{
+  "events": [
+    {
+      "event_id": "ldp-pos",
+      "host_id": "fixture-host",
+      "timestamp_ns": 7200,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "daemon",
+        "item_path": "/Library/LaunchDaemons/com.unsigned.persistence.plist",
+        "executable_path": "/tmp/raw_dropper",
+        "managed": false,
+        "executable_code_signing": {"team_id": "", "signing_id": "", "flags": 0, "is_platform_binary": false},
+        "instigator_pid": 93,
+        "instigator_code_signing": {"team_id": "", "signing_id": "com.apple.xpc.smd", "flags": 0, "is_platform_binary": true}
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "privilege_launchd_plist_write",
+      "severity": "high",
+      "description_contains": "/Library/LaunchDaemons/com.unsigned.persistence.plist",
+      "event_ids": ["ldp-pos"]
+    }
+  ]
+}

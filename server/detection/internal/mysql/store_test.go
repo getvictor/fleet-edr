@@ -276,6 +276,56 @@ func TestStore_CountAlerts(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
+// spec:server-detection-rules-engine/persisted-alert-schema/an-alert-with-no-attributable-process-omits-the-process-link
+// spec:server-detection-rules-engine/alert-dedup-by-subject/process-less-findings-dedup-on-a-rule-supplied-subject
+// TestStore_InsertAlert_ProcessLess covers the ADR-0008-amendment persistence path: a process-less alert (ProcessID 0, a rule-supplied
+// Subject) persists with a NULL process_id (no fk_alerts_process violation) and dedups on subject rather than process_id. The same
+// daemon registration dedups; a different one produces a second alert; the row reads back with ProcessID 0 via the read-path COALESCE.
+func TestStore_InsertAlert_ProcessLess(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	mk := func(subject string) (int64, bool) {
+		id, created, err := s.InsertAlert(ctx, api.Alert{
+			HostID:      "h",
+			RuleID:      "privilege_launchd_plist_write",
+			Severity:    api.SeverityHigh,
+			Title:       "LaunchDaemon persistence",
+			Description: "D",
+			ProcessID:   0, // process-less: no live attacker process (the BTM instigator is Apple's smd)
+			Subject:     subject,
+		}, []string{})
+		require.NoError(t, err, "process-less insert must not trip fk_alerts_process")
+		return id, created
+	}
+
+	id1, created1 := mk("launchdaemon:/Library/LaunchDaemons/com.a.plist")
+	require.True(t, created1)
+
+	id1Again, created1Again := mk("launchdaemon:/Library/LaunchDaemons/com.a.plist")
+	assert.False(t, created1Again, "same subject dedups")
+	assert.Equal(t, id1, id1Again, "dedup returns the existing alert id")
+
+	_, created2 := mk("launchdaemon:/Library/LaunchDaemons/com.b.plist")
+	assert.True(t, created2, "a different daemon (subject) is a distinct alert")
+
+	count, err := s.CountAlerts(ctx, api.AlertFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count, "two distinct subjects -> two alerts; the duplicate subject deduped")
+
+	got, err := s.GetAlert(ctx, id1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), got.ProcessID, "process-less alert reads back ProcessID 0 (NULL coalesced)")
+
+	// A process-less alert that forgets its Subject is a programming error: defaulting to "0" would collapse every such
+	// alert for the same (source, host, rule) into one row. InsertAlert rejects it rather than mis-deduplicating.
+	_, _, errNoSubject := s.InsertAlert(ctx, api.Alert{
+		HostID: "h", RuleID: "privilege_launchd_plist_write", Severity: api.SeverityHigh,
+		Title: "T", Description: "D", ProcessID: 0, Subject: "",
+	}, []string{})
+	require.Error(t, errNoSubject, "process-less alert with empty Subject must be rejected, not deduped to '0'")
+}
+
 func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()
