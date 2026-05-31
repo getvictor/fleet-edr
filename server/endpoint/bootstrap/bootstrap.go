@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -16,7 +15,9 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
 	"github.com/fleetdm/edr/server/endpoint/internal/operator"
 	"github.com/fleetdm/edr/server/endpoint/internal/service"
+	endpointmigrations "github.com/fleetdm/edr/server/endpoint/migrations"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/migrations/runner"
 )
 
 // CommandInserter is the closure cmd/main supplies so endpoint can queue commands (today: rotate_token) without importing response/api
@@ -105,25 +106,23 @@ func New(deps Deps) (*Endpoint, error) {
 	}, nil
 }
 
-// ApplySchema runs the DDL statements endpoint owns. Idempotent (CREATE TABLE IF NOT EXISTS). No cross-context FKs; ordering with
-// other contexts' ApplySchema is not load-bearing.
+// ApplySchema applies endpoint's goose migration corpus. Idempotent (goose skips already-applied versions). No cross-context FKs;
+// ordering with other contexts' ApplySchema is not load-bearing.
 func (e *Endpoint) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, e.db)
 }
 
-// ApplySchema is the package-level form: applies endpoint's DDL against the given DB without requiring a fully constructed *Endpoint.
-// Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's service dependencies. CREATE
-// TABLE IF NOT EXISTS makes the call safe to re-run.
+// ApplySchema is the package-level form: applies endpoint's goose migration corpus against the given DB without requiring a fully
+// constructed *Endpoint. Used by server/testdb so tests can apply every context's schema without faking out each bootstrap's
+// service dependencies. Idempotent (goose skips already-applied versions), so a second call on an already-migrated DB is a no-op.
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {
 		return errors.New("endpoint ApplySchema: db must not be nil")
 	}
-	for _, stmt := range schemaStatements {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("endpoint schema create: %w", err)
-		}
-	}
-	return nil
+	return runner.Up(ctx, db, endpointmigrations.FS, runner.Options{
+		Context:   "endpoint",
+		TableName: "endpoint_goose_db_version",
+	})
 }
 
 // Service exposes the public api.Service for cross-context callers. Today: cmd/main's serverGaugeSource calls Service().CountActive
