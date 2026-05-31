@@ -100,6 +100,25 @@ The `is_notarized` wire field was removed. Notarization / reputation scoring, if
 layer off the hot path. The 2026-05-29 capture's `spctl -t install -> rejected` line remains accurate as ground-truth
 about that specific binary; it is just no longer a decision input.
 
+## Amendment 2026-05-31: selective subscription implemented (steps 2-3), RENAME deferred
+
+Decision steps 2 and 3 shipped in #301:
+
+- **`sudoers_tamper` moved to a dedicated file-tamper client (step 2).** A second, NOTIFY-only `es_client_t`
+  (`FileTamperSubscriber`) subscribes to `NOTIFY_CREATE` + `NOTIFY_WRITE`, calls `es_unmute_all_target_paths`, mutes
+  `/etc/sudoers` (target-literal) + `/etc/sudoers.d` (target-prefix), then `es_invert_muting(ES_MUTE_INVERSION_TYPE_TARGET_PATH)`
+  so it observes ONLY those paths. It re-emits each as a write-mode `open` event, so the server rule is unchanged. The
+  inversion lives on this client alone — it has no auth subscriptions — so `AUTH_EXEC` / Application Control on the primary
+  client are untouched (the client-global-inversion landmine this ADR identified). Validated on edr-dev: sudoers
+  create/write fire, a non-sudoers write does not, exec still flows.
+- **Broad `NOTIFY_OPEN` + `NOTIFY_CREATE` dropped from the primary client (step 3).** `sudoers_tamper` was the only rule
+  consuming `open`; with it on the file-tamper client, the open/create firehose is removed.
+- **`NOTIFY_RENAME` was deliberately NOT subscribed.** The ADR listed it parenthetically, but visudo/sudoedit write via
+  temp-file + atomic rename onto `/etc/sudoers`, so watching rename would fire on every legitimate sudoers edit. The
+  atomic-replace gap stays documented on `sudoers_tamper` (unchanged from before). Closing it cleanly (with a
+  visudo/sudoedit/installer carve-out) is a possible focused follow-up. Step 4 (server-pushed watched-path set) remains
+  future work.
+
 ## Context
 
 The system extension's ESF client (`extension/edr/extension/ESFSubscriber.swift`) subscribes to

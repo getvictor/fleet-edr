@@ -17,8 +17,8 @@ ingest path, the storage schema, and the React UI can reason about the wire form
 ### Requirement: Process lifecycle event capture
 
 The system SHALL emit a `fork` event when a monitored process forks, an `exec` event when a process replaces its image,
-an `exit` event when a process exits, and an `open` event when a process opens a file. Each event MUST carry the
-originating PID and any additional fields documented for that event type.
+and an `exit` event when a process exits. Each event MUST carry the originating PID and any additional fields documented
+for that event type.
 
 #### Scenario: A user runs a shell command
 
@@ -49,6 +49,15 @@ code-signing for the instigator process but not for the to-be-launched executabl
 - **WHEN** launchd registers a system LaunchDaemon (for example via `launchctl bootstrap`)
 - **THEN** the system emits a `btm_launch_item_add` event whose payload includes `item_type=daemon`, the launch item
   path, the registered executable path, the MDM-managed flag, and the registered executable's code-signing identity
+
+### Requirement: Sensitive-path file-modification capture
+
+The system SHALL emit a write-mode `open` event when a process creates or writes a file under a fixed set of sensitive
+target paths (currently `/etc/sudoers` and any direct child of `/etc/sudoers.d/`), carrying the writing process PID, the
+file path, and write-mode access flags. The system SHALL NOT forward a broad stream of file opens: collection is scoped
+at the source to those sensitive target paths via a dedicated Endpoint Security client with inverted target-path muting,
+kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes
+to paths outside the sensitive set MUST NOT be collected.
 
 ### Requirement: Process exec authorization
 

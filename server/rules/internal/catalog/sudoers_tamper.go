@@ -24,18 +24,26 @@ import (
 // interest. We fire on any non-allowlisted writer instead, and let
 // operators tune via EDR_SUDOERS_WRITER_ALLOWLIST.
 //
+// Collection (ADR-0008 / #301): these write-mode `open` events are no longer
+// drawn from a broad NOTIFY_OPEN firehose. The extension watches /etc/sudoers
+// + /etc/sudoers.d/* on a dedicated, target-path-mute-inverted Endpoint
+// Security client (NOTIFY_CREATE + NOTIFY_WRITE only) and re-emits each as a
+// write-mode `open` event, so this rule's match logic is unchanged while the
+// host no longer forwards every file open.
+//
 // Why visudo doesn't need to be in the default allowlist: visudo writes
 // to /etc/sudoers.tmp (or $TMPDIR) and atomically renames it onto
-// /etc/sudoers. ESF NOTIFY_OPEN doesn't fire on rename, and visudo
-// never opens /etc/sudoers itself in write mode, so the rule doesn't
-// see visudo's flow at all. Same is true for sudoedit. The rule only
-// trips when something writes to /etc/sudoers directly.
+// /etc/sudoers, so the file-tamper client (which watches CREATE/WRITE on
+// /etc/sudoers but deliberately NOT rename) never sees visudo's flow.
+// Same is true for sudoedit. The rule only trips when something creates
+// or writes /etc/sudoers* directly.
 //
-// Known limitation: an attacker with root could create the temp file
-// and rename it onto /etc/sudoers without ever firing NOTIFY_OPEN on
-// /etc/sudoers. NOTIFY_RENAME would catch that, but the extension
-// doesn't subscribe to it today (tracked alongside the
-// privilege_launchd_plist_write atomic-rename gap).
+// Known limitation: an attacker with root could write a temp file and rename
+// it onto /etc/sudoers without ever firing CREATE/WRITE on /etc/sudoers.
+// Subscribing to NOTIFY_RENAME would catch that, but it would also fire on
+// every legitimate visudo/sudoedit edit, so the atomic-replace gap is left
+// documented (same class as the privilege_launchd_plist_write atomic-rename
+// gap, which BTM registration now covers).
 type SudoersTamper struct {
 	// AllowedWriters is the set of absolute writer-process paths the rule should silently accept. Populated from
 	// EDR_SUDOERS_WRITER_ALLOWLIST. Empty by default — every direct write to sudoers fires.
