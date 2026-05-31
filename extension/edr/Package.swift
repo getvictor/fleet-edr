@@ -68,13 +68,13 @@ let package = Package(
                 "extension/main.swift",
                 "extension/ESFStringToken.swift",
                 "extension/ESFSubscriber.swift",
-                // ESFSubscriber's handler splits (+FileEvents / +BTM / +AuthExec) and the cdhash helpers depend on
-                // EndpointSecurity es_* types, so they belong to the Xcode extension target, not this pure-logic library.
-                // Listed here to keep `swift build` free of the "unhandled file" warning (the explicit sources list below
-                // still defines what actually compiles).
-                "extension/ESFSubscriber+FileEvents.swift",
+                // ESFSubscriber's handler splits (+BTM / +AuthExec), the dedicated FileTamperSubscriber client, and the
+                // cdhash helpers depend on EndpointSecurity es_* types, so they belong to the Xcode extension target, not
+                // this pure-logic library. Listed here to keep `swift build` free of the "unhandled file" warning (the
+                // explicit sources list below still defines what actually compiles).
                 "extension/ESFSubscriber+BTM.swift",
                 "extension/ESFSubscriber+AuthExec.swift",
+                "extension/FileTamperSubscriber.swift",
                 "extension/CDHashHex.swift",
                 "extension/NotificationClient.swift",
                 "extension/ProcessSnapshotEnumerator.swift",

@@ -90,14 +90,14 @@ final class ESFSubscriber: Sendable {
             ES_EVENT_TYPE_NOTIFY_EXEC,  // notification: records allowed execs (fires after AUTH allows)
             ES_EVENT_TYPE_NOTIFY_FORK,
             ES_EVENT_TYPE_NOTIFY_EXIT,
-            ES_EVENT_TYPE_NOTIFY_OPEN,
-            // Creating a NEW file fires NOTIFY_CREATE, not NOTIFY_OPEN, so write-to-sensitive-path rules keyed on
-            // `open` events (privilege_launchd_plist_write, sudoers_tamper) miss the canonical "drop a new file"
-            // attack without this. See handleCreate.
-            ES_EVENT_TYPE_NOTIFY_CREATE,
             // Launch-item persistence (T1543.004 LaunchDaemons) is detected via BTM registration rather than raw file
             // writes: lower volume, and robust to atomic-rename / `cp` drops a file-write rule misses. See
             // handleBtmLaunchItemAdd (ADR-0008).
+            //
+            // Broad NOTIFY_OPEN / NOTIFY_CREATE are deliberately NOT subscribed here (#301, ADR-0008): NOTIFY_OPEN cannot
+            // be muted per-event-type and was the open/create firehose. Sensitive-path file writes (sudoers) are now
+            // watched by the dedicated, target-muted FileTamperSubscriber client, which keeps target-path mute inversion
+            // off this exec-authorization client.
             ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD
         ]
 
@@ -145,10 +145,6 @@ final class ESFSubscriber: Sendable {
             handleFork(msg)
         case ES_EVENT_TYPE_NOTIFY_EXIT:
             handleExit(msg)
-        case ES_EVENT_TYPE_NOTIFY_OPEN:
-            handleOpen(msg)
-        case ES_EVENT_TYPE_NOTIFY_CREATE:
-            handleCreate(msg)
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
             handleBtmLaunchItemAdd(msg)
         default:
