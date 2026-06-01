@@ -18,6 +18,7 @@ import (
 	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
+	"github.com/fleetdm/edr/server/coordination/leader"
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
@@ -107,7 +108,12 @@ func run() error {
 	// RunAndShutdown below.
 	drain := &httpserver.DrainState{}
 
-	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining)
+	// coord elects a single replica to run the periodic maintenance tasks (retention + process-TTL) via MySQL advisory locks, so
+	// they don't run on every replica behind the load balancer. The processor is intentionally left un-coordinated (it scales via
+	// SKIP LOCKED). It shares the main DB pool; each held lock pins one spare connection.
+	coord := leader.NewMySQL(db, logger)
+
+	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord)
 	if err != nil {
 		return err
 	}
@@ -225,6 +231,7 @@ func openDetection(
 	cfg *config.Config,
 	identityCtx *identitybootstrap.Identity,
 	isDraining func() bool,
+	coord leader.Coordinator,
 ) (*detectionbootstrap.Detection, error) {
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,
@@ -245,6 +252,7 @@ func openDetection(
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		IsDraining:           isDraining,
+		Coordinator:          coord,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)

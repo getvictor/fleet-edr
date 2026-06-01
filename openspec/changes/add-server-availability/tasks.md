@@ -33,9 +33,12 @@ stack (PR 1 -> 2) and the HA-foundation stack (PR 3 -> 4) run in parallel from m
 
 ## PR 4: leader coordinator package
 
-- [ ] `server/coordination/leader` package (MySQL `GET_LOCK`) + unit + integration tests
-- [ ] wire retention + process-TTL under `RunIfLeader`; leave processor parallel (SKIP LOCKED)
-- [ ] requirements + scenarios added to `server-availability`; test markers
+- [x] `server/coordination/leader` package (MySQL `GET_LOCK`, crash-safe via connection-scoped locks) + integration tests
+- [x] wire retention + process-TTL under `RunIfLeader`; leave processor parallel (SKIP LOCKED); nil coordinator runs directly
+- [x] requirements + scenarios added to `server-availability`; test markers
+- [ ] seed-banner "loser does not print" — still deferred. The coordinator now unblocks it (a one-shot DoOnceIfLeader-style
+  gate), but it touches the security-sensitive break-glass path in cmd/main and the failure it prevents is a second VALID
+  redemption URL (benign), so it lands as a focused follow-up rather than inside the coordinator PR.
 
 ## PR 5: multi-replica install package + multi-replica integration test
 

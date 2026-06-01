@@ -104,3 +104,38 @@ apart in the observability backend. The identifier SHALL be stable for the lifet
 - **GIVEN** a running replica
 - **WHEN** its service instance id is read more than once
 - **THEN** the same value is returned each time
+
+### Requirement: Periodic tasks run on exactly one replica via MySQL advisory locking
+
+The system SHALL run its single-instance periodic maintenance tasks (event retention and the stale-process TTL reconciler) on
+exactly one replica at a time, coordinated through MySQL named advisory locks, even though every replica runs the same binary. A
+replica that does not hold a task's lock SHALL NOT run that task, and SHALL take over when the current holder releases the lock or
+its connection drops. The event processor is explicitly NOT coordinated this way: it scales across replicas via row-level
+SKIP LOCKED claiming, so each replica processes disjoint batches.
+
+#### Scenario: Single replica acquires the lease uncontended
+
+- **GIVEN** a single replica and no other holder of a task's lock
+- **WHEN** the replica runs the task under the coordinator
+- **THEN** it acquires the lock and runs the task
+
+#### Scenario: Concurrent replicas elect exactly one leader per task
+
+- **GIVEN** two replicas contending for the same task lock
+- **WHEN** both run the task under the coordinator
+- **THEN** exactly one replica acquires the lock and runs the task
+- **AND** the other does not run the task while the holder keeps the lock
+
+#### Scenario: Lease releases on context cancel
+
+- **GIVEN** a replica holding a task lock
+- **WHEN** its context is cancelled for a graceful shutdown
+- **THEN** it releases the lock
+- **AND** a waiting replica acquires it
+
+#### Scenario: Lease releases on replica crash via connection close
+
+- **GIVEN** a replica holding a task lock
+- **WHEN** its database connection drops because the process crashed
+- **THEN** MySQL releases the lock
+- **AND** another replica can acquire it

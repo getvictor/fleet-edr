@@ -1,0 +1,188 @@
+package leader_test
+
+import (
+	"context"
+	crand "crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"os"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/fleetdm/edr/server/coordination/leader"
+)
+
+// lockSalt makes lock names unique per test process so parallel packages sharing one MySQL server (GET_LOCK names are
+// server-global) don't collide, and so they never clash with the production names (edr_retention, edr_process_ttl).
+var lockSalt = func() string {
+	var b [4]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:])
+}()
+
+var lockSeq atomic.Int64
+
+func uniqueLockName() string { return fmt.Sprintf("edrtest_%s_%d", lockSalt, lockSeq.Add(1)) }
+
+// replicaDBs opens two independent MySQL handles to the test server, simulating two replicas (each its own connection pool, hence
+// its own GET_LOCK sessions). GET_LOCK needs no schema, so the test connects via EDR_TEST_DSN directly and skips when it is unset.
+func replicaDBs(t *testing.T) (*sqlx.DB, *sqlx.DB) {
+	t.Helper()
+	dsn := os.Getenv("EDR_TEST_DSN") //nolint:forbidigo // approved test-DB boundary; see issue #172
+	if dsn == "" {
+		t.Skip("EDR_TEST_DSN not set; skipping leader integration test")
+	}
+	open := func() *sqlx.DB {
+		db, err := sqlx.Open("mysql", dsn)
+		require.NoError(t, err)
+		db.SetMaxOpenConns(3) // a held lock connection plus headroom for poll attempts + the killer query
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	return open(), open()
+}
+
+func newCoord(db *sqlx.DB) leader.Coordinator {
+	return leader.NewMySQL(db, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		leader.WithPollInterval(20*time.Millisecond))
+}
+
+// runLeader starts coord.RunIfLeader in a goroutine; the fn closes `ran` when it becomes leader and then blocks until ctx is
+// cancelled (the shape of a real periodic loop).
+func runLeader(ctx context.Context, coord leader.Coordinator, name string) <-chan struct{} {
+	ran := make(chan struct{})
+	go func() {
+		_ = coord.RunIfLeader(ctx, name, func(ctx context.Context) error {
+			close(ran)
+			<-ctx.Done()
+			return nil
+		})
+	}()
+	return ran
+}
+
+func TestRunIfLeader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("spec:server-availability/periodic-tasks-run-on-exactly-one-replica-via-mysql-advisory-locking/single-replica-acquires-the-lease-uncontended", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		ran := runLeader(t.Context(), newCoord(a), uniqueLockName())
+		select {
+		case <-ran:
+		case <-time.After(3 * time.Second):
+			t.Fatal("uncontended replica never acquired leadership")
+		}
+	})
+
+	t.Run("spec:server-availability/periodic-tasks-run-on-exactly-one-replica-via-mysql-advisory-locking/concurrent-replicas-elect-exactly-one-leader-per-task", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+		ctx := t.Context()
+
+		var leaders atomic.Int64
+		fn := func(ctx context.Context) error {
+			leaders.Add(1)
+			<-ctx.Done()
+			return nil
+		}
+		go func() { _ = newCoord(a).RunIfLeader(ctx, name, fn) }()
+		go func() { _ = newCoord(b).RunIfLeader(ctx, name, fn) }()
+
+		require.Eventually(t, func() bool { return leaders.Load() == 1 }, 3*time.Second, 20*time.Millisecond,
+			"exactly one replica should hold leadership")
+		// Hold a while longer: the follower keeps polling but must never also become leader while the first holds the lock.
+		time.Sleep(200 * time.Millisecond)
+		assert.Equal(t, int64(1), leaders.Load(), "the follower must not also acquire while the leader holds the lock")
+	})
+
+	t.Run("spec:server-availability/periodic-tasks-run-on-exactly-one-replica-via-mysql-advisory-locking/lease-releases-on-context-cancel", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+
+		ctxA, cancelA := context.WithCancel(t.Context())
+		defer cancelA()
+		aRan := runLeader(ctxA, newCoord(a), name)
+		<-aRan // A is leader
+
+		bRan := runLeader(t.Context(), newCoord(b), name)
+		select {
+		case <-bRan:
+			t.Fatal("B acquired while A still held the lock")
+		case <-time.After(200 * time.Millisecond): // B correctly blocked
+		}
+
+		cancelA() // A releases the lock on cancel
+		select {
+		case <-bRan: // B took over
+		case <-time.After(3 * time.Second):
+			t.Fatal("B did not acquire after A released the lock on context cancel")
+		}
+	})
+
+	t.Run("spec:server-availability/periodic-tasks-run-on-exactly-one-replica-via-mysql-advisory-locking/lease-releases-on-replica-crash-via-connection-close", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+		ctx := t.Context()
+
+		// Replica A holds the lock on a dedicated connection (the coordinator's design); record its MySQL connection id.
+		connA, err := a.Conn(ctx)
+		require.NoError(t, err)
+		var got sql.NullInt64
+		require.NoError(t, connA.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+		require.EqualValues(t, 1, got.Int64, "A should acquire the free lock")
+		var connID int64
+		require.NoError(t, connA.QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&connID))
+
+		// While A holds it, another replica cannot acquire.
+		require.NoError(t, b.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+		require.EqualValues(t, 0, got.Int64, "B must not acquire while A holds the lock")
+
+		// Simulate A's process crashing: kill its connection. MySQL releases a session's locks when its connection drops, which
+		// is what makes coordinator leadership crash-safe without an explicit lease TTL.
+		_, _ = b.ExecContext(ctx, fmt.Sprintf("KILL CONNECTION %d", connID)) //nolint:gosec // connID is a MySQL CONNECTION_ID(), not user input
+		_ = connA.Close()
+
+		require.Eventually(t, func() bool {
+			conn, e := b.Conn(ctx)
+			if e != nil {
+				return false
+			}
+			defer func() { _ = conn.Close() }()
+			var g sql.NullInt64
+			if e := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&g); e != nil {
+				return false
+			}
+			if g.Valid && g.Int64 == 1 {
+				_, _ = conn.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", name)
+				return true
+			}
+			return false
+		}, 5*time.Second, 50*time.Millisecond, "lock not released after the holding connection was killed")
+	})
+
+	t.Run("acquire error retries until context cancel", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		require.NoError(t, a.Close()) // a closed pool makes every acquire attempt error
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		// RunIfLeader must keep hitting the acquire-error path and then return nil (graceful) when ctx expires, not hang.
+		require.NoError(t, newCoord(a).RunIfLeader(ctx, uniqueLockName(), func(context.Context) error { return nil }))
+	})
+}

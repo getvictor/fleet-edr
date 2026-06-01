@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/coordination/leader"
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/engine"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
@@ -77,6 +78,10 @@ type Deps struct {
 	// IsDraining is the graceful-shutdown drain predicate the intake handler's /readyz consults. Optional: nil means readiness
 	// reflects only the DB check. cmd/main wires the process DrainState's IsDraining so a SIGTERM flips /readyz to 503.
 	IsDraining func() bool
+
+	// Coordinator gates the single-replica periodic tasks (retention + process-TTL) so they run on exactly one replica. Optional:
+	// nil runs them directly (single-replica deployments and tests). cmd/main wires a MySQL-advisory-lock coordinator.
+	Coordinator leader.Coordinator
 }
 
 // Detection is the handle cmd/main holds.
@@ -158,10 +163,11 @@ func New(deps Deps) (*Detection, error) {
 			Logger:        logger,
 		})
 		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
-			Processor:  processor,
-			ProcessTTL: processTTL,
-			Retention:  retention,
-			DB:         deps.DB,
+			Processor:   processor,
+			ProcessTTL:  processTTL,
+			Retention:   retention,
+			DB:          deps.DB,
+			Coordinator: deps.Coordinator,
 		})
 	} else {
 		// Intake-only: still expose a service with the intake handler
