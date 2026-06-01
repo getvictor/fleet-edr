@@ -36,6 +36,13 @@ type Coordinator interface {
 	// interval, so when the current leader exits or crashes (its connection drops, freeing the lock) a waiting replica takes
 	// over. Returns nil on graceful (ctx-cancelled) shutdown, or fn's error if fn returns one on the leader.
 	RunIfLeader(ctx context.Context, lockName string, fn func(context.Context) error) error
+
+	// DoOnceIfLeader makes a single non-blocking attempt to acquire lockName and, if it wins, runs fn once while holding the lock
+	// and then releases. It returns (true, fnErr) when this replica ran fn, or (false, nil) when another replica currently holds
+	// the lock. Unlike RunIfLeader it never waits or retries: a replica that loses the race simply reports false. It is for
+	// boot-time one-shots, like printing the break-glass redemption banner exactly once across a concurrent cluster boot, where
+	// blocking to become leader would hang startup.
+	DoOnceIfLeader(ctx context.Context, lockName string, fn func(context.Context) error) (bool, error)
 }
 
 // mysqlCoordinator is the MySQL-advisory-lock Coordinator.
@@ -98,6 +105,18 @@ func (c *mysqlCoordinator) RunIfLeader(ctx context.Context, lockName string, fn 
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *mysqlCoordinator) DoOnceIfLeader(ctx context.Context, lockName string, fn func(context.Context) error) (bool, error) {
+	conn, acquired, err := c.tryAcquire(ctx, lockName)
+	if err != nil {
+		return false, err
+	}
+	if !acquired {
+		return false, nil
+	}
+	defer c.release(context.WithoutCancel(ctx), lockName, conn)
+	return true, fn(ctx)
 }
 
 // tryAcquire grabs a dedicated connection and makes one non-blocking GET_LOCK attempt on it. On success it returns the held

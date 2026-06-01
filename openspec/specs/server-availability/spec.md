@@ -79,7 +79,8 @@ zero to disable the wait.
 
 When multiple replicas boot concurrently against a fresh database, the first-boot break-glass admin seed SHALL produce exactly one
 admin row and every replica's seed SHALL succeed. The replica that loses the create race SHALL adopt the existing row rather than
-failing its boot.
+failing its boot. The break-glass redemption banner SHALL be emitted by at most one replica per concurrent boot, so an operator
+sees a single redemption URL rather than one per replica.
 
 #### Scenario: Two replicas seeding concurrently produce exactly one admin row
 
@@ -87,6 +88,13 @@ failing its boot.
 - **WHEN** both seed attempts run
 - **THEN** both succeed
 - **AND** exactly one break-glass admin row exists
+
+#### Scenario: Only one replica emits the bootstrap-token banner under concurrent boot
+
+- **GIVEN** multiple replicas booting concurrently with the admin not yet redeemed
+- **WHEN** they race to emit the break-glass redemption banner under the leader gate
+- **THEN** exactly one replica emits the token and prints the banner
+- **AND** the other replicas do not
 
 ### Requirement: Replica identity is observable via service.instance.id
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -182,7 +183,50 @@ func TestRunIfLeader(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
+		coord := newCoord(a)
 		// RunIfLeader must keep hitting the acquire-error path and then return nil (graceful) when ctx expires, not hang.
-		require.NoError(t, newCoord(a).RunIfLeader(ctx, uniqueLockName(), func(context.Context) error { return nil }))
+		require.NoError(t, coord.RunIfLeader(ctx, uniqueLockName(), func(context.Context) error { return nil }))
+		// DoOnceIfLeader surfaces the acquire error to the caller (which fails open).
+		ran, err := coord.DoOnceIfLeader(ctx, uniqueLockName(), func(context.Context) error { return nil })
+		require.Error(t, err)
+		require.False(t, ran)
+	})
+}
+
+// TestDoOnceIfLeader pins that across replicas racing the same one-shot lock, fn runs on exactly one of them and the losers skip
+// without running it. This is the mechanism that makes the break-glass redemption banner print exactly once across a concurrent
+// cluster boot (cmd/main gates the banner emission on this); fn here stands in for "emit the banner".
+func TestDoOnceIfLeader(t *testing.T) {
+	t.Parallel()
+	t.Run("spec:server-availability/first-boot-admin-seed-is-safe-under-concurrent-replica-boot/only-one-replica-emits-the-bootstrap-token-banner-under-concurrent-boot", func(t *testing.T) {
+		t.Parallel()
+		const replicas = 6
+		a, _ := replicaDBs(t)
+		a.SetMaxOpenConns(replicas + 2) // each concurrent attempt grabs its own connection (its own GET_LOCK session)
+		coord := newCoord(a)
+		name := uniqueLockName()
+
+		var emits atomic.Int64
+		start := make(chan struct{})
+		hold := make(chan struct{})
+		var wg sync.WaitGroup
+		for range replicas {
+			wg.Go(func() {
+				<-start // release all attempts together to maximise contention
+				_, _ = coord.DoOnceIfLeader(t.Context(), name, func(context.Context) error {
+					emits.Add(1)
+					<-hold // the winner holds the lock until every loser has made its single attempt
+					return nil
+				})
+			})
+		}
+		close(start)
+		// Every replica makes its one non-blocking attempt within microseconds of the barrier; the winner is still holding, so
+		// the losers all see the lock taken. A generous wait removes any timing flake before the assertion.
+		time.Sleep(200 * time.Millisecond)
+		assert.Equal(t, int64(1), emits.Load(), "exactly one replica should emit; the losers must not")
+		close(hold)
+		wg.Wait()
+		assert.Equal(t, int64(1), emits.Load(), "no replica should emit after the winner releases")
 	})
 }

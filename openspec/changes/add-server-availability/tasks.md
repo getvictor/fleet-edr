@@ -36,9 +36,9 @@ stack (PR 1 -> 2) and the HA-foundation stack (PR 3 -> 4) run in parallel from m
 - [x] `server/coordination/leader` package (MySQL `GET_LOCK`, crash-safe via connection-scoped locks) + integration tests
 - [x] wire retention + process-TTL under `RunIfLeader`; leave processor parallel (SKIP LOCKED); nil coordinator runs directly
 - [x] requirements + scenarios added to `server-availability`; test markers
-- [ ] seed-banner "loser does not print" — still deferred. The coordinator now unblocks it (a one-shot DoOnceIfLeader-style
-  gate), but it touches the security-sensitive break-glass path in cmd/main and the failure it prevents is a second VALID
-  redemption URL (benign), so it lands as a focused follow-up rather than inside the coordinator PR.
+- [x] seed-banner "loser does not print": cmd/main gates the redemption-banner emission on `coordinator.DoOnceIfLeader` (fail-open
+  so a missed banner never strands the first operator — both tokens are valid, redeeming one is enough). Loser replicas skip;
+  scenario + test added to server-availability.
 
 ## PR 5: multi-replica install package + multi-replica integration test
 
