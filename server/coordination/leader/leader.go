@@ -8,6 +8,10 @@
 // A lock is held for the lifetime of a dedicated *sql.Conn. That makes leadership crash-safe for free: when a leader process dies
 // its connection drops, and MySQL releases the session's locks, so a waiting replica acquires on its next poll. Graceful shutdown
 // releases the lock explicitly. See docs/adr/0010-stateless-server.md and openspec/specs/server-availability/spec.md.
+//
+// The package also provides WithLock, a blocking mutual-exclusion primitive (every caller runs the work, serialized) distinct from
+// the leader-election helpers above. It backs the boot-time migration sequence: under a rolling upgrade several replicas may boot
+// concurrently, and the advisory lock serializes their schema apply so no two run goose Up against the same database at once.
 package leader
 
 import (
@@ -34,6 +38,12 @@ const defaultKeepAliveInterval = 1 * time.Minute
 // session). The scheduler retries every poll interval, so blocking inside GET_LOCK would only duplicate that wait.
 const lockWaitSeconds = 0
 
+// lockAcquireWaitSeconds bounds a single blocking GET_LOCK attempt inside WithLock. WithLock loops, so this only caps how long one
+// attempt blocks server-side before the loop re-checks ctx; a cancelled ctx also interrupts the in-flight GET_LOCK via the query
+// context. It is long enough to usually acquire in a single attempt yet short enough that boot does not hang unbounded if the
+// driver fails to propagate a cancel into a blocked GET_LOCK.
+const lockAcquireWaitSeconds = 10
+
 // Coordinator runs work on exactly one replica at a time.
 type Coordinator interface {
 	// RunIfLeader runs fn on exactly one replica at a time, identified by lockName. It acquires the lock, runs fn while holding
@@ -48,6 +58,13 @@ type Coordinator interface {
 	// boot-time one-shots, like printing the break-glass redemption banner exactly once across a concurrent cluster boot, where
 	// blocking to become leader would hang startup.
 	DoOnceIfLeader(ctx context.Context, lockName string, fn func(context.Context) error) (bool, error)
+
+	// WithLock runs fn while holding lockName, blocking until the lock is acquired or ctx is cancelled. Unlike RunIfLeader (which
+	// elects one replica and abandons the work on the others), every caller of WithLock runs fn: it is mutual exclusion, not leader
+	// election. It backs the boot-time migration sequence, where every replica must apply migrations (goose makes an
+	// already-applied corpus a no-op) but no two replicas may run goose Up against the same database concurrently. Returns ctx's
+	// error if cancelled before the lock is acquired, otherwise fn's error.
+	WithLock(ctx context.Context, lockName string, fn func(context.Context) error) error
 }
 
 // mysqlCoordinator is the MySQL-advisory-lock Coordinator.
@@ -174,6 +191,47 @@ func (c *mysqlCoordinator) DoOnceIfLeader(ctx context.Context, lockName string, 
 	}
 	defer c.release(context.WithoutCancel(ctx), lockName, conn)
 	return true, fn(ctx)
+}
+
+func (c *mysqlCoordinator) WithLock(ctx context.Context, lockName string, fn func(context.Context) error) error {
+	conn, err := c.acquireBlocking(ctx, lockName)
+	if err != nil {
+		return err
+	}
+	// Release with a cancellation-stripped context so RELEASE_LOCK still runs if fn returned because ctx was cancelled. Deferred so
+	// a panic in fn still frees the lock rather than stranding it until the pooled connection is eventually reaped.
+	defer c.release(context.WithoutCancel(ctx), lockName, conn)
+	return fn(ctx)
+}
+
+// acquireBlocking grabs a dedicated connection and blocks on GET_LOCK until the lock is held or ctx is cancelled. The caller MUST
+// release the returned connection (WithLock does so). It loops because a single GET_LOCK attempt is bounded at
+// lockAcquireWaitSeconds; between attempts it re-checks ctx so a cancelled boot does not hang.
+func (c *mysqlCoordinator) acquireBlocking(ctx context.Context, lockName string) (*sql.Conn, error) {
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open lock connection: %w", err)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		var got sql.NullInt64
+		if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, ?)", lockName, lockAcquireWaitSeconds).Scan(&got); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("get_lock %q (blocking): %w", lockName, err)
+		}
+		if !got.Valid {
+			// NULL is an error per the MySQL docs (OOM, killed session, bad argument), not contention. Surface it.
+			_ = conn.Close()
+			return nil, fmt.Errorf("get_lock %q returned NULL", lockName)
+		}
+		if got.Int64 == 1 {
+			return conn, nil
+		}
+		// got.Int64 == 0: the attempt timed out while another session held the lock. Loop to re-check ctx, then retry.
+	}
 }
 
 // tryAcquire grabs a dedicated connection and makes one non-blocking GET_LOCK attempt on it. On success it returns the held

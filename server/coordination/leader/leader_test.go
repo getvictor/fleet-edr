@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -252,5 +253,52 @@ func TestDoOnceIfLeader(t *testing.T) {
 		close(hold)
 		wg.Wait()
 		assert.Equal(t, int64(1), emits.Load(), "no replica should emit after the winner releases")
+	})
+}
+
+// TestWithLock pins the mutual-exclusion contract WithLock backs the boot-time migration apply with: concurrent callers run fn one
+// at a time (never overlapping), and every caller runs fn (unlike leader election, which abandons the work on the losers).
+func TestWithLock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("serializes concurrent callers and every caller runs fn", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		coord := newCoord(a)
+		name := uniqueLockName()
+		const callers = 5
+
+		var inCritical, maxConcurrent, ran atomic.Int64
+		var wg sync.WaitGroup
+		for range callers {
+			wg.Go(func() {
+				err := coord.WithLock(t.Context(), name, func(context.Context) error {
+					cur := inCritical.Add(1)
+					for { // record the high-water mark of simultaneous holders; a working lock keeps it at 1
+						m := maxConcurrent.Load()
+						if cur <= m || maxConcurrent.CompareAndSwap(m, cur) {
+							break
+						}
+					}
+					time.Sleep(10 * time.Millisecond) // widen the critical section so a broken lock would overlap and bump the mark
+					ran.Add(1)
+					inCritical.Add(-1)
+					return nil
+				})
+				assert.NoError(t, err)
+			})
+		}
+		wg.Wait()
+
+		assert.Equal(t, int64(1), maxConcurrent.Load(), "WithLock must hold the lock exclusively: no two fns may overlap")
+		assert.EqualValues(t, callers, ran.Load(), "every caller must run fn (mutual exclusion, not leader election)")
+	})
+
+	t.Run("returns fn's error", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		sentinel := errors.New("boom")
+		err := newCoord(a).WithLock(t.Context(), uniqueLockName(), func(context.Context) error { return sentinel })
+		require.ErrorIs(t, err, sentinel)
 	})
 }

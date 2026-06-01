@@ -83,8 +83,16 @@ func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Ser
 //   - CookieSecure = false because httptest is plain HTTP.
 func Setup(t *testing.T) *Stack {
 	t.Helper()
+	return setupReplica(t, full.Open(t))
+}
 
-	db := full.Open(t)
+// setupReplica wires one full stack against an already-open database. Setup calls it with a fresh per-test DB; the multi-replica
+// test calls it twice with the SAME *sqlx.DB so two independent stacks (two sets of bootstrap contexts, two muxes, two httptest
+// servers) share one MySQL. That models two replicas: separate in-process state, one shared store. The signing key is identical
+// across calls, which is what lets a session minted against one stack validate on the other.
+func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
+	t.Helper()
+
 	logger := slog.Default()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

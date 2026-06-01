@@ -57,6 +57,11 @@ var (
 const (
 	serviceName = "fleet-edr-server"
 
+	// migrationLockName is the MySQL advisory lock that serializes the boot-time schema apply across replicas. Under a rolling
+	// upgrade several replicas boot concurrently against one database; holding this lock while applying each context's goose corpus
+	// means no two replicas run goose Up at once. It joins the other coordination lock names (edr_retention, edr_process_ttl).
+	migrationLockName = "edr_migrations"
+
 	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s and idle 60s bound how long a stuck client holds a connection.
 	// Same values as fleet-edr-ingest.
 	httpWriteTimeout = 30 * time.Second
@@ -98,39 +103,46 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	identityCtx, err := openIdentity(ctx, logger, db, cfg)
-	if err != nil {
-		return err
-	}
-
 	// drain is the process-wide graceful-shutdown signal: SIGTERM flips it so /readyz reports 503 and the load balancer drains this
 	// replica before RunAndShutdown closes the listener. Shared between the detection intake handler (which serves /readyz) and
 	// RunAndShutdown below.
 	drain := &httpserver.DrainState{}
 
 	// coord elects a single replica to run the periodic maintenance tasks (retention + process-TTL) via MySQL advisory locks, so
-	// they don't run on every replica behind the load balancer. The processor is intentionally left un-coordinated (it scales via
-	// SKIP LOCKED). It shares the main DB pool; each held lock pins one spare connection.
+	// they don't run on every replica behind the load balancer, and serializes the boot-time schema apply below. The processor is
+	// intentionally left un-coordinated (it scales via SKIP LOCKED). It shares the main DB pool; each held lock pins one spare
+	// connection.
 	coord := leader.NewMySQL(db, logger)
 
-	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord)
-	if err != nil {
+	// Wire every bounded context and apply its schema under a single advisory lock. Under a rolling upgrade several replicas boot
+	// concurrently against one database; the lock serializes their schema apply so no two run goose Up at once. goose's per-context
+	// tracking table makes a second replica's apply a no-op, so every replica still boots. See docs/adr/0009-migrations-via-goose.md
+	// and the "Schema migrations are safe under rolling upgrade" requirement in openspec/specs/server-availability/spec.md.
+	var (
+		identityCtx  *identitybootstrap.Identity
+		detectionCtx *detectionbootstrap.Detection
+		responseCtx  *responsebootstrap.Response
+		rulesCtx     *rulesbootstrap.Rules
+		endpointCtx  *endpointbootstrap.Endpoint
+	)
+	if err := coord.WithLock(ctx, migrationLockName, func(ctx context.Context) error {
+		var err error
+		if identityCtx, err = openIdentity(ctx, logger, db, cfg); err != nil {
+			return err
+		}
+		if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
+			return err
+		}
+		if responseCtx, err = openResponse(ctx, logger, db, detectionCtx, identityCtx); err != nil {
+			return err
+		}
+		if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx); err != nil {
+			return err
+		}
+		detectionCtx.LoadActive(rulesCtx.ContentService())
+		endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx)
 		return err
-	}
-
-	responseCtx, err := openResponse(ctx, logger, db, detectionCtx, identityCtx)
-	if err != nil {
-		return err
-	}
-
-	rulesCtx, err := openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx)
-	if err != nil {
-		return err
-	}
-	detectionCtx.LoadActive(rulesCtx.ContentService())
-
-	endpointCtx, err := openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx)
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
