@@ -675,7 +675,7 @@ components:
       type: object
       required: [status, uptime_seconds, checks]
       properties:
-        status: {type: string, enum: [ok, degraded]}
+        status: {type: string, enum: [ok, degraded, draining]}
         version: {type: string}
         commit: {type: string}
         build_time: {type: string}
@@ -689,7 +689,7 @@ components:
       type: object
       required: [status]
       properties:
-        status: {type: string, enum: [ok, error, unavailable]}
+        status: {type: string, enum: [ok, error, unavailable, draining]}
         latency_ms: {type: integer, format: int64}
         error: {type: string}
 
@@ -744,7 +744,7 @@ components:
         timestamp_ns: {type: integer, format: int64}
         event_type:
           type: string
-          enum: [exec, fork, exit, open, network_connect, dns_query]
+          enum: [exec, fork, exit, open, network_connect, dns_query, application_control_block, snapshot_heartbeat]
         payload:
           type: object
           description: Event-type-specific body; see schema/events.json in the repo

@@ -126,11 +126,12 @@ type BuildInfo struct {
 // Handler serves the event ingestion API plus the
 // livez/readyz/health endpoints.
 type Handler struct {
-	store     *mysql.Store
-	logger    *slog.Logger
-	buildInfo BuildInfo
-	startTime time.Time
-	metrics   api.MetricsRecorder
+	store      *mysql.Store
+	logger     *slog.Logger
+	buildInfo  BuildInfo
+	startTime  time.Time
+	metrics    api.MetricsRecorder
+	isDraining func() bool
 }
 
 // New creates an ingestion Handler. The store argument may be nil in tests that only exercise the health endpoints; readiness checks
@@ -149,6 +150,11 @@ func New(s *mysql.Store, logger *slog.Logger, info BuildInfo) *Handler {
 
 // SetMetrics installs the OTel ingest-counter hook.
 func (h *Handler) SetMetrics(m api.MetricsRecorder) { h.metrics = m }
+
+// SetReadinessGate installs the graceful-shutdown drain predicate. When it returns true, /readyz reports 503 ("draining") so a
+// load balancer removes this replica from rotation before the listener closes. cmd/main wires this to the process DrainState; a nil
+// gate (the default) means readiness reflects only the DB check.
+func (h *Handler) SetReadinessGate(isDraining func() bool) { h.isDraining = isDraining }
 
 // IngestHandler returns the POST /api/events handler. Callers wrap
 // it in the endpoint context's HostToken middleware before mounting.
@@ -283,6 +289,22 @@ func (h *Handler) handleLivez(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// Graceful-shutdown drain takes precedence over the DB check: once draining, report not-ready so the load balancer removes
+	// this replica from rotation before the listener closes. The server keeps serving in-flight + new requests during the drain
+	// window; only the readiness signal flips. Checked before the DB ping so a draining replica reports 503 even if the DB is fine.
+	if h.isDraining != nil && h.isDraining() {
+		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusServiceUnavailable, readyzResponse{
+			Status:        "draining",
+			Version:       h.buildInfo.Version,
+			Commit:        h.buildInfo.Commit,
+			BuildTime:     h.buildInfo.BuildTime,
+			UptimeSeconds: int64(time.Since(h.startTime).Seconds()),
+			Checks:        map[string]checkResult{"drain": {Status: "draining"}},
+		})
+		return
+	}
+
 	pingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
 

@@ -10,7 +10,28 @@ import (
 	"go.opentelemetry.io/otel"
 	otellog "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
+
+// TestBuildResource_ServiceInstanceID pins that a replica's telemetry resource carries service.instance.id when one is set. The
+// attribute lives on the resource, so every span and metric the SDK emits inherits it — which is how an operator tells replicas
+// apart in the backend.
+func TestBuildResource_ServiceInstanceID(t *testing.T) {
+	t.Run("spec:server-availability/replica-identity-is-observable-via-service-instance-id/every-emitted-span-carries-the-service-instance-id", func(t *testing.T) {
+		res, err := buildResource(t.Context(), Options{ServiceName: "test-svc", ServiceInstanceID: "instance-abc"})
+		require.NoError(t, err)
+
+		var got string
+		var found bool
+		for _, kv := range res.Attributes() {
+			if kv.Key == semconv.ServiceInstanceIDKey {
+				got, found = kv.Value.AsString(), true
+			}
+		}
+		require.True(t, found, "resource must carry service.instance.id so every emitted span inherits it")
+		assert.Equal(t, "instance-abc", got)
+	})
+}
 
 // restoreGlobals captures the current global OTel providers + propagator and registers a cleanup that restores them after the test.
 // Tests that call Init with a non-empty endpoint MUST call this first, otherwise their providers leak into subsequent tests.

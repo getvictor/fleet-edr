@@ -45,16 +45,23 @@ const (
 	// at the config layer so cmd/main can build the redemption-URL banner with a non-zero TTL string when the operator did not pin
 	// EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL.
 	DefaultBreakglassBootstrapTokenTTL = time.Hour
+	// defaultShutdownDrain is how long the server keeps serving after SIGTERM before closing the listener, so a load balancer
+	// observes /readyz flip to 503 and drains this replica from rotation first (server-availability). 30s suits the default
+	// health-check interval of common load balancers; operators tune via EDR_SHUTDOWN_DRAIN (0 disables the wait, e.g. in tests).
+	defaultShutdownDrain = 30 * time.Second
 )
 
 // Config is the resolved server configuration.
 type Config struct {
-	DSN              string
-	ListenAddr       string
-	EnrollSecret     string
-	TLSCertFile      string
-	TLSKeyFile       string
-	AllowTLS12       bool
+	DSN          string
+	ListenAddr   string
+	EnrollSecret string
+	TLSCertFile  string
+	TLSKeyFile   string
+	AllowTLS12   bool
+	// ShutdownDrain is how long RunAndShutdown keeps serving after SIGTERM (with /readyz reporting 503) before closing the
+	// listener, so a load balancer drains this replica first. Default 30s; 0 disables the drain wait. From EDR_SHUTDOWN_DRAIN.
+	ShutdownDrain    time.Duration
 	EnrollRatePerMin int
 	LogLevel         string
 	LogFormat        string
@@ -231,6 +238,7 @@ func defaults() Config {
 		StaleProcessInterval:     defaultStaleProcessInterval,
 		HostTokenLifetime:        defaultHostTokenLifetime,
 		HostTokenGrace:           defaultHostTokenGrace,
+		ShutdownDrain:            defaultShutdownDrain,
 		OIDCScopes:               []string{"openid", "email", "profile"},
 		OIDCAllowJITProvisioning: true,
 		OIDCStateCookieTTL:       defaultOIDCStateCookieTTL,
@@ -290,6 +298,9 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
+	// NonNegative (not Positive): 0 is the documented "disable the drain wait" sentinel — RunAndShutdown skips the drain phase and
+	// shuts down immediately. Integration + single-process tests set EDR_SHUTDOWN_DRAIN=0 so they don't sleep the drain window.
+	envparse.NonNegativeDuration(getenv, "EDR_SHUTDOWN_DRAIN", &c.ShutdownDrain, errs)
 	envparse.UnitFraction(getenv, "EDR_AUDIT_READ_SAMPLING", &c.AuditReadSampling, errs)
 	envparse.NonNegativeInt(getenv, "EDR_AUDIT_ASYNC_QUEUE_CAP", &c.AuditAsyncQueueCap, errs)
 

@@ -22,11 +22,14 @@ stack (PR 1 -> 2) and the HA-foundation stack (PR 3 -> 4) run in parallel from m
 
 ## PR 3: ADR-0010 stateless + drain-then-shutdown + concurrent-boot safety
 
-- [ ] ADR-0010 stateless-server invariant + CLAUDE.md note
-- [ ] drain-then-shutdown on SIGTERM (`server/httpserver/serve.go`); `EDR_SHUTDOWN_DRAIN`
-- [ ] race-safe first-boot admin seed; loser replica does not print the bootstrap token
-- [ ] `service.instance.id` on the OTel resource (`server/bootstrap/bootstrap.go`)
-- [ ] requirements + scenarios added to `server-availability`; test markers
+- [x] ADR-0010 stateless-server invariant + CLAUDE.md note
+- [x] drain-then-shutdown on SIGTERM (`server/httpserver/serve.go` `DrainState` + `RunAndShutdown`); `EDR_SHUTDOWN_DRAIN` config;
+  `/readyz` reports 503 while draining
+- [x] race-safe first-boot admin seed (loser re-fetches on the email unique-key dup; exactly one row)
+- [ ] loser replica does not print the bootstrap token — DEFERRED to PR 4: needs the leader coordinator (there is no token
+  re-issue path, so "print only on creation" would strand an operator who misses it; the leader-gated banner is the clean fix)
+- [x] `service.instance.id` on the OTel resource (`bootstrap.Init` -> `observability.Options`)
+- [x] requirements + scenarios added to `server-availability`; test markers (the stateless requirement is ADR-enforced, no test)
 
 ## PR 4: leader coordinator package
 

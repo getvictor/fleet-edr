@@ -73,6 +73,10 @@ type Deps struct {
 	// AuthZ is the authorization chokepoint every privileged operator route gates on. Required in ModeFull. cmd/main wires
 	// identityCtx.AuthZ(); intake-only mode (ModeIntake) does not register the operator handler so AuthZ may be nil there.
 	AuthZ identityapi.AuthZ
+
+	// IsDraining is the graceful-shutdown drain predicate the intake handler's /readyz consults. Optional: nil means readiness
+	// reflects only the DB check. cmd/main wires the process DrainState's IsDraining so a SIGTERM flips /readyz to 503.
+	IsDraining func() bool
 }
 
 // Detection is the handle cmd/main holds.
@@ -106,6 +110,9 @@ func New(deps Deps) (*Detection, error) {
 	}
 
 	intakeH := intake.New(store, logger, deps.Build)
+	// Unconditional: a nil predicate is the documented "readiness reflects only the DB check" case (handleReadyz guards on
+	// h.isDraining != nil), so there is no branch to leave untested here.
+	intakeH.SetReadinessGate(deps.IsDraining)
 	if deps.Metrics != nil {
 		intakeH.SetMetrics(deps.Metrics)
 	}

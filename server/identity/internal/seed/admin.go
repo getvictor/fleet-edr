@@ -93,6 +93,10 @@ func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Log
 		return nil, fmt.Errorf("look up existing admin: %w", err)
 	}
 
+	// Concurrent replica boot is safe without any extra handling here: users.Store.CreateBreakglass upserts via
+	// INSERT ... ON DUPLICATE KEY UPDATE and re-reads the row, so the replica that loses the create race gets the winner's row back
+	// with no error rather than a unique-key violation. The seed_concurrent_test pins exactly-one-row across racing replicas; this
+	// path relies on that CreateBreakglass property (server-availability: race-safe first-boot seed).
 	u, err := us.CreateBreakglass(ctx, users.CreateBreakglassRequest{
 		Email: DefaultAdminEmail,
 	})

@@ -144,7 +144,8 @@ Status codes follow HTTP semantics:
 - `409` — conflict (e.g., enrollment already revoked)
 - `429` — rate limited
 - `500` — server-side error. Expect a retry to succeed.
-- `503` — `/readyz` returns this when the DB is unreachable
+- `503` — `/readyz` returns this when the DB is unreachable (`status: degraded`), or while the server is draining on SIGTERM
+  before shutdown (`status: draining`), so a load balancer takes the replica out of rotation
 
 ## Generating clients
 
