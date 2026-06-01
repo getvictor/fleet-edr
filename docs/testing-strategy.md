@@ -134,9 +134,10 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
   within the per-rule SLA. UAT plan milestone **M9** delivered the driver plus one starter scenario,
   `attack-runbook`, which asserts six rule_ids fire from the dogfood runbook. The scenario is a thin wrapper
   around `scripts/qa/attack-runbook.sh`; the dogfood script stays the interactive demo, M9 adds the asserted
-  automation layer on top. App Control gets its own UAT scenario tracked separately against the per-policy
-  `/api/v1/app-control/*` surface. Driver supports `--dry-run` for orchestration smoke-tests without driving
-  real infrastructure. See `scripts/uat/README.md` for the schema - capture procedure.
+  automation layer on top. App Control active blocking has its own scenario, `app-control-block`, which posts a
+  BINARY BLOCK rule via the per-policy `/api/v1/app-control/*` surface, confirms the extension denies the matching
+  exec on the VM, and asserts the resulting `application_control_block` alert. Driver supports `--dry-run` for
+  orchestration smoke-tests without driving real infrastructure. See `scripts/uat/README.md` for the schema - capture procedure.
 - Runs on a real Mac with a SIP-enabled guest (GitHub-hosted macOS runners do not allow nested virtualisation
   or expose the ESF entitlement). Never per PR. UAT plan milestone **M11** ships the local-execution flavour:
   `task uat:l5 -- attack-runbook ...` (or `scripts/uat/system-test.sh attack-runbook ...` direct) runs the

@@ -1,0 +1,18 @@
+# app-control-block scenario.
+#
+# This scenario exercises Application Control ACTIVE BLOCKING: attack.sh posts a
+# BINARY BLOCK rule via the admin API, confirms the system extension DENIES the
+# matching exec on a SIP-on VM (host-side enforcement), and asserts the resulting
+# application_control_block alert server-side.
+#
+# There is intentionally NO `rules:` block. The alert a block produces has a
+# DYNAMIC rule_id (app_control:<ruleId>, assigned per run), which the driver's
+# static rule_id match cannot express. attack.sh therefore asserts BOTH halves
+# itself (the host-side AUTH_EXEC deny AND the application_control_block alert for
+# the exact rule it created), and the driver passes the scenario on attack.sh's
+# exit 0 -- a mode it explicitly supports ("scenario passes on attack.sh exit 0
+# alone").
+
+scenario_id: app-control-block
+description: Posts a BINARY BLOCK rule via the app-control admin API, confirms the extension denies the matching exec on a SIP-on VM, and asserts the application_control_block alert. Assertions live in attack.sh (the alert rule_id is dynamic).
+within_seconds: 120

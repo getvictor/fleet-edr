@@ -14,8 +14,11 @@ A fourth script (`e2-policy-roundtrip.sh`) used to exercise the blocklist
 policy round-trip via `GET/PUT /api/policy`. The server's blocklist admin
 endpoint has been replaced by the per-policy app-control surface
 (`/api/v1/app-control/policies/*` etc), which is a fundamentally different
-shape; the old script was removed rather than ported. A new round-trip
-script over the app-control admin API is tracked separately.
+shape; the old script was removed rather than ported. Its replacement over the
+app-control admin API is the asserted L5 scenario
+`scripts/uat/scenarios/app-control-block/` (it posts a BINARY BLOCK rule,
+confirms the extension denies the matching exec, and asserts the
+`application_control_block` alert), rather than another interactive `qa/` script.
 
 ## Prerequisites
 
