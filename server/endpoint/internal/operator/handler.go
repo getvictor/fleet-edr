@@ -26,8 +26,8 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// revokeBodyCap caps the JSON body size for POST /revoke. The handler only reads two short string fields; matches the 64KiB cap admin
-// uses for /api/policy and protects the operator surface from clients that stream a large body before any auth check fails.
+// revokeBodyCap caps the JSON body size for POST /revoke. The handler only reads two short string fields; matches the 64KiB cap the
+// admin operator surfaces use and protects the operator surface from clients that stream a large body before any auth check fails.
 const revokeBodyCap = 64 << 10
 
 // Handler serves the operator-facing enrollment routes.

@@ -10,8 +10,8 @@ import "context"
 //     GET /api/commands/{id};
 //   - endpoint/internal/service — Insert at enroll-fan-out time,
 //     via a method-value closure;
-//   - rules/internal/service — Insert at PUT /api/policy fan-out
-//     time, via a method-value closure;
+//   - rules/internal/appcontrol — Insert at app-control policy
+//     fan-out time, via a method-value closure;
 //   - cmd/main metrics adapter — CountPending for the
 //     PendingCommands gauge.
 //
