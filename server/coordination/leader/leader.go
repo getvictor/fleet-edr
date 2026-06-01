@@ -38,11 +38,16 @@ const defaultKeepAliveInterval = 1 * time.Minute
 // session). The scheduler retries every poll interval, so blocking inside GET_LOCK would only duplicate that wait.
 const lockWaitSeconds = 0
 
-// lockAcquireWaitSeconds bounds a single blocking GET_LOCK attempt inside WithLock. WithLock loops, so this only caps how long one
-// attempt blocks server-side before the loop re-checks ctx; a cancelled ctx also interrupts the in-flight GET_LOCK via the query
-// context. It is long enough to usually acquire in a single attempt yet short enough that boot does not hang unbounded if the
-// driver fails to propagate a cancel into a blocked GET_LOCK.
+// lockAcquireWaitSeconds bounds a single blocking GET_LOCK attempt inside the Lock acquire loop. The loop re-runs, so this only caps
+// how long one attempt blocks server-side before the loop re-checks ctx; a cancelled ctx also interrupts the in-flight GET_LOCK via
+// the query context. It is long enough to usually acquire in a single attempt yet short enough that boot does not hang unbounded if
+// the driver fails to propagate a cancel into a blocked GET_LOCK.
 const lockAcquireWaitSeconds = 10
+
+// releaseTimeout bounds the RELEASE_LOCK + connection close on the deferred release path. release runs on a cancellation-stripped
+// context (so the lock is still freed during a graceful shutdown), which otherwise has no deadline; without this cap a hung or
+// unresponsive database could block shutdown — or a WithLock/Lock caller's deferred release — indefinitely.
+const releaseTimeout = 5 * time.Second
 
 // Coordinator runs work on exactly one replica at a time.
 type Coordinator interface {
@@ -64,7 +69,17 @@ type Coordinator interface {
 	// election. It backs the boot-time migration sequence, where every replica must apply migrations (goose makes an
 	// already-applied corpus a no-op) but no two replicas may run goose Up against the same database concurrently. Returns ctx's
 	// error if cancelled before the lock is acquired, otherwise fn's error.
+	//
+	// WithLock is for SHORT critical sections. Unlike RunIfLeader it does NOT ping the lock connection, so fn must finish well
+	// within MySQL's wait_timeout; otherwise the idle lock connection could be closed and the lock silently released mid-fn. The
+	// boot-time schema apply (milliseconds to a few seconds) fits comfortably; long-lived single-replica loops use RunIfLeader.
 	WithLock(ctx context.Context, lockName string, fn func(context.Context) error) error
+
+	// Lock is the non-closure form of WithLock: it acquires lockName (blocking until held or ctx is cancelled) and returns a release
+	// func the caller MUST invoke (typically deferred) to free the lock. It exists for critical sections that cannot be expressed as
+	// a single closure — notably the boot sequence, which assigns several bounded-context handles that must outlive the locked
+	// region. Same short-critical-section constraint as WithLock (no keep-alive). Returns ctx's error if cancelled before acquire.
+	Lock(ctx context.Context, lockName string) (release func(), err error)
 }
 
 // mysqlCoordinator is the MySQL-advisory-lock Coordinator.
@@ -194,19 +209,28 @@ func (c *mysqlCoordinator) DoOnceIfLeader(ctx context.Context, lockName string, 
 }
 
 func (c *mysqlCoordinator) WithLock(ctx context.Context, lockName string, fn func(context.Context) error) error {
-	conn, err := c.acquireBlocking(ctx, lockName)
+	release, err := c.Lock(ctx, lockName)
 	if err != nil {
 		return err
 	}
-	// Release with a cancellation-stripped context so RELEASE_LOCK still runs if fn returned because ctx was cancelled. Deferred so
-	// a panic in fn still frees the lock rather than stranding it until the pooled connection is eventually reaped.
-	defer c.release(context.WithoutCancel(ctx), lockName, conn)
+	defer release()
 	return fn(ctx)
 }
 
+// Lock acquires lockName, blocking until it is held or ctx is cancelled, and returns a release func the caller MUST invoke to free
+// it. release runs RELEASE_LOCK on a cancellation-stripped, timeout-bounded context (so a graceful shutdown still frees the lock)
+// and returns the dedicated connection to the pool.
+func (c *mysqlCoordinator) Lock(ctx context.Context, lockName string) (func(), error) {
+	conn, err := c.acquireBlocking(ctx, lockName)
+	if err != nil {
+		return nil, err
+	}
+	return func() { c.release(context.WithoutCancel(ctx), lockName, conn) }, nil
+}
+
 // acquireBlocking grabs a dedicated connection and blocks on GET_LOCK until the lock is held or ctx is cancelled. The caller MUST
-// release the returned connection (WithLock does so). It loops because a single GET_LOCK attempt is bounded at
-// lockAcquireWaitSeconds; between attempts it re-checks ctx so a cancelled boot does not hang.
+// release the returned connection (Lock does so). It loops because a single GET_LOCK attempt is bounded at lockAcquireWaitSeconds;
+// between attempts it re-checks ctx so a cancelled boot does not hang.
 func (c *mysqlCoordinator) acquireBlocking(ctx context.Context, lockName string) (*sql.Conn, error) {
 	conn, err := c.db.Conn(ctx)
 	if err != nil {
@@ -220,6 +244,11 @@ func (c *mysqlCoordinator) acquireBlocking(ctx context.Context, lockName string)
 		var got sql.NullInt64
 		if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, ?)", lockName, lockAcquireWaitSeconds).Scan(&got); err != nil {
 			_ = conn.Close()
+			// A ctx cancelled mid-wait surfaces here as a query error; honour the documented contract ("returns ctx's error if
+			// cancelled before the lock is acquired") by returning the cancellation directly rather than a wrapped get_lock error.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, fmt.Errorf("get_lock %q (blocking): %w", lockName, err)
 		}
 		if !got.Valid {
@@ -263,9 +292,12 @@ func (c *mysqlCoordinator) tryAcquire(ctx context.Context, lockName string) (*sq
 }
 
 // release frees the lock and returns the connection to the pool. The caller passes a cancellation-stripped context so RELEASE_LOCK
-// runs even during a graceful shutdown. RELEASE_LOCK is explicit because returning the connection to the pool does NOT end the
+// runs even during a graceful shutdown; release re-imposes a releaseTimeout deadline so an unresponsive database cannot block the
+// (often deferred) release indefinitely. RELEASE_LOCK is explicit because returning the connection to the pool does NOT end the
 // session, so the session-scoped lock would otherwise linger until the pooled connection is eventually closed.
 func (c *mysqlCoordinator) release(ctx context.Context, lockName string, conn *sql.Conn) {
+	ctx, cancel := context.WithTimeout(ctx, releaseTimeout)
+	defer cancel()
 	if _, err := conn.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", lockName); err != nil {
 		c.logger.WarnContext(ctx, "release leader lock failed", "lock", lockName, "err", err)
 	}

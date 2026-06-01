@@ -694,7 +694,8 @@ tasks:
       Prerequisites: populate packaging/secrets/ (mysql_root, edr_dsn, enroll_secret,
       session_signing_key) and packaging/tls/ (fullchain.pem, privkey.pem) per
       docs/install-server.md, and either pull a released image or build one. Then
-      verify through the load balancer: curl -k https://localhost/readyz.
+      verify through the load balancer: curl -k https://localhost/readyz (or
+      https://localhost:$EDR_HTTPS_PORT/readyz if you override the default 443).
     dir: packaging
     cmds:
       - docker compose -f docker-compose-multi-replica.yml up -d

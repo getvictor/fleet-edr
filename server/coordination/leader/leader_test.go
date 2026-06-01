@@ -301,4 +301,76 @@ func TestWithLock(t *testing.T) {
 		err := newCoord(a).WithLock(t.Context(), uniqueLockName(), func(context.Context) error { return sentinel })
 		require.ErrorIs(t, err, sentinel)
 	})
+
+	t.Run("blocks while another session holds the lock, then acquires on release", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+
+		// Hold the lock from an independent session (a stand-in for another replica).
+		holder, err := b.Connx(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = holder.Close() }()
+		var got sql.NullInt64
+		require.NoError(t, holder.QueryRowContext(t.Context(), "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+		require.EqualValues(t, 1, got.Int64, "the holder should acquire the free lock")
+
+		ran := make(chan struct{})
+		go func() {
+			_ = newCoord(a).WithLock(t.Context(), name, func(context.Context) error {
+				close(ran)
+				return nil
+			})
+		}()
+		// WithLock must block while the holder keeps the lock.
+		select {
+		case <-ran:
+			t.Fatal("WithLock acquired while another session held the lock")
+		case <-time.After(200 * time.Millisecond):
+		}
+		// Release from the holder; WithLock's blocking GET_LOCK then acquires and runs fn.
+		_, err = holder.ExecContext(t.Context(), "SELECT RELEASE_LOCK(?)", name)
+		require.NoError(t, err)
+		select {
+		case <-ran:
+		case <-time.After(3 * time.Second):
+			t.Fatal("WithLock did not acquire after the holder released the lock")
+		}
+	})
+
+	t.Run("returns the context error when cancelled while waiting", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+
+		holder, err := b.Connx(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = holder.Close() }()
+		var got sql.NullInt64
+		require.NoError(t, holder.QueryRowContext(t.Context(), "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+		require.EqualValues(t, 1, got.Int64)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+		var fnRan atomic.Bool
+		err = newCoord(a).WithLock(ctx, name, func(context.Context) error {
+			fnRan.Store(true)
+			return nil
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded, "WithLock must return ctx's error when cancelled before acquiring")
+		require.False(t, fnRan.Load(), "fn must not run when the lock was never acquired")
+	})
+
+	t.Run("surfaces the acquire error on a closed pool", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		require.NoError(t, a.Close()) // a closed pool makes the lock-connection open fail
+		var fnRan atomic.Bool
+		err := newCoord(a).WithLock(t.Context(), uniqueLockName(), func(context.Context) error {
+			fnRan.Store(true)
+			return nil
+		})
+		require.Error(t, err)
+		require.False(t, fnRan.Load(), "fn must not run when the lock could not be acquired")
+	})
 }

@@ -141,27 +141,14 @@ func TestMultiReplicaMigrationsSafeUnderRollingUpgrade(t *testing.T) {
 		var wg sync.WaitGroup
 		for range replicas {
 			wg.Go(func() {
-				err := coord.WithLock(t.Context(), lockName, func(ctx context.Context) error {
-					cur := inCritical.Add(1)
-					for { // a working lock keeps the high-water mark of simultaneous applies at 1
-						m := maxConcurrent.Load()
-						if cur <= m || maxConcurrent.CompareAndSwap(m, cur) {
-							break
-						}
-					}
-					time.Sleep(20 * time.Millisecond) // widen the apply window so a broken lock would overlap
-					applyErr := runner.Up(ctx, db, responsemigrations.FS, runner.Options{
-						Context:   "response",
-						TableName: "response_goose_db_version",
-					})
-					inCritical.Add(-1)
-					if applyErr != nil {
-						return applyErr
+				// require would call FailNow from a non-test goroutine (illegal), so assert is correct here.
+				assert.NoError(t, coord.WithLock(t.Context(), lockName, func(ctx context.Context) error {
+					if err := applyResponseSchemaTrackingConcurrency(ctx, db, &inCritical, &maxConcurrent); err != nil {
+						return err
 					}
 					applied.Add(1)
 					return nil
-				})
-				assert.NoError(t, err)
+				}))
 			})
 		}
 		wg.Wait()
@@ -171,6 +158,31 @@ func TestMultiReplicaMigrationsSafeUnderRollingUpgrade(t *testing.T) {
 		assert.EqualValues(t, replicas, applied.Load(),
 			"every replica applies (goose makes the re-apply a no-op) and boots successfully")
 	})
+}
+
+// applyResponseSchemaTrackingConcurrency runs the response goose apply (a no-op re-apply, since full.Open already applied it) while
+// recording how many callers are inside the critical section at once. A working advisory lock keeps maxConcurrent at 1. Extracted
+// from the test body so the test function stays under the cognitive-complexity limit.
+func applyResponseSchemaTrackingConcurrency(ctx context.Context, db *sqlx.DB, inCritical, maxConcurrent *atomic.Int64) error {
+	cur := inCritical.Add(1)
+	defer inCritical.Add(-1)
+	recordMax(maxConcurrent, cur)
+	time.Sleep(20 * time.Millisecond) // widen the apply window so a broken lock would overlap and bump the high-water mark
+	return runner.Up(ctx, db, responsemigrations.FS, runner.Options{
+		Context:   "response",
+		TableName: "response_goose_db_version",
+	})
+}
+
+// recordMax lifts maxConcurrent to cur if cur is larger, retrying the CAS until it wins (the value only ever rises here, so a lost
+// race means another goroutine already set an equal-or-higher mark).
+func recordMax(maxConcurrent *atomic.Int64, cur int64) {
+	for {
+		m := maxConcurrent.Load()
+		if cur <= m || maxConcurrent.CompareAndSwap(m, cur) {
+			return
+		}
+	}
 }
 
 // seedUnprocessedEvents inserts n events in the unprocessed state (processed = 0) for the SKIP LOCKED claim test. All share one

@@ -72,6 +72,19 @@ curl -fsSL -o docker-compose.prod.yml \
     https://raw.githubusercontent.com/getvictor/fleet-edr/main/docker-compose.prod.yml
 ```
 
+**For the multi-replica HA topology**, use the packaging stack instead of the
+single-replica file above. It references sibling config files (the NGINX or
+HAProxy proxy config), so fetch the whole `packaging/` directory rather than a
+single file:
+
+```sh
+git clone --depth 1 https://github.com/getvictor/fleet-edr.git
+cd fleet-edr/packaging   # docker-compose-multi-replica.yml + nginx/ + haproxy/ live here
+```
+
+The remaining steps are identical; create `secrets/` and `tls/` inside
+`packaging/`.
+
 ### 3. Create secret files
 
 Three secret files live under `./secrets/` with mode 0600. Docker Compose
@@ -87,6 +100,15 @@ printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > se
 ENROLL_SECRET=$(openssl rand -hex 32)
 printf '%s' "$ENROLL_SECRET" > secrets/enroll_secret
 chmod 0600 secrets/*
+```
+
+**For the multi-replica HA topology**, also generate the shared session signing
+key. Every replica mounts the same key so a session or OIDC state cookie minted
+on one replica validates on another:
+
+```sh
+openssl rand -hex 32 > secrets/session_signing_key
+chmod 0600 secrets/session_signing_key
 ```
 
 The `edr_dsn` file contains the same MySQL password embedded into a Go
