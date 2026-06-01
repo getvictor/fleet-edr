@@ -54,11 +54,20 @@ trap cleanup EXIT
 #    A copied system binary will not do: macOS binaries are arm64e, which AMFI
 #    kills when run ad-hoc-signed outside SIP. Source is base64'd to dodge SSH
 #    quoting. Hash the built binary -- that is the image that execs.
+#
+#    Go is a prerequisite on the VM (the attack-runbook scenario depends on it
+#    too); fail with a clear message rather than a cryptic build error if it is
+#    absent. See this scenario's README "Prerequisites".
 uat_log app-control-block "building non-platform block target on VM (go build)"
-GO_SRC_B64=$(printf 'package main\nimport "fmt"\nfunc main(){ fmt.Println("%s") }\n' "$SENTINEL" | base64)
+if ! uat_ssh "$VM" "export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin; command -v go >/dev/null"; then
+  uat_fail app-control-block "go toolchain not found on the VM; this scenario needs it to build a non-platform block target (see README)"
+fi
+# Host base64 may line-wrap; tr strips that so the VM gets one token. Decode with
+# -D (BSD-canonical, accepted on every macOS) rather than -d.
+GO_SRC_B64=$(printf 'package main\nimport "fmt"\nfunc main(){ fmt.Println("%s") }\n' "$SENTINEL" | base64 | tr -d '\n')
 uat_ssh "$VM" "export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin
   mkdir -p $SRC
-  echo '$GO_SRC_B64' | base64 -d > $SRC/main.go
+  echo '$GO_SRC_B64' | base64 -D > $SRC/main.go
   cd $SRC && go build -o $TARGET main.go"
 HASH=$(uat_ssh "$VM" "shasum -a 256 $TARGET | awk '{print \$1}'")
 [[ "$HASH" =~ ^[0-9a-f]{64}$ ]] || uat_fail app-control-block "could not build/hash block target (got '$HASH')"
@@ -83,7 +92,7 @@ uat_log app-control-block "posted BINARY block rule id=$RULE_ID policy=$POLICY_I
 #    denied AUTH_EXEC fails to run, so the sentinel stops printing. Each denied
 #    exec also emits an application_control_block event the driver asserts on.
 blocked=0
-for _ in $(seq 1 20); do # ~60s; fan-out is normally single-digit seconds
+for _ in {1..20}; do # ~60s; fan-out is normally single-digit seconds
   if ! uat_ssh "$VM" "$TARGET $SENTINEL 2>/dev/null" | grep -q "$SENTINEL"; then
     blocked=1
     break
@@ -104,7 +113,7 @@ uat_ssh "$VM" "$TARGET $SENTINEL >/dev/null 2>&1 || true; $TARGET $SENTINEL >/de
 #    rules out collapsing onto a stale alert from a prior run.
 uat_log app-control-block "asserting application_control_block alert (rule_id=app_control:$RULE_ID)"
 alert_seen=0
-for _ in $(seq 1 15); do # ~30s; event upload + detection is single-digit seconds
+for _ in {1..15}; do # ~30s; event upload + detection is single-digit seconds
   if rest GET "/api/alerts?host_id=$UAT_HOST_ID&limit=100" |
     jq -e --arg rid "app_control:$RULE_ID" '.[]? | select(.rule_id==$rid and .source=="application_control")' >/dev/null 2>&1; then
     alert_seen=1

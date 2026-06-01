@@ -1,6 +1,6 @@
 # app-control-block scenario
 
-L5 system/VM coverage for **Application Control active blocking** — the half of
+L5 system/VM coverage for **Application Control active blocking** - the half of
 the App Control story that detection scenarios (attack-runbook) do not exercise.
 
 It is the replacement for the removed `e2-policy-roundtrip.sh` blocklist scenario
@@ -12,9 +12,10 @@ works", VM-validated on a SIP-on host).
 
 ## What it does
 
-1. Stages a deterministic non-platform block target on the VM (a copy of
-   `/bin/echo`; copying drops the kernel `is_platform_binary` attribution so the
-   platform carve-out does not exempt it).
+1. Builds a deterministic non-platform block target on the VM via `go build`
+   (a locally compiled binary lacks Apple's `is_platform_binary` flag, so the
+   platform carve-out does not exempt it; an ad-hoc-signed copy of a system
+   `arm64e` binary would instead be killed by AMFI under SIP).
 2. Confirms the target runs + is allowed at baseline.
 3. POSTs a `BINARY` BLOCK rule on the copy's SHA-256 to the seeded Default policy.
 4. Polls until the snapshot fan-out reaches the host and the exec is **DENIED**
@@ -23,6 +24,13 @@ works", VM-validated on a SIP-on host).
    (`expected.yaml`).
 
 Cleanup deletes the rule and the target on exit.
+
+## Prerequisites
+
+A working `go` toolchain on the VM (found on `PATH` or under `/usr/local/go/bin`),
+used to compile the non-platform block target. This matches the attack-runbook
+scenario, which also `go build`s its launchd dropper. If `go` is absent the
+scenario fails fast with a clear message rather than a cryptic build error.
 
 ## Run
 
