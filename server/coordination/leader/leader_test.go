@@ -165,7 +165,7 @@ func TestRunIfLeader(t *testing.T) {
 			}
 			defer func() { _ = conn.Close() }()
 			var g sql.NullInt64
-			if e := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&g); e != nil {
+			if conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", name).Scan(&g) != nil {
 				return false
 			}
 			if g.Valid && g.Int64 == 1 {
@@ -174,6 +174,29 @@ func TestRunIfLeader(t *testing.T) {
 			}
 			return false
 		}, 5*time.Second, 50*time.Millisecond, "lock not released after the holding connection was killed")
+	})
+
+	t.Run("re-acquires leadership after losing the lease without shutdown", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		coord := newCoord(a)
+		name := uniqueLockName()
+		ctx := t.Context()
+
+		var calls atomic.Int64
+		go func() {
+			_ = coord.RunIfLeader(ctx, name, func(fnCtx context.Context) error {
+				if calls.Add(1) == 1 {
+					return nil // simulate a lost lease: fn returns while the parent ctx is still alive
+				}
+				<-fnCtx.Done() // later acquisitions hold leadership normally
+				return nil
+			})
+		}()
+		// After the first fn returns without the parent cancelling, RunIfLeader must re-acquire and call fn again rather than
+		// abandoning leadership.
+		require.Eventually(t, func() bool { return calls.Load() >= 2 }, 3*time.Second, 20*time.Millisecond,
+			"RunIfLeader should re-acquire after losing the lease")
 	})
 
 	t.Run("acquire error retries until context cancel", func(t *testing.T) {
@@ -186,8 +209,9 @@ func TestRunIfLeader(t *testing.T) {
 		coord := newCoord(a)
 		// RunIfLeader must keep hitting the acquire-error path and then return nil (graceful) when ctx expires, not hang.
 		require.NoError(t, coord.RunIfLeader(ctx, uniqueLockName(), func(context.Context) error { return nil }))
-		// DoOnceIfLeader surfaces the acquire error to the caller (which fails open).
-		ran, err := coord.DoOnceIfLeader(ctx, uniqueLockName(), func(context.Context) error { return nil })
+		// DoOnceIfLeader surfaces the acquire error to the caller (which fails open). Use a fresh context so the error is the
+		// closed pool, not the already-expired timeout context above.
+		ran, err := coord.DoOnceIfLeader(context.Background(), uniqueLockName(), func(context.Context) error { return nil })
 		require.Error(t, err)
 		require.False(t, ran)
 	})

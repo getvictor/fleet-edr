@@ -424,9 +424,13 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 	}
 	ran, err := coord.DoOnceIfLeader(ctx, "edr_seed_banner", emit)
 	switch {
-	case err != nil:
+	case err != nil && !ran:
+		// The leader gate itself failed (couldn't acquire/consult the lock). Fail open and emit anyway: a missed banner strands
+		// the first operator, which is worse than a duplicate.
 		logger.WarnContext(ctx, "seed-banner leader gate failed; emitting anyway", "err", err)
 		_ = emit(ctx)
+	case err != nil:
+		// We won the gate and ran emit, but emit itself failed; it already logged the error. Re-emitting would just fail again.
 	case !ran:
 		logger.InfoContext(ctx, "another replica is emitting the break-glass redemption banner; skipping")
 	}

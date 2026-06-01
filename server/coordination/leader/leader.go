@@ -25,6 +25,11 @@ import (
 // latency-sensitive, so a relaxed interval keeps the GET_LOCK polling cost negligible.
 const defaultPollInterval = 15 * time.Second
 
+// defaultKeepAliveInterval is how often the leader pings its lock connection. The leader callback is a long-lived loop, so without
+// pings the lock connection would sit idle for the whole run and MySQL would eventually close it as idle (wait_timeout), silently
+// releasing the lock and admitting a second leader. A minute is well under MySQL's 8h default and most tightened values.
+const defaultKeepAliveInterval = 1 * time.Minute
+
 // lockWaitSeconds is the GET_LOCK timeout. 0 means non-blocking: GET_LOCK returns immediately (1 if free, 0 if held by another
 // session). The scheduler retries every poll interval, so blocking inside GET_LOCK would only duplicate that wait.
 const lockWaitSeconds = 0
@@ -47,9 +52,10 @@ type Coordinator interface {
 
 // mysqlCoordinator is the MySQL-advisory-lock Coordinator.
 type mysqlCoordinator struct {
-	db           *sqlx.DB
-	pollInterval time.Duration
-	logger       *slog.Logger
+	db                *sqlx.DB
+	pollInterval      time.Duration
+	keepAliveInterval time.Duration
+	logger            *slog.Logger
 }
 
 // Option configures a mysqlCoordinator.
@@ -65,13 +71,23 @@ func WithPollInterval(d time.Duration) Option {
 	}
 }
 
+// WithKeepAliveInterval overrides how often the leader pings its lock connection. Values <= 0 are ignored. Tests use a short
+// interval so the relinquish-on-connection-loss path is exercised quickly.
+func WithKeepAliveInterval(d time.Duration) Option {
+	return func(c *mysqlCoordinator) {
+		if d > 0 {
+			c.keepAliveInterval = d
+		}
+	}
+}
+
 // NewMySQL builds a Coordinator backed by db's MySQL advisory locks. db must allow at least one spare pooled connection per
 // concurrently-held lock, since each held lock pins a dedicated connection for its lifetime.
 func NewMySQL(db *sqlx.DB, logger *slog.Logger, opts ...Option) *mysqlCoordinator {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	c := &mysqlCoordinator{db: db, pollInterval: defaultPollInterval, logger: logger}
+	c := &mysqlCoordinator{db: db, pollInterval: defaultPollInterval, keepAliveInterval: defaultKeepAliveInterval, logger: logger}
 	for _, o := range opts {
 		o(c)
 	}
@@ -92,17 +108,58 @@ func (c *mysqlCoordinator) RunIfLeader(ctx context.Context, lockName string, fn 
 			c.logger.WarnContext(ctx, "leader lock acquire failed; will retry", "lock", lockName, "err", err)
 		case acquired:
 			c.logger.InfoContext(ctx, "acquired leadership", "lock", lockName)
-			runErr := fn(ctx)
-			// Release with cancellation stripped but values kept: fn returns because ctx was cancelled (graceful shutdown), yet
-			// the lock must still be released promptly so a peer can take over.
-			c.release(context.WithoutCancel(ctx), lockName, conn)
-			return runErr
+			runErr := c.runAsLeader(ctx, lockName, conn, fn)
+			if ctx.Err() != nil {
+				return runErr // parent cancelled: graceful shutdown, we are done
+			}
+			// We lost the lease without the parent cancelling (the keep-alive ping failed, i.e. the lock connection dropped).
+			// Fall through to re-acquire so leadership is not abandoned after a transient connection loss.
+			c.logger.WarnContext(ctx, "lost leadership; will attempt to re-acquire", "lock", lockName)
 		}
 
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+		}
+	}
+}
+
+// runAsLeader runs fn while this replica holds the lock. fn runs under a lease context derived from ctx; a keep-alive goroutine
+// pings the lock connection so MySQL's wait_timeout cannot silently close it, and if a ping fails (the connection dropped) it
+// cancels the lease so fn — a long-running loop — stops promptly rather than acting as leader after the lock is gone. The lock is
+// released on return (deferred, so a panic in fn still frees it); the keep-alive is stopped and joined before release so it never
+// touches the connection concurrently with RELEASE_LOCK / Close.
+func (c *mysqlCoordinator) runAsLeader(ctx context.Context, lockName string, conn *sql.Conn, fn func(context.Context) error) error {
+	leaseCtx, cancelLease := context.WithCancel(ctx)
+	keepAliveDone := make(chan struct{})
+	go func() {
+		defer close(keepAliveDone)
+		c.keepAlive(leaseCtx, cancelLease, lockName, conn)
+	}()
+	defer func() {
+		cancelLease()
+		<-keepAliveDone // wait for the keep-alive to stop using conn before releasing it
+		c.release(context.WithoutCancel(ctx), lockName, conn)
+	}()
+	return fn(leaseCtx)
+}
+
+// keepAlive pings the lock connection every keepAliveInterval so MySQL does not close it as idle while the leader callback runs. A
+// failed ping means the connection (and thus the lock) is gone, so it relinquishes the lease and returns.
+func (c *mysqlCoordinator) keepAlive(ctx context.Context, relinquish context.CancelFunc, lockName string, conn *sql.Conn) {
+	ticker := time.NewTicker(c.keepAliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := conn.PingContext(ctx); err != nil {
+				c.logger.WarnContext(ctx, "leader lock keep-alive failed; relinquishing leadership", "lock", lockName, "err", err)
+				relinquish()
+				return
+			}
 		}
 	}
 }
@@ -132,8 +189,15 @@ func (c *mysqlCoordinator) tryAcquire(ctx context.Context, lockName string) (*sq
 		_ = conn.Close()
 		return nil, false, fmt.Errorf("get_lock %q: %w", lockName, err)
 	}
-	if !got.Valid || got.Int64 != 1 {
-		// 0 = held by another session, NULL = error/timeout. Either way we are not the leader; return the connection to the pool.
+	if !got.Valid {
+		// NULL from GET_LOCK is an error (out of memory, the session was killed, or a bad argument) per the MySQL docs, not mere
+		// contention. Surface it so RunIfLeader logs + retries and DoOnceIfLeader's caller can fail open, rather than silently
+		// treating it as "another replica holds the lock".
+		_ = conn.Close()
+		return nil, false, fmt.Errorf("get_lock %q returned NULL", lockName)
+	}
+	if got.Int64 != 1 {
+		// 0 = the lock is held by another session: we are simply not the leader. Return the connection to the pool.
 		_ = conn.Close()
 		return nil, false, nil
 	}
