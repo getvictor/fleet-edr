@@ -403,13 +403,13 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.svc.AuditFailure(r.Context(), body.Email, "user_not_found",
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(r.Context(), w, "invalid_credentials")
+		h.unauthorized(r.Context(), w)
 		return
 	}
 	if !user.IsBreakglass {
 		h.svc.AuditFailure(r.Context(), body.Email, "not_breakglass",
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(r.Context(), w, "invalid_credentials")
+		h.unauthorized(r.Context(), w)
 		return
 	}
 	sess, err := h.svc.FinishLogin(r.Context(), FinishLoginRequest{
@@ -433,7 +433,7 @@ func (h *Handler) handleFinishLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		h.svc.AuditFailure(r.Context(), user.Email, reason,
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(r.Context(), w, "invalid_credentials")
+		h.unauthorized(r.Context(), w)
 		return
 	}
 	h.clearChallengeCookie(w)
@@ -459,7 +459,10 @@ func (h *Handler) badRequest(ctx context.Context, w http.ResponseWriter, reason 
 	h.writeJSON(ctx, w, http.StatusBadRequest, map[string]any{"reason": reason})
 }
 
-func (h *Handler) unauthorized(ctx context.Context, w http.ResponseWriter, reason string) {
+func (h *Handler) unauthorized(ctx context.Context, w http.ResponseWriter) {
+	// Every break-glass 401 reports the same generic reason on purpose: not revealing whether the user, the credential, or
+	// the assertion was at fault denies an attacker a credential oracle.
+	const reason = "invalid_credentials"
 	w.Header().Set(authReasonHeader, reason)
 	h.writeJSON(ctx, w, http.StatusUnauthorized, map[string]any{"reason": reason})
 }
@@ -601,7 +604,7 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		// Session refers to a deleted user — middleware should have
 		// caught this; treat as session-invalid.
-		h.unauthorized(ctx, w, "invalid_credentials")
+		h.unauthorized(ctx, w)
 		return
 	}
 	challenge, _, err := h.svc.BeginLogin(ctx, user.Email)
@@ -658,7 +661,7 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.svc.users.Get(ctx, sess.UserID)
 	if err != nil {
-		h.unauthorized(ctx, w, "invalid_credentials")
+		h.unauthorized(ctx, w)
 		return
 	}
 	if !h.rates.AllowEmailFail(user.Email) {
@@ -679,7 +682,7 @@ func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {
 		reason := reasonForLoginErr(err)
 		h.svc.AuditFailure(ctx, user.Email, reason,
 			httpserver.ClientIP(r), r.UserAgent())
-		h.unauthorized(ctx, w, "invalid_credentials")
+		h.unauthorized(ctx, w)
 		return
 	}
 	// Re-derive the raw cookie token from the request so the identity service can stamp last_auth_at on this session row. The plaintext is

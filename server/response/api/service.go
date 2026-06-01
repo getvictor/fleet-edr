@@ -4,15 +4,15 @@ import "context"
 
 // Service is the response-context surface for the agent command
 // queue. Consumed by:
-//   - response/internal/agent — GET /api/commands and
+//   - response/internal/agent: GET /api/commands and
 //     PUT /api/commands/{id};
-//   - response/internal/operator — POST /api/commands and
+//   - response/internal/operator: POST /api/commands and
 //     GET /api/commands/{id};
-//   - endpoint/internal/service — Insert at enroll-fan-out time,
+//   - endpoint/internal/service: Insert at enroll-fan-out time,
 //     via a method-value closure;
-//   - rules/internal/service — Insert at PUT /api/policy fan-out
-//     time, via a method-value closure;
-//   - cmd/main metrics adapter — CountPending for the
+//   - rules/internal/appcontrol: Insert at app-control policy
+//     fan-out time, via a method-value closure;
+//   - cmd/main metrics adapter: CountPending for the
 //     PendingCommands gauge.
 //
 // Endpoint and rules consume the Insert method as a method value

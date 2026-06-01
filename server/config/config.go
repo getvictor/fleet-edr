@@ -292,8 +292,6 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	requireStr(&c.DSN, "EDR_DSN", getenv, errs, true)
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, errs, true)
-	// UI + admin surfaces authenticate via the session cookie minted by POST /api/session. The first-boot seeder prints the admin password
-	// once so the operator can log in.
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 

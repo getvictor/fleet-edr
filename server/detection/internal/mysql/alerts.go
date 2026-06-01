@@ -65,7 +65,8 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	)
 	if err != nil {
 		if isDuplicateKeyErr(err) {
-			return s.attachEventsToExistingAlert(ctx, tx, a, eventIDs)
+			existingID, attachErr := s.attachEventsToExistingAlert(ctx, tx, a, eventIDs)
+			return existingID, false, attachErr // dedup branch never creates a row
 		}
 		return 0, false, fmt.Errorf("insert alert: %w", err)
 	}
@@ -125,8 +126,9 @@ func isDuplicateKeyErr(err error) bool {
 }
 
 // attachEventsToExistingAlert handles the dedup branch when (source, host_id, rule_id, subject) already has an alert row. Extracted
-// from InsertAlert to keep the main path under the cognitive complexity limit.
-func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, bool, error) {
+// from InsertAlert to keep the main path under the cognitive complexity limit. Returns the existing alert's id; the caller reports
+// created=false (this branch never creates a row).
+func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, error) {
 	var existingID int64
 	// FOR UPDATE makes this a locking (current) read rather than a consistent snapshot read. We only reach here after the
 	// INSERT hit a duplicate-key error, i.e. a concurrent transaction inserted and committed this (source, host_id,
@@ -136,15 +138,15 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND subject = ? FOR UPDATE",
 		a.Source, a.HostID, a.RuleID, a.Subject,
 	); err != nil {
-		return 0, false, fmt.Errorf("lookup duplicate alert: %w", err)
+		return 0, fmt.Errorf("lookup duplicate alert: %w", err)
 	}
 	if err := bulkInsertAlertEvents(ctx, tx, existingID, eventIDs, true /* dedup */); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, false, fmt.Errorf("commit duplicate alert lookup: %w", err)
+		return 0, fmt.Errorf("commit duplicate alert lookup: %w", err)
 	}
-	return existingID, false, nil
+	return existingID, nil
 }
 
 // ListAlerts returns alerts matching the given filter, ordered by

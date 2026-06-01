@@ -590,7 +590,6 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/alerts", "GET /api/alerts/{id}", "PUT /api/alerts/{id}",
 		"GET /api/commands/{id}", "POST /api/commands",
 		"GET /api/enrollments", "POST /api/enrollments/{host_id}/revoke", "POST /api/enrollments/{host_id}/rotate",
-		"GET /api/policy", "PUT /api/policy",
 		"GET /api/attack-coverage",
 		"GET /api/rules",
 		"GET /api/audit-events",
