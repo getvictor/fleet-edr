@@ -43,13 +43,113 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 curl -s https://<server>/readyz | jq .
 ```
 
-There is no downtime tolerated by MySQL during this. The server
-container restarts in place; MySQL keeps running. Expect ~2s of
-HTTP 503 while the new server boots; agents retry automatically.
+This is the single-replica path: the server container restarts in place,
+MySQL keeps running, and you accept ~2s of HTTP 503 while the new server
+boots (agents retry automatically). For a zero-downtime upgrade, run the
+multi-replica topology and follow [Rolling upgrade](#rolling-upgrade-multi-replica)
+below instead.
 
-DDL in the v0.1.x line is `CREATE TABLE IF NOT EXISTS` throughout, so
-minor upgrades don't require a MySQL migration. Major-version upgrades
-will ship with a migration runbook in the release notes.
+Schema changes ship as versioned, forward-only goose migrations
+(see [ADR-0009](adr/0009-migrations-via-goose.md)) that the server applies at
+boot, not as in-process DDL. On upgrade the new server applies any pending
+migrations against the running MySQL as it starts; an already-applied corpus
+is a no-op. Migrations within the v0.1.x line are expand-compatible, so the
+old and new server versions tolerate the same schema during the swap.
+
+## Rolling upgrade (multi-replica)
+
+This is the zero-downtime upgrade path for the multi-replica topology
+([install-server.md](install-server.md#deployment-topology)). It replaces
+replicas one at a time so the load balancer always has a ready replica to
+route to. The whole arc that makes it safe is recorded in
+[ADR-0011](adr/0011-ha-architecture.md).
+
+What makes it hitless, and the piece each part plays:
+
+- **Drain.** On SIGTERM a replica reports `/readyz` 503 for `EDR_SHUTDOWN_DRAIN`
+  (default 30s) before closing its listener, so the LB pulls it from rotation
+  and finishes in-flight requests elsewhere. Set the LB's health-check interval
+  shorter than the drain window so it notices the 503 in time.
+- **Migrations.** The first new-version replica to boot applies any pending
+  goose migrations under a MySQL advisory lock; replicas that boot while it
+  holds the lock block briefly, then see an already-applied corpus and no-op.
+  No two replicas ever run the migration tool against the database at once.
+- **Stateless tier.** Sessions and CSRF tokens are MySQL-backed, so a logged-in
+  operator whose replica is being replaced is served by another replica with no
+  re-login (no sticky sessions). See [ADR-0010](adr/0010-stateless-server.md).
+- **Leader failover.** Retention and the stale-process TTL reconciler run on a
+  single replica via an advisory lock; when that replica is drained the lock
+  frees and another replica takes over on its next poll. The event processor is
+  not coordinated — it scales across every replica via `SKIP LOCKED`.
+
+Procedure:
+
+```sh
+# 1. Bump EDR_VERSION in .env to the exact release tag.
+cd /srv/fleet-edr   # the directory holding docker-compose-multi-replica.yml
+docker compose -f docker-compose-multi-replica.yml --env-file .env pull
+
+# 2. Recreate one replica at a time. Compose sends SIGTERM (drain), waits, then
+#    starts the new container. Wait for it to report ready before the next.
+docker compose -f docker-compose-multi-replica.yml --env-file .env up -d --no-deps server-a
+curl -fsS -k https://localhost/readyz >/dev/null && echo "server-a ready"
+
+docker compose -f docker-compose-multi-replica.yml --env-file .env up -d --no-deps server-b
+curl -fsS -k https://localhost/readyz >/dev/null && echo "server-b ready"
+
+# 3. Confirm the version through the LB.
+curl -s -k https://localhost/readyz | jq -r .version
+```
+
+Because two binary versions read and write the same MySQL between step 2's two
+commands, every schema change in the v0.1.x line is expand-contract: a migration
+only adds columns/tables (or widens) so the older version keeps working against
+the newer schema. A change that would drop or narrow a column ships across two
+releases (expand in release N, contract in N+1) so no single rolling upgrade
+ever has both versions disagreeing on a column's existence.
+
+If a new replica fails to come up (bad image tag, migration error), the old
+replicas are still in rotation — the LB never routed to the half-started one
+because `/readyz` never went green. Fix `.env` and re-run; nothing rolled back
+because nothing committed.
+
+## Multi-replica trade-offs
+
+The stateless tier ([ADR-0010](adr/0010-stateless-server.md)) accepts two
+bounded per-replica behaviours rather than adding a second coordination
+dependency in v0.1.0. Both are operational knobs, not bugs.
+
+### Per-IP rate limiting is per replica
+
+The per-source-IP rate limiter (`server/httpserver/iplimiter.go`, in front of
+the public enroll + login + break-glass routes) keeps its token buckets in
+process memory, so each replica counts independently. Behind N replicas a
+single source IP can therefore burst up to N times the per-replica limit before
+any one replica throttles it, because the LB spreads its requests across the
+fleet.
+
+Size the per-replica limit with that in mind: divide the fleet-wide budget you
+want by the replica count. The fragmentation is bounded (it never exceeds
+N times the limit) and the limiter is a coarse abuse-control measure, not a
+billing-grade quota, so v0.1.0 accepts it rather than centralising the buckets
+in MySQL or Redis. A shared limiter is a v0.1.x follow-up.
+
+### Audit-event durability under crash
+
+The audit log dual-emits: every event is written to MySQL AND to slog (the
+secondary durable sink). Writes, denials, and auth events take the synchronous
+path and are durable before the request returns. Only sampled read-audit events
+ride an in-memory async queue (`EDR_AUDIT_ASYNC_QUEUE_CAP`, default 8192) so the
+read hot path does not wait on an INSERT.
+
+On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a
+hard kill (SIGKILL, OOM) the in-flight queue is lost — but those same events
+were already emitted to slog, so they survive in your OTel/log backend. The
+append-only MySQL audit table can therefore miss sampled read rows after a hard
+crash; the slog stream is the recovery source. v0.1.0 accepts this rather than
+shipping a write-ahead audit outbox (a v0.1.x follow-up). Alert on the
+`audit dropped` / `audit async record failed` WARN logs (see
+[Auth + authz dashboard](#auth--authz-dashboard)) to catch sustained drops.
 
 ## Upgrade agents
 

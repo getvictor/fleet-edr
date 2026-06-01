@@ -21,6 +21,12 @@ import (
 // least-recently-seen bucket is evicted. This guarantees the map size
 // cannot grow past IPLimiterMaxBuckets even under a distributed spray on
 // a public endpoint.
+//
+// Per replica: the bucket map is in process memory, so under a multi-replica
+// deployment each replica counts independently and a source IP can burst up to
+// N times this limit behind N replicas. That fragmentation is accepted and
+// documented in docs/operations.md ("Multi-replica trade-offs"); size the
+// per-replica limit with the replica count in mind.
 const (
 	IPLimiterIdleTTL    = 2 * time.Hour
 	IPLimiterMaxBuckets = 1024

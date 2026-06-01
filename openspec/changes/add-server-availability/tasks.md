@@ -49,7 +49,9 @@ stack (PR 1 -> 2) and the HA-foundation stack (PR 3 -> 4) run in parallel from m
 
 ## PR 6: operations + availability + SLA docs + ADR-0011
 
-- [ ] rolling-upgrade runbook; rate-limiter + audit-queue decisions (`docs/operations.md`)
-- [ ] availability + SLA docs (`docs/install-server.md`)
-- [ ] ADR-0011 HA architecture; `ha-architecture.md` header cites it
-- [ ] archive this change once every scenario has a marker
+- [x] rolling-upgrade runbook; rate-limiter + audit-queue decisions (`docs/operations.md`); stale "CREATE TABLE IF NOT EXISTS"
+  migration claims scrubbed in operations.md + install-server.md; godoc pointers added on `iplimiter.go` + audit `async.go`
+- [x] availability + SLA docs (`docs/install-server.md`): 99.9% control-plane target, agent-side resilience, MySQL-SPOF + 3 caveats
+- [x] ADR-0011 HA architecture (capstone); ADR index (README) updated to list 0009/0010/0011
+- [ ] archive this change once every scenario has a marker (post-merge capstone: run `openspec archive add-server-availability`
+  after PR 5 + PR 6 land on main; spectrace already reports 286/286 normative scenarios marked)

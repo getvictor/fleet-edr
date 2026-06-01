@@ -43,6 +43,49 @@ operate and fine for a pilot, but a server restart or upgrade is a brief
 maintenance window rather than a hitless rollout. Move to the multi-replica
 topology when you need upgrades without downtime.
 
+## Availability and SLA
+
+The control-plane availability target for the multi-replica topology is
+**99.9%** (the management, query, ingest, and alerting plane: the UI, the API,
+and `/api/events` ingestion). The full architecture rationale is in
+[ADR-0011](adr/0011-ha-architecture.md).
+
+How the topology reaches it: N stateless replicas behind a load balancer mean a
+single replica can crash, be drained, or be rolled to a new version without the
+control plane going down, because the LB routes around any replica that is not
+reporting `/readyz` ready and sessions are MySQL-backed (any replica serves any
+request). Rolling upgrade (see
+[operations.md](operations.md#rolling-upgrade-multi-replica)) is therefore not a
+maintenance window.
+
+**Endpoint protection does not depend on control-plane availability.** This is
+the honest resilience story for a customer:
+
+- **Enforcement continues during an outage.** Application-control block
+  decisions are made in the macOS system extension from a cached policy
+  snapshot, not by a server round-trip, so a server or network outage does not
+  open a hole in enforcement.
+- **No endpoint data is lost (up to the queue cap).** When the server is
+  unreachable the agent buffers events in its local SQLite queue and uploads
+  them when the server returns; `edr.agent.queue.dropped` increments only if the
+  queue hits its cap. Detection and alerting run server-side, so alerts for
+  events captured during an outage are generated when the backlog uploads
+  (delayed, not lost).
+
+Three caveats on the SLA, stated plainly:
+
+1. **It is the control plane, not your infrastructure.** The 99.9% target is the
+   EDR server tier. It is conditional on the load balancer and MySQL you operate
+   being available; the EDR does not monitor or guarantee those.
+2. **MySQL is a single point of failure in the reference stack.** v0.1.0 ships a
+   single MySQL; the customer brings a replicated or managed MySQL for a fully
+   HA datastore. A MySQL outage takes the control plane down regardless of how
+   many server replicas are running (endpoint enforcement still continues, per
+   above).
+3. **Single region, single MySQL writer.** There is no multi-region or
+   active-active deployment in v0.1.0; geo-distribution and read-routing are
+   deferred to a later release.
+
 ## Prerequisites
 
 - A Linux host with Docker Engine 24+ and Docker Compose v2 (`docker
@@ -331,9 +374,12 @@ docker compose -f docker-compose.prod.yml --env-file .env pull server
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-MySQL is not recreated on upgrade; its volume persists. No schema
-migration needed within the v0.1.x series because the DDL is
-`CREATE TABLE IF NOT EXISTS` throughout.
+MySQL is not recreated on upgrade; its volume persists. Schema changes
+ship as versioned, forward-only goose migrations that the server applies
+at boot (see [ADR-0009](adr/0009-migrations-via-goose.md)); an
+already-applied corpus is a no-op, so re-running an upgrade is safe. For a
+zero-downtime upgrade of the multi-replica topology, follow the
+[rolling upgrade](operations.md#rolling-upgrade-multi-replica) runbook.
 
 ## Rotate secrets
 

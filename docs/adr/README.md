@@ -43,6 +43,9 @@ time, not a single mutable "current view".
 | [0006](0006-otel-only-metrics.md) | OpenTelemetry is the only metrics pipeline; no Prometheus /metrics | Accepted |
 | [0007](0007-xpc-peer-validation-libxpc-only.md) | XPC peer validation via libxpc code-signing requirement; no audit_token layer | Accepted |
 | [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Accepted |
+| [0009](0009-migrations-via-goose.md) | Versioned, forward-only, per-context schema migrations via goose | Accepted |
+| [0010](0010-stateless-server.md) | Stateless server: no in-process state survives a request | Accepted |
+| [0011](0011-ha-architecture.md) | High-availability architecture: multi-replica app tier with rolling upgrade | Accepted |
 
 ## Tooling
 
