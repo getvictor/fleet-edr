@@ -13,7 +13,9 @@
 // the event payload + an OTel-shaped attribute set so dashboards can
 // alert on drop-rate spikes. The slog backend is the audit's
 // secondary durable sink under the dual-emit pattern; on a hard kill
-// (SIGKILL, OOM) the in-flight queue is lost but slog has it.
+// (SIGKILL, OOM) the in-flight queue is lost but slog has it. See
+// docs/operations.md ("Audit-event durability under crash") for the
+// operator-facing trade-off.
 //
 // Shutdown contract: Submit + close-and-drain are mutually exclusive
 // via a sync.RWMutex. RLock is the cheap many-reader path Submit
