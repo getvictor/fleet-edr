@@ -687,6 +687,24 @@ tasks:
     cmds:
       - docker compose down
 
+  install:multi-replica:up:
+    desc: |
+      Bring up the reference multi-replica HA stack (two server replicas + MySQL +
+      NGINX) from packaging/docker-compose-multi-replica.yml for local validation.
+      Prerequisites: populate packaging/secrets/ (mysql_root, edr_dsn, enroll_secret,
+      session_signing_key) and packaging/tls/ (fullchain.pem, privkey.pem) per
+      docs/install-server.md, and either pull a released image or build one. Then
+      verify through the load balancer: curl -k https://localhost/readyz.
+    dir: packaging
+    cmds:
+      - docker compose -f docker-compose-multi-replica.yml up -d
+
+  install:multi-replica:down:
+    desc: Stop the multi-replica HA stack and remove its containers.
+    dir: packaging
+    cmds:
+      - docker compose -f docker-compose-multi-replica.yml down
+
   db:reset:
     desc: |
       DESTRUCTIVE: drop the dev database and recreate empty. Requires explicit

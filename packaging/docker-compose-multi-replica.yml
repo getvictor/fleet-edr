@@ -1,0 +1,112 @@
+# Reference multi-replica (high-availability) compose stack for the EDR server.
+#
+# This is the HA topology: two stateless server replicas behind an NGINX
+# reverse proxy that terminates TLS and load-balances across them, in front of
+# a single MySQL. It is the multi-replica counterpart to the root
+# docker-compose.prod.yml (one replica). The server tier holds no in-process
+# state that survives a request (ADR-0010), so any replica serves any request
+# and a replica can be drained and restarted without customer-visible loss.
+#
+# Boot shortcut (run from this directory, with ./secrets and ./tls populated as
+# in docs/install-server.md):
+#
+#   docker compose -f docker-compose-multi-replica.yml --env-file .env up -d
+#
+# Validate locally with `task install:multi-replica:up`.
+#
+# An HAProxy load balancer is provided as an alternative to NGINX in
+# packaging/haproxy/multi-replica.cfg; swap the proxy service's image + config
+# mount to use it (it adds active /readyz health checks; see the docs).
+
+# Common server config, shared by every replica via a YAML anchor so the two
+# replica services stay byte-identical apart from their name. Add a third
+# replica by copying the server-b block and renaming.
+x-server: &server
+  image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
+  restart: unless-stopped
+  depends_on:
+    mysql:
+      condition: service_healthy
+  environment:
+    # Same shared MySQL for every replica: the durable state lives here, which
+    # is what makes the app tier stateless and horizontally scalable.
+    EDR_DSN: ""
+    EDR_DSN_FILE: /run/secrets/edr_dsn
+    EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
+    # The session signing key MUST be identical across replicas: a session or
+    # OIDC state cookie minted on one replica is validated on another, so they
+    # have to share the key. The shared secret file guarantees that.
+    EDR_SESSION_SIGNING_KEY_FILE: /run/secrets/session_signing_key
+    # Each replica terminates TLS on the proxy-to-backend hop (the EDR binary
+    # never serves plaintext HTTP; see issue #140). Reuse the public cert or a
+    # backend cert from your internal CA.
+    EDR_TLS_CERT_FILE: ${EDR_TLS_CERT_FILE:-/tls/fullchain.pem}
+    EDR_TLS_KEY_FILE: ${EDR_TLS_KEY_FILE:-/tls/privkey.pem}
+    # Drain window: on SIGTERM the replica reports /readyz 503 and keeps serving
+    # for this long so the proxy removes it from rotation before the listener
+    # closes. This is what makes a rolling restart hitless.
+    EDR_SHUTDOWN_DRAIN: ${EDR_SHUTDOWN_DRAIN:-30s}
+    EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
+    EDR_LOG_FORMAT: "json"
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    OTEL_SERVICE_NAME: fleet-edr-server
+  volumes:
+    - ${EDR_TLS_DIR:-./tls}:/tls:ro
+  secrets:
+    - enroll_secret
+    - edr_dsn
+    - session_signing_key
+  # No host port: replicas are reachable only through the proxy. The proxy
+  # fans out to them by service name on the compose network.
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root
+      MYSQL_DATABASE: edr
+    volumes:
+      - edr-mysql-data:/var/lib/mysql
+    secrets:
+      - mysql_root
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --silent 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  server-a:
+    <<: *server
+  server-b:
+    <<: *server
+
+  proxy:
+    image: nginx:1.27
+    restart: unless-stopped
+    depends_on:
+      - server-a
+      - server-b
+    ports:
+      - "${EDR_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/multi-replica.conf:/etc/nginx/conf.d/default.conf:ro
+      # The proxy terminates external TLS with the same cert dir the replicas use
+      # for the backend hop; point EDR_TLS_DIR at your cert store if it differs.
+      - ${EDR_TLS_DIR:-./tls}:/tls:ro
+
+volumes:
+  edr-mysql-data:
+
+secrets:
+  mysql_root:
+    file: ./secrets/mysql_root
+  enroll_secret:
+    file: ./secrets/enroll_secret
+  edr_dsn:
+    file: ./secrets/edr_dsn
+  # Shared across every replica so cross-replica session + CSRF validation works.
+  # Generate once: `openssl rand -hex 32 > secrets/session_signing_key`.
+  session_signing_key:
+    file: ./secrets/session_signing_key

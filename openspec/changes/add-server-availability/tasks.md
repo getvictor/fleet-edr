@@ -42,10 +42,10 @@ stack (PR 1 -> 2) and the HA-foundation stack (PR 3 -> 4) run in parallel from m
 
 ## PR 5: multi-replica install package + multi-replica integration test
 
-- [ ] `packaging/docker-compose-multi-replica.yml` + NGINX + HAProxy configs + install-server.md topology
-- [ ] `test/integration/multi_replica_test.go` (SKIP LOCKED, cross-replica session/CSRF, goose lock under concurrent apply)
-- [ ] boot-time migration advisory lock at the cmd layer
-- [ ] requirements + scenarios added to `server-availability`; test markers
+- [x] `packaging/docker-compose-multi-replica.yml` + NGINX + HAProxy configs + install-server.md topology + `task install:multi-replica:up`
+- [x] `test/integration/multi_replica_test.go` (SKIP LOCKED, cross-replica session/CSRF, goose lock under concurrent apply)
+- [x] boot-time migration advisory lock at the cmd layer (`leader.WithLock` around the schema apply in cmd/fleet-edr-server)
+- [x] requirements + scenarios added to `server-availability`; test markers (3 requirements, 4 scenarios)
 
 ## PR 6: operations + availability + SLA docs + ADR-0011
 

@@ -2,9 +2,46 @@
 
 The reference deployment is Docker Compose: MySQL + the server image,
 with a TLS-terminating ingress in front. The stack is sized for a single
-customer with 10 to 500 endpoints. Larger fleets should split MySQL onto
-its own instance and run the server image behind a load balancer, using
-this setup as the starting shape.
+customer with 10 to 500 endpoints. Pick a topology below, then follow the
+setup steps.
+
+## Deployment topology
+
+The server tier is stateless: it holds no in-process state that outlives a
+request, so any replica can serve any request and durable state lives in the
+shared MySQL (see `docs/adr/0010-stateless-server.md`). That makes two
+topologies available.
+
+### Multi-replica (high availability) - reference
+
+Two or more server replicas behind a load balancer, in front of one MySQL.
+This is the recommended topology: a replica can be drained and restarted (or
+rolled to a new version) without a maintenance window, because the load
+balancer routes around a draining replica and sessions are MySQL-backed, so
+there are no sticky sessions to strand. Use
+`packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX
+proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative
+to the NGINX proxy that adds active `/readyz` health checks. The setup steps
+below apply unchanged except that you also generate a shared
+`session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`),
+which every replica must share so a session minted on one validates on another.
+
+Properties this topology relies on, each pinned by a test in the
+`server-availability` spec: the processor scales across replicas via
+`SKIP LOCKED`; sessions and CSRF tokens validate on any replica; the periodic
+maintenance tasks run on exactly one replica via MySQL advisory locking; and
+schema migrations are applied under an advisory lock so a rolling upgrade never
+runs two migration applies against one database at once.
+
+The MySQL instance is the remaining single point of failure; bring your own
+replicated/managed MySQL for an HA datastore (out of scope here).
+
+### Single-replica (small pilot)
+
+One server replica + MySQL, from the root `docker-compose.prod.yml`. Simplest to
+operate and fine for a pilot, but a server restart or upgrade is a brief
+maintenance window rather than a hitless rollout. Move to the multi-replica
+topology when you need upgrades without downtime.
 
 ## Prerequisites
 
