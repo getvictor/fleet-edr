@@ -13,9 +13,10 @@ import (
 )
 
 // TestAdmin_ConcurrentBoot pins that the break-glass admin seed is safe when several replicas boot at once against a fresh
-// database. Every replica's seed must succeed — the replica that loses the create race re-fetches the winner's row instead of
-// failing on the users.email unique key — and exactly one admin row must exist afterward. The goroutines are released through a
-// barrier so they hit GetByEmail simultaneously, maximising the create-race window the re-fetch path handles.
+// database: every replica's seed must succeed and exactly one admin row must exist afterward. The race-safety is a property of
+// users.Store.CreateBreakglass (INSERT ... ON DUPLICATE KEY UPDATE + re-read), so the loser of the create race gets the winner's
+// row back with no error; this test guards that invariant at the seed.Admin level and would fail if CreateBreakglass regressed to
+// a plain INSERT. The goroutines are released through a barrier so they hit the seed simultaneously, maximising the race window.
 func TestAdmin_ConcurrentBoot(t *testing.T) {
 	t.Parallel()
 	t.Run("spec:server-availability/first-boot-admin-seed-is-safe-under-concurrent-replica-boot/two-replicas-seeding-concurrently-produce-exactly-one-admin-row", func(t *testing.T) {

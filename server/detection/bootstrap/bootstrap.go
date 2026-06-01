@@ -110,9 +110,9 @@ func New(deps Deps) (*Detection, error) {
 	}
 
 	intakeH := intake.New(store, logger, deps.Build)
-	if deps.IsDraining != nil {
-		intakeH.SetReadinessGate(deps.IsDraining)
-	}
+	// Unconditional: a nil predicate is the documented "readiness reflects only the DB check" case (handleReadyz guards on
+	// h.isDraining != nil), so there is no branch to leave untested here.
+	intakeH.SetReadinessGate(deps.IsDraining)
 	if deps.Metrics != nil {
 		intakeH.SetMetrics(deps.Metrics)
 	}

@@ -58,9 +58,11 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, 
 		if drain != nil {
 			drain.BeginDrain()
 		}
-		// Stay up for the drain window so the LB sees /readyz flip to 503 and drains this replica before the listener closes. A
-		// second SIGTERM hard-kills via the default handler (signal.NotifyContext catches only once), which is the operator's
-		// escape hatch if the drain window is too long.
+		// Stay up for the drain window so the LB sees /readyz flip to 503 and drains this replica before the listener closes;
+		// in-flight and new requests keep being served meanwhile. The bounded drain + ShutdownTimeout deadline guarantees the
+		// process exits. NOTE: a second SIGTERM is NOT a faster escape hatch — signal.NotifyContext keeps relaying the signal
+		// until its stop func runs (deferred in cmd/main to after this returns), so a second SIGTERM is swallowed rather than
+		// delivered to the default handler. An operator who needs an immediate stop sends SIGKILL, which cannot be intercepted.
 		if drainDelay > 0 {
 			drainTimer := time.NewTimer(drainDelay)
 			defer drainTimer.Stop()

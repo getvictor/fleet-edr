@@ -84,44 +84,29 @@ func Admin(ctx context.Context, us *users.Store, rb *rbac.Store, logger *slog.Lo
 func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Logger) (*users.User, error) {
 	existing, err := us.GetByEmail(ctx, DefaultAdminEmail)
 	if err == nil {
-		return requireBreakglass(existing)
+		if !existing.IsBreakglass {
+			return nil, fmt.Errorf("seed.Admin: canonical email %q exists with is_breakglass=0; refusing to silently rewrite", DefaultAdminEmail)
+		}
+		return existing, nil
 	}
 	if !errors.Is(err, users.ErrNotFound) {
 		return nil, fmt.Errorf("look up existing admin: %w", err)
 	}
 
+	// Concurrent replica boot is safe without any extra handling here: users.Store.CreateBreakglass upserts via
+	// INSERT ... ON DUPLICATE KEY UPDATE and re-reads the row, so the replica that loses the create race gets the winner's row back
+	// with no error rather than a unique-key violation. The seed_concurrent_test pins exactly-one-row across racing replicas; this
+	// path relies on that CreateBreakglass property (server-availability: race-safe first-boot seed).
 	u, err := us.CreateBreakglass(ctx, users.CreateBreakglassRequest{
 		Email: DefaultAdminEmail,
 	})
 	if err != nil {
-		// Concurrent replica boot: another replica won the create race and inserted the canonical admin first, so this INSERT hit
-		// the users.email unique key. Re-fetch the winner's row instead of failing this replica's boot — the outcome is exactly one
-		// admin row no matter how many replicas boot at once (server-availability: race-safe first-boot seed). The losing replica
-		// does not log "seeded"; it just adopts the existing row.
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDupEntry {
-			won, getErr := us.GetByEmail(ctx, DefaultAdminEmail)
-			if getErr != nil {
-				return nil, fmt.Errorf("re-fetch admin after concurrent create: %w", getErr)
-			}
-			return requireBreakglass(won)
-		}
 		return nil, fmt.Errorf("create breakglass admin: %w", err)
 	}
 	logger.InfoContext(ctx, "break-glass admin user seeded",
 		attrkeys.UserID, u.ID,
 		attrkeys.UserEmail, u.Email,
 	)
-	return u, nil
-}
-
-// requireBreakglass returns u when it is the break-glass admin, or a hard error when the canonical email is occupied by a
-// non-break-glass row. Pre-pilot there is no deployment in that state, and refusing to silently rewrite the row is the safer
-// default. Shared by the GetByEmail-hit path and the concurrent-create re-fetch path.
-func requireBreakglass(u *users.User) (*users.User, error) {
-	if !u.IsBreakglass {
-		return nil, fmt.Errorf("seed.Admin: canonical email %q exists with is_breakglass=0; refusing to silently rewrite", DefaultAdminEmail)
-	}
 	return u, nil
 }
 
