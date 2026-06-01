@@ -18,6 +18,7 @@ import (
 	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
+	"github.com/fleetdm/edr/server/coordination/leader"
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
@@ -107,7 +108,12 @@ func run() error {
 	// RunAndShutdown below.
 	drain := &httpserver.DrainState{}
 
-	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining)
+	// coord elects a single replica to run the periodic maintenance tasks (retention + process-TTL) via MySQL advisory locks, so
+	// they don't run on every replica behind the load balancer. The processor is intentionally left un-coordinated (it scales via
+	// SKIP LOCKED). It shares the main DB pool; each held lock pins one spare connection.
+	coord := leader.NewMySQL(db, logger)
+
+	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord)
 	if err != nil {
 		return err
 	}
@@ -137,7 +143,7 @@ func run() error {
 	)
 	detectionCtx.SetMetrics(metricsRec)
 
-	seedAdmin(ctx, logger, cfg, identityCtx)
+	seedAdmin(ctx, logger, cfg, identityCtx, coord)
 
 	mux := buildMux(muxDeps{
 		detectionCtx: detectionCtx,
@@ -225,6 +231,7 @@ func openDetection(
 	cfg *config.Config,
 	identityCtx *identitybootstrap.Identity,
 	isDraining func() bool,
+	coord leader.Coordinator,
 ) (*detectionbootstrap.Detection, error) {
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,
@@ -245,6 +252,7 @@ func openDetection(
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		IsDraining:           isDraining,
+		Coordinator:          coord,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)
@@ -364,7 +372,7 @@ func openEndpoint(
 	return endpointCtx, nil
 }
 
-func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, identityCtx *identitybootstrap.Identity) {
+func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, identityCtx *identitybootstrap.Identity, coord leader.Coordinator) {
 	admin, _, err := identityCtx.Service().SeedAdmin(ctx, os.Stderr)
 	if err != nil && !errors.Is(err, identityapi.ErrAlreadySeeded) {
 		logger.ErrorContext(ctx, "admin seed failed", "err", err)
@@ -375,8 +383,9 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 		// pre-existing row. Nothing to do.
 		return
 	}
-	// Print the redemption URL banner when the admin account has no registered WebAuthn credentials yet. Idempotent across container
-	// restarts: a fresh deployment prints on every boot until the operator redeems; once the credential is stored, this is silent.
+	// Print the redemption URL banner when the admin account has no registered WebAuthn credentials yet. A fresh deployment prints
+	// on every boot until the operator redeems; once the credential is stored, this is silent. Under a multi-replica boot the
+	// emission is leader-gated below so exactly one replica prints (see the DoOnceIfLeader call).
 	bg := identityCtx.BreakglassService()
 	if bg == nil {
 		return
@@ -396,12 +405,35 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 	if ttl <= 0 {
 		ttl = config.DefaultBreakglassBootstrapTokenTTL
 	}
-	plaintext, _, err := bg.IssueSetupToken(ctx, admin.ID, ttl)
-	if err != nil {
-		logger.ErrorContext(ctx, "breakglass issue setup token failed", "err", err)
+	emit := func(ctx context.Context) error {
+		plaintext, _, err := bg.IssueSetupToken(ctx, admin.ID, ttl)
+		if err != nil {
+			logger.ErrorContext(ctx, "breakglass issue setup token failed", "err", err)
+			return err
+		}
+		printBreakglassBanner(ctx, logger, admin.Email, plaintext, ttl, cfg)
+		return nil
+	}
+
+	// Gate the banner so a concurrent cluster boot prints exactly one redemption URL rather than one per replica. Fail-open: with
+	// no coordinator wired, or if the lock can't be consulted, emit anyway — a missed banner strands the first operator (there is
+	// no out-of-band re-issue path), which is strictly worse than a duplicate (both tokens are valid; redeeming one is enough).
+	if coord == nil {
+		_ = emit(ctx)
 		return
 	}
-	printBreakglassBanner(ctx, logger, admin.Email, plaintext, ttl, cfg)
+	ran, err := coord.DoOnceIfLeader(ctx, "edr_seed_banner", emit)
+	switch {
+	case err != nil && !ran:
+		// The leader gate itself failed (couldn't acquire/consult the lock). Fail open and emit anyway: a missed banner strands
+		// the first operator, which is worse than a duplicate.
+		logger.WarnContext(ctx, "seed-banner leader gate failed; emitting anyway", "err", err)
+		_ = emit(ctx)
+	case err != nil:
+		// We won the gate and ran emit, but emit itself failed; it already logged the error. Re-emitting would just fail again.
+	case !ran:
+		logger.InfoContext(ctx, "another replica is emitting the break-glass redemption banner; skipping")
+	}
 }
 
 // printBreakglassBanner writes the redemption URL to stderr in a single write. The plaintext token appears once; the structured log
