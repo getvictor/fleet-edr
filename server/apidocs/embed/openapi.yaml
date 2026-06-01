@@ -744,7 +744,7 @@ components:
         timestamp_ns: {type: integer, format: int64}
         event_type:
           type: string
-          enum: [exec, fork, exit, open, network_connect, dns_query]
+          enum: [exec, fork, exit, open, network_connect, dns_query, application_control_block, snapshot_heartbeat]
         payload:
           type: object
           description: Event-type-specific body; see schema/events.json in the repo
