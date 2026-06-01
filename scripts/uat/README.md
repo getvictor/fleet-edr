@@ -39,16 +39,21 @@ M9's assertion layer picks the change up automatically.
       lib/
         common.sh            -- shared SSH + REST + polling helpers
       scenarios/
+        app-control-block/   -- App Control active blocking (deny + alert)
+          README.md
+          attack.sh
+          expected.yaml
         attack-runbook/      -- fires every shipped detection rule
           README.md
           attack.sh
           expected.yaml
 
-A blocklist policy-roundtrip scenario used to live here; it has been
-dropped because the underlying server endpoint (`/api/policy`) is gone --
-the replacement is the per-policy app-control admin surface at
-`/api/v1/app-control/*`. A fresh scenario over the new API is tracked
-separately.
+A blocklist policy-roundtrip scenario used to live here; it was dropped when the
+`/api/policy` endpoint gave way to the per-policy app-control admin surface at
+`/api/v1/app-control/*`. Its replacement is the `app-control-block` scenario
+below, which posts a BINARY BLOCK rule over the new API, confirms the extension
+denies the matching exec on the VM, and asserts the `application_control_block`
+alert -- L5 coverage for Application Control active blocking.
 
 ## Quick start (local execution)
 
