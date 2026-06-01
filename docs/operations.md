@@ -53,8 +53,8 @@ Schema changes ship as versioned, forward-only goose migrations
 (see [ADR-0009](adr/0009-migrations-via-goose.md)) that the server applies at
 boot, not as in-process DDL. On upgrade the new server applies any pending
 migrations against the running MySQL as it starts; an already-applied corpus
-is a no-op. Migrations within the v0.1.x line are expand-compatible, so the
-old and new server versions tolerate the same schema during the swap.
+is a no-op. Migrations within the v0.1.x line follow the expand-contract pattern,
+so the old and new server versions tolerate the same schema during the swap.
 
 ## Rolling upgrade (multi-replica)
 
@@ -80,25 +80,34 @@ What makes it hitless, and the piece each part plays:
 - **Leader failover.** Retention and the stale-process TTL reconciler run on a
   single replica via an advisory lock; when that replica is drained the lock
   frees and another replica takes over on its next poll. The event processor is
-  not coordinated — it scales across every replica via `SKIP LOCKED`.
+  not coordinated: it scales across every replica via `SKIP LOCKED`.
 
 Procedure:
 
 ```sh
-# 1. Bump EDR_VERSION in .env to the exact release tag.
+# 1. Bump EDR_VERSION in .env to the exact release tag, then pull.
 cd /srv/fleet-edr   # the directory holding docker-compose-multi-replica.yml
 docker compose -f docker-compose-multi-replica.yml --env-file .env pull
 
 # 2. Recreate one replica at a time. Compose sends SIGTERM (drain), waits, then
-#    starts the new container. Wait for it to report ready before the next.
+#    starts the new container with a fresh IP. Reload the proxy so NGINX
+#    re-resolves the upstream IPs (it caches them at start, so a recreated
+#    container's new IP would otherwise 502). Then confirm THIS replica is up by
+#    reading its own log, not by curling the LB: a /readyz through the LB can be
+#    answered by the still-healthy sibling and return a false-positive 200.
 docker compose -f docker-compose-multi-replica.yml --env-file .env up -d --no-deps server-a
-curl -fsS -k https://localhost/readyz >/dev/null && echo "server-a ready"
+docker compose -f docker-compose-multi-replica.yml kill -s HUP proxy
+docker compose -f docker-compose-multi-replica.yml logs --tail=20 server-a
 
+# Only after server-a's log shows it serving, roll server-b the same way.
 docker compose -f docker-compose-multi-replica.yml --env-file .env up -d --no-deps server-b
-curl -fsS -k https://localhost/readyz >/dev/null && echo "server-b ready"
+docker compose -f docker-compose-multi-replica.yml kill -s HUP proxy
+docker compose -f docker-compose-multi-replica.yml logs --tail=20 server-b
 
-# 3. Confirm the version through the LB.
-curl -s -k https://localhost/readyz | jq -r .version
+# 3. Confirm the rolled version through the load balancer. Use the real hostname
+#    so TLS verifies (pass --cacert for a private CA, as elsewhere in this
+#    runbook); do not normalize -k against a production endpoint.
+curl -fsS https://<server>/readyz | jq -r .version
 ```
 
 Because two binary versions read and write the same MySQL between step 2's two
@@ -108,10 +117,14 @@ the newer schema. A change that would drop or narrow a column ships across two
 releases (expand in release N, contract in N+1) so no single rolling upgrade
 ever has both versions disagreeing on a column's existence.
 
-If a new replica fails to come up (bad image tag, migration error), the old
-replicas are still in rotation — the LB never routed to the half-started one
-because `/readyz` never went green. Fix `.env` and re-run; nothing rolled back
-because nothing committed.
+If a new replica fails to come up (bad image tag), the old replicas stay in
+rotation: the proxy never routes to a container whose `/readyz` is not green, so
+the control plane is unaffected. Fix `.env` and re-run. A failed migration is
+different: MySQL commits DDL implicitly, so a migration that fails partway can
+leave the schema partially advanced (goose records the version only on full
+success). Recovery is forward-only per [ADR-0009](adr/0009-migrations-via-goose.md):
+fix the migration and re-apply, or restore from backup; do not hand-edit the
+schema.
 
 ## Multi-replica trade-offs
 
@@ -143,7 +156,7 @@ ride an in-memory async queue (`EDR_AUDIT_ASYNC_QUEUE_CAP`, default 8192) so the
 read hot path does not wait on an INSERT.
 
 On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a
-hard kill (SIGKILL, OOM) the in-flight queue is lost — but those same events
+hard kill (SIGKILL, OOM) the in-flight queue is lost, but those same events
 were already emitted to slog, so they survive in your OTel/log backend. The
 append-only MySQL audit table can therefore miss sampled read rows after a hard
 crash; the slog stream is the recovery source. v0.1.0 accepts this rather than
