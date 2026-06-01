@@ -135,3 +135,52 @@ SKIP LOCKED claiming, so each replica processes disjoint batches.
 - **WHEN** its database connection drops because the process crashed
 - **THEN** MySQL releases the lock
 - **AND** another replica can acquire it
+
+### Requirement: The processor scales across replicas via SKIP LOCKED
+
+The system SHALL claim event batches for processing with row-level `SELECT ... FOR UPDATE SKIP LOCKED` so the event processor runs
+on every replica concurrently, each claiming a disjoint set of unprocessed events, and no event row is claimed by more than one
+replica at a time. This is the deliberate counterpart to the leader-gated periodic tasks: throughput-bound event processing scales
+horizontally across the replica fleet rather than running on a single elected replica.
+
+#### Scenario: Two replicas claim disjoint event batches
+
+- **GIVEN** unprocessed events in the shared store and two replicas claiming batches concurrently
+- **WHEN** both run the SKIP LOCKED claim
+- **THEN** each replica receives a batch of events
+- **AND** no event appears in both replicas' batches
+
+### Requirement: Sessions and CSRF tokens validate across any replica
+
+A user session and its CSRF token SHALL validate on any replica, not only the one that minted them, because session state lives in
+the shared MySQL store rather than in replica memory. A request bearing a valid session cookie SHALL be authenticated on a replica
+that did not mint the session, and an unsafe request bearing the session's CSRF token SHALL pass CSRF validation on that replica.
+This is what lets the load balancer route a user's requests to any replica without sticky sessions.
+
+#### Scenario: Session minted on replica A validates on replica B
+
+- **GIVEN** a session minted against the shared store
+- **WHEN** a request bearing its cookie reaches a replica that did not mint it
+- **THEN** that replica authenticates the request from the shared store
+- **AND** an equivalent request carrying no session cookie is rejected
+
+#### Scenario: CSRF token from replica A passes on replica B
+
+- **GIVEN** a session and its CSRF token minted against the shared store
+- **WHEN** an unsafe request bearing that CSRF token reaches a replica that did not mint it
+- **THEN** that replica accepts the CSRF token
+- **AND** an equivalent unsafe request carrying no CSRF token is rejected
+
+### Requirement: Schema migrations are safe under rolling upgrade
+
+When several replicas boot concurrently against one database during a rolling upgrade, the system SHALL apply schema migrations
+under a database advisory lock so no two replicas run the migration tool against the same database at once. Every replica SHALL
+still complete its boot-time apply: the per-context tracking table makes an already-applied corpus a no-op, so a replica that
+acquires the lock after another has already applied performs no schema change and boots successfully.
+
+#### Scenario: Goose tracking table lock prevents concurrent apply
+
+- **GIVEN** several replicas booting concurrently and racing to apply the same migration corpus
+- **WHEN** they apply under the boot-time migration advisory lock
+- **THEN** the applies are serialized so no two run at once
+- **AND** every replica completes its apply and boots successfully

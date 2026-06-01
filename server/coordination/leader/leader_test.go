@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -252,5 +253,124 @@ func TestDoOnceIfLeader(t *testing.T) {
 		close(hold)
 		wg.Wait()
 		assert.Equal(t, int64(1), emits.Load(), "no replica should emit after the winner releases")
+	})
+}
+
+// TestWithLock pins the mutual-exclusion contract WithLock backs the boot-time migration apply with: concurrent callers run fn one
+// at a time (never overlapping), and every caller runs fn (unlike leader election, which abandons the work on the losers).
+func TestWithLock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("serializes concurrent callers and every caller runs fn", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		coord := newCoord(a)
+		name := uniqueLockName()
+		const callers = 5
+
+		var inCritical, maxConcurrent, ran atomic.Int64
+		var wg sync.WaitGroup
+		for range callers {
+			wg.Go(func() {
+				err := coord.WithLock(t.Context(), name, func(context.Context) error {
+					cur := inCritical.Add(1)
+					for { // record the high-water mark of simultaneous holders; a working lock keeps it at 1
+						m := maxConcurrent.Load()
+						if cur <= m || maxConcurrent.CompareAndSwap(m, cur) {
+							break
+						}
+					}
+					time.Sleep(10 * time.Millisecond) // widen the critical section so a broken lock would overlap and bump the mark
+					ran.Add(1)
+					inCritical.Add(-1)
+					return nil
+				})
+				assert.NoError(t, err)
+			})
+		}
+		wg.Wait()
+
+		assert.Equal(t, int64(1), maxConcurrent.Load(), "WithLock must hold the lock exclusively: no two fns may overlap")
+		assert.EqualValues(t, callers, ran.Load(), "every caller must run fn (mutual exclusion, not leader election)")
+	})
+
+	t.Run("returns fn's error", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		sentinel := errors.New("boom")
+		err := newCoord(a).WithLock(t.Context(), uniqueLockName(), func(context.Context) error { return sentinel })
+		require.ErrorIs(t, err, sentinel)
+	})
+
+	t.Run("blocks while another session holds the lock, then acquires on release", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+
+		// Hold the lock from an independent session (a stand-in for another replica).
+		holder, err := b.Connx(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = holder.Close() }()
+		var got sql.NullInt64
+		require.NoError(t, holder.QueryRowContext(t.Context(), "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+		require.EqualValues(t, 1, got.Int64, "the holder should acquire the free lock")
+
+		ran := make(chan struct{})
+		go func() {
+			_ = newCoord(a).WithLock(t.Context(), name, func(context.Context) error {
+				close(ran)
+				return nil
+			})
+		}()
+		// WithLock must block while the holder keeps the lock.
+		select {
+		case <-ran:
+			t.Fatal("WithLock acquired while another session held the lock")
+		case <-time.After(200 * time.Millisecond):
+		}
+		// Release from the holder; WithLock's blocking GET_LOCK then acquires and runs fn.
+		_, err = holder.ExecContext(t.Context(), "SELECT RELEASE_LOCK(?)", name)
+		require.NoError(t, err)
+		select {
+		case <-ran:
+		case <-time.After(3 * time.Second):
+			t.Fatal("WithLock did not acquire after the holder released the lock")
+		}
+	})
+
+	t.Run("returns the context error when cancelled while waiting", func(t *testing.T) {
+		t.Parallel()
+		a, b := replicaDBs(t)
+		name := uniqueLockName()
+
+		holder, err := b.Connx(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = holder.Close() }()
+		var got sql.NullInt64
+		require.NoError(t, holder.QueryRowContext(t.Context(), "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+		require.EqualValues(t, 1, got.Int64)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+		var fnRan atomic.Bool
+		err = newCoord(a).WithLock(ctx, name, func(context.Context) error {
+			fnRan.Store(true)
+			return nil
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded, "WithLock must return ctx's error when cancelled before acquiring")
+		require.False(t, fnRan.Load(), "fn must not run when the lock was never acquired")
+	})
+
+	t.Run("surfaces the acquire error on a closed pool", func(t *testing.T) {
+		t.Parallel()
+		a, _ := replicaDBs(t)
+		require.NoError(t, a.Close()) // a closed pool makes the lock-connection open fail
+		var fnRan atomic.Bool
+		err := newCoord(a).WithLock(t.Context(), uniqueLockName(), func(context.Context) error {
+			fnRan.Store(true)
+			return nil
+		})
+		require.Error(t, err)
+		require.False(t, fnRan.Load(), "fn must not run when the lock could not be acquired")
 	})
 }

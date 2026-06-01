@@ -57,6 +57,11 @@ var (
 const (
 	serviceName = "fleet-edr-server"
 
+	// migrationLockName is the MySQL advisory lock that serializes the boot-time schema apply across replicas. Under a rolling
+	// upgrade several replicas boot concurrently against one database; holding this lock while applying each context's goose corpus
+	// means no two replicas run goose Up at once. It joins the other coordination lock names (edr_retention, edr_process_ttl).
+	migrationLockName = "edr_migrations"
+
 	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s and idle 60s bound how long a stuck client holds a connection.
 	// Same values as fleet-edr-ingest.
 	httpWriteTimeout = 30 * time.Second
@@ -98,38 +103,18 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	identityCtx, err := openIdentity(ctx, logger, db, cfg)
-	if err != nil {
-		return err
-	}
-
 	// drain is the process-wide graceful-shutdown signal: SIGTERM flips it so /readyz reports 503 and the load balancer drains this
 	// replica before RunAndShutdown closes the listener. Shared between the detection intake handler (which serves /readyz) and
 	// RunAndShutdown below.
 	drain := &httpserver.DrainState{}
 
 	// coord elects a single replica to run the periodic maintenance tasks (retention + process-TTL) via MySQL advisory locks, so
-	// they don't run on every replica behind the load balancer. The processor is intentionally left un-coordinated (it scales via
-	// SKIP LOCKED). It shares the main DB pool; each held lock pins one spare connection.
+	// they don't run on every replica behind the load balancer, and serializes the boot-time schema apply (openContexts). The
+	// processor is intentionally left un-coordinated (it scales via SKIP LOCKED). It shares the main DB pool; each held lock pins one
+	// spare connection.
 	coord := leader.NewMySQL(db, logger)
 
-	detectionCtx, err := openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord)
-	if err != nil {
-		return err
-	}
-
-	responseCtx, err := openResponse(ctx, logger, db, detectionCtx, identityCtx)
-	if err != nil {
-		return err
-	}
-
-	rulesCtx, err := openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx)
-	if err != nil {
-		return err
-	}
-	detectionCtx.LoadActive(rulesCtx.ContentService())
-
-	endpointCtx, err := openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx)
+	identityCtx, detectionCtx, responseCtx, rulesCtx, endpointCtx, err := openContexts(ctx, logger, db, cfg, coord, drain)
 	if err != nil {
 		return err
 	}
@@ -176,6 +161,53 @@ func run() error {
 		return err
 	}
 	return httpserver.RunAndShutdown(ctx, srv, logger, drain, cfg.ShutdownDrain)
+}
+
+// openContexts wires every bounded context and applies each one's schema under a single MySQL advisory lock. Under a rolling
+// upgrade several replicas boot concurrently against one database; holding migrationLockName across the apply serializes them so no
+// two run goose Up at once. goose's per-context tracking table makes a second replica's apply a no-op, so every replica still boots.
+// The lock is released when this function returns (deferred), well before the server starts serving. See
+// docs/adr/0009-migrations-via-goose.md and the "Schema migrations are safe under rolling upgrade" requirement in
+// openspec/specs/server-availability/spec.md.
+//
+// The contexts are returned (rather than assigned inside a coord.WithLock closure) so the compiler's nil-flow analysis can see each
+// handle is non-nil on the err == nil path; a closure would hide those assignments behind the lock callback.
+func openContexts(
+	ctx context.Context,
+	logger *slog.Logger,
+	db *sqlx.DB,
+	cfg *config.Config,
+	coord leader.Coordinator,
+	drain *httpserver.DrainState,
+) (
+	identityCtx *identitybootstrap.Identity,
+	detectionCtx *detectionbootstrap.Detection,
+	responseCtx *responsebootstrap.Response,
+	rulesCtx *rulesbootstrap.Rules,
+	endpointCtx *endpointbootstrap.Endpoint,
+	err error,
+) {
+	release, err := coord.Lock(ctx, migrationLockName)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	defer release()
+
+	if identityCtx, err = openIdentity(ctx, logger, db, cfg); err != nil {
+		return
+	}
+	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
+		return
+	}
+	if responseCtx, err = openResponse(ctx, logger, db, detectionCtx, identityCtx); err != nil {
+		return
+	}
+	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx); err != nil {
+		return
+	}
+	detectionCtx.LoadActive(rulesCtx.ContentService())
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx)
+	return
 }
 
 func openIdentity(
