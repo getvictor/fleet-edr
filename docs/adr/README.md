@@ -46,6 +46,7 @@ time, not a single mutable "current view".
 | [0009](0009-migrations-via-goose.md) | Versioned, forward-only, per-context schema migrations via goose | Accepted |
 | [0010](0010-stateless-server.md) | Stateless server: no in-process state survives a request | Accepted |
 | [0011](0011-ha-architecture.md) | High-availability architecture: multi-replica app tier with rolling upgrade | Accepted |
+| [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Proposed |
 
 ## Tooling
 
