@@ -30,6 +30,7 @@ final class SigningInfoFallbackTests: XCTestCase {
     }
 
     // spec marker: the canonical scenario id maps to this test function name (slashes/dashes -> underscores).
+    // swiftlint:disable:next line_length
     func test_spec_extension_application_control_target_identifier_tuple_for_every_exec_a_cold_leaf_cert_lookup_yields_an_absent_value_without_blocking() throws {
         let file = try makeUnsignedTempFile()
 

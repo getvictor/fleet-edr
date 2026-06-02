@@ -231,10 +231,11 @@ final class ApplicationControlStoreTests: XCTestCase {
 
     // MARK: - apply: atomic in-memory swap to the newer snapshot
 
-    /// Applying version V then V+1 must leave the in-memory snapshot equal to V+1 immediately after acceptance, with the new
-    /// doc's rules replacing (not merging with) V's. Pins the "an incoming snapshot replaces the prior one atomically"
-    /// scenario: the lock.withLock swap in apply() is the atomic in-memory update; no exec can observe a half-applied state
-    /// because currentSnapshot() reads the whole struct under the same lock.
+    // Applying version V then V+1 must leave the in-memory snapshot equal to V+1 immediately after acceptance, with the new
+    // doc's rules replacing (not merging with) V's. Pins the "an incoming snapshot replaces the prior one atomically"
+    // scenario: the lock.withLock swap in apply() is the atomic in-memory update; no exec can observe a half-applied state
+    // because currentSnapshot() reads the whole struct under the same lock.
+    // swiftlint:disable:next line_length
     func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_an_incoming_snapshot_replaces_the_prior_one_atomically() {
         let store = makeStore()
         store.apply(rawJSON: document(
@@ -375,6 +376,7 @@ final class ApplicationControlStoreTests: XCTestCase {
 
     // MARK: - persist + loadFromDisk round-trip
 
+    // swiftlint:disable:next line_length
     func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_extension_restart_restores_the_last_applied_snapshot() {
         // The injectable storagePath unlocks a real end-to-end test: apply on one store writes
         // the snapshot to disk; a fresh store with the same path can loadFromDisk and observe the

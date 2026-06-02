@@ -16,7 +16,7 @@ without code changes. The audit log is itself readable through an authorized end
 The system SHALL record an audit row for every authentication outcome, success or
 failure, regardless of authentication method. Action names MUST follow the pattern
 `auth.<flow>.<outcome>` where `<flow>` is one of `oidc` or `breakglass` (named after
-the *flow* that produced the outcome, not the credential type — the break-glass flow
+the *flow* that produced the outcome, not the credential type: the break-glass flow
 combines a local password and a WebAuthn assertion under a single `breakglass` flow
 so dashboards stay cohesive). The action name MUST be one of `auth.oidc.success`,
 `auth.oidc.failure`, `auth.oidc.callback.error`, `auth.breakglass.success`, or
@@ -132,7 +132,7 @@ audit trail and when.
 - **GIVEN** an authenticated session bound to the `auditor` role
 - **WHEN** the operator issues `GET /api/audit-events?limit=50`
 - **THEN** the server returns `200 OK` with up to 50 rows in reverse-chronological order
-- **AND** the read itself produces an audit row with `action='audit.read'` and the
+- **AND** the read itself produces an audit row with `action='authz.audit.read'` and the
   query parameters in the row's payload
 
 #### Scenario: Analyst is denied the audit log

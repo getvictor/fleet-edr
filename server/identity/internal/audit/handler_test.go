@@ -287,8 +287,7 @@ func withActor(actor *api.Actor, next http.Handler) http.Handler {
 // End-to-end against the REAL Rego chokepoint (not a stub): an auditor-bound session reads GET /api/audit-events?limit=50 and gets
 // 200 with the rows the reader returns, AND the read itself produces an audit row. The chokepoint emits the audit-of-audit row as
 // `authz.audit.read` (audit.read is exempt from the read-sampling gate), which is the implementation of the scenario's "the read
-// itself produces an audit row with action='audit.read'" clause.
-// spec:server-identity-audit-log/audit-log-read-endpoint-requires-audit-read-and-audits-its-own-access/analyst-is-denied-the-audit-log
+// itself produces an audit row with action='authz.audit.read'" clause.
 func TestHandler_AuditorReadIsAuditedThroughRealChokepoint(t *testing.T) {
 	t.Parallel()
 	rec := &recordingAudit{}
@@ -342,6 +341,7 @@ type listResponseBody struct {
 
 // AuthZ deny short-circuits before the reader is hit. The deny reason surfaces on the X-Edr-Authz-Reason header so the operator UI can
 // distinguish "forbidden by policy" from "session expired" without parsing a body shape that already varies by error class.
+// spec:server-identity-audit-log/audit-log-read-endpoint-requires-audit-read-and-audits-its-own-access/analyst-is-denied-the-audit-log
 func TestHandler_AuthZDeny(t *testing.T) {
 	t.Parallel()
 	reader := &stubReader{}

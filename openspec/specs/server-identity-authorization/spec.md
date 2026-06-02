@@ -58,6 +58,11 @@ host.read, process.read, alert.read, alert.comment), and `auditor` (read-only in
 audit.read). The break-glass user MUST be bound to `super_admin` at the deployment-wide
 scope. SSO-provisioned users MUST default to `analyst` at the deployment-wide scope; the
 system MUST NOT auto-elevate any role from a SSO claim.
+The `*.*` notation above (`policy.*`, `host.*`, `alert.*`) is prose shorthand for the
+concrete per-domain action identifiers each role is granted; the seeds expand it to
+explicit actions in the policy bundle, and only `super_admin` holds a literal wildcard
+(`*`) grant. This keeps the seeds consistent with the UI permission-set expansion
+requirement, which returns concrete action identifiers rather than a wildcard token.
 
 #### Scenario: Roles are seeded on first boot
 

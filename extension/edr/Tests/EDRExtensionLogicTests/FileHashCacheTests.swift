@@ -263,6 +263,7 @@ final class FileHashCacheTests: XCTestCase {
         )
     }
 
+    // swiftlint:disable:next line_length
     func test_spec_extension_application_control_deadline_guarded_synchronous_sha_256_for_binary_rule_consultation_sync_hash_on_cold_cache_decides_the_first_exec() throws {
         // Cold cache: the binary has never been hashed. The deadline-bounded sync compute returns .computed within budget,
         // and a BINARY rule keyed on that exact SHA-256 must DENY on this FIRST exec (the #208 bypass was first-exec ALLOW).
@@ -284,6 +285,7 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: sha), "first exec of a BINARY-blocked target must DENY")
     }
 
+    // swiftlint:disable:next line_length
     func test_spec_extension_application_control_deadline_guarded_synchronous_sha_256_for_binary_rule_consultation_mutated_dev_inode_mtime_does_not_bypass_the_binary_rule() throws {
         // Attacker mutates (dev,inode,mtime) on every exec to invalidate the cache key and keep returning to the cold path.
         // Each fresh key is a cache MISS that re-computes synchronously and yields .computed -> BINARY rule DENIES every time.

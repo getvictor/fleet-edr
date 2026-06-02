@@ -96,9 +96,11 @@ uat_log app-control-block "posted BINARY block rule id=$RULE_ID policy=$POLICY_I
 #    denied AUTH_EXEC fails to run, so the sentinel stops printing. Each denied
 #    exec also emits an application_control_block event the driver asserts on.
 blocked=0
-for _ in {1..20}; do # ~60s; fan-out is normally single-digit seconds
+deny_landed_iters=0
+for i in {1..20}; do # ~60s; fan-out is normally single-digit seconds
   if ! uat_ssh "$VM" "$TARGET $SENTINEL 2>/dev/null" | grep -q "$SENTINEL"; then
     blocked=1
+    deny_landed_iters=$i # record the observed fan-out latency to bound the platform-rule wait below
     break
   fi
   sleep 3
@@ -128,16 +130,21 @@ PLATFORM_RULE_ID=$(rest POST "/api/v1/app-control/policies/$POLICY_ID/rules" \
 [[ -n "$PLATFORM_RULE_ID" && "$PLATFORM_RULE_ID" != "null" ]] || uat_fail app-control-block "platform-probe rule create did not return an id"
 uat_log app-control-block "posted BINARY block rule id=$PLATFORM_RULE_ID on $PLATFORM_BIN (sha=${PLATFORM_HASH:0:12}); waiting for fan-out"
 
-# Give the snapshot fan-out the same window the deny poll used, then confirm echo STILL runs despite the block rule.
-# We poll for the snapshot to have advanced (the non-platform deny above already proved fan-out works; reuse the wait by
-# re-running echo a few times across the fan-out window -- echo must print its sentinel on EVERY attempt).
+# Confirm echo STILL runs despite the block rule on its hash. echo's allow is carved out unconditionally, so we cannot poll
+# for a positive "blocked" transition the way the deny poll above does -- the carve-out means echo never blocks. Instead we
+# bound the wait by the fan-out latency the deny poll just measured (same policy, same fan-out path): wait that observed
+# window plus a small margin for the new snapshot to land, then assert echo is allowed on several consecutive execs. This
+# replaces an unconditional ~60s busy-wait (which ran the full budget on every happy path) with an observed-latency wait.
+settle_iters=$(( deny_landed_iters + 2 ))
+(( settle_iters < 4 )) && settle_iters=4 # floor so a near-instant deny landing still leaves a margin for the platform fan-out
+for _ in $(seq 1 "$settle_iters"); do sleep 3; done
 platform_allowed=1
-for _ in {1..20}; do # ~60s, same budget as the deny poll, so the rule has definitely landed
+for _ in {1..3}; do # echo must print its sentinel on every attempt once the snapshot carrying the block rule has landed
   if ! uat_ssh "$VM" "$PLATFORM_BIN $PLATFORM_SENTINEL 2>/dev/null" | grep -q "$PLATFORM_SENTINEL"; then
     platform_allowed=0
     break
   fi
-  sleep 3
+  sleep 1
 done
 # spec:extension-application-control/platform-binary-carve-out-precedes-the-snapshot-walk/an-apple-platform-binary-is-unconditionally-allowed
 [[ "$platform_allowed" == 1 ]] || uat_fail app-control-block "platform binary $PLATFORM_BIN was BLOCKED despite the carve-out (host-bricking regression)"

@@ -40,6 +40,7 @@ func TestClientAuthURL_CarriesPKCEAndConfiguredParams(t *testing.T) {
 	assert.Equal(t, "https://edr.example.com/api/auth/callback", q.Get("redirect_uri"))
 	assert.Equal(t, "openid profile email", q.Get("scope"))
 	assert.Equal(t, "STATE-XYZ", q.Get("state"))
+	assert.Equal(t, "NONCE-ABC", q.Get("nonce"))
 	assert.Equal(t, "CHALLENGE-123", q.Get("code_challenge"))
 	assert.Equal(t, "S256", q.Get("code_challenge_method"))
 	assert.Equal(t, "code", q.Get("response_type"))

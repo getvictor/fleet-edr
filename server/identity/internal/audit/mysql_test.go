@@ -294,9 +294,21 @@ func TestRecord_AllowEmitsInfoAndSpanAttributes(t *testing.T) {
 	}))
 	span.End()
 
-	// slog INFO clause.
+	// slog INFO clause. Scan the emitted JSON lines for the decision record rather than assuming the buffer holds exactly one entry, so
+	// the assertion stays valid if the store ever emits additional log lines around the decision.
 	var entry map[string]any
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec map[string]any
+		require.NoError(t, json.Unmarshal(line, &rec))
+		if rec["action"] == "authz.host.isolate" {
+			entry = rec
+			break
+		}
+	}
+	require.NotNil(t, entry, "expected a slog record for the authz.host.isolate decision")
 	assert.Equal(t, "INFO", entry["level"], "allow decision must emit slog at INFO")
 	assert.Equal(t, "authz.host.isolate", entry["action"])
 
