@@ -189,6 +189,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 			CookieSecure: deps.CookieSecure,
 			Logger:       logger,
 			Audit:        auditStore,
+			Permissions:  authzEngine,
 		}),
 		oidcHandler:       oidcHandler,
 		breakglassHandler: bgHandler,

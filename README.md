@@ -135,10 +135,14 @@ task db:up
 # Build the UI (embedded in the server binary via server/ui/dist/)
 task build:ui
 
-# Run the server
+# Run the server (HTTPS-only since #140; serves tmp/dev.crt: mkcert-trusted if mkcert is installed, else a self-signed cert)
 task dev:server
-# Then open http://localhost:8088/ui/
+# Then open https://localhost:8088/ui/
 ```
+
+`task dev:server` boots break-glass-only (no SSO). To exercise the SSO sign-in flow locally against the
+bundled dex IdP, run `task qa:up` then `task dev:server:qa-oidc`; see [`docs/okta-setup.md`](docs/okta-setup.md)
+for configuring a real OIDC tenant.
 
 ## Production deployment
 

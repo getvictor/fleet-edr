@@ -25,10 +25,19 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 )
 
+// PermissionResolver maps an operator's role ids to the flat set of action identifiers those roles confer (the `*` wildcard expanded
+// to the concrete action set). The session probe attaches the result so the UI can hide affordances the operator's roles do not
+// grant. It is advisory presentation data only; the authorization chokepoint remains the sole security boundary. Satisfied by the
+// authz engine.
+type PermissionResolver interface {
+	PermissionsForRoleIDs(roleIDs []string) []string
+}
+
 // Handler serves the session-check + logout endpoints.
 type Handler struct {
 	svc       api.Service
 	audit     api.AuditRecorder
+	perms     PermissionResolver
 	logger    *slog.Logger
 	cookieSec bool
 }
@@ -43,6 +52,10 @@ type Options struct {
 	// care about the audit trail need not stand one up). When set, the logout path emits one row through this recorder after the action
 	// commits.
 	Audit api.AuditRecorder
+	// Permissions resolves an operator's role ids to their effective action set for the session probe. Optional: when nil the probe
+	// returns an empty permission set (existing tests that don't exercise UI gating need not wire the authz engine). Production wires
+	// identityCtx's authz engine.
+	Permissions PermissionResolver
 }
 
 // New builds a session handler. Panics if svc is nil.
@@ -57,6 +70,7 @@ func New(svc api.Service, opts Options) *Handler {
 	return &Handler{
 		svc:       svc,
 		audit:     opts.Audit,
+		perms:     opts.Permissions,
 		logger:    logger,
 		cookieSec: opts.CookieSecure,
 	}
@@ -83,6 +97,10 @@ type sessionResponse struct {
 	User       userResponse `json:"user"`
 	CSRFToken  string       `json:"csrf_token"`
 	AuthMethod string       `json:"auth_method"`
+	// Permissions is the flat set of action identifiers the operator's roles confer, used by the UI to gate navigation and action
+	// affordances. Always a non-nil array (possibly empty) so the wire shape is stable. Advisory only: the server still enforces every
+	// action at the authorization chokepoint regardless of what this carried.
+	Permissions []string `json:"permissions"`
 }
 
 type errBody struct {
@@ -181,10 +199,36 @@ func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u
 		authMethod = sess.AuthMethod
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
-		User:       userResponse{ID: u.ID, Email: u.Email},
-		CSRFToken:  api.EncodeToken(csrfToken),
-		AuthMethod: authMethod,
+		User:        userResponse{ID: u.ID, Email: u.Email},
+		CSRFToken:   api.EncodeToken(csrfToken),
+		AuthMethod:  authMethod,
+		Permissions: h.effectivePermissions(ctx),
 	})
+}
+
+// effectivePermissions returns the action identifiers the operator's roles confer, for the session probe's `permissions` field. It
+// reads the actor the Session middleware pinned on ctx, collects its deployment-wide (`global`) role ids (the only scope wave-1
+// honours), and resolves them through the PermissionResolver. Always returns a non-nil slice so the JSON wire shape is a stable array:
+// an empty set (no resolver wired, no actor, or no global bindings) marshals as `[]`, never `null`.
+func (h *Handler) effectivePermissions(ctx context.Context) []string {
+	if h.perms == nil {
+		return []string{}
+	}
+	actor, ok := api.ActorFromContext(ctx)
+	if !ok {
+		return []string{}
+	}
+	roleIDs := make([]string, 0, len(actor.Roles))
+	for _, b := range actor.Roles {
+		if b.ScopeType == api.RoleBindingScopeGlobal {
+			roleIDs = append(roleIDs, b.RoleID)
+		}
+	}
+	perms := h.perms.PermissionsForRoleIDs(roleIDs)
+	if perms == nil {
+		return []string{}
+	}
+	return perms
 }
 
 func (h *Handler) expireCookie() *http.Cookie {

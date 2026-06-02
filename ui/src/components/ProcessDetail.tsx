@@ -20,6 +20,8 @@ import { Card } from "./ui/Card";
 import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
+import { Can } from "../permissions";
+import { PermissionAction } from "../permissions-core";
 import "./ProcessDetail.scss";
 
 // killCommandPollIntervalMs is the cadence we re-fetch the kill command's
@@ -237,26 +239,28 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         )}
       </dl>
 
-      <div className="process-detail__kill">
-        <Button
-          variant="alert"
-          size="small"
-          onClick={handleKillProcess}
-          disabled={killDisabled}
-        >
-          Kill process
-        </Button>
-        {killCommand && (
-          <span className={`process-detail__cmd-status process-detail__cmd-status--${killCommand.status}`}>
-            {killCommand.status}
-            {killCommand.status === "failed"
-              && typeof killCommand.result?.error === "string"
-              ? `: ${killCommand.result.error}`
-              : ""}
-            {killCommand.status === "completed" ? " — process killed" : ""}
-          </span>
-        )}
-      </div>
+      <Can action={PermissionAction.HostKillProcess}>
+        <div className="process-detail__kill">
+          <Button
+            variant="alert"
+            size="small"
+            onClick={handleKillProcess}
+            disabled={killDisabled}
+          >
+            Kill process
+          </Button>
+          {killCommand && (
+            <span className={`process-detail__cmd-status process-detail__cmd-status--${killCommand.status}`}>
+              {killCommand.status}
+              {killCommand.status === "failed"
+                && typeof killCommand.result?.error === "string"
+                ? `: ${killCommand.result.error}`
+                : ""}
+              {killCommand.status === "completed" ? " — process killed" : ""}
+            </span>
+          )}
+        </div>
+      </Can>
 
       {loading && <p className="process-detail__loading">Loading network data...</p>}
 

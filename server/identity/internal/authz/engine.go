@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/open-policy-agent/opa/v1/rego"
@@ -54,6 +55,11 @@ type Engine struct {
 	// action is denied with reason `action_not_registered`; the build-time parity check between api.RegisteredActions and
 	// policy/data/actions.json keeps the two in lockstep, this set is the runtime defense in depth.
 	registered map[api.Action]struct{}
+
+	// roleGrants is the role-id -> grant-list map parsed from policy/data/roles.json, the same bundle the Rego store reads. It backs
+	// PermissionsForRoleIDs, which the session probe uses to tell the UI which actions an operator's roles confer. It is presentation
+	// data only; Allow remains the single authorization decision.
+	roleGrants map[string][]string
 }
 
 // Options bundles the optional async-audit dependencies. Zero values are valid: a nil AsyncRead degrades to fully-synchronous audit;
@@ -106,6 +112,11 @@ func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, opts
 		registered[a] = struct{}{}
 	}
 
+	roleGrants, err := parseRoleGrants()
+	if err != nil {
+		return nil, err
+	}
+
 	e := &Engine{
 		query:            query,
 		audit:            audit,
@@ -113,8 +124,47 @@ func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, opts
 		readSamplingRate: opts.ReadSamplingRate,
 		logger:           logger,
 		registered:       registered,
+		roleGrants:       roleGrants,
 	}
 	return e, nil
+}
+
+// PermissionsForRoleIDs returns the union of action grants conferred by the given role ids, with the `*` wildcard (held by
+// super_admin) expanded to the concrete registered action set. The result is deduplicated and sorted for a stable wire shape.
+// Unknown role ids are ignored. Scope is the caller's concern: wave-1 passes only deployment-wide (`global`) bindings, matching the
+// only scope the chokepoint honours.
+//
+// This is presentation data for the session probe: it tells the UI which affordances an operator's roles confer so it can hide the
+// rest. It is NEVER an authorization decision: every privileged action still funnels through Allow, which is the sole security
+// boundary (a stale or wrong permission set can only change what the UI shows, not what the server permits).
+func (e *Engine) PermissionsForRoleIDs(roleIDs []string) []string {
+	if e == nil {
+		// Defensive: a typed-nil *Engine wrapped in the PermissionResolver interface would otherwise panic on the
+		// e.roleGrants access below. The session handler treats a nil result as an empty permission set.
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, id := range roleIDs {
+		grants, ok := e.roleGrants[id]
+		if !ok {
+			continue
+		}
+		for _, g := range grants {
+			if g == "*" {
+				for _, a := range api.RegisteredActions() {
+					seen[string(a)] = struct{}{}
+				}
+				continue
+			}
+			seen[g] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for a := range seen {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Allow evaluates the policy and returns the decision. Implements
@@ -309,6 +359,28 @@ func loadDataBundle() (map[string]any, error) {
 		"actions": stringsToAny(actions.Actions),
 		"roles":   rolesData,
 	}, nil
+}
+
+// parseRoleGrants reads the embedded roles.json and returns the role-id -> grant-list map backing PermissionsForRoleIDs. It parses
+// the same bytes loadDataBundle feeds the OPA store, so the UI's permission set and the chokepoint's grant data come from one source.
+func parseRoleGrants() (map[string][]string, error) {
+	rolesBytes, err := fs.ReadFile(policyFS, "policy/data/roles.json")
+	if err != nil {
+		return nil, fmt.Errorf("authz: read roles.json: %w", err)
+	}
+	var roles struct {
+		Roles map[string]struct {
+			Grants []string `json:"grants"`
+		} `json:"roles"`
+	}
+	if err := json.Unmarshal(rolesBytes, &roles); err != nil {
+		return nil, fmt.Errorf("authz: parse roles.json: %w", err)
+	}
+	out := make(map[string][]string, len(roles.Roles))
+	for id, r := range roles.Roles {
+		out[id] = r.Grants
+	}
+	return out, nil
 }
 
 func stringsToAny(in []string) []any {

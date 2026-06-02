@@ -10,12 +10,18 @@ import { Login } from "./components/Login";
 import { BreakGlassSetup } from "./components/BreakGlassSetup";
 import { BreakGlassLogin } from "./components/BreakGlassLogin";
 import { TopNav } from "./components/ui/TopNav";
-import { currentSession, logout, Unauthorized401Error, SessionInfo } from "./api";
+import { currentSession, logout, Unauthorized401Error, SessionInfo, setForbiddenHandler } from "./api";
+import { PermissionsProvider, RequirePermission } from "./permissions";
+import { PermissionAction } from "./permissions-core";
+import { createDedupedRunner } from "./dedupe";
 
 type AuthState =
   | { status: "loading" }
   | { status: "anon" }
-  | { status: "authed"; user: SessionInfo["user"]; authMethod: string };
+  // permissions is the operator's effective action set from the session probe, or
+  // undefined when the server didn't return one (older server). Threaded into the
+  // PermissionsProvider so the capability seam can gate nav + affordances.
+  | { status: "authed"; user: SessionInfo["user"]; authMethod: string; permissions: string[] | undefined };
 
 // Routes are top-level. /ui/login (and the break-glass pages) are
 // public; /ui/* otherwise probes /api/session and gates
@@ -57,6 +63,7 @@ function AuthedApp() {
           status: "authed",
           user: info.user,
           authMethod: info.auth_method ?? "local_password",
+          permissions: info.permissions,
         });
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -77,6 +84,23 @@ function AuthedApp() {
     // route change cost an extra /api/session round-trip per
     // navigation and made the app flicker back to 'loading'
     // mid-route.
+  }, []);
+
+  useEffect(() => {
+    // When the server returns a genuine 403 for an action the UI believed was
+    // permitted (e.g. the operator's role was changed after the session probe),
+    // refresh the permission set so the now-stale affordance is hidden on the next
+    // render. createDedupedRunner collapses a burst of simultaneous denials into a
+    // single /api/session refetch rather than a request storm (the throttle the
+    // capability-gating spec requires). A failed/again-denied refetch is a no-op for
+    // auth state: the per-fetch 401 path handles session loss; a repeat 403 just
+    // means still-denied.
+    const refresh = createDedupedRunner(async () => {
+      const info = await currentSession();
+      setAuth((prev) => (prev.status === "authed" ? { ...prev, permissions: info.permissions } : prev));
+    });
+    setForbiddenHandler(refresh);
+    return () => { setForbiddenHandler(null); };
   }, []);
 
   const handleLogout = useCallback(async () => {
@@ -100,7 +124,7 @@ function AuthedApp() {
   }
 
   return (
-    <>
+    <PermissionsProvider permissions={auth.permissions}>
       <TopNav
         user={auth.user}
         authMethod={auth.authMethod}
@@ -110,13 +134,20 @@ function AuthedApp() {
         <Routes>
           <Route path="/" element={<HostList />} />
           <Route path="/alerts" element={<AlertList />} />
-          <Route path="/app-control/*" element={<ApplicationControlRoutes />} />
+          <Route
+            path="/app-control/*"
+            element={(
+              <RequirePermission action={PermissionAction.AppControlRead} surface="Application control">
+                <ApplicationControlRoutes />
+              </RequirePermission>
+            )}
+          />
           <Route path="/coverage" element={<AttackCoverage />} />
           <Route path="/rules/:ruleId" element={<RuleDetail />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
-    </>
+    </PermissionsProvider>
   );
 }

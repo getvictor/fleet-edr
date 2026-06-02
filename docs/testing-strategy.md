@@ -334,6 +334,13 @@ check exits 0 unless a reference points to a non-existent canonical ID (which ca
 `--strict` it also fails when a SHALL / MUST scenario has zero references. The CI workflow at
 `.github/workflows/spectrace.yml` runs `check --strict` on every PR.
 
+Scenarios declared in in-flight change proposals (`openspec/changes/<change>/specs/<capability>/spec.md`, the
+`--changes-dir` tree, default `openspec/changes`) are also valid marker targets. This lets a PR add a `spec:<id>`
+marker for a scenario it is introducing before the change is archived into `openspec/specs/`, without `check` flagging
+the marker as a dangling reference. WIP scenarios only widen what a marker may point at; they impose no coverage
+obligation (they are not in the `--strict` denominator) until the change is archived and its delta merges into the live
+specs. A MODIFIED requirement that repeats a live scenario heading is expected and collapses harmlessly.
+
 `tools/spectrace list-ids [--normative-only]` prints every canonical scenario ID so contributors can copy a marker
 without typing the slug.
 
