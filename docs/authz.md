@@ -125,6 +125,35 @@ See `docs/architecture.md` for the bounded-context split and
 chokepoint sits inside the `identity` context but exposes a public
 `api.AuthZ` interface every other context calls.
 
+## UI capability gating
+
+The web UI hides navigation entries and action controls an operator's
+role does not confer, so an analyst never sees a Kill process button or
+an Application control tab they cannot use. This is a usability layer
+only: the chokepoint above remains the sole security boundary, and the
+UI keeps handling a `403` gracefully (it never relies on hiding as a
+control). See `docs/adr/0012-capability-based-ui-gating.md` for the
+decision and trade-offs.
+
+The UI learns what to show from the session probe. `GET /api/session`
+returns a `permissions` array: the flat set of action identifiers the
+operator's role bindings confer, computed server-side from the same
+`roles.json` grants the chokepoint evaluates (the `super_admin` `*`
+wildcard expanded to the concrete action set; the wire never carries
+`*`). The UI gates on those exact identifiers, so a gate maps 1:1 to a
+chokepoint check and to an `authz.<action>` audit row: one vocabulary
+end to end, no separate role-to-feature mapping in the frontend.
+
+The permission set is a session-lifetime snapshot. A role change made
+mid-session is not reflected in the UI until the operator's next sign-in
+or an explicit refresh, matching the chokepoint's own "takes effect on
+next sign-in" behaviour (binding changes do not bounce live sessions, as
+noted under "Binding a role to a user" above). As a self-heal, when the
+server denies an action the UI believed was permitted, the UI refetches
+the session permission set (deduplicated so a burst of denials collapses
+to a single request) and hides the now-stale affordance on the next
+render.
+
 ## Test coverage
 
 Three test layers protect the chokepoint contract:

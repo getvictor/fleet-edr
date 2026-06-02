@@ -15,7 +15,7 @@ advisory to the UI for presentation only; no client SHALL treat it as authorizat
 SHALL continue to enforce every action at its authorization boundary independently of what the
 permission set contained.
 
-#### Scenario: Session probe returns identity and permissions while logged in
+#### Scenario: Session probe while logged in
 
 - **GIVEN** the client holds a valid session cookie for an operator bound to the `analyst` role
 - **WHEN** the client issues a GET to the session endpoint

@@ -12,6 +12,7 @@ package tests
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/bootstrap"
+	identityrbac "github.com/fleetdm/edr/server/identity/internal/rbac"
 	identitysessions "github.com/fleetdm/edr/server/identity/internal/sessions"
 	identityusers "github.com/fleetdm/edr/server/identity/internal/users"
 	"github.com/fleetdm/edr/server/testdb/full"
@@ -148,6 +150,93 @@ func TestRegisterRoutes_Authed(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
 		"GET /api/session via RegisterAuthedRoutes (without Session middleware -> 500 misconfigured)")
+}
+
+// TestSessionProbe_IncludesEffectivePermissions exercises the full GET /api/session path through the real Session middleware (which
+// pins the actor with its live role bindings) and asserts the response carries the operator's effective permission set, expanded from
+// the bound role's grants. This proves the wiring end to end: authz engine -> login handler -> JSON. The exhaustive per-role grant
+// correctness lives in the authz package's PermissionsForRoleIDs unit test; this test pins the wire contract and the role-difference.
+func TestSessionProbe_IncludesEffectivePermissions(t *testing.T) {
+	t.Parallel()
+	id, db := newIdentityWithDB(t)
+	ctx := t.Context()
+
+	// Authed routes behind the real Session middleware, exactly as cmd/main mounts them. GET is cookie-only, so no CSRF wrapper is
+	// needed for the probe.
+	mux := http.NewServeMux()
+	id.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(id.SessionMiddleware()(mux))
+	t.Cleanup(srv.Close)
+
+	usersStore := identityusers.New(db)
+	rbacStore := identityrbac.New(db)
+	sessionsStore := identitysessions.New(db, identitysessions.Options{})
+
+	probe := func(t *testing.T, roleID string) []string {
+		t.Helper()
+		u, err := usersStore.Create(ctx, identityusers.CreateRequest{
+			Email: roleID + "@example.com", Password: "long-enough-password-for-test",
+		})
+		require.NoError(t, err)
+		require.NoError(t, rbacStore.BindRole(ctx, rbacStore.DB(), identityrbac.BindRoleRequest{
+			UserID: u.ID, RoleID: roleID, ScopeType: string(api.RoleBindingScopeGlobal), ScopeID: api.RoleBindingScopeWildcard,
+		}))
+		sess, err := sessionsStore.Create(ctx, u.ID, identitysessions.CreateOptions{AuthMethod: "oidc"})
+		require.NoError(t, err)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/session", nil)
+		require.NoError(t, err)
+		req.AddCookie(&http.Cookie{Name: api.SessionCookieName, Value: api.EncodeToken(sess.ID)})
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var body struct {
+			User        struct{ Email string } `json:"user"`
+			Permissions []string               `json:"permissions"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		require.NotNil(t, body.Permissions, "permissions must be a present (non-null) array")
+		return body.Permissions
+	}
+
+	// spec:ui-authentication-session/current-user-lookup/session-probe-while-logged-in
+	t.Run("analyst is gated to read plus comment", func(t *testing.T) {
+		perms := probe(t, "analyst")
+		assert.Contains(t, perms, "host.read")
+		assert.Contains(t, perms, "alert.comment")
+		assert.NotContains(t, perms, "host.kill_process")
+		assert.NotContains(t, perms, "application_control.read")
+	})
+
+	// spec:ui-authentication-session/current-user-lookup/higher-privilege-role-returns-a-superset
+	t.Run("senior_analyst gains destructive and app-control read", func(t *testing.T) {
+		perms := probe(t, "senior_analyst")
+		assert.Contains(t, perms, "host.kill_process")
+		assert.Contains(t, perms, "application_control.read")
+	})
+
+	// spec:ui-authentication-session/current-user-lookup/all-actions-role-is-expanded-rather-than-wildcarded
+	t.Run("super_admin returns the concrete action registry, not a wildcard", func(t *testing.T) {
+		perms := probe(t, "super_admin")
+		// The wildcard must arrive expanded to concrete actions.
+		assert.Contains(t, perms, "host.kill_process")
+		assert.Contains(t, perms, "application_control.policy_delete")
+		assert.Contains(t, perms, "audit.read")
+		assert.NotContains(t, perms, "*")
+		assert.Len(t, perms, len(api.RegisteredActions()))
+	})
+
+	// spec:ui-authentication-session/current-user-lookup/session-probe-while-logged-out
+	t.Run("logged-out probe is 401 with no permission set", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/session", nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	})
 }
 
 // TestService_LogoutEmptyToken covers the early-return branch in Logout (sessionToken length zero) so a stale or missing cookie cannot

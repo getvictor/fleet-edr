@@ -9,6 +9,8 @@ import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import { Select } from "./ui/Input";
 import { PageHeader } from "./ui/PageHeader";
+import { Can } from "../permissions";
+import { PermissionAction } from "../permissions-core";
 import "./AlertList.scss";
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
@@ -215,31 +217,37 @@ export function AlertList() {
                 <td>
                   <div className="alert-actions">
                     {a.status === "open" && (
-                      <Button
-                        size="small"
-                        variant="inverse"
-                        onClick={() => { handleStatusChange(a.id, "acknowledged"); }}
-                      >
-                        Acknowledge
-                      </Button>
+                      <Can action={PermissionAction.AlertAcknowledge}>
+                        <Button
+                          size="small"
+                          variant="inverse"
+                          onClick={() => { handleStatusChange(a.id, "acknowledged"); }}
+                        >
+                          Acknowledge
+                        </Button>
+                      </Can>
                     )}
                     {a.status !== "resolved" && (
-                      <Button
-                        size="small"
-                        variant="inverse"
-                        onClick={() => { handleStatusChange(a.id, "resolved"); }}
-                      >
-                        Resolve
-                      </Button>
+                      <Can action={PermissionAction.AlertResolve}>
+                        <Button
+                          size="small"
+                          variant="inverse"
+                          onClick={() => { handleStatusChange(a.id, "resolved"); }}
+                        >
+                          Resolve
+                        </Button>
+                      </Can>
                     )}
                     {a.status === "resolved" && (
-                      <Button
-                        size="small"
-                        variant="inverse"
-                        onClick={() => { handleStatusChange(a.id, "open"); }}
-                      >
-                        Reopen
-                      </Button>
+                      <Can action={PermissionAction.AlertReopen}>
+                        <Button
+                          size="small"
+                          variant="inverse"
+                          onClick={() => { handleStatusChange(a.id, "open"); }}
+                        >
+                          Reopen
+                        </Button>
+                      </Can>
                     )}
                   </div>
                 </td>

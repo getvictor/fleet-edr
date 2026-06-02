@@ -83,6 +83,14 @@ export interface SessionInfo {
   // before sending, but the field remains optional for forward-
   // compatibility.
   auth_method?: string;
+  // permissions is the operator's effective action set, computed server-side from
+  // their role bindings (the `*` wildcard expanded to concrete actions). The UI gates
+  // navigation and action affordances on it via the capability seam (see
+  // permissions.tsx). Optional for forward-compatibility: an older server that
+  // predates this field leaves it undefined, which the seam treats as "render
+  // optimistically and rely on the server's 403". Advisory only; the server's
+  // authorization chokepoint remains authoritative.
+  permissions?: string[];
 }
 
 export function getCsrfToken(): string {
@@ -156,6 +164,19 @@ function assertSafeAPIPath(path: string): void {
   }
 }
 
+// forbiddenHandler is an optional callback invoked when the server returns a genuine
+// (non-reauth) 403 — "your role does not grant this action." The UI registers one so
+// it can refresh a possibly-stale permission set (e.g. the operator's role changed
+// after the session probe). Deduping/throttling is the handler's responsibility (see
+// createDedupedRunner); api.ts just fires the signal. Reauth 403s and 401s do NOT
+// trigger it — those have their own handling.
+let forbiddenHandler: (() => void) | null = null;
+
+// setForbiddenHandler registers (or clears, with null) the genuine-403 callback.
+export function setForbiddenHandler(handler: (() => void) | null): void {
+  forbiddenHandler = handler;
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   assertSafeAPIPath(path);
   const headers: Record<string, string> = {
@@ -194,6 +215,10 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     // to the !res.ok branch below.
     const reauth = await readReauthChallenge(res);
     if (reauth) throw new ReauthRequiredError(reauth);
+    // A genuine forbidden: the operator's role does not grant this action. Signal the
+    // UI so it can refresh a possibly-stale permission set and hide the affordance on
+    // the next render. The error still propagates below so the caller surfaces it.
+    forbiddenHandler?.();
   }
   if (!res.ok) {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);

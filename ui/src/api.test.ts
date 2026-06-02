@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { listAlerts } from "./api";
+import { listAlerts, setForbiddenHandler, ReauthRequiredError } from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
 // suite mocks api.listAlerts directly via vi.spyOn, so the real
@@ -106,5 +106,34 @@ describe("listAlerts query-string composition", () => {
     const [target] = fetchMock.mock.calls[0] as [URL];
     const url = target.toString();
     expect(url).not.toContain("source=");
+  });
+});
+
+describe("forbidden handler signalling", () => {
+  afterEach(() => { setForbiddenHandler(null); });
+
+  // spec:web-ui/authorization-denials-degrade-gracefully/mid-session-revocation-degrades-and-refetches
+  it("fires on a genuine (non-reauth) 403 so the UI can refresh permissions", async () => {
+    stubFetch({ error: "no_matching_rule" }, 403);
+    const onForbidden = vi.fn();
+    setForbiddenHandler(onForbidden);
+    await expect(listAlerts()).rejects.toThrow(/API error: 403/);
+    expect(onForbidden).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire on a reauth-required 403 (that has its own retry flow)", async () => {
+    stubFetch({ error: "reauth_required", challenge: { auth_method: "oidc", reauth_url: "/api/auth/login" } }, 403);
+    const onForbidden = vi.fn();
+    setForbiddenHandler(onForbidden);
+    await expect(listAlerts()).rejects.toBeInstanceOf(ReauthRequiredError);
+    expect(onForbidden).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire on a 401 (session expiry has its own path)", async () => {
+    stubFetch(null, 401);
+    const onForbidden = vi.fn();
+    setForbiddenHandler(onForbidden);
+    await expect(listAlerts()).rejects.toBeTruthy();
+    expect(onForbidden).not.toHaveBeenCalled();
   });
 });
