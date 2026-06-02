@@ -3,7 +3,7 @@
 ### Requirement: Navigation and action affordances are capability-gated
 
 The UI SHALL hide navigation entries and action controls that the authenticated operator's effective
-permission set — obtained from the session probe — does not authorize, so an operator is not shown
+permission set - obtained from the session probe - does not authorize, so an operator is not shown
 affordances they cannot use. A navigation entry SHALL be hidden when the permission set does not
 contain the read action that gates its destination surface. An action control SHALL be hidden when the
 permission set does not contain the action that the control performs. Gating SHALL be derived solely
@@ -40,12 +40,14 @@ access control; the server remains authoritative for every action.
 
 The UI SHALL present an authorization denial as a clear, human-readable no-access state and SHALL NOT
 surface a raw transport error such as `API error: 403`. When the server denies a request the UI
-believed was permitted — for example because the operator's role changed after the session permission
-set was fetched — the UI SHALL render the no-access state for that surface or action AND SHALL refresh
+believed was permitted - for example because the operator's role changed after the session permission
+set was fetched - the UI SHALL render the no-access state for that surface or action AND SHALL refresh
 the permission set from the session endpoint so subsequent rendering reflects the operator's current
-permissions. When the permission set is unavailable — for example an older server that does not return
-one — the UI MAY render affordances optimistically but MUST still degrade any resulting denial
-gracefully, so an absent permission set can never grant access; only the server can.
+permissions. The refetch SHALL be deduplicated and throttled so that multiple gated components failing
+at once, or repeated denials in quick succession, collapse to a single in-flight request rather than a
+storm of session-endpoint calls. When the permission set is unavailable - for example an older server
+that does not return one - the UI MAY render affordances optimistically but MUST still degrade any
+resulting denial gracefully, so an absent permission set can never grant access; only the server can.
 
 #### Scenario: Deep-link to a gated surface shows a no-access state
 
@@ -62,3 +64,12 @@ gracefully, so an absent permission set can never grant access; only the server 
 - **THEN** the UI renders the no-access state for that action
 - **AND** the UI refetches the session permission set so the corresponding affordance is hidden on
   subsequent renders
+
+#### Scenario: Simultaneous denials collapse to one refetch
+
+- **GIVEN** an operator whose role was revoked mid-session and a page that renders several gated
+  affordances at once
+- **WHEN** multiple of those affordances trigger an authorization denial in quick succession
+- **THEN** the UI issues at most one in-flight refetch of the session permission set rather than one per
+  denial
+- **AND** subsequent renders reflect the refreshed permission set

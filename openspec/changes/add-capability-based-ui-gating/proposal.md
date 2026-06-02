@@ -5,7 +5,7 @@ regardless of what their role permits. The wave-1 authorization chokepoint corre
 unpermitted action server-side, but the operator only finds out by clicking: a JIT-provisioned
 `analyst` who opens Application control sees a raw `Error: API error: 403`, and the Kill process /
 isolate / run-script controls are shown to roles that cannot use them. That is a least-privilege
-console that neither looks nor feels least-privilege — a UX and credibility gap against the
+console that neither looks nor feels least-privilege - a UX and credibility gap against the
 security-console set (CrowdStrike Falcon, SentinelOne Singularity, Microsoft Defender for Endpoint),
 all of which hide what a role cannot do.
 
@@ -25,8 +25,8 @@ recorded in ADR-0012.
   example, Application control is hidden without `application_control.read`) and hides action controls
   whose action is not granted (for example, Kill process is hidden without `host.kill_process`). Gating
   is derived solely from the server-provided set; the UI holds no role→action mapping of its own.
-- The UI treats an authorization denial it did not anticipate as a graceful no-access state — a
-  human-readable message plus a refetch of the permission set — never a raw `API error: 403`. This
+- The UI treats an authorization denial it did not anticipate as a graceful no-access state - a
+  human-readable message plus a refetch of the permission set - never a raw `API error: 403`. This
   covers the snapshot-staleness window (a role changed mid-session) and any affordance not yet gated.
 - No change to the authorization chokepoint, the role / action registry, or the persisted
   authorization model. The permission set is advisory to the UI; the server remains authoritative for
@@ -40,8 +40,8 @@ recorded in ADR-0012.
   operator's effective permission set, so the UI can discover not just *who* is logged in but *what
   they may do*, without a per-affordance round trip. The set is advisory and is never authorization in
   itself.
-- `web-ui`: navigation entries and action affordances become capability-gated — hidden when the
-  operator's permission set does not include the relevant action — and authorization denials degrade to
+- `web-ui`: navigation entries and action affordances become capability-gated - hidden when the
+  operator's permission set does not include the relevant action - and authorization denials degrade to
   a graceful no-access state instead of a raw transport error.
 
 No new capabilities are introduced and no other context's behavior changes.
@@ -72,6 +72,6 @@ authorization conditions (ADR-0012 records the trigger for revisiting a client a
 
 **Rollback:** the change is additive and reversible. Reverting the UI restores unconditional rendering;
 reverting the server field leaves the UI to treat an absent permission set as "gate nothing", which is
-safe because the server still enforces — fail-open affects *visibility* only, never access. The agent
+safe because the server still enforces - fail-open affects *visibility* only, never access. The agent
 protocol, the events schema, and the persisted host token are untouched, so no agent-side rollback
 steps apply.

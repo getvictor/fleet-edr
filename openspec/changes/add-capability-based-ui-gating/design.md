@@ -39,15 +39,21 @@ server-side keeps the single source of truth on the server.
 A single capability provider is seeded from the existing session bootstrap and exposes one check
 (conceptually `can(action)` / a `<Can action="…">` wrapper). Every gated affordance goes through it:
 
-- Navigation entries gate on the read action for their destination (Application control on
-  `application_control.read`, and so on).
+- Navigation entries gate on the read action for their destination. The full wave-1 mapping:
+  - Hosts (`/`) on `host.read`.
+  - Alerts (`/alerts`) on `alert.read`.
+  - Application control (`/app-control`) on `application_control.read`.
+  - Coverage (`/coverage`) and the per-rule documentation pages are not gated by a dedicated read
+    action in wave 1 (no `coverage.read` / `rule.read` exists in the action registry); they remain
+    visible to any authenticated operator. If a future wave adds such an action, this mapping grows
+    with it.
 - Action controls gate on the action they perform (Kill process on `host.kill_process`; isolate on
   `host.isolate`; run script on `host.run_script`; alert lifecycle controls on their respective
   actions).
 
 Centralizing on one seam is the load-bearing decision: it keeps role→feature logic out of the UI
-entirely (the UI only ever reads the server-computed set) and makes a future swap to a library — should
-wave-2 scoped grants ever require client-side conditional evaluation — mechanical rather than a rewrite.
+entirely (the UI only ever reads the server-computed set) and makes a future swap to a library - should
+wave-2 scoped grants ever require client-side conditional evaluation - mechanical rather than a rewrite.
 
 ## Staleness and graceful denial
 
@@ -67,7 +73,7 @@ what is shown, never what is allowed.
 
 ## Non-goals
 
-- Per-resource (`host_group` / `host`) scoped gating — depends on wave-2 scoped role bindings.
+- Per-resource (`host_group` / `host`) scoped gating - depends on wave-2 scoped role bindings.
 - Pushing permission changes to a live session without a refetch.
-- Any client-side evaluation of authorization conditions, or a client authorization library — see
+- Any client-side evaluation of authorization conditions, or a client authorization library - see
   ADR-0012 for the trigger that would reopen that choice.

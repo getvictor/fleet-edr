@@ -27,15 +27,15 @@ and (b) whether to build a bespoke gating helper or adopt a client-side authoriz
 Two forces constrain the answer. First, the server already owns the authoritative role→action
 mapping (Rego + the action registry); any second copy of that logic is a drift hazard, and for a
 security product two policy definitions that can disagree is a liability, not a feature. Second,
-ADR-0010 (stateless server) requires that no UI-specific cross-request state live in process —
-whatever we hand the UI must be derivable per request from the session's role bindings, which is
-exactly how the chokepoint already builds the request actor.
+ADR-0010 (stateless server) requires that no UI-specific cross-request state live in process - whatever
+we hand the UI must be derivable per request from the session's role bindings, which is exactly how the
+chokepoint already builds the request actor.
 
 ## Decision
 
-1. The server computes the authenticated operator's **effective permission set** — the union of the
+1. The server computes the authenticated operator's **effective permission set** - the union of the
    action grants across the session's role bindings, with the `super_admin` `*` wildcard expanded
-   against the action registry — and returns it in the session-probe response (`GET /api/session`)
+   against the action registry - and returns it in the session-probe response (`GET /api/session`)
    as a flat list of action identifiers.
 2. The UI gates navigation entries and action controls through a single centralized capability seam
    that reads that set. It ships **permissions (action identifiers), not role names**: the UI never
@@ -56,14 +56,14 @@ What becomes easier:
   drift.
 - The raw-`403` UX defect is fixed by item 4 (graceful denial) independently of the hiding work.
 - The seam is tiny, dependency-free, and reversible. Centralizing behind one boundary means swapping
-  the implementation later — including adopting a library — is mechanical.
+  the implementation later - including adopting a library - is mechanical.
 - Consistent with ADR-0010: the permission set is derived per request from the session's bindings;
   no new in-process shared state.
 
 What becomes harder, and the costs:
 
 - The permission set is a **session-lifetime snapshot**. A role change made mid-session is not
-  reflected until the next login or an explicit refetch — the same "takes effect on next sign-in"
+  reflected until the next login or an explicit refetch - the same "takes effect on next sign-in"
   semantics the chokepoint already exhibits, but now it must be documented as a UI property too.
 - The session response gains a field that must stay aligned with the action registry. The UI inherits
   correctness from the server because it only echoes server-computed data, but a new wire field is a
@@ -79,13 +79,13 @@ What becomes harder, and the costs:
   result, not the inputs.
 - **Coarse UI capability booleans** (`{canViewAppControl, canKillProcess, …}`). Attractive: smallest
   payload, leaks no taxonomy. Rejected as the primary shape because it introduces a *second*
-  permission vocabulary the server must maintain alongside the action registry — another drift
-  surface — for no security benefit (our action catalog is checked into the repo and is not
+  permission vocabulary the server must maintain alongside the action registry - another drift
+  surface - for no security benefit (our action catalog is checked into the repo and is not
   sensitive). The flat action list reuses the vocabulary we already have.
 - **Adopt a client-side authorization library (e.g. CASL / `@casl/react`).** Attractive: ready-made
   conditional-render components, isomorphic rules, a well-trodden path. Rejected for wave 1 because it
   is a client-side *decision engine* and we already have one on the server (Rego). Using it for real
-  means reimplementing policy conditions in JS (drift; two engines that can disagree — unacceptable
+  means reimplementing policy conditions in JS (drift; two engines that can disagree - unacceptable
   for a security product); using it only as a conditional-render wrapper over a flat set exercises a
   small fraction of the library that a thin bespoke check replaces. Revisit at wave-2 scoped bindings
   (`host_group` / `host`) *only if* the UI must evaluate resource/attribute conditions client-side
@@ -97,13 +97,13 @@ What becomes harder, and the costs:
 
 ## References
 
-- ADR-0010 (stateless server) — the permission set is per-request-derived session data, not
+- ADR-0010 (stateless server) - the permission set is per-request-derived session data, not
   in-process state.
-- OpenSpec change `add-capability-based-ui-gating` — the behavioral spec deltas for this decision.
-- `docs/authz.md` — role / action matrix.
-  `server/identity/internal/authz/policy/data/{actions,roles}.json` — the authoritative action
+- OpenSpec change `add-capability-based-ui-gating` - the behavioral spec deltas for this decision.
+- `docs/authz.md` - role / action matrix.
+  `server/identity/internal/authz/policy/data/{actions,roles}.json` - the authoritative action
   registry and role grants.
-- User-management plan, issue #66 — the wave-1 identity boundary this builds on.
+- User-management plan, issue #66 - the wave-1 identity boundary this builds on.
 - Frontend RBAC guidance ("expose permissions, keep enforcement server-side"): CASL
   (https://github.com/stalniy/casl), LogRocket on access-control models for the frontend
   (https://blog.logrocket.com/choosing-best-access-control-model-frontend/), Oso on RBAC
