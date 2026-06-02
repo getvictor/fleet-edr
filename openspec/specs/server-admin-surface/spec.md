@@ -163,6 +163,7 @@ MUST NOT be modified.
 
 ### Requirement: Audit trail for state-changing admin actions
 
+The system SHALL maintain a structured, queryable audit trail for state-changing admin actions, as detailed below.
 Every successful state-changing admin call defined by this specification (revoke, and application-control rule create / update /
 delete) SHALL emit a structured audit log record carrying at minimum a timestamp, the operator's identity (`actor`, sourced from
 the session context as `user:<id>` for application-control mutations), the operator-supplied `reason` from the request body, the

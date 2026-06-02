@@ -79,6 +79,7 @@ func TestMultiReplicaSessionsAndCSRFValidateAcrossReplicas(t *testing.T) {
 	_ = setupReplica(t, db) // replica A: where the session is conceptually minted (seeded into the shared store below)
 	replicaB := setupReplica(t, db)
 
+	// spec:server-availability/the-server-holds-no-in-process-state-that-survives-a-request-lifetime/state-written-on-one-replica-is-served-by-another
 	t.Run("spec:server-availability/sessions-and-csrf-tokens-validate-across-any-replica/session-minted-on-replica-a-validates-on-replica-b", func(t *testing.T) {
 		// A session row in the shared store stands for one replica A minted at login. Replica B, a distinct stack with no in-process
 		// session state, must validate it purely from the store.

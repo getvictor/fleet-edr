@@ -54,6 +54,7 @@ func newAsyncEngine(t *testing.T, rate float64) (*authz.Engine, *recordingAudit,
 
 // rate=0.0 + read action + non-break-glass + Allow → no row anywhere. The chokepoint elides the emission entirely; sampling drops it
 // before it reaches the async writer or the sync recorder.
+// spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/read-sampling-defaults-skip-non-break-glass-reads
 func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
@@ -81,6 +82,7 @@ func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
 
 // Break-glass actor reads at rate=0.0 still audit synchronously. The carve-out is critical: missing one break-glass action would
 // defeat the surface's audit purpose.
+// spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/break-glass-reads-are-always-recorded
 func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
@@ -109,6 +111,7 @@ func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 
 // Deny on a read action at rate=0.0 always writes sync. Denies are the security signal the audit dashboard pivots on; sampling them
 // would defeat the dashboard.
+// spec:server-identity-authorization/every-privileged-action-funnels-through-one-authorization-chokepoint/unauthorized-action-is-denied-with-a-reason
 func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	// analyst has host.read but not enrollment.read; exercise a read
@@ -124,6 +127,8 @@ func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 
 // Write actions never take the async path even at rate=1.0. Writes are infrequent and security-relevant; durability matters more than
 // latency on these emissions.
+// spec:server-identity-authorization/every-privileged-action-funnels-through-one-authorization-chokepoint/authorized-action-is-allowed-and-recorded
+// spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/state-changing-allow-is-recorded
 func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
 	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))

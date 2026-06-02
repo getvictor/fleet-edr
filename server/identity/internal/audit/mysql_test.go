@@ -11,7 +11,11 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	otrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/identity/api"
@@ -260,6 +264,54 @@ func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 	assert.Equal(t, "allow", payload["decision"])
 }
 
+// spec:server-identity-audit-log/audit-rows-are-dual-emitted-to-slog-and-otel/allow-emits-info
+//
+// Pins both THEN clauses of the allow-emits-INFO scenario: an authorization allow on a state-changing action (authz.host.isolate
+// with payload.allow=true) writes a structured slog record at INFO carrying the audit fields, AND the active request span carries
+// the three edr.audit.* attributes (action, decision, reason). The span is captured via an in-memory SpanRecorder on a LOCAL
+// TracerProvider so the test reads exactly the attributes emitDualEmit set on trace.SpanFromContext(ctx).
+func TestRecord_AllowEmitsInfoAndSpanAttributes(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store, db := newStoreWithLogger(t, logger)
+	const userID = int64(13)
+	seedUser(t, db, userID, "operator-13@test")
+
+	rec := tracetest.NewSpanRecorder()
+	tp := trace.NewTracerProvider(trace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	ctx, span := tp.Tracer("audit-allow-test").Start(t.Context(), "request")
+
+	uid := userID
+	require.NoError(t, store.Record(ctx, api.AuditEvent{
+		UserID:     &uid,
+		ActorEmail: "operator-13@test",
+		Action:     api.AuditAction("authz.host.isolate"),
+		TargetType: "host",
+		TargetID:   "h-1",
+		Payload:    map[string]any{"allow": true, "reason": "granted"},
+	}))
+	span.End()
+
+	// slog INFO clause.
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.Equal(t, "INFO", entry["level"], "allow decision must emit slog at INFO")
+	assert.Equal(t, "authz.host.isolate", entry["action"])
+
+	// OTel span-attribute clause.
+	ended := rec.Ended()
+	require.Len(t, ended, 1, "exactly one span must have ended")
+	attrs := map[string]string{}
+	for _, kv := range ended[0].Attributes() {
+		attrs[string(kv.Key)] = kv.Value.AsString()
+	}
+	assert.Equal(t, "authz.host.isolate", attrs["edr.audit.action"])
+	assert.Equal(t, "allow", attrs["edr.audit.decision"])
+	assert.Equal(t, "granted", attrs["edr.audit.reason"])
+}
+
 // When UserID is nil (e.g. a pre-auth audit row like auth.oidc.callback.error), the dual-emit still fires and emits edr.user.id=0.
 // The audit row itself stays attributable via the actor_email column. Per server-identity-audit-log spec, failure suffix actions land
 // at WARN so a SigNoz alert on severity_text=WARN catches them without a separate filter.
@@ -287,6 +339,7 @@ func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 // Spec contract: a chokepoint deny emits slog at WARN. Pinned so the observability dashboard's "WARN threshold" alert catches
 // chokepoint denies without a separate severity filter per decision type. server-identity-audit-log spec §"Audit rows are
 // dual-emitted": "WARN when the decision is `deny`, the action is a break-glass action, or the decision is `error`."
+// spec:server-identity-audit-log/audit-rows-are-dual-emitted-to-slog-and-otel/deny-emits-warn
 func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
@@ -314,6 +367,11 @@ func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 // Spec contract: every break-glass action emits slog at WARN - regardless of outcome - because the recovery surface is the
 // high-privilege path and every interaction is operationally noteworthy. server-identity-audit-log spec: "WARN when ... the action is
 // a break-glass action."
+//
+// spec:server-identity-authentication/break-glass-authentication-is-rate-limited-and-audited-at-warn/successful-break-glass-emits-a-warn-audit-row
+//
+// The auth.breakglass.success subtest pins the scenario's core: a successful break-glass login lands an audit row at WARN with
+// action='auth.breakglass.success', which is exactly what the SigNoz "any break-glass success" alert keys on.
 func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
 	t.Parallel()
 	cases := []api.AuditAction{
@@ -380,6 +438,75 @@ func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
 	}
 	assert.True(t, sawAuditRecorded, "dual-emit must fire even on INSERT failure")
 	assert.True(t, sawInsertFailed, "INSERT failure must emit a separate ERROR log")
+}
+
+// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/audit-write-failure-does-not-fail-the-user-request
+//
+// Pins the failure-handling clauses of the scenario: when the audit INSERT fails (transient DB outage simulated by a closed
+// connection), Record (a) logs the failure at ERROR with a unique structured key ("audit row INSERT failed") and (b) increments
+// the edr.audit.write_failures counter. The counter is registered against the global OTel meter, so the test installs a
+// ManualReader-backed MeterProvider as the global before constructing the Store, then collects it after the forced failure. The
+// scenario's "the user request still completes" clause is structural: login handlers mint the session before calling the audit
+// recorder and never propagate Record's error to the user response (the recorder is fire-and-forget on the request's critical path).
+func TestRecord_WriteFailureLogsErrorAndIncrementsMetric(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Install a ManualReader-backed global MeterProvider so the audit Store's package-level otel.Meter counter records into a
+	// reader this test can collect. Restore the prior global provider on cleanup so we don't leak global state into sibling tests.
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prev := otel.GetMeterProvider()
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(prev)
+		_ = mp.Shutdown(context.Background())
+	})
+
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	store := audit.New(db, logger) // registers the write-failures counter against the global meter installed above
+
+	// Force the INSERT to fail by closing the connection pool.
+	require.NoError(t, db.Close())
+
+	err := store.Record(t.Context(), api.AuditEvent{
+		ActorEmail: "operator@test",
+		Action:     api.AuditAuthLoginSuccess,
+		Payload:    map[string]any{"decision": "allow"},
+	})
+	require.Error(t, err, "INSERT against a closed DB must surface as an error to the recorder")
+
+	// (a) ERROR log with the unique structured key.
+	var sawInsertFailed bool
+	for _, e := range parseJSONLogs(t, buf.Bytes()) {
+		if e["msg"] == "audit row INSERT failed" {
+			sawInsertFailed = true
+			assert.Equal(t, "ERROR", e["level"])
+		}
+	}
+	assert.True(t, sawInsertFailed, "write failure must emit an ERROR log with key 'audit row INSERT failed'")
+
+	// (b) edr.audit.write_failures counter incremented by exactly one for this action.
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	var total int64
+	var found bool
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "edr.audit.write_failures" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			require.True(t, ok, "write_failures must be an int64 Sum")
+			found = true
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+		}
+	}
+	require.True(t, found, "edr.audit.write_failures metric must be present after a failed insert")
+	assert.Equal(t, int64(1), total, "edr.audit.write_failures must increment by exactly one on a single failed insert")
 }
 
 // parseJSONLogs splits a buffer's JSON-per-line slog output into a slice of decoded maps. Pulled out so the dual-emit-on-failure test

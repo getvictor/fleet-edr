@@ -191,6 +191,7 @@ func TestSchema_Idempotent(t *testing.T) {
 // TestSeed_BuiltinRoles verifies the five built-in roles seed exactly once, in the canonical role-id set, with is_builtin=1 (so the
 // future admin API can refuse to delete them). The ID set is the wire-shape vocabulary OPA / Rego policy bundles will reference;
 // a reorder or rename here is a contract break.
+// spec:server-identity-authorization/five-seeded-roles-bundle-permissions-for-the-deployment/roles-are-seeded-on-first-boot
 func TestSeed_BuiltinRoles(t *testing.T) {
 	t.Parallel()
 	db := openIdentitySchema(t)

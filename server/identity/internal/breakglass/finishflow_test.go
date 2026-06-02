@@ -174,6 +174,7 @@ func fakeAssertion() *protocol.ParsedCredentialAssertionData {
 
 // FinishSetup happy path: token redeemed, password set, credential persisted, identity row inserted, session minted, audit row
 // written. The fake WebAuthn engine returns a credential keyed on the user handle so we can verify it lands in webauthn_credentials.
+// spec:server-identity-authentication/break-glass-account-is-bootstrapped-via-single-use-token-not-a-printed-password/token-redemption-sets-the-password-and-registers-webauthn
 func TestService_FinishSetup_HappyPath(t *testing.T) {
 	t.Parallel()
 	svc, db, rec, uid, _ := newFakeService(t)
@@ -273,6 +274,12 @@ func TestService_FinishSetup_CreateCredentialFails(t *testing.T) {
 // FinishLogin happy path: assertion validates, password verifies, session minted. Pre-seeds password + credential via FinishSetup
 // so the full round-trip is exercised, then primes the fake so its ValidateLogin returns the persisted credential id with a
 // strictly-larger sign_count (so RecordAssertion accepts).
+//
+// spec:server-identity-authentication/break-glass-login-lives-at-a-separate-path-not-on-the-sso-login-page/successful-break-glass-login-requires-both-password-and-webauthn
+//
+// Pins the both-factors-required happy path: a correct password AND a valid WebAuthn assertion together mint a session. The
+// "both are required" invariant is reinforced by TestService_FinishLogin_WrongPassword (valid assertion + wrong password fails)
+// and TestService_FinishLogin_BadAssertion (failed assertion fails before the password is even checked).
 func TestService_FinishLogin_HappyPath(t *testing.T) {
 	t.Parallel()
 	svc, db, _, uid, fake := newFakeService(t)
@@ -612,6 +619,11 @@ func TestHandle_FullLogin_Success(t *testing.T) {
 // The handler logs the underlying error at WARN so an operator can diagnose the failure in SigNoz; the wire response stays redacted so
 // a probing attacker cannot enumerate failure modes. Pinned because the WARN branch is the operator's only diagnostic breadcrumb when
 // the failure isn't one of the named cases.
+//
+// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/failed-break-glass-login-is-audited-without-leaking-the-failure-mode-to-the-client
+//
+// Pins both clauses: the client receives a generic invalid_credentials response (X-Edr-Auth-Reason=invalid_credentials) while the
+// audit row records action=auth.breakglass.failure with the precise failure reason in the row's payload.
 func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 	t.Parallel()
 	h, db, rec, uid, fake := newFakeHandler(t)
@@ -710,6 +722,7 @@ func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 // because rate-limit rejection short-circuits in gateSetupRequest before any svc.* method runs.
 //
 // Covers the handler's tooMany path + the rate.AllowIP false branch in handleBeginSetup.
+// spec:server-identity-authentication/break-glass-authentication-is-rate-limited-and-audited-at-warn/rate-limit-blocks-excessive-attempts
 func TestHandle_PerIPRateLimit(t *testing.T) {
 	t.Parallel()
 	db := testdb.Open(t)

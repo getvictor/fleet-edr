@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
+	"github.com/fleetdm/edr/server/identity/internal/authz"
 )
 
 // stubReader is a deterministic api.AuditReader for handler tests. captures the AuditFilter the handler computed so each test can
@@ -248,6 +250,94 @@ func TestNewHandler_PanicsOnNilAuthZ(t *testing.T) {
 func TestNewHandler_NilLoggerOK(t *testing.T) {
 	t.Parallel()
 	assert.NotPanics(t, func() { _ = audit.NewHandler(&stubReader{}, allowAllAuthZ{}, nil) })
+}
+
+// recordingAudit captures every audit row the chokepoint writes so the audit-of-audit assertion can confirm the read produced an
+// `authz.audit.read` row.
+type recordingAudit struct {
+	mu     sync.Mutex
+	events []api.AuditEvent
+}
+
+func (r *recordingAudit) Record(_ context.Context, e api.AuditEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *recordingAudit) snapshot() []api.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]api.AuditEvent, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+// withActor wraps a handler so every request carries the given actor on its context, standing in for the identity Session
+// middleware that pins the actor + role bindings in production.
+func withActor(actor *api.Actor, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(api.WithActor(r.Context(), actor)))
+	})
+}
+
+// spec:server-identity-audit-log/audit-log-read-endpoint-requires-audit-read-and-audits-its-own-access/auditor-reads-the-audit-log
+//
+// End-to-end against the REAL Rego chokepoint (not a stub): an auditor-bound session reads GET /api/audit-events?limit=50 and gets
+// 200 with the rows the reader returns, AND the read itself produces an audit row. The chokepoint emits the audit-of-audit row as
+// `authz.audit.read` (audit.read is exempt from the read-sampling gate), which is the implementation of the scenario's "the read
+// itself produces an audit row with action='audit.read'" clause.
+// spec:server-identity-audit-log/audit-log-read-endpoint-requires-audit-read-and-audits-its-own-access/analyst-is-denied-the-audit-log
+func TestHandler_AuditorReadIsAuditedThroughRealChokepoint(t *testing.T) {
+	t.Parallel()
+	rec := &recordingAudit{}
+	engine, err := authz.New(t.Context(), rec, nil, authz.Options{})
+	require.NoError(t, err)
+
+	uid := int64(1)
+	reader := &stubReader{rows: []api.AuditRow{
+		{ID: 2, Action: api.AuditAuthLoginSuccess},
+		{ID: 1, Action: api.AuditAuthLogout},
+	}}
+	h := audit.NewHandler(reader, engine, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterAuthedRoutes(mux)
+
+	auditor := &api.Actor{
+		UserID:       uid,
+		AuthMethod:   "oidc",
+		SessionFresh: true,
+		Roles: []api.RoleBinding{{
+			UserID: uid, RoleID: "auditor",
+			ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
+		}},
+	}
+	srv := httptest.NewServer(withActor(auditor, mux))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/audit-events?limit=50", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got listResponseBody
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Len(t, got.Items, 2)
+	// Reverse-chronological: the reader returns newest-first and the handler forwards order verbatim.
+	assert.Greater(t, got.Items[0].ID, got.Items[1].ID)
+	assert.Equal(t, 50, reader.gotFilter.Limit)
+
+	// The chokepoint recorded the audit-of-audit row for this read.
+	events := rec.snapshot()
+	require.Len(t, events, 1, "auditor read must produce exactly one audit-of-audit row")
+	assert.Equal(t, api.AuditAction("authz.audit.read"), events[0].Action)
+}
+
+type listResponseBody struct {
+	Items []api.AuditRow `json:"items"`
 }
 
 // AuthZ deny short-circuits before the reader is hit. The deny reason surfaces on the X-Edr-Authz-Reason header so the operator UI can

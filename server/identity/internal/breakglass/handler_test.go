@@ -688,6 +688,7 @@ func TestHandleReauth_BodyInvalid(t *testing.T) {
 
 // IP allowlist 404 for off-list callers. Pinned because the spec
 // requires the surface's existence to NOT be acknowledged.
+// spec:server-identity-authentication/break-glass-login-lives-at-a-separate-path-not-on-the-sso-login-page/off-allowlist-requester-receives-404
 func TestHandle_OffAllowlist404(t *testing.T) {
 	t.Parallel()
 	rec := &recAudit{}

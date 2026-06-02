@@ -28,6 +28,7 @@ TARGET=/tmp/edr-acblock-target
 SRC=/tmp/edr-acblock-src
 SENTINEL="EDR_ACBLOCK_SENTINEL_RAN"
 RULE_ID=""
+PLATFORM_RULE_ID=""
 
 # rest METHOD PATH [JSON_BODY] -- authenticated admin REST call.
 rest() {
@@ -43,6 +44,9 @@ rest() {
 cleanup() {
   # DeleteRule requires a reason in the JSON body (audit trail); a bodyless DELETE 400s.
   [[ -n "$RULE_ID" ]] && rest DELETE "/api/v1/app-control/rules/$RULE_ID" '{"reason":"uat app-control-block cleanup"}' >/dev/null 2>&1 || true
+  # The platform carve-out probe rule (step 4b) is deleted inline on the happy path; this is the backstop if the script
+  # exits between its create and that inline delete, so a stray BINARY rule on /bin/echo cannot leak into a later run.
+  [[ -n "$PLATFORM_RULE_ID" ]] && rest DELETE "/api/v1/app-control/rules/$PLATFORM_RULE_ID" '{"reason":"uat platform carve-out probe cleanup"}' >/dev/null 2>&1 || true
   uat_ssh "$VM" "rm -rf $TARGET $SRC" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -100,10 +104,46 @@ for _ in {1..20}; do # ~60s; fan-out is normally single-digit seconds
   sleep 3
 done
 [[ "$blocked" == 1 ]] || uat_fail app-control-block "exec still ALLOWED after 60s; the BLOCK rule was not enforced"
+# The block target is a locally `go build`-ed binary: it carries no kernel is_platform_binary flag, so the platform
+# carve-out does NOT exempt it and the AUTH_EXEC handler proceeds to the snapshot precedence walk, where the BINARY
+# rule on its SHA-256 matches and DENIES. A denied exec proves the snapshot was genuinely walked for a non-platform target.
+# spec:extension-application-control/platform-binary-carve-out-precedes-the-snapshot-walk/a-non-platform-binary-still-walks-the-snapshot
 uat_log app-control-block "host-side enforcement confirmed: matching exec is now DENIED"
 
 # A couple more denied execs so the application_control_block alert is unambiguous.
 uat_ssh "$VM" "$TARGET $SENTINEL >/dev/null 2>&1 || true; $TARGET $SENTINEL >/dev/null 2>&1 || true"
+
+# 4b. Platform-binary carve-out: an Apple platform binary must be ALLOWed unconditionally even with a BINARY BLOCK rule
+#     on its exact SHA-256. /bin/echo is on the Apple-signed system image, so the kernel sets is_platform_binary=true and
+#     the AUTH_EXEC handler returns ALLOW (cache:true) BEFORE consulting the snapshot. We post a BINARY rule on echo's
+#     hash, then confirm echo still runs -- the inverse of step 4. This is the carve-out that stops an admin from bricking
+#     the host by blocklisting /sbin/launchd et al. A failure here (echo blocked) would be a host-bricking regression.
+PLATFORM_BIN=/bin/echo
+PLATFORM_SENTINEL="EDR_ACBLOCK_PLATFORM_OK"
+PLATFORM_HASH=$(uat_ssh "$VM" "shasum -a 256 $PLATFORM_BIN | awk '{print \$1}'")
+[[ "$PLATFORM_HASH" =~ ^[0-9a-f]{64}$ ]] || uat_fail app-control-block "could not hash platform binary $PLATFORM_BIN (got '$PLATFORM_HASH')"
+PLATFORM_RULE_ID=$(rest POST "/api/v1/app-control/policies/$POLICY_ID/rules" \
+  "{\"rule_type\":\"BINARY\",\"identifier\":\"$PLATFORM_HASH\",\"severity\":\"high\",\"custom_msg\":\"L5 platform carve-out probe\",\"reason\":\"uat app-control platform carve-out coverage\"}" \
+  | jq -r '.id')
+[[ -n "$PLATFORM_RULE_ID" && "$PLATFORM_RULE_ID" != "null" ]] || uat_fail app-control-block "platform-probe rule create did not return an id"
+uat_log app-control-block "posted BINARY block rule id=$PLATFORM_RULE_ID on $PLATFORM_BIN (sha=${PLATFORM_HASH:0:12}); waiting for fan-out"
+
+# Give the snapshot fan-out the same window the deny poll used, then confirm echo STILL runs despite the block rule.
+# We poll for the snapshot to have advanced (the non-platform deny above already proved fan-out works; reuse the wait by
+# re-running echo a few times across the fan-out window -- echo must print its sentinel on EVERY attempt).
+platform_allowed=1
+for _ in {1..20}; do # ~60s, same budget as the deny poll, so the rule has definitely landed
+  if ! uat_ssh "$VM" "$PLATFORM_BIN $PLATFORM_SENTINEL 2>/dev/null" | grep -q "$PLATFORM_SENTINEL"; then
+    platform_allowed=0
+    break
+  fi
+  sleep 3
+done
+# spec:extension-application-control/platform-binary-carve-out-precedes-the-snapshot-walk/an-apple-platform-binary-is-unconditionally-allowed
+[[ "$platform_allowed" == 1 ]] || uat_fail app-control-block "platform binary $PLATFORM_BIN was BLOCKED despite the carve-out (host-bricking regression)"
+uat_log app-control-block "platform carve-out confirmed: $PLATFORM_BIN still ALLOWED with a BINARY block rule on its hash"
+# Clean up the platform-probe rule so it cannot leak into a later run's snapshot.
+rest DELETE "/api/v1/app-control/rules/$PLATFORM_RULE_ID" '{"reason":"uat platform carve-out probe cleanup"}' >/dev/null 2>&1 || true
 
 # 5. Server-side assertion. The denial must surface as an application_control_block
 #    alert. That alert's rule_id is app_control:<ruleId> -- DYNAMIC per run -- which
