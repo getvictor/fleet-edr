@@ -6,9 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// archiveDirName is the subdirectory of openspec/changes that holds already-applied changes. parseChangeScenarioIDs skips
+// it: archived changes are merged into openspec/specs (the live canonical set), so re-counting their delta IDs as WIP
+// targets would keep a stale ID valid after a later live rename and defeat the dangling-reference check.
+const archiveDirName = "archive"
 
 // runReport implements `spectrace report --format=md [--output FILE]`. The Markdown coverage matrix has one row per scenario
 // and one column per test layer (L0..L6), with each cell listing the markers (file:line links) that cover the scenario at
@@ -112,6 +118,8 @@ func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
 	if changesDir == "" {
 		return ids, nil
 	}
+	// A missing changes tree (no in-flight proposals) or a path that isn't a directory is not an error:
+	// spectrace simply has no WIP IDs to add and behaves exactly as it did before the feature.
 	info, statErr := os.Stat(changesDir)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -122,12 +130,23 @@ func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
 	if !info.IsDir() {
 		return ids, nil
 	}
-	scenarios, err := ParseAllSpecs(changesDir)
+	entries, err := os.ReadDir(changesDir)
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range scenarios {
-		ids[s.ID] = struct{}{}
+	// Parse each in-flight proposal directory's delta specs. Skip the archive subtree (already applied into the live
+	// specs) and any plain files, so only genuinely in-flight scenario IDs widen the reference-valid set.
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == archiveDirName {
+			continue
+		}
+		scenarios, err := ParseAllSpecs(filepath.Join(changesDir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range scenarios {
+			ids[s.ID] = struct{}{}
+		}
 	}
 	return ids, nil
 }

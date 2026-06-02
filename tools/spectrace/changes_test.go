@@ -59,6 +59,37 @@ The system SHALL return the session.
 		assert.Len(t, ids, 1, "the repeated heading collapses to a single set entry")
 	})
 
+	t.Run("scenarios under the archive subtree are excluded", func(t *testing.T) {
+		changes := t.TempDir()
+		// An in-flight proposal: its scenario IDs ARE valid WIP marker targets.
+		writeChangeSpec(t, changes, "in-flight", "web-ui", `## ADDED Requirements
+
+### Requirement: New thing
+The UI SHALL do a new thing.
+
+#### Scenario: New thing happens
+- **THEN** it happens
+`)
+		// An archived (already-applied) change lives under archive/. Its delta IDs are represented in the live
+		// specs already, so they must NOT be re-counted here (else a later live rename would leave the stale ID
+		// falsely valid).
+		archived := filepath.Join(changes, archiveDirName, "2026-01-01-old-change", "specs", "web-ui")
+		require.NoError(t, os.MkdirAll(archived, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(archived, "spec.md"), []byte(`## MODIFIED Requirements
+
+### Requirement: Old thing
+The UI SHALL do an old thing.
+
+#### Scenario: Old thing happened
+- **THEN** it happened
+`), 0o600))
+
+		ids, err := parseChangeScenarioIDs(changes)
+		require.NoError(t, err)
+		assert.Contains(t, ids, "web-ui/new-thing/new-thing-happens")
+		assert.NotContains(t, ids, "web-ui/old-thing/old-thing-happened", "archived change IDs must not count as WIP targets")
+	})
+
 	t.Run("missing changes dir yields an empty set, not an error", func(t *testing.T) {
 		ids, err := parseChangeScenarioIDs(filepath.Join(t.TempDir(), "does-not-exist"))
 		require.NoError(t, err)
