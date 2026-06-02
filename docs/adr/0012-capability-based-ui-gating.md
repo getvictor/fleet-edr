@@ -62,9 +62,11 @@ What becomes easier:
 
 What becomes harder, and the costs:
 
-- The permission set is a **session-lifetime snapshot**. A role change made mid-session is not
-  reflected until the next login or an explicit refetch - the same "takes effect on next sign-in"
-  semantics the chokepoint already exhibits, but now it must be documented as a UI property too.
+- The permission set is a **session-lifetime snapshot**, so server enforcement and UI display update
+  on different schedules: the chokepoint reads fresh bindings on the next request (enforced
+  immediately), while the UI keeps showing the cached snapshot until the next login or an explicit
+  refetch. That gap is the cost; it must be documented as a UI property and is mitigated by the
+  refetch-on-denial self-heal below.
 - The session response gains a field that must stay aligned with the action registry. The UI inherits
   correctness from the server because it only echoes server-computed data, but a new wire field is a
   new thing to keep honest.

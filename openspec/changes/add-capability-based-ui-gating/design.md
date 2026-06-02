@@ -57,9 +57,10 @@ wave-2 scoped grants ever require client-side conditional evaluation - mechanica
 
 ## Staleness and graceful denial
 
-The permission set is a snapshot taken at session bootstrap; its lifetime is the session's. A role
-change made mid-session is therefore not reflected until the next login or an explicit refetch. This
-matches the chokepoint's existing "takes effect on next sign-in" behavior.
+The permission set is a snapshot taken at session bootstrap; its lifetime is the session's. The
+chokepoint itself reads fresh bindings on every request, so a mid-session role change is enforced
+server-side immediately; only the UI's cached snapshot lags, staying stale until the next login or an
+explicit refetch.
 
 Two consequences are specified as behavior:
 

@@ -20,6 +20,7 @@ import (
 func runReport(args []string) int {
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	specsDir := fs.String("specs-dir", defaultSpecsDir, "root of the openspec/specs tree")
+	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree; in-flight proposal scenarios are valid marker targets")
 	rootDir := fs.String("root", defaultRootDir, "root of the source tree to scan for markers")
 	format := fs.String("format", "md", "output format (currently only `md` is supported)")
 	output := fs.String("output", "", "write to FILE instead of stdout")
@@ -36,9 +37,10 @@ func runReport(args []string) int {
 	// Promote --specs-dir / --root to repo-root-relative when cwd doesn't have them; matches the runCheck shape.
 	setFlags := userSetFlagNames(fs)
 	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
 	*rootDir = resolvePathFlag(*rootDir, setFlags["root"])
 
-	scenarios, markers, exitCode := loadScenariosAndMarkers(*specsDir, *rootDir)
+	scenarios, _, markers, exitCode := loadScenariosAndMarkers(*specsDir, *changesDir, *rootDir)
 	if exitCode != 0 {
 		return exitCode
 	}
@@ -66,23 +68,68 @@ func runReport(args []string) int {
 // (scenarios, markers, exitCode); when exitCode != 0 the error has already been written to stderr and the caller should
 // return it directly. Kept here rather than in main.go because report.go is the first consumer; check predates this and
 // inlines the same three calls. A future refactor could fold them, but the diff would be wider than the deduplication.
-func loadScenariosAndMarkers(specsDir, rootDir string) ([]Scenario, []Marker, int) {
+func loadScenariosAndMarkers(specsDir, changesDir, rootDir string) ([]Scenario, map[string]struct{}, []Marker, int) {
 	scenarios, err := ParseAllSpecs(specsDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spectrace: parse specs:", err)
-		return nil, nil, 2
+		return nil, nil, nil, 2
 	}
 	canonical, dupErr := buildCanonicalSet(scenarios)
 	if dupErr != nil {
 		fmt.Fprintln(os.Stderr, "spectrace:", dupErr)
-		return nil, nil, 2
+		return nil, nil, nil, 2
 	}
-	markers, err := ScanMarkers(rootDir, canonical)
+	// Union the live canonical IDs with the WIP IDs from change proposals to form the reference-valid set: the set a
+	// marker's ID must be in to count as a real reference rather than a dangling one. Live scenarios alone drive coverage
+	// and the --strict gate (see runCheck); WIP IDs only widen what a marker is allowed to point at.
+	wipIDs, err := parseChangeScenarioIDs(changesDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "spectrace: parse change specs:", err)
+		return nil, nil, nil, 2
+	}
+	referenceValid := make(map[string]struct{}, len(canonical)+len(wipIDs))
+	for id := range canonical {
+		referenceValid[id] = struct{}{}
+	}
+	for id := range wipIDs {
+		referenceValid[id] = struct{}{}
+	}
+	markers, err := ScanMarkers(rootDir, referenceValid)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spectrace: scan markers:", err)
-		return nil, nil, 2
+		return nil, nil, nil, 2
 	}
-	return scenarios, markers, 0
+	return scenarios, referenceValid, markers, 0
+}
+
+// parseChangeScenarioIDs returns the set of canonical scenario IDs declared in in-flight OpenSpec change proposals under
+// changesDir (openspec/changes/<change>/specs/<capability>/spec.md). Unlike the live specs these IDs are NOT run through
+// buildCanonicalSet's duplicate detection: a MODIFIED requirement in a proposal intentionally repeats a live scenario
+// heading (and two proposals may touch the same capability), so collisions are expected and collapse harmlessly into the
+// set. A missing or empty changesDir yields an empty set so a repo with no in-flight proposals behaves exactly as before.
+func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
+	ids := make(map[string]struct{})
+	if changesDir == "" {
+		return ids, nil
+	}
+	info, statErr := os.Stat(changesDir)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return ids, nil
+		}
+		return nil, statErr
+	}
+	if !info.IsDir() {
+		return ids, nil
+	}
+	scenarios, err := ParseAllSpecs(changesDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range scenarios {
+		ids[s.ID] = struct{}{}
+	}
+	return ids, nil
 }
 
 // openReportWriter returns (writer, cleanup, error). When path is empty the writer is stdout and the cleanup is a no-op.

@@ -138,6 +138,11 @@ func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, opts
 // rest. It is NEVER an authorization decision: every privileged action still funnels through Allow, which is the sole security
 // boundary (a stale or wrong permission set can only change what the UI shows, not what the server permits).
 func (e *Engine) PermissionsForRoleIDs(roleIDs []string) []string {
+	if e == nil {
+		// Defensive: a typed-nil *Engine wrapped in the PermissionResolver interface would otherwise panic on the
+		// e.roleGrants access below. The session handler treats a nil result as an empty permission set.
+		return nil
+	}
 	seen := make(map[string]struct{})
 	for _, id := range roleIDs {
 		grants, ok := e.roleGrants[id]

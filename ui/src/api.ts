@@ -164,15 +164,21 @@ function assertSafeAPIPath(path: string): void {
   }
 }
 
-// forbiddenHandler is an optional callback invoked when the server returns a genuine
-// (non-reauth) 403 — "your role does not grant this action." The UI registers one so
-// it can refresh a possibly-stale permission set (e.g. the operator's role changed
-// after the session probe). Deduping/throttling is the handler's responsibility (see
-// createDedupedRunner); api.ts just fires the signal. Reauth 403s and 401s do NOT
-// trigger it — those have their own handling.
+// AUTHZ_REASON_HEADER is the response header the authorization chokepoint sets on a policy
+// denial (server/identity/api: AuthzReasonHeader). Its presence distinguishes a genuine
+// authz "your role does not grant this action" 403 from other 403s (CSRF failures, etc.),
+// which the forbidden-handler signal gates on so only authz denials trigger a refetch.
+const AUTHZ_REASON_HEADER = "X-Edr-Authz-Reason";
+
+// forbiddenHandler is an optional callback invoked when the server returns an authorization
+// 403 (one carrying AUTHZ_REASON_HEADER). The UI registers one so it can refresh a
+// possibly-stale permission set (e.g. the operator's role changed after the session probe).
+// Deduping/throttling is the handler's responsibility (see createDedupedRunner); api.ts just
+// fires the signal. Reauth 403s, CSRF 403s, and 401s do NOT trigger it: they have their own
+// handling or are not authz denials.
 let forbiddenHandler: (() => void) | null = null;
 
-// setForbiddenHandler registers (or clears, with null) the genuine-403 callback.
+// setForbiddenHandler registers (or clears, with null) the authz-403 callback.
 export function setForbiddenHandler(handler: (() => void) | null): void {
   forbiddenHandler = handler;
 }
@@ -215,10 +221,14 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     // to the !res.ok branch below.
     const reauth = await readReauthChallenge(res);
     if (reauth) throw new ReauthRequiredError(reauth);
-    // A genuine forbidden: the operator's role does not grant this action. Signal the
-    // UI so it can refresh a possibly-stale permission set and hide the affordance on
-    // the next render. The error still propagates below so the caller surfaces it.
-    forbiddenHandler?.();
+    // Signal the UI to refresh a possibly-stale permission set ONLY when this 403 came
+    // from the authorization chokepoint, identified by its reason header. CSRF failures
+    // (csrf_missing / csrf_mismatch) and other non-authz 403s are also 403 but do NOT
+    // carry the header, so they must not trigger a spurious /api/session refetch. The
+    // error still propagates below so the caller surfaces it.
+    if (res.headers.get(AUTHZ_REASON_HEADER)) {
+      forbiddenHandler?.();
+    }
   }
   if (!res.ok) {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);

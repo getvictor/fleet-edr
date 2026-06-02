@@ -144,15 +144,17 @@ wildcard expanded to the concrete action set; the wire never carries
 chokepoint check and to an `authz.<action>` audit row: one vocabulary
 end to end, no separate role-to-feature mapping in the frontend.
 
-The permission set is a session-lifetime snapshot. A role change made
-mid-session is not reflected in the UI until the operator's next sign-in
-or an explicit refresh, matching the chokepoint's own "takes effect on
-next sign-in" behaviour (binding changes do not bounce live sessions, as
-noted under "Binding a role to a user" above). As a self-heal, when the
-server denies an action the UI believed was permitted, the UI refetches
-the session permission set (deduplicated so a burst of denials collapses
-to a single request) and hides the now-stale affordance on the next
-render.
+The permission set the UI gates on is a session-lifetime snapshot, taken
+when the session probe runs. Server enforcement and UI display therefore
+update on different schedules, and this is not a contradiction: the
+chokepoint reads fresh bindings on the next request (see "Binding a role
+to a user" above), so a role change is enforced immediately server-side;
+but the UI keeps showing affordances from its cached snapshot until the
+operator's next sign-in or an explicit refresh. As a self-heal, when the
+server denies an action the UI believed was permitted (the snapshot was
+stale), the UI refetches the session permission set (deduplicated so a
+burst of denials collapses to a single request) and hides the now-stale
+affordance on the next render.
 
 ## Test coverage
 

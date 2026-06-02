@@ -14,15 +14,22 @@ interface FakeResponse {
   ok: boolean;
   status: number;
   statusText: string;
+  headers: { get(name: string): string | null };
   clone(): FakeResponse;
   json(): Promise<unknown>;
 }
 
-function stubFetch(body: unknown, status = 200): ReturnType<typeof vi.fn> {
+// stubFetch installs a fake global fetch returning a single response. headers maps response
+// header names (case-insensitive, matching the real Headers.get contract) so tests can drive
+// the X-Edr-Authz-Reason gate on the 403 path.
+function stubFetch(body: unknown, status = 200, headers: Record<string, string> = {}): ReturnType<typeof vi.fn> {
+  const lower: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) lower[k.toLowerCase()] = v;
   const fake: FakeResponse = {
     ok: status >= 200 && status < 300,
     status,
     statusText: "",
+    headers: { get: (name: string): string | null => lower[name.toLowerCase()] ?? null },
     clone(): FakeResponse {
       return fake;
     },
@@ -113,12 +120,22 @@ describe("forbidden handler signalling", () => {
   afterEach(() => { setForbiddenHandler(null); });
 
   // spec:web-ui/authorization-denials-degrade-gracefully/mid-session-revocation-degrades-and-refetches
-  it("fires on a genuine (non-reauth) 403 so the UI can refresh permissions", async () => {
-    stubFetch({ error: "no_matching_rule" }, 403);
+  it("fires on an authz 403 (carrying the chokepoint reason header) so the UI can refresh permissions", async () => {
+    stubFetch({ error: "no_matching_rule" }, 403, { "X-Edr-Authz-Reason": "no_matching_rule" });
     const onForbidden = vi.fn();
     setForbiddenHandler(onForbidden);
     await expect(listAlerts()).rejects.toThrow(/API error: 403/);
     expect(onForbidden).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire on a 403 without the authz reason header (e.g. a CSRF failure)", async () => {
+    // CSRF and other non-authz 403s go through WriteCookieAuthFailure and carry no authz header,
+    // so they must not trigger a spurious /api/session permission refetch.
+    stubFetch({ error: "csrf_mismatch" }, 403);
+    const onForbidden = vi.fn();
+    setForbiddenHandler(onForbidden);
+    await expect(listAlerts()).rejects.toThrow(/API error: 403/);
+    expect(onForbidden).not.toHaveBeenCalled();
   });
 
   it("does NOT fire on a reauth-required 403 (that has its own retry flow)", async () => {

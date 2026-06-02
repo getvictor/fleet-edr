@@ -63,6 +63,7 @@ func TestPermissionsForRoleIDs_PerSeededRole(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := e.PermissionsForRoleIDs([]string{tc.roleID})
 
 			assert.True(t, sort.StringsAreSorted(got), "permission set must be returned sorted for a stable wire shape")
@@ -87,6 +88,7 @@ func TestPermissionsForRoleIDs_UnionAndEdges(t *testing.T) {
 	e, _ := newEngine(t)
 
 	t.Run("union of overlapping roles dedups to the superset", func(t *testing.T) {
+		t.Parallel()
 		union := e.PermissionsForRoleIDs([]string{"analyst", "senior_analyst"})
 		seniorOnly := e.PermissionsForRoleIDs([]string{"senior_analyst"})
 		// analyst's grants are a subset of senior_analyst's, so the union equals senior_analyst's set with no duplicates.
@@ -94,14 +96,17 @@ func TestPermissionsForRoleIDs_UnionAndEdges(t *testing.T) {
 	})
 
 	t.Run("unknown role id contributes nothing", func(t *testing.T) {
+		t.Parallel()
 		assert.Empty(t, e.PermissionsForRoleIDs([]string{"does_not_exist"}))
 	})
 
 	t.Run("empty input yields an empty set", func(t *testing.T) {
+		t.Parallel()
 		assert.Empty(t, e.PermissionsForRoleIDs(nil))
 	})
 
 	t.Run("unknown roles are skipped but known roles still resolve", func(t *testing.T) {
+		t.Parallel()
 		got := e.PermissionsForRoleIDs([]string{"ghost", "analyst"})
 		assert.Equal(t, e.PermissionsForRoleIDs([]string{"analyst"}), got)
 	})

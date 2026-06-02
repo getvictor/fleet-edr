@@ -135,7 +135,7 @@ task db:up
 # Build the UI (embedded in the server binary via server/ui/dist/)
 task build:ui
 
-# Run the server (HTTPS-only since #140; serves a local mkcert-trusted cert from tmp/dev.crt)
+# Run the server (HTTPS-only since #140; serves tmp/dev.crt: mkcert-trusted if mkcert is installed, else a self-signed cert)
 task dev:server
 # Then open https://localhost:8088/ui/
 ```

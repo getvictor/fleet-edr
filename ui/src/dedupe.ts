@@ -14,7 +14,12 @@ export function createDedupedRunner(task: () => Promise<void>): () => void {
   return () => {
     if (inFlight) return;
     inFlight = true;
-    void task()
+    // Run the task inside Promise.resolve().then(...) so a SYNCHRONOUS throw (a task that
+    // raises before returning its promise) is caught by the same .catch/.finally chain.
+    // Without this, a sync throw would bypass finally and wedge inFlight=true forever,
+    // permanently dropping every later call.
+    void Promise.resolve()
+      .then(() => task())
       .catch(() => undefined)
       .finally(() => {
         inFlight = false;

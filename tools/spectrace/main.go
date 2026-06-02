@@ -32,6 +32,11 @@ import (
 const (
 	defaultSpecsDir = "openspec/specs"
 	defaultRootDir  = "."
+	// defaultChangesDir holds in-flight OpenSpec change proposals. Scenarios declared in their delta specs
+	// (openspec/changes/<change>/specs/<capability>/spec.md) are treated as VALID marker targets so a test can
+	// reference a not-yet-archived scenario ID without spectrace flagging a dangling reference. They are not added to
+	// the gated coverage set: a proposal imposes no coverage obligation until it is archived into openspec/specs.
+	defaultChangesDir = "openspec/changes"
 )
 
 func main() {
@@ -62,13 +67,15 @@ func usage() {
 	fmt.Fprint(os.Stderr, `spectrace - openspec spec-to-test traceability linter
 
 Usage:
-  spectrace check    [--specs-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]
+  spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]
   spectrace list-ids [--specs-dir DIR] [--normative-only]
-  spectrace report   [--specs-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
+  spectrace report   [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
 Subcommands:
   check     Walk specs and codebase; report uncovered scenarios and invalid references.
             Exit code 0 unless --strict is set or invalid references are present.
+            --changes-dir  openspec/changes tree; scenarios in in-flight proposals are valid
+                           marker targets (not yet gated for coverage). Default openspec/changes.
             --by-layer  Annotate the gap report with per-layer coverage (L0..L6).
             --new-code  Gate only on scenarios added or modified in the current PR (diff against --base-ref).
             --base-ref  Git revision the merge base is computed against (default: origin/main).
@@ -93,6 +100,7 @@ See docs/testing-strategy.md for the marker syntax and rollout plan.
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	specsDir := fs.String("specs-dir", defaultSpecsDir, "root of the openspec/specs tree")
+	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree; in-flight proposal scenarios are valid marker targets")
 	rootDir := fs.String("root", defaultRootDir, "root of the source tree to scan for markers")
 	strict := fs.Bool("strict", false, "exit non-zero if any SHALL/MUST scenario is uncovered")
 	byLayer := fs.Bool("by-layer", false, "annotate the gap report with per-layer coverage (L0..L6)")
@@ -107,21 +115,21 @@ func runCheck(args []string) int {
 	// because their literal cwd-relative meaning is rarely the intent; explicit values keep cwd-first semantics.
 	setFlags := userSetFlagNames(fs)
 	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
 	*rootDir = resolvePathFlag(*rootDir, setFlags["root"])
 
-	scenarios, markers, exitCode := loadScenariosAndMarkers(*specsDir, *rootDir)
+	scenarios, referenceValid, markers, exitCode := loadScenariosAndMarkers(*specsDir, *changesDir, *rootDir)
 	if exitCode != 0 {
 		return exitCode
 	}
-	canonical := make(map[string]struct{}, len(scenarios))
-	for _, s := range scenarios {
-		canonical[s.ID] = struct{}{}
-	}
 
+	// A marker is a valid reference when its ID is in referenceValid (live specs ∪ in-flight proposals); only then does it
+	// count toward `covered`. A live scenario it points at is covered; a WIP-only ID resolves without error but covers no
+	// gated scenario (WIP scenarios are not in `scenarios`, so splitUncovered + --strict ignore them).
 	covered := make(map[string][]Marker, len(markers))
 	var invalid []Marker
 	for _, m := range markers {
-		if _, ok := canonical[m.ID]; ok {
+		if _, ok := referenceValid[m.ID]; ok {
 			covered[m.ID] = append(covered[m.ID], m)
 			continue
 		}
