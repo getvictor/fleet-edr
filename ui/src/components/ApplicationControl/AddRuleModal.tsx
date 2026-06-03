@@ -22,17 +22,18 @@ interface AddRuleModalProps {
 
 const DIALOG_TITLE_ID = "add-rule-modal-title";
 
-// RULE_TYPES enumerates the values the schema's rule_type ENUM accepts. Phase A close-out
-// enables CDHASH, BINARY, SIGNINGID, and TEAMID. CERTIFICATE + PATH stay deferred to
-// Phase B (CERTIFICATE needs the leaf-cert cache plumbing; PATH needs Launch Services
-// indirection coverage).
+// RULE_TYPES enumerates the values the schema's rule_type ENUM accepts. All six ship in
+// v0.1.0: BINARY, CDHASH, SIGNINGID, and TEAMID (PR #289) plus CERTIFICATE and PATH
+// (PR #210, "expand rule types beyond BINARY"). The server validates every type
+// (server/rules/internal/appcontrol/validate.go) and the extension's AUTH_EXEC decider
+// enforces the precedence walk CDHASH > BINARY > CERTIFICATE > SIGNINGID > TEAMID > PATH.
 const RULE_TYPES: { value: string; label: string; available: boolean }[] = [
   { value: "BINARY", label: "BINARY (file SHA-256)", available: true },
   { value: "CDHASH", label: "CDHASH (code-directory hash)", available: true },
   { value: "SIGNINGID", label: "SIGNINGID (Team:bundle.id)", available: true },
   { value: "TEAMID", label: "TEAMID (Apple Developer team)", available: true },
-  { value: "CERTIFICATE", label: "CERTIFICATE (leaf SHA-256)", available: false },
-  { value: "PATH", label: "PATH (canonical absolute)", available: false },
+  { value: "CERTIFICATE", label: "CERTIFICATE (leaf SHA-256)", available: true },
+  { value: "PATH", label: "PATH (canonical absolute)", available: true },
 ];
 
 const SEVERITIES = ["low", "medium", "high", "critical"];
@@ -55,11 +56,13 @@ const PLACEHOLDERS = new Map<string, string>([
   ["CDHASH", "40 lowercase hex characters"],
   ["TEAMID", "10 uppercase alphanumeric (e.g. EQHXZ8M8AV)"],
   ["SIGNINGID", "EQHXZ8M8AV:com.google.Chrome or platform:com.apple.curl"],
+  ["CERTIFICATE", "64 lowercase hex characters (leaf cert sha256)"],
+  ["PATH", "absolute path, e.g. /usr/local/bin/app (/tmp,/var,/etc canonicalized to /private)"],
 ]);
 
 // validateIdentifier dispatches to the per-type regex. Returns null on success or a
-// user-facing error string on failure. Identifiers are normalized (trimmed; BINARY/CDHASH
-// lowercased; TEAMID/SIGNINGID kept case-sensitive because the server is case-sensitive).
+// user-facing error string on failure. Identifiers are normalized (trimmed; BINARY/CDHASH/
+// CERTIFICATE lowercased; TEAMID/SIGNINGID kept case-sensitive; PATH canonicalized server-side).
 function validateIdentifier(ruleType: string, value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return "Identifier is required.";
@@ -90,17 +93,37 @@ function validateIdentifier(ruleType: string, value: string): string | null {
         return "SIGNINGID must look like <TeamID>:<bundle.id> or platform:<bundle.id>.";
       }
       return null;
+    case "CERTIFICATE":
+      // CERTIFICATE shares BINARY's 64-char SHA-256 hex shape (the leaf signing cert's digest); server uses the same hex64 regex.
+      if (trimmed.length !== BINARY_HEX_LENGTH) {
+        return `CERTIFICATE identifier must be ${String(BINARY_HEX_LENGTH)} hex characters (was ${String(trimmed.length)}).`;
+      }
+      if (!BINARY_HEX_REGEX.test(trimmed.toLowerCase())) {
+        return "CERTIFICATE identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
+      }
+      return null;
+    case "PATH":
+      // The server canonicalizes the path on persist (filepath.Clean + /tmp,/var,/etc -> /private). The client only rejects the
+      // shapes canonicalizePath rejects outright: relative paths and `..` segments. The empty case is caught above.
+      if (!trimmed.startsWith("/")) {
+        return "PATH must be an absolute path (start with /).";
+      }
+      if (trimmed.split("/").includes("..")) {
+        return "PATH must not contain `..` segments.";
+      }
+      return null;
     default:
       return `Rule type ${ruleType} is not accepted by this build.`;
   }
 }
 
-// normalizeIdentifier prepares the value for submission to the server. BINARY and CDHASH
-// are lowercased (the server validator is strict on case); TEAMID and SIGNINGID stay
-// untouched because the format already constrains them.
+// normalizeIdentifier prepares the value for submission to the server. BINARY, CDHASH, and
+// CERTIFICATE are lowercased (the server validator is strict on hex case); TEAMID and
+// SIGNINGID stay untouched because the format already constrains them. PATH is sent as
+// typed; the server canonicalizes it on persist (NormalizeIdentifier in validate.go).
 function normalizeIdentifier(ruleType: string, value: string): string {
   const trimmed = value.trim();
-  if (ruleType === "BINARY" || ruleType === "CDHASH") {
+  if (ruleType === "BINARY" || ruleType === "CDHASH" || ruleType === "CERTIFICATE") {
     return trimmed.toLowerCase();
   }
   return trimmed;

@@ -418,4 +418,103 @@ describe("AddRuleModal", () => {
     });
     expect(createSpy).not.toHaveBeenCalled();
   });
+
+  // CERTIFICATE + PATH shipped end to end in PR #210 (server validation + extension AUTH_EXEC enforcement); these pin that the UI
+  // exposes them as authorable rule types rather than the "(coming soon)" disabled options they used to render as.
+  it("offers CERTIFICATE and PATH as selectable (not disabled) rule types", () => {
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    const cert = screen.getByRole<HTMLOptionElement>("option", { name: /CERTIFICATE/i });
+    const path = screen.getByRole<HTMLOptionElement>("option", { name: /PATH/i });
+    expect(cert.disabled).toBe(false);
+    expect(path.disabled).toBe(false);
+    expect(cert.textContent).not.toMatch(/coming soon/i);
+    expect(path.textContent).not.toMatch(/coming soon/i);
+  });
+
+  it("accepts a valid CERTIFICATE identifier and submits it lowercased with rule_type=CERTIFICATE", async () => {
+    const createSpy = vi
+      .spyOn(api, "createAppControlRule")
+      .mockResolvedValue(makeRule({ rule_type: "CERTIFICATE", identifier: "d".repeat(64) }));
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "CERTIFICATE" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "D".repeat(64) } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "revoked leaf cert" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      // CERTIFICATE shares BINARY's 64-hex shape and normalizes to lowercase before submission.
+      expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+        rule_type: "CERTIFICATE",
+        identifier: "d".repeat(64),
+      }));
+    });
+  });
+
+  it("rejects a CERTIFICATE identifier that is not 64 hex characters", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule");
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "CERTIFICATE" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "abc123" } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/CERTIFICATE identifier must be 64 hex/i);
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts an absolute PATH and submits it verbatim with rule_type=PATH (server canonicalizes)", async () => {
+    const createSpy = vi
+      .spyOn(api, "createAppControlRule")
+      .mockResolvedValue(makeRule({ rule_type: "PATH", identifier: "/private/tmp/dropper" }));
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "PATH" } });
+    // The client sends the operator's literal absolute path; the server's NormalizeIdentifier canonicalizes /tmp -> /private/tmp.
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "/tmp/dropper" } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block dropper path" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
+        rule_type: "PATH",
+        identifier: "/tmp/dropper",
+      }));
+    });
+  });
+
+  it("rejects a relative PATH", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule");
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "PATH" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "usr/local/bin/foo" } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/PATH must be an absolute path/i);
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a PATH containing `..` segments", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule");
+    render(
+      <AddRuleModal open policyID={1} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "PATH" } });
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "/var/foo/../../etc/sudoers" } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/must not contain `\.\.`/i);
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
 });
