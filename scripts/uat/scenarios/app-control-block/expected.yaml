@@ -1,8 +1,8 @@
 # app-control-block scenario.
 #
 # This scenario exercises Application Control ACTIVE BLOCKING across the full rule-type
-# matrix: for each block rule type (BINARY, PATH, CDHASH live; CERTIFICATE, SIGNINGID,
-# TEAMID gated on a signed fixture, see README), attack.sh posts a BLOCK rule via the admin API,
+# matrix: for each block rule type (BINARY, PATH, CDHASH always; CERTIFICATE, SIGNINGID,
+# TEAMID when UAT_ACBLOCK_FIXTURE_BIN is set, see README), attack.sh posts a BLOCK rule via the admin API,
 # confirms the system extension DENIES the matching exec on a SIP-on VM (host-side
 # enforcement), and asserts the resulting application_control_block alert server-side.
 #
@@ -15,5 +15,5 @@
 # alone").
 
 scenario_id: app-control-block
-description: Walks the app-control block rule-type matrix (BINARY, PATH, CDHASH live; CERTIFICATE, SIGNINGID, TEAMID gated on a signed fixture), confirming the extension denies each matching exec on a SIP-on VM and asserting the application_control_block alert per rule. Assertions live in attack.sh (the alert rule_ids are dynamic).
+description: Walks the app-control block rule-type matrix (BINARY, PATH, CDHASH always; CERTIFICATE, SIGNINGID, TEAMID when UAT_ACBLOCK_FIXTURE_BIN points to a non-EDR Developer-ID-signed binary), confirming the extension denies each matching exec on a SIP-on VM and asserting the application_control_block alert per rule. Assertions live in attack.sh (the alert rule_ids are dynamic).
 within_seconds: 120

@@ -33,13 +33,28 @@ SIP). Cleanup deletes every created rule, the work tree, and any temp keychain o
 | `BINARY` | live | block by file SHA-256 |
 | `PATH` | live | block by canonical absolute path (server + extension both rewrite `/tmp`→`/private/tmp`) |
 | `CDHASH` | live | ad-hoc + Hardened Runtime sign (`CS_RUNTIME` surfaces the cdhash); no Apple ID needed |
-| `CERTIFICATE` | gated | needs a fixture whose leaf cert SHA-256 differs from the EDR's own Developer ID leaf (a rule on the shared leaf would also match the agent). `codesign` only signs with a *trusted* identity, so a self-signed leaf would require mutating the VM's system trust store - not done on a release VM. Set `UAT_ACBLOCK_CERT_BIN` + `UAT_ACBLOCK_CERT_SHA256`. L0 cover: `AuthExecDeciderPhaseBTests` |
-| `SIGNINGID` | gated | needs a Developer-ID-signed fixture (`team_id` is Apple-issued; a self-signed cert yields none). Set `UAT_ACBLOCK_SIGNINGID_BIN` + `UAT_ACBLOCK_SIGNINGID_ID`. L0 cover: `AuthExecDeciderPhaseBTests` |
-| `TEAMID` | gated (unsafe by default) | the only Developer-ID team on this host is the EDR's own (`FDG8Q7N4CC`); a `TEAMID` block on it would also deny the agent. Needs a **distinct-team** fixture (`UAT_ACBLOCK_TEAMID_BIN` + `UAT_ACBLOCK_TEAMID_ID`). L0 cover: `AuthExecDeciderPhaseBTests` |
+| `CERTIFICATE` | fixture | leaf signing-cert SHA-256 |
+| `SIGNINGID` | fixture | `<TeamID>:<bundle.id>` |
+| `TEAMID` | fixture | 10-char Developer-ID team |
 
-`CERTIFICATE`, `SIGNINGID`, and `TEAMID` are gated because the bare QA VM has no signing
-material that is both usable by `codesign` and distinct from the EDR's own identity;
-all three are covered at L0 by the extension decider unit tests.
+`CERTIFICATE`, `SIGNINGID`, and `TEAMID` are the **signing-derived** types: they only
+match a binary that carries a real Apple-issued identity, and that identity must be
+**distinct from the EDR's own** (`FDG8Q7N4CC`) - a `CERTIFICATE` rule on the EDR's shared
+leaf, or a `TEAMID` rule on its team, would also match the agent + extension. So they're
+driven by one externally-signed fixture binary rather than a generated one:
+
+    UAT_ACBLOCK_FIXTURE_BIN   path on the HOST to a Developer-ID-signed binary with a non-EDR identity
+    UAT_ACBLOCK_FIXTURE_ARGS  args that make it exec-and-exit-0 cleanly (default: --version)
+
+A small, self-contained, CLI-safe binary already on most dev Macs works well - e.g. the
+1Password CLI `op` (team `2BUA8C4S2C`). The scenario derives the binary's team / signing
+id / leaf-cert SHA-256 with **read-only** `codesign` on the host (it never executes the
+fixture there), copies the binary to the VM's `/tmp` (a file, **not** an install -
+removed on cleanup), execs it only on the VM, and refuses any fixture whose team is the
+EDR's own. The three share one binary, so each is tested in isolation
+(post → deny → remove → allow-again) since the precedence ladder would otherwise let a
+lingering higher-precedence rule mask the next. Unset → all three skip with a clear
+message; all three are covered at L0 by `AuthExecDeciderPhaseBTests`.
 
 ## Prerequisites
 
@@ -55,3 +70,8 @@ scenario fails fast with a clear message rather than a cryptic build error.
 
 Same required env as attack-runbook (see `../../README.md`): `EDR_SERVER_URL`,
 `EDR_SESSION_COOKIE`, `VM_SSH_TARGET`, and `UAT_INSECURE=1` for the local dev cert.
+
+To also exercise the signing-derived types, add `UAT_ACBLOCK_FIXTURE_BIN` (see the matrix
+above), e.g.:
+
+    UAT_ACBLOCK_FIXTURE_BIN=/opt/homebrew/bin/op task uat:l5 -- app-control-block --skip-install
