@@ -22,17 +22,18 @@ interface AddRuleModalProps {
 
 const DIALOG_TITLE_ID = "add-rule-modal-title";
 
-// RULE_TYPES enumerates the values the schema's rule_type ENUM accepts. Phase A close-out
-// enables CDHASH, BINARY, SIGNINGID, and TEAMID. CERTIFICATE + PATH stay deferred to
-// Phase B (CERTIFICATE needs the leaf-cert cache plumbing; PATH needs Launch Services
-// indirection coverage).
+// RULE_TYPES enumerates the values the schema's rule_type ENUM accepts. All six ship in
+// v0.1.0: BINARY, CDHASH, SIGNINGID, and TEAMID (PR #289) plus CERTIFICATE and PATH
+// (PR #210, "expand rule types beyond BINARY"). The server validates every type
+// (server/rules/internal/appcontrol/validate.go) and the extension's AUTH_EXEC decider
+// enforces the precedence walk CDHASH > BINARY > CERTIFICATE > SIGNINGID > TEAMID > PATH.
 const RULE_TYPES: { value: string; label: string; available: boolean }[] = [
   { value: "BINARY", label: "BINARY (file SHA-256)", available: true },
   { value: "CDHASH", label: "CDHASH (code-directory hash)", available: true },
   { value: "SIGNINGID", label: "SIGNINGID (Team:bundle.id)", available: true },
   { value: "TEAMID", label: "TEAMID (Apple Developer team)", available: true },
-  { value: "CERTIFICATE", label: "CERTIFICATE (leaf SHA-256)", available: false },
-  { value: "PATH", label: "PATH (canonical absolute)", available: false },
+  { value: "CERTIFICATE", label: "CERTIFICATE (leaf SHA-256)", available: true },
+  { value: "PATH", label: "PATH (canonical absolute)", available: true },
 ];
 
 const SEVERITIES = ["low", "medium", "high", "critical"];
@@ -55,52 +56,62 @@ const PLACEHOLDERS = new Map<string, string>([
   ["CDHASH", "40 lowercase hex characters"],
   ["TEAMID", "10 uppercase alphanumeric (e.g. EQHXZ8M8AV)"],
   ["SIGNINGID", "EQHXZ8M8AV:com.google.Chrome or platform:com.apple.curl"],
+  ["CERTIFICATE", "64 lowercase hex characters (leaf cert sha256)"],
+  ["PATH", "absolute path, e.g. /usr/local/bin/app (/tmp,/var,/etc canonicalized to /private)"],
 ]);
 
-// validateIdentifier dispatches to the per-type regex. Returns null on success or a
-// user-facing error string on failure. Identifiers are normalized (trimmed; BINARY/CDHASH
-// lowercased; TEAMID/SIGNINGID kept case-sensitive because the server is case-sensitive).
+// hexValidator builds a per-type validator for the fixed-length lowercase-hex shapes (BINARY, CDHASH, CERTIFICATE). Returns
+// null on success or a user-facing error string. Factored out so each rule type is a tiny function behind the dispatch Map
+// below, keeping validateIdentifier a flat lookup (Sonar typescript:S3776 cognitive-complexity).
+function hexValidator(label: string, len: number, regex: RegExp): (trimmed: string) => string | null {
+  return (trimmed) => {
+    if (trimmed.length !== len) {
+      return `${label} identifier must be ${String(len)} hex characters (was ${String(trimmed.length)}).`;
+    }
+    if (!regex.test(trimmed.toLowerCase())) {
+      return `${label} identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.`;
+    }
+    return null;
+  };
+}
+
+// validatePath rejects the shapes the server's canonicalizePath rejects outright: relative paths and `..` segments. The empty
+// case is caught by validateIdentifier; the server canonicalizes the rest on persist (/tmp,/var,/etc -> /private).
+function validatePath(trimmed: string): string | null {
+  if (!trimmed.startsWith("/")) return "PATH must be an absolute path (start with /).";
+  if (trimmed.split("/").includes("..")) return "PATH must not contain `..` segments.";
+  return null;
+}
+
+// IDENTIFIER_VALIDATORS maps each rule type to its format check. CERTIFICATE shares BINARY's 64-char SHA-256 hex shape (the
+// leaf signing cert's digest; the server uses the same hex64 regex). A Map keeps the dispatch off bracket-indexing (object-injection lint).
+const IDENTIFIER_VALIDATORS = new Map<string, (trimmed: string) => string | null>([
+  ["BINARY", hexValidator("BINARY", BINARY_HEX_LENGTH, BINARY_HEX_REGEX)],
+  ["CERTIFICATE", hexValidator("CERTIFICATE", BINARY_HEX_LENGTH, BINARY_HEX_REGEX)],
+  ["CDHASH", hexValidator("CDHASH", CDHASH_HEX_LENGTH, CDHASH_HEX_REGEX)],
+  ["TEAMID", (trimmed) => (TEAM_ID_REGEX.test(trimmed) ? null : "TEAMID must be 10 uppercase alphanumeric characters (e.g. EQHXZ8M8AV).")],
+  ["SIGNINGID", (trimmed) => (SIGNING_ID_REGEX.test(trimmed) ? null : "SIGNINGID must look like <TeamID>:<bundle.id> or platform:<bundle.id>.")],
+  ["PATH", validatePath],
+]);
+
+// validateIdentifier trims, rejects empty, then dispatches to the per-type validator. Returns null on success or a user-facing
+// error string. Identifiers are normalized at submit (BINARY/CDHASH/CERTIFICATE lowercased; TEAMID/SIGNINGID kept
+// case-sensitive; PATH canonicalized server-side).
 function validateIdentifier(ruleType: string, value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return "Identifier is required.";
-  switch (ruleType) {
-    case "BINARY":
-      if (trimmed.length !== BINARY_HEX_LENGTH) {
-        return `BINARY identifier must be ${String(BINARY_HEX_LENGTH)} hex characters (was ${String(trimmed.length)}).`;
-      }
-      if (!BINARY_HEX_REGEX.test(trimmed.toLowerCase())) {
-        return "BINARY identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
-      }
-      return null;
-    case "CDHASH":
-      if (trimmed.length !== CDHASH_HEX_LENGTH) {
-        return `CDHASH identifier must be ${String(CDHASH_HEX_LENGTH)} hex characters (was ${String(trimmed.length)}).`;
-      }
-      if (!CDHASH_HEX_REGEX.test(trimmed.toLowerCase())) {
-        return "CDHASH identifier must contain only hex characters (0-9 a-f); will be normalized to lowercase before submit.";
-      }
-      return null;
-    case "TEAMID":
-      if (!TEAM_ID_REGEX.test(trimmed)) {
-        return "TEAMID must be 10 uppercase alphanumeric characters (e.g. EQHXZ8M8AV).";
-      }
-      return null;
-    case "SIGNINGID":
-      if (!SIGNING_ID_REGEX.test(trimmed)) {
-        return "SIGNINGID must look like <TeamID>:<bundle.id> or platform:<bundle.id>.";
-      }
-      return null;
-    default:
-      return `Rule type ${ruleType} is not accepted by this build.`;
-  }
+  const validate = IDENTIFIER_VALIDATORS.get(ruleType);
+  if (!validate) return `Rule type ${ruleType} is not accepted by this build.`;
+  return validate(trimmed);
 }
 
-// normalizeIdentifier prepares the value for submission to the server. BINARY and CDHASH
-// are lowercased (the server validator is strict on case); TEAMID and SIGNINGID stay
-// untouched because the format already constrains them.
+// normalizeIdentifier prepares the value for submission to the server. BINARY, CDHASH, and
+// CERTIFICATE are lowercased (the server validator is strict on hex case); TEAMID and
+// SIGNINGID stay untouched because the format already constrains them. PATH is sent as
+// typed; the server canonicalizes it on persist (NormalizeIdentifier in validate.go).
 function normalizeIdentifier(ruleType: string, value: string): string {
   const trimmed = value.trim();
-  if (ruleType === "BINARY" || ruleType === "CDHASH") {
+  if (ruleType === "BINARY" || ruleType === "CDHASH" || ruleType === "CERTIFICATE") {
     return trimmed.toLowerCase();
   }
   return trimmed;
