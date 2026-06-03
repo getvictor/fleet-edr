@@ -59,6 +59,14 @@ at the source to those sensitive target paths via a dedicated Endpoint Security 
 kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes
 to paths outside the sensitive set MUST NOT be collected.
 
+#### Scenario: A write to a sensitive path is captured
+
+- **GIVEN** the extension is running with the sensitive-path file-modification client active
+- **WHEN** a process writes to `/etc/sudoers` (or a direct child of `/etc/sudoers.d/`)
+- **THEN** a write-mode `open` event is emitted carrying the writing process PID, the file path, and the
+  write-mode access flags
+- **AND** the event reaches the server and is available to the detection pipeline
+
 ### Requirement: Process exec authorization
 
 The system SHALL evaluate every exec against the active blocklist before allowing the new image to run. When the target

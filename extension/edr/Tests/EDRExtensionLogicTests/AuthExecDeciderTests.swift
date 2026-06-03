@@ -8,91 +8,65 @@
 @testable import EDRExtensionLogic
 import XCTest
 
-// MARK: - Free-function helpers (shared across AuthExecDeciderTests + AuthExecDeciderPhaseBTests)
-//
-// Helpers live at file scope rather than inside the test class because the class body length is bounded by SwiftLint
-// (type_body_length = 300). The shared helpers are tiny enough that file-scope makes them naturally usable by the second
-// test class that covers CERTIFICATE + PATH precedence. Keeping them private here scopes the symbols to the test target.
-
-/// makeRule builds a minimal ApplicationControlRule with the supplied ruleType / identifier / action / enforcement. Other
-/// fields are set to representative defaults so tests focus on the precedence walk and verdict mapping rather than per-rule
-/// decoration.
-private func makeRule(
-    ruleType: String,
-    identifier: String,
-    action: String = ApplicationControlAction.block,
-    enforcement: String = ApplicationControlEnforcement.protect
-) -> ApplicationControlRule {
-    return ApplicationControlRule(
-        ruleID: "app_control:test-\(identifier)",
-        ruleType: ruleType,
-        identifier: identifier,
-        action: action,
-        enforcement: enforcement,
-        severity: "medium",
-        customMsg: nil,
-        customURL: nil
-    )
-}
-
-/// makeSnapshot builds an ApplicationControlSnapshot with the supplied rule maps and the requested fallback posture. Maps
-/// not supplied default to empty so the precedence walk for missing layers correctly returns no match. certificateRules +
-/// pathRules joined the parameter list when CERTIFICATE / PATH wired through to the decider (PR for #210).
-private func makeSnapshot(
-    deadlineFallback: FallbackPosture = .defaultPosture,
-    cdhashRules: [String: ApplicationControlRule] = [:],
-    binaryRules: [String: ApplicationControlRule] = [:],
-    signingIDRules: [String: ApplicationControlRule] = [:],
-    teamIDRules: [String: ApplicationControlRule] = [:],
-    certificateRules: [String: ApplicationControlRule] = [:],
-    pathRules: [String: ApplicationControlRule] = [:]
-) -> ApplicationControlSnapshot {
-    return ApplicationControlSnapshot(
-        policyID: 1,
-        policyVersion: 1,
-        deadlineFallback: deadlineFallback,
-        binaryRules: binaryRules,
-        cdhashRules: cdhashRules,
-        signingIDRules: signingIDRules,
-        certificateRules: certificateRules,
-        teamIDRules: teamIDRules,
-        pathRules: pathRules
-    )
-}
-
-/// makeTuple wraps AuthTuple's memberwise init with every field defaulted to nil so existing tests can supply just the
-/// field they exercise. Each new test case sets only the fields its precedence row depends on; the rest stay nil so the
-/// walker correctly skips those layers. The default-everything pattern keeps the test surface readable and stable across
-/// future AuthTuple field additions.
-private func makeTuple(
-    cdhash: String? = nil,
-    leafCertSHA256: String? = nil,
-    signingIDPrefixed: String? = nil,
-    teamID: String? = nil,
-    canonicalPath: String? = nil
-) -> AuthTuple {
-    return AuthTuple(
-        cdhash: cdhash,
-        leafCertSHA256: leafCertSHA256,
-        signingIDPrefixed: signingIDPrefixed,
-        teamID: teamID,
-        canonicalPath: canonicalPath
-    )
-}
+// The shared makeRule / makeSnapshot / makeTuple fixtures live in AuthExecDeciderTestSupport.swift so this suite, the
+// CERTIFICATE / PATH suite (AuthExecDeciderPhaseBTests), and the SIGNINGID / TEAMID suite (AuthExecDeciderSigningTests)
+// all share a single definition without any one file breaching SwiftLint's file_length cap.
 
 final class AuthExecDeciderTests: XCTestCase {
 
     // MARK: - No match returns allow
 
-    func testNoMatchOnEmptySnapshotReturnsAllow() {
+    func test_spec_extension_application_control_auth_exec_denial_on_block_match_no_matching_rule_allows_the_exec() {
         let tuple = makeTuple(cdhash: "c0", signingIDPrefixed: "ABC:org.test", teamID: "ABCDEFGHIJ")
         let decision = decideAuthExec(tuple: tuple, snapshot: makeSnapshot(), hashOutcome: .notNeeded)
         XCTAssertEqual(decision, .allow)
     }
 
+    /// An unsigned exec target's tuple carries no team_id / signing_id_prefixed / leaf_cert_sha256, so the SIGNINGID, TEAMID,
+    /// and CERTIFICATE layers are skipped by the decider's optional bindings: a rule populated in any of those maps cannot
+    /// match such a target. Only CDHASH (also absent here), BINARY (via hashOutcome), and PATH could fire. With SIGNINGID +
+    /// TEAMID + CERTIFICATE rules present but every corresponding tuple field nil, the walk consults none of them and allows.
+    func test_spec_extension_application_control_precedence_walk_an_absent_tuple_component_is_skipped() {
+        let signRule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.bad")
+        let teamRule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
+        let certRule = makeRule(ruleType: ApplicationControlRuleType.certificate, identifier: "leafhash")
+        // Unsigned target: no cdhash, no signing id, no team id, no leaf cert. canonicalPath nil so PATH is skipped too.
+        let tuple = makeTuple()
+        let decision = decideAuthExec(
+            tuple: tuple,
+            snapshot: makeSnapshot(
+                signingIDRules: ["ABC:org.bad": signRule],
+                teamIDRules: ["ABCDEFGHIJ": teamRule],
+                certificateRules: ["leafhash": certRule]
+            ),
+            hashOutcome: .notNeeded
+        )
+        XCTAssertEqual(decision, .allow, "SIGNINGID/TEAMID/CERTIFICATE layers must be skipped when the tuple field is absent")
+    }
+
+    // CDHASH rules are only consulted when the target tuple carries a cdhash, which buildAuthTuple populates exclusively for
+    // Hardened-Runtime processes (see isHardenedRuntime gate). A non-hardened binary surfaces cdhash == nil, so a CDHASH rule
+    // whose identifier nominally targets it silently no-ops and the walk continues to lower-precedence layers. Pins the
+    // decider half of the "CDHASH only matches hardened-runtime processes" requirement; the Hardened-Runtime flag read itself
+    // lives in buildAuthTuple (ESF-coupled, exercised at the system layer).
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_cdhash_rules_only_match_hardened_runtime_processes_a_cdhash_rule_does_not_match_a_non_hardened_binary() {
+        let cdhashRule = makeRule(ruleType: ApplicationControlRuleType.cdhash, identifier: "cdhashvalue")
+        let teamRule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
+        // Non-hardened binary: buildAuthTuple leaves cdhash nil even though the CDHASH rule's identifier "would" match.
+        let tuple = makeTuple(cdhash: nil, teamID: "ABCDEFGHIJ")
+        let decision = decideAuthExec(
+            tuple: tuple,
+            snapshot: makeSnapshot(cdhashRules: ["cdhashvalue": cdhashRule], teamIDRules: ["ABCDEFGHIJ": teamRule]),
+            hashOutcome: .notNeeded
+        )
+        // CDHASH skipped (cdhash nil); the walk continues and the lower-precedence TEAMID rule is what fires.
+        XCTAssertEqual(decision, .deny(rule: teamRule, matchedIdentifier: "ABCDEFGHIJ"))
+    }
+
     // MARK: - CDHASH precedence
 
-    func testCDHashBlockRuleReturnsDeny() {
+    func test_spec_extension_application_control_auth_exec_denial_on_block_match_a_block_rule_denies_the_exec() {
         let rule = makeRule(ruleType: ApplicationControlRuleType.cdhash, identifier: "cdhashvalue")
         let tuple = makeTuple(cdhash: "cdhashvalue", signingIDPrefixed: nil, teamID: nil)
         let decision = decideAuthExec(
@@ -151,7 +125,8 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: signRule, matchedIdentifier: "ABC:org.bad"))
     }
 
-    func testNotNeededHashSkipsBinaryLayerAndWalksRest() {
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_deadline_guarded_synchronous_sha_256_for_binary_rule_consultation_empty_binary_map_skips_the_hash_compute() {
         // When the snapshot has no BINARY rules, handleAuthExec passes .notNeeded so the precedence
         // walk skips BINARY entirely and continues to SIGNINGID / TEAMID rather than applying the
         // fallback posture. This is the common case in practice.
@@ -169,7 +144,7 @@ final class AuthExecDeciderTests: XCTestCase {
     // layer (.deadlineExceeded / .readFailed) and SIGNINGID + TEAMID both fail to match. A
     // definitive lower-precedence DENY beats BINARY uncertainty.
 
-    func testDeadlineExceededFailClosedNoLowerRuleDeniesWithUndecidedAudit() {
+    func test_spec_extension_application_control_deadline_fallback_posture_fail_closed_under_deadline_exceedance() {
         let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(
@@ -180,7 +155,7 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .denyWithUndecidedAudit(reason: .deadline))
     }
 
-    func testDeadlineExceededFailOpenNoLowerRuleAllowsSilently() {
+    func test_spec_extension_application_control_deadline_fallback_posture_fail_open_under_deadline_exceedance() {
         let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(
@@ -191,7 +166,7 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .allow)
     }
 
-    func testDeadlineExceededAuditOnlyNoLowerRuleAllowsAndEmitsUndecidedAudit() {
+    func test_spec_extension_application_control_deadline_fallback_posture_audit_only_under_deadline_exceedance() {
         let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(
@@ -202,42 +177,9 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .allowWithUndecidedAudit(reason: .deadline))
     }
 
-    // MARK: - Lower-precedence rules dominate BINARY uncertainty (Gemini critical)
-
-    // Gemini Code Assist flagged the prior behaviour as a security bypass: under fail-open or
-    // audit-only postures, a hash timeout would short-circuit the walk and silently disable any
-    // SIGNINGID / TEAMID block rules. The corrected semantic continues the walk and only applies
-    // the posture when no later layer matches.
-
-    func testDeadlineExceededFailOpenStillEnforcesSigningIDBlock() {
-        let signRule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.bad")
-        let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
-        let tuple = makeTuple(cdhash: nil, signingIDPrefixed: "ABC:org.bad", teamID: nil)
-        let snapshot = makeSnapshot(
-            deadlineFallback: .failOpen,
-            binaryRules: ["anyShaWeCantSee": binaryRule],
-            signingIDRules: ["ABC:org.bad": signRule]
-        )
-        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .deadlineExceeded)
-        XCTAssertEqual(decision, .deny(rule: signRule, matchedIdentifier: "ABC:org.bad"))
-    }
-
-    func testReadFailedAuditOnlyStillEnforcesTeamIDBlock() {
-        let teamRule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
-        let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
-        let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: "ABCDEFGHIJ")
-        let snapshot = makeSnapshot(
-            deadlineFallback: .auditOnly,
-            binaryRules: ["anyShaWeCantSee": binaryRule],
-            teamIDRules: ["ABCDEFGHIJ": teamRule]
-        )
-        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .readFailed)
-        XCTAssertEqual(decision, .deny(rule: teamRule, matchedIdentifier: "ABCDEFGHIJ"))
-    }
-
     // MARK: - Read-failed posture matrix
 
-    func testReadFailedFailClosedNoLowerRuleDeniesWithUndecidedAudit() {
+    func test_spec_extension_application_control_application_control_undecided_event_read_failed_reason_on_toctou_mismatch_under_fail_closed() {
         let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
         let snapshot = makeSnapshot(deadlineFallback: .failClosed, binaryRules: ["anyShaWeCantSee": binaryRule])
@@ -251,40 +193,6 @@ final class AuthExecDeciderTests: XCTestCase {
         let snapshot = makeSnapshot(deadlineFallback: .auditOnly, binaryRules: ["anyShaWeCantSee": binaryRule])
         let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: .readFailed)
         XCTAssertEqual(decision, .allowWithUndecidedAudit(reason: .readFailed))
-    }
-
-    // MARK: - SIGNINGID / TEAMID layers
-
-    func testSigningIDBlockRuleReturnsDeny() {
-        let rule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.bad")
-        let tuple = makeTuple(cdhash: nil, signingIDPrefixed: "ABC:org.bad", teamID: nil)
-        let decision = decideAuthExec(
-            tuple: tuple, snapshot: makeSnapshot(signingIDRules: ["ABC:org.bad": rule]), hashOutcome: .notNeeded
-        )
-        XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "ABC:org.bad"))
-    }
-
-    func testTeamIDBlockRuleReturnsDeny() {
-        let rule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
-        let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: "ABCDEFGHIJ")
-        let decision = decideAuthExec(
-            tuple: tuple, snapshot: makeSnapshot(teamIDRules: ["ABCDEFGHIJ": rule]), hashOutcome: .notNeeded
-        )
-        XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "ABCDEFGHIJ"))
-    }
-
-    func testPrecedenceCDHashBeatsSigningIDOnSimultaneousBlock() {
-        // Both CDHASH and SIGNINGID layers have block rules; the precedence walk must return
-        // the CDHASH match (higher priority) and never consult SIGNINGID.
-        let cdRule = makeRule(ruleType: ApplicationControlRuleType.cdhash, identifier: "cdhashfirst")
-        let signRule = makeRule(ruleType: ApplicationControlRuleType.signingID, identifier: "ABC:org.bad")
-        let tuple = makeTuple(cdhash: "cdhashfirst", signingIDPrefixed: "ABC:org.bad", teamID: nil)
-        let decision = decideAuthExec(
-            tuple: tuple,
-            snapshot: makeSnapshot(cdhashRules: ["cdhashfirst": cdRule], signingIDRules: ["ABC:org.bad": signRule]),
-            hashOutcome: .notNeeded
-        )
-        XCTAssertEqual(decision, .deny(rule: cdRule, matchedIdentifier: "cdhashfirst"))
     }
 }
 
@@ -332,7 +240,7 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
 
     /// A binary with no leaf cert (unsigned / ad-hoc) and no CERTIFICATE rule in the map must NOT match even if the map
     /// has entries for other certs. Sanity check that the optional-binding skips the layer cleanly.
-    func testCertificateNoMatchWhenLeafIsNil() {
+    func test_spec_extension_application_control_auth_exec_denial_on_block_match_a_cold_cache_exec_on_a_certificate_only_target_is_allowed() {
         let certRule = makeRule(ruleType: ApplicationControlRuleType.certificate, identifier: "otherleafhash")
         let tuple = makeTuple(leafCertSHA256: nil)
         let decision = decideAuthExec(
@@ -341,6 +249,23 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
             hashOutcome: .notNeeded
         )
         XCTAssertEqual(decision, .allow)
+    }
+
+    // A cold leaf-cert cache (leafCertSHA256 == nil) silently misses the CERTIFICATE layer and the exec is allowed; once the
+    // cache warms (leafCertSHA256 present) the same CERTIFICATE rule matches and the decider returns deny. The two halves
+    // model the cold-miss-then-warm-hit lazy-fetch contract at the decider boundary -- the SecCode-backed cache fill itself
+    // (SigningInfoFallback) is environment-coupled and exercised at the system / VM layer, but the decider's optional-binding
+    // behaviour on the leaf-cert tuple field is the pure, deterministic half pinned here.
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_lazy_signing_info_fetch_is_non_blocking_a_cold_certificate_cache_yields_a_silent_miss_then_a_warm_hit() {
+        let certRule = makeRule(ruleType: ApplicationControlRuleType.certificate, identifier: "leafhashvalue")
+        let snapshot = makeSnapshot(certificateRules: ["leafhashvalue": certRule])
+        // Cold: leaf cert not yet resolved -> CERTIFICATE layer skipped -> allow.
+        let cold = decideAuthExec(tuple: makeTuple(leafCertSHA256: nil), snapshot: snapshot, hashOutcome: .notNeeded)
+        XCTAssertEqual(cold, .allow)
+        // Warm: cache filled, leaf cert present -> CERTIFICATE rule matches -> deny within the same (non-blocking) decode path.
+        let warm = decideAuthExec(tuple: makeTuple(leafCertSHA256: "leafhashvalue"), snapshot: snapshot, hashOutcome: .notNeeded)
+        XCTAssertEqual(warm, .deny(rule: certRule, matchedIdentifier: "leafhashvalue"))
     }
 
     /// Under fail-open with .deadlineExceeded, the walk still continues through CERTIFICATE before the posture fires.

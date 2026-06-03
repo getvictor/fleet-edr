@@ -23,6 +23,7 @@ func TestRoles_NilDBRejected(t *testing.T) {
 // TestBuiltinRoles_StableShape pins the canonical role set as a wire-format contract: order, ids, and the is-builtin invariant (every
 // entry in the list represents a built-in role; the seed sets is_builtin=1 for each). A future operator-created role set lives outside
 // this slice; renaming or reordering an entry here is a schema-level break.
+// spec:server-identity-authorization/five-seeded-roles-bundle-permissions-for-the-deployment/built-in-role-cannot-be-deleted
 func TestBuiltinRoles_StableShape(t *testing.T) {
 	t.Parallel()
 	wantIDs := []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}

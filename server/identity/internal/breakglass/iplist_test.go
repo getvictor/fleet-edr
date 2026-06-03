@@ -95,6 +95,7 @@ func TestAllowlist_Middleware_404sOffList(t *testing.T) {
 }
 
 // On-list requests pass through.
+// spec:server-identity-authentication/break-glass-login-lives-at-a-separate-path-not-on-the-sso-login-page/break-glass-ui-is-reachable-from-an-allowlisted-ip
 func TestAllowlist_Middleware_PassesThroughOnList(t *testing.T) {
 	t.Parallel()
 	a, err := breakglass.NewAllowlist([]string{"127.0.0.0/8"})

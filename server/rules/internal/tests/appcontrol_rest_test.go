@@ -237,6 +237,7 @@ func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 }
 
 // spec:server-admin-surface/persist-and-fan-out-application-control-rules/valid-rule-create-increments-version-and-fans-out
+// spec:server-application-control/command-fan-out-on-policy-mutation/a-new-rule-fans-out-only-to-assigned-hosts
 //
 // TestAppControl_CreateRule_FansOutToEveryHost: the headline contract. One rule create -> one set_application_control command per host,
 // each carrying the same wire payload. Dedup if HostLister returns duplicates so the audit row's fanout_hosts is the unique count.
@@ -289,6 +290,8 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	assert.Equal(t, 0, ev.Payload["fanout_failed"], "no failures expected on the happy path")
 }
 
+// spec:server-application-control/command-fan-out-on-policy-mutation/a-host-that-matches-multiple-assigned-groups-receives-one-command
+//
 // TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments: closes openspec task 11.1.5. The Phase A walker
 // resolves hosts via the assignments -> host_groups walk in service.fanout; when a policy is assigned to two host groups
 // whose criteria resolve to overlapping host sets, each unique host must receive exactly ONE set_application_control
@@ -380,6 +383,51 @@ func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, 2, events[0].Payload["fanout_hosts"])
 	assert.Equal(t, 1, events[0].Payload["fanout_failed"], "host-bad's failure must show in fanout_failed")
+}
+
+// spec:server-application-control/rule-lifecycle-audit-events/creating-a-rule-emits-an-audit-event
+//
+// TestAppControlREST_CreateRule_AuditCarriesIdentityReasonAndDiff pins the spec scenario "creating a rule emits an audit event":
+// a successful rule create must leave exactly one audit event carrying the operator's identity (the session user_id), the
+// operator-supplied reason, the policy and rule identifiers, and a diff describing the created rule (its rule_type + identifier +
+// severity). The headline fan-out test asserts the event is emitted; this test pins the full audit-content contract the
+// scenario's THEN clause enumerates.
+func TestAppControlREST_CreateRule_AuditCarriesIdentityReasonAndDiff(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+	identifier := strings.Repeat("a", 64)
+
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": identifier,
+			"severity":   rulesapi.SeverityRuleHigh,
+			"reason":     "block known-bad binary from incident IR-1234",
+		})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var created rulesapi.ApplicationControlRule
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+
+	events := r.audit.snapshot()
+	require.Len(t, events, 1, "a successful rule create emits exactly one audit event")
+	ev := events[0]
+	// Operator identity.
+	assert.Equal(t, identityapi.AuditAppControlRuleCreate, ev.Action)
+	require.NotNil(t, ev.UserID)
+	assert.Equal(t, int64(42), *ev.UserID, "audit event carries the session operator's identity")
+	// Rule identifier (target) + policy identifier in the payload.
+	assert.Equal(t, "application_control_rule", ev.TargetType)
+	assert.Equal(t, i64(created.ID), ev.TargetID, "target id is the created rule id")
+	assert.EqualValues(t, policyID, ev.Payload["policy_id"], "audit payload names the owning policy")
+	// Operator-supplied reason.
+	assert.Equal(t, "block known-bad binary from incident IR-1234", ev.Payload["reason"])
+	// Diff describing the created rule.
+	assert.Equal(t, string(rulesapi.RuleTypeBinary), ev.Payload["rule_type"])
+	assert.Equal(t, identifier, ev.Payload["identifier"])
+	assert.Equal(t, string(rulesapi.SeverityRuleHigh), ev.Payload["severity"])
 }
 
 // TestAppControl_CreateRule_RejectsDuplicate: posting the same (policy, rule_type, identifier) twice should return 409 with the typed
@@ -1026,9 +1074,12 @@ func TestAppControlREST_Mutations_InvalidPolicyID(t *testing.T) {
 	}
 }
 
+// spec:server-application-control/rule-lifecycle-audit-events/bulk-upsert-emits-a-single-audit-event
+//
 // TestAppControlREST_BulkUpsertRules_HappyPath confirms POST /policies/{id}/rules:bulkUpsert lands a mixed insert+update batch,
 // returns the post-upsert row set + insert/update counts, bumps the policy version exactly once, fans out exactly once to every
-// host, and emits a single rule_bulk_upsert audit event.
+// host, and emits a single rule_bulk_upsert audit event. Pins the spec scenario "bulk upsert emits a single audit event":
+// exactly one audit row regardless of batch size, carrying the touched-rule count.
 func TestAppControlREST_BulkUpsertRules_HappyPath(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a", "host-b"})

@@ -41,6 +41,7 @@ var forbiddenAuditSQL = regexp.MustCompile(
 // package and need an explicit exception added to the allowed-list,
 // at which point the rule's intent is the discussion the change
 // invites — exactly the code-review signal the spec wanted.
+// spec:server-identity-audit-log/append-only-persistence/no-code-path-updates-an-audit-row
 func TestAuditEventsAppendOnly(t *testing.T) {
 	t.Parallel()
 	root := repoRoot(t)

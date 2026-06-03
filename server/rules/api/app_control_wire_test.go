@@ -56,8 +56,12 @@ func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
 	}
 }
 
+// spec:server-application-control/command-fan-out-on-policy-mutation/disabled-rules-are-not-pushed
+//
 // TestMarshalSetApplicationControlPayload_FiltersDisabled covers the payload's filtering contract: disabled rules MUST NOT reach the
-// agent. The fan-out path lifts this gate so the extension never allocates snapshot entries for rules an admin has paused.
+// agent. The fan-out path lifts this gate so the extension never allocates snapshot entries for rules an admin has paused. Pins the
+// spec scenario "disabled rules are not pushed": a policy with one enabled + one disabled rule fans out a payload carrying only the
+// enabled rule.
 func TestMarshalSetApplicationControlPayload_FiltersDisabled(t *testing.T) {
 	rules := []api.ApplicationControlRule{
 		{RuleType: api.RuleTypeBinary, Identifier: "a", Enabled: true},

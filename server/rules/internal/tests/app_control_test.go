@@ -36,6 +36,8 @@ func newAppControlStore(t *testing.T) (api.ApplicationControlStore, *rulesbootst
 	return r.ApplicationControlStore(), r
 }
 
+// spec:server-application-control/policy-is-a-named-versioned-ruleset/a-fresh-deployment-boots-and-the-seed-policy-is-present
+//
 // TestAppControl_SeedDefaultPolicy locks the bootstrap contract: a fresh deployment boots with one Default policy, version 1, zero
 // rules, default_action='NONE'.
 func TestAppControl_SeedDefaultPolicy(t *testing.T) {
@@ -55,6 +57,8 @@ func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 	assert.Empty(t, rules)
 }
 
+// spec:server-application-control/bootstrap-seeds-default-policy-and-all-hosts-group/bootstrap-is-idempotent
+//
 // TestAppControl_BootstrapIdempotent re-applies the schema and seed and confirms the policy count stays at one. Boot loops (e.g.
 // cmd/main on restart) must not duplicate the seed row.
 func TestAppControl_BootstrapIdempotent(t *testing.T) {
@@ -68,6 +72,18 @@ func TestAppControl_BootstrapIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, policies, 1)
 	assert.Equal(t, api.DefaultPolicyName, policies[0].Name)
+
+	// The spec scenario "bootstrap is idempotent" requires the host-group, policy, AND assignment counts to all remain at one
+	// across repeated ApplySchema calls; assert all three so a regression that re-seeds the all-hosts group or the
+	// Default -> all-hosts assignment on every boot is caught here, not just policy duplication.
+	groups, err := store.ListHostGroups(t.Context())
+	require.NoError(t, err)
+	require.Len(t, groups, 1, "all-hosts host group count must stay at one across repeated bootstraps")
+	assert.Equal(t, api.DefaultHostGroupName, groups[0].Name)
+
+	assignments, err := store.ListAssignmentsForPolicy(t.Context(), policies[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, assignments, 1, "Default -> all-hosts assignment count must stay at one across repeated bootstraps")
 }
 
 // TestAppControl_GetPolicy_NotFound surfaces the typed sentinel that
@@ -258,8 +274,11 @@ func TestAppControl_ListRulesAcrossPolicies_EnabledTriState(t *testing.T) {
 
 func ptrBool(b bool) *bool { return &b }
 
+// spec:server-application-control/policy-is-a-named-versioned-ruleset/creating-a-rule-increments-the-policy-version
+//
 // TestAppControl_CreateRule_BinaryHappyPath exercises the demo's critical write: an admin creates a BINARY rule, the row persists,
-// the policy version bumps so the next agent poll picks up the change.
+// the policy version bumps so the next agent poll picks up the change. Pins the spec scenario "creating a rule increments the
+// policy version": post-create the policy version is preVersion+1 and updated_by reflects the actor.
 func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
@@ -307,6 +326,8 @@ func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 	assert.Equal(t, rule.ID, listed[0].ID)
 }
 
+// spec:server-application-control/rule-identifies-one-binary-signing-identity-or-path/duplicating-the-same-rule-type-identifier-is-rejected
+//
 // TestAppControl_CreateRule_DuplicateRejected confirms the unique key returns the typed sentinel rather than a bare driver error.
 // The REST surface maps the sentinel to HTTP 409 so idempotent retries from automation clients are distinguishable from real failures.
 func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
@@ -329,6 +350,52 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	_, err = store.CreateRule(ctx, req)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlDuplicateRule)
+}
+
+// spec:server-application-control/rule-identifies-one-binary-signing-identity-or-path/two-rules-in-the-same-policy-can-target-the-same-identifier-under-different-types
+//
+// TestAppControl_CreateRule_SameIdentifierDifferentTypeCoexist pins the spec scenario "two rules in the same policy can target
+// the same identifier under different types": the unique key is the triple (policy_id, rule_type, identifier), so the SAME
+// identifier string under two distinct rule_types must both persist without tripping ErrAppControlDuplicateRule. BINARY and
+// CERTIFICATE share the 64-lowercase-hex identifier format, so a single hex string is valid under both types and is the honest
+// way to exercise the "rule_type is part of the key" invariant with two genuinely-accepted identifiers.
+func TestAppControl_CreateRule_SameIdentifierDifferentTypeCoexist(t *testing.T) {
+	t.Parallel()
+	store, _ := newAppControlStore(t)
+	ctx := t.Context()
+	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
+	require.NoError(t, err)
+
+	sharedIdentifier := strings.Repeat("a", 64) // valid for both BINARY and CERTIFICATE
+
+	binaryRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   p.ID,
+		RuleType:   api.RuleTypeBinary,
+		Identifier: sharedIdentifier,
+		Actor:      "demo-admin",
+		Reason:     "binary rule for shared identifier",
+	})
+	require.NoError(t, err)
+
+	// Same identifier string, different rule_type: must succeed because the unique key includes rule_type.
+	certRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
+		PolicyID:   p.ID,
+		RuleType:   api.RuleTypeCertificate,
+		Identifier: sharedIdentifier,
+		Actor:      "demo-admin",
+		Reason:     "certificate rule for the same identifier",
+	})
+	require.NoError(t, err, "same identifier under a different rule_type must NOT collide on the unique key")
+
+	assert.NotEqual(t, binaryRule.ID, certRule.ID, "the two rules are distinct rows")
+	assert.Equal(t, api.RuleTypeBinary, binaryRule.RuleType)
+	assert.Equal(t, api.RuleTypeCertificate, certRule.RuleType)
+	assert.Equal(t, sharedIdentifier, binaryRule.Identifier)
+	assert.Equal(t, sharedIdentifier, certRule.Identifier)
+
+	listed, err := store.ListRulesByPolicy(ctx, p.ID)
+	require.NoError(t, err)
+	require.Len(t, listed, 2, "both rules coexist on the same policy")
 }
 
 // spec:server-admin-surface/persist-and-fan-out-application-control-rules/unsupported-rule-type-is-rejected-without-persisting
@@ -363,6 +430,8 @@ func TestAppControl_CreateRule_RejectsUnknownRuleType(t *testing.T) {
 	assert.Len(t, rulesAfter, len(rulesBefore), "rejected rule_type must not persist a row")
 }
 
+// spec:server-application-control/identifier-validation-per-rule-type/a-path-is-canonicalized-before-persistence
+//
 // TestAppControl_CreateRule_PathPersistsCanonical pins the canonicalization-on-persist contract Gemini surfaced on PR #290.
 // An operator who creates a PATH rule for `/tmp/foo` MUST see `/private/tmp/foo` round-trip from the store; the extension's
 // AUTH_EXEC walker queries against the canonical form, so persisting the raw `/tmp/foo` would silently make every such rule
@@ -438,6 +507,8 @@ func TestAppControl_CreateRule_AcceptsAllWiredTypes(t *testing.T) {
 	}
 }
 
+// spec:server-application-control/host-groups-and-policy-assignments/a-fresh-deployment-has-an-all-hosts-group-and-the-default-policy-is-assigned-to-it
+//
 // TestAppControl_ListHostGroupsForPolicy_SeededDefault pins the Phase A bootstrap contract: EnsureDefaultPolicy must seed a Default
 // policy AND an all-hosts host group AND an assignment between them, and ListHostGroupsForPolicy must return that group. A regression
 // in any of those three rows would otherwise silently break the fan-out path (no assignment -> no_assignments skip).
@@ -712,6 +783,8 @@ func TestAppControl_CreatePolicy_HappyPath(t *testing.T) {
 	assert.Equal(t, "demo-admin", policy.CreatedBy)
 }
 
+// spec:server-application-control/policy-is-a-named-versioned-ruleset/two-policies-cannot-share-a-name
+//
 // TestAppControl_CreatePolicy_DuplicateName confirms ErrAppControlDuplicatePolicy fires on a name collision. The seed Default
 // policy gives us a guaranteed collision target.
 func TestAppControl_CreatePolicy_DuplicateName(t *testing.T) {
@@ -879,6 +952,7 @@ func TestAppControl_BulkUpsertRules_HappyPath_MixedInsertAndUpdate(t *testing.T)
 
 // TestAppControl_BulkUpsertRules_Idempotent confirms a re-run with the same payload produces 0 inserts + N updates and the
 // same final row set. The audit log would show two separate bulk_upsert rows but each with the same post-upsert state.
+// spec:server-application-control/rest-surface-for-policies-rules-groups-and-assignments/a-bulk-upsert-is-idempotent-on-the-unique-key
 func TestAppControl_BulkUpsertRules_Idempotent(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
@@ -1063,10 +1137,13 @@ func TestAppControl_GetHostGroupByID_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrAppControlHostGroupNotFound)
 }
 
+// spec:server-application-control/bootstrap-seeds-default-policy-and-all-hosts-group/a-fresh-database-boots-into-a-usable-state
+//
 // TestAppControl_ListAssignmentsForPolicy_SurfacesSeedAssignment: the bootstrap seeds the Default policy + the
 // Default -> all-hosts assignment. ListAssignmentsForPolicy on the seed policy returns exactly one row pointing at the seed
 // host group with priority 0. Tests the raw-rows shape the REST handler emits (distinct from ListHostGroupsForPolicy which
-// returns the joined group metadata).
+// returns the joined group metadata). This pins the spec scenario "a fresh database boots into a usable state": exactly one
+// host group, exactly one Default policy, and exactly one assignment connecting them.
 func TestAppControl_ListAssignmentsForPolicy_SurfacesSeedAssignment(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)

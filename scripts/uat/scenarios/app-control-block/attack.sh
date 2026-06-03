@@ -188,7 +188,10 @@ probe_block() {
 }
 
 # ===========================================================================
-# BINARY -- block by file SHA-256.
+# BINARY -- block by file SHA-256. A locally go-built (non-platform) binary carries no is_platform_binary flag, so the
+# carve-out does not exempt it: the AUTH_EXEC handler walks the snapshot precedence ladder, where the BINARY rule on its
+# SHA-256 matches and DENIES. A denied exec proves the snapshot was genuinely walked for a non-platform target.
+# spec:extension-application-control/platform-binary-carve-out-precedes-the-snapshot-walk/a-non-platform-binary-still-walks-the-snapshot
 # ===========================================================================
 BIN_BINARY=$(build_target binary)
 HASH=$(uat_ssh "$VM" "shasum -a 256 $BIN_BINARY | awk '{print \$1}'")
@@ -216,6 +219,30 @@ if [[ "$CDHASH" =~ ^[0-9a-f]{40}$ ]]; then
 else
   uat_fail app-control-block "CDHASH: could not extract a 40-hex cdhash from the signed binary (got '$CDHASH')"
 fi
+
+# ===========================================================================
+# Platform carve-out (ALLOW probe): an Apple platform binary must run even with a BINARY block rule on its exact SHA-256 --
+# the kernel sets is_platform_binary=true and AUTH_EXEC returns ALLOW BEFORE consulting the snapshot. /bin/echo is platform-
+# signed. This is the carve-out that stops an admin bricking the host by blocklisting /sbin/launchd et al.; a block here would
+# be a host-bricking regression. echo never shows a block->allow transition (it is never blocked), so we post the rule, wait a
+# bounded settle (well above the single-digit-second fan-out the block probes above just exercised) for the snapshot to land,
+# then assert echo runs on several consecutive execs.
+# ===========================================================================
+PLATFORM_BIN=/bin/echo
+PLATFORM_HASH=$(uat_ssh "$VM" "shasum -a 256 $PLATFORM_BIN | awk '{print \$1}'")
+[[ "$PLATFORM_HASH" =~ ^[0-9a-f]{64}$ ]] || uat_fail app-control-block "carve-out: could not hash $PLATFORM_BIN (got '$PLATFORM_HASH')"
+PLATFORM_RID=$(post_block_rule BINARY "$PLATFORM_HASH" "platform-carveout")
+RULE_IDS+=("$PLATFORM_RID") # cleanup removes it; leaving it active is harmless (it only matches /bin/echo, which is carved out)
+uat_log app-control-block "carve-out: posted BINARY rule id=$PLATFORM_RID on $PLATFORM_BIN (sha=${PLATFORM_HASH:0:12}); waiting for fan-out"
+for _ in {1..12}; do sleep 3; done # ~36s bounded settle, well above the single-digit-second fan-out the probes above measured
+platform_allowed=1
+for _ in {1..3}; do # echo must still print its sentinel on every attempt despite the block rule on its hash
+  if ! exec_ran "$PLATFORM_BIN" "$SENTINEL" sentinel; then platform_allowed=0; break; fi
+  sleep 1
+done
+# spec:extension-application-control/platform-binary-carve-out-precedes-the-snapshot-walk/an-apple-platform-binary-is-unconditionally-allowed
+[[ "$platform_allowed" == 1 ]] || uat_fail app-control-block "platform binary $PLATFORM_BIN was BLOCKED despite the carve-out (host-bricking regression)"
+uat_log app-control-block "platform carve-out confirmed: $PLATFORM_BIN still ALLOWED with a BINARY block rule on its hash"
 
 # ===========================================================================
 # CERTIFICATE / SIGNINGID / TEAMID -- the signing-derived types, from ONE Developer-ID-signed fixture binary with a non-EDR

@@ -537,6 +537,49 @@ func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), count, "duplicate event_id must not produce a duplicate row in the events table")
 }
 
+// spec:server-application-control/application-control-block-event-contract/a-block-event-for-a-now-deleted-rule-is-accepted
+//
+// TestIngest_ApplicationControlBlockForDeletedRuleIsAccepted pins the spec scenario "a block event for a now-deleted rule is
+// accepted": an extension denies an exec against an app-control rule, the rule is deleted server-side before the block event
+// reaches the server, and the agent then posts the `application_control_block` event. The ingest channel is event-kind-agnostic
+// and performs no rule-existence check, so the event MUST be accepted (HTTP 200) and persisted so the historical decision is not
+// lost. The event references a `rule_id` (`app_control:999999`) that corresponds to no live rule, modelling the deleted-rule
+// race. The authoritative probe is the events-table cardinality after ingest.
+// spec:server-application-control/application-control-block-event-contract/a-block-event-for-an-unknown-rule-is-accepted
+func TestIngest_ApplicationControlBlockForDeletedRuleIsAccepted(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	// rule_id app_control:999999 does not correspond to any live rule on this server (the rule was deleted after the
+	// extension denied the exec). The payload otherwise carries the full block-event shape the extension emits.
+	blockEvent := api.Event{
+		EventID:     "acb-deleted-rule-1",
+		HostID:      "host-a",
+		TimestampNs: 4000,
+		EventType:   "application_control_block",
+		Payload: json.RawMessage(`{
+			"pid": 100,
+			"path": "/Applications/Blocked.app/Contents/MacOS/Blocked",
+			"rule_id": "app_control:999999",
+			"rule_type": "BINARY",
+			"identifier": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"severity": "high",
+			"policy_id": 1,
+			"policy_version": 7
+		}`),
+	}
+	// insertEventsViaIngest asserts HTTP 200 on the POST /api/events response, which is the "server accepts" half of the
+	// scenario.
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{blockEvent})
+
+	// The "and persists" half: the block event lands as a row in the events table even though its rule_id resolves to no
+	// live rule, so the historical decision survives the rule deletion.
+	count, err := d.Store().CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count, "an application_control_block event for a deleted/unknown rule must still persist")
+}
+
 // spec:server-event-ingestion/idempotent-submission-by-event-id/a-batch-mixes-new-and-previously-seen-events
 //
 // First batch persists one event; second batch contains the same event plus a new one. The expected post-state

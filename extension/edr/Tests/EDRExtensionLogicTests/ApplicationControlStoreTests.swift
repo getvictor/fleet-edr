@@ -185,7 +185,7 @@ final class ApplicationControlStoreTests: XCTestCase {
 
     // MARK: - apply: monotonic-version gate
 
-    func testApplyHonorsMonotonicVersionGate() {
+    func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_a_stale_snapshot_is_rejected() {
         let store = makeStore()
 
         // Baseline at version 500.
@@ -227,6 +227,83 @@ final class ApplicationControlStoreTests: XCTestCase {
         // rule list does not include it. Pinning this prevents a future bug
         // where apply() accidentally merges rather than replacing.
         XCTAssertNil(snapshot.binaryRules["baseline"], "newer doc must replace, not merge")
+    }
+
+    // MARK: - apply: atomic in-memory swap to the newer snapshot
+
+    // Applying version V then V+1 must leave the in-memory snapshot equal to V+1 immediately after acceptance, with the new
+    // doc's rules replacing (not merging with) V's. Pins the "an incoming snapshot replaces the prior one atomically"
+    // scenario: the lock.withLock swap in apply() is the atomic in-memory update; no exec can observe a half-applied state
+    // because currentSnapshot() reads the whole struct under the same lock.
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_an_incoming_snapshot_replaces_the_prior_one_atomically() {
+        let store = makeStore()
+        store.apply(rawJSON: document(
+            policyID: 9, version: 1,
+            rules: [RuleSpec(type: "BINARY", identifier: "v1-rule", ruleID: "r-v1")]
+        ))
+        XCTAssertEqual(store.currentSnapshot().policyVersion, 1)
+        store.apply(rawJSON: document(
+            policyID: 9, version: 2,
+            rules: [RuleSpec(type: "BINARY", identifier: "v2-rule", ruleID: "r-v2")]
+        ))
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyVersion, 2, "in-memory snapshot must be V+1 immediately after acceptance")
+        XCTAssertEqual(snapshot.binaryRules["v2-rule"]?.ruleID, "r-v2")
+        XCTAssertNil(snapshot.binaryRules["v1-rule"], "the swap replaces wholesale; the prior version's rules are gone")
+    }
+
+    // MARK: - apply: first apply writes the typed file, replacing any prior on-disk file
+
+    /// A legacy / pre-existing file at the storage path must be overwritten by the typed snapshot on first apply. The persist
+    /// path uses Data.write(to:options:.atomic), which replaces the destination, so a fresh store loading the same path back
+    /// sees the new typed document, not the legacy bytes. Pins "a first apply replaces any prior snapshot file".
+    func test_spec_extension_application_control_snapshot_persistence_format_is_typed_a_first_apply_replaces_any_prior_snapshot_file() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppControlLegacy-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("application-control.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Seed a legacy / foreign file at the exact path the typed snapshot will be written to.
+        try Data(#"{"legacy":"singleton-blocklist-format"}"#.utf8).write(to: url)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+
+        let store = ApplicationControlStore(storagePath: url.path)
+        store.apply(rawJSON: document(
+            policyID: 3, version: 1,
+            rules: [RuleSpec(type: "TEAMID", identifier: "FDG8Q7N4CC", ruleID: "r1")]
+        ))
+        // The legacy file already exists at the path, so a bare file-exists poll would return immediately against stale
+        // bytes; poll until the async persist has actually overwritten the legacy content with the typed document.
+        let deadline = Date().addingTimeInterval(2)
+        var onDisk = try Data(contentsOf: url)
+        while Date() < deadline, String(data: onDisk, encoding: .utf8)?.contains("singleton-blocklist-format") == true {
+            Thread.sleep(forTimeInterval: 0.01)
+            onDisk = (try? Data(contentsOf: url)) ?? onDisk
+        }
+
+        // The on-disk bytes are now the typed document; the legacy key is gone and the typed snapshot decodes.
+        let asString = String(data: onDisk, encoding: .utf8) ?? ""
+        XCTAssertFalse(asString.contains("singleton-blocklist-format"), "legacy file must be replaced, got: \(asString)")
+        let decoded = try JSONDecoder().decode(ApplicationControlDocument.self, from: onDisk)
+        XCTAssertEqual(decoded.policyID, 3)
+        XCTAssertEqual(decoded.rules.first?.ruleType, "TEAMID")
+    }
+
+    // MARK: - apply: deadline_fallback default substitution
+
+    /// A snapshot payload that omits deadline_fallback must decode to the fail-closed posture (FallbackPosture.defaultPosture)
+    /// so a deadline-exceeded BINARY consultation DENies by default. Pins "missing deadline_fallback substitutes fail-closed".
+    /// The document() helper above never emits the field, so its output is exactly the omitted-field wire shape.
+    func test_spec_extension_application_control_deadline_fallback_posture_missing_deadline_fallback_substitutes_fail_closed() {
+        let store = makeStore()
+        store.apply(rawJSON: document(
+            policyID: 1, version: 1,
+            rules: [RuleSpec(type: "BINARY", identifier: "any-binary", ruleID: "r1")]
+        ))
+        XCTAssertEqual(store.currentSnapshot().deadlineFallback, .failClosed,
+                       "omitted deadline_fallback must substitute the fail-closed default")
     }
 
     // MARK: - apply: cross-policy regression accepted
@@ -299,7 +376,8 @@ final class ApplicationControlStoreTests: XCTestCase {
 
     // MARK: - persist + loadFromDisk round-trip
 
-    func testApplyPersistsToDiskAndFreshInstanceLoadsItBack() {
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_extension_restart_restores_the_last_applied_snapshot() {
         // The injectable storagePath unlocks a real end-to-end test: apply on one store writes
         // the snapshot to disk; a fresh store with the same path can loadFromDisk and observe the
         // identical snapshot. Previously this was untestable because the persist target was a

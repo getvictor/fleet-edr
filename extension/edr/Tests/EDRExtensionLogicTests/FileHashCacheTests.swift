@@ -234,6 +234,82 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertEqual(outcome, .readFailed)
     }
 
+    // MARK: - Sync hash drives the BINARY-rule decision (issue #208 close-out)
+    //
+    // These tests cross the FileHashCache → decideAuthExec boundary: the deadline-bounded sync SHA-256 produces the
+    // HashOutcome that the pure decider consumes, and a BINARY rule keyed on that hash must DENY. This is the unit-level
+    // proxy for the AUTH callback path (decideAndRespond in ESFSubscriber.swift, ESF-coupled and exercised at the system
+    // layer): the cache + decider halves it composes are both in the SwiftPM target, so the cold-cache "first exec is
+    // decided, not allowed" property is provable here without a live ES client.
+
+    private func makeBinaryRule(identifier: String) -> ApplicationControlRule {
+        ApplicationControlRule(
+            ruleID: "app_control:binary-\(identifier.prefix(8))",
+            ruleType: ApplicationControlRuleType.binary,
+            identifier: identifier,
+            action: ApplicationControlAction.block,
+            enforcement: ApplicationControlEnforcement.protect,
+            severity: "high",
+            customMsg: nil,
+            customURL: nil
+        )
+    }
+
+    private func binaryOnlySnapshot(rule: ApplicationControlRule) -> ApplicationControlSnapshot {
+        ApplicationControlSnapshot(
+            policyID: 1, policyVersion: 1, deadlineFallback: .failClosed,
+            binaryRules: [rule.identifier: rule],
+            cdhashRules: [:], signingIDRules: [:], certificateRules: [:], teamIDRules: [:], pathRules: [:]
+        )
+    }
+
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_deadline_guarded_synchronous_sha_256_for_binary_rule_consultation_sync_hash_on_cold_cache_decides_the_first_exec() throws {
+        // Cold cache: the binary has never been hashed. The deadline-bounded sync compute returns .computed within budget,
+        // and a BINARY rule keyed on that exact SHA-256 must DENY on this FIRST exec (the #208 bypass was first-exec ALLOW).
+        let payload = Data("cold-cache-first-exec-binary".utf8)
+        let file = try makeTempFile(bytes: payload)
+        let sha = expectedSHA256(of: payload)
+
+        let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+            path: file.path, stat: file.stat, deadlineMachAbs: generousDeadlineMachAbs()
+        )
+        XCTAssertEqual(outcome, .computed(sha), "cold-cache sync compute must produce the hash within the deadline budget")
+
+        let rule = makeBinaryRule(identifier: sha)
+        let decision = decideAuthExec(
+            tuple: AuthTuple(cdhash: nil, leafCertSHA256: nil, signingIDPrefixed: nil, teamID: nil, canonicalPath: nil),
+            snapshot: binaryOnlySnapshot(rule: rule),
+            hashOutcome: outcome
+        )
+        XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: sha), "first exec of a BINARY-blocked target must DENY")
+    }
+
+    // swiftlint:disable:next line_length
+    func test_spec_extension_application_control_deadline_guarded_synchronous_sha_256_for_binary_rule_consultation_mutated_dev_inode_mtime_does_not_bypass_the_binary_rule() throws {
+        // Attacker mutates (dev,inode,mtime) on every exec to invalidate the cache key and keep returning to the cold path.
+        // Each fresh key is a cache MISS that re-computes synchronously and yields .computed -> BINARY rule DENIES every time.
+        // Model three successive "execs" of the same content under three distinct stat tuples (fresh temp files).
+        let content = Data(repeating: 0x41, count: 4096)
+        let sha = expectedSHA256(of: content)
+        let rule = makeBinaryRule(identifier: sha)
+        let snapshot = binaryOnlySnapshot(rule: rule)
+
+        for attempt in 0..<3 {
+            let file = try makeTempFile(bytes: content)
+            let outcome = FileHashCache.shared.lookupOrComputeWithDeadline(
+                path: file.path, stat: file.stat, deadlineMachAbs: generousDeadlineMachAbs()
+            )
+            XCTAssertEqual(outcome, .computed(sha), "fresh (dev,inode,mtime) must re-compute, not slip through (attempt \(attempt))")
+            let decision = decideAuthExec(
+                tuple: AuthTuple(cdhash: nil, leafCertSHA256: nil, signingIDPrefixed: nil, teamID: nil, canonicalPath: nil),
+                snapshot: snapshot,
+                hashOutcome: outcome
+            )
+            XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: sha), "every exec must DENY (attempt \(attempt))")
+        }
+    }
+
     func testLookupOrComputeWithDeadlineReturnsReadFailedOnInodeMismatch() throws {
         // Same TOCTOU guard as lookupOrCompute: if the opened FD's (dev, inode, mtime) differs from the expected
         // tuple, abort with .readFailed (treated as "hash unavailable, defer to posture") and leave the cache empty.

@@ -74,6 +74,7 @@ func TestListLiveBindings_RoundTrip(t *testing.T) {
 // TestListLiveBindings_ExpiredBindingsFiltered locks in the wave-1 invariant: an expired binding (expires_at < NOW(6)) MUST NOT be
 // part of the actor the chokepoint evaluates against. The Rego policy treats expired bindings as if they did not exist; this is the
 // storage-side enforcement of that contract.
+// spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/expired-binding-is-ignored
 func TestListLiveBindings_ExpiredBindingsFiltered(t *testing.T) {
 	t.Parallel()
 	db := openSchema(t)
