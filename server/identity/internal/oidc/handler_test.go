@@ -212,6 +212,11 @@ func TestWriteSessionCookie(t *testing.T) {
 // without ever touching the IdP. These cover the most common
 // regression vector: a refactor that bypasses the audit/redirect
 // helper for a particular branch and leaks plaintext to the operator.
+//
+// The "state query param mismatch" case below pins the spec's tampered/stale-state scenario: a state value that does not match
+// the server-issued state cookie yields a non-2xx (302 to /login?error=…) without minting a session, and an audit row at
+// decision=error with reason oidc.state_mismatch.
+// spec:server-identity-authentication/okta-oidc-is-the-primary-login-path/tampered-or-stale-state-is-rejected
 func TestHandleCallback_FailurePaths(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

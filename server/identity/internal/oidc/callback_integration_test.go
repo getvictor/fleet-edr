@@ -119,6 +119,8 @@ func (e *callbackTestEnv) callbackRequest(t *testing.T, stateOverride string) *h
 
 // spec:ui-authentication-session/session-cookie-is-http-only-and-same-site/cookie-attributes-on-login
 // spec:ui-authentication-session/login-mints-a-session-cookie-and-a-csrf-token/successful-login
+// spec:server-identity-authentication/okta-oidc-is-the-primary-login-path/successful-callback-mints-a-session
+// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/successful-sso-login-is-audited
 //
 // Pins the cookie-attributes clause AND the spec's "successful login" scenario on the OIDC happy-path session mint:
 // after the callback succeeds and a session is created, the response is 302 to the state's pinned redirect (/ui/) and
@@ -174,6 +176,7 @@ func TestHandleCallback_HappyPath_JITNewUser(t *testing.T) {
 
 // JIT disabled + unknown subject: handler emits auth.oidc.failure with
 // reason oidc.unknown_subject and 302s to /login?error=unknown_subject.
+// spec:server-identity-authentication/just-in-time-provisioning-of-unknown-sso-users/unknown-subject-is-rejected-when-jit-is-disabled
 func TestHandleCallback_UnknownSubject_JITDisabled(t *testing.T) {
 	t.Parallel()
 	env := newCallbackEnv(t, false, &oidc.Claims{

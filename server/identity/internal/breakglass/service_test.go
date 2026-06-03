@@ -126,6 +126,12 @@ func TestService_BeginSetup_TokenInvalid(t *testing.T) {
 }
 
 // BeginSetup with a consumed token returns ErrTokenConsumed.
+//
+// spec:server-identity-authentication/break-glass-account-is-bootstrapped-via-single-use-token-not-a-printed-password/expired-or-already-consumed-token-cannot-be-redeemed
+//
+// Pins the already-consumed half of the redemption-rejection scenario: once a setup token is redeemed, a second redemption attempt
+// fails with ErrTokenConsumed before BeginSetup returns a user, so no user or session is created. The handler maps ErrTokenConsumed
+// to the bootstrap.consumed audit reason; the expiry sibling is pinned by TestFindValid_Expired in tokens_test.go.
 func TestService_BeginSetup_TokenConsumed(t *testing.T) {
 	t.Parallel()
 	svc, db, _, uid := newService(t)

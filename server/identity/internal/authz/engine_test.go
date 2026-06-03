@@ -64,6 +64,7 @@ func globalBinding(roleID, _ string) api.RoleBinding {
 
 // TestAllow_RoleActionMatrix exercises every (role, action) cell the spec names. Failure here means a Rego edit changed the policy
 // matrix in a way the table didn't expect; the matching opa-test suite catches the same bug from the policy side.
+// spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/deployment-wide-binding-grants-the-action
 func TestAllow_RoleActionMatrix(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -182,6 +183,7 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 
 // TestAllow_UnregisteredAction_Denied verifies the defense-in-depth gate: a caller passing an action string outside RegisteredActions
 // is denied with reason action_not_registered before Rego sees it.
+// spec:server-identity-authorization/every-privileged-action-funnels-through-one-authorization-chokepoint/unregistered-action-is-denied-as-defense-in-depth
 func TestAllow_UnregisteredAction_Denied(t *testing.T) {
 	e, rec := newEngine(t)
 	actor := actorWithRoles(1, "default", globalBinding("super_admin", "default"))
@@ -208,6 +210,7 @@ func TestAllow_NoActor_Denied(t *testing.T) {
 // TestAllow_HostScope_NotYetSupported pins the wave-1 scope contract: a binding with scope_type=host on the matching resource is
 // denied with reason scope_not_yet_supported (the wave-2 resolver isn't shipped). Without this assertion a wave-2 author could add the
 // resolver and not realise wave-1 deployments expected the deny.
+// spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/host-scoped-binding-does-not-grant-the-action-in-wave-1
 func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default", api.RoleBinding{
@@ -235,6 +238,52 @@ func TestAllow_GlobalGrantWinsOverHostScopeDeny(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
 	assert.Equal(t, "granted", d.Reason)
+}
+
+// spec:server-identity-authentication/reauthentication-is-required-for-destructive-actions/fresh-session-executes-a-destructive-action
+//
+// A session whose last fresh-auth event is within the reauth window executes a destructive action (host.isolate) that the role
+// (admin) otherwise grants: the chokepoint allows it. SessionFresh=true is the in-window signal the Rego requires_fresh_auth rule
+// reads.
+func TestAllow_FreshSession_ExecutesDestructiveAction(t *testing.T) {
+	e, _ := newEngine(t)
+	actor := &api.Actor{
+		UserID:       1,
+		AuthMethod:   "local_password",
+		SessionFresh: true,
+		Roles:        []api.RoleBinding{globalBinding("admin", "default")},
+	}
+	ctx := api.WithActor(t.Context(), actor)
+	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
+	require.NoError(t, err)
+	assert.True(t, d.Allow, "fresh session must execute the destructive action")
+	assert.Equal(t, api.ReasonGranted, d.Reason)
+}
+
+// spec:server-identity-authentication/reauthentication-is-required-for-destructive-actions/stale-session-is-challenged-before-destructive-action
+//
+// The same admin actor with a STALE session (SessionFresh=false) is denied the destructive action with the typed
+// reauth_required reason (the UI's signal to prompt for re-authentication), the action is NOT performed (Allow=false), and the
+// chokepoint records an audit row for the deny carrying decision=deny and reason=reauth_required in its payload.
+func TestAllow_StaleSession_ChallengedBeforeDestructiveAction(t *testing.T) {
+	e, rec := newEngine(t)
+	actor := &api.Actor{
+		UserID:       1,
+		AuthMethod:   "local_password",
+		SessionFresh: false,
+		Roles:        []api.RoleBinding{globalBinding("admin", "default")},
+	}
+	ctx := api.WithActor(t.Context(), actor)
+	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
+	require.NoError(t, err)
+	assert.False(t, d.Allow, "stale session must not perform the destructive action")
+	assert.Equal(t, api.ReasonReauthRequired, d.Reason)
+
+	events := rec.snapshot()
+	require.Len(t, events, 1, "the reauth_required deny must be audited")
+	assert.Equal(t, api.AuditAction("authz.host.isolate"), events[0].Action)
+	assert.Equal(t, false, events[0].Payload["allow"], "deny decision recorded as allow=false")
+	assert.Equal(t, api.ReasonReauthRequired, events[0].Payload["reason"])
 }
 
 // TestAllow_NilAuditDoesNotPanic guards the test-only path where a caller passes nil for the AuditRecorder. Production callers must

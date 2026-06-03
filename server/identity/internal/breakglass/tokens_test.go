@@ -52,6 +52,43 @@ func TestIssueSetup_RoundTrip(t *testing.T) {
 	assert.False(t, got.RedeemedAt.Valid, "fresh token has no redeemed_at")
 }
 
+// spec:server-identity-authentication/break-glass-account-is-bootstrapped-via-single-use-token-not-a-printed-password/first-boot-with-empty-users-prints-the-redemption-url
+//
+// Pins the persistence clauses of the first-boot scenario that live in this bounded context: IssueSetup inserts exactly one
+// bootstrap_tokens row with kind='breakglass_setup' (the schema column the spec calls `purpose`) and expires_at = now + ttl, and
+// the token is stored hashed (token_hash) - the unhashed plaintext is never persisted. The "single stderr write of the redemption
+// URL /admin/break-glass/setup?token=<token>" and the "unhashed token does not appear in any structured log" clauses live in
+// cmd/main (which composes the banner from this plaintext) and are exercised there, outside the identity bounded context.
+func TestIssueSetup_FirstBootInsertsOneSetupTokenRow(t *testing.T) {
+	t.Parallel()
+	s, db, uid := newTokenStore(t)
+	ctx := t.Context()
+
+	const ttl = 90 * time.Minute
+	before := time.Now()
+	plaintext, tok, err := s.IssueSetup(ctx, uid, ttl)
+	require.NoError(t, err)
+	after := time.Now()
+
+	// Exactly one row for this user, with the break-glass-setup kind.
+	var count int
+	require.NoError(t, db.GetContext(ctx, &count,
+		`SELECT COUNT(*) FROM bootstrap_tokens WHERE user_id = ? AND kind = ?`,
+		uid, breakglass.TokenKindBreakglassSetup))
+	assert.Equal(t, 1, count, "first boot must insert exactly one breakglass_setup token row")
+	assert.Equal(t, breakglass.TokenKindBreakglassSetup, tok.Kind)
+
+	// expires_at = issue time + ttl (within the wall-clock window the call spanned).
+	assert.WithinRange(t, tok.ExpiresAt, before.Add(ttl), after.Add(ttl),
+		"expires_at must be now + ttl")
+
+	// The plaintext is never persisted; only its hash lands in token_hash.
+	var hashMatchesPlaintext int
+	require.NoError(t, db.GetContext(ctx, &hashMatchesPlaintext,
+		`SELECT COUNT(*) FROM bootstrap_tokens WHERE token_hash = ?`, plaintext))
+	assert.Equal(t, 0, hashMatchesPlaintext, "the unhashed token must never be stored as token_hash")
+}
+
 // FindValid returns ErrTokenInvalid for a plaintext that doesn't match any persisted hash. Includes a syntactically-correct-but-
 // unknown token to verify the lookup hashes the input rather than comparing plaintext directly (which would never match).
 func TestFindValid_Unknown(t *testing.T) {

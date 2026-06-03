@@ -29,6 +29,8 @@ import (
 //
 // Run via .github/workflows/authz.yml (no -race), not the main test
 // matrix. Skipped under -short.
+// spec:server-identity-authorization/authorization-decisions-sub-millisecond-at-p99/benchmark-passes-on-the-merge-candidate
+// spec:server-identity-authorization/authorization-decisions-sub-millisecond-at-p99/benchmark-regression-blocks-the-build
 func TestAllow_P99Latency(t *testing.T) {
 	if testing.Short() {
 		t.Skip("perf gate skipped in -short mode")

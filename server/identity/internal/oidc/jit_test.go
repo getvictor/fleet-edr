@@ -46,6 +46,13 @@ func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, *sqlx.DB, *
 
 // JIT path: an unknown subject creates a user + identity + role binding atomically, audits user_created, returns ids the handler uses
 // to mint the session.
+//
+// spec:server-identity-authentication/just-in-time-provisioning-of-unknown-sso-users/first-okta-login-auto-provisions-an-analyst
+// spec:server-identity-authentication/a-user-is-the-row-an-identity-is-the-way-to-authenticate/sso-user-has-exactly-one-oidc-identity
+//
+// Pins both the JIT-provisioning scenario (user row with NULL password + is_breakglass=0, an identities row keyed by
+// (provider, subject), a role binding to the seeded analyst role at deployment-wide scope, and a user.created audit row) and the
+// "a user is the row" scenario (exactly one kind='oidc' identity for the user, with NULL password_hash/password_salt).
 func TestProvisionOrFind_JITNewUser(t *testing.T) {
 	t.Parallel()
 	p, db, rec := newProvisioner(t, true)
@@ -57,6 +64,25 @@ func TestProvisionOrFind_JITNewUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Positive(t, uid)
 	assert.Positive(t, idID)
+
+	// User row carries a NULL password (SSO users never have a local password) and is not a break-glass account.
+	var userRow struct {
+		PasswordHash []byte `db:"password_hash"`
+		PasswordSalt []byte `db:"password_salt"`
+		IsBreakglass bool   `db:"is_breakglass"`
+	}
+	require.NoError(t, db.GetContext(t.Context(), &userRow, `
+		SELECT password_hash, password_salt, is_breakglass FROM users WHERE id = ?
+	`, uid))
+	assert.Nil(t, userRow.PasswordHash, "SSO user must have NULL password_hash")
+	assert.Nil(t, userRow.PasswordSalt, "SSO user must have NULL password_salt")
+	assert.False(t, userRow.IsBreakglass, "JIT-provisioned SSO user must not be a break-glass account")
+
+	// Exactly one identity row exists for this user, and it is the OIDC identity keyed by (provider, subject).
+	var oidcIdentityCount int
+	require.NoError(t, db.GetContext(t.Context(), &oidcIdentityCount,
+		`SELECT COUNT(*) FROM identities WHERE user_id = ?`, uid))
+	assert.Equal(t, 1, oidcIdentityCount, "JIT SSO user must have exactly one identity row")
 
 	// Identity row exists with the right (provider, subject).
 	var got struct {
@@ -253,6 +279,45 @@ func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uid, uid2)
+}
+
+// spec:server-identity-authentication/a-user-is-the-row-an-identity-is-the-way-to-authenticate/a-single-sso-subject-cannot-be-bound-to-multiple-users
+//
+// The UNIQUE(provider, subject) constraint keeps an OIDC subject bound to exactly one user. After a JIT provision binds
+// (oidc, subject) to user A, a direct attempt to bind the same (oidc, subject) to a DIFFERENT user B is rejected by the unique
+// constraint (the insert errors), so the same Okta account cannot fan out to two users in the deployment.
+func TestProvisionOrFind_SubjectUniqueAcrossUsers(t *testing.T) {
+	t.Parallel()
+	p, db, _ := newProvisioner(t, true)
+	ctx := t.Context()
+
+	const subject = "okta-shared-subject"
+	uidA, _, err := p.ProvisionOrFind(ctx, &oidc.Claims{Subject: subject, Email: "a@example.com"})
+	require.NoError(t, err)
+
+	// Create a second, distinct user that an attacker-controlled re-bind would target.
+	resB, err := db.ExecContext(ctx,
+		`INSERT INTO users (email, password_hash, password_salt) VALUES (?, ?, ?)`,
+		"b@example.com", []byte("h"), []byte("s"))
+	require.NoError(t, err)
+	uidB, err := resB.LastInsertId()
+	require.NoError(t, err)
+	require.NotEqual(t, uidA, uidB)
+
+	// Binding the already-claimed (oidc, subject) to user B must be rejected by uk_identities_provider_subject.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO identities (user_id, provider, subject) VALUES (?, 'oidc', ?)`,
+		uidB, subject)
+	require.Error(t, err, "the same (provider, subject) must not bind to a second user")
+
+	// The subject still resolves to exactly one identity, owned by the original user.
+	var ownerCount, total int
+	require.NoError(t, db.QueryRowxContext(ctx,
+		`SELECT COUNT(*) FROM identities WHERE provider = 'oidc' AND subject = ?`, subject).Scan(&total))
+	assert.Equal(t, 1, total, "subject must map to exactly one identity row")
+	require.NoError(t, db.QueryRowxContext(ctx,
+		`SELECT COUNT(*) FROM identities WHERE provider = 'oidc' AND subject = ? AND user_id = ?`, subject, uidA).Scan(&ownerCount))
+	assert.Equal(t, 1, ownerCount, "the surviving identity must belong to the original user")
 }
 
 // Empty subject is rejected with a clear error. Defense-in-depth: if a future IdP somehow produces an empty sub claim (it never should

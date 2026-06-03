@@ -68,6 +68,7 @@ var sealedBody = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 // `/api/rules` as the routes behind it), so the 401-with-JSON-shape contract the admin scenario asserts
 // is identical to the session-middleware contract. The added body decode below pins the JSON shape
 // clause `{"error": "..."}` that the spec requires.
+// spec:server-application-control/rest-surface-for-policies-rules-groups-and-assignments/an-unauthenticated-request-is-rejected
 func TestSession_MissingCookieReturns401(t *testing.T) {
 	t.Parallel()
 	svc, _ := newService(t)

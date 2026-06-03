@@ -1,3 +1,4 @@
+# spec:endpoint-event-collection/sensitive-path-file-modification-capture/a-write-to-a-sensitive-path-is-captured
 # T1548.003 Abuse Elevation Control Mechanism: Sudo and Sudo Caching.
 #
 # Synthetic attacker overwrites /etc/sudoers via `cp /tmp/evil /etc/sudoers`.
