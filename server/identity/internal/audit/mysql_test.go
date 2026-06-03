@@ -297,7 +297,7 @@ func TestRecord_AllowEmitsInfoAndSpanAttributes(t *testing.T) {
 	// slog INFO clause. Scan the emitted JSON lines for the decision record rather than assuming the buffer holds exactly one entry, so
 	// the assertion stays valid if the store ever emits additional log lines around the decision.
 	var entry map[string]any
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}
