@@ -12,23 +12,39 @@ works", VM-validated on a SIP-on host).
 
 ## What it does
 
-1. Builds a deterministic non-platform block target on the VM via `go build`
-   (a locally compiled binary lacks Apple's `is_platform_binary` flag, so the
-   platform carve-out does not exempt it; an ad-hoc-signed copy of a system
-   `arm64e` binary would instead be killed by AMFI under SIP).
-2. Confirms the target runs + is allowed at baseline.
-3. POSTs a `BINARY` BLOCK rule on the copy's SHA-256 to the seeded Default policy.
-4. Polls until the snapshot fan-out reaches the host and the exec is **DENIED**
-   (host-side enforcement), then fires a couple more denied execs.
-5. The driver asserts the resulting `application_control_block` alert
-   (`expected.yaml`).
+It walks every block rule type the AUTH_EXEC decider supports (#210), one probe per
+type. Each probe uses a **distinct** non-platform binary whose only matching
+identifier is the rule type under test, so the decider's precedence ladder
+(`CDHASH > BINARY > CERTIFICATE > SIGNINGID > TEAMID > PATH`) never lets one probe's
+rule mask another's. Per probe it: confirms the target runs at baseline, POSTs a
+`BLOCK` rule on the seeded Default policy, polls until the snapshot fan-out reaches
+the host and the exec is **DENIED** (host-side enforcement), then asserts the
+resulting `application_control_block` alert for the exact `rule_id` it created.
 
-Cleanup deletes the rule and the target on exit.
+Binaries are built on the VM via `go build` (a locally compiled binary lacks Apple's
+`is_platform_binary` flag, so the platform carve-out does not exempt it; an
+ad-hoc-signed copy of a system `arm64e` binary would instead be killed by AMFI under
+SIP). Cleanup deletes every created rule, the work tree, and any temp keychain on exit.
+
+### Rule-type coverage matrix
+
+| Rule type | Mode on a bare edr-qa | How |
+|---|---|---|
+| `BINARY` | live | block by file SHA-256 |
+| `PATH` | live | block by canonical absolute path (server + extension both rewrite `/tmp`→`/private/tmp`) |
+| `CDHASH` | live | ad-hoc + Hardened Runtime sign (`CS_RUNTIME` surfaces the cdhash); no Apple ID needed |
+| `CERTIFICATE` | gated | needs a fixture whose leaf cert SHA-256 differs from the EDR's own Developer ID leaf (a rule on the shared leaf would also match the agent). `codesign` only signs with a *trusted* identity, so a self-signed leaf would require mutating the VM's system trust store - not done on a release VM. Set `UAT_ACBLOCK_CERT_BIN` + `UAT_ACBLOCK_CERT_SHA256`. L0 cover: `AuthExecDeciderPhaseBTests` |
+| `SIGNINGID` | gated | needs a Developer-ID-signed fixture (`team_id` is Apple-issued; a self-signed cert yields none). Set `UAT_ACBLOCK_SIGNINGID_BIN` + `UAT_ACBLOCK_SIGNINGID_ID`. L0 cover: `AuthExecDeciderPhaseBTests` |
+| `TEAMID` | gated (unsafe by default) | the only Developer-ID team on this host is the EDR's own (`FDG8Q7N4CC`); a `TEAMID` block on it would also deny the agent. Needs a **distinct-team** fixture (`UAT_ACBLOCK_TEAMID_BIN` + `UAT_ACBLOCK_TEAMID_ID`). L0 cover: `AuthExecDeciderPhaseBTests` |
+
+`CERTIFICATE`, `SIGNINGID`, and `TEAMID` are gated because the bare QA VM has no signing
+material that is both usable by `codesign` and distinct from the EDR's own identity;
+all three are covered at L0 by the extension decider unit tests.
 
 ## Prerequisites
 
 A working `go` toolchain on the VM (found on `PATH` or under `/usr/local/go/bin`),
-used to compile the non-platform block target. This matches the attack-runbook
+used to compile the non-platform block targets. This matches the attack-runbook
 scenario, which also `go build`s its launchd dropper. If `go` is absent the
 scenario fails fast with a clear message rather than a cryptic build error.
 

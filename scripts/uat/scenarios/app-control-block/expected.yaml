@@ -1,9 +1,10 @@
 # app-control-block scenario.
 #
-# This scenario exercises Application Control ACTIVE BLOCKING: attack.sh posts a
-# BINARY BLOCK rule via the admin API, confirms the system extension DENIES the
-# matching exec on a SIP-on VM (host-side enforcement), and asserts the resulting
-# application_control_block alert server-side.
+# This scenario exercises Application Control ACTIVE BLOCKING across the full rule-type
+# matrix: for each block rule type (BINARY, PATH, CDHASH live; CERTIFICATE, SIGNINGID,
+# TEAMID gated on a signed fixture, see README), attack.sh posts a BLOCK rule via the admin API,
+# confirms the system extension DENIES the matching exec on a SIP-on VM (host-side
+# enforcement), and asserts the resulting application_control_block alert server-side.
 #
 # There is intentionally NO `rules:` block. The alert a block produces has a
 # DYNAMIC rule_id (app_control:<ruleId>, assigned per run), which the driver's
@@ -14,5 +15,5 @@
 # alone").
 
 scenario_id: app-control-block
-description: Posts a BINARY BLOCK rule via the app-control admin API, confirms the extension denies the matching exec on a SIP-on VM, and asserts the application_control_block alert. Assertions live in attack.sh (the alert rule_id is dynamic).
+description: Walks the app-control block rule-type matrix (BINARY, PATH, CDHASH live; CERTIFICATE, SIGNINGID, TEAMID gated on a signed fixture), confirming the extension denies each matching exec on a SIP-on VM and asserting the application_control_block alert per rule. Assertions live in attack.sh (the alert rule_ids are dynamic).
 within_seconds: 120
