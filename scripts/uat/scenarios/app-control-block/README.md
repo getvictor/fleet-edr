@@ -24,7 +24,7 @@ resulting `application_control_block` alert for the exact `rule_id` it created.
 Binaries are built on the VM via `go build` (a locally compiled binary lacks Apple's
 `is_platform_binary` flag, so the platform carve-out does not exempt it; an
 ad-hoc-signed copy of a system `arm64e` binary would instead be killed by AMFI under
-SIP). Cleanup deletes every created rule, the work tree, and any temp keychain on exit.
+SIP). Cleanup deletes every created rule and the work tree on exit.
 
 ### Rule-type coverage matrix
 

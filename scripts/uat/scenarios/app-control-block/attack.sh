@@ -32,8 +32,10 @@ uat_curl_args     # populates UAT_CURL_ARGS (adds -k under UAT_INSECURE)
 
 VM="$UAT_VM_SSH_TARGET"
 # Per-run nonce so binaries, paths, and rule identifiers are unique across runs: a prior run's leftover rule (or a failed
-# cleanup) can never collide into a 409 duplicate, and the work tree never clashes with a concurrent or stale run.
-RUN_NONCE="$(date +%s)"
+# cleanup) can never collide into a 409 duplicate, and the work tree never clashes. `date +%s` alone is 1-second granularity,
+# so two runs starting in the same second (or a fast rerun) would share it -- the PID ($$) plus $RANDOM add the entropy that
+# makes the nonce unique even for concurrent same-second runs.
+RUN_NONCE="$(date +%s)-$$-$RANDOM"
 WORKDIR="/tmp/edr-acblock-$RUN_NONCE"
 SENTINEL="EDR_ACBLOCK_SENTINEL_RAN"
 # Indexed array (bash 3.2 safe -- macOS ships bash 3.2; no declare -A) of created rule ids, removed on exit.
@@ -56,10 +58,14 @@ rest() {
 
 cleanup() {
   # DeleteRule requires a reason in the JSON body (audit trail); a bodyless DELETE 400s.
+  # Length-guard the loop: in bash 3.2 `"${arr[@]:-}"` on an empty array expands to a single empty string (not a syntax
+  # error), so the explicit `${#arr[@]} -gt 0` guard skips that spurious iteration and is the clearer bash-3.2-safe form.
   local rid
-  for rid in "${RULE_IDS[@]:-}"; do
-    [[ -n "$rid" ]] && rest DELETE "/api/v1/app-control/rules/$rid" '{"reason":"uat app-control-block cleanup"}' >/dev/null 2>&1 || true
-  done
+  if [[ ${#RULE_IDS[@]} -gt 0 ]]; then
+    for rid in "${RULE_IDS[@]}"; do
+      rest DELETE "/api/v1/app-control/rules/$rid" '{"reason":"uat app-control-block cleanup"}' >/dev/null 2>&1 || true
+    done
+  fi
   # Remove the work tree (built binaries + the copied fixture) so the VM returns to a clean state for the next run.
   uat_ssh "$VM" "rm -rf $WORKDIR" >/dev/null 2>&1 || true
 }
@@ -120,7 +126,7 @@ exec_ran() {
 # on timeout. Fires a couple more denied execs so the application_control_block alert is unambiguous.
 wait_blocked() {
   local bin="$1" label="$2" runargs="$3" mode="$4"
-  for _ in $(seq 1 20); do # ~60s; fan-out is normally single-digit seconds
+  for _ in {1..20}; do # ~60s; fan-out is normally single-digit seconds
     if ! exec_ran "$bin" "$runargs" "$mode"; then
       uat_log app-control-block "$label: host-side enforcement confirmed -- matching exec is now DENIED"
       exec_ran "$bin" "$runargs" "$mode" >/dev/null 2>&1 || true
@@ -136,7 +142,7 @@ wait_blocked() {
 # to confirm the removal fanned out before the next probe so a lingering higher-precedence rule cannot mask it.
 wait_allowed() {
   local bin="$1" label="$2" runargs="$3" mode="$4"
-  for _ in $(seq 1 20); do
+  for _ in {1..20}; do
     if exec_ran "$bin" "$runargs" "$mode"; then
       return 0
     fi
@@ -148,7 +154,7 @@ wait_allowed() {
 # assert_alert <rule_id> <label> -- polls the server until the application_control_block alert for app_control:<rule_id> appears.
 assert_alert() {
   local rid="$1" label="$2"
-  for _ in $(seq 1 15); do # ~30s; event upload + detection is single-digit seconds
+  for _ in {1..15}; do # ~30s; event upload + detection is single-digit seconds
     if rest GET "/api/alerts?host_id=$UAT_HOST_ID&limit=200" |
       jq -e --arg rid "app_control:$rid" '.[]? | select(.rule_id==$rid and .source=="application_control")' >/dev/null 2>&1; then
       uat_log app-control-block "$label: server-side alert confirmed (rule_id=app_control:$rid, source=application_control)"

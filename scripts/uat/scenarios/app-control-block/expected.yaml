@@ -15,5 +15,14 @@
 # alone").
 
 scenario_id: app-control-block
-description: Walks the app-control block rule-type matrix (BINARY, PATH, CDHASH always; CERTIFICATE, SIGNINGID, TEAMID when UAT_ACBLOCK_FIXTURE_BIN points to a non-EDR Developer-ID-signed binary), confirming the extension denies each matching exec on a SIP-on VM and asserting the application_control_block alert per rule. Assertions live in attack.sh (the alert rule_ids are dynamic).
-within_seconds: 120
+description: >-
+  Walks the app-control block rule-type matrix (BINARY, PATH, CDHASH always; CERTIFICATE,
+  SIGNINGID, TEAMID when UAT_ACBLOCK_FIXTURE_BIN points to a non-EDR Developer-ID-signed
+  binary), confirming the extension denies each matching exec on a SIP-on VM and asserting
+  the application_control_block alert per rule. Assertions live in attack.sh (the alert
+  rule_ids are dynamic).
+# within_seconds is the driver's alert-poll window, consumed only when expected.yaml has a `rules:` block. This scenario has
+# none -- attack.sh asserts its own alerts with its own internal timeouts and the driver passes on exit 0 -- so the value is
+# inert here. It is nonetheless sized to the script's real worst-case (~3x60s deny polls + 3x30s alert polls, roughly doubled
+# once the fixture path runs) so it stays correct if a `rules:` block is ever added.
+within_seconds: 900
