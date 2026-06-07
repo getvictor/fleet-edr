@@ -24,7 +24,7 @@
 # `docker manifest inspect node:20 --verbose` and copying the manifest digest.
 # Dependabot's docker ecosystem keeps these current; do not strip the digest
 # during a tag bump.
-FROM --platform=$BUILDPLATFORM node:26@sha256:980c5420a7a2ddcb44037726977f2a349e5c7b64217516c7488dce4c74d71583 AS ui-build
+FROM --platform=$BUILDPLATFORM node:26@sha256:e3ffe0cbaeebdcddbfe1ee7bca9b564a92863a8386d5b99a3d72677b3667b61d AS ui-build
 # package*.json first for layer-cache reuse: npm ci only reruns when
 # dependencies change, not every source edit.
 WORKDIR /src/ui
