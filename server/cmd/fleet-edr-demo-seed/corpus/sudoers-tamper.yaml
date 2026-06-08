@@ -1,0 +1,31 @@
+# Demo corpus copy of test/efficacy/corpus/T1548.003-sudoers-tamper.
+# T1548.003 Abuse Elevation Control Mechanism: Sudo and Sudo Caching.
+#
+# A process overwrites /etc/sudoers via `cp /tmp/evil /etc/sudoers`. The
+# sudoers_tamper rule triggers on an `open` event for the sudoers path with
+# write-mode flags. Flags 1537 = O_WRONLY | O_CREAT | O_TRUNC.
+name: "T1548.003 sudoers tamper via cp /tmp/evil /etc/sudoers"
+mitre: T1548.003
+host:
+  id: DE300548-0003-0000-0000-000000000003
+  hostname: demo-build-server.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4548
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4548
+    ppid: 1
+    path: /bin/cp
+    args: ["cp", "/tmp/evil", "/etc/sudoers"]
+    cwd: /tmp
+    uid: 0
+    gid: 0
+  - at: 20ms
+    type: open
+    pid: 4548
+    path: /etc/sudoers
+    flags: 1537

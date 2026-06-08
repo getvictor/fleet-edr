@@ -1,0 +1,26 @@
+# Demo corpus copy of test/efficacy/corpus/T1555.001-keychain-dump.
+# T1555.001 Credentials from Password Stores: Keychain.
+#
+# A process spawns /usr/bin/security with the dump-keychain subcommand. The
+# credential_keychain_dump rule matches path == /usr/bin/security and
+# args[1] == dump-keychain and fires a high-severity alert.
+name: "T1555.001 credential dump via /usr/bin/security dump-keychain"
+mitre: T1555.001
+host:
+  id: DE300555-0001-0000-0000-000000000001
+  hostname: demo-analyst-laptop.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4555
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4555
+    ppid: 1
+    path: /usr/bin/security
+    args: ["security", "dump-keychain"]
+    cwd: /
+    uid: 501
+    gid: 20
