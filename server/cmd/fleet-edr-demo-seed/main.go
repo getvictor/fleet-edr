@@ -40,6 +40,11 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 		return err
 	}
 
+	client, err := newHTTPClient(cfg.caCertPath)
+	if err != nil {
+		return fmt.Errorf("build http client: %w", err)
+	}
+
 	db, err := sql.Open("mysql", cfg.dsn)
 	if err != nil {
 		return fmt.Errorf("open mysql: %w", err)
@@ -47,12 +52,30 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 	defer db.Close()
 
 	// Budget the overall run at the readiness + verification windows plus headroom for enroll/ingest round-trips.
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.readyTimeout+cfg.verifyTimeout+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.readyTimeout+cfg.verifyTimeout+defaultHeadroom)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping mysql: %w", err)
+	if err := pingUntilReady(ctx, db, cfg.readyTimeout, cfg.pollInterval); err != nil {
+		return err
 	}
 
-	return newSeeder(cfg, db, logger).run(ctx)
+	return newSeeder(cfg, db, client, logger).run(ctx)
+}
+
+// pingUntilReady retries the DB ping until it succeeds or the ready window elapses. In docker-compose first boot, MySQL may still be
+// warming up or running migrations when the seeder starts, so a single ping would crash the container spuriously.
+func pingUntilReady(ctx context.Context, db *sql.DB, timeout, interval time.Duration) error {
+	pingCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		err := db.PingContext(pingCtx)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-pingCtx.Done():
+			return fmt.Errorf("ping mysql: %w", err)
+		case <-time.After(interval):
+		}
+	}
 }

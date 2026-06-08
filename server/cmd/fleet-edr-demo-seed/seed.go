@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/fleetdm/edr/test/fakeagent"
@@ -30,8 +32,14 @@ const (
 	keychainRuleID = "credential_keychain_dump"
 )
 
-// httpClientTimeout bounds every enroll, ingest, and readiness request.
-const httpClientTimeout = 30 * time.Second
+const (
+	// httpClientTimeout bounds every enroll, ingest, and readiness request.
+	httpClientTimeout = 30 * time.Second
+	// errorBodyLimit caps how much of a failed response body is read into an error message.
+	errorBodyLimit = 1024
+	// maxResponseBytes caps a decoded success response so a malformed or oversized body cannot exhaust memory.
+	maxResponseBytes = 1 << 20
+)
 
 // seeder drives the demo seed end to end: wait for readiness, replay the curated corpus, fabricate the app-control block, verify the
 // processor materialised everything, and optionally provision the SSO demo user.
@@ -42,19 +50,29 @@ type seeder struct {
 	logger *slog.Logger
 }
 
-// newSeeder wires a seeder with an HTTP client honouring cfg.insecure.
-func newSeeder(cfg config, db dbExecQuerier, logger *slog.Logger) *seeder {
-	return &seeder{cfg: cfg, db: db, client: newHTTPClient(cfg.insecure), logger: logger}
+// newSeeder wires a seeder with a pre-built HTTP client (built in main so config errors surface at the wiring boundary).
+func newSeeder(cfg config, db dbExecQuerier, client *http.Client, logger *slog.Logger) *seeder {
+	return &seeder{cfg: cfg, db: db, client: client, logger: logger}
 }
 
-// newHTTPClient builds the client used for enroll, ingest, and readiness probes. With insecure set it skips TLS verification so the
-// demo stack's self-signed localhost cert is accepted without priming a trust store.
-func newHTTPClient(insecure bool) *http.Client {
-	tr := &http.Transport{}
-	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // demo stack serves a self-signed localhost cert
+// newHTTPClient builds the client used for enroll, ingest, and readiness probes. It clones http.DefaultTransport to keep the stock
+// connection-pool + timeout tuning. When caCertPath is set, the server's TLS is verified against that PEM (the demo stack's
+// self-signed localhost cert) rather than disabling verification; an empty path uses the system trust store.
+func newHTTPClient(caCertPath string) (*http.Client, error) {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if caCertPath != "" {
+		//nolint:gosec // G304: caCertPath is operator-supplied wiring config (a trusted CA path), not untrusted input
+		pemBytes, err := os.ReadFile(caCertPath)
+		if err != nil {
+			return nil, fmt.Errorf("read ca cert %s: %w", caCertPath, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("ca cert %s: no PEM certificates found", caCertPath)
+		}
+		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	return &http.Client{Timeout: httpClientTimeout, Transport: tr}
+	return &http.Client{Timeout: httpClientTimeout, Transport: tr}, nil
 }
 
 // run executes the full seed. It is safe to re-run: replay is skipped when demo data is already present unless cfg.force is set.
@@ -193,13 +211,15 @@ func (s *seeder) enroll(ctx context.Context, hostID, hostname string) (string, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("POST /api/enroll for %s: HTTP %d", hostID, resp.StatusCode)
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+		return "", fmt.Errorf("POST /api/enroll for %s: HTTP %d (%s)", hostID, resp.StatusCode, bytes.TrimSpace(snippet))
 	}
 	var er struct {
 		HostID    string `json:"host_id"`
 		HostToken string `json:"host_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+	// Bound the decoded body so an unexpectedly large response cannot exhaust memory.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&er); err != nil {
 		return "", fmt.Errorf("decode enroll response: %w", err)
 	}
 	if er.HostToken == "" {
@@ -226,10 +246,11 @@ func (s *seeder) postEnvelopes(ctx context.Context, token string, envs []fakeage
 		return fmt.Errorf("POST /api/events: %w", err)
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("POST /api/events: HTTP %d", resp.StatusCode)
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+		return fmt.Errorf("POST /api/events: HTTP %d (%s)", resp.StatusCode, bytes.TrimSpace(snippet))
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -249,7 +270,11 @@ func (s *seeder) waitReady(ctx context.Context) error {
 		}
 		defer resp.Body.Close()
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return resp.StatusCode == http.StatusOK, nil
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("readyz HTTP %d", resp.StatusCode)
+			return false, nil // server up but not ready (e.g. 503 during migrations); keep polling
+		}
+		return true, nil
 	})
 	if err != nil && lastErr != nil {
 		return fmt.Errorf("%w (last probe error: %w)", err, lastErr)
@@ -294,15 +319,22 @@ func (s *seeder) waitForProcess(ctx context.Context, hostID string, pid int) err
 // verify polls until the processor has materialised a process graph, at least one detection alert, and at least one app-control
 // alert, or verifyTimeout elapses.
 func (s *seeder) verify(ctx context.Context) error {
-	return s.poll(ctx, s.cfg.verifyTimeout, func() (bool, error) {
+	var last demoCounts
+	err := s.poll(ctx, s.cfg.verifyTimeout, func() (bool, error) {
 		c, err := s.counts(ctx)
 		if err != nil {
 			return false, err
 		}
+		last = c
 		s.logger.DebugContext(ctx, "verify counts",
 			"processes", c.processes, "detection_alerts", c.detectionAlerts, "app_control_alerts", c.appControlAlerts)
 		return c.processes > 0 && c.detectionAlerts > 0 && c.appControlAlerts > 0, nil
 	})
+	if err != nil {
+		return fmt.Errorf("%w (processes=%d detection_alerts=%d app_control_alerts=%d)",
+			err, last.processes, last.detectionAlerts, last.appControlAlerts)
+	}
+	return nil
 }
 
 // demoCounts is the materialised-data tally verify checks.

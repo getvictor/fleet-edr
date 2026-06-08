@@ -33,11 +33,22 @@ func seedDemoUser(ctx context.Context, db dbExecQuerier, email, subject, roleID 
 		return fmt.Errorf("look up demo user id: %w", err)
 	}
 
+	// Insert the identity, leaving any pre-existing (provider, subject) mapping untouched (ON DUPLICATE ... user_id = user_id is a
+	// no-op). Then confirm the mapping points at the demo user: refuse to silently re-bind a subject already owned by another user
+	// rather than hijacking it.
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO identities (user_id, provider, subject)
 		VALUES (?, 'oidc', ?)
-		ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`, userID, subject); err != nil {
+		ON DUPLICATE KEY UPDATE user_id = user_id`, userID, subject); err != nil {
 		return fmt.Errorf("seed demo identity: %w", err)
+	}
+	var boundUserID int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT user_id FROM identities WHERE provider = 'oidc' AND subject = ?`, subject).Scan(&boundUserID); err != nil {
+		return fmt.Errorf("verify demo identity binding: %w", err)
+	}
+	if boundUserID != userID {
+		return fmt.Errorf("oidc subject %q is already bound to user %d, not demo user %d; refusing to re-bind", subject, boundUserID, userID)
 	}
 
 	if _, err := db.ExecContext(ctx, `

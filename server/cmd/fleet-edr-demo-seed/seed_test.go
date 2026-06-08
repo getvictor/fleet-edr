@@ -19,6 +19,9 @@ import (
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// testHTTPClient builds the default (system-roots) client tests use when they don't exercise CA-cert handling.
+func testHTTPClient() *http.Client { c, _ := newHTTPClient(""); return c }
+
 // httpSeeder builds a seeder pointed at a test server, with short timeouts so polling paths run fast.
 func httpSeeder(serverURL string) *seeder {
 	cfg := config{
@@ -27,7 +30,8 @@ func httpSeeder(serverURL string) *seeder {
 		pollInterval: time.Millisecond,
 		readyTimeout: time.Second,
 	}
-	return newSeeder(cfg, nil, discardLogger())
+	client, _ := newHTTPClient("")
+	return newSeeder(cfg, nil, client, discardLogger())
 }
 
 func TestResolveConfig(t *testing.T) {
@@ -40,7 +44,7 @@ func TestResolveConfig(t *testing.T) {
 		assert.Equal(t, "demo@fleet-edr.local", c.demoEmail)
 		assert.Equal(t, "senior_analyst", c.demoRole)
 		assert.Empty(t, c.demoOIDCSubject)
-		assert.True(t, c.insecure)
+		assert.Empty(t, c.caCertPath)
 		assert.False(t, c.force)
 		assert.Equal(t, 90*time.Second, c.readyTimeout)
 	})
@@ -51,7 +55,7 @@ func TestResolveConfig(t *testing.T) {
 			"--server-url=https://demo.example:9000",
 			"--dsn=from-flag",
 			"--force",
-			"--insecure=false",
+			"--ca-cert=/etc/tls/dev.crt",
 			"--demo-oidc-subject=ChdkZW1v",
 			"--demo-role=admin",
 			"--poll-interval=250ms",
@@ -61,10 +65,17 @@ func TestResolveConfig(t *testing.T) {
 		assert.Equal(t, "https://demo.example:9000", c.serverURL)
 		assert.Equal(t, "from-flag", c.dsn)
 		assert.True(t, c.force)
-		assert.False(t, c.insecure)
+		assert.Equal(t, "/etc/tls/dev.crt", c.caCertPath)
 		assert.Equal(t, "ChdkZW1v", c.demoOIDCSubject)
 		assert.Equal(t, "admin", c.demoRole)
 		assert.Equal(t, 250*time.Millisecond, c.pollInterval)
+	})
+
+	t.Run("trims trailing slash from server-url", func(t *testing.T) {
+		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_SERVER_URL": "https://localhost:8088/"}
+		c, err := resolveConfig(func(k string) string { return env[k] }, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "https://localhost:8088", c.serverURL)
 	})
 
 	t.Run("missing dsn is an error", func(t *testing.T) {

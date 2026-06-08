@@ -72,7 +72,7 @@ func TestSeedDemoUser(t *testing.T) {
 func TestCountsAndAlreadySeeded(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
-	s := newSeeder(config{}, db, discardLogger())
+	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
 
 	c, err := s.counts(ctx)
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 func TestWaitForProcess(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
-	s := newSeeder(config{pollInterval: time.Millisecond, verifyTimeout: time.Second}, db, discardLogger())
+	s := newSeeder(config{pollInterval: time.Millisecond, verifyTimeout: time.Second}, db, testHTTPClient(), discardLogger())
 
 	insertProcess(t, db, "HOST-B", 200)
 	require.NoError(t, s.waitForProcess(ctx, "HOST-B", 200))
@@ -168,7 +168,7 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	ts := demoServer(t, &enrollCalls)
 	defer ts.Close()
 
-	s := newSeeder(runTestConfig(ts.URL), db, discardLogger())
+	s := newSeeder(runTestConfig(ts.URL), db, testHTTPClient(), discardLogger())
 	require.NoError(t, s.run(ctx))
 
 	assert.Equal(t, len(corpusManifest), int(enrollCalls.Load()), "every scenario host was enrolled")
@@ -189,7 +189,7 @@ func TestRunSkipsWhenAlreadySeeded(t *testing.T) {
 	ts := demoServer(t, &enrollCalls)
 	defer ts.Close()
 
-	s := newSeeder(runTestConfig(ts.URL), db, discardLogger())
+	s := newSeeder(runTestConfig(ts.URL), db, testHTTPClient(), discardLogger())
 	require.NoError(t, s.run(ctx))
 
 	assert.Equal(t, 0, int(enrollCalls.Load()), "replay skipped when demo data already present")
