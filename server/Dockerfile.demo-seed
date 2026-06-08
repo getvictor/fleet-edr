@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+
+# Build for the fleet-edr-demo-seed one-shot seeder used by docker-compose.demo.yml.
+#
+# Stage 1 (build): Go compiles the seeder. It is pure Go (go-sql-driver/mysql is
+# CGo-free) so the final image lands on distroless/static. The seeder imports
+# test/fakeagent for scenario replay, so the test/ tree is part of the build
+# context (alongside server/ + internal/ + the module graph).
+#
+# Stage 2 (runtime): distroless/static-debian12:nonroot, no shell, no package
+# manager. The container runs once to seed a freshly-booted demo server and exits.
+#
+# Built for linux/amd64 and linux/arm64 via `docker buildx --platform`. Image
+# digests are pinned alongside the human-readable tag for OpenSSF Scorecard's
+# Pinned-Dependencies check; Dependabot keeps them current.
+
+# ---------------------------------------------------------------
+# Stage 1: Go binary
+# ---------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM golang:1.26.4@sha256:68cb6d68bed024785b69195b89af7ac7a444f27791435f98647edff595aa0479 AS build
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /src
+
+# Explicit copies bound the build context to what the seeder needs: the module
+# graph, the seeder package (under server/), shared helpers, and test/fakeagent.
+COPY go.mod go.sum ./
+COPY server ./server
+COPY internal ./internal
+COPY test ./test
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+    go build \
+        -trimpath \
+        -ldflags "-s -w" \
+        -o /out/fleet-edr-demo-seed \
+        ./server/cmd/fleet-edr-demo-seed
+
+# ---------------------------------------------------------------
+# Stage 2: runtime
+# ---------------------------------------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
+
+COPY --from=build /out/fleet-edr-demo-seed /usr/local/bin/fleet-edr-demo-seed
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/usr/local/bin/fleet-edr-demo-seed"]

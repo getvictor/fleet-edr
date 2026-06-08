@@ -1,0 +1,28 @@
+# Demo-only scenario backing the application-control block record.
+#
+# fakeagent does not emit application_control_block events (those are
+# produced reactively by the extension's AUTH_EXEC walker, not by attack
+# corpus), so the seeder posts that event itself. This scenario just
+# materialises the process the block refers to: a fork + exec of a binary an
+# admin policy would deny, with NO exit so the process stays live and the
+# ApplicationControlBlock rule's GetProcessByPID lookup resolves. The seeder
+# reads the exec event's pid + path to build the matching block event.
+name: "app-control: exec of a policy-blocked binary"
+host:
+  id: DE300AC1-0000-0000-0000-000000000001
+  hostname: demo-finance-laptop.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 6123
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 6123
+    ppid: 1
+    path: /Applications/CoinMiner.app/Contents/MacOS/CoinMiner
+    args: ["CoinMiner", "--stratum", "pool.example.net:3333"]
+    cwd: /Applications/CoinMiner.app
+    uid: 501
+    gid: 20
