@@ -92,17 +92,16 @@ let package = Package(
                 "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
                 "extension/AuthExecDecider.swift",
-                "extension/XPCServer.swift",
                 "extension/BlockNotification.swift",
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
                 "networkextension/DNSParser.swift",
-                // Pure hello-handshake decision for the network extension's XPCServer. Foundation-only, uniquely named
-                // (NetworkXPCMessageType / networkXPCShouldAck) so it does not collide with the security extension's
-                // XPCMessageType in this single logic module. networkextension/XPCServer.swift itself stays excluded
-                // (it would collide with extension/XPCServer.swift's type names + needs no test beyond this decision).
-                "networkextension/NetworkXPCInbound.swift"
+                // The XPC server is now shared by both extensions (shared/XPCEventServer.swift): the listener, hello-ack
+                // handshake, pending buffer, peer code-signing, and the dispatchInbound decision. The per-extension
+                // XPCServer.swift wrappers (thin XPCEventServer instantiations) stay out of this logic module; the
+                // shared file carries every unit-tested symbol.
+                "shared/XPCEventServer.swift"
             ]
         ),
         .testTarget(

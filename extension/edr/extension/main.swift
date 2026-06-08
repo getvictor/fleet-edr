@@ -1,5 +1,6 @@
 import Foundation
 import EndpointSecurity
+import os.log
 
 // Load the persisted application control snapshot BEFORE ESF starts subscribing.
 // Startup order matters here — if we subscribed first, a racing exec of a blocked
@@ -8,7 +9,12 @@ import EndpointSecurity
 // this snapshot on every exec.
 ApplicationControlStore.shared.loadFromDisk()
 
-let server = XPCServer(serviceName: "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc")
+// The security extension wires the shared XPCEventServer's inbound hook to apply app-control policy pushed by the agent.
+let server = XPCEventServer(
+    serviceName: "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc",
+    logger: Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer"),
+    onApplicationControl: { data in ApplicationControlStore.shared.apply(rawJSON: data) }
+)
 server.start()
 
 let subscriber = ESFSubscriber()
