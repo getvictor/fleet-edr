@@ -102,6 +102,11 @@
 			path = networkextension;
 			sourceTree = "<group>";
 		};
+		5EFA5EFA5EFA5EFA5EFA5EFA /* shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -137,6 +142,7 @@
 				57B10CCD2F43BBBF007F4B27 /* edr */,
 				57B10CFD2F43BC89007F4B27 /* extension */,
 				57B10E162F43BC89007F4B27 /* networkextension */,
+				5EFA5EFA5EFA5EFA5EFA5EFA /* shared */,
 				57B10CFA2F43BC89007F4B27 /* Frameworks */,
 				57B10CCC2F43BBBF007F4B27 /* Products */,
 			);
@@ -203,6 +209,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				57B10CFD2F43BC89007F4B27 /* extension */,
+				5EFA5EFA5EFA5EFA5EFA5EFA /* shared */,
 			);
 			name = extension;
 			packageProductDependencies = (
@@ -225,6 +232,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				57B10E162F43BC89007F4B27 /* networkextension */,
+				5EFA5EFA5EFA5EFA5EFA5EFA /* shared */,
 			);
 			name = networkextension;
 			packageProductDependencies = (
