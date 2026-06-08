@@ -196,6 +196,20 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(buffer.entries, [Data("a".utf8), Data("b".utf8), Data("c".utf8)])
     }
 
+    // spec:extension-xpc-server/hello-handshake-and-reply/the-agent-sends-a-hello-after-connecting
+    func testNetworkExtensionAcksHelloAndIgnoresEverythingElse() {
+        // Regression for the network-extension event-delivery bug: the NE's XPCServer originally never read inbound
+        // dictionaries, so it never answered the agent's hello and the agent's xpc_bridge_connect timed out every
+        // reconnect cycle — the NE delivered zero network/DNS events. networkXPCShouldAck encodes the fix: ack a hello,
+        // ignore everything else (the NE has no application_control.update inbound, unlike the security extension).
+        XCTAssertTrue(networkXPCShouldAck(type: "hello"), "NE must ack the agent's hello to complete the handshake")
+        XCTAssertEqual(NetworkXPCMessageType.helloAck, "hello-ack", "outbound reply wire-shape must be hello-ack")
+        XCTAssertFalse(networkXPCShouldAck(type: "application_control.update"),
+                       "NE has no inbound control messages; only hello is acked")
+        XCTAssertFalse(networkXPCShouldAck(type: "bogus"), "unknown types are ignored, not acked")
+        XCTAssertFalse(networkXPCShouldAck(type: nil), "a missing type is ignored, not acked")
+    }
+
     // MARK: - Requirement: Forward compatibility for unknown messages
 
     // spec:extension-xpc-server/forward-compatibility-for-unknown-messages/future-agent-sends-a-new-message-type
