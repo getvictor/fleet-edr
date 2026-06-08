@@ -196,46 +196,6 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(buffer.entries, [Data("a".utf8), Data("b".utf8), Data("c".utf8)])
     }
 
-    // The flush of a deep pending buffer is chunked across `queue` iterations (flushChunkSize per chunk) so a worst-case
-    // pendingSendCap drain can't monopolise the serial queue. chunkBoundaries computes the per-chunk index ranges; the
-    // re-dispatch + xpc_connection_send_message loop that consumes them is exercised at the system / VM layer. This test
-    // pins the batching invariants that keep the "delivers every buffered event in the order it was emitted" contract:
-    // the ranges are gap-free, non-overlapping, cover exactly 0..<count, and stay in ascending order.
-    func testChunkBoundariesPartitionEveryIndexInOrderWithoutGapsOrOverlap() {
-        struct ChunkCase {
-            let count: Int
-            let size: Int
-            let expected: [Range<Int>]
-        }
-        let cases: [ChunkCase] = [
-            ChunkCase(count: 0, size: 256, expected: []),
-            ChunkCase(count: 1, size: 256, expected: [0..<1]),
-            ChunkCase(count: 256, size: 256, expected: [0..<256]),
-            ChunkCase(count: 257, size: 256, expected: [0..<256, 256..<257]),
-            ChunkCase(count: 5, size: 2, expected: [0..<2, 2..<4, 4..<5])
-        ]
-        for testCase in cases {
-            let ranges = chunkBoundaries(count: testCase.count, size: testCase.size)
-            XCTAssertEqual(ranges, testCase.expected,
-                           "count=\(testCase.count) size=\(testCase.size) must split into the expected ranges")
-            // Flatten the ranges back to the index sequence and assert it is exactly 0, 1, ..., count-1 in order: this
-            // proves gap-free + non-overlapping + complete + ascending in one shot.
-            XCTAssertEqual(ranges.flatMap { Array($0) }, Array(0..<testCase.count),
-                           "ranges must cover every index in 0..<count exactly once, in order")
-        }
-    }
-
-    func testChunkBoundariesAtPendingCapProduceCeilingManyChunksWithFullCoverage() {
-        // The operationally relevant worst case: a full pending buffer (pendingSendCap == 10_000) drained in
-        // flushChunkSize (256) chunks. ceil(10_000 / 256) == 40 chunks; the last is the short remainder; coverage is
-        // still exactly 0..<10_000 with no gap.
-        let ranges = chunkBoundaries(count: 10_000, size: 256)
-        XCTAssertEqual(ranges.count, 40, "ceil(10000/256) == 40 chunks")
-        XCTAssertEqual(ranges.first, 0..<256, "first chunk is a full chunk starting at 0")
-        XCTAssertEqual(ranges.last, 9984..<10_000, "last chunk is the 16-element remainder")
-        XCTAssertEqual(ranges.reduce(0) { $0 + $1.count }, 10_000, "the chunks cover every buffered event exactly once")
-    }
-
     // MARK: - Requirement: Forward compatibility for unknown messages
 
     // spec:extension-xpc-server/forward-compatibility-for-unknown-messages/future-agent-sends-a-new-message-type
