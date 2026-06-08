@@ -1,0 +1,23 @@
+# Override layer: build the server + seeder images from the checkout instead of
+# pulling pinned images from ghcr. Use for local source runs and smoke tests
+# (no published tag required):
+#
+#   docker compose -f docker-compose.demo.yml \
+#                  -f docker-compose.demo.build.yml \
+#                  up --build
+#
+# Mirrors docker-compose.prod.build.yml. Keep both demo files checked in
+# together so the override resolves its build context from the repo root.
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: ${EDR_VERSION:-demo}
+        COMMIT: ${EDR_COMMIT:-unknown}
+
+  seeder:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.demo-seed

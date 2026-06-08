@@ -25,6 +25,48 @@ Fleet EDR is an open-source endpoint detection and response system for macOS fle
 into process and network activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph,
 and ships response actions (kill, token rotation, app-control block) without a SaaS dependency.
 
+## Try the demo (no Mac required)
+
+Evaluate Fleet EDR in about five minutes with one command. No Apple Silicon Mac, MDM, or Apple-granted entitlement needed.
+
+<!-- Demo recording: replace this line with the published release-asset link. -->
+Demo recording: _coming soon_ -- extension activation, a correlated detection, and an AUTH_EXEC block, captured on a real Mac.
+
+```sh
+docker compose -f docker-compose.demo.yml up
+```
+
+Then open <https://localhost:8088/ui/>, accept the self-signed certificate warning, and sign in with the bundled SSO account:
+
+- Email: `demo@fleet-edr.local`
+- Password: `demo`
+
+You'll see a process graph, fired ATT&CK detection alerts (keychain dump, sudoers tamper, launchd persistence), and an
+application-control block -- all produced by the real ingestion + detection pipeline from a replayed attack corpus, not
+hand-inserted rows.
+
+To run from a local source build instead of the pinned release images:
+
+```sh
+docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --build
+```
+
+### Notes for reviewers
+
+- The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an
+  MDM, and Apple Silicon, so it cannot run in Docker. The recording above shows it on a real Mac; this stack exercises the
+  server, UI, and detection pipeline.
+- The demo data is genuine: the seeder replays a curated attack + noise corpus through the real `POST /api/events` ingest
+  path, and the server's own processor materializes the process graph and fires the alerts.
+- Response actions (kill, isolate) are visible and enqueue, but never complete because no live agent is connected.
+- TLS uses a self-signed `localhost` certificate, so the browser shows a one-time warning. The stack is for evaluation only:
+  empty MySQL password and checked-in dev secrets -- do not expose it.
+- SSO is the documented path. Admin onboarding via break-glass is also available: a redemption URL prints to the server logs
+  on first boot (`docker compose -f docker-compose.demo.yml logs server | grep -i break-glass`); redeeming it needs a
+  WebAuthn authenticator.
+- If your browser does not resolve `*.localhost` to `127.0.0.1` (most Chromium and Firefox builds do), add
+  `127.0.0.1 dex.demo.localhost` to your hosts file so the SSO redirect can reach the bundled IdP.
+
 ## Operator docs
 
 Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):

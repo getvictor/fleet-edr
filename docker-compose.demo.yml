@@ -1,0 +1,138 @@
+# Mac-free, one-command demo stack for evaluating Fleet EDR.
+#
+#   docker compose -f docker-compose.demo.yml up
+#   # then open https://localhost:8088/ui/ and sign in: demo@fleet-edr.local / demo
+#
+# It boots the real server + embedded UI against MySQL, generates a self-signed
+# localhost TLS cert, bundles a dex IdP for SSO, and runs a one-shot seeder that
+# replays a curated attack + noise corpus through the real ingest + detection
+# pipeline so the UI shows a process graph, fired ATT&CK alerts, and an
+# application-control block. No Mac, MDM, or Apple entitlement required.
+#
+# Images are pinned to a released tag. To run from a local source build instead
+# (no published tag needed), layer the build override:
+#
+#   docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --build
+#
+# This stack is for evaluation only: empty MySQL password, self-signed cert,
+# checked-in dev secrets. Do not expose it or use it in production.
+name: fleet-edr-demo
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: edr
+    # Ephemeral by design: every `up` starts from a clean, freshly-seeded database.
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./config/dex/demo-config.yaml:/etc/dex/config.yaml:ro
+      - dex-data:/var/dex
+    networks:
+      default:
+        # The server reaches the issuer host (dex.demo.localhost) through this
+        # alias; the browser reaches the same host via *.localhost -> 127.0.0.1
+        # and the published port below. See config/dex/demo-config.yaml.
+        aliases:
+          - dex.demo.localhost
+    ports:
+      - "127.0.0.1:5556:5556"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  cert-init:
+    # Generate a self-signed localhost cert into the shared tls volume before the
+    # server boots (the distroless server image has no openssl). SAN covers
+    # `localhost` (the browser-facing URL) and `server` (the in-network hostname
+    # the seeder verifies). Runs once and exits; idempotent across restarts.
+    image: alpine:3.21
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ -s /tls/dev.crt ] && [ -s /tls/dev.key ]; then
+          echo "cert already present, skipping"
+          exit 0
+        fi
+        apk add --no-cache openssl >/dev/null
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+          -keyout /tls/dev.key -out /tls/dev.crt \
+          -subj "/CN=localhost" \
+          -addext "subjectAltName=DNS:localhost,DNS:server,IP:127.0.0.1,IP:::1"
+        chmod 0644 /tls/dev.crt /tls/dev.key
+        echo "generated /tls/dev.crt"
+    volumes:
+      - tls:/tls
+
+  server:
+    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-v0.1.1-rc.9}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      dex:
+        condition: service_healthy
+      cert-init:
+        condition: service_completed_successfully
+    environment:
+      EDR_DSN: "root@tcp(mysql:3306)/edr?parseTime=true&tls=false"
+      EDR_ENROLL_SECRET: demo-enroll-secret
+      EDR_TLS_CERT_FILE: /tls/dev.crt
+      EDR_TLS_KEY_FILE: /tls/dev.key
+      EDR_LOG_FORMAT: json
+      EDR_SESSION_SIGNING_KEY: demo-only-session-signing-key-do-not-use-in-prod
+      # SSO against the bundled dex. EDR_OIDC_DEFAULT_ROLE lands the single demo
+      # user at `admin` on first sign-in so every affordance is visible.
+      EDR_OIDC_ISSUER: http://dex.demo.localhost:5556/dex
+      EDR_OIDC_CLIENT_ID: edr-demo
+      EDR_OIDC_CLIENT_SECRET: edr-demo-client-secret-do-not-use-in-prod
+      EDR_OIDC_REDIRECT_URL: https://localhost:8088/api/auth/callback
+      EDR_OIDC_ALLOW_JIT_PROVISIONING: "1"
+      EDR_OIDC_DEFAULT_ROLE: admin
+      # Break-glass is available as an alternative login (a redemption URL prints
+      # to the server logs on first boot). See README "Notes for reviewers".
+      EDR_BREAKGLASS_RP_ID: localhost
+      EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - tls:/tls:ro
+
+  seeder:
+    image: ghcr.io/getvictor/fleet-edr-demo-seed:${EDR_VERSION:-v0.1.1-rc.9}
+    # One-shot: enrolls hosts, replays the corpus, verifies, then exits 0.
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      cert-init:
+        condition: service_completed_successfully
+      server:
+        # The server image is distroless (no shell for a container healthcheck),
+        # so the seeder polls /readyz itself rather than gating on health.
+        condition: service_started
+    environment:
+      EDR_DEMO_SERVER_URL: https://server:8088
+      EDR_ENROLL_SECRET: demo-enroll-secret
+      EDR_DSN: "root@tcp(mysql:3306)/edr?parseTime=true&tls=false"
+      EDR_DEMO_CA_CERT: /tls/dev.crt
+    volumes:
+      - tls:/tls:ro
+
+volumes:
+  dex-data:
+  tls:
