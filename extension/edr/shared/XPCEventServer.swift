@@ -57,6 +57,14 @@ enum XPCMessageType {
 /// this constant.
 private let pendingSendCap = 10_000
 
+/// Max events flushPendingTo sends per `queue` iteration before yielding the serial queue and re-dispatching the
+/// remainder. The pending buffer can hold up to pendingSendCap events (accumulated while the agent was absent), and a
+/// single synchronous drain of that depth would monopolise `queue` for the whole loop, delaying any inbound peer
+/// message queued behind it (a second peer's hello, an ERROR disconnect). Each xpc_connection_send_message is a
+/// non-blocking enqueue, so one chunk is sub-millisecond; yielding between chunks is what bounds the latency another
+/// queue item can see behind a deep flush. File-private alongside pendingSendCap.
+private let flushChunkSize = 256
+
 /// PendingBuffer is a bounded FIFO of event payloads the XPC server buffers while no peer is connected. Drained to the
 /// next peer that completes the hello handshake. Extracted from XPCEventServer so the cap + drop-oldest semantics +
 /// drain behaviour are unit-testable without a real XPC peer.
@@ -213,10 +221,31 @@ final class XPCEventServer {
     /// same event the broadcast would have delivered, and at the moment it was queued there were no peers — the newly
     /// arriving peer is the rightful recipient. If a SECOND peer connects later, that's a separate session and doesn't
     /// get the historical buffer.
+    ///
+    /// The drain happens up-front (clearing the buffer atomically on `queue`), but the sends are chunked via flushChunks
+    /// so a deep buffer (worst case pendingSendCap) can't monopolise the serial queue for the whole drain and stall an
+    /// inbound hello / disconnect queued behind it. In-order delivery is preserved, so the "delivers every buffered
+    /// event in the order it was emitted" contract still holds.
     private func flushPendingTo(_ peer: XPCPeer) {
         guard !pendingBuffer.isEmpty else { return }
         let drained = pendingBuffer.drain()
-        for data in drained {
+        log.info("XPC flushing \(drained.count, privacy: .public) buffered events to newly-connected peer")
+        flushChunks(drained[...], to: peer)
+    }
+
+    /// flushChunks sends the next flushChunkSize events from `remaining`, then re-dispatches itself on `queue` for the
+    /// rest so the serial queue can interleave other work between chunks. A live event broadcast during the flush
+    /// carries a later timestamp than any buffered (older) event, so the server's timestamp-ordered graph build
+    /// tolerates the interleave. If the peer disconnected since the previous chunk (its ERROR handler ran on `queue` and
+    /// removed it from `peers`), the remaining sends would be no-ops against a cancelled connection, so we stop early —
+    /// consistent with the "stop sending events to a peer once its connection closes" disconnect-cleanup contract.
+    private func flushChunks(_ remaining: ArraySlice<Data>, to peer: XPCPeer) {
+        guard peers.contains(peer) else {
+            log.info("XPC flush aborted mid-drain: peer disconnected before all buffered events were sent")
+            return
+        }
+        let chunk = remaining.prefix(flushChunkSize)
+        for data in chunk {
             let msg = xpc_dictionary_create_empty()
             data.withUnsafeBytes { buf in
                 guard let baseAddress = buf.baseAddress else { return }
@@ -224,7 +253,12 @@ final class XPCEventServer {
             }
             xpc_connection_send_message(peer.connection, msg)
         }
-        log.info("XPC flushed \(drained.count, privacy: .public) buffered events to newly-connected peer")
+        let next = remaining.dropFirst(chunk.count)
+        if !next.isEmpty {
+            queue.async { [weak self] in
+                self?.flushChunks(next, to: peer)
+            }
+        }
     }
 
     /// handlePeerMessage dispatches an inbound XPC dictionary from a connected peer (the agent). The decision logic
