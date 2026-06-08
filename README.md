@@ -129,7 +129,7 @@ task --list
 ## Quick start
 
 ```bash
-# Start MySQL (local dev + test on ports 3316/3317)
+# Start MySQL (local dev + test on ports 33306/33307)
 task db:up
 
 # Build the UI (embedded in the server binary via server/ui/dist/)

@@ -16,7 +16,7 @@ import (
 // calls this once and shares the returned handle across every
 // bounded context's bootstrap so all contexts share one connection
 // budget. The dsn should be in go-sql-driver/mysql format, e.g.
-// "user:pass@tcp(127.0.0.1:3316)/edr?parseTime=true". parseTime=true
+// "user:pass@tcp(127.0.0.1:33306)/edr?parseTime=true". parseTime=true
 // is appended automatically when missing.
 //
 // The connection pool lives in the platform bootstrap package because

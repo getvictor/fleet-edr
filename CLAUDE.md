@@ -104,12 +104,12 @@ ADR-0004 carved `server/` into five bounded contexts: `identity`, `endpoint`,
 
 ## Dev environment
 
-- Local MySQL: `task db:up` brings up `127.0.0.1:3316` (dev) and `:3317` (test).
+- Local MySQL: `task db:up` brings up `127.0.0.1:33306` (dev) and `:33307` (test).
   Empty password (`MYSQL_ALLOW_EMPTY_PASSWORD=yes` in `docker-compose.yml`).
 - Dev server: `task dev:server` listens on `127.0.0.1:8088` against
-  `127.0.0.1:3316/edr`. Real-tool QA must use this; never fall back to curl
+  `127.0.0.1:33306/edr`. Real-tool QA must use this; never fall back to curl
   or unit tests when the user asks for a Chrome / VM / dev-server check.
-- Test DSN: `EDR_TEST_DSN=root@tcp(127.0.0.1:3317)/edr_test?parseTime=true`.
+- Test DSN: `EDR_TEST_DSN=root@tcp(127.0.0.1:33307)/edr_test?parseTime=true`.
 
 ## Coverage gates
 

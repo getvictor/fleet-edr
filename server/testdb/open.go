@@ -83,7 +83,7 @@ func getAdminPool(baseDSN string) (*sqlx.DB, error) {
 // is the canonical fixture for cross-context integration tests.
 //
 // Requires EDR_TEST_DSN to be set (e.g.
-// "root:@tcp(127.0.0.1:3316)/edr_test?parseTime=true"). The database
+// "root:@tcp(127.0.0.1:33306)/edr_test?parseTime=true"). The database
 // name in the DSN is used only to connect initially; the test runs
 // against its own temporary database.
 //

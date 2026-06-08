@@ -45,7 +45,7 @@ If a linter disagrees with a specific change, prefer fixing the code over disabl
 ## Tests
 
 Run `task test` before pushing. Targeted runs: `task test:go`, `task test:ui`. Use subtests (`t.Run`) and table-driven cases
-in Go. Integration tests hit a real MySQL on port 3317; do not mock the database in store-layer tests.
+in Go. Integration tests hit a real MySQL on port 33307; do not mock the database in store-layer tests.
 
 Coverage is measured by SonarCloud; the new-code coverage gate is 80%. PRs that add code without adding tests will fail the
 gate.

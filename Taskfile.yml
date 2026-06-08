@@ -147,11 +147,11 @@ tasks:
     desc: |
       Run Go tests with race detector (server + agent + internal). Uses
       $EDR_TEST_DSN from the environment if set; otherwise defaults to the
-      docker-compose mysql_test service on port 3317 (see db:up). Pointing at
-      the dev DB on 3316 by accident is a common foot-gun because dev tests
+      docker-compose mysql_test service on port 33307 (see db:up). Pointing at
+      the dev DB on 33306 by accident is a common foot-gun because dev tests
       truncate tables. CI sets its own DSN.
     env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./agent/... ./internal/...
 
@@ -203,13 +203,13 @@ tasks:
   test:go:server:
     desc: |
       Run Go tests with race detector for the server + shared code. Requires
-      $EDR_TEST_DSN set or the docker-compose mysql_test on port 3317.
+      $EDR_TEST_DSN set or the docker-compose mysql_test on port 33307.
 
       Runs WITHOUT the integration build tag so the layer-2 + layer-3 tests
       (`server/<X>/internal/tests/`, `test/integration/`) are excluded; for
       those use test:go:server:integration.
     env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./internal/...
 
@@ -219,7 +219,7 @@ tasks:
       under server/<X>/internal/tests/ + layer-3 cross-context tests under
       test/integration/). Requires a real MySQL via $EDR_TEST_DSN.
     env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
     cmds:
       - go test -race -count=1 -timeout=10m -tags=integration ./server/... ./internal/... ./test/integration/...
 
@@ -243,7 +243,7 @@ tasks:
       the same tests are picked up automatically by test:go:server:integration
       under the recursive ./test/integration/... glob on the ubuntu runner.
     env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
       CGO_ENABLED: 0
     cmds:
       - go test -count=1 -timeout=5m -tags=integration ./test/integration/agentserver/...
@@ -264,7 +264,7 @@ tasks:
       Nightly CI runs this via .github/workflows/efficacy.yml; this task is
       for local iteration.
     env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
       CGO_ENABLED: 0
     cmds:
       - go test -count=1 -timeout=5m -tags=integration ./test/efficacy/...
@@ -332,7 +332,7 @@ tasks:
       cross-package coverage attribution; without that, the bootstrap.go and
       service.go files (which the integration tests exercise) would report 0%.
     env:
-      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:3317)/edr_test?parseTime=true"}}'
+      EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
     cmds:
       # -coverpkg=./server/...,./internal/... attributes coverage from one
       # package's tests back to symbols in any other package they exercise.
@@ -622,7 +622,7 @@ tasks:
       serve the embedded copy.
     deps: [dev:certs]
     env:
-      EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
+      EDR_DSN: "root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
       EDR_ENROLL_SECRET: dev-enroll-secret
       EDR_TLS_CERT_FILE: tmp/dev.crt
       EDR_TLS_KEY_FILE: tmp/dev.key
@@ -711,12 +711,12 @@ tasks:
       DESTRUCTIVE: drop the dev database and recreate empty. Requires explicit
       confirmation (Taskfile's prompt:). Use only when the schema is out of
       sync with current migrations; routine dev never needs this.
-      Credentials match the dev:server DSN (root, empty password, port 3316);
+      Credentials match the dev:server DSN (root, empty password, port 33306);
       see the dev:server desc for why the password is empty (matches docker-compose
       MYSQL_ALLOW_EMPTY_PASSWORD=yes; a `-ptoor` invocation produces access-denied).
     prompt: About to DROP DATABASE edr. Continue?
     cmds:
-      - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+      - mysql -uroot -h127.0.0.1 -P33306 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
 
   db:backup:
     desc: |
@@ -733,7 +733,7 @@ tasks:
       - mkdir -p tmp
       - |
         OUT="tmp/edr-dev-$(date +%Y%m%d-%H%M%S).sql.gz"
-        mysqldump -uroot -h127.0.0.1 -P3316 \
+        mysqldump -uroot -h127.0.0.1 -P33306 \
           --single-transaction --routines --triggers \
           edr | gzip > "$OUT"
         echo "wrote $OUT ($(du -h "$OUT" | cut -f1))"
@@ -759,7 +759,7 @@ tasks:
       - sh: 'test -f "{{.BACKUP_FILE}}"'
         msg: 'BACKUP_FILE not found: {{.BACKUP_FILE}}'
     cmds:
-      - mysql -uroot -h127.0.0.1 -P3316 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
+      - mysql -uroot -h127.0.0.1 -P33306 -e "DROP DATABASE IF EXISTS edr; CREATE DATABASE edr CHARACTER SET utf8mb4;"
       - |
         # gzip -dcf works on both macOS and Linux: -d decompresses,
         # -c streams to stdout, -f passes plaintext through
@@ -767,8 +767,8 @@ tasks:
         # so the task runs the same on Debian/Ubuntu (where /bin/sh
         # is dash and doesn't grok [[ ]]) as it does on macOS bash.
         case "{{.BACKUP_FILE}}" in
-          *.gz) gzip -dcf "{{.BACKUP_FILE}}" | mysql -uroot -h127.0.0.1 -P3316 edr ;;
-          *)    mysql -uroot -h127.0.0.1 -P3316 edr < "{{.BACKUP_FILE}}" ;;
+          *.gz) gzip -dcf "{{.BACKUP_FILE}}" | mysql -uroot -h127.0.0.1 -P33306 edr ;;
+          *)    mysql -uroot -h127.0.0.1 -P33306 edr < "{{.BACKUP_FILE}}" ;;
         esac
         echo "restored edr from {{.BACKUP_FILE}}"
 
@@ -821,7 +821,7 @@ tasks:
       config/dex/dev-config.yaml's redirectURIs list mirrors that.
     deps: [dev:certs]
     env:
-      EDR_DSN: "root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
+      EDR_DSN: "root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
       EDR_ENROLL_SECRET: dev-enroll-secret
       EDR_TLS_CERT_FILE: tmp/dev.crt
       EDR_TLS_KEY_FILE: tmp/dev.key
