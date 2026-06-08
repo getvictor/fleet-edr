@@ -200,7 +200,7 @@ final class XPCServerLogicTests: XCTestCase {
     func testNetworkExtensionAcksHelloAndIgnoresEverythingElse() {
         // Regression for the network-extension event-delivery bug: the NE's XPCServer originally never read inbound
         // dictionaries, so it never answered the agent's hello and the agent's xpc_bridge_connect timed out every
-        // reconnect cycle — the NE delivered zero network/DNS events. networkXPCShouldAck encodes the fix: ack a hello,
+        // reconnect cycle and the NE delivered zero network/DNS events. networkXPCShouldAck encodes the fix: ack a hello,
         // ignore everything else (the NE has no application_control.update inbound, unlike the security extension).
         XCTAssertTrue(networkXPCShouldAck(type: "hello"), "NE must ack the agent's hello to complete the handshake")
         XCTAssertEqual(NetworkXPCMessageType.helloAck, "hello-ack", "outbound reply wire-shape must be hello-ack")
