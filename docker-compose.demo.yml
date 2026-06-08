@@ -24,7 +24,9 @@ services:
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: edr
-    # Ephemeral by design: every `up` starts from a clean, freshly-seeded database.
+    # No named volume: data lives in an anonymous volume that persists across `up`/`down`
+    # but is discarded by `docker compose ... down -v`. Re-runs are safe regardless: the
+    # seeder is idempotent and skips replay when the demo data is already present.
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s

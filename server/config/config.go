@@ -416,6 +416,12 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	enforceOIDCGate(c, errs)
 }
 
+// builtinRoleIDs is the set of seeded RBAC role IDs that EDR_OIDC_DEFAULT_ROLE may name. Kept in sync with the canonical list in
+// server/identity/internal/seed/roles.go; config is a platform package and cannot import an identity-context internal package, so
+// the list is duplicated here behind this sync note. Validating against it at boot turns a mistyped role into a clear startup
+// error instead of an opaque foreign-key failure on the first SSO sign-in.
+var builtinRoleIDs = []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
+
 // parseOIDCOverrides reads the optional override env vars (EDR_OIDC_SCOPES, EDR_OIDC_ALLOW_JIT_PROVISIONING) onto c. Pulled out so
 // loadOIDCConfig stays under the cognitive-complexity budget.
 func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
@@ -432,7 +438,13 @@ func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
 		c.OIDCAllowJITProvisioning = v == "1"
 	}
 	if v := getenv("EDR_OIDC_DEFAULT_ROLE"); v != "" {
-		c.OIDCDefaultRole = v
+		// Normalize away whitespace + case typos; role IDs are canonically lower-case.
+		role := strings.ToLower(strings.TrimSpace(v))
+		if !slices.Contains(builtinRoleIDs, role) {
+			*errs = append(*errs, fmt.Errorf("EDR_OIDC_DEFAULT_ROLE %q is not a known role; allowed values: %s",
+				v, strings.Join(builtinRoleIDs, ", ")))
+		}
+		c.OIDCDefaultRole = role
 	}
 }
 
@@ -446,11 +458,11 @@ func enforceOIDCGate(c *Config, errs *[]error) {
 			"EDR_SESSION_SIGNING_KEY is required when OIDC is enabled; "+
 				"must be at least 32 bytes (use EDR_SESSION_SIGNING_KEY_FILE for docker-secret mounts)"))
 	}
-	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != ""
+	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != "" || c.OIDCDefaultRole != ""
 	switch {
 	case c.OIDCIssuer == "" && partialOIDC:
 		*errs = append(*errs, errors.New(
-			"EDR_OIDC_CLIENT_ID/CLIENT_SECRET/REDIRECT_URL set without EDR_OIDC_ISSUER; "+
+			"EDR_OIDC_CLIENT_ID/CLIENT_SECRET/REDIRECT_URL/DEFAULT_ROLE set without EDR_OIDC_ISSUER; "+
 				"set EDR_OIDC_ISSUER to enable OIDC, or unset the partial values to opt out"))
 	case c.OIDCIssuer == "" && !c.AuthAllowNoOIDC:
 		*errs = append(*errs, errors.New(

@@ -483,6 +483,41 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "EDR_OIDC_DEFAULT_ROLE is normalized (trim + lowercase)",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_DEFAULT_ROLE":   "  Senior_Analyst  ",
+				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "senior_analyst", c.OIDCDefaultRole)
+			},
+		},
+		{
+			name: "EDR_OIDC_DEFAULT_ROLE unknown role -> error listing allowed values",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_DEFAULT_ROLE":   "wizard",
+				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+			}),
+			wantErr: "EDR_OIDC_DEFAULT_ROLE \"wizard\" is not a known role",
+		},
+		{
+			name: "EDR_OIDC_DEFAULT_ROLE without issuer -> partial-OIDC error",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_DEFAULT_ROLE":  "admin",
+				"EDR_AUTH_ALLOW_NO_OIDC": "1",
+			}),
+			wantErr: "set without EDR_OIDC_ISSUER",
+		},
+		{
 			name: "EDR_OIDC_STATE_COOKIE_TTL override",
 			env: withExtra(prodLikeEnv, map[string]string{
 				"EDR_OIDC_ISSUER":           "https://example.okta.com",

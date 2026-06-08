@@ -54,8 +54,8 @@ docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --
 ### Notes for reviewers
 
 - The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an
-  MDM, and Apple Silicon, so it cannot run in Docker. The recording above shows it on a real Mac; this stack exercises the
-  server, UI, and detection pipeline.
+  MDM, and Apple Silicon, so it cannot run in Docker. The recording linked above (once published) captures it on a real Mac;
+  this stack exercises the server, UI, and detection pipeline.
 - The demo data is genuine: the seeder replays a curated attack + noise corpus through the real `POST /api/events` ingest
   path, and the server's own processor materializes the process graph and fires the alerts.
 - Response actions (kill, isolate) are visible and enqueue, but never complete because no live agent is connected.

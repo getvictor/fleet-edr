@@ -55,13 +55,12 @@ and redirect the browser to the application's home view.
 The system SHALL provision a user account on first successful Okta login when
 `auth.oidc.allow_jit_provisioning` is enabled and no identity row exists for the
 incoming `(provider, subject)` pair. The newly-created user SHALL be bound to the
-deployment's configured default JIT role at the deployment-wide scope — the seeded
-`analyst` role by default, overridable to another seeded role via `EDR_OIDC_DEFAULT_ROLE`
-— MUST NOT inherit any other role from claims (group → role mapping is out of scope for
+deployment's configured default JIT role at the deployment-wide scope (the seeded
+`analyst` role by default, overridable to another seeded role via `EDR_OIDC_DEFAULT_ROLE`).
+It MUST NOT inherit any other role from claims (group to role mapping is out of scope for
 wave 1), and the provisioning SHALL emit an audit row with action `user.created`. When
-`allow_jit_provisioning` is
-disabled, an unknown subject SHALL be denied with an audit row whose reason is
-`oidc.unknown_subject`.
+`allow_jit_provisioning` is disabled, an unknown subject SHALL be denied with an audit row
+whose reason is `oidc.unknown_subject`.
 
 #### Scenario: First Okta login auto-provisions an analyst
 

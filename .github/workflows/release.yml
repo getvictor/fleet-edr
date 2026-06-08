@@ -453,9 +453,29 @@ jobs:
           cosign sign \
             "ghcr.io/getvictor/fleet-edr-demo-seed@${IMAGE_DIGEST}"
 
-      # The seeder is internal demo tooling, not a shipped product artifact, so it
-      # carries a cosign signature + SLSA build provenance but not the full SBOM
-      # attestation the server image gets.
+      # Full supply-chain parity with the server image: the seeder is published to the
+      # same public registry, so it gets a cosign-attested SBOM + SLSA provenance too.
+      - name: Generate image SBOM (SPDX)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ghcr.io/getvictor/fleet-edr-demo-seed@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: fleet-edr-demo-seed-${{ env.RELEASE_TAG }}-sbom.spdx.json
+          output-file: /tmp/fleet-edr-demo-seed-sbom.spdx.json
+          upload-release-assets: false
+
+      - name: Attach image SBOM as cosign attestation
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          COSIGN_YES: 'true'
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign attest \
+            --predicate /tmp/fleet-edr-demo-seed-sbom.spdx.json \
+            --type spdxjson \
+            "ghcr.io/getvictor/fleet-edr-demo-seed@${IMAGE_DIGEST}"
+
       - name: Attest image build provenance
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
