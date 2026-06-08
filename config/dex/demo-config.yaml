@@ -1,0 +1,51 @@
+# dex (https://dexidp.io) configuration for the Mac-free docker demo
+# (docker-compose.demo.yml). It backs the one reviewer SSO account so a
+# reviewer can sign in and click around without an MDM, a Mac, or a real IdP.
+#
+# A single static user is pre-provisioned: demo@fleet-edr.local / demo. On
+# first sign-in the EDR JIT-provisions it; docker-compose.demo.yml sets
+# EDR_OIDC_DEFAULT_ROLE=admin so that account lands at the `admin` role and
+# every affordance is visible.
+#
+# DO NOT use this config or these credentials in production. The issuer URL,
+# client secret, and static password are all checked into the repo by design;
+# production OIDC config lives in env vars loaded from a real secrets manager
+# per docs/okta-setup.md.
+#
+# The issuer host `dex.demo.localhost` is deliberate: browsers resolve any
+# *.localhost name to 127.0.0.1 (RFC 6761), so the reviewer's browser reaches
+# dex via its published :5556 port, while the EDR server container resolves the
+# same hostname to the dex service through a docker network alias. One issuer
+# URL that resolves to dex from both sides. See README "Notes for reviewers".
+issuer: http://dex.demo.localhost:5556/dex
+
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+
+# Skip the consent screen so the reviewer's sign-in is a single password prompt.
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: edr-demo
+    name: "Fleet EDR demo"
+    secret: edr-demo-client-secret-do-not-use-in-prod
+    redirectURIs:
+      # Must match docker-compose.demo.yml's EDR_OIDC_REDIRECT_URL exactly; dex
+      # refuses any other URL during the authorization-code redirect. This is the
+      # browser-facing EDR server URL, hence localhost (not the in-network name).
+      - "https://localhost:8088/api/auth/callback"
+
+enablePasswordDB: true
+
+staticPasswords:
+  # Password is "demo"; hash generated with `htpasswd -bnBC 10 "" demo | tr -d ':\n'`.
+  - email: "demo@fleet-edr.local"
+    username: "demo"
+    userID: "de300000-0000-4000-8000-000000000001"
+    hash: "$2y$10$EckN0c12ycD1XJti5eWMceLbY9Xz6FDro.jF8cNz7roAmhgefLc52"

@@ -230,6 +230,7 @@ func openIdentity(
 			RedirectURL:          cfg.OIDCRedirectURL,
 			Scopes:               cfg.OIDCScopes,
 			AllowJITProvisioning: cfg.OIDCAllowJITProvisioning,
+			DefaultRole:          cfg.OIDCDefaultRole,
 			StateCookieTTL:       cfg.OIDCStateCookieTTL,
 		},
 		Breakglass: identitybootstrap.BreakglassDeps{

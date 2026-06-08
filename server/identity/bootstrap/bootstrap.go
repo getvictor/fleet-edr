@@ -85,8 +85,10 @@ type OIDCDeps struct {
 	RedirectURL          string
 	Scopes               []string
 	AllowJITProvisioning bool
-	StateCookieTTL       time.Duration
-	HTTPClient           *http.Client // optional; tests inject a fixture
+	// DefaultRole is the role a JIT-provisioned OIDC user is bound to. Empty falls through to the provisioner default (`analyst`).
+	DefaultRole    string
+	StateCookieTTL time.Duration
+	HTTPClient     *http.Client // optional; tests inject a fixture
 }
 
 const defaultCleanupInterval = 5 * time.Minute
@@ -323,8 +325,9 @@ func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, e
 		return nil, fmt.Errorf("identity bootstrap: construct OIDC client: %w", err)
 	}
 	prov := oidc.NewProvisioner(in.deps.DB, in.users, in.identities, in.rbac, in.audit, oidc.ProvisionerOptions{
-		AllowJIT: in.deps.OIDC.AllowJITProvisioning,
-		Logger:   in.logger,
+		AllowJIT:    in.deps.OIDC.AllowJITProvisioning,
+		DefaultRole: in.deps.OIDC.DefaultRole,
+		Logger:      in.logger,
 	})
 	return oidc.NewHandler(oidc.HandlerOptions{
 		Client:      client,
