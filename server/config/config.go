@@ -157,6 +157,10 @@ type Config struct {
 	// binding. true = create on first sign-in (recommended for most deployments); false = require an admin to pre-provision the user.
 	// Default true.
 	OIDCAllowJITProvisioning bool
+	// OIDCDefaultRole is the role a JIT-provisioned OIDC user is bound to. Populated from EDR_OIDC_DEFAULT_ROLE; empty falls through to
+	// the identity context's default (`analyst`). Must name a seeded role. Lets a deployment land SSO users at a higher role without
+	// per-user pre-provisioning (the docker demo uses it to land its single SSO user at `admin`).
+	OIDCDefaultRole string
 	// OIDCStateCookieTTL bounds how long the signed state cookie (carrying state + nonce + PKCE verifier) stays valid. Defaults to 5m;
 	// tune up for slow IdPs / MFA prompts.
 	OIDCStateCookieTTL time.Duration
@@ -426,6 +430,9 @@ func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
 	}
 	if v := getenv("EDR_OIDC_ALLOW_JIT_PROVISIONING"); v != "" {
 		c.OIDCAllowJITProvisioning = v == "1"
+	}
+	if v := getenv("EDR_OIDC_DEFAULT_ROLE"); v != "" {
+		c.OIDCDefaultRole = v
 	}
 }
 

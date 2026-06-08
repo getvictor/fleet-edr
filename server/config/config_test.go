@@ -432,6 +432,7 @@ func TestLoad_OIDCConfig(t *testing.T) {
 				assert.Equal(t, "https://edr.example.com/api/auth/callback", c.OIDCRedirectURL)
 				assert.Equal(t, []string{"openid", "email", "profile"}, c.OIDCScopes)
 				assert.True(t, c.OIDCAllowJITProvisioning)
+				assert.Empty(t, c.OIDCDefaultRole, "default JIT role falls through to the identity-context default")
 				assert.Equal(t, 5*time.Minute, c.OIDCStateCookieTTL)
 				assert.False(t, c.AuthAllowNoOIDC)
 			},
@@ -464,6 +465,21 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
 				assert.False(t, c.OIDCAllowJITProvisioning)
+			},
+		},
+		{
+			name: "EDR_OIDC_DEFAULT_ROLE override",
+			env: withExtra(prodLikeEnv, map[string]string{
+				"EDR_OIDC_ISSUER":         "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":      "edr",
+				"EDR_OIDC_CLIENT_SECRET":  "shh",
+				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_DEFAULT_ROLE":   "admin",
+				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "admin", c.OIDCDefaultRole)
 			},
 		},
 		{
