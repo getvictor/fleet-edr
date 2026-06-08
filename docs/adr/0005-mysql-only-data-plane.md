@@ -62,7 +62,7 @@ Three demands push back on MySQL-only:
 The data plane runs on MySQL 8.4 only. There is no abstraction layer over
 the SQL dialect: stores use raw MySQL features (`FOR UPDATE SKIP LOCKED`,
 duplicate-error swallowing, `parseTime=true`, the docker-compose
-`mysql_test` service on port 3317 for integration tests). The reference
+`mysql_test` service on port 33307 for integration tests). The reference
 deployment is the `mysql:8.4` image from the official Docker library, run
 either as a sidecar container or as a managed service (RDS, CloudSQL,
 Aurora MySQL-compatible) keyed off `EDR_DSN`.
@@ -83,7 +83,7 @@ the EDR's primary store stays MySQL.
   `FOR UPDATE SKIP LOCKED` claim pattern, and the `parseTime=true`
   invariant are all MySQL-specific and only have to be right in one place.
 - Test infrastructure is single-shape: `testdb/full.Open` against a real
-  MySQL on `127.0.0.1:3317` is the integration-test seam, with parallel
+  MySQL on `127.0.0.1:33307` is the integration-test seam, with parallel
   schema isolation. No matrix builds across RDBMSes.
 - Operators get a predictable upgrade path within MySQL 8.x; the team
   audits one stream of CVEs and one set of breaking-change notes.

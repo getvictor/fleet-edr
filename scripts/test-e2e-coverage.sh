@@ -52,7 +52,7 @@ COV_OUT="$REPO_ROOT/coverage-server-e2e.out"
 # The covered binary refuses to boot without EDR_TLS_CERT_FILE + EDR_TLS_KEY_FILE.
 task dev:certs > /dev/null
 COMMON_ENV=(
-  EDR_DSN="root:@tcp(127.0.0.1:3316)/edr?parseTime=true"
+  EDR_DSN="root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
   EDR_ENROLL_SECRET=dev-enroll-secret
   EDR_TLS_CERT_FILE="$REPO_ROOT/tmp/dev.crt"
   EDR_TLS_KEY_FILE="$REPO_ROOT/tmp/dev.key"

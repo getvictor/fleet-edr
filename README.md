@@ -6,14 +6,14 @@
 
 <!-- Build & quality -->
 ![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
-[![Tests](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml)
+[![Tests](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
 [![Coverage](https://img.shields.io/codecov/c/github/getvictor/fleet-edr?style=flat-square&logo=codecov)](https://codecov.io/gh/getvictor/fleet-edr)
 
 <!-- Security scanners -->
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/codeql.yml?branch=main&label=CodeQL&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml)
-[![govulncheck](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/go-vulncheck.yml?branch=main&label=govulncheck&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
-[![OSV-Scanner](https://img.shields.io/github/actions/workflow/status/getvictor/fleet-edr/osv-scanner.yml?branch=main&label=OSV-Scanner&style=flat-square)](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml)
+[![CodeQL](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml)
+[![govulncheck](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
+[![OSV-Scanner](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml)
 
 <!-- Supply chain -->
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12994/badge)](https://www.bestpractices.dev/projects/12994)
@@ -129,7 +129,7 @@ task --list
 ## Quick start
 
 ```bash
-# Start MySQL (local dev + test on ports 3316/3317)
+# Start MySQL (local dev + test on ports 33306/33307)
 task db:up
 
 # Build the UI (embedded in the server binary via server/ui/dist/)

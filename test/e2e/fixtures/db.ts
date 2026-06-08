@@ -2,11 +2,11 @@ import * as crypto from "node:crypto";
 import mysql, { Connection } from "mysql2/promise";
 
 // Dev DB matches Taskfile's dev:server* env block: root user, empty
-// password, port 3316. Keep this constant in sync with
+// password, port 33306. Keep this constant in sync with
 // Taskfile.yml's EDR_DSN.
 const DEV_DSN = {
   host: "127.0.0.1",
-  port: 3316,
+  port: 33306,
   user: "root",
   password: "",
   database: "edr",
