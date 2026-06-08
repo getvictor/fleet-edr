@@ -78,6 +78,10 @@ final class XPCServer {
                         self?.peers.remove(peer)
                         logger.info("Peer disconnected (total: \(self?.peers.count ?? 0))")
                     }
+                    return
+                }
+                if peerType == XPC_TYPE_DICTIONARY {
+                    self?.handlePeerMessage(peerEvent, peer: peer)
                 }
             }
 
@@ -85,6 +89,23 @@ final class XPCServer {
         } else if type == XPC_TYPE_ERROR {
             logger.error("Listener error")
         }
+    }
+
+    /// handlePeerMessage replies to the agent's "hello" with "hello-ack" to complete the connect handshake. The agent's
+    /// xpc_bridge_connect sends "hello" and tears the connection down if no "hello-ack" arrives within 5s
+    /// (agent/xpcbridge/xpc_bridge.c, issue #178); without this reply the agent's network-extension receiver timed out
+    /// every reconnect cycle and the extension delivered no network/DNS events. The network extension has no inbound
+    /// control messages (unlike the security extension's application_control.update), so any other type is ignored.
+    private func handlePeerMessage(_ event: xpc_object_t, peer: XPCPeer) {
+        let typeStr = xpc_dictionary_get_string(event, "type").map { String(cString: $0) }
+        guard networkXPCShouldAck(type: typeStr) else {
+            // type is peer-supplied; redact in the unified log so a compromised peer cannot inject arbitrary strings.
+            logger.info("unknown XPC message type: \(typeStr ?? "(none)", privacy: .private)")
+            return
+        }
+        let ack = xpc_dictionary_create_empty()
+        xpc_dictionary_set_string(ack, "type", NetworkXPCMessageType.helloAck)
+        xpc_connection_send_message(peer.connection, ack)
     }
 }
 
