@@ -17,9 +17,13 @@ import (
 
 const (
 	defaultXPCService = "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc"
-	// Team-prefixed (globally resolvable) Mach service. An app-group-scoped name (group.*) is only reachable by
-	// processes holding that app-group entitlement, which the agent does not, so the agent could never connect.
-	defaultNetXPCService = "FDG8Q7N4CC.com.fleetdm.edr.networkextension.xpc"
+	// The network extension's only launchd-registered Mach service is its NEMachServiceName, which Apple requires to be
+	// app-group-scoped. A team-prefixed name is NOT registered for a NetworkExtension sysext (unlike the security
+	// extension, which gets its team-prefixed name registered via NSEndpointSecurityMachServiceName), so dialing one
+	// fails at the Mach bootstrap lookup with "xpc_bridge_connect failed". The agent reaches the app-group name fine
+	// (verified on edr-qa: "receiver connected" to group.com.fleetdm.edr.networkextension across many sessions). #300
+	// switched this to a team-prefixed name on a false premise and silently broke NE event delivery.
+	defaultNetXPCService = "group.com.fleetdm.edr.networkextension"
 	defaultQueueDBPath   = "/var/db/fleet-edr/events.db"
 
 	// defaultPruneAge is the default for EDR_PRUNE_AGE: drop uploaded events
