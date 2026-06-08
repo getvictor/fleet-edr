@@ -51,7 +51,7 @@ To run from a local source build instead of the pinned release images:
 docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --build
 ```
 
-### Notes for reviewers
+### Demo notes
 
 - The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an
   MDM, and Apple Silicon, so it cannot run in Docker. The recording linked above (once published) captures it on a real Mac;
@@ -60,7 +60,7 @@ docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --
   path, and the server's own processor materializes the process graph and fires the alerts.
 - Response actions (kill, isolate) are visible and enqueue, but never complete because no live agent is connected.
 - TLS uses a self-signed `localhost` certificate, so the browser shows a one-time warning. The stack is for evaluation only:
-  empty MySQL password and checked-in dev secrets -- do not expose it.
+  empty MySQL password and checked-in dev secrets. Do not expose it this stack to the public internet.
 - SSO is the documented path. Admin onboarding via break-glass is also available: a redemption URL prints to the server logs
   on first boot (`docker compose -f docker-compose.demo.yml logs server | grep -i break-glass`); redeeming it needs a
   WebAuthn authenticator.
