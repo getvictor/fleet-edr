@@ -13,6 +13,8 @@ import (
 )
 
 // spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-resolves-a-domain-and-connects-to-the-resolved-address
+// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-browser-resolving-and-connecting-to-an-ordinary-domain-does-not-fire
+// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-that-connects-to-an-address-it-never-resolved-does-not-fire
 //
 // TestDNSC2Beacon_Fixtures runs every fixture under fixtures/dns_c2_beacon/ as its own sub-test. The positive case is
 // the spec scenario above (temp-path process resolves a high-entropy domain, then connects to the resolved address);
