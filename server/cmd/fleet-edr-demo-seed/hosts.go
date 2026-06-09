@@ -84,6 +84,13 @@ func loadHostEnvelopes(file string) ([]fakeagent.Envelope, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("read host corpus %s: %w", file, err)
 	}
+	return decodeHostEnvelopes(raw, file)
+}
+
+// decodeHostEnvelopes parses a scrubbed JSONL capture into wire envelopes and returns them with the single host_id they all
+// carry. Split from the embed read so the malformed-line / mixed-host / empty failure paths are unit-testable without a
+// checked-in bad fixture.
+func decodeHostEnvelopes(raw []byte, file string) ([]fakeagent.Envelope, string, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 0, maxHostCorpusLineBytes), maxHostCorpusLineBytes)
 	var envs []fakeagent.Envelope
@@ -145,7 +152,10 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 	if err != nil {
 		return err
 	}
-	shiftEnvelopesToRecent(envs, time.Now())
+	// One clock read for the whole host: the ambient tail and every woven attack are placed relative to this same now, so
+	// per-batch network latency cannot drift the attacks forward relative to the ambient events (deterministic relative timing).
+	now := time.Now()
+	shiftEnvelopesToRecent(envs, now)
 	for start := 0; start < len(envs); start += hostReplayBatchSize {
 		end := min(start+hostReplayBatchSize, len(envs))
 		if err := s.postEnvelopes(ctx, token, envs[start:end]); err != nil {
@@ -156,7 +166,7 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 		"file", host.File, "host_id", hostID, "hostname", host.Hostname, "events", len(envs))
 
 	for i, atk := range host.Attacks {
-		if err := s.weaveAttack(ctx, hostID, token, atk, i); err != nil {
+		if err := s.weaveAttack(ctx, hostID, token, atk, i, now); err != nil {
 			return fmt.Errorf("weave %s onto %s: %w", atk.File, host.File, err)
 		}
 	}
@@ -167,15 +177,16 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 // captured stream or another woven attack), overrides the host_id to the captured host, and posts the events at a recent,
 // per-attack-staggered time. For an app-control scenario it then posts the fabricated block event against the offset pid (after
 // the process materialises), exactly as the standalone path used to.
-func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wovenAttack, idx int) error {
+func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wovenAttack, idx int, now time.Time) error {
 	sc, err := loadAttackScenario(atk.File)
 	if err != nil {
 		return err
 	}
 	offsetScenarioPIDs(sc, attackPIDOffsetBase+idx*attackPIDOffsetStride)
 
-	// Place the attack just before the captured tail, staggered per attack, so it reads as recent activity on the host.
-	atkStart := time.Now().Add(-recentTailOffset).Add(-time.Duration(idx+1) * attackStagger)
+	// Place the attack just before the captured tail, staggered per attack, so it reads as recent activity on the host. now is
+	// the caller's single clock read (see replayHost) so the attack's offset from the ambient tail stays stable across replays.
+	atkStart := now.Add(-recentTailOffset).Add(-time.Duration(idx+1) * attackStagger)
 	envs, err := sc.Envelopes(fakeagent.WithStartTime(atkStart), fakeagent.WithHostID(hostID))
 	if err != nil {
 		return fmt.Errorf("materialise %s: %w", atk.File, err)
@@ -221,5 +232,6 @@ func offsetScenarioPIDs(sc *fakeagent.Scenario, offset int) {
 		ev.PPID = bump(ev.PPID)
 		ev.ChildPID = bump(ev.ChildPID)
 		ev.ParentPID = bump(ev.ParentPID)
+		ev.InstigatorPID = bump(ev.InstigatorPID)
 	}
 }

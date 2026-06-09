@@ -36,12 +36,21 @@ func loadAttackScenario(file string) (*fakeagent.Scenario, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded corpus %s: %w", file, err)
 	}
+	return decodeAttackScenario(raw, file)
+}
+
+// decodeAttackScenario parses and validates one scenario's raw YAML. Split from the embed read so the parse/validate failure
+// paths are unit-testable without a checked-in malformed fixture.
+func decodeAttackScenario(raw []byte, name string) (*fakeagent.Scenario, error) {
 	var sc fakeagent.Scenario
-	if err := yaml.Unmarshal(raw, &sc); err != nil {
-		return nil, fmt.Errorf("parse corpus %s: %w", file, err)
+	// Strict decode: an unknown or misspelled YAML key is a checked-in-corpus bug, not something to silently default away (a
+	// typo'd field would otherwise produce a low-fidelity scenario that still parses). The files ship in the binary, so any
+	// drift is caught at build time by the tests that load every scenario.
+	if err := yaml.UnmarshalStrict(raw, &sc); err != nil {
+		return nil, fmt.Errorf("parse corpus %s: %w", name, err)
 	}
 	if err := sc.Validate(); err != nil {
-		return nil, fmt.Errorf("validate corpus %s: %w", file, err)
+		return nil, fmt.Errorf("validate corpus %s: %w", name, err)
 	}
 	return &sc, nil
 }

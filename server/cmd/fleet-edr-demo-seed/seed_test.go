@@ -132,6 +132,32 @@ func TestWovenAttacksLoadAndValidate(t *testing.T) {
 	}
 }
 
+// TestReplayHostErrors covers replayHost's two HTTP failure branches (enroll and the events POST) against a real captured host
+// from the manifest, with no DB: an error at either step must abort the replay.
+func TestReplayHostErrors(t *testing.T) {
+	t.Run("enroll failure aborts replay", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden) // enroll -> 403
+		}))
+		defer ts.Close()
+		err := httpSeeder(ts.URL).replayHost(context.Background(), hostManifest[0])
+		require.Error(t, err)
+	})
+
+	t.Run("events POST failure aborts replay", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/enroll" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"host_id": "H", "host_token": "tok"})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError) // /api/events -> 500
+		}))
+		defer ts.Close()
+		err := httpSeeder(ts.URL).replayHost(context.Background(), hostManifest[0])
+		require.Error(t, err)
+	})
+}
+
 func TestFirstExec(t *testing.T) {
 	withExec := &fakeagent.Scenario{Timeline: []fakeagent.Event{
 		{Type: "fork", ChildPID: 10, ParentPID: 1},

@@ -63,3 +63,23 @@ func TestShiftEnvelopesToRecent(t *testing.T) {
 		assert.Less(t, envs[1].TimestampNs, now.UnixNano())
 	})
 }
+
+// TestOffsetScenarioPIDs confirms every pid-like field is shifted by the offset (including InstigatorPID, used by
+// btm_launch_item_add events) while kernel/launchd sentinels (values <= 1) are preserved so the subtree still roots at pid 1.
+func TestOffsetScenarioPIDs(t *testing.T) {
+	t.Parallel()
+	sc := &fakeagent.Scenario{Timeline: []fakeagent.Event{
+		{Type: "fork", ChildPID: 100, ParentPID: 1},
+		{Type: "btm_launch_item_add", PID: 200, PPID: 100, InstigatorPID: 50},
+		{Type: "exec", PID: 1, PPID: 1}, // sentinels
+	}}
+	offsetScenarioPIDs(sc, 5_000_000)
+
+	assert.Equal(t, 5_000_100, sc.Timeline[0].ChildPID)
+	assert.Equal(t, 1, sc.Timeline[0].ParentPID, "launchd sentinel preserved")
+	assert.Equal(t, 5_000_200, sc.Timeline[1].PID)
+	assert.Equal(t, 5_000_100, sc.Timeline[1].PPID)
+	assert.Equal(t, 5_000_050, sc.Timeline[1].InstigatorPID, "instigator pid is offset too")
+	assert.Equal(t, 1, sc.Timeline[2].PID, "pid <= 1 preserved")
+	assert.Equal(t, 1, sc.Timeline[2].PPID)
+}
