@@ -45,6 +45,15 @@ config:
   MD024:
     siblings_only: true
 
+  # Table-column-style (added in markdownlint v0.38, default-on in newer
+  # markdownlint-cli2 releases). The repo writes tables with compact separator
+  # rows (`|---|`) and spaced data cells (`| x |`) consistently across ~30
+  # tables; that mix is cosmetic and renders fine, but MD060 flags it (200+
+  # findings repo-wide on a version bump). Disable it for the same reason we
+  # disable MD033/MD034: it fights the repo's established style without catching
+  # a real defect. Pin a style here later if we ever want enforced uniformity.
+  MD060: false
+
   # Default first-line-h1 stays on so every doc opens with a clear title.
   # MD041: enabled by default.
 
