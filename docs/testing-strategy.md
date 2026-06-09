@@ -192,7 +192,7 @@ Each simulated host enrols via `/api/enroll`, then loops `fakeagent.PostDirect` 
 duration; the runner records client-observed p50/p95/p99 latency and asserts the documented gate
 (`p99 < 250ms`, zero errors). A per-PR smoke (5 hosts x 5s) at `test/scale/scale_test.go` runs on every push via the
 `./test/scale/...` glob in the server-test job (`task test:go:server:coverage`) and proves the harness itself does not
-rot. The 30-minute baseline is captured manually and committed to `test/scale/baselines/baseline.json`. Queue-depth
+rot. The 30-minute baseline is captured manually and committed to `test/scale/baselines/`. Queue-depth
 probes and SigNoz cross-checks (see the M12 row in `ai/uat/plan.md`) are explicitly deferred to a follow-up.
 
 ## Reusable artefacts
