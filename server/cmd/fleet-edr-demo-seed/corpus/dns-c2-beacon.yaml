@@ -1,0 +1,44 @@
+# Demo corpus scenario backing the dns_c2_beacon detection (the three-stream
+# differentiator: exec + DNS + network correlated into one finding).
+#
+# A payload staged to a temp path resolves a high-entropy (DGA-like) domain and
+# then opens an outbound connection to the resolved address. The dns_c2_beacon
+# rule fires on the connection: a temp/world-writable-path process whose
+# dns_query resolved the address it is now connecting to. The high-entropy
+# domain escalates the finding to Critical and adds T1568.002. The remote IP is
+# in the RFC 5737 TEST-NET-3 documentation block. Woven onto a captured host by
+# the seeder, so it fires inside real ambient activity.
+name: "T1071.004 DNS C2 beacon: temp-path payload resolves + connects"
+mitre: T1071.004 + T1568.002
+host:
+  id: DE300DC2-0000-0000-0000-000000000001
+  hostname: demo-host.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 7200
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 7200
+    ppid: 1
+    path: /tmp/.update
+    args: ["/tmp/.update"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+  - at: 40ms
+    type: dns_query
+    pid: 7200
+    query_name: kx7gq2vphj9k3mzw.example.net
+    query_type: A
+    response_addresses: ["203.0.113.66"]
+    protocol: udp
+  - at: 70ms
+    type: network_connect
+    pid: 7200
+    protocol: tcp
+    direction: outbound
+    remote_address: 203.0.113.66
+    remote_port: 443

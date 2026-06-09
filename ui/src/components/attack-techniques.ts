@@ -33,6 +33,11 @@ export const TECHNIQUE_CATALOG: Record<string, TechniqueMeta> = {
     name: "Unix Shell",
     tactic: "Execution",
   },
+  "T1071.004": {
+    id: "T1071.004",
+    name: "DNS",
+    tactic: "Command and Control",
+  },
   "T1105": {
     id: "T1105",
     name: "Ingress Tool Transfer",
@@ -62,6 +67,11 @@ export const TECHNIQUE_CATALOG: Record<string, TechniqueMeta> = {
     id: "T1566.001",
     name: "Spearphishing Attachment",
     tactic: "Initial Access",
+  },
+  "T1568.002": {
+    id: "T1568.002",
+    name: "Domain Generation Algorithms",
+    tactic: "Command and Control",
   },
   "T1574.006": {
     id: "T1574.006",

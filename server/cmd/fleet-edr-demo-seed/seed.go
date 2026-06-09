@@ -81,11 +81,6 @@ func (s *seeder) run(ctx context.Context) error {
 		return fmt.Errorf("server did not become ready: %w", err)
 	}
 
-	scenarios, err := loadScenarios()
-	if err != nil {
-		return err
-	}
-
 	if !s.cfg.force {
 		seeded, err := s.alreadySeeded(ctx)
 		if err != nil {
@@ -97,9 +92,11 @@ func (s *seeder) run(ctx context.Context) error {
 		}
 	}
 
-	for _, sc := range scenarios {
-		if err := s.replay(ctx, sc); err != nil {
-			return fmt.Errorf("replay %s: %w", sc.File, err)
+	// Replay each rich captured host (deep real process tree + correlated network_connect/dns_query) and weave its attacks
+	// in, so every detection fires inside genuine ambient activity rather than on a 2-event stub host.
+	for _, host := range hostManifest {
+		if err := s.replayHost(ctx, host); err != nil {
+			return fmt.Errorf("replay host %s: %w", host.File, err)
 		}
 	}
 
@@ -111,54 +108,6 @@ func (s *seeder) run(ctx context.Context) error {
 	}
 
 	s.logger.InfoContext(ctx, "demo seed complete")
-	return nil
-}
-
-// replay enrols the scenario's host, posts its events directly to the ingest API, and for app-control scenarios fabricates the
-// follow-up block event.
-func (s *seeder) replay(ctx context.Context, sc demoScenario) error {
-	hostID := sc.Scenario.Host.ID
-	token, err := s.enroll(ctx, hostID, sc.Scenario.Host.Hostname)
-	if err != nil {
-		return err
-	}
-
-	base := time.Now()
-	if err := sc.Scenario.PostDirect(ctx, s.cfg.serverURL, token,
-		fakeagent.WithHTTPClient(s.client), fakeagent.WithStartTime(base)); err != nil {
-		return err
-	}
-	s.logger.InfoContext(ctx, "replayed scenario",
-		"file", sc.File, "host_id", hostID, "kind", string(sc.Kind), "events", len(sc.Scenario.Timeline))
-
-	if sc.Kind == kindAppControl {
-		return s.postAppControlBlock(ctx, sc, token, base)
-	}
-	return nil
-}
-
-// postAppControlBlock fabricates and posts the application_control_block event for an app-control scenario. The block rule resolves
-// the event's pid against the materialised graph, so it first waits for the scenario's exec to land; otherwise the rule would skip
-// the event permanently (the processor evaluates each event once).
-func (s *seeder) postAppControlBlock(ctx context.Context, sc demoScenario, token string, base time.Time) error {
-	pid, execPath, ok := firstExec(sc.Scenario)
-	if !ok {
-		return fmt.Errorf("app-control scenario %s has no exec event", sc.File)
-	}
-	hostID := sc.Scenario.Host.ID
-
-	if err := s.waitForProcess(ctx, hostID, pid); err != nil {
-		return fmt.Errorf("app-control process pid %d never materialised: %w", pid, err)
-	}
-
-	// Stamp the block one second past the scenario start so it sits after the fork/exec; the scenario emits no exit, so the live
-	// process resolves at this timestamp.
-	blockTS := base.Add(time.Second).UnixNano()
-	env := buildBlockEnvelope(hostID, pid, execPath, blockTS)
-	if err := s.postEnvelopes(ctx, token, []fakeagent.Envelope{env}); err != nil {
-		return fmt.Errorf("post application_control_block event: %w", err)
-	}
-	s.logger.InfoContext(ctx, "posted application-control block", "host_id", hostID, "pid", pid, "path", execPath)
 	return nil
 }
 
