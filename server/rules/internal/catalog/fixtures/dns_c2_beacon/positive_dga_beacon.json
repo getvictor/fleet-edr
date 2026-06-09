@@ -1,0 +1,63 @@
+{
+  "events": [
+    {
+      "event_id": "b-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {"child_pid": 4200, "parent_pid": 1}
+    },
+    {
+      "event_id": "b-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 4200,
+        "ppid": 1,
+        "path": "/tmp/.update",
+        "args": ["/tmp/.update"],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "b-dns",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "dns_query",
+      "payload": {
+        "pid": 4200,
+        "path": "/tmp/.update",
+        "uid": 501,
+        "protocol": "udp",
+        "query_name": "kx7gq2vphj9k3mzw.example.com",
+        "query_type": "A",
+        "response_addresses": ["203.0.113.10"]
+      }
+    },
+    {
+      "event_id": "b-connect",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1300,
+      "event_type": "network_connect",
+      "payload": {
+        "pid": 4200,
+        "path": "/tmp/.update",
+        "uid": 501,
+        "protocol": "tcp",
+        "direction": "outbound",
+        "remote_address": "203.0.113.10",
+        "remote_port": 443
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "dns_c2_beacon",
+      "severity": "critical",
+      "description_contains": "kx7gq2vphj9k3mzw.example.com",
+      "event_ids": ["b-dns", "b-connect"]
+    }
+  ]
+}

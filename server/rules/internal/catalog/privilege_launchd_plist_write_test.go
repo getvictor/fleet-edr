@@ -41,6 +41,9 @@ func (stubGraphReader) GetChildProcesses(context.Context, string, int, api.TimeR
 func (stubGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process, error) {
 	return nil, nil
 }
+func (stubGraphReader) GetNetworkEventsForProcess(context.Context, string, int, api.TimeRange) ([]api.Event, error) {
+	return nil, nil
+}
 
 // TestPrivilegeLaunchdPlistWrite_Fixtures runs every fixture case under fixtures/privilege_launchd_plist_write/ as its own sub-test.
 // Add a new case by dropping a *.json file in that directory; no Go edits needed.

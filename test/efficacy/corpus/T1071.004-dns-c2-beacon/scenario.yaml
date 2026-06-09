@@ -1,0 +1,47 @@
+# T1071.004 Application Layer Protocol: DNS (+ T1568.002 Dynamic Resolution:
+# Domain Generation Algorithms). Synthetic C2 beacon: a payload staged to /tmp
+# resolves a high-entropy (DGA-like) domain and then opens an outbound TCP
+# connection to the resolved address. The dns_c2_beacon rule correlates all
+# three streams -- the temp-path exec, the dns_query, and the network_connect --
+# and fires on the connection (the last link). The remote IP is in the
+# TEST-NET-3 documentation block (RFC 5737) so the scenario is unambiguously
+# synthetic.
+name: "T1071.004 DGA domain resolve -> outbound C2 connect from /tmp"
+mitre: T1071.004 + T1568.002
+host:
+  id: AAAA1071-0004-0000-0000-000000000004
+  hostname: efficacy-t1071-004.local
+  os: macOS 26.0
+timeline:
+  # A payload staged to a temp path launches.
+  - at: 0ms
+    type: fork
+    child_pid: 4200
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4200
+    ppid: 1
+    path: /tmp/.update
+    args: ["/tmp/.update"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+
+  # It resolves a high-entropy domain (the DGA shape) ...
+  - at: 40ms
+    type: dns_query
+    pid: 4200
+    query_name: kx7gq2vphj9k3mzw.example.com
+    query_type: A
+    response_addresses: ["203.0.113.10"]
+    protocol: udp
+
+  # ... and connects to the address it just resolved. The rule fires here.
+  - at: 70ms
+    type: network_connect
+    pid: 4200
+    protocol: tcp
+    direction: outbound
+    remote_address: 203.0.113.10
+    remote_port: 443

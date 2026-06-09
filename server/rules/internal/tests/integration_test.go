@@ -75,6 +75,7 @@ func TestCatalog_ListShape(t *testing.T) {
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
 		"application_control_block",
+		"dns_c2_beacon",
 	}
 	require.Len(t, catalog, len(wantIDs))
 	for i, want := range wantIDs {
@@ -110,8 +111,8 @@ func TestCatalog_DisabledRuleIDsHonoredEndToEnd(t *testing.T) {
 			"disabled rule MUST NOT appear in ContentService().ActiveRules() (the engine evaluation set)")
 	}
 	// Sanity: the rest of the catalog still appears so a regression that filtered the wrong subset is caught.
-	assert.Len(t, catalog, 8, "exactly one rule must have been filtered (9 shipped - 1 disabled)")
-	assert.Len(t, active, 8)
+	assert.Len(t, catalog, 9, "exactly one rule must have been filtered (10 shipped - 1 disabled)")
+	assert.Len(t, active, 9)
 }
 
 // TestBootstrap_WarnsOnUnknownDisabledRuleID covers the boot-time WARN path #238 added to bootstrap.New: a stale operator

@@ -24,6 +24,7 @@ func New(opts api.RegistryOptions) []api.Rule {
 		&PrivilegeLaunchdPlistWrite{AllowedTeamIDs: opts.LaunchDaemonTeamIDAllowlist},
 		&SudoersTamper{AllowedWriters: opts.SudoersWriterAllowlist},
 		&ApplicationControlBlock{},
+		&DNSC2Beacon{},
 	}
 	if len(opts.DisabledRuleIDs) == 0 {
 		return all

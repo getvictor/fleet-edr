@@ -18,9 +18,10 @@ traffic that resolves and connects to a domain does NOT fire. When the resolved 
 signal (a high-entropy or algorithmically-generated name), the rule MAY raise the finding severity and MUST add the
 `T1568.002` technique.
 
-A firing alert SHALL cite the `exec`, `dns_query`, and `network_connect` events that compose the chain, and SHALL be
-attributed to the originating process so the engine's per-process dedup collapses repeated beacons into a single alert.
-The rule MUST hold no state between batches; the correlation is performed by retrospective graph reads.
+A firing alert SHALL cite the `dns_query` and `network_connect` events that compose the chain and SHALL be attributed to
+the originating process (its exec), so an analyst sees the full exec-to-DNS-to-network chain and the engine's per-process
+dedup collapses repeated beacons into a single alert. The rule MUST hold no state between batches; the correlation is
+performed by retrospective graph reads.
 
 #### Scenario: A suspicious process resolves a domain and connects to the resolved address
 
@@ -29,8 +30,8 @@ The rule MUST hold no state between batches; the correlation is performed by ret
 - **WHEN** a `network_connect` event for the same process to `remote_address` `203.0.113.10` is evaluated, within the
   correlation window
 - **THEN** the engine produces one `dns_c2_beacon` finding
-- **AND** the finding cites the originating `exec`, the `dns_query`, and the `network_connect` event identifiers
-- **AND** the finding is attributed to the originating process
+- **AND** the finding cites the `dns_query` and `network_connect` event identifiers
+- **AND** the finding is attributed to the originating process (its exec)
 - **AND** the finding carries the `T1071.004` technique, plus `T1568.002` because the domain tripped the anomaly signal
 
 #### Scenario: A browser resolving and connecting to an ordinary domain does not fire

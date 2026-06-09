@@ -1,0 +1,56 @@
+{
+  "events": [
+    {
+      "event_id": "nb-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {"child_pid": 5300, "parent_pid": 1}
+    },
+    {
+      "event_id": "nb-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5300,
+        "ppid": 1,
+        "path": "/Applications/Safari.app/Contents/MacOS/Safari",
+        "args": ["/Applications/Safari.app/Contents/MacOS/Safari"],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "nb-dns",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2200,
+      "event_type": "dns_query",
+      "payload": {
+        "pid": 5300,
+        "path": "/Applications/Safari.app/Contents/MacOS/Safari",
+        "uid": 501,
+        "protocol": "udp",
+        "query_name": "www.apple.com",
+        "query_type": "A",
+        "response_addresses": ["203.0.113.10"]
+      }
+    },
+    {
+      "event_id": "nb-connect",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2300,
+      "event_type": "network_connect",
+      "payload": {
+        "pid": 5300,
+        "path": "/Applications/Safari.app/Contents/MacOS/Safari",
+        "uid": 501,
+        "protocol": "tcp",
+        "direction": "outbound",
+        "remote_address": "203.0.113.10",
+        "remote_port": 443
+      }
+    }
+  ],
+  "expected_findings": []
+}
