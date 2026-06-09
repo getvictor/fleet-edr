@@ -41,9 +41,12 @@ Then open <https://localhost:8088/ui/>, accept the self-signed certificate warni
 - Email: `demo@fleet-edr.local`
 - Password: `demo`
 
-You'll see a process graph, fired ATT&CK detection alerts (keychain dump, sudoers tamper, launchd persistence), and an
-application-control block -- all produced by the real ingestion + detection pipeline from a replayed attack corpus, not
-hand-inserted rows.
+You'll see two real macOS hosts -- an engineer laptop (`alex-mbp`) and a CI build server (`ci-builder`) -- each with a deep
+process graph and correlated `network_connect` + `dns_query` activity drawn from genuine scrubbed captures. Woven into that
+ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec -> DNS -> outbound
+connection correlated across all three streams) on the laptop; sudoers tampering, launchd persistence, and an
+application-control block on the build server. Every alert is produced by the real ingestion + detection pipeline, not
+hand-inserted rows. The benign browsing and build activity raises no false alarms.
 
 To run from a local source build instead of the pinned release images:
 
@@ -56,8 +59,11 @@ docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --
 - The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an
   MDM, and Apple Silicon, so it cannot run in Docker. The recording linked above (once published) captures it on a real Mac;
   this stack exercises the server, UI, and detection pipeline.
-- The demo data is genuine: the seeder replays a curated attack + noise corpus through the real `POST /api/events` ingest
-  path, and the server's own processor materializes the process graph and fires the alerts.
+- The demo data is genuine: the seeder replays two scrubbed real-Mac captures (hundreds of events each, with their real
+  process trees, network connections, and DNS lookups intact) through the real `POST /api/events` ingest path, weaves the
+  attack scenarios into that ambient activity, and lets the server's own processor materialize the graph and fire the alerts.
+  Captures are scrubbed of identity strings and remapped to RFC 5737 / RFC 3849 documentation IP ranges, preserving the
+  DNS-to-connection correlation.
 - Response actions (kill, isolate) are visible and enqueue, but never complete because no live agent is connected.
 - TLS uses a self-signed `localhost` certificate, so the browser shows a one-time warning. The stack is for evaluation only:
   empty MySQL password and checked-in dev secrets. Do not expose it this stack to the public internet.
