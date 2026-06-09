@@ -171,7 +171,8 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	s := newSeeder(runTestConfig(ts.URL), db, testHTTPClient(), discardLogger())
 	require.NoError(t, s.run(ctx))
 
-	assert.Equal(t, len(corpusManifest), int(enrollCalls.Load()), "every scenario host was enrolled")
+	assert.Equal(t, len(corpusManifest)+len(hostManifest), int(enrollCalls.Load()),
+		"every scenario host AND every rich captured host was enrolled")
 
 	var userCount int
 	require.NoError(t, db.QueryRowContext(ctx,

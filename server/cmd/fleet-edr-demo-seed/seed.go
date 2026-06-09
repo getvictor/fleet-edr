@@ -103,6 +103,14 @@ func (s *seeder) run(ctx context.Context) error {
 		}
 	}
 
+	// Rich captured hosts: deep real process trees with correlated network_connect + dns_query that the
+	// attack/noise scenarios lack. Replayed after the scenarios so the demo opens on populated, realistic hosts.
+	for _, host := range hostManifest {
+		if err := s.replayHost(ctx, host); err != nil {
+			return fmt.Errorf("replay host %s: %w", host.File, err)
+		}
+	}
+
 	if err := s.verify(ctx); err != nil {
 		return fmt.Errorf("verify demo data: %w", err)
 	}
