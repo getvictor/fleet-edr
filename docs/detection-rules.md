@@ -301,7 +301,7 @@ The extension's AUTH_EXEC decision walker denies execs that match an admin-defin
 ## dns_c2_beacon
 
 **DNS C2 beacon (suspicious process resolves a domain then connects to it)**  
-Correlates all three streams: a temp/world-writable-path process that resolves a domain (dns_query) and then connects to the resolved address (network_connect).
+Flags a program that looks up a domain name and then connects to the address that lookup returned, when that program was launched from a suspicious location such as a temporary or world-writable folder. This is the classic "malware phoning home" shape, and the alert ties three normally separate signals into one finding: the program launch, the DNS lookup, and the outbound connection.
 
 | | |
 | --- | --- |
@@ -312,19 +312,19 @@ Correlates all three streams: a temp/world-writable-path process that resolves a
 
 ### Description
 
-Fires on the LAST link of the chain -- an outbound network_connect from a process that was exec'd out of a temporary or world-writable path AND previously issued a dns_query whose resolved addresses include the address being connected to. The single finding cites the dns_query and the network_connect and is attributed to the originating process (its exec), so an analyst sees the full exec -> DNS -> network chain in one alert.
+Fires on the last link of the chain: an outbound network connection from a program that was launched out of a temporary or world-writable path and had earlier looked up a domain whose resolved addresses include the one now being connected to. The single finding cites both the DNS lookup and the outbound connection, and is attributed to the program that launched, so an analyst sees the whole launch -> lookup -> connection chain in one alert.
 
-Reverse-direction triggering is deliberate and race-immune: by the time the connection lands, the process's DNS resolutions are already ingested, so the rule holds no cross-batch state. dns_query and network_connect share the network-extension clock, so the resolve-then-connect window is measured on timestamp_ns.
+Triggering on the connection (rather than on the lookup) is deliberate and avoids races: by the time the connection lands, the program's DNS lookups are already recorded, so the rule keeps no state between event batches. The DNS lookup and the connection are reported by the same network extension and share its clock, so the lookup-then-connect window is measured directly on their timestamps.
 
-A high-entropy (algorithmically generated) resolved domain escalates the finding to Critical and adds the DGA technique. Ordinary browser traffic does not fire: the rule gates on a suspicious process exec context, which a browser does not satisfy.
+A high-entropy, algorithmically generated domain name (the kind produced by a domain-generation algorithm) raises the finding to Critical and adds the DGA technique. Ordinary browser traffic does not fire this rule: it only considers programs launched from a suspicious location, which a browser is not.
 
 ### Known false-positive sources
 
-- A tool legitimately staged to a temp path that fetches a hostname and connects to it -- rare on managed fleets; allowlist the path if it recurs.
+- A legitimate tool staged in a temporary path that looks up a hostname and connects to it. This is rare on managed fleets; allowlist the path if it recurs.
 
 ### Limitations
 
-- Sees classic UDP/TCP DNS only; encrypted DNS (DoH/DoT) bypasses the proxy and is not correlated.
-- v1 gates on a temporary/world-writable exec path; a script-interpreter-with-non-interactive-parent signal is a planned extension.
-- Resolve-then-connect window is bounded (dnsBeaconWindowNs); a beacon that resolves far in advance of connecting is missed by design.
+- Sees plain UDP/TCP DNS only. Encrypted DNS (DoH/DoT) bypasses the proxy and is not correlated.
+- The current detection requires the program to have been launched from a temporary or world-writable path. Detecting beacons started by a scripting interpreter that is running non-interactively (for example, a shell script with no terminal) is a planned addition.
+- The lookup-then-connect window is bounded (currently 30 seconds). A beacon that looks up its domain far in advance of connecting is missed by design.
 
