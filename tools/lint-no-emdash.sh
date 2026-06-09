@@ -14,9 +14,10 @@ EN_DASH=$(printf '\xe2\x80\x93') # U+2013
 PATTERN="${EM_DASH}|${EN_DASH}"
 
 # Tracked files only. gitignored paths (node_modules, dist, tmp/, ai/) are absent from git ls-files already. grep -I drops
-# binary files. This script is skipped explicitly (defensive; it is ASCII-only, but never scan the scanner).
+# binary files. This script is skipped explicitly (defensive; it is ASCII-only, but never scan the scanner). NUL-delimited
+# (ls-files -z + read -d '') so filenames with spaces, quotes, or non-ASCII bytes are read verbatim, not Git-quoted.
 found=0
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
   case "$f" in
     # Never scan the scanner (defensive; it is ASCII-only). .claude/** is AI-tool-installed config we do not author
     # (markdownlint ignores it for the same reason), so it is out of scope for this gate.
@@ -25,7 +26,7 @@ while IFS= read -r f; do
   if grep -HInE "$PATTERN" -- "$f" 2>/dev/null; then
     found=1
   fi
-done < <(git ls-files)
+done < <(git ls-files -z)
 
 if [ "$found" -ne 0 ]; then
   echo "::error::Em dash (U+2014) or en dash (U+2013) found above. Replace with ': ' or ' - ' (a spaced ASCII hyphen)." >&2

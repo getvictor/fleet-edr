@@ -250,7 +250,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                           onChange={(e) => { handleTypeChange(index, e.target.value); }}
                           disabled={busy}
                         >
-                          <option value=""> - pick a type - </option>
+                          <option value="">pick a type</option>
                           {PASTE_MANY_RULE_TYPES.map((t) => (
                             <option key={t} value={t} disabled={!AVAILABLE_RULE_TYPES.has(t)}>
                               {t}{AVAILABLE_RULE_TYPES.has(t) ? "" : " (coming soon)"}
