@@ -118,9 +118,9 @@ func TestAll_DisabledRuleIDsFiltered(t *testing.T) {
 			disable: []string{
 				"suspicious_exec", "persistence_launchagent", "dyld_insert", "shell_from_office",
 				"osascript_network_exec", "credential_keychain_dump",
-				"privilege_launchd_plist_write", "sudoers_tamper", "application_control_block",
+				"privilege_launchd_plist_write", "sudoers_tamper", "application_control_block", "dns_c2_beacon",
 			},
-			wantGone:  []string{"suspicious_exec", "application_control_block"},
+			wantGone:  []string{"suspicious_exec", "application_control_block", "dns_c2_beacon"},
 			wantStill: nil,
 		},
 		{

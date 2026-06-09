@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -80,6 +81,21 @@ func TestAddressResolved(t *testing.T) {
 	assert.False(t, addressResolved("2001:db8::1", []string{"2001:db8::2"}))
 	// Non-IP strings fall back to exact match.
 	assert.True(t, addressResolved("not-an-ip", []string{"not-an-ip"}))
+}
+
+func TestIngestedLookupRange(t *testing.T) {
+	t.Parallel()
+	// Unset ingest time (fixture replay): full range so the in-memory window still sees every candidate.
+	full := ingestedLookupRange(0)
+	assert.Equal(t, int64(0), full.FromNs)
+	assert.Equal(t, int64(math.MaxInt64), full.ToNs)
+
+	// Known ingest time (production): bounded to [t - window - pad, t + pad] so a long-lived pid isn't scanned wholesale.
+	connectIngested := int64(1_000_000_000_000)
+	bounded := ingestedLookupRange(connectIngested)
+	assert.Equal(t, connectIngested-dnsBeaconWindowNs-ingestLookupPadNs, bounded.FromNs)
+	assert.Equal(t, connectIngested+ingestLookupPadNs, bounded.ToNs)
+	assert.Less(t, bounded.FromNs, connectIngested, "lower bound precedes the connection's ingest time")
 }
 
 func TestSelectResolvingQuery(t *testing.T) {

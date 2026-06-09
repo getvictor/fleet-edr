@@ -1,0 +1,63 @@
+{
+  "events": [
+    {
+      "event_id": "cs-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000000,
+      "event_type": "fork",
+      "payload": {"child_pid": 7700, "parent_pid": 1}
+    },
+    {
+      "event_id": "cs-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 7700,
+        "ppid": 1,
+        "path": "/private/tmp/.beacon",
+        "args": ["/private/tmp/.beacon"],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "cs-dns",
+      "host_id": "fixture-host",
+      "timestamp_ns": 900000,
+      "event_type": "dns_query",
+      "payload": {
+        "pid": 7700,
+        "path": "/private/tmp/.beacon",
+        "uid": 501,
+        "protocol": "udp",
+        "query_name": "c2.example.net",
+        "query_type": "A",
+        "response_addresses": ["203.0.113.55"]
+      }
+    },
+    {
+      "event_id": "cs-connect",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000000,
+      "event_type": "network_connect",
+      "payload": {
+        "pid": 7700,
+        "path": "/private/tmp/.beacon",
+        "uid": 501,
+        "protocol": "tcp",
+        "direction": "outbound",
+        "remote_address": "203.0.113.55",
+        "remote_port": 443
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "dns_c2_beacon",
+      "severity": "high",
+      "description_contains": "c2.example.net",
+      "event_ids": ["cs-dns", "cs-connect"]
+    }
+  ]
+}

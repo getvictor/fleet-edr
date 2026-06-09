@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"net"
+	"net/netip"
+	"slices"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
@@ -37,7 +38,7 @@ func (r *DNSC2Beacon) ID() string { return "dns_c2_beacon" }
 // finding carries T1071.004; only DGA-domain findings add T1568.002). Procurement and ATT&CK-Navigator export read this
 // list, so it is pinned by a test.
 func (r *DNSC2Beacon) Techniques() []string {
-	return []string{"T1071.004", "T1568.002"}
+	return []string{techniqueDNSC2, techniqueDGA}
 }
 
 func (r *DNSC2Beacon) Doc() api.Documentation {
@@ -69,10 +70,28 @@ func (r *DNSC2Beacon) Doc() api.Documentation {
 	}
 }
 
+// MITRE technique IDs the rule stamps. Named constants (not inline literals) so the rule body, Techniques(), and the
+// per-finding subset all reference one source (Sonar go:S1192).
+const (
+	techniqueDNSC2 = "T1071.004" // Application Layer Protocol: DNS
+	techniqueDGA   = "T1568.002" // Dynamic Resolution: Domain Generation Algorithms
+)
+
 const (
 	// dnsBeaconWindowNs bounds how long before the connection the matching dns_query may have occurred, on the shared
 	// network-extension clock. A beacon resolves and connects within sub-second; 30s is a generous ceiling.
 	dnsBeaconWindowNs = int64(30_000_000_000)
+
+	// processLookupSkewPadNs is the forward pad used to retry the process lookup when the exact-time lookup misses.
+	// network_connect carries the network-extension clock while the process row carries the Endpoint Security clock; the
+	// two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row.
+	// Retrying a few seconds forward absorbs that skew. The exact lookup is tried first, so the pad only affects the miss.
+	processLookupSkewPadNs = int64(5_000_000_000)
+
+	// ingestLookupPadNs pads the ingested-time bound on the network/DNS query so batch/ingest jitter between the
+	// dns_query and the connection (both network-extension events, ingested within seconds) can't fall outside the range.
+	// The precise resolve-then-connect window is still enforced in-memory on timestamp_ns.
+	ingestLookupPadNs = int64(10_000_000_000)
 
 	// dgaMinLabelLen and dgaEntropyBitsPerChar gate the DGA severity booster. A label must be at least this long and
 	// carry at least this much Shannon entropy per character to read as algorithmically generated. Tuned empirically
@@ -128,7 +147,7 @@ func (r *DNSC2Beacon) evalEvent(
 		return nil, 0, nil
 	}
 
-	proc, err := s.GetProcessByPID(ctx, evt.HostID, conn.PID, evt.TimestampNs)
+	proc, err := lookupProcessSkewTolerant(ctx, s, evt.HostID, conn.PID, evt.TimestampNs)
 	if err != nil {
 		return nil, 0, fmt.Errorf("get pid %d: %w", conn.PID, err)
 	}
@@ -142,10 +161,12 @@ func (r *DNSC2Beacon) evalEvent(
 		return nil, 0, nil
 	}
 
-	// Wide ingested-time range: retrieve all of the pid's network/DNS events, then bound the correlation in-memory on
-	// timestamp_ns. network_connect + dns_query share the NE clock, so timestamp_ns proximity is sound here even though
-	// GetNetworkEventsForProcess filters ingested_at_ns (which exists for ES/NE cross-source drift, issue #7).
-	netEvents, err := s.GetNetworkEventsForProcess(ctx, evt.HostID, conn.PID, api.TimeRange{FromNs: 0, ToNs: math.MaxInt64})
+	// Retrieve the pid's network/DNS events, then bound the correlation in-memory on timestamp_ns. network_connect +
+	// dns_query share the NE clock, so timestamp_ns proximity is sound here even though GetNetworkEventsForProcess
+	// filters ingested_at_ns (which exists for ES/NE cross-source drift, issue #7). The ingested-time range is bounded
+	// around this connection's ingest time to keep the DB scan tight for long-lived pids; it falls back to the full
+	// range when the connection's ingest time is unset (e.g. fixture replay), so the precise in-memory window still runs.
+	netEvents, err := s.GetNetworkEventsForProcess(ctx, evt.HostID, conn.PID, ingestedLookupRange(evt.IngestedAtNs))
 	if err != nil {
 		return nil, 0, fmt.Errorf("get network events for pid %d: %w", conn.PID, err)
 	}
@@ -156,10 +177,10 @@ func (r *DNSC2Beacon) evalEvent(
 	}
 
 	severity := api.SeverityHigh
-	techniques := []string{"T1071.004"}
+	techniques := []string{techniqueDNSC2}
 	if looksLikeDGADomain(queryName) {
 		severity = api.SeverityCritical
-		techniques = []string{"T1071.004", "T1568.002"}
+		techniques = []string{techniqueDNSC2, techniqueDGA}
 	}
 
 	return &api.Finding{
@@ -172,6 +193,35 @@ func (r *DNSC2Beacon) evalEvent(
 		EventIDs:    []string{dnsEvt.EventID, evt.EventID},
 		Techniques:  techniques,
 	}, conn.PID, nil
+}
+
+// lookupProcessSkewTolerant resolves the process for (hostID, pid) at the connection's timestamp, retrying a short interval forward if
+// the exact-time lookup misses. The connection carries the network-extension clock while the process row carries the Endpoint Security
+// clock; the two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row. The
+// exact lookup is tried first (so a reused pid resolves to the right generation in the common case); the forward retry only runs on a miss.
+func lookupProcessSkewTolerant(ctx context.Context, s api.GraphReader, hostID string, pid int, atNs int64) (*api.Process, error) {
+	proc, err := s.GetProcessByPID(ctx, hostID, pid, atNs)
+	if err != nil {
+		return nil, err
+	}
+	if proc != nil {
+		return proc, nil
+	}
+	return s.GetProcessByPID(ctx, hostID, pid, atNs+processLookupSkewPadNs)
+}
+
+// ingestedLookupRange returns the ingested-time range for the pid's network/DNS query. When the connection's ingest time is known it
+// bounds the scan to [connectIngestedNs - dnsBeaconWindowNs - pad, connectIngestedNs + pad] so a long-lived pid's history isn't scanned
+// wholesale; the precise resolve-then-connect window is enforced in-memory on timestamp_ns. When the ingest time is unset (0, e.g.
+// fixture replay) it returns the full range so the in-memory correlation still sees every candidate row.
+func ingestedLookupRange(connectIngestedNs int64) api.TimeRange {
+	if connectIngestedNs <= 0 {
+		return api.TimeRange{FromNs: 0, ToNs: math.MaxInt64}
+	}
+	return api.TimeRange{
+		FromNs: connectIngestedNs - dnsBeaconWindowNs - ingestLookupPadNs,
+		ToNs:   connectIngestedNs + ingestLookupPadNs,
+	}
 }
 
 // selectResolvingQuery scans the pid's network/DNS events for the dns_query that resolved remoteAddr and preceded the connection at
@@ -206,18 +256,17 @@ func selectResolvingQuery(netEvents []api.Event, remoteAddr string, connectTSNs 
 	return best, bestName
 }
 
-// addressResolved reports whether remoteAddr appears in addrs, comparing parsed IPs so equivalent IPv6 forms (zero
-// compression, case) match. Falls back to a string compare when either side is not a parseable IP.
+// addressResolved reports whether remoteAddr appears in addrs, comparing parsed IPs (via net/netip, allocation-free and
+// zone-aware) so equivalent IPv6 forms (zero compression, case, v4-in-v6) match. Unmap normalizes v4-mapped v6 to v4 on
+// both sides. Falls back to an exact string compare when remoteAddr is not a parseable IP.
 func addressResolved(remoteAddr string, addrs []string) bool {
-	target := net.ParseIP(remoteAddr)
+	target, err := netip.ParseAddr(remoteAddr)
+	if err != nil {
+		return slices.Contains(addrs, remoteAddr)
+	}
+	target = target.Unmap()
 	for _, a := range addrs {
-		if target != nil {
-			if ip := net.ParseIP(a); ip != nil && ip.Equal(target) {
-				return true
-			}
-			continue
-		}
-		if a == remoteAddr {
+		if ip, parseErr := netip.ParseAddr(a); parseErr == nil && ip.Unmap() == target {
 			return true
 		}
 	}
@@ -252,16 +301,19 @@ func mostSignificantLabel(domain string) string {
 	return longest
 }
 
-// shannonEntropyBitsPerChar returns the Shannon entropy (bits per character) of s. An empty string is 0.
+// shannonEntropyBitsPerChar returns the Shannon entropy (bits per character) of s. An empty string is 0. Counts runes in
+// a single pass (no []rune allocation) and pre-sizes the map to avoid resizing.
 func shannonEntropyBitsPerChar(s string) float64 {
 	if s == "" {
 		return 0
 	}
-	counts := map[rune]int{}
+	counts := make(map[rune]int, len(s))
+	var total int
 	for _, c := range s {
 		counts[c]++
+		total++
 	}
-	n := float64(len([]rune(s)))
+	n := float64(total)
 	var entropy float64
 	for _, c := range counts {
 		p := float64(c) / n
