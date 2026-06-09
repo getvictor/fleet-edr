@@ -60,7 +60,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         // contains the content-filter enable.
         XCTAssertEqual(plan.last, .setDNSProxyEnabled(true))
         XCTAssertTrue(plan.contains(.setContentFilterEnabled(true)))
-        // The exit code for a clean re-activation is EXIT_SUCCESS — same aggregate verdict as the
+        // The exit code for a clean re-activation is EXIT_SUCCESS - same aggregate verdict as the
         // first-time case (both delegates return .completed on a re-activation against approved
         // extensions).
         var agg = CompletionAggregator(expected: 2)

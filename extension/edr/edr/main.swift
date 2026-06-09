@@ -80,7 +80,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     /// between chaining into enableContentFilter-then-enableDNSProxy (activate-on-success) and exiting
     /// immediately (deactivate or any failure), per the spec contract encoded in postAggregateStep. Named
     /// with the `Aggregate` suffix because NSObject already declares a `finalize()` method that this method's
-    /// body has nothing to do with — the collision would be a compile error if both kept the same selector.
+    /// body has nothing to do with - the collision would be a compile error if both kept the same selector.
     private func finalizeAggregate() {
         let verdict = aggregator.verdict
         switch postAggregateStep(for: action, verdict: verdict) {
