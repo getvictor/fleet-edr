@@ -61,7 +61,7 @@ test.describe("alert list filtering and lifecycle", () => {
     await expect(page.getByRole("heading", { name: /alerts/i })).toBeVisible({ timeout: 10_000 });
 
     // The open alert's title is visible; the acknowledged one is not. Match by row to be robust to title text
-    // appearing in another cell (defence in depth — the acked title only ever appears in its own row, but the
+    // appearing in another cell (defence in depth - the acked title only ever appears in its own row, but the
     // row-anchored locator stays correct if anyone adds a "recent activity" panel later).
     const openRow = page.locator("tr", { hasText: openTitle });
     const ackedRow = page.locator("tr", { hasText: ackedTitle });

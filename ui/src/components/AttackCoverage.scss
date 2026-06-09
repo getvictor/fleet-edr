@@ -37,7 +37,7 @@
   }
 
   // Single-table layout. table-layout:fixed makes the colgroup widths
-  // authoritative so every section's columns line up — without it, each
+  // authoritative so every section's columns line up - without it, each
   // tactic group inside the table would still default-size from its widest
   // cell and the visual alignment promise would silently break the day a
   // long technique name lands in one tactic.

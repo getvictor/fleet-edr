@@ -18,7 +18,7 @@ let blockNotificationServiceName = "FDG8Q7N4CC.com.fleetdm.edr.notifications"
 /// The extension creates this directory at mode 1777 (sticky-bit
 /// rwx for everyone) so the user-session host app can read root-
 /// written files without a privileged-helper trampoline. Files
-/// land at mode 0644 — host app reads, doesn't delete (only the
+/// land at mode 0644 - host app reads, doesn't delete (only the
 /// file owner can unlink under sticky-bit rules).
 let blockNotificationDropDir = "/private/tmp/fleet-edr-notify-drop"
 
@@ -45,12 +45,12 @@ let blockNotificationPeerRequirement =
 struct BlockNotificationPayload: Codable, Sendable {
     /// Stable rule identifier (e.g. "app_control:42") that the
     /// server alert mapping uses. Travels for forensic correlation
-    /// only — today's host-app UI doesn't render it; the operator
+    /// only - today's host-app UI doesn't render it; the operator
     /// inspects the server alerts view to see which rule fired.
     let ruleID: String
     /// Rule type token (BINARY today; the others come post-demo).
     let ruleType: String
-    /// Matched identifier value — the file SHA-256 for a BINARY
+    /// Matched identifier value - the file SHA-256 for a BINARY
     /// rule. Travels for forensic correlation; the host-app UI
     /// does not currently render it.
     let identifier: String
@@ -71,7 +71,7 @@ struct BlockNotificationPayload: Codable, Sendable {
     /// drowning the column in a full path.
     let binaryPath: String
     /// Policy id from the snapshot the extension was holding at
-    /// decision time. Travels for forensic correlation only —
+    /// decision time. Travels for forensic correlation only -
     /// today's host-app UI doesn't render it.
     let policyID: Int64
     /// Policy version from the same snapshot. Same forensic-only

@@ -189,7 +189,7 @@ EDR_TLS_KEY_FILE=/tls/privkey.pem
 
 **Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).**
 The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs
-over TLS — issue #140 removed the plaintext-HTTP opt-out, so the EDR server
+over TLS - issue #140 removed the plaintext-HTTP opt-out, so the EDR server
 binary cannot serve HTTP under any configuration. Issue the proxy-to-backend
 cert from your internal CA (or reuse the public cert) and mount it under
 `./tls/`; the env-var shape is identical to Option A.
@@ -231,7 +231,7 @@ either add the CA to the local trust store, pass
 `--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe.
 Don't paper over a trust failure with `-k` in an automation script.
 
-Local dev deployment (`task dev:server`, issue #140 — TLS by default with the
+Local dev deployment (`task dev:server`, issue #140 - TLS by default with the
 self-signed cert from `task dev:certs`):
 
 ```sh
@@ -239,7 +239,7 @@ curl -sk https://localhost:8088/readyz | jq .
 ```
 
 `-k` is acceptable here because the cert is a known self-signed dev cert; never
-ship `-k` in an automation script against a real deployment — install mkcert
+ship `-k` in an automation script against a real deployment - install mkcert
 locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and
 the cert validates without the flag.
 
@@ -265,7 +265,7 @@ The server seeds a single break-glass admin row on first boot with a
 NULL password. cmd/main prints a one-shot redemption URL to stderr;
 the operator opens that URL in a browser to set a password and register
 a WebAuthn credential (atomic redemption). The URL prints on every
-boot until the credential is stored — once it is, the banner is silent.
+boot until the credential is stored - once it is, the banner is silent.
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env logs server \
@@ -276,7 +276,7 @@ Expected output:
 
 ```text
 ================================================================
-BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)
+BREAK-GLASS ADMIN SETUP (one-shot redemption URL - open in a browser)
   Email: admin@fleet-edr.local
   URL:   https://edr.example.com/admin/break-glass/setup?token=<random>
   TTL:   1h0m0s
@@ -288,7 +288,7 @@ Open the URL within the TTL (default 1h, tunable via
 (≥ 12 runes) and prompts the authenticator to register a WebAuthn
 credential; the three writes (token consume + password set + credential
 persist) commit in a single transaction so a partial failure leaves the
-token reusable. If the redemption window lapses, restart the server —
+token reusable. If the redemption window lapses, restart the server -
 a fresh token + URL print on every boot until the credential lands.
 
 ### Log into the UI
@@ -298,7 +298,7 @@ Production deployments authenticate via OIDC: open
 into your IdP. The break-glass account at `/admin/break-glass` exists
 for IdP-down recovery only.
 
-Local dev (`task dev:server`, `https://localhost:8088/ui/` — accept the
+Local dev (`task dev:server`, `https://localhost:8088/ui/` - accept the
 self-signed cert once if mkcert isn't installed) typically uses the
 seeded break-glass account because no production IdP is configured.
 The hosts page is empty until the first agent enrolls.
@@ -353,13 +353,13 @@ Datadog OTel, etc.). The server exports:
 - **Traces** for every HTTP request + DB query.
 - **Logs** via `otelslog` with `service.name=fleet-edr-server`.
 - **Metrics**:
-  - `edr.events.ingested` (counter, by `host_id`) — accepted events.
+  - `edr.events.ingested` (counter, by `host_id`) - accepted events.
   - `edr.alerts.created` (counter, by `rule_id` + `severity`).
-  - `edr.enrolled.hosts` (gauge) — current enrolled count.
-  - `edr.offline.hosts` (gauge) — hosts unseen >5 min.
-  - `edr.retention.rows_deleted` (counter) — rows pruned per run.
+  - `edr.enrolled.hosts` (gauge) - current enrolled count.
+  - `edr.offline.hosts` (gauge) - hosts unseen >5 min.
+  - `edr.retention.rows_deleted` (counter) - rows pruned per run.
   - `edr.db.query.duration` (histogram, by `op`).
-  - `edr.agent.queue.dropped` (counter) — agent-side drops reported back.
+  - `edr.agent.queue.dropped` (counter) - agent-side drops reported back.
 
   See [operations.md](operations.md#metrics-and-monitoring) for what to
   alert on.
@@ -443,7 +443,7 @@ Test your restore path quarterly.
 
 ## Troubleshoot
 
-**"unknown database 'edr'"** at server startup — MySQL booted but
+**"unknown database 'edr'"** at server startup - MySQL booted but
 didn't create the `edr` schema. The compose file sets
 `MYSQL_DATABASE: edr` so this means MySQL initialized earlier without
 that var set (an earlier compose file shipped without it) and its volume
@@ -456,21 +456,21 @@ docker compose -f docker-compose.prod.yml exec mysql \
 docker compose -f docker-compose.prod.yml restart server
 ```
 
-**Server keeps exiting with "EDR_DSN is required"** — the `edr_dsn`
+**Server keeps exiting with "EDR_DSN is required"** - the `edr_dsn`
 secret file is missing or unreadable. Re-run the secrets step in Setup.
 
 **Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both
-required"** — either cert path is unset or unreadable. The server has
+required"** - either cert path is unset or unreadable. The server has
 no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem
 under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE`
 env vars before retrying.
 
-**Agents see "enrollment failed: unauthorized"** — the `enroll_secret`
+**Agents see "enrollment failed: unauthorized"** - the `enroll_secret`
 on the server and the `EDR_ENROLL_SECRET` the agent reads from
 `/etc/fleet-edr.conf` are different. Confirm the MDM install-script
 writes the exact value from `secrets/enroll_secret`.
 
-**Server log shows "exporter export timeout"** — OTel collector is
+**Server log shows "exporter export timeout"** - OTel collector is
 unreachable. Either fix connectivity to `OTEL_EXPORTER_OTLP_ENDPOINT`
 or unset the var. Server functionality is unaffected; only telemetry
 is dropped.

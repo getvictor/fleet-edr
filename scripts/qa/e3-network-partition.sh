@@ -7,7 +7,7 @@
 # calls for "no duplicates after restore"; the queue itself does NOT
 # enforce uniqueness (its schema is `events(id INTEGER PRIMARY KEY
 # AUTOINCREMENT, event_json, created_at, uploaded)` per
-# agent/queue/queue.go — no event_id column, no UNIQUE constraint), so
+# agent/queue/queue.go - no event_id column, no UNIQUE constraint), so
 # that guarantee currently rests on the server's `INSERT IGNORE` on
 # `events` (see server/store/store.go) when flushed. A precise
 # duplicate check is out of scope for a script that drives only public
@@ -24,7 +24,7 @@
 #  4. Confirm the queue depth grew relative to the baseline while the
 #     partition is in effect (≥ baseline + 60 events: 30 forks + 30
 #     execs).
-#  5. Remove the pf anchor — partition heals.
+#  5. Remove the pf anchor - partition heals.
 #  6. Wait up to 90s for the queue to drain back to baseline.
 #  7. Surface the post-recovery alert count for the host. (No precise
 #     server-side "no duplicates" assertion today; the v0.1 admin API
@@ -45,14 +45,14 @@
 # until the session expires.
 #
 # EDR_SERVER_IP is the IP the agent on the VM uses to reach the
-# server — typically the host's bridge address. We block at the IP
+# server - typically the host's bridge address. We block at the IP
 # layer rather than tearing the VM's NIC down so SSH from the
 # workstation keeps working. Pass --short for a 60-second partition
 # instead of 10 minutes; useful for development of the script itself.
 
 set -uEo pipefail
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
-trap 'rc=$?; echo "[e3] step at line $LINENO exited $rc — continuing"' ERR
+trap 'rc=$?; echo "[e3] step at line $LINENO exited $rc - continuing"' ERR
 
 require_env() {
   for v in "$@"; do
@@ -168,7 +168,7 @@ hr
 echo "[e3] step 4: generate 30 synthetic processes on the VM"
 ssh -o BatchMode=yes "$VM_SSH_TARGET" "$BASH_S" <<'EOF'
 for i in $(seq 1 30); do /usr/bin/true; done
-echo "[vm] 30 /usr/bin/true execs done — agent should see fork+exec events"
+echo "[vm] 30 /usr/bin/true execs done - agent should see fork+exec events"
 EOF
 
 # Wait through the partition. The agent retries the uploader every
@@ -182,7 +182,7 @@ echo "[e3] queue depth during partition: $mid_queue"
 expected_at_least=$((baseline_queue + 60))
 if [[ "$mid_queue" -lt "$expected_at_least" ]]; then
   echo "[e3] WARNING: expected queue ≥ $expected_at_least, got $mid_queue."
-  echo "[e3] events may not have been observed by ESF — check /var/log/fleet-edr-agent.log"
+  echo "[e3] events may not have been observed by ESF - check /var/log/fleet-edr-agent.log"
 fi
 
 # Heal the partition.

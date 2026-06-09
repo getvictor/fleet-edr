@@ -20,7 +20,7 @@
 #     (default last_seen threshold is 5 min).
 #  5. Optionally: re-run `installer -pkg` and verify the agent picks
 #     up the preserved config without prompting for a new
-#     enroll_secret. Off by default — pass --reinstall to opt in.
+#     enroll_secret. Off by default - pass --reinstall to opt in.
 #
 # Usage from this workstation:
 #   EDR_SERVER_URL=https://edr.local:8088 \
@@ -39,7 +39,7 @@
 
 set -uEo pipefail
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
-trap 'rc=$?; echo "[e4] step at line $LINENO exited $rc — continuing"' ERR
+trap 'rc=$?; echo "[e4] step at line $LINENO exited $rc - continuing"' ERR
 
 require_env() {
   for v in "$@"; do
@@ -53,7 +53,7 @@ require_env() {
 require_env EDR_SERVER_URL EDR_SESSION_COOKIE VM_SSH_TARGET
 
 # Constant for the SSH stdin-driver argument used on every remote-bash
-# block below — Sonar S1192 flags `'bash -s'` four times; one constant
+# block below - Sonar S1192 flags `'bash -s'` four times; one constant
 # satisfies it without changing behaviour.
 BASH_S='bash -s'
 
@@ -197,7 +197,7 @@ set -uo pipefail
 sudo /usr/sbin/installer -pkg "/tmp/$pkg_basename" -target /
 EOF
   echo "[e4] re-installed; check that /etc/fleet-edr.conf was reused (no manual config step)"
-  echo "[e4] verify the agent re-enrols with the SAME host_id ($HOST_ID) — the persisted token at"
+  echo "[e4] verify the agent re-enrols with the SAME host_id ($HOST_ID) - the persisted token at"
   echo "[e4] /var/db/fleet-edr/enrolled.plist is recreated by the post-install only if the conf is read."
 fi
 

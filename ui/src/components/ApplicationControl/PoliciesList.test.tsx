@@ -88,8 +88,8 @@ describe("PoliciesList", () => {
     await waitFor(() => {
       expect(screen.getByText("Default")).toBeInTheDocument();
     });
-    // The "Rules" column should render the em dash placeholder.
-    expect(screen.getByText("—")).toBeInTheDocument();
+    // The "Rules" column should render the dash placeholder.
+    expect(screen.getByText("-")).toBeInTheDocument();
   });
 
   it("renders assignment_count with the appropriate singular / plural / zero label", async () => {

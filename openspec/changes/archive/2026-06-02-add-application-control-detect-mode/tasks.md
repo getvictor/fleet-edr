@@ -16,7 +16,7 @@ are seeded, `cdhash` is on exec events). Each task below cites the matching spec
   `server-detection-rules-engine` "Alert subtype distinguishes block from would-block".)
 - [ ] 1.3 Enforce the source-dependent dedup key with a unique index (or indexes) that backs the
   ingest UPSERT. MySQL has no partial unique indexes, so pick one of:
-  - two unique indexes — `UNIQUE (source, host_id, rule_id, process_id)` enforced only on
+  - two unique indexes - `UNIQUE (source, host_id, rule_id, process_id)` enforced only on
     `source='detection'` rows by writing a sentinel value (e.g. `''`) into `process_id` for
     `source='application_control'` rows, plus the natural collision check on the sentinel; OR
   - a synthetic `dedup_discriminator` column populated at write time as `process_id` for

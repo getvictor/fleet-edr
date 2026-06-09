@@ -3,10 +3,10 @@
 The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR.
 Codecov mirrors that threshold. Tests live in three layers:
 
-1. **Per-package unit tests** — co-located with the code, default tag.
-2. **Per-context integration tests** — `server/<context>/internal/tests/`,
+1. **Per-package unit tests** - co-located with the code, default tag.
+2. **Per-context integration tests** - `server/<context>/internal/tests/`,
    `package tests`, real MySQL via `testdb/full.Open(t)`.
-3. **Cross-context integration tests** — `test/integration/`,
+3. **Cross-context integration tests** - `test/integration/`,
    `package integration`, multi-context scenarios.
 
 ### Test-style decision matrix
@@ -33,10 +33,10 @@ in this codebase that already use or should use PBT:
   `wire.DecodeBatch ∘ wire.EncodeBatch`.
 - **State-machine transitions**: `service.canTransition` over the full
   `AlertStatus` enum cross-product, exhaustive-by-construction.
-- **Graph invariants**: `graph.buildForest` — for any random fork batch, every
+- **Graph invariants**: `graph.buildForest` - for any random fork batch, every
   non-root node has its parent in the tree, no cycles, every input PID
   appears exactly once.
-- **Order-preserving filters**: `engine.filterSnapshotEvents` — the output is
+- **Order-preserving filters**: `engine.filterSnapshotEvents` - the output is
   exactly the input minus the snapshot:true exec events, in the same order.
 - **Re-exec chain**: walking `previous_exec_id` from any leaf reaches the
   chain root in ≤ chain length steps without revisiting nodes.
@@ -47,7 +47,7 @@ UI tests live under `ui/src/**` as `*.test.{ts,tsx}` files co-located with the s
 `npm run test:coverage` for the LCOV that Sonar + codecov read). The conventions:
 
 - **Components**: `@testing-library/react`'s `render` + `screen` + user-event idioms. Mock the API layer via `vi.spyOn(api,
-  ...)` rather than stubbing global `fetch` — keeps the test scoped to the component's behaviour, not the HTTP wire shape.
+  ...)` rather than stubbing global `fetch` - keeps the test scoped to the component's behaviour, not the HTTP wire shape.
 - **Hooks**: `renderHook` from `@testing-library/react`. The `act()` wrapper is required around state-setter calls.
 - **Pure-logic modules** (URL builders, parsers, validators): plain vitest `describe` / `it` with no React dependency.
 - **WebAuthn / browser globals**: stub via `vi.stubGlobal("navigator", { credentials: { create / get } })` or
@@ -126,7 +126,7 @@ Layered on the global guide. Project-specific:
 
 - Line wrap at 140 characters.
 - Sentence case for headings.
-- No em-dashes (use `—` only when explicitly asked, otherwise `:` or `-` with surrounding spaces).
+- No em dashes: use `:` or `-` with surrounding spaces. Insert a literal em dash (U+2014) only when explicitly asked. Enforced by `task lint:dashes`.
 - Don't run `task db:reset` without explicit user permission.
 - Stateless server (ADR-0010): the server holds no in-process state that survives a request lifetime and that a peer replica
   would need to serve the next request. Durable cross-request state goes in MySQL; per-request state may ride in signed cookies;

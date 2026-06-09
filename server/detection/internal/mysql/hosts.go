@@ -66,7 +66,7 @@ func (s *Store) UpdateHostLastSeen(ctx context.Context, hostID string, now time.
 // statement.
 //
 // Issue #91: the prior shape was one ExecContext per distinct host_id
-// in the batch — N round-trips inside the ingest hot path. The
+// in the batch - N round-trips inside the ingest hot path. The
 // multi-row VALUES clause folds that to one round-trip. The (host_id,
 // event_count, last_seen_ns) per-host triple is unique within a
 // single call (we aggregate into byHost first), so ON DUPLICATE KEY

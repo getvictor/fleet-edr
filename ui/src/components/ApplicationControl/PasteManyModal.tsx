@@ -52,7 +52,7 @@ const errorMessageByCode = new Map<string, string>([
 
 // nextRowId is the module-level counter that mints a stable id per parsed row. React keys built from row index would shift
 // when a middle row is removed (Gemini finding on PR #192) and force every later row to unmount + remount, dropping any
-// in-flight select / focus state along the way. The counter survives across modal opens — collisions don't matter because
+// in-flight select / focus state along the way. The counter survives across modal opens - collisions don't matter because
 // keys only need to be unique within a single React list reconciliation, not globally.
 let nextRowId = 0;
 
@@ -179,7 +179,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
   }
 
   // Pluralisation kept as a separate helper so the subtitle + submitLabel ternaries above don't nest one inside the other
-  // (Sonar S3358 — nested ternaries are unreadable). pluralSuffix returns "" or "s" only; the caller composes the noun.
+  // (Sonar S3358 - nested ternaries are unreadable). pluralSuffix returns "" or "s" only; the caller composes the noun.
   const pluralSuffix = rows.length === 1 ? "" : "s";
   const previewSubtitle = `${String(rows.length)} row${pluralSuffix} ready. Override any inferred type before saving.`;
   const previewSubmitLabel = `Save ${String(rows.length)} rule${pluralSuffix}`;
@@ -250,7 +250,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                           onChange={(e) => { handleTypeChange(index, e.target.value); }}
                           disabled={busy}
                         >
-                          <option value="">— pick a type —</option>
+                          <option value=""> - pick a type - </option>
                           {PASTE_MANY_RULE_TYPES.map((t) => (
                             <option key={t} value={t} disabled={!AVAILABLE_RULE_TYPES.has(t)}>
                               {t}{AVAILABLE_RULE_TYPES.has(t) ? "" : " (coming soon)"}

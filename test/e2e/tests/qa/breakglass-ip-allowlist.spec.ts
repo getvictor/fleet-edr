@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 // With EDR_BREAKGLASS_IP_ALLOWLIST set to a CIDR the test client is
-// NOT in, every break-glass URL returns a generic 404 — the path's
+// NOT in, every break-glass URL returns a generic 404 - the path's
 // existence is concealed from off-allowlist callers (different from
 // a 403, which would prove the path exists). Run ONLY against a dev
 // server started with EDR_BREAKGLASS_IP_ALLOWLIST=10.99.99.0/24 (or

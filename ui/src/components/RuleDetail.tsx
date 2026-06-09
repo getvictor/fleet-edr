@@ -76,7 +76,7 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
               {techniques.length === 0
                 ? <span className="rule-detail__muted">no mapping</span>
                 // Composite key (value + index) defends against an upstream
-                // API ever returning a duplicate technique ID by accident —
+                // API ever returning a duplicate technique ID by accident -
                 // React would otherwise reuse one DOM node for both entries
                 // and confuse its reconciler.
                 : techniques.map((t, i) => (

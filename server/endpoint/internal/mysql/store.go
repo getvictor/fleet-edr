@@ -13,7 +13,7 @@ import (
 
 const (
 	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte token (tokenLen lives in hash.go). For n bytes the encoded
-	// length is ceil(n*4/3) = (n*4+2)/3 — derived from tokenLen rather than hard-coded so a future tokenLen bump stays in sync without a
+	// length is ceil(n*4/3) = (n*4+2)/3 - derived from tokenLen rather than hard-coded so a future tokenLen bump stays in sync without a
 	// second edit. Anything else is a malformed presentation; we reject before paying the argon2id cost.
 	hostTokenBase64Len = (tokenLen*4 + 2) / 3
 
@@ -390,7 +390,7 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 	}, nil
 }
 
-// CountActive returns how many non-revoked enrollments exist. Cheaper than ActiveHostIDs when the caller only needs the count — the
+// CountActive returns how many non-revoked enrollments exist. Cheaper than ActiveHostIDs when the caller only needs the count - the
 // OTel gauge `edr.enrolled.hosts` is the primary caller.
 func (s *Store) CountActive(ctx context.Context) (int, error) {
 	var n int
@@ -448,7 +448,7 @@ func (s *Store) Get(ctx context.Context, hostID string) (*Enrollment, error) {
 // revoke_reason + revoked_by. Returns sql.ErrNoRows if the host_id is not in the table at all.
 func (s *Store) Revoke(ctx context.Context, hostID, reason, actor string) error {
 	// Verify the row exists first so "not found" and "already revoked" are distinguishable in
-	// RowsAffected — MySQL's affected-rows counter excludes no-op updates.
+	// RowsAffected - MySQL's affected-rows counter excludes no-op updates.
 	var exists bool
 	err := s.db.GetContext(ctx, &exists, `SELECT 1 FROM enrollments WHERE host_id = ?`, hostID)
 	if errors.Is(err, sql.ErrNoRows) {

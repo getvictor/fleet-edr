@@ -1,7 +1,7 @@
 // Package metrics owns the OTel metric surface. Every counter, histogram, and
 // observable gauge is registered against the global OTel meter so values flow through
 // the same OTLP pipeline `observability.Init` already configured. There is no Prometheus
-// scrape endpoint and no secondary registry — SigNoz (or any OTLP receiver) sees these
+// scrape endpoint and no secondary registry - SigNoz (or any OTLP receiver) sees these
 // alongside traces and logs.
 //
 // Call sites instrument via typed methods (EventsIngested, AlertCreated, etc.) rather
@@ -57,7 +57,7 @@ type Recorder struct {
 
 // Options tune the Recorder. All fields are optional.
 type Options struct {
-	// OfflineThreshold is the "how old is too old" for the offline-hosts gauge. Zero uses 5 minutes — match the UI's threshold so what
+	// OfflineThreshold is the "how old is too old" for the offline-hosts gauge. Zero uses 5 minutes - match the UI's threshold so what
 	// operators see in SigNoz matches what they see on the host page.
 	OfflineThreshold time.Duration
 	// Meter, optional. Defaults to otel.Meter(meterName). Tests pass a meter backed by
@@ -214,7 +214,7 @@ func (r *Recorder) RetentionRowsDeleted(ctx context.Context, n int64) {
 }
 
 // ProcessesTTLReconciled satisfies processttl.MetricsRecorder. A non-zero rate of this indicates the fleet is losing exit events
-// (agent drops, kernel back-pressure, queue pruning) — investigate the affected hosts.
+// (agent drops, kernel back-pressure, queue pruning) - investigate the affected hosts.
 func (r *Recorder) ProcessesTTLReconciled(ctx context.Context, n int64) {
 	if r == nil || r.processesReconciled == nil || n <= 0 {
 		return

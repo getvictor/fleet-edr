@@ -29,15 +29,15 @@ import (
 //
 // The rule still requires both halves of the chain (curl ancestor's sibling +
 // temp-exec) to be present, so download-only or temp-exec-only flows do not
-// fire — those overlap with other rules (suspicious_exec, network_exec_*).
+// fire - those overlap with other rules (suspicious_exec, network_exec_*).
 //
 // MITRE ATT&CK: T1059.002 (AppleScript) + T1105 (Ingress Tool Transfer).
 type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1059.002 (Command and Scripting Interpreter → AppleScript) + T1105
-// (Ingress Tool Transfer). The rule specifically flags osascript invoking a curl/wget that stages an executable to /tmp — the exact
+// Techniques returns the MITRE ATT&CK IDs this rule covers - T1059.002 (Command and Scripting Interpreter → AppleScript) + T1105
+// (Ingress Tool Transfer). The rule specifically flags osascript invoking a curl/wget that stages an executable to /tmp - the exact
 // shape of a T1105 dropper.
 func (r *OsascriptNetworkExec) Techniques() []string {
 	return []string{"T1059.002", "T1105"}
@@ -49,7 +49,7 @@ func (r *OsascriptNetworkExec) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   "AppleScript dropper (osascript → curl/wget → temp exec)",
 		Summary: "Critical-severity catch on the canonical macOS commodity-dropper chain: osascript fetches a stage-2 over the network and runs it from /tmp.",
-		Description: "Fires on the LAST link of the chain — an exec from a temp directory whose process tree has " +
+		Description: "Fires on the LAST link of the chain - an exec from a temp directory whose process tree has " +
 			"both an osascript ancestor and a curl/wget sibling within the osascript's 30-second descendant window. " +
 			"This shape is the recognisable signature of macOS commodity malware staged via AppleScript.\n\n" +
 			"Reverse-direction triggering is deliberate: by the time the temp-exec event lands, the entire ancestor " +
@@ -57,15 +57,15 @@ func (r *OsascriptNetworkExec) Doc() api.Documentation {
 			"Forward triggering (fire on the osascript exec, look for descendants) misses chains that complete " +
 			"across an agent flush boundary.\n\n" +
 			"The rule requires both halves of the chain to be present, so download-only or temp-exec-only flows do " +
-			"not fire here — those overlap with suspicious_exec.",
+			"not fire here - those overlap with suspicious_exec.",
 		Severity:   api.SeverityCritical,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
-			"Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript — extremely rare in managed fleets.",
+			"Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript - extremely rare in managed fleets.",
 		},
 		Limitations: []string{
 			"30-second descendant window is hard-coded; longer-running chains are missed by design.",
-			"Does not cover Python URL fetches or AppleScript built-in URL access — only flags the explicit curl/wget shape.",
+			"Does not cover Python URL fetches or AppleScript built-in URL access - only flags the explicit curl/wget shape.",
 		},
 	}
 }
@@ -113,7 +113,7 @@ type osascriptPayload struct {
 }
 
 func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	// One osascript chain commonly produces multiple temp-exec descendants — the kernel re-execs sh→bash, the chain runs more than one
+	// One osascript chain commonly produces multiple temp-exec descendants - the kernel re-execs sh→bash, the chain runs more than one
 	// stage, etc. Track which osascript ancestor PIDs we've already fired on within this batch so we emit one finding per chain, not one
 	// per descendant row.
 	seenOsa := map[int]struct{}{}
@@ -234,7 +234,7 @@ func (r *OsascriptNetworkExec) findOsascriptAncestor(
 // argv slot the analyst sees.
 //
 // `sh -c <command>` returns "" on purpose because the next argv slot is
-// a command string, not a path — running isSuspiciousPath against it
+// a command string, not a path - running isSuspiciousPath against it
 // false-positives on arbitrary text containing `..`.
 func shebangScriptArg(p osascriptPayload) string {
 	if !shebangShellPaths[p.Path] {

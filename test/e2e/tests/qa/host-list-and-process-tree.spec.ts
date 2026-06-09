@@ -1,4 +1,4 @@
-// L4 (M6) — UI specs that drive the M5 agent fixture and assert on the host list + process tree pages. Four logically-distinct test
+// L4 (M6) - UI specs that drive the M5 agent fixture and assert on the host list + process tree pages. Four logically-distinct test
 // cases consolidated into one .spec.ts FILE because each break-glass-setup ceremony burns 2 of the global 5/min token budget; four
 // separate files would exhaust the bucket and the last specs would deadline-out on the setup challenge. A single file with
 // test.describe.serial + a shared `page` lets us pay the 2-token ceremony once at beforeAll, then every test reuses the same

@@ -1,4 +1,4 @@
-// Package identities owns the `identities` table — the (provider,
+// Package identities owns the `identities` table - the (provider,
 // subject) → user_id mapping that lets the same user authenticate via
 // multiple flows (local password, OIDC, future api_token). Used to
 // look up an OIDC subject's user on callback and to insert a new
@@ -46,7 +46,7 @@ type Store struct {
 	db *sqlx.DB
 }
 
-// New constructs a Store. Panics if db is nil — a Store backed by
+// New constructs a Store. Panics if db is nil - a Store backed by
 // nothing has no useful behavior.
 func New(db *sqlx.DB) *Store {
 	if db == nil {
@@ -74,7 +74,7 @@ func (s *Store) FindByProviderSubject(ctx context.Context, provider, subject str
 }
 
 // Executor is the executor subset Insert / InsertWith consume. Pass an *sqlx.Tx for the JIT provisioner's atomic insert; pass the
-// Store's db for standalone calls. Caller is responsible for matching tx + user_id — the identity row's FK CASCADEs on user delete,
+// Store's db for standalone calls. Caller is responsible for matching tx + user_id - the identity row's FK CASCADEs on user delete,
 // so inserting into an uncommitted user orphans if the parent rolls back. Named per the Go convention (single-method interface ends in
 // -er).
 type Executor interface {

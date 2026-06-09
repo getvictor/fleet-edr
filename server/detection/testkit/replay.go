@@ -2,7 +2,7 @@ package testkit
 
 // Replay runs detection rules against JSON fixtures so new rule PRs
 // can be reviewed as "here are the events, here are the expected
-// findings" — no per-rule boilerplate.
+// findings" - no per-rule boilerplate.
 //
 // Fixture layout:
 //
@@ -18,8 +18,8 @@ package testkit
 //  1. Spin up an isolated MySQL test DB via testdb.Open.
 //  2. Apply detection's schema + migrations via testkit's own helpers
 //     (no bootstrap import needed at the call site).
-//  3. s.InsertEvents(events) — server stamps ingested_at_ns here.
-//  4. graph.Builder.ProcessBatch(events) — materialises the process
+//  3. s.InsertEvents(events) - server stamps ingested_at_ns here.
+//  4. graph.Builder.ProcessBatch(events) - materialises the process
 //     rows the rule depends on (fork/exec/exit).
 //  5. rule.Evaluate(events, store) and check the findings shape against
 //     the fixture's expected_findings.
@@ -52,7 +52,7 @@ type FixtureCase struct {
 	// Events are the event envelopes the rule will see. Fork + exec pairs are expected for any process the rule's Evaluate dereferences
 	// via GetProcessByPID; Replay calls ProcessBatch to materialise them before Evaluate.
 	Events []detectionapi.Event `json:"events"`
-	// ExpectedFindings is the assertion target. An empty slice (or omitted key) means "rule must not fire for these events" — a negative
+	// ExpectedFindings is the assertion target. An empty slice (or omitted key) means "rule must not fire for these events" - a negative
 	// test.
 	ExpectedFindings []ExpectedFinding `json:"expected_findings,omitempty"`
 }
@@ -69,7 +69,7 @@ type ExpectedFinding struct {
 
 // Replay discovers every *.json file at or below fixtureDir
 // (recursively), runs each as a sub-test, and asserts the findings
-// match. Fails t if fixtureDir is missing or has no cases — a silent
+// match. Fails t if fixtureDir is missing or has no cases - a silent
 // pass when all cases accidentally get moved is worse than a loud fail.
 //
 // Sub-tests are named by the fixture's path relative to fixtureDir
@@ -127,7 +127,7 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	require.NoError(t, err, "rule.Evaluate")
 
 	require.Len(t, findings, len(c.ExpectedFindings),
-		"finding count mismatch — expected %d, got %d",
+		"finding count mismatch - expected %d, got %d",
 		len(c.ExpectedFindings), len(findings))
 
 	// Positional match. Rules in this codebase emit findings in
@@ -136,7 +136,7 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	// rule itself, not here.
 	//
 	// Range over findings rather than ExpectedFindings so nilaway can
-	// see that we never index a nil slice — rule.Evaluate returns a
+	// see that we never index a nil slice - rule.Evaluate returns a
 	// nil []Finding for no-match cases, which is Go-idiomatic but
 	// trips nilaway's can-be-nil flow without this rewrite. The
 	// require.Len above guarantees ExpectedFindings[i] is in range.

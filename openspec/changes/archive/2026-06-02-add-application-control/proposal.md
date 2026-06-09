@@ -6,7 +6,7 @@ The EDR competes against CrowdStrike Falcon, SentinelOne Singularity, Microsoft 
 Carbon Black Cloud. Every one of those products ships an application-control surface with named policies, host-group
 scoping, detect-vs-protect modes, rule lifecycle (source / severity / expiration), and blocked-exec events that flow
 into the unified detection pipeline. We currently ship a singleton blocklist with two textareas: paths and SHA-256
-hashes. That is enough for a laptop demo, not enough for a pilot — and not enough to convince a customer who runs
+hashes. That is enough for a laptop demo, not enough for a pilot - and not enough to convince a customer who runs
 Santa today to migrate, since Santa already covers five identifier types, allowlists, and Lockdown.
 
 This change replaces the singleton blocklist with the EDR's Application Control subsystem. Phase A delivers the
@@ -33,16 +33,16 @@ preserving a compatibility window. No data migrations, no agent capability negot
   conflict resolution). A built-in `all-hosts` group and a `Default` policy are seeded on first boot.
 - Add six rule identifier types with fixed precedence walked CDHASH → BINARY → SIGNINGID → CERTIFICATE → TEAMID
   → PATH:
-  - `CDHASH` — 40 hex characters, matched only against processes that run under Apple's Hardened Runtime.
-  - `BINARY` — SHA-256 of the executable, 64 hex characters.
-  - `SIGNINGID` — `TeamID:bundle.id` or `platform:bundle.id` for Apple platform binaries.
-  - `CERTIFICATE` — SHA-256 of the leaf signing X.509 certificate, 64 hex characters.
-  - `TEAMID` — 10-character Apple Developer Team ID.
-  - `PATH` — absolute filesystem path in macOS canonical form.
+  - `CDHASH` - 40 hex characters, matched only against processes that run under Apple's Hardened Runtime.
+  - `BINARY` - SHA-256 of the executable, 64 hex characters.
+  - `SIGNINGID` - `TeamID:bundle.id` or `platform:bundle.id` for Apple platform binaries.
+  - `CERTIFICATE` - SHA-256 of the leaf signing X.509 certificate, 64 hex characters.
+  - `TEAMID` - 10-character Apple Developer Team ID.
+  - `PATH` - absolute filesystem path in macOS canonical form.
 - Per-rule columns set in this change with semantics activated either now or in the follow-on:
-  - `action ENUM('BLOCK')` — Phase A enforces blocks only. `ALLOW` and `SILENT_BLOCK` arrive with the
+  - `action ENUM('BLOCK')` - Phase A enforces blocks only. `ALLOW` and `SILENT_BLOCK` arrive with the
     Lockdown change.
-  - `enforcement ENUM('PROTECT','DETECT') DEFAULT 'PROTECT'` — column present in Phase A; only `PROTECT` is
+  - `enforcement ENUM('PROTECT','DETECT') DEFAULT 'PROTECT'` - column present in Phase A; only `PROTECT` is
     honored by the decision engine. `DETECT` (audit-only) wires in with the Lockdown change.
   - `enabled BOOL`, `custom_msg`, `custom_url`, `comment`, `severity ENUM('low','medium','high','critical')`,
     `source ENUM('admin','imported','intel') DEFAULT 'admin'`, `source_ref`, `expires_at NULLABLE`.
@@ -80,7 +80,7 @@ preserving a compatibility window. No data migrations, no agent capability negot
 - `server-application-control`: server-side policies, rules, host groups, assignments, fan-out of the
   `set_application_control` command, validation of rule identifiers per type, audit-event emission per
   rule lifecycle action, and the contract for the `application_control_block` event that the extension emits.
-- `extension-application-control`: extension-side decision engine — five-tuple identifier extraction from
+- `extension-application-control`: extension-side decision engine - five-tuple identifier extraction from
   `es_process_t` plus lazy/cached SHA-256 of the file and leaf cert, precedence walk, snapshot persistence,
   AUTH_EXEC verdict emission, and the failsafe carve-outs that prevent the policy from blocking the agent,
   the extension, the host app, or `launchd`.
@@ -106,7 +106,7 @@ preserving a compatibility window. No data migrations, no agent capability negot
 
 - `server/rules/internal/policy/`: replaced with packages for policies, rules, host groups, assignments,
   decision-event ingest, and audit emission.
-- `server/rules/api/`: new public types — `ApplicationControlPolicy`, `ApplicationControlRule`, `RuleType`,
+- `server/rules/api/`: new public types - `ApplicationControlPolicy`, `ApplicationControlRule`, `RuleType`,
   `Action`, `Enforcement`, `HostGroup`, error sentinels for validation. Old `BlocklistPolicy` and
   `set_blocklist` payload types removed.
 - `server/rules/bootstrap/schema.go`: drops the `policies` table; creates `app_control_policies`,
@@ -155,7 +155,7 @@ preserving a compatibility window. No data migrations, no agent capability negot
 
 - Agent protocol: this change replaces the only command type in `set_blocklist` with `set_application_control`.
   Pre-release; rollback means reverting the entire change set. There is no compatibility shim and none is
-  added — that is the intentional cost of operating without released customers.
+  added - that is the intentional cost of operating without released customers.
 - Events schema: rolling back the change reverts `schema/events.json` to its prior shape and removes the
   `application_control_block` kind plus the new optional exec-event fields. Server ingestion is tolerant of
   unknown fields, so a partial revert leaves the server able to accept old-shape events without code change.

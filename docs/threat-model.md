@@ -2,7 +2,7 @@
 
 This document is Fleet EDR's threat model. It exists for three audiences:
 
-1. **Engineers reviewing security-sensitive PRs** — "does this widen one of
+1. **Engineers reviewing security-sensitive PRs** - "does this widen one of
    the listed threats? does it close a gap?"
 2. **Pilot-customer security reviewers** asking what attack surface the
    vendor considered before installing the agent on managed endpoints.
@@ -92,7 +92,7 @@ Trust assumptions:
 | Spoofing | Attacker installs a competing NE filter. | `NEFilterDataProvider` profiles are MDM-installed and persist until the MDM revokes them; multiple filters can coexist but each has its own bundle ID + team ID fingerprint. |
 | Tampering | NE binary swapped. | Same as sysext (SIP, signed, notarized). |
 | Repudiation | Connection event dropped silently. | Per-connection ID; dropped flow logs via `os_log`. **GAP, low**: no dedicated `edr.network.events.dropped` counter. |
-| Information disclosure | NE captures connection payload bytes. | Configured for **flow-handling-only** — 5-tuple + PID + signing context. Payload bytes are deliberately not captured. This sidesteps wiretap-law concerns and reduces the data-at-rest footprint. |
+| Information disclosure | NE captures connection payload bytes. | Configured for **flow-handling-only** - 5-tuple + PID + signing context. Payload bytes are deliberately not captured. This sidesteps wiretap-law concerns and reduces the data-at-rest footprint. |
 | Denial of service | NE's allow-or-deny verdict latency stalls all connections. | Verdicts are inline with a small per-decision budget; framework falls back to `verdictAllow` if the client extension is unresponsive. |
 | Elevation of privilege | NE bug → root. | NE runs as root by Apple design; minimal surface; uses Apple-vetted `NEFilterDataProvider` API. |
 
@@ -136,7 +136,7 @@ Trust assumptions:
 | Spoofing | Attacker pushes a fake `.pkg` claiming to be the EDR. | Pkg is Developer-ID-signed and Apple-notarized; macOS verifies the signature at install; the `.mobileconfig` profile binds the team ID expected for the system extension. |
 | Tampering | Malicious post-install scripts. | Pkg post-install scripts live in `packaging/pkg/` and are reviewable; build is via the signed CI release workflow; no `curl \| bash` at install time. |
 | Repudiation | Install / uninstall not logged. | macOS records `/var/log/install.log`; agent enrollment logs the host's hardware UUID + first-seen time on the server side. |
-| Information disclosure | Enroll secret leaks via process listing or shell history. | The pkg postinstall script (and Fleet's install-script contract — see `packaging/pkg/scripts/postinstall`) writes the enroll secret to root-owned `/etc/fleet-edr.conf`; the agent reads that file via the layering in `agent/config/conffile.go` and `agent/config/config.go`, with env vars only as an override. The conf-file path keeps the secret out of `launchctl print` output. Residual risk is bounded to local root-equivalent access or incorrect file permissions on the conf file. |
+| Information disclosure | Enroll secret leaks via process listing or shell history. | The pkg postinstall script (and Fleet's install-script contract - see `packaging/pkg/scripts/postinstall`) writes the enroll secret to root-owned `/etc/fleet-edr.conf`; the agent reads that file via the layering in `agent/config/conffile.go` and `agent/config/config.go`, with env vars only as an override. The conf-file path keeps the secret out of `launchctl print` output. Residual risk is bounded to local root-equivalent access or incorrect file permissions on the conf file. |
 | Denial of service | MDM-driven mass uninstall. | Out of scope (the MDM is a trust anchor); the agent has no self-uninstall path. |
 | Elevation of privilege | Pre / post-install scripts have a bug, run as root. | Scripts are minimal (write conf file, kickstart LaunchDaemon); reviewed; signed pkg gates execution. |
 
@@ -184,13 +184,13 @@ Trust assumptions:
 Copied from the per-component tables for at-a-glance triage. Severity reflects
 pilot-deployment impact, not theoretical worst case.
 
-**High** — block multi-seat pilots:
+**High** - block multi-seat pilots:
 
 - (None remaining for v0.1 ship. The wave-1 OIDC + WebAuthn break-glass +
   chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping
   inside a single deployment is a follow-on feature, not a v0.1 gap.)
 
-**Medium** — block a security-mature pilot's procurement:
+**Medium** - block a security-mature pilot's procurement:
 
 - Encryption at rest for the events table (component 6, deployment-mode item).
 - `Content-Security-Policy` header on the UI (component 5).
@@ -198,7 +198,7 @@ pilot-deployment impact, not theoretical worst case.
 - `step-security/harden-runner` on CI jobs (supply chain).
 - Signed-commit policy + `CODEOWNERS` + required-review-count (insider).
 
-**Low** — operational hygiene:
+**Low** - operational hygiene:
 
 - Per-host rate limits beyond per-route caps (component 4).
 - Pagination contract on list endpoints (component 5).
@@ -209,7 +209,7 @@ pilot-deployment impact, not theoretical worst case.
 - **macOS kernel exploits.** SIP, KASLR, kernel signing, and Apple's response
   cycle own this. Outside the EDR's control surface.
 - **Physical access to the endpoint.** A physically-present attacker with
-  FileVault unlocked is not in this threat model — disk encryption and
+  FileVault unlocked is not in this threat model - disk encryption and
   device-loss policy own that boundary.
 - **Compromised MDM.** The MDM is a trust anchor; if it is itself
   compromised, the deployment chain is broken and the EDR cannot defend
@@ -228,7 +228,7 @@ Update this document when:
   a new API surface).
 - A new trust boundary is crossed (a webhook out, a SIEM export endpoint,
   cross-deployment routing).
-- A gap above is closed — move the bullet from "gap" to a citation in the
+- A gap above is closed - move the bullet from "gap" to a citation in the
   per-component table.
 - A new STRIDE category becomes relevant for an existing component (e.g.,
   shipping RBAC opens new spoofing + elevation surfaces that need entries).

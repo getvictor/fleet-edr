@@ -21,7 +21,7 @@ var ErrPasswordTooShort = errors.New("breakglass: password too short")
 
 // ValidatePassword enforces the wave-1 length-only break-glass
 // password policy. Rune-counted (utf8) so a password of 12 emoji
-// counts as 12, not as 48 bytes — preventing an operator from
+// counts as 12, not as 48 bytes - preventing an operator from
 // hitting the floor with a single multi-byte sequence.
 //
 // Returns ErrPasswordTooShort when len([]rune(password)) <

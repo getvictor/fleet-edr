@@ -24,7 +24,7 @@ import (
 )
 
 // AuthzReasonHeader is the response header an HTTP handler writes when the chokepoint denies a privileged action. The operator UI
-// reads it to distinguish a policy deny ("forbidden — your role does not grant this action") from a session expiry, which would
+// reads it to distinguish a policy deny ("forbidden - your role does not grant this action") from a session expiry, which would
 // otherwise share the 403 status and produce identical UX.
 const AuthzReasonHeader = "X-Edr-Authz-Reason"
 

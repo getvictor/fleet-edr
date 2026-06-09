@@ -7,7 +7,7 @@
 //
 // Three pieces compose the wave-1 surface:
 //
-//  1. **Bootstrap token redemption** — first-boot prints a one-shot
+//  1. **Bootstrap token redemption** - first-boot prints a one-shot
 //     redemption URL (not a plaintext password) to stderr. The
 //     operator visits the URL within the configured TTL, sets a
 //     password (length-only ≥ 12; WebAuthn carries the cryptographic
@@ -17,14 +17,14 @@
 //     credential persist) commit in a single transaction so a
 //     partial failure leaves the token reusable.
 //
-//  2. **Login** — `/admin/break-glass` requires both a correct
+//  2. **Login** - `/admin/break-glass` requires both a correct
 //     password AND a successful WebAuthn assertion against a
 //     registered credential. WebAuthn's challenge round-trips
 //     through a signature-protected cookie so the flow survives
 //     between the GET (challenge issued) and POST (assertion
 //     submitted) without a server-side session table.
 //
-//  3. **Surface protection** — an optional CIDR allowlist returns
+//  3. **Surface protection** - an optional CIDR allowlist returns
 //     a generic 404 to off-list callers (`/admin/break-glass`
 //     existence is not acknowledged); per-IP, per-email, and
 //     setup-bucket rate limits are stricter than the SSO login

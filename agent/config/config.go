@@ -126,7 +126,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	// A zero or negative prune age computes a future cutoff and deletes nearly every uploaded
 	// row; outright reject.
 	envparse.PositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
-	// 0 disables the agent-side process-tree reconciliation loop entirely (issue #6 client half) — useful for narrow QA where synthetic
+	// 0 disables the agent-side process-tree reconciliation loop entirely (issue #6 client half) - useful for narrow QA where synthetic
 	// exits would distort what a clean ESF feed looks like. Negative values are rejected.
 	envparse.NonNegativeDuration(getenv, "EDR_PROCESS_RECONCILE_INTERVAL", &c.ProcessReconcileInterval, &errs)
 	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB is set above and applies when the env var is unset;

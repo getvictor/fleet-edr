@@ -102,7 +102,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
   // alerts. Wrap both mutations through useReauthRetry so the
   // operator gets an inline reauth modal + the action retries on
   // success. Non-gated mutations (e.g. alert.acknowledge or kill on
-  // a fresh session) pass through unchanged — useReauthRetry is a
+  // a fresh session) pass through unchanged - useReauthRetry is a
   // no-op until the chokepoint throws ReauthRequiredError.
   const sendKillCommand = useCallback(
     async (): Promise<{ id: number }> => createCommand(hostId, "kill_process", { pid: node.pid }),
@@ -133,7 +133,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       .catch((err: unknown) => {
         // Cancelled reauth surfaces as ReauthRequiredError (the hook
         // rethrows the original gate-deny when the operator dismisses
-        // the modal). That isn't a send failure — no command was
+        // the modal). That isn't a send failure - no command was
         // ever dispatched. Leave killCommand untouched so the UI
         // returns to its pre-click state instead of showing a
         // misleading "Failed to send command" row.
@@ -256,7 +256,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
                 && typeof killCommand.result?.error === "string"
                 ? `: ${killCommand.result.error}`
                 : ""}
-              {killCommand.status === "completed" ? " — process killed" : ""}
+              {killCommand.status === "completed" ? " - process killed" : ""}
             </span>
           )}
         </div>
@@ -279,7 +279,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
                 <code className="process-detail__break">{gen.path || "(unknown)"}</code>
                 {gen.exec_time_ns !== undefined && (
                   <span className="process-detail__reexec-time">
-                    {" — exec @ "}
+                    {" - exec @ "}
                     {formatTimestamp(gen.exec_time_ns)}
                   </span>
                 )}
@@ -287,7 +287,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
             ))}
             <li className="process-detail__reexec-item process-detail__reexec-item--current">
               <code className="process-detail__break">{node.path || "(unknown)"}</code>
-              <span className="process-detail__reexec-time"> — current</span>
+              <span className="process-detail__reexec-time"> - current</span>
             </li>
           </ol>
         </div>

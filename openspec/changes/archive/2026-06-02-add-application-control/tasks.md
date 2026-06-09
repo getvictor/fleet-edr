@@ -2,18 +2,18 @@
 
 ## Status (2026-05-16)
 
-The demo cut shipped via PRs #151–#159 (`App control demo cut steps 1–9`). The slice that landed is a
+The demo cut shipped via PRs #151 - #159 (`App control demo cut steps 1 - 9`). The slice that landed is a
 BINARY-only, single-policy, all-hosts foundation that closes most of Phase A's *shape* but explicitly
 punts three categories of work to a Phase A close-out PR before the change can be archived:
 
-1. **The other five rule identifier types** (CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH) — schema
+1. **The other five rule identifier types** (CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH) - schema
    and snapshot maps exist for all six; the validator and the extension's precedence walk gate at
    BINARY only (`server/rules/internal/appcontrol/validate.go:25-83`,
    `extension/edr/extension/ESFSubscriber.swift:124-146`).
-2. **`host_groups` + `app_control_assignments` tables + the `all-hosts` seed** — explicitly deferred
+2. **`host_groups` + `app_control_assignments` tables + the `all-hosts` seed** - explicitly deferred
    with a comment in `server/rules/bootstrap/schema.go:11-13`. Fan-out (`appcontrol/service.go`)
    currently targets every enrolled host directly, bypassing the assignment layer the spec mandates.
-3. **`cdhash` + `signing_id` + `team_id` + `leaf_cert_sha256` on every exec event** — `team_id` and
+3. **`cdhash` + `signing_id` + `team_id` + `leaf_cert_sha256` on every exec event** - `team_id` and
    `signing_id` ship today nested under `code_signing` (`extension/edr/extension/EventSerializer.swift`);
    `cdhash` and `leaf_cert_sha256` are not extracted from `es_process_t` at all.
 
@@ -50,12 +50,12 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
   `server-application-control` capability spec. Include the reserved columns (`default_action`,
   `enforcement`, `source`, `source_ref`, `severity`, `expires_at`) and the
   `(policy_id, rule_type, identifier)` unique key. *Partial: `app_control_policies` + `app_control_rules`
-  shipped in PR #152. `host_groups` + `app_control_assignments` deferred (`schema.go:11-13`) — PR-1
+  shipped in PR #152. `host_groups` + `app_control_assignments` deferred (`schema.go:11-13`) - PR-1
   close-out scope below.*
 - [ ] 2.2 Add idempotent bootstrap that seeds the built-in `all-hosts` host group, the `Default`
   policy with zero rules and `default_action='NONE'`, and the assignment connecting them. *Partial:
   `Default` policy seed shipped in PR #152 (`appcontrol/store.go:30:EnsureDefaultPolicy`); `all-hosts`
-  group + assignment row not yet seeded — PR-1 close-out scope below.*
+  group + assignment row not yet seeded - PR-1 close-out scope below.*
 - [x] 2.3 Per-context integration tests at `server/rules/internal/tests/` covering the seed shape, the
   unique-key dedup, the bootstrap idempotency, and the typed-enum constraints. *Shipped: PR #152
   (`server/rules/internal/tests/app_control_test.go`).*
@@ -64,21 +64,21 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
 
 - [ ] 3.1 New package `server/rules/internal/appcontrol/` with the policy, rule, host-group, and
   assignment store types and their persistence methods. *Partial: policy + rule store shipped in
-  PR #155; host-group + assignment store deferred — PR-1 close-out scope below.*
+  PR #155; host-group + assignment store deferred - PR-1 close-out scope below.*
 - [ ] 3.2 Public surface on `server/rules/api/`: `ApplicationControlPolicy`, `ApplicationControlRule`,
   `RuleType`, `Action`, `Enforcement`, `Severity`, `Source`, `HostGroup`, `Assignment`, error sentinels
   for validation, and the `SetApplicationControlPayload` codec. *Partial: policy/rule/codec types
-  shipped in PR #152; `HostGroup` + `Assignment` types deferred — PR-1 close-out scope below.*
+  shipped in PR #152; `HostGroup` + `Assignment` types deferred - PR-1 close-out scope below.*
 - [ ] 3.3 Per-type identifier validators in `server/rules/internal/appcontrol/validate.go` per the rules
   in the `server-application-control` capability spec (`CDHASH` 40 hex, `BINARY`/`CERTIFICATE` 64 hex,
   `TEAMID` 10 of `[A-Z0-9]`, `SIGNINGID` `<TeamID|platform>:bundle.id`, `PATH` canonical absolute).
   *Partial: shape validators shipped for all six types in PR #152; BINARY accepts, the other five
-  return `ErrAppControlUnsupportedRuleType` (`validate.go:25-83`) — PR-1 close-out scope below.*
+  return `ErrAppControlUnsupportedRuleType` (`validate.go:25-83`) - PR-1 close-out scope below.*
 - [x] 3.4 Path canonicalizer reused from the legacy module (the macOS `/tmp`, `/var`, `/etc` →
   `/private/...` rewrite), promoted into `server/rules/internal/appcontrol/`. *Shipped: PR #152
   (`appcontrol/validate.go:95-115:canonicalizePath`).*
 - [ ] 3.5 Fuzz test (`go test -fuzz`) per identifier validator. *Partial: BINARY validator fuzzed;
-  the other five wait on type acceptance — PR-1 close-out scope below.*
+  the other five wait on type acceptance - PR-1 close-out scope below.*
 - [x] 3.6 PBT (`pgregory.net/rapid`) for the `(Marshal, Unmarshal)` round-trip on
   `SetApplicationControlPayload`. *Shipped: PR #152.*
 
@@ -86,7 +86,7 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
 
 - [x] 4.1 New `extension/edr/extension/ApplicationControl/` Swift sources for the typed snapshot, the
   per-`(inode, mtime)` caches for `file_sha256` and `leaf_cert_sha256`, and the precedence walker.
-  *Partial: `ApplicationControlStore.swift` + `FileHashCache.swift` shipped in PRs #153–#155. The
+  *Partial: `ApplicationControlStore.swift` + `FileHashCache.swift` shipped in PRs #153 - #155. The
   `leaf_cert_sha256` cache class is not yet created (deferred with the CERTIFICATE rule type to
   Phase B).*
 - [ ] 4.2 Implement the target-tuple builder per the `extension-application-control` capability spec:
@@ -94,27 +94,27 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
   compute or lookup `leaf_cert_sha256` via `SecCodeCopySigningInformation` off the AUTH path.
   *Partial: `team_id` is read for the failsafe check and `file_sha256` is looked up for the BINARY
   match in `ESFSubscriber.swift:114-124`. `cdhash`, `signing_id`-as-tuple-component, and `leaf_cert_sha256`
-  are not assembled into the target tuple — PR-1 close-out scope below (cdhash + signing_id), Phase B
+  are not assembled into the target tuple - PR-1 close-out scope below (cdhash + signing_id), Phase B
   for leaf_cert_sha256.*
 - [ ] 4.3 Implement the precedence walk in fixed order
   `CDHASH → BINARY → SIGNINGID → CERTIFICATE → TEAMID → PATH` returning on first match. Skip
   unpopulated tuple components. *Partial: walker only consults `binaryRules`
   (`ESFSubscriber.swift:124-146`). The other five maps are populated by `ApplicationControlStore` but
-  never read — PR-1 close-out scope below.*
+  never read - PR-1 close-out scope below.*
 - [x] 4.4 Implement snapshot apply: validate `policy_version` is greater than the current value;
   atomically swap the in-memory snapshot; atomically write the disk snapshot with
   write-temp-then-rename to `/var/db/com.fleetdm.edr/application-control.json`. *Shipped: PR #153
   (`ApplicationControlStore.swift:apply`).*
 - [ ] 4.5 Wire the decision engine into `ESFSubscriber.handleAuthExec()`. On match return deny and emit
   the `application_control_block` event; on miss return allow and emit the regular `exec` event.
-  *Partial: deny + block-event emission shipped (PRs #153–#154); the "on miss return allow and emit
+  *Partial: deny + block-event emission shipped (PRs #153 - #154); the "on miss return allow and emit
   the regular `exec` event" half is met today via NOTIFY_EXEC; the spec's intent that a denied AUTH
-  also emit a denied-exec telemetry event is unmet — addressed in the
+  also emit a denied-exec telemetry event is unmet - addressed in the
   `add-application-control-detect-mode` change.*
 - [ ] 4.6 Extend the regular `exec` event payload to carry the optional `cdhash`, `signing_id`,
   `team_id`, and `leaf_cert_sha256` fields when their cached values are available. *Partial: `team_id`
   and `signing_id` ship today nested under `code_signing` (`EventSerializer.swift:CodeSigning`);
-  `cdhash` and `leaf_cert_sha256` are not on the payload — PR-1 close-out scope (cdhash), Phase B
+  `cdhash` and `leaf_cert_sha256` are not on the payload - PR-1 close-out scope (cdhash), Phase B
   (leaf_cert_sha256).*
 - [ ] 4.7 Unit tests for the precedence walker on a synthetic snapshot covering each rule type and the
   silent-miss-on-cold-cache path. Tag with `-tags=extensiontest` if needed by the existing Swift test
@@ -144,7 +144,7 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
   `host-groups`, `assignments`, `bulkUpsert`). *Partial: `GET /policies`, `GET /policies/{id}`,
   `POST /policies/{id}/rules` shipped in PR #155. `PATCH /policies/{id}`, `DELETE /policies/{id}`,
   `PATCH /rules/{id}`, `DELETE /rules/{id}`, `bulkUpsert`, `GET /rules`, `/host-groups/*`,
-  `/assignments` not yet — Phase A close-out follow-on below.*
+  `/assignments` not yet - Phase A close-out follow-on below.*
 - [x] 6.2 Route registration under `/api/v1/app-control/` in `server/cmd/fleet-edr-server/main.go` (or
   the equivalent router-wiring file in the current layout). Reuse the existing session + CSRF
   middleware. *Shipped: PR #155.*
@@ -157,7 +157,7 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
   enqueue exactly one `set_application_control` command per unique host. Record `fanout_hosts` and
   `fanout_failed` as unique-host counts on the audit event. Use the existing command-enqueue path.
   *Partial: per-host enqueue shipped in PR #155, but the assignment-layer resolution is short-circuited
-  to "every enrolled host" because `app_control_assignments` doesn't exist yet — PR-1 close-out scope
+  to "every enrolled host" because `app_control_assignments` doesn't exist yet - PR-1 close-out scope
   below.*
 - [ ] 6.6 Integration test for unique-host fan-out: a host that belongs to two assigned host groups
   receives exactly one command, and the audit event's `fanout_hosts` counts that host once. Failing this
@@ -210,17 +210,17 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
 - [ ] 8.3 Implement the policy detail view at
   `ui/src/components/ApplicationControl/PolicyDetail.tsx` with the filterable rules table, per-row
   enable/disable/edit/delete actions, and the assignment summary. *Partial: read-only table + add-rule
-  button shipped in PR #157. Per-row enable/disable/edit/delete buttons render but are non-functional —
+  button shipped in PR #157. Per-row enable/disable/edit/delete buttons render but are non-functional -
   Phase A close-out follow-on.*
 - [ ] 8.4 Implement the add-rule modal at
   `ui/src/components/ApplicationControl/AddRuleModal.tsx` with the type selector, type-aware
   identifier validation, optional fields (`custom_msg`, `custom_url`, `severity`, `comment`), and the
   audit-reason gate. *Partial: modal + BINARY validator + custom_msg/custom_url/severity/reason fields
   shipped in PR #157. The other five rule types render with `available: false` and a "coming soon"
-  badge — PR-1 close-out scope below (CDHASH/SIGNINGID/TEAMID), Phase B (CERTIFICATE), follow-on (PATH).*
+  badge - PR-1 close-out scope below (CDHASH/SIGNINGID/TEAMID), Phase B (CERTIFICATE), follow-on (PATH).*
 - [ ] 8.5 Implement the paste-many flow at
   `ui/src/components/ApplicationControl/PasteManyModal.tsx` with the per-line type inference rules
-  from the web-ui delta spec. *Deferred: lands when at least two rule types accept submission —
+  from the web-ui delta spec. *Deferred: lands when at least two rule types accept submission -
   PR-1 close-out scope below.*
 - [x] 8.6 Typed API clients in `ui/src/api.ts` for the `/api/v1/app-control/*` endpoints.
   *Shipped: PR #157 for the demo subset; PATCH/DELETE/bulk clients land with the corresponding
@@ -239,7 +239,7 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
   verify the AUTH_EXEC denial, the structured `application_control_block` event, and the resulting
   alert in the alerts view. Capture screenshots / logs into `tmp/qa/app-control/` per the project's
   real-tool QA convention. *Partial: BINARY-only verified for the demo recording. The other five rule
-  types verify against this checklist as they come online — PR-1 close-out scope below for CDHASH /
+  types verify against this checklist as they come online - PR-1 close-out scope below for CDHASH /
   SIGNINGID / TEAMID.*
 - [x] 9.3 Confirm via SigNoz (using `mcp__signoz__*` tools) that the decision spans land under
   `service.name="fleet"` and that the new event kind is queryable. *Shipped: demo dry-run.*
@@ -256,7 +256,7 @@ Lockdown, simulation, failsafes) lives in a separate change (`add-application-co
 ## 11. Phase A close-out scope (PR-1)
 
 A single PR closes out the remaining Phase A surface so this change can be archived. The bundling is
-deliberate — every item below either (a) was punted by the demo cut with a comment in the shipped
+deliberate - every item below either (a) was punted by the demo cut with a comment in the shipped
 code, or (b) is needed by the Phase B Detect-mode change (`add-application-control-detect-mode`).
 
 ### 11.1 `host_groups` + `app_control_assignments` tables (closes tasks 2.1, 2.2, 3.1, 3.2, 6.5, 6.6, 8.2)
@@ -289,7 +289,7 @@ Services indirection edge cases). Both stay in Phase B's scope.
   `process.codesigning_flags & CS_HARD` indicates Hardened Runtime per the spec) and `signing_id` into
   the AUTH-path tuple. `team_id` is already read for the failsafe.
 - [ ] 11.2.4 Replace the BINARY-only check in `ESFSubscriber.handleAuthExec` with the precedence walk:
-  `CDHASH → BINARY → SIGNINGID → TEAMID → PATH` (skip CERTIFICATE — its map stays unwalked until
+  `CDHASH → BINARY → SIGNINGID → TEAMID → PATH` (skip CERTIFICATE - its map stays unwalked until
   Phase B lands the leaf-cert cache). PATH consulted as a no-op until the validator accepts it; the
   map is empty.
 - [ ] 11.2.5 Swift unit tests for the precedence walker covering each of the four wired types and
@@ -313,7 +313,7 @@ Services indirection edge cases). Both stay in Phase B's scope.
 - [ ] 11.3.3 Update `schema/events.json` exec payload schema with optional `cdhash`.
 
 `leaf_cert_sha256` stays deferred until Phase B lands the lazy `SecCodeCopySigningInformation` cache
-(it ships paired with the CERTIFICATE rule type for the same reason — both need the same plumbing).
+(it ships paired with the CERTIFICATE rule type for the same reason - both need the same plumbing).
 
 ### 11.4 Full REST CRUD (closes task 6.1)
 
@@ -321,7 +321,7 @@ Services indirection edge cases). Both stay in Phase B's scope.
   `default_action='NONE'` in Phase A).
 - [ ] 11.4.2 `DELETE /api/v1/app-control/policies/{id}` with rule cascade.
 - [ ] 11.4.3 `POST /api/v1/app-control/policies` (create new policy beyond the seeded Default).
-- [ ] 11.4.4 `PATCH /api/v1/app-control/rules/{id}` — every mutable field. Phase B Detect-mode change
+- [ ] 11.4.4 `PATCH /api/v1/app-control/rules/{id}` - every mutable field. Phase B Detect-mode change
   layers on the `enforcement` toggle; this PR delivers the generic PATCH path.
 - [ ] 11.4.5 `DELETE /api/v1/app-control/rules/{id}`.
 - [ ] 11.4.6 `POST /api/v1/app-control/policies/{id}/rules:bulkUpsert` with idempotent
@@ -345,10 +345,10 @@ Services indirection edge cases). Both stay in Phase B's scope.
 
 ### Not in Phase A close-out, intentionally
 
-- **Per-rule Detect mode semantics** — separate change
+- **Per-rule Detect mode semantics** - separate change
   (`openspec/changes/add-application-control-detect-mode/`). Implemented after this close-out PR.
-- **Lockdown / allowlist / failsafe-list / pre-deploy simulation** — Phase B proper, separate
+- **Lockdown / allowlist / failsafe-list / pre-deploy simulation** - Phase B proper, separate
   change.
-- **CERTIFICATE + PATH rule types** — Phase B (CERTIFICATE needs leaf-cert cache plumbing; PATH
+- **CERTIFICATE + PATH rule types** - Phase B (CERTIFICATE needs leaf-cert cache plumbing; PATH
   needs Launch Services indirection coverage).
-- **Editable host groups + multi-policy assignments** — Phase B (UI work; schema is ready).
+- **Editable host groups + multi-policy assignments** - Phase B (UI work; schema is ready).

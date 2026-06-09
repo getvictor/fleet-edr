@@ -8,7 +8,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/breakglass"
 )
 
-// AllowIP refuses to bucket an empty IP — a regression that bucketed "" would let an attacker who somehow got past the upstream IP
+// AllowIP refuses to bucket an empty IP - a regression that bucketed "" would let an attacker who somehow got past the upstream IP
 // resolver consume the same single bucket as everyone else.
 func TestRateLimits_EmptyIPRejected(t *testing.T) {
 	t.Parallel()

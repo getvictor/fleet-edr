@@ -4,7 +4,7 @@ import { AppControlApiError, ReauthRequiredError } from "../../api";
 // Sonar flagged the duplicated catch blocks across AddRuleModal / EditRuleModal / ConfirmActionModal as a
 // new_duplicated_lines_density violation on PR #189; collapsing the mapping here keeps the per-modal handler one line.
 //
-// Returns true when the error was a ReauthRequiredError — the caller MUST return early in that case because useReauthRetry's
+// Returns true when the error was a ReauthRequiredError - the caller MUST return early in that case because useReauthRetry's
 // modal is mounted as a sibling and will re-run the original call after the reauth completes. Returns false for every other
 // error (which has been mapped onto setFormError) so the caller can fall through to its `finally { setBusy(false) }`.
 export function applyAppControlSubmitError(

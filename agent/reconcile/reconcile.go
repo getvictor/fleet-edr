@@ -33,7 +33,7 @@ const (
 	defaultInterval = 60 * time.Second
 
 	// defaultMinAge is the fallback for Options.MinAge. The window guards
-	// against racing a brand-new exec — see the Options.MinAge comment.
+	// against racing a brand-new exec - see the Options.MinAge comment.
 	defaultMinAge = 30 * time.Second
 
 	// defaultMaxPerPass caps synthetic-exit emissions per tick.
@@ -65,7 +65,7 @@ type KillFunc func(pid int, sig syscall.Signal) error
 // Options configures the reconciler. Zero values fall back to defaults.
 type Options struct {
 	// Interval between reconciliation passes. Zero or negative values fall back to the default. Default 60s. Disabling the loop entirely
-	// is a wiring decision — the agent main skips constructing the runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level API
+	// is a wiring decision - the agent main skips constructing the runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level API
 	// always runs.
 	Interval time.Duration
 
@@ -100,7 +100,7 @@ type Reconciler struct {
 	now        func() time.Time
 	kill       KillFunc
 	// newID and marshal are seams for tests so the rare error paths in emitSyntheticExit are reachable. Default to crypto/rand-backed
-	// newUUIDv4 and stdlib json.Marshal — both effectively never fail in production on a healthy host. Tests inject failing versions to
+	// newUUIDv4 and stdlib json.Marshal - both effectively never fail in production on a healthy host. Tests inject failing versions to
 	// lock in our error-handling shape (issue: synthetic exits must surface queue-affecting failures rather than silently skip a PID).
 	newID   func() (string, error)
 	marshal func(any) ([]byte, error)
@@ -195,7 +195,7 @@ type PassStats struct {
 func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 	hostID := r.hostID()
 	if hostID == "" {
-		// No host_id yet — the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
+		// No host_id yet - the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
 		// server's ingest handler would reject the whole batch on the first one).
 		return PassStats{}
 	}
@@ -206,7 +206,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 
 	for pid, info := range r.pt.Snapshot() {
 		if pid <= 0 {
-			// Skip PID 0 / negative — kill(0, 0) signals all processes in the caller's process group, kill(-1, 0) signals
+			// Skip PID 0 / negative - kill(0, 0) signals all processes in the caller's process group, kill(-1, 0) signals
 			// every process the caller may signal. Neither is what we want.
 			continue
 		}

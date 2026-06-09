@@ -12,7 +12,7 @@ import (
 
 // PersistenceLaunchAgent fires when a process calls `launchctl load` or
 // `launchctl bootstrap` referencing a plist under `~/Library/LaunchAgents/` or
-// `/Library/LaunchAgents/` — the canonical macOS persistence mechanism. Operators can
+// `/Library/LaunchAgents/` - the canonical macOS persistence mechanism. Operators can
 // silence expected plists via `EDR_LAUNCHAGENT_ALLOWLIST` (comma-separated absolute paths).
 //
 // MITRE ATT&CK: T1547.011 (Boot or Logon Autostart Execution: Launch Agent)
@@ -24,7 +24,7 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1543.001 (Create or Modify System Process → Launch Agent). The rule
+// Techniques returns the MITRE ATT&CK IDs this rule covers - T1543.001 (Create or Modify System Process → Launch Agent). The rule
 // fires on `launchctl load` of user LaunchAgent plists, which is exactly this sub-technique's scope.
 func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.001"} }
 
@@ -47,7 +47,7 @@ func (r *PersistenceLaunchAgent) Doc() api.Documentation {
 			"Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.",
 		},
 		Limitations: []string{
-			"Does not cover `launchctl bootout` or `launchctl unload` — those undo persistence rather than create it.",
+			"Does not cover `launchctl bootout` or `launchctl unload` - those undo persistence rather than create it.",
 			"Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.",
 		},
 		Config: []api.ConfigKnob{
@@ -68,7 +68,7 @@ var launchctlPaths = map[string]bool{
 }
 
 // launchAgentPath matches arguments that reference a plist under a LaunchAgents directory. We accept both system-wide
-// (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library) locations — an attacker-planted plist at either is a persistence
+// (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library) locations - an attacker-planted plist at either is a persistence
 // mechanism.
 var launchAgentPath = regexp.MustCompile(`(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$`)
 
@@ -112,7 +112,7 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.allowed(plistPath) {
 		return nil, nil
 	}
-	// Look up the process row so the alert can link to the process detail view. If it's not yet materialised we skip — the next batch
+	// Look up the process row so the alert can link to the process detail view. If it's not yet materialised we skip - the next batch
 	// re-evaluates once the processor lands the row. Safer than firing an alert we can't pivot from.
 	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {

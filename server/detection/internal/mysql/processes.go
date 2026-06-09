@@ -229,7 +229,7 @@ func (s *Store) ReExec(
 // ordering key for the result. The anchor row sits at depth=0 and
 // each recursion step adds one, so depth tracks structural distance
 // back from `current.PreviousExecID`. ORDER BY depth DESC therefore
-// yields oldest-first — independent of fork_time_ns, which can tie or
+// yields oldest-first - independent of fork_time_ns, which can tie or
 // drift across agents (per Gemini Code Assist + Copilot review on
 // PR #110).
 //

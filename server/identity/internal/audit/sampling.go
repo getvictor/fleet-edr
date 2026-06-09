@@ -50,7 +50,7 @@ func ShouldSampleRead(action api.Action, breakGlass bool, rate float64) bool {
 	if rate >= 1.0 {
 		return true
 	}
-	// math/rand/v2 is fine here — sampling decisions are not security-sensitive (an attacker who can predict the gate's outcome learns
+	// math/rand/v2 is fine here - sampling decisions are not security-sensitive (an attacker who can predict the gate's outcome learns
 	// whether the chokepoint logged a row, which is public information once the audit table is read by an authed user). crypto/rand would
 	// be ~100x slower for no security gain.
 	return rand.Float64() < rate //nolint:gosec

@@ -32,7 +32,7 @@ test.describe("break-glass challenge rate limit", () => {
     }
     expect(observed429).toBe(true);
     expect(retryAfter).toBeDefined();
-    // Number("abc") returns NaN, and NaN > 0 is false — so the previous
+    // Number("abc") returns NaN, and NaN > 0 is false - so the previous
     // single assertion would fail with "expected NaN to be greater than 0"
     // for any non-numeric Retry-After. Split into "is a number" + "is
     // positive" so the failure message names the actual contract.

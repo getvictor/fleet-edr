@@ -10,7 +10,7 @@ import "./ApplicationControl.scss";
 // PoliciesList renders the Application Control policy
 // roster. In the demo cut the seeded `Default` policy is the only
 // row; multi-policy is post-demo, so the "New policy" button renders
-// disabled with a "coming soon" tooltip — honest scaffolding rather
+// disabled with a "coming soon" tooltip - honest scaffolding rather
 // than a 404. The list is the entry point for the camera-facing
 // admin surface (demo beat #1).
 export function PoliciesList() {
@@ -37,11 +37,11 @@ export function PoliciesList() {
 
   // ruleCount returns the number of rules attached to the policy. The
   // list endpoint omits the rules array so the count is unknown until
-  // someone opens the detail page; show "—" rather than a fake 0 so
+  // someone opens the detail page; show "-" rather than a fake 0 so
   // the admin knows they have to click in. Post-demo work adds a
   // rule_count aggregate to the list response.
   const ruleCount = (p: ApplicationControlPolicy): string =>
-    p.rules ? String(p.rules.length) : "—";
+    p.rules ? String(p.rules.length) : "-";
 
   // assignmentLabel formats the assignment_count column. The seed Default policy renders "1 host group" because its only
   // assignment row connects it to all-hosts; policies created without assignments render "no host groups" (an admin posture,

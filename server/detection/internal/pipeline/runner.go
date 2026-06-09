@@ -39,7 +39,7 @@ type RunnerOptions struct {
 	DB         *sqlx.DB
 	// Coordinator gates the single-replica periodic tasks (processTTL + retention) so they run on exactly one replica at a time.
 	// Nil disables coordination: the tasks run directly on this process, which is correct for a single-replica deployment and for
-	// tests. The processor is never gated — it scales across replicas via SKIP LOCKED.
+	// tests. The processor is never gated - it scales across replicas via SKIP LOCKED.
 	Coordinator leader.Coordinator
 }
 

@@ -48,7 +48,7 @@ func cdhashHexString(from cdhash: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UIn
                                     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)) -> String? {
     var bytes = cdhash
     return withUnsafeBytes(of: &bytes) { raw -> String? in
-        // All-zero cdhash means "no real CDHash present" — unsigned or otherwise unverifiable. Return nil so the precedence walker
+        // All-zero cdhash means "no real CDHash present" - unsigned or otherwise unverifiable. Return nil so the precedence walker
         // skips the CDHASH map for this exec rather than matching a rule whose identifier is "00…00" by coincidence.
         if raw.allSatisfy({ $0 == 0 }) {
             return nil

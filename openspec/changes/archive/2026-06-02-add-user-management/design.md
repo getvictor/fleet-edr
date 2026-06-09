@@ -34,7 +34,7 @@ The current state, as of this proposal:
   one cohesive change inside the existing bounded-context architecture, with arch-go
   passing at every PR boundary.
 - Expose the authz chokepoint and the audit recorder through `server/identity/api/` so that
-  every other context calls into identity through its public surface — no inversion of the
+  every other context calls into identity through its public surface - no inversion of the
   ADR-0004 import rules, no new "shared internal" package.
 - Keep the agent ↔ server protocol, the events schema, and the host-token middleware
   unchanged. None of this work touches the agent.
@@ -74,10 +74,10 @@ runtime code lives under `server/identity/internal/`.
 
 **Alternatives considered:**
 
-- Separate `authz` context. Rejected — every other context would need to import both
+- Separate `authz` context. Rejected - every other context would need to import both
   `identity/api` (for the actor) and `authz/api` (for the chokepoint), doubling the
   cross-context surface for no practical isolation benefit.
-- Audit as a cross-cutting "shared" package outside any context. Rejected — there is
+- Audit as a cross-cutting "shared" package outside any context. Rejected - there is
   no shared-package layer in the bounded-context layout; ADR-0004 is explicit that
   cross-context calls go through `<other>/api`. A new shared layer would punch a hole
   in arch-go's allow-list.
@@ -134,7 +134,7 @@ Identity owns the new identity-side tables. The product is a single-instance dep
 (each customer runs their own server), so no `tenant_id` partitioning column is added to
 any context's tables.
 
-- `server/identity/internal/store/schema.sql` — adds `identities`, `roles`,
+- `server/identity/internal/store/schema.sql` - adds `identities`, `roles`,
   `role_bindings`, `audit_events`, `bootstrap_tokens`, `webauthn_credentials`, plus the
   additive columns on `users` and `sessions`. Existing migrations remain untouched;
   follow the additive-only pattern documented for ADR-0004 phase 5.
@@ -270,7 +270,7 @@ every phase boundary.
 **Rollback strategy:** Every PR in this sequence is independently reversible.
 Phase 2 is the cutover (deny decisions start returning 403); rollback to the prior
 binary restores pre-chokepoint behavior. The new identity tables remain in place
-across rollback — `bootstrap_tokens` and `webauthn_credentials` rows are harmless if
+across rollback - `bootstrap_tokens` and `webauthn_credentials` rows are harmless if
 the seed flow is reverted.
 
 ## Open Questions

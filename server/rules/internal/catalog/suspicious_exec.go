@@ -36,13 +36,13 @@ var suspiciousPrefixes = []string{
 //
 // Triggering: the rule fires on the LAST link of the chain (the temp-exec
 // event or the outbound network_connect event) rather than on the shell's
-// exec event. Forward-direction triggering — fire when the shell exec is
-// seen, then look forward for descendants — is unreliable in production
+// exec event. Forward-direction triggering - fire when the shell exec is
+// seen, then look forward for descendants - is unreliable in production
 // because the processor pipeline runs `builder.ProcessBatch` then
 // `detection.Evaluate` per agent POST and the agent flushes events in
 // roughly 1-second batches. A real chain completes in ~150ms, so when the
 // cadence boundary lands mid-chain the shell exec arrives in batch N while
-// the temp-binary exec arrives in batch N+1 — at batch N's Evaluate the
+// the temp-binary exec arrives in batch N+1 - at batch N's Evaluate the
 // descendants haven't been materialised, and the shell event isn't in
 // batch N+1 to re-trigger evaluation. Reverse-direction triggering is
 // race-immune because by the time the trigger event lands, every ancestor
@@ -52,7 +52,7 @@ var suspiciousPrefixes = []string{
 // MITRE ATT&CK: T1059 (Command and Scripting Interpreter), T1204 (User Execution).
 type SuspiciousExec struct {
 	// AllowedNonShellParents is the set of non-shell parent paths the rule
-	// should treat as benign roots — for BOTH the temp-path-exec arm AND
+	// should treat as benign roots - for BOTH the temp-path-exec arm AND
 	// the outbound-network-connect arm. The canonical case is
 	// `/usr/libexec/sshd-session`: admins SSH in, run a script from
 	// /tmp/ AND/OR curl a tool, leave; both chains match the rule's
@@ -62,7 +62,7 @@ type SuspiciousExec struct {
 	// a compromised SSH credential follows the same chain shape on
 	// either arm, so allowlisting sshd-session reduces noise but also
 	// blinds the rule to those attacker patterns from that parent.
-	// Empty by default — operators opt in via
+	// Empty by default - operators opt in via
 	// EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST for fleets where the noise
 	// reduction matters more than the residual attacker coverage. On
 	// servers where interactive SSH is unusual, leaving this empty is
@@ -72,7 +72,7 @@ type SuspiciousExec struct {
 
 func (r *SuspiciousExec) ID() string { return "suspicious_exec" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1059
+// Techniques returns the MITRE ATT&CK IDs this rule covers - T1059
 // (Command and Scripting Interpreter) + T1105 (Ingress Tool Transfer).
 func (r *SuspiciousExec) Techniques() []string {
 	return []string{"T1059", "T1105"}
@@ -88,7 +88,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 			"1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)\n" +
 			"2. non-shell parent → shell child → outbound network_connect\n\n" +
 			"The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the " +
-			"shell's exec. That makes it race-immune across the agent's flush boundaries — a chain that completes " +
+			"shell's exec. That makes it race-immune across the agent's flush boundaries - a chain that completes " +
 			"in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor " +
 			"chain has already been ingested by the time the trigger event lands.\n\n" +
 			"30 seconds is the temporal cap between the shell exec and the trigger event.",
@@ -100,7 +100,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		},
 		Limitations: []string{
 			"30s window is hard-coded; long-tail post-shell activity is missed by design.",
-			"Allowlisting a parent silences BOTH arms of the rule for that parent — the trade-off is documented on AllowedNonShellParents.",
+			"Allowlisting a parent silences BOTH arms of the rule for that parent - the trade-off is documented on AllowedNonShellParents.",
 		},
 		Config: []api.ConfigKnob{
 			{
@@ -125,7 +125,7 @@ const (
 )
 
 // execPayload is the subset of exec event payload fields needed for detection. Args carries argv so the rule can detect shebang-shell
-// execs where the kernel resolves `#!/bin/sh` to /bin/sh and the actual script path lives in argv[1] — the rule must consider those
+// execs where the kernel resolves `#!/bin/sh` to /bin/sh and the actual script path lives in argv[1] - the rule must consider those
 // temp-path execs even though the exec event's `path` field is /bin/sh, not /tmp/whatever.
 type execPayload struct {
 	PID  int      `json:"pid"`
@@ -135,7 +135,7 @@ type execPayload struct {
 }
 
 // networkConnectPayload is the subset of network_connect event fields needed for detection. PID identifies the process making the
-// connection — the rule walks UP from there looking for a shell ancestor with a non-shell parent.
+// connection - the rule walks UP from there looking for a shell ancestor with a non-shell parent.
 type networkConnectPayload struct {
 	PID           int    `json:"pid"`
 	Direction     string `json:"direction"`
@@ -146,7 +146,7 @@ type networkConnectPayload struct {
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	// Two-pass evaluation. Pass 1 handles temp-exec triggers (preferred); Pass 2 handles outbound network_connect triggers as a fallback.
 	// Splitting the passes preserves the original rule's "prefer the path-based finding when both signals exist for the same shell"
-	// semantics — which would otherwise be order-dependent on event arrival within a single pass.
+	// semantics - which would otherwise be order-dependent on event arrival within a single pass.
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
 
@@ -206,7 +206,7 @@ func findShellExecEventID(events []api.Event, hostID string, shellPID int, exclu
 }
 
 // evalExec inspects a single exec event. Returns (finding, shellPID, err) on a match. The shellPID is the PID of the attributed shell
-// ancestor — the caller uses it for batch-level dedupe so multiple temp-exec children of one shell produce one finding rather than one
+// ancestor - the caller uses it for batch-level dedupe so multiple temp-exec children of one shell produce one finding rather than one
 // per child.
 func (r *SuspiciousExec) evalExec(
 	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
@@ -220,7 +220,7 @@ func (r *SuspiciousExec) evalExec(
 		return nil, 0, nil
 	}
 
-	// We need the temp-exec process record either way — for the finding's
+	// We need the temp-exec process record either way - for the finding's
 	// ProcessID link, and (in the arm-2 case) to walk its re-exec chain.
 	tempProc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
@@ -241,7 +241,7 @@ func (r *SuspiciousExec) evalExec(
 }
 
 // execMatchInputs bundles the per-event evaluation state shared by both exec arms. Sonar's go:S107 caps function signatures at 7
-// parameters; passing these through individually pushed both arms over the limit. Bundling reads cleaner anyway — every field below is
+// parameters; passing these through individually pushed both arms over the limit. Bundling reads cleaner anyway - every field below is
 // "inputs about this single exec event" and they always travel together.
 type execMatchInputs struct {
 	evt       api.Event
@@ -377,14 +377,14 @@ func (r *SuspiciousExec) evalNetwork(
 // findShellWithNonShellAncestor walks the PPID chain inclusively starting at
 // startPID looking for a shell process whose own parent is non-shell. Returns
 // the matched shell and its non-shell parent. The parent return value is nil
-// only when the shell's parent is launchd (PPID <= 1) — that still counts as
+// only when the shell's parent is launchd (PPID <= 1) - that still counts as
 // a match because launchd is structurally non-shell. PPID > 1 with a missing
-// parent record means "ancestry incomplete, defer rather than fire" — this
+// parent record means "ancestry incomplete, defer rather than fire" - this
 // keeps the rule from alerting on partial data and, in particular, keeps the
 // AllowedNonShellParents allowlist effective when the entry-point process
 // hasn't been materialised yet.
 //
-// The walk is "inclusive" — startPID itself is the first candidate. Callers
+// The walk is "inclusive" - startPID itself is the first candidate. Callers
 // that pass the temp-exec's own PID get the trivial first-iteration skip
 // (temp-binary fails shellPaths) and the walk proceeds to the actual
 // candidate parent on the next step.
@@ -414,12 +414,12 @@ func (r *SuspiciousExec) findShellWithNonShellAncestor(
 // examineCandidate is the per-step decision for findShellWithNonShellAncestor.
 // It returns one of three terminal shapes:
 //
-//   - (shell, parent, nil, nil) — match: `current` is a shell whose own
+//   - (shell, parent, nil, nil) - match: `current` is a shell whose own
 //     parent is non-shell (parent==nil means "shell parented at launchd",
 //     which counts as a match).
-//   - (nil, nil, advance, nil) — keep walking; `advance` is the next
+//   - (nil, nil, advance, nil) - keep walking; `advance` is the next
 //     ancestor to examine.
-//   - (nil, nil, nil, nil) — terminate without a match: ran out of
+//   - (nil, nil, nil, nil) - terminate without a match: ran out of
 //     ancestry (PPID<=1 with no shell yet) or the parent record is
 //     missing (defer rather than alert on incomplete data).
 //
@@ -474,8 +474,8 @@ func (r *SuspiciousExec) lookupAncestor(
 }
 
 // shellWithinWindow reports whether the trigger event's timestamp falls within the 30-second window after the shell's exec. Anchored
-// on the shell's exec_time_ns when set (preferred — that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
-// (defensive — should always be set for a fully-materialised process).
+// on the shell's exec_time_ns when set (preferred - that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
+// (defensive - should always be set for a fully-materialised process).
 func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	anchor := shell.ForkTimeNs
 	if shell.ExecTimeNs != nil {
@@ -510,7 +510,7 @@ func (r *SuspiciousExec) makeExecFinding(
 }
 
 // parentAllowed reports whether the given non-shell parent process is on the operator's allowlist. A nil parent (shell parented at
-// launchd, or parent not yet materialised) never matches — those are the cases the rule must continue to flag because there's no
+// launchd, or parent not yet materialised) never matches - those are the cases the rule must continue to flag because there's no
 // human-attested entry point.
 func (r *SuspiciousExec) parentAllowed(parent *api.Process) bool {
 	if r.AllowedNonShellParents == nil || parent == nil {
@@ -559,7 +559,7 @@ func suspiciousTempPath(p execPayload) (string, bool) {
 	for i := 1; i < len(p.Args); i++ {
 		a := p.Args[i]
 		if a == "-c" {
-			// `sh -c <command>` — argv[i+1] is a command string, not a
+			// `sh -c <command>` - argv[i+1] is a command string, not a
 			// script path. This argv shape is not a shebang invocation.
 			return "", false
 		}

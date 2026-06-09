@@ -229,7 +229,7 @@ func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ServerURL = srv.URL
-	// TokenFn present but returns "" — the unenrolled-agent shape the spec scenario describes.
+	// TokenFn present but returns "" - the unenrolled-agent shape the spec scenario describes.
 	cfg.TokenFn = func() string { return "" }
 	cfg.MaxRetries = 3
 
@@ -620,7 +620,7 @@ func TestUpload_413_SingleEventDrops_MetricAndAudit(t *testing.T) {
 
 // TestUpload_413NotMistakenForGeneric4xx pins the quarantine-budget contract: a 413 must NOT consume the
 // ClientErrorQuarantineThreshold counter (a 413 is a size signal, not a malformed-event signal). The complementary
-// assertion — generic 4xx (e.g. 400) must NOT trigger the events_dropped_too_large counter — is also pinned here so
+// assertion - generic 4xx (e.g. 400) must NOT trigger the events_dropped_too_large counter - is also pinned here so
 // both error-classification regressions are caught by one test.
 //
 // Setup: one event in the queue, server always returns 400 (not 413). After one drainOnce:

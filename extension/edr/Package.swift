@@ -53,7 +53,7 @@ let package = Package(
                 // NotificationListener / BlockNotification pull in AppKit-only UI surfaces (NSAlert,
                 // NSApplication) that belong in the production host-app bundle, not in the EDRExtensionLogic
                 // library whose role is to expose pure-logic types for XCTest. SwiftPM CAN link AppKit on a
-                // .macOS target — the exclusion is library-hygiene (no UI deps, no top-level code), not a
+                // .macOS target - the exclusion is library-hygiene (no UI deps, no top-level code), not a
                 // SwiftPM linker limitation. edr/ExtensionManagerLogic.swift IS in the source list below
                 // (pure-logic types only, no top-level code) so host-app-extension-manager spec scenarios
                 // are unit-testable.

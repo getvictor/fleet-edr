@@ -130,7 +130,7 @@ func TestStore_InsertEvents_ClosedDBReturnsError(t *testing.T) {
 //     in that budget, the goroutine returns the wrapped 1213 and the test fails loudly rather than silently dropping
 //     events.
 //   - The events table's final cardinality equals the count of distinct event_ids across all batches (not the SUM of
-//     batch lengths). This pins both the dedup semantic AND the "no spurious deletes / rollbacks" property — a buggy
+//     batch lengths). This pins both the dedup semantic AND the "no spurious deletes / rollbacks" property - a buggy
 //     concurrent path that lost rows would show up as a low cardinality count here.
 //
 // The architectural property being pinned is the spec's "Multiple replicas of the ingestion service MUST be able to
@@ -359,7 +359,7 @@ func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
 	const fiveMinutes int64 = 5 * 60 * 1_000_000_000
 
 	now := int64(1_000_000_000_000_000) // fixed nanosecond clock so the math is auditable
-	oldFork := now - tenHours           // forked 10h ago — would normally be reconciled
+	oldFork := now - tenHours           // forked 10h ago - would normally be reconciled
 	freshLastSeen := now - fiveMinutes  // heartbeated 5min ago
 
 	_, err := s.InsertProcess(ctx, api.Process{
@@ -436,7 +436,7 @@ func TestStore_ReconcileStaleProcesses_ClosesStaleLiveRow_NoRegression(t *testin
 		HostID: "h-live-stale", PID: 3, PPID: 0, Path: "/bin/forgotten",
 		ForkTimeNs: oldFork, ExecTimeNs: &oldFork,
 		IsSnapshot: false,
-		// LastSeenNs: nil — live rows never bump this column.
+		// LastSeenNs: nil - live rows never bump this column.
 	})
 	require.NoError(t, err)
 

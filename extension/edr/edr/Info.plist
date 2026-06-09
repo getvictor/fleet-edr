@@ -21,7 +21,7 @@
 	    enable-filter / disable-filter etc.) which run, print, and
 	    exit. LSUIElement gives us both: AppKit can show UI when we
 	    ask it to, and the app stays invisible in the Dock and Cmd-
-	    Tab switcher otherwise. LSBackgroundOnly was the wrong key —
+	    Tab switcher otherwise. LSBackgroundOnly was the wrong key -
 	    it would have silently suppressed NSAlert presentation on
 	    every block, as Copilot flagged on PR #157.
 	-->

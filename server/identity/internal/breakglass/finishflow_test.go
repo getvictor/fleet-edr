@@ -31,8 +31,8 @@ import (
 
 // fakeWebAuthnEngine satisfies breakglass.WebAuthnEngine without
 // performing real cryptography. Used so service-level tests can
-// drive the full FinishSetup / FinishLogin happy path — including
-// the atomic redemption transaction and post-commit session mint —
+// drive the full FinishSetup / FinishLogin happy path - including
+// the atomic redemption transaction and post-commit session mint -
 // without standing up a virtual authenticator.
 //
 // Returned values:
@@ -162,7 +162,7 @@ func newFakeService(t *testing.T) (
 }
 
 // fakeAttestation returns a non-nil *ParsedCredentialCreationData. The fake CreateCredential ignores its contents, so this is
-// deliberately minimal — enough to satisfy the type system and the handler's "attestation present" guard.
+// deliberately minimal - enough to satisfy the type system and the handler's "attestation present" guard.
 func fakeAttestation() *protocol.ParsedCredentialCreationData {
 	return &protocol.ParsedCredentialCreationData{}
 }
@@ -228,7 +228,7 @@ func TestService_FinishSetup_HappyPath(t *testing.T) {
 	assert.ErrorIs(t, err, breakglass.ErrTokenConsumed)
 }
 
-// FinishSetup with a too-short password rejects with ErrPasswordTooShort BEFORE touching the WebAuthn engine — the validator runs
+// FinishSetup with a too-short password rejects with ErrPasswordTooShort BEFORE touching the WebAuthn engine - the validator runs
 // first per the implementation contract.
 func TestService_FinishSetup_PasswordTooShort(t *testing.T) {
 	t.Parallel()
@@ -384,7 +384,7 @@ func TestService_FinishLogin_BadAssertion(t *testing.T) {
 }
 
 // FinishLogin sign_count regression: ValidateLogin succeeds (the authenticator returned a valid assertion) but the new sign_count is
-// <= the stored sign_count. RecordAssertion rejects with ErrCredentialClonedDetected — the central security signal of WebAuthn §6.1.1.
+// <= the stored sign_count. RecordAssertion rejects with ErrCredentialClonedDetected - the central security signal of WebAuthn §6.1.1.
 func TestService_FinishLogin_SignCountRegression(t *testing.T) {
 	t.Parallel()
 	svc, db, _, uid, fake := newFakeService(t)
@@ -459,7 +459,7 @@ func TestHandle_FullSetup_Success(t *testing.T) {
 	plaintext, _, err := breakglass.NewTokenStore(db).IssueSetup(t.Context(), uid, time.Hour)
 	require.NoError(t, err)
 
-	// 1. POST the challenge — challenge issuance lives on a dedicated POST (the GET is a redirect to /ui/...) so the React UI can fetch
+	// 1. POST the challenge - challenge issuance lives on a dedicated POST (the GET is a redirect to /ui/...) so the React UI can fetch
 	// it after the GET landed. Sets the signed challenge cookie.
 	resp1, err := srv.Client().Post(srv.URL+"/admin/break-glass/setup/challenge?token="+plaintext,
 		"application/json", nil)
@@ -668,7 +668,7 @@ func TestHandle_FullLogin_GenericError_LogsAtWarn(t *testing.T) {
 	require.NotNil(t, challengeCookie)
 
 	// Construct a parseable WebAuthn assertion. The fields just need to satisfy protocol.ParseCredentialRequestResponseBytes' shape
-	// checks (base64url-decodable clientDataJSON with valid JSON, authenticatorData ≥ 37 bytes, base64url-decodable signature) — the fake
+	// checks (base64url-decodable clientDataJSON with valid JSON, authenticatorData ≥ 37 bytes, base64url-decodable signature) - the fake
 	// ValidateLogin pre-set above rejects this regardless of content, so we skip the full ceremony.
 	clientDataJSON, err := json.Marshal(map[string]any{
 		"type":      "webauthn.get",

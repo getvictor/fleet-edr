@@ -212,7 +212,7 @@ func (u *Uploader) drainBatch(ctx context.Context) (int, error) {
 //  2. 401 (clientError with statusCode=401): leave queued (OnAuthFail has been signalled by doUpload), return the error.
 //  3. 413 (requestEntityTooLargeError) with len(batch) > 1: bisect the batch and recurse on each half. Halves that deliver are
 //     marked uploaded as part of their own recursive call; halves that still 413 recurse until single-event leaves.
-//  4. 413 (requestEntityTooLargeError) with len(batch) == 1: drop the event — MarkUploaded so the queue stops surfacing it, emit
+//  4. 413 (requestEntityTooLargeError) with len(batch) == 1: drop the event - MarkUploaded so the queue stops surfacing it, emit
 //     a WARN log with the event id, and increment the events_dropped_too_large counter. Per the spec, 413 does NOT
 //     consume the quarantine budget because the recovery shape differs (size signal, not "malformed event" signal).
 //  5. Other 4xx: route through recordClientErrorAndAudit (the existing #253 quarantine path).
@@ -447,7 +447,7 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 
 	if resp.StatusCode == http.StatusUnauthorized && u.cfg.OnAuthFail != nil {
 		// Surface the 401 to the enrollment package so it can re-enroll. We fall through to the 4xx branch below,
-		// so this fires at most once per drain tick (not per retry — clientError is non-retryable). The callback is itself
+		// so this fires at most once per drain tick (not per retry - clientError is non-retryable). The callback is itself
 		// rate-limited, so repeated drain ticks while the token is stale are safe.
 		u.cfg.OnAuthFail(ctx)
 	}

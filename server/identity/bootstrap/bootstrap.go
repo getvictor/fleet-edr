@@ -220,7 +220,7 @@ type breakglassDeps struct {
 }
 
 // buildBreakglass constructs the break-glass Service + Handler. Returns (nil, nil, nil) when the deployment opted out (no RP ID + OIDC
-// enabled). Returns an error when the operator partially configured the surface — same pattern as the OIDC gate.
+// enabled). Returns an error when the operator partially configured the surface - same pattern as the OIDC gate.
 func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handler, error) {
 	bg := in.deps.Breakglass
 	rpID := bg.RPID
@@ -238,7 +238,7 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 			"identity bootstrap: EDR_BREAKGLASS_RP_ORIGINS set without EDR_BREAKGLASS_RP_ID")
 	}
 	if rpID == "" {
-		// OIDC is configured but break-glass is not — operator opted out. Routes will not be mounted AND the seed flow will not issue
+		// OIDC is configured but break-glass is not - operator opted out. Routes will not be mounted AND the seed flow will not issue
 		// bootstrap tokens (cmd/main short-circuits when BreakglassService() returns nil). The operator can later opt in by setting
 		// EDR_BREAKGLASS_RP_ID; the seed step on the next boot will then issue a token.
 		return nil, nil, nil
@@ -303,7 +303,7 @@ type oidcHandlerDeps struct {
 }
 
 // buildOIDCHandler constructs the OIDC handler when the deployment supplied OIDC config. Returns (nil, nil) for break-glass-only
-// deployments — the route registration step skips it. Returns an error when the OIDC discovery / verifier setup fails so cmd/main
+// deployments - the route registration step skips it. Returns an error when the OIDC discovery / verifier setup fails so cmd/main
 // refuses to start with an explicit error rather than silently falling back.
 func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, error) {
 	if in.deps.OIDC.Issuer == "" {
@@ -412,7 +412,7 @@ func (i *Identity) BreakglassService() *breakglass.Service {
 // around the React UI's break-glass subroutes (/ui/admin/break-glass
 // and /ui/admin/break-glass/setup). Without this gate, an off-allowlist
 // caller could load the React shell at those paths even though the
-// API endpoints behind them 404 — defeating the path-concealment
+// API endpoints behind them 404 - defeating the path-concealment
 // promise the breakglass.Handler comment makes for /admin/break-glass.
 //
 // Returns a passthrough middleware (no-op) when the deployment opted

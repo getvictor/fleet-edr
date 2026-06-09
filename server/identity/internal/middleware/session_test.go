@@ -22,7 +22,7 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newService returns a ready-to-use api.Service backed by a fresh test DB. A stub users row (id=1, 7, 42 — anything tests reference)
+// newService returns a ready-to-use api.Service backed by a fresh test DB. A stub users row (id=1, 7, 42 - anything tests reference)
 // is inserted first so the FK sessions.user_id -> users(id) constraint doesn't reject session inserts that the tests below mint via
 // the sessions store directly.
 func newService(t *testing.T) (api.Service, *sessions.Store) {

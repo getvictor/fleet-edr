@@ -35,7 +35,7 @@ interface TopNavProps {
 
 // authMethodLabel turns the wire-shape AuthMethod ("oidc" /
 // "local_password") into operator-friendly copy. break-glass is the
-// only case worth surfacing — an OIDC session is the default and
+// only case worth surfacing - an OIDC session is the default and
 // doesn't need a badge.
 function authMethodLabel(authMethod?: string): string | null {
   if (authMethod === "local_password") return "Break-glass";

@@ -44,7 +44,7 @@ type PrivilegeLaunchdPlistWrite struct {
 
 func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_plist_write" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1543.004
+// Techniques returns the MITRE ATT&CK IDs this rule covers - T1543.004
 // (Boot or Logon Autostart Execution → Launch Daemon).
 func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1543.004"} }
 

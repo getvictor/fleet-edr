@@ -78,7 +78,7 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		ClientID: opts.ClientID,
 		Now: func() time.Time {
 			// Backdate the verifier's clock by the tolerance so a token whose Expiry just passed (within the window) still
-			// verifies. iat/nbf checks read the same Now, so a future-dated token within the window also passes — both
+			// verifies. iat/nbf checks read the same Now, so a future-dated token within the window also passes - both
 			// directions of the tolerance covered by a single offset.
 			return time.Now().Add(-clockSkewTolerance)
 		},
@@ -117,7 +117,7 @@ func (c *Client) AuthURL(state, nonce, codeChallenge string) string {
 
 // Claims is the per-flow subset of ID-token claims the JIT provisioner reads. Subject is the stable per-user identifier (always
 // present per OIDC spec). Email is best-effort; some IdPs require an extra scope. EmailVerified mirrors the IdP's email_verified claim
-// — true when the IdP attests the address is owned by the subject, false when the IdP says it is not, nil when the IdP omitted the
+// - true when the IdP attests the address is owned by the subject, false when the IdP says it is not, nil when the IdP omitted the
 // claim entirely. Name is whatever the IdP populates as preferred display (preferred_username falls through to name when present).
 type Claims struct {
 	Subject       string
@@ -146,7 +146,7 @@ func (c *Claims) EmailTrusted() bool {
 //
 // codeVerifier is the PKCE secret the login handler stashed in the
 // state cookie. expectedNonce is the nonce from the same cookie.
-// Mismatches at either field are hard errors — the verifier's
+// Mismatches at either field are hard errors - the verifier's
 // existing checks combined with this nonce comparison eliminate
 // replay + injection vectors that would otherwise let an attacker
 // substitute a token from a different flow.

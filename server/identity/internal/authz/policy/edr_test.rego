@@ -137,7 +137,7 @@ test_host_scope_only_denied_with_distinct_reason if {
 
 # When BOTH a deployment-wide binding AND a host-scope binding exist
 # and the deployment-wide one would grant, the deployment grant wins
-# — the scope_not_yet_supported branch must NOT fire and shadow it.
+# - the scope_not_yet_supported branch must NOT fire and shadow it.
 
 test_global_grant_wins_over_host_scope_deny if {
 	d := authz.decision with input as {
@@ -252,7 +252,7 @@ test_analyst_isolate_host_says_no_matching_rule_not_reauth if {
 }
 
 # Reads + non-destructive lifecycle actions are NOT reauth-gated even
-# when the actor's session is stale — the freshness window applies
+# when the actor's session is stale - the freshness window applies
 # only to the destructive set.
 
 test_admin_read_host_unaffected_by_stale_session if {

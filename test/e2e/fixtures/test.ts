@@ -6,7 +6,7 @@
 //
 // Specs that build their own browser contexts via
 // `browser.newContext().newPage()` (most of tests/qa/*.spec.ts) get
-// captured only for the FIRST page in each test — page.coverage is
+// captured only for the FIRST page in each test - page.coverage is
 // per-page, and the fixture only wraps the default `page`. Those
 // specs primarily drive page.request anyway (no UI lines to cover),
 // so the gap is operationally small; if it grows, the right fix is
@@ -46,7 +46,7 @@ async function dumpCoverage(page: Page, testId: string): Promise<void> {
     return;
   }
   await mkdir(COVERAGE_DIR, { recursive: true });
-  // randomUUID() rather than Math.random — the filename only needs to
+  // randomUUID() rather than Math.random - the filename only needs to
   // be unique across concurrent test executions, but Math.random
   // trips Sonar's typescript:S2245 (pseudorandom for security-
   // sensitive use); crypto-grade randomness is the right primitive

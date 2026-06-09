@@ -7,7 +7,7 @@ import { applyAppControlSubmitError } from "./dialogErrors";
 import "./ApplicationControl.scss";
 
 // ConfirmActionModal asks the operator to type a reason before a destructive or visible action goes through. Used by the
-// disable/enable toggle + delete button on the rules table — both endpoints require a reason on the wire for the audit row, so a
+// disable/enable toggle + delete button on the rules table - both endpoints require a reason on the wire for the audit row, so a
 // confirmation dialog is the right UX rather than a one-click action. The shared shape keeps the dialog vocabulary uniform
 // across actions; per-action labels + button copy are passed in.
 interface ConfirmActionModalProps {
@@ -15,7 +15,7 @@ interface ConfirmActionModalProps {
   readonly title: string;
   readonly description: React.ReactNode;
   readonly confirmLabel: string;
-  // confirmVariant controls the Save button's color — `alert` for delete (red), `primary` for non-destructive confirmations.
+  // confirmVariant controls the Save button's color - `alert` for delete (red), `primary` for non-destructive confirmations.
   readonly confirmVariant?: "primary" | "alert";
   readonly reasonPlaceholder?: string;
   readonly onClose: () => void;
@@ -78,7 +78,7 @@ export function ConfirmActionModal({
       // staying open here lets a multi-step parent flow render an in-place success state if it wants.
     } catch (err) {
       if (applyAppControlSubmitError(err, setFormError, errorMessageByCode, "Action failed.")) {
-        return; // ReauthRequiredError — useReauthRetry's modal handles the rest.
+        return; // ReauthRequiredError - useReauthRetry's modal handles the rest.
       }
     } finally {
       setBusy(false);

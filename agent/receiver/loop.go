@@ -1,8 +1,8 @@
 // Package receiver: Loop owns the reconnect/backoff/heartbeat machinery that
 // drives a single XPC service's connection lifecycle. It depends on the
 // Connector interface (production: *Receiver, tests: a stub) so the loop
-// semantics — exponential backoff, post-success reset, heartbeat-driven
-// reconnect, clean shutdown — can be exercised without standing up a real
+// semantics - exponential backoff, post-success reset, heartbeat-driven
+// reconnect, clean shutdown - can be exercised without standing up a real
 // Mach service. The agent main wires one Loop per service (ESF + network
 // extension) plus a Dispatcher so outbound application_control pushes can
 // route to whichever connector is currently active.

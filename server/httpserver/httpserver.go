@@ -39,7 +39,7 @@ type Options struct {
 	// ServiceName is the operation name passed to otelhttp.NewHandler; used in the span name prefix.
 	ServiceName string
 	// SlowThreshold upgrades access-log lines to warn when the handler took longer than this. Zero uses the default (defaultSlowThreshold
-	// = 500ms). A negative value disables the upgrade entirely — Build leaves negatives untouched and accessLog's `slowThreshold > 0` gate
+	// = 500ms). A negative value disables the upgrade entirely - Build leaves negatives untouched and accessLog's `slowThreshold > 0` gate
 	// then short-circuits.
 	SlowThreshold time.Duration
 	// TLSEnabled toggles the HSTS response header. Only set this true when the server actually speaks TLS; emitting HSTS over plain HTTP

@@ -78,7 +78,7 @@ func TestLoad(t *testing.T) {
 				t.Helper()
 				assert.Equal(t, "root@tcp(127.0.0.1:3306)/edr?parseTime=true", c.DSN)
 				assert.Equal(t, "enroll-me", c.EnrollSecret)
-				assert.True(t, c.TLSEnabled(), "TLS must always be enabled — no plaintext-HTTP mode (issue #140)")
+				assert.True(t, c.TLSEnabled(), "TLS must always be enabled - no plaintext-HTTP mode (issue #140)")
 				assert.Equal(t, ":8088", c.ListenAddr)
 				assert.Equal(t, "info", c.LogLevel)
 				assert.Equal(t, "json", c.LogFormat)
@@ -304,7 +304,7 @@ func TestLoad(t *testing.T) {
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
 				assert.Nil(t, c.TrustedProxies,
-					"unset env keeps the secure default — XFF ignored, peer IP used")
+					"unset env keeps the secure default - XFF ignored, peer IP used")
 			},
 		},
 		{
@@ -691,7 +691,7 @@ func TestLoad_AuditEnvKnobs(t *testing.T) {
 
 // TestLoad_TLSCertFailFast pins the fail-fast behaviour added in response to a CodeRabbit review on PR #182: bad cert paths
 // must surface during config.Load, before any caller mutates DB state (schema apply, admin seeding). Without this, a typoed
-// EDR_TLS_CERT_FILE used to escape Config validation and only failed inside configureTLS — long after the first-boot admin
+// EDR_TLS_CERT_FILE used to escape Config validation and only failed inside configureTLS - long after the first-boot admin
 // password had been printed to the log.
 func TestLoad_TLSCertFailFast(t *testing.T) {
 	certFile, keyFile := writeTestCert(t)

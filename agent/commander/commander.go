@@ -241,7 +241,7 @@ func (c *Commander) executeSetApplicationControl(ctx context.Context, cmd comman
 		return
 	}
 
-	// The send is async — completing the command here does NOT mean the extension has successfully applied the snapshot. The demo cut
+	// The send is async - completing the command here does NOT mean the extension has successfully applied the snapshot. The demo cut
 	// intentionally stops short of an extension-side ack; the audit trail of "command completed on agent" is sufficient for now. A future
 	// revision can add a round-trip ack with the actually-applied version.
 	result, _ := json.Marshal(map[string]any{
@@ -356,7 +356,7 @@ func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string
 	_, _ = io.ReadAll(resp.Body)
 
 	// Surface 401 to the enrollment package here too. fetchPending already does this on its poll loop, but a revoked token can show up
-	// between a fetch and the following ack/complete PUT — without this call, recovery waits until the next poll tick.
+	// between a fetch and the following ack/complete PUT - without this call, recovery waits until the next poll tick.
 	if resp.StatusCode == http.StatusUnauthorized && c.cfg.OnAuthFail != nil {
 		c.cfg.OnAuthFail(ctx)
 	}

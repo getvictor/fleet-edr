@@ -461,7 +461,7 @@ paths:
         Agents call this with `status=acked` once they pick up a command
         and with `status=completed` or `status=failed` once they finish.
         The handler enforces that the command belongs to the authenticated
-        host — agent A cannot touch agent B's commands.
+        host - agent A cannot touch agent B's commands.
       security:
         - HostToken: []
       parameters:

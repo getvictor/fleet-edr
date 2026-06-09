@@ -45,7 +45,7 @@ Detects two related chain shapes that share a single attribution chain:
 1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)
 2. non-shell parent → shell child → outbound network_connect
 
-The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries — a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
+The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries - a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
 30 seconds is the temporal cap between the shell exec and the trigger event.
 
@@ -63,7 +63,7 @@ The rule fires on the LAST link of the chain (the temp-exec or the network_conne
 ### Limitations
 
 - 30s window is hard-coded; long-tail post-shell activity is missed by design.
-- Allowlisting a parent silences BOTH arms of the rule for that parent — the trade-off is documented on AllowedNonShellParents.
+- Allowlisting a parent silences BOTH arms of the rule for that parent - the trade-off is documented on AllowedNonShellParents.
 
 ## persistence_launchagent
 
@@ -96,7 +96,7 @@ Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plis
 
 ### Limitations
 
-- Does not cover `launchctl bootout` or `launchctl unload` — those undo persistence rather than create it.
+- Does not cover `launchctl bootout` or `launchctl unload` - those undo persistence rather than create it.
 - Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.
 
 ## dyld_insert
@@ -113,19 +113,19 @@ Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shel
 
 ### Description
 
-Detects the classic macOS code-injection primitive: launching a process with `DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into the new process before main(). The rule fires on the leading argv slot only — `VAR=value /path/to/bin` shell form, or `env VAR=value /path/to/bin` — so substring noise (curl POST data, echo, etc.) does not false-positive.
+Detects the classic macOS code-injection primitive: launching a process with `DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into the new process before main(). The rule fires on the leading argv slot only - `VAR=value /path/to/bin` shell form, or `env VAR=value /path/to/bin` - so substring noise (curl POST data, echo, etc.) does not false-positive.
 
 The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw event payload for responders.
 
 ### Known false-positive sources
 
 - Local development of code that itself uses DYLD_INSERT_LIBRARIES (rare; usually scoped to non-managed dev hosts).
-- Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch — investigate why an admin script is setting these vars at all.
+- Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch - investigate why an admin script is setting these vars at all.
 
 ### Limitations
 
 - Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.
-- DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched — higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.
+- DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched - higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.
 
 ## shell_from_office
 
@@ -169,25 +169,25 @@ Critical-severity catch on the canonical macOS commodity-dropper chain: osascrip
 
 ### Description
 
-Fires on the LAST link of the chain — an exec from a temp directory whose process tree has both an osascript ancestor and a curl/wget sibling within the osascript's 30-second descendant window. This shape is the recognisable signature of macOS commodity malware staged via AppleScript.
+Fires on the LAST link of the chain - an exec from a temp directory whose process tree has both an osascript ancestor and a curl/wget sibling within the osascript's 30-second descendant window. This shape is the recognisable signature of macOS commodity malware staged via AppleScript.
 
 Reverse-direction triggering is deliberate: by the time the temp-exec event lands, the entire ancestor chain has already been ingested and materialised by earlier batches, so the rule is race-immune. Forward triggering (fire on the osascript exec, look for descendants) misses chains that complete across an agent flush boundary.
 
-The rule requires both halves of the chain to be present, so download-only or temp-exec-only flows do not fire here — those overlap with suspicious_exec.
+The rule requires both halves of the chain to be present, so download-only or temp-exec-only flows do not fire here - those overlap with suspicious_exec.
 
 ### Known false-positive sources
 
-- Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript — extremely rare in managed fleets.
+- Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript - extremely rare in managed fleets.
 
 ### Limitations
 
 - 30-second descendant window is hard-coded; longer-running chains are missed by design.
-- Does not cover Python URL fetches or AppleScript built-in URL access — only flags the explicit curl/wget shape.
+- Does not cover Python URL fetches or AppleScript built-in URL access - only flags the explicit curl/wget shape.
 
 ## credential_keychain_dump
 
 **Keychain dump (security dump-keychain)**  
-Flags exec of /usr/bin/security dump-keychain — the canonical macOS Keychain export command.
+Flags exec of /usr/bin/security dump-keychain - the canonical macOS Keychain export command.
 
 | | |
 | --- | --- |
@@ -209,7 +209,7 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 ### Limitations
 
 - Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.
-- Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w) — left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.
+- Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w) - left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.
 
 ## privilege_launchd_plist_write
 
@@ -265,7 +265,7 @@ Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in 
 
 Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of `/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as root.
 
-Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries — the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.
+Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries - the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.
 
 `visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the rule does not see them at all.
 

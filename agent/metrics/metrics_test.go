@@ -74,7 +74,7 @@ func TestNilRecorder_QueueDropped_Safe(t *testing.T) {
 
 // TestNew exercises the production constructor that wires the global OTel meter, covering the path that the agent main package takes
 // at startup. We can't inspect the resulting counter through the global meter without leaking state across tests, so we just verify
-// the Recorder is shaped correctly and that recording against it does not panic — the no-op SDK swallows the sample when no OTLP
+// the Recorder is shaped correctly and that recording against it does not panic - the no-op SDK swallows the sample when no OTLP
 // endpoint is configured.
 func TestNew(t *testing.T) {
 	r := New(nil)
@@ -103,7 +103,7 @@ func (f *fakeDepthSource) Depth(_ context.Context) (int64, error) {
 //
 // Pins the counter-name + nil-safe + n<=0 no-op contract on the agent's events_dropped_too_large counter. Mirrors the
 // TestRecorder_QueueDropped shape: a ManualReader-backed meter so the collect cycle is synchronous, then sum the data
-// points by the documented attribute set (none for this counter — host identity rides on the OTLP resource).
+// points by the documented attribute set (none for this counter - host identity rides on the OTLP resource).
 func TestRecorder_EventsDroppedTooLarge(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -178,7 +178,7 @@ func TestRecorder_QueueDepthGauge(t *testing.T) {
 	}
 	assert.Equal(t, int64(42), observed)
 
-	// Update the source and collect again — the gauge tracks the live value, not a snapshot at registration.
+	// Update the source and collect again - the gauge tracks the live value, not a snapshot at registration.
 	src.depth = 7
 	require.NoError(t, reader.Collect(ctx, &rm))
 	for _, sm := range rm.ScopeMetrics {

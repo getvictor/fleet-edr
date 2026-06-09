@@ -57,7 +57,7 @@ MAY have an empty technique list.
 The system SHALL treat the tuple (source, host id, rule id, process id) as the alert dedup key, where
 `source` is `detection` for catalog-rule findings and `application_control` for application-control blocks.
 Including `source` in the dedup key prevents a collision when a catalog rule and an application-control rule
-happen to share an identifier — two distinct findings on the same process never collapse into one alert row.
+happen to share an identifier - two distinct findings on the same process never collapse into one alert row.
 Re-evaluating the same catalog rule against the same process on the same host in a later batch MUST NOT
 create a second alert row; the existing alert remains the single record for that finding. A subsequent
 `application_control_block` event for the same `(source, host, rule, process)` tuple MUST NOT create a

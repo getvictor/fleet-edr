@@ -278,11 +278,11 @@ and the EDR agent only.
 - `extension/edr/extension/XPCServer.swift` line 187 (the single
   call site of `xpc_connection_set_peer_code_signing_requirement`).
 - `extension/edr/Package.swift` (`platforms: [.macOS(.v13)]`).
-- `openspec/specs/extension-xpc-server/spec.md` — Requirement
+- `openspec/specs/extension-xpc-server/spec.md` - Requirement
   "Peer code-signing validation" and the four scenarios that pin
   the contract from the spec side.
 - `extension/edr/Tests/EDRExtensionLogicTests/XPCServerLogicTests.swift`
-  — the four `peer-code-signing-validation/*` tests that assert
+  - the four `peer-code-signing-validation/*` tests that assert
   the requirement strings include the Apple anchor + team ID and
   that the production string excludes the cdhash clause.
 - ADR-0002 "macOS Apple Silicon MVP only" (the macOS 13+ target

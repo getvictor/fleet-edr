@@ -25,22 +25,22 @@ var forbiddenAuditSQL = regexp.MustCompile(
 // for developers who bypass the hook with --no-verify.
 //
 // The check is intentionally tolerant of:
-//   - test files (*_test.go) — fixtures may insert + truncate to set
+//   - test files (*_test.go) - fixtures may insert + truncate to set
 //     up scenarios; no production caller does.
-//   - vendor/, tmp/, ui/node_modules/ — third-party / scratch.
-//   - the schema DDL itself — `CREATE TABLE audit_events` ships in
+//   - vendor/, tmp/, ui/node_modules/ - third-party / scratch.
+//   - the schema DDL itself - `CREATE TABLE audit_events` ships in
 //     server/identity/bootstrap/schema.go and the regex deliberately
 //     does not match CREATE.
 //
 // The audit package itself is NOT excluded (per PR #120 review,
 // Copilot + CodeRabbit): the regex is UPDATE/DELETE-specific so the
 // legitimate INSERT in mysql.go does not trip, and policing the
-// package is the point — that's the most likely regression site.
+// package is the point - that's the most likely regression site.
 //
 // A future archival job (wave-2 retention) would land in its own
 // package and need an explicit exception added to the allowed-list,
 // at which point the rule's intent is the discussion the change
-// invites — exactly the code-review signal the spec wanted.
+// invites - exactly the code-review signal the spec wanted.
 // spec:server-identity-audit-log/append-only-persistence/no-code-path-updates-an-audit-row
 func TestAuditEventsAppendOnly(t *testing.T) {
 	t.Parallel()
@@ -99,7 +99,7 @@ func shouldScanFile(path string) bool {
 // trips the forbidden regex, or "" if it does not. Read-only.
 func fileForbiddenMatch(path string) (string, error) {
 	// path is fully under the repo root (we walk from there) and the
-	// lint is read-only — no file-inclusion risk.
+	// lint is read-only - no file-inclusion risk.
 	data, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return "", err

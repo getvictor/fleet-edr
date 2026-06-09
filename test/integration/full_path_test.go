@@ -178,7 +178,7 @@ func stepHeartbeatRecorded(t *testing.T, stack *Stack, hostID string) {
 	t.Helper()
 	// /api/commands doubles as heartbeat in production: response calls detection.api.Service.RecordHostSeen on every poll. The
 	// agent_polls_commands step above triggered it. Use Eventually (rather than asserting once) because the heartbeat write happens via
-	// a closure invoked from the response handler — there's no in-process synchronisation guaranteeing it lands before the HTTP reply,
+	// a closure invoked from the response handler - there's no in-process synchronisation guaranteeing it lands before the HTTP reply,
 	// so a single-shot assertion can race.
 	require.Eventually(t, func() bool {
 		hosts, err := stack.DetectionService().ListHosts(t.Context())

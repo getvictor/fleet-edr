@@ -1017,7 +1017,7 @@ func TestAppControl_BulkUpsertRules_BadItemRejectsBatch(t *testing.T) {
 
 // TestAppControl_BulkUpsertRules_EmptyBatchRejected covers the empty-input guard. An empty Items slice is operator confusion
 // (paste with no content); reject as ErrAppControlInvalidRequest so the REST handler returns 400 instead of silently no-op'ing.
-// Both shapes pinned: a nil slice AND an empty non-nil slice (CodeRabbit on PR #190 — Go treats them differently for some
+// Both shapes pinned: a nil slice AND an empty non-nil slice (CodeRabbit on PR #190 - Go treats them differently for some
 // reflection paths, so locking both keeps the contract honest).
 func TestAppControl_BulkUpsertRules_EmptyBatchRejected(t *testing.T) {
 	t.Parallel()

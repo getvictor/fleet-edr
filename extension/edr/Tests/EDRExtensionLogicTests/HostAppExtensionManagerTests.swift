@@ -49,7 +49,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         // Re-activation expands to the same intent list as first-time activation; the difference is
         // OS-side. When the same bundle id is already registered, OSSystemExtensionManager invokes the
         // `request(_:actionForReplacingExtension:withExtension:)` delegate callback to ask "drop the old
-        // copy?" — main.swift returns `.replace`, so the running extensions are swapped for the on-disk
+        // copy?" - main.swift returns `.replace`, so the running extensions are swapped for the on-disk
         // copy without a deactivate-then-activate round trip. The replace policy is a single value pinned
         // in main.swift; this test pins the intent shape (same as first-time) and notes the replacement
         // policy lives there.
@@ -174,7 +174,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         // shape is what this test pins: a FilterConfigIntent + DNSProxyConfigIntent with isEnabled=true
         // and the documented provider configuration. When the host comes back up, the OS reloads these
         // preferences, sees isEnabled=true, and reattaches the extensions to the kernel's filter + DNS-
-        // proxy plumbing — at which point event capture resumes without operator action. The OS-side
+        // proxy plumbing - at which point event capture resumes without operator action. The OS-side
         // restore is verified at the system / VM rehearsal layer.
         XCTAssertTrue(activateFilterConfig.isEnabled,
                       "the saved content-filter preference must be isEnabled=true so macOS restores the filter on reboot")

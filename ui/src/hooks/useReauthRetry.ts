@@ -1,9 +1,9 @@
-// useReauthRetry — reauth retry wrapper. Wraps an async
+// useReauthRetry - reauth retry wrapper. Wraps an async
 // mutation; on ReauthRequiredError, opens a per-flow reauth prompt
 // (rendered by the caller via the returned `modal` props) and
 // retries the original call once the operator completes the
 // challenge. Cancellation surfaces the original gate-deny so the
-// mutation's onError fires (rather than silently succeeding) — the
+// mutation's onError fires (rather than silently succeeding) - the
 // operator deserves to know the action didn't land.
 //
 // Challenge-level single-flight: a flurry of clicks while the modal
@@ -79,7 +79,7 @@ export function useReauthRetry<A extends readonly unknown[], R>(
       if (!ok) {
         // Operator cancelled. Surface the original deny so the
         // mutation's onError sees the failure rather than a silent
-        // no-op — the action genuinely didn't land.
+        // no-op - the action genuinely didn't land.
         throw err;
       }
       return await fn(...args);

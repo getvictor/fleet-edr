@@ -3,7 +3,7 @@
 ## Purpose
 
 The host app is the small command-line entry point that installers, MDM scripts, and operators use to bring the EDR's
-on-device components into and out of an active state. It owns no telemetry, no policy, and no network — it exists
+on-device components into and out of an active state. It owns no telemetry, no policy, and no network - it exists
 purely to drive Apple's system-extension activation flow, the Network Extension content-filter configuration, and the
 DNS proxy configuration. Without it, the system extension and network extension are inert binaries on disk; with it,
 they are registered with the operating system, surfaced in System Settings for user approval, and bound to the

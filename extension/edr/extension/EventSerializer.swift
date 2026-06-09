@@ -99,7 +99,7 @@ struct ExecPayload: Codable, Sendable {
         try container.encodeIfPresent(codeSigning, forKey: .codeSigning)
         try container.encodeIfPresent(sha256, forKey: .sha256)
         try container.encodeIfPresent(cdhash, forKey: .cdhash)
-        // Only emit snapshot when true — keeps the live-exec wire shape stable
+        // Only emit snapshot when true - keeps the live-exec wire shape stable
         // and avoids tripping the server detection-engine bytes.Contains gate
         // on a `"snapshot":false` payload (false events would correctly be
         // kept by the JSON probe, but we want zero wire change for live exec).

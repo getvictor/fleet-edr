@@ -12,7 +12,7 @@ import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
 
 // "offline" is last_seen > 5 min old. The agent polls every 5 s, so 5 min
-// is 60× the polling interval — well past any transient network blip but
+// is 60× the polling interval - well past any transient network blip but
 // fast enough that a crashed agent shows up quickly in the UI.
 const OFFLINE_THRESHOLD_MINUTES = 5;
 const offlineThresholdMs = OFFLINE_THRESHOLD_MINUTES * MILLISECONDS_PER_MINUTE;

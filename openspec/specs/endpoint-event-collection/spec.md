@@ -5,7 +5,7 @@
 Endpoint event collection is the on-device telemetry source for the Fleet EDR product. It captures the security-relevant
 operating-system activity that downstream detection rules, the process-tree UI, and incident-response workflows depend on:
 process lifecycle (exec / fork / exit / open), outbound and inbound network flows attributed to the originating process,
-and DNS queries with their resolved answers. Without this layer there is no signal — every other component in the system
+and DNS queries with their resolved answers. Without this layer there is no signal - every other component in the system
 is consuming or relaying what this capability emits.
 
 The behavior described here is the contract agents and the server depend on. It defines what events appear, what fields
@@ -99,7 +99,7 @@ flows on the basis of capture; capture is observation-only.
 - **WHEN** a process initiates an outbound TCP connection to a remote endpoint
 - **THEN** the system emits a `network_connect` event whose payload identifies the source PID, the source binary path,
   the effective UID, the protocol (`tcp` or `udp`), the direction (`outbound`), the remote address, the remote port, the
-  local address, the local port, and — when the system can derive it from the flow — the remote hostname
+  local address, the local port, and - when the system can derive it from the flow - the remote hostname
 - **AND** the flow is allowed to proceed unmodified
 
 ### Requirement: DNS query capture

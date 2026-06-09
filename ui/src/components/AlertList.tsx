@@ -89,7 +89,7 @@ export function AlertList() {
   // operator gets an inline reauth prompt (modal) and the original
   // call retries on success. Other status transitions (acknowledge,
   // reopen, resolve on lower severities) pass through the same
-  // wrapper unchanged — useReauthRetry is a no-op until the chokepoint
+  // wrapper unchanged - useReauthRetry is a no-op until the chokepoint
   // throws ReauthRequiredError.
   const updateStatus = useCallback(
     async (alertId: number, newStatus: string) => updateAlertStatus(alertId, newStatus),
@@ -101,7 +101,7 @@ export function AlertList() {
     callUpdateStatus(alertId, newStatus)
       .then(() => { setAlerts((prev) => applyStatus(prev, alertId, newStatus)); })
       .catch((err: unknown) => {
-        // Operator cancelled reauth — no real failure to report. The
+        // Operator cancelled reauth - no real failure to report. The
         // hook rethrows the original gate-deny so onError fires; we
         // silence it because the action genuinely never ran and the
         // UI's pre-click state is the right resting place.
@@ -180,7 +180,7 @@ export function AlertList() {
                 </td>
                 <td className="alert-source">{formatSource(a.source)}</td>
                 <td>
-                  {/* Title is the primary alert pivot — it opens the host's
+                  {/* Title is the primary alert pivot - it opens the host's
                       process tree pinned to the moment the alert fired, with
                       the alert breadcrumb visible. The "what does this rule
                       do" link to /ui/rules/<id> lives inside that breadcrumb,

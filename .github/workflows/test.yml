@@ -21,7 +21,7 @@ name: Tests
 # Failsafe: every dependent job's `if:` evaluates `needs.changes.result !=
 # 'success' || <relevant flag>`. If the `changes` job itself flakes (e.g.
 # transient gh API failure), test jobs run unconditionally rather than
-# skipping — without the failsafe, a flaky gate would let a PR merge with
+# skipping - without the failsafe, a flaky gate would let a PR merge with
 # no test execution because skipped required checks are treated as success.
 
 on:
@@ -106,7 +106,7 @@ jobs:
   # agent-test runs on macos-latest because the agent's CGo receiver links
   # -framework Foundation with no darwin build tag, so it won't build on
   # ubuntu. server-test runs on ubuntu-latest with a mysql service container
-  # — server/ has zero darwin build tags so the platform is free, and ubuntu
+  # - server/ has zero darwin build tags so the platform is free, and ubuntu
   # is ~10x cheaper minutes plus skips the 45s brew-install MySQL step.
   # Coverage is collected here (not re-run in the Sonar job) to avoid
   # duplicate Go test runs.
@@ -205,7 +205,7 @@ jobs:
       # Raise MySQL's max_connections above the 151 default. With t.Parallel() across the
       # integration suite (issue #172) and `go test -p` fanning out one process per package,
       # peak in-flight connections crosses 200. Setting via SQL avoids needing a custom image
-      # or a mounted my.cnf — the service container has no volume mount in GHA.
+      # or a mounted my.cnf - the service container has no volume mount in GHA.
       - name: Raise MySQL max_connections
         run: |
           mysql -h 127.0.0.1 -P 3306 -u root -e "SET GLOBAL max_connections = 500"
@@ -277,8 +277,8 @@ jobs:
   # End-to-end Playwright coverage. Boots an instrumented (`go build
   # -cover`) server binary against mysql + dex, runs the full
   # Playwright suite across five phases (each with its own env so
-  # the env-specific QA sections — A.6 allowlist, A.7 rate limit,
-  # B.3 JIT off, E.1+E.4+E.5 session lifecycle — actually exercise
+  # the env-specific QA sections - A.6 allowlist, A.7 rate limit,
+  # B.3 JIT off, E.1+E.4+E.5 session lifecycle - actually exercise
   # their server-side gates), drains GOCOVERDIR via `go tool covdata
   # textfmt` into coverage-server-e2e.out, and merges per-test V8
   # coverage payloads into test/e2e/coverage/lcov-e2e.info via
@@ -312,7 +312,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # No top-level env block — scripts/test-e2e-coverage.sh sets the
+    # No top-level env block - scripts/test-e2e-coverage.sh sets the
     # full EDR_* env explicitly per phase (COMMON_ENV array + phase
     # overrides) so each server boot exercises exactly the env that
     # phase's specs assert against. Anything declared here would
@@ -411,7 +411,7 @@ jobs:
     # job still runs when one of the upstream test jobs was *skipped* (e.g.
     # a Go-only PR that skipped ui-test). The explicit `!= 'failure'` checks
     # preserve the prior behavior of "don't run Sonar on top of a failing
-    # test" — the test failure already blocks merge on its own.
+    # test" - the test failure already blocks merge on its own.
     #
     # Dependabot-triggered PR runs cannot access Actions secrets (deliberate
     # GitHub policy: prevents a compromised upstream action from stealing
@@ -442,7 +442,7 @@ jobs:
       # running. Skipped producers (UI-only PR skips Go tests, etc.) don't
       # publish artifacts, so an unconditional download would 404. Sonar
       # tolerates missing inputs and reports 0% for whichever language
-      # didn't run — but since the gate evaluates new-code coverage only,
+      # didn't run - but since the gate evaluates new-code coverage only,
       # a PR that didn't touch that language has no new lines to cover.
       - name: Download agent coverage
         if: needs.agent-test.result == 'success'
@@ -557,7 +557,7 @@ jobs:
           path: test/e2e/coverage
 
       # The vitest LCOV from the `ui-test` job. SonarCloud was already reading this artifact (sonar.javascript.lcov.reportPaths
-      # picks it up), but codecov had no upload step for it — so PRs that only added vitest tests showed near-zero UI patch
+      # picks it up), but codecov had no upload step for it - so PRs that only added vitest tests showed near-zero UI patch
       # coverage to codecov even when Sonar saw the lines as covered. Uploading under the same `ui` flag the Playwright LCOV
       # uses; codecov takes the union of LCOVs per flag so the two cover-paths (unit + E2E) merge cleanly.
       - name: Download UI vitest coverage
@@ -597,7 +597,7 @@ jobs:
       # E2E coverage uploads: same `server` flag merges this profile
       # with the unit-test server coverage (Codecov takes the union
       # per flag). The UI E2E LCOV uploads under a separate `ui` flag
-      # because no vitest tests exist yet — when they land they'll
+      # because no vitest tests exist yet - when they land they'll
       # upload to the same flag and the union still holds.
       - name: Upload server E2E coverage
         if: needs.e2e-test.result == 'success'

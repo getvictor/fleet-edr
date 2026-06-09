@@ -8,7 +8,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// sensitive target paths for content changes (ADR-0008, #301). It is separate from the primary ESFSubscriber client for one
 /// hard ESF reason: target-path mute *inversion* (`es_invert_muting`) is client-global, and `AUTH_EXEC`'s "target" is the
 /// executable being launched. Inverting target-path muting to "observe only /etc/sudoers*" on a client that also handles
-/// `AUTH_EXEC` would filter exec authorization (and Application Control) by that same path list — breaking enforcement. So the
+/// `AUTH_EXEC` would filter exec authorization (and Application Control) by that same path list - breaking enforcement. So the
 /// inversion lives here, on a client with NO auth subscriptions (exactly what `es_invert_muting`'s documentation requires),
 /// and the primary client keeps unfiltered exec authorization.
 ///
@@ -55,7 +55,7 @@ final class FileTamperSubscriber: Sendable {
         // documented prerequisite for inverting target-path muting); then mute the watched paths; then invert so the muted
         // set becomes the ONLY observed set.
         es_unmute_all_target_paths(client)
-        // A mute failure leaves that target unobserved after inversion (a silent coverage gap), so treat it as fatal —
+        // A mute failure leaves that target unobserved after inversion (a silent coverage gap), so treat it as fatal -
         // consistent with the invert + subscribe failures below. The watched set is a fixed list of valid absolute paths,
         // so a failure here means a misconfigured client, not a bad path.
         Self.watchedTargets.forEach { target in
@@ -77,7 +77,7 @@ final class FileTamperSubscriber: Sendable {
             logger.error("file-tamper subscribe failed")
             exit(EXIT_FAILURE)
         }
-        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers* — CREATE/WRITE only")
+        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers* - CREATE/WRITE only")
     }
 
     func stop() {

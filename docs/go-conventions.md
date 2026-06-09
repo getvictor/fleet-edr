@@ -206,7 +206,7 @@ import (
 
 ## Naming conventions
 
-- **Receiver variables**: short names — `s` for Store, `h` for Handler, `b` for Builder, `q` for Query.
+- **Receiver variables**: short names - `s` for Store, `h` for Handler, `b` for Builder, `q` for Query.
 - **Avoid numbers in names**: use descriptive names like `configReqWithBadSignature` not `configReq3`.
 - **Use `any`** instead of `interface{}`.
 - **Line wrap** at 150 characters including comments.

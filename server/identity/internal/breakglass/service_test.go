@@ -279,7 +279,7 @@ func TestNewService_DefaultLogger(t *testing.T) {
 		Credentials: breakglass.NewCredentialStore(db),
 		Sessions:    sessions.New(db, sessions.Options{}),
 		WebAuthn:    wa,
-		// Logger left nil — must default.
+		// Logger left nil - must default.
 	})
 	require.NotNil(t, svc)
 }

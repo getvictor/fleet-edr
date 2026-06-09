@@ -117,7 +117,7 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 			logAttrHostID, existing.HostID, "edr.token_file", opts.TokenFile)
 		return p, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard fail — the operator needs to
+		// A file that exists but can't be loaded (bad perms, corrupted, wrong schema) is a hard fail - the operator needs to
 		// take action. Silent fallback to enroll would leave a stale token on disk.
 		return nil, fmt.Errorf("load token file %q: %w", opts.TokenFile, err)
 	}
@@ -125,7 +125,7 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 	// First boot: need EDR_ENROLL_SECRET to call /api/enroll.
 	if opts.EnrollSecret == "" {
 		return nil, fmt.Errorf(
-			"no token file at %q and EDR_ENROLL_SECRET is not set — cannot bootstrap",
+			"no token file at %q and EDR_ENROLL_SECRET is not set - cannot bootstrap",
 			opts.TokenFile,
 		)
 	}
@@ -206,7 +206,7 @@ func (p *provider) Rotate(ctx context.Context, newToken string) error {
 
 // OnUnauthorized is called by the uploader/commander when the server returns 401. We throttle to at most one attempt per minute so
 // a misconfigured server doesn't get spammed. If the operator started the agent from a persisted token without EDR_ENROLL_SECRET,
-// re-enroll cannot succeed — log a loud error and skip so we don't spin through pointless throttled attempts.
+// re-enroll cannot succeed - log a loud error and skip so we don't spin through pointless throttled attempts.
 func (p *provider) OnUnauthorized(ctx context.Context) {
 	p.reenrollMu.Lock()
 	defer p.reenrollMu.Unlock()
@@ -300,7 +300,7 @@ func (p *provider) enroll(ctx context.Context) error {
 }
 
 // httpClient builds an http.Client that honours the fingerprint-pinning + insecure toggles. We clone http.DefaultTransport so we
-// inherit the stdlib's dial/idle/keep-alive timeouts and ProxyFromEnvironment support — a bare &http.Transport{} loses those, which in
+// inherit the stdlib's dial/idle/keep-alive timeouts and ProxyFromEnvironment support - a bare &http.Transport{} loses those, which in
 // turn loses HTTPS_PROXY support and can leak connections under load.
 func (p *provider) httpClient() (*http.Client, error) {
 	tlsCfg, err := BuildTLSConfig(p.opts.AllowInsecure, p.opts.ServerFingerprint, p.logger)
@@ -317,13 +317,13 @@ func (p *provider) httpClient() (*http.Client, error) {
 
 // BuildTLSConfig returns a *tls.Config that honours the agent's AllowInsecure +
 // ServerFingerprint settings. Exposed so the uploader + commander HTTP clients in main.go
-// can share the exact same TLS policy as the enrollment client — without this, the
+// can share the exact same TLS policy as the enrollment client - without this, the
 // enrollment round-trip succeeds against a self-signed cert but every subsequent request
 // fails with "x509: certificate signed by unknown authority" because DefaultTransport
 // doesn't know about the opt-in.
 //
 // Fingerprint pinning always takes precedence over AllowInsecure. When both are set, the
-// pinning verifier still runs — AllowInsecure alone is only the no-fingerprint dev shortcut.
+// pinning verifier still runs - AllowInsecure alone is only the no-fingerprint dev shortcut.
 // This matches the operator intuition that fingerprint pinning is the *stronger* guarantee.
 func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.Logger) (*tls.Config, error) {
 	if logger == nil {
@@ -369,7 +369,7 @@ func BuildTLSConfig(allowInsecure bool, serverFingerprint string, logger *slog.L
 // --- persistence ---
 
 // loadPersisted reads + validates the on-disk token. Mode must be 0600; the file must round-trip through our plist schema. Any
-// deviation is a hard error rather than silent recovery — the operator needs to either delete the file or fix its perms.
+// deviation is a hard error rather than silent recovery - the operator needs to either delete the file or fix its perms.
 func loadPersisted(path string) (*Persisted, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -382,7 +382,7 @@ func loadPersisted(path string) (*Persisted, error) {
 	if err != nil {
 		return nil, err
 	}
-	// We write plist XML via marshalMinimalPlist; parse that back here. JSON fallback is intentionally not attempted — a malformed file is
+	// We write plist XML via marshalMinimalPlist; parse that back here. JSON fallback is intentionally not attempted - a malformed file is
 	// an operator signal, not something to heuristically recover.
 	p, perr := parseMinimalPlist(buf)
 	if perr != nil {
@@ -397,7 +397,7 @@ func loadPersisted(path string) (*Persisted, error) {
 // writePersisted atomically writes the token file with mode 0600.
 //
 // We remove any stale .new file before opening with O_EXCL so the temp file is always a fresh
-// inode at 0600 — O_TRUNC on an attacker-preseeded .new with broader permissions would briefly
+// inode at 0600 - O_TRUNC on an attacker-preseeded .new with broader permissions would briefly
 // leak the token. fsync on the file forces data to disk; APFS + ext4-default make the rename
 // itself durable, but strict POSIX requires fsyncing the parent directory too. We don't do
 // that here because macOS doesn't expose a reliable cross-volume directory fsync and the MVP

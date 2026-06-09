@@ -42,7 +42,7 @@
 	    KeepAlive=false: the agent re-spawns the process on demand
 	    via the Mach service binding. A crashed host app stays down
 	    until the next AUTH_EXEC denial, which is the desired
-	    behaviour — we don't want a CPU-burning crashloop on the
+	    behaviour - we don't want a CPU-burning crashloop on the
 	    user's desktop. The next denial spawns a fresh instance.
 	-->
 	<key>KeepAlive</key>
@@ -58,7 +58,7 @@
 	    queryable via `log show --predicate 'subsystem == "com.fleetdm.edr"'`.
 	    A shared file path under /tmp would race across users on a
 	    multi-user install (the first user's launchd creates the file
-	    with permissions that lock out later sessions) — caught by
+	    with permissions that lock out later sessions) - caught by
 	    Gemini + Copilot on PR #157.
 
 	    Packaging note: the dist/pkg path does NOT yet copy this

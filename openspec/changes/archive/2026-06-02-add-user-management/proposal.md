@@ -2,7 +2,7 @@
 
 Today every authenticated operator is functionally a super-admin: there is one seeded local
 account, no roles, no permissions, no SSO, and no audit log. The seed flow prints a
-generated password to stderr on first boot — fine for a laptop demo, untenable for the pilot
+generated password to stderr on first boot - fine for a laptop demo, untenable for the pilot
 deployments on the MVP roadmap and unworkable against the security-console competitive set
 (CrowdStrike Falcon, SentinelOne Singularity, Microsoft Defender for Endpoint), all of which
 ship SSO + RBAC + audit as table stakes. The product needs an identity boundary that an
@@ -67,7 +67,7 @@ against the requirements pinned by this change).
 
 ### New Capabilities
 
-- `server-identity-authentication`: Server-side authentication flows — Okta OIDC discovery,
+- `server-identity-authentication`: Server-side authentication flows - Okta OIDC discovery,
   authorize / callback, JIT provisioning, identity model (`users` ↔ `identities`),
   break-glass bootstrap token + WebAuthn registration, ongoing break-glass login at a
   separate path with IP allowlist + tighter rate limits, and the session augmentations

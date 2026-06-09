@@ -63,7 +63,7 @@ func New(w io.Writer, opts Options) (*slog.Logger, error) {
 		name = "fleet-edr"
 	}
 	// otelslog.NewHandler reads the global LoggerProvider. When OTel is disabled this becomes a cheap no-op emitter. Upstream's Enabled()
-	// always returns true, so we wrap it in a level filter that matches the stderr handler — otherwise DEBUG and INFO records would be
+	// always returns true, so we wrap it in a level filter that matches the stderr handler - otherwise DEBUG and INFO records would be
 	// exported to OTLP even when the configured level is WARN or ERROR.
 	otelHandler := slog.Handler(&levelFilter{level: lvl, next: otelslog.NewHandler(name)})
 
@@ -89,7 +89,7 @@ func parseLevel(s string) (slog.Level, error) {
 }
 
 // levelFilter drops records below the configured level before they reach the wrapped handler. Applied to the otelslog bridge because
-// its own Enabled() always returns true — without this filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN
+// its own Enabled() always returns true - without this filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN
 // or ERROR.
 type levelFilter struct {
 	level slog.Level

@@ -5,7 +5,7 @@
 
 // Phase A close-out gates CERTIFICATE and PATH behind the same "coming soon" flag the AddRuleModal renders. inference still
 // returns those values when the shape matches so the operator sees that the row would map to a not-yet-supported type and can
-// switch to BINARY (for a 64-hex) or omit the row (for a PATH) — instead of the row being silently rejected by the server.
+// switch to BINARY (for a 64-hex) or omit the row (for a PATH) - instead of the row being silently rejected by the server.
 const RULE_TYPE_CDHASH = "CDHASH";
 const RULE_TYPE_BINARY = "BINARY";
 const RULE_TYPE_TEAMID = "TEAMID";

@@ -24,7 +24,7 @@ import (
 //
 // Documented set on the enroll handler (per server/endpoint/internal/enroll/handler.go):
 //
-//	(200, "")                    success — Service.Enroll returned a token
+//	(200, "")                    success - Service.Enroll returned a token
 //	(400, "bad_body")            body parse failure OR missing required field
 //	(400, "hardware_uuid_invalid") Service returned api.ErrInvalidHardwareUUID
 //	(401, "secret_mismatch")     Service returned api.ErrInvalidSecret
@@ -45,7 +45,7 @@ import (
 //
 //	"Use Go's native go test -fuzz for untrusted input parsing including event JSON, policy diff, and agent HTTP bodies"
 //
-// This closes the "agent HTTP bodies" row for the enroll surface — the other public agent body path.
+// This closes the "agent HTTP bodies" row for the enroll surface - the other public agent body path.
 func FuzzEnrollBody(f *testing.F) {
 	seedEnrollCorpus(f)
 
@@ -149,7 +149,7 @@ func assertEnrollErrBody(t *testing.T, body, respBody []byte, status int, allowe
 // The Service stub returns success on every call; per-error-mapping branches are covered by handler_test.go's table
 // tests, not by the fuzz.
 //
-// The limiter is set to a huge per-minute rate so 429s don't accumulate across iterations — but the iteration order +
+// The limiter is set to a huge per-minute rate so 429s don't accumulate across iterations - but the iteration order +
 // the limiter's internal token-bucket state still mean the very first few iterations can drain the burst; the fuzz
 // must tolerate 429s with the proper envelope (assertEnrollOutputContract handles that case explicitly).
 //
@@ -179,7 +179,7 @@ func seedEnrollCorpus(f *testing.F) {
 
 	// Happy-path-shape bodies. All required fields populated; the stub returns success.
 	f.Add([]byte(`{"enroll_secret":"s","hardware_uuid":"93DFC6F5-763D-5075-B305-8AC145D12F96","hostname":"h","os_version":"o","agent_version":"v"}`))
-	// Empty secret — all-fields-required gate rejects with bad_body before Service.Enroll is called.
+	// Empty secret - all-fields-required gate rejects with bad_body before Service.Enroll is called.
 	f.Add([]byte(`{"enroll_secret":"","hardware_uuid":"u","hostname":"h","os_version":"o","agent_version":"v"}`))
 
 	// bad_body shapes.

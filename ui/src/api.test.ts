@@ -3,7 +3,7 @@ import { listAlerts, setForbiddenHandler, ReauthRequiredError } from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
 // suite mocks api.listAlerts directly via vi.spyOn, so the real
-// query-string building inside listAlerts never runs there — and
+// query-string building inside listAlerts never runs there - and
 // the new ?source= branch added in step 9 was the only line in
 // api.ts not covered by other tests. These tests exercise the
 // real listAlerts against a stubbed global fetch so the source

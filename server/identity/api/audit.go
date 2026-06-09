@@ -131,7 +131,7 @@ type AuditRecorder interface {
 //
 // ctx contract: ctx is valid only for the synchronous part of Submit
 // (the channel send + a slog.WarnContext on overflow). Implementations
-// MUST NOT retain it for the eventual asynchronous DB write — the
+// MUST NOT retain it for the eventual asynchronous DB write - the
 // request-scoped ctx is cancelled the moment the handler returns,
 // and an INSERT under a cancelled ctx silently drops the row. Per the
 // AuditEvent doc: copy the trace_id (and any other ctx-derived fields)
@@ -154,7 +154,7 @@ type AsyncAuditWriter interface {
 //
 // ActionAuditRead is included in the read set semantically (it is a
 // read of audit history) but the chokepoint exempts it from sampling
-// — auditors need a record of who read the audit log, regardless of
+// - auditors need a record of who read the audit log, regardless of
 // the operator's read_sampling configuration.
 //
 // The default branch returns false for every non-read action; adding

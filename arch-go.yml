@@ -6,7 +6,7 @@ version: 1
 # Strict mode: bootstrap is for production wiring only. Per-context
 # internal code may NOT import its own context's bootstrap; tests reach
 # for the per-context testkit instead. Cross-context tests import only
-# **.<Y>.api or **.<Y>.testkit — never **.<Y>.bootstrap and never
+# **.<Y>.api or **.<Y>.testkit - never **.<Y>.bootstrap and never
 # **.<Y>.internal.**. testkit packages are pinned to their own context
 # so cross-context test allowances cannot be exploited as transitive
 # paths to other bounded contexts.
@@ -222,7 +222,7 @@ dependenciesRules:
   # Plan §"Platform packages": "Platform packages MUST NOT import any context."
   # An earlier revision encoded this as a deny-list (shouldNotDependsOn each
   # bounded context); Gemini's review on PR #100 pointed out that the
-  # deny-list is not future-proof — adding a sixth bounded context would
+  # deny-list is not future-proof - adding a sixth bounded context would
   # require updating every platform rule by hand. The allow-list form
   # (shouldOnlyDependsOn the explicit set of allowed internal-graph deps)
   # auto-excludes any new context: a future server/<new-context>/ package
@@ -230,7 +230,7 @@ dependenciesRules:
   #
   # The allow-list enumerates: every other platform package, the repo-level
   # internal/ tree (envparse + observability today), and stdlib/third-party
-  # imports (which arch-go's "internal:" key doesn't restrict — third-party
+  # imports (which arch-go's "internal:" key doesn't restrict - third-party
   # imports flow through automatically, no listing needed).
   #
   # Patterns use full module paths because `**.bootstrap` would otherwise
@@ -297,7 +297,7 @@ dependenciesRules:
   # Plan §"Architecture lint" prescribes "Allow only `cmd/**` and
   # `test/integration/**` to import any `bootstrap/` package."
   # arch-go v1.7.0 exposes only "depends-on" rule families
-  # (shouldOnlyDependsOn / shouldNotDependsOn) — not the inverse
+  # (shouldOnlyDependsOn / shouldNotDependsOn) - not the inverse
   # "shouldOnlyBeAccessedBy" the plan sketched against v2. The
   # invariant is enforced indirectly by the importer-perspective
   # rules already in this file:
