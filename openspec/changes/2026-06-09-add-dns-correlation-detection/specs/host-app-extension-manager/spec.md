@@ -1,4 +1,4 @@
-# Host-app extension manager — DNS proxy on by default delta
+# Host-app extension manager: DNS proxy on by default delta
 
 ## MODIFIED Requirements
 
@@ -6,10 +6,10 @@
 
 The host app SHALL provide an `activate` subcommand that submits an activation request for both the system extension
 (Endpoint Security) and the network extension, and on success enables both the network content filter AND the DNS proxy.
-Enabling the DNS proxy as part of `activate` makes the third telemetry stream (DNS) on by default, so a freshly activated
-host emits correlated exec, network, and DNS events without a separate opt-in step. The DNS proxy remains independently
-toggleable afterward via `disable-dns-proxy` / `enable-dns-proxy`. The user MAY be required to approve the extensions in
-System Settings; the subcommand MUST report when approval is pending.
+Enabling the DNS proxy as part of `activate` makes the third telemetry stream (DNS) on by default, so a freshly
+activated host emits correlated exec, network, and DNS events without a separate opt-in step. The DNS proxy remains
+independently toggleable afterward via `disable-dns-proxy` / `enable-dns-proxy`. The user MAY be required to approve the
+extensions in System Settings; the subcommand MUST report when approval is pending.
 
 #### Scenario: First-time activation on an unconfigured machine
 
