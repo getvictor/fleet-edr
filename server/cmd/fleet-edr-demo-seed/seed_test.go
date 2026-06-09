@@ -102,35 +102,34 @@ func TestEnvHelpers(t *testing.T) {
 	assert.Equal(t, time.Minute, envDuration(get(nil), "K", time.Minute))
 }
 
-func TestLoadScenarios(t *testing.T) {
-	scenarios, err := loadScenarios()
-	require.NoError(t, err)
-	require.Len(t, scenarios, len(corpusManifest))
-
-	byFile := map[string]demoScenario{}
-	hostIDs := map[string]bool{}
-	for _, sc := range scenarios {
-		require.NotNil(t, sc.Scenario, "scenario %s parsed", sc.File)
-		require.NotEmpty(t, sc.Scenario.Host.ID)
-		assert.False(t, hostIDs[sc.Scenario.Host.ID], "host id %s is unique across the corpus", sc.Scenario.Host.ID)
-		hostIDs[sc.Scenario.Host.ID] = true
-		byFile[sc.File] = sc
+// TestWovenAttacksLoadAndValidate confirms every attack woven into the host manifest parses + validates, that each kindAttack
+// names the rule it trips, that there is exactly one app-control attack (carrying an exec for the block to target), and that all
+// the demo's headline detections are represented across the hosts.
+func TestWovenAttacksLoadAndValidate(t *testing.T) {
+	t.Parallel()
+	rules := map[string]bool{}
+	appControls, total := 0, 0
+	for _, h := range hostManifest {
+		for _, atk := range h.Attacks {
+			sc, err := loadAttackScenario(atk.File)
+			require.NoErrorf(t, err, "attack %s loads + validates", atk.File)
+			total++
+			switch atk.Kind {
+			case kindAttack:
+				assert.NotEmptyf(t, atk.ExpectRule, "%s names the rule it trips", atk.File)
+				rules[atk.ExpectRule] = true
+			case kindAppControl:
+				appControls++
+				_, _, ok := firstExec(sc)
+				assert.Truef(t, ok, "app-control scenario %s has an exec the block targets", atk.File)
+			}
+		}
 	}
-
-	// Attack scenarios must name the catalog rule they trip.
-	for _, f := range []string{"keychain-dump.yaml", "sudoers-tamper.yaml", "launchagent-persistence.yaml"} {
-		sc, ok := byFile[f]
-		require.True(t, ok, "manifest includes %s", f)
-		assert.Equal(t, kindAttack, sc.Kind)
-		assert.NotEmpty(t, sc.ExpectRule)
+	assert.Positive(t, total, "at least one attack is woven")
+	assert.Equal(t, 1, appControls, "exactly one app-control attack across the hosts")
+	for _, want := range []string{"credential_keychain_dump", "dns_c2_beacon", "sudoers_tamper", "persistence_launchagent"} {
+		assert.Truef(t, rules[want], "detection %s is woven into a host", want)
 	}
-
-	// The app-control scenario must carry an exec the block event can target.
-	ac, ok := byFile["app-control-blocked-app.yaml"]
-	require.True(t, ok)
-	assert.Equal(t, kindAppControl, ac.Kind)
-	_, _, hasExec := firstExec(ac.Scenario)
-	assert.True(t, hasExec, "app-control scenario has an exec event")
 }
 
 func TestFirstExec(t *testing.T) {

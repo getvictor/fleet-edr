@@ -140,24 +140,38 @@ func runTestConfig(serverURL string) config {
 	}
 }
 
+// appControlTarget finds the app-control attack in the host manifest and returns the (captured host UUID, offset pid) the
+// fabricated block event will target, replicating the seeder's pid offset so a test can pre-materialise that process row.
+func appControlTarget(t *testing.T) (string, int) {
+	t.Helper()
+	for _, h := range hostManifest {
+		for i, atk := range h.Attacks {
+			if atk.Kind != kindAppControl {
+				continue
+			}
+			_, hostID, err := loadHostEnvelopes(h.File)
+			require.NoError(t, err)
+			sc, err := loadAttackScenario(atk.File)
+			require.NoError(t, err)
+			offsetScenarioPIDs(sc, attackPIDOffsetBase+i*attackPIDOffsetStride)
+			pid, _, ok := firstExec(sc)
+			require.True(t, ok, "app-control scenario %s has an exec", atk.File)
+			return hostID, pid
+		}
+	}
+	t.Fatal("no app-control attack in hostManifest")
+	return "", 0
+}
+
 func TestRunSeedsEndToEnd(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
 	insertRole(t, db, "senior_analyst")
 
-	// Find the app-control host/pid so we can pre-materialise the process its block event targets (the test server does not run
-	// the real processor, so waitForProcess + verify need their rows seeded directly).
-	scs, err := loadScenarios()
-	require.NoError(t, err)
-	var acHost string
-	var acPID int
-	for _, sc := range scs {
-		if sc.Kind == kindAppControl {
-			acHost = sc.Scenario.Host.ID
-			acPID, _, _ = firstExec(sc.Scenario)
-		}
-	}
-	require.NotEmpty(t, acHost)
+	// The app-control attack is woven onto a captured host with an offset pid, so the block event targets
+	// (capturedHostID, offsetPid). Replicate the seeder's offset to pre-materialise that process row (the test server does not
+	// run the real processor, so weaveAttack's waitForProcess + verify need their rows seeded directly).
+	acHost, acPID := appControlTarget(t)
 	insertProcess(t, db, acHost, acPID)
 	// A detection + an app-control alert so verify's predicate is satisfied. No keychain alert, so alreadySeeded stays false and
 	// the full replay path runs.
@@ -171,8 +185,8 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	s := newSeeder(runTestConfig(ts.URL), db, testHTTPClient(), discardLogger())
 	require.NoError(t, s.run(ctx))
 
-	assert.Equal(t, len(corpusManifest)+len(hostManifest), int(enrollCalls.Load()),
-		"every scenario host AND every rich captured host was enrolled")
+	assert.Equal(t, len(hostManifest), int(enrollCalls.Load()),
+		"every rich captured host was enrolled exactly once (woven attacks reuse the host token)")
 
 	var userCount int
 	require.NoError(t, db.QueryRowContext(ctx,

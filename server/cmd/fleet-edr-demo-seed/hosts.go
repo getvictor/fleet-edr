@@ -34,17 +34,46 @@ const recentTailOffset = time.Minute
 // default; 1 MiB is comfortably above any single captured envelope.
 const maxHostCorpusLineBytes = 1 << 20
 
-// demoHost is a rich, real-captured host: a deep process tree with correlated network_connect + dns_query, scrubbed from an
-// edr-qa capture. Distinct from the attack/noise YAML scenarios; these are the ambient activity a real busy Mac produces.
-type demoHost struct {
-	File     string // under corpus/hosts/
-	Hostname string
+// attackPIDOffsetBase and attackPIDOffsetStride keep a woven attack's pids from colliding with the captured host's pids (which
+// top out in the low five figures) or with another attack woven onto the same host. Each attack on a host is offset by
+// base + index*stride; launchd/kernel sentinels (<= 1) are preserved so the attack subtree still roots at pid 1.
+const (
+	attackPIDOffsetBase   = 5_000_000
+	attackPIDOffsetStride = 100_000
+	// attackStagger spaces successive woven attacks apart in time so each reads as a distinct event in the host's timeline.
+	attackStagger = 2 * time.Second
+)
+
+// wovenAttack is an attack scenario re-hosted onto a captured host: the same fakeagent YAML the efficacy corpus uses, but its
+// pids are offset and its host_id is overridden to the captured host so the detection fires inside real ambient activity.
+type wovenAttack struct {
+	File       string       // under corpus/
+	Kind       scenarioKind // kindAttack or kindAppControl
+	ExpectRule string       // the catalog rule this attack should trip (documentation; verify asserts the alert count)
 }
 
-// hostManifest is the ordered set of rich captured hosts. Order is replay order and the order they appear in the demo UI.
+// demoHost is a rich, real-captured host: a deep process tree with correlated network_connect + dns_query, scrubbed from an
+// edr-qa capture, with attacks woven in so the detections fire inside genuine ambient activity (the plan's "fewer hosts, attacks
+// in context"). Distinct from a stub 2-event attack host.
+type demoHost struct {
+	File     string // captured stream under corpus/hosts/
+	Hostname string
+	Attacks  []wovenAttack // attacks re-hosted onto this host
+}
+
+// hostManifest is the ordered set of rich captured hosts and the attacks woven onto each. Order is replay order and the order
+// hosts appear in the demo UI. Two real hosts cover all five detections: the engineer laptop carries credential theft + a DNS C2
+// beacon; the build server carries persistence, privilege escalation, and a blocked binary.
 var hostManifest = []demoHost{
-	{File: "alex-mbp.jsonl", Hostname: "alex-mbp.local"},
-	{File: "ci-builder.jsonl", Hostname: "ci-builder.local"},
+	{File: "alex-mbp.jsonl", Hostname: "alex-mbp.local", Attacks: []wovenAttack{
+		{File: "keychain-dump.yaml", Kind: kindAttack, ExpectRule: "credential_keychain_dump"},
+		{File: "dns-c2-beacon.yaml", Kind: kindAttack, ExpectRule: "dns_c2_beacon"},
+	}},
+	{File: "ci-builder.jsonl", Hostname: "ci-builder.local", Attacks: []wovenAttack{
+		{File: "sudoers-tamper.yaml", Kind: kindAttack, ExpectRule: "sudoers_tamper"},
+		{File: "launchagent-persistence.yaml", Kind: kindAttack, ExpectRule: "persistence_launchagent"},
+		{File: "app-control-blocked-app.yaml", Kind: kindAppControl},
+	}},
 }
 
 // loadHostEnvelopes parses a host's scrubbed JSONL capture into wire envelopes and returns them with the host_id they all carry.
@@ -125,5 +154,72 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 	}
 	s.logger.InfoContext(ctx, "replayed captured host",
 		"file", host.File, "host_id", hostID, "hostname", host.Hostname, "events", len(envs))
+
+	for i, atk := range host.Attacks {
+		if err := s.weaveAttack(ctx, hostID, token, atk, i); err != nil {
+			return fmt.Errorf("weave %s onto %s: %w", atk.File, host.File, err)
+		}
+	}
 	return nil
+}
+
+// weaveAttack re-hosts an attack scenario onto a captured host: it offsets the scenario's pids (so they can't collide with the
+// captured stream or another woven attack), overrides the host_id to the captured host, and posts the events at a recent,
+// per-attack-staggered time. For an app-control scenario it then posts the fabricated block event against the offset pid (after
+// the process materialises), exactly as the standalone path used to.
+func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wovenAttack, idx int) error {
+	sc, err := loadAttackScenario(atk.File)
+	if err != nil {
+		return err
+	}
+	offsetScenarioPIDs(sc, attackPIDOffsetBase+idx*attackPIDOffsetStride)
+
+	// Place the attack just before the captured tail, staggered per attack, so it reads as recent activity on the host.
+	atkStart := time.Now().Add(-recentTailOffset).Add(-time.Duration(idx+1) * attackStagger)
+	envs, err := sc.Envelopes(fakeagent.WithStartTime(atkStart), fakeagent.WithHostID(hostID))
+	if err != nil {
+		return fmt.Errorf("materialise %s: %w", atk.File, err)
+	}
+	if err := s.postEnvelopes(ctx, token, envs); err != nil {
+		return fmt.Errorf("post %s events: %w", atk.File, err)
+	}
+	s.logger.InfoContext(ctx, "wove attack onto host",
+		"file", atk.File, "host_id", hostID, "rule", atk.ExpectRule, "kind", string(atk.Kind), "events", len(envs))
+
+	if atk.Kind != kindAppControl {
+		return nil
+	}
+	pid, execPath, ok := firstExec(sc)
+	if !ok {
+		return fmt.Errorf("app-control scenario %s has no exec event", atk.File)
+	}
+	if err := s.waitForProcess(ctx, hostID, pid); err != nil {
+		return fmt.Errorf("app-control process pid %d never materialised: %w", pid, err)
+	}
+	// Stamp the block one second past the scenario start so it sits after the fork/exec; the scenario emits no exit, so the
+	// live process resolves at this timestamp.
+	blockTS := atkStart.Add(time.Second).UnixNano()
+	if err := s.postEnvelopes(ctx, token, []fakeagent.Envelope{buildBlockEnvelope(hostID, pid, execPath, blockTS)}); err != nil {
+		return fmt.Errorf("post application_control_block for %s: %w", atk.File, err)
+	}
+	s.logger.InfoContext(ctx, "posted application-control block", "host_id", hostID, "pid", pid, "path", execPath)
+	return nil
+}
+
+// offsetScenarioPIDs bumps every pid field in the scenario's timeline by offset, preserving kernel/launchd sentinels (values
+// <= 1) so the attack subtree still roots at pid 1. Mutates the scenario in place; callers pass a freshly loaded copy.
+func offsetScenarioPIDs(sc *fakeagent.Scenario, offset int) {
+	bump := func(p int) int {
+		if p > 1 {
+			return p + offset
+		}
+		return p
+	}
+	for i := range sc.Timeline {
+		ev := &sc.Timeline[i]
+		ev.PID = bump(ev.PID)
+		ev.PPID = bump(ev.PPID)
+		ev.ChildPID = bump(ev.ChildPID)
+		ev.ParentPID = bump(ev.ParentPID)
+	}
 }
