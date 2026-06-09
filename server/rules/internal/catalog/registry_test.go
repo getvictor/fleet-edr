@@ -15,8 +15,8 @@ import (
 // explicitly being added here. The slice this returns is the single source of truth used by the production server's main.go and the
 // docs generator (tools/gen-rule-docs); a silent drift between the two would mean operators see a different surface than the ATT&CK
 // coverage promises. The spec scenario "the engine reports its rule catalog" is satisfied by this test because it asserts the exact
-// ID list the spec enumerates. Note the spec lists the 8 catalog rules (suspicious_exec, shell_from_office, ...); the registry also
-// includes application_control_block which is operator-policy-driven, not part of the spec-named catalog set.
+// ID list the spec enumerates. Note the spec lists the 9 catalog rules (suspicious_exec, shell_from_office, ..., dns_c2_beacon); the
+// registry also includes application_control_block which is operator-policy-driven, not part of the spec-named catalog set.
 func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	t.Parallel()
 	got := New(api.RegistryOptions{})
@@ -30,6 +30,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
 		"application_control_block",
+		"dns_c2_beacon",
 	}
 	require.Len(t, got, len(wantIDs))
 	for i, want := range wantIDs {
@@ -117,9 +118,9 @@ func TestAll_DisabledRuleIDsFiltered(t *testing.T) {
 			disable: []string{
 				"suspicious_exec", "persistence_launchagent", "dyld_insert", "shell_from_office",
 				"osascript_network_exec", "credential_keychain_dump",
-				"privilege_launchd_plist_write", "sudoers_tamper", "application_control_block",
+				"privilege_launchd_plist_write", "sudoers_tamper", "application_control_block", "dns_c2_beacon",
 			},
-			wantGone:  []string{"suspicious_exec", "application_control_block"},
+			wantGone:  []string{"suspicious_exec", "application_control_block", "dns_c2_beacon"},
 			wantStill: nil,
 		},
 		{

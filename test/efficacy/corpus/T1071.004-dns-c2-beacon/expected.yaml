@@ -1,0 +1,12 @@
+# Expected detection assertions for the T1071.004-dns-c2-beacon technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when the L6
+# runner polls). severity: pinned at critical because the resolved domain is
+# high-entropy (the DGA booster escalates High -> Critical and adds T1568.002).
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1071.004-dns-c2-beacon
+mitre: T1071.004 + T1568.002
+within_seconds: 30
+rules:
+  - rule_id: dns_c2_beacon
+    severity: critical
+    expect: alert

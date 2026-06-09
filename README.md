@@ -94,7 +94,9 @@ Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):
 - **System extension** (Swift) -- subscribes to macOS Endpoint Security Framework events
   (exec, fork, exit, open) and captures process metadata, code signing info, and file hashes
 - **Network extension** (Swift) -- monitors TCP/UDP connections via NEFilterDataProvider with
-  process attribution
+  process attribution, and resolves DNS via NEDNSProxyProvider to emit `dns_query` events (query
+  name, type, resolved addresses) per process. DNS is the newest of the three telemetry streams;
+  encrypted-DNS (DoH/DoT) visibility and failure-mode hardening are on the roadmap
 - **Agent daemon** (Go) -- receives events from extensions over XPC, queues them in SQLite,
   and uploads to the server
 

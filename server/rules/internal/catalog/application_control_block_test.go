@@ -221,3 +221,7 @@ func (s *stubBlockGraphReader) GetChildProcesses(_ context.Context, _ string, _ 
 func (s *stubBlockGraphReader) GetExecChain(_ context.Context, current api.Process) ([]api.Process, error) {
 	return []api.Process{current}, nil
 }
+
+func (s *stubBlockGraphReader) GetNetworkEventsForProcess(_ context.Context, _ string, _ int, _ api.TimeRange) ([]api.Event, error) {
+	return nil, nil
+}

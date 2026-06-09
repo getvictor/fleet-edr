@@ -44,24 +44,12 @@
 - [ ] `go test ./server/...`; `cd tools/spectrace && go run . check`; `openspec validate
   2026-06-09-add-dns-correlation-detection --strict`.
 
-## 4. DNS proxy on by default
-
-- [ ] `edr/main.swift`: the `activate` flow enables the DNS proxy after the content filter. Note: `enableContentFilter()`
-  and `enableDNSProxy()` currently each call `exit()` in their completion handlers, so they must be refactored to chain
-  via a completion callback (enable filter, then on success enable DNS proxy, then exit) rather than exiting from each
-  handler. `enable-dns-proxy` / `disable-dns-proxy` remain for independent toggling.
-- [ ] Update / add host-app extension-manager logic tests so `activate` asserts both the filter and the DNS proxy are
-  enabled on success.
-- [ ] Verify on edr-qa: a clean `edr activate` leaves the content filter AND the DNS proxy enabled.
-
-## 5. Spec
+## 4. Spec
 
 - [ ] `server-detection-rules-engine` delta: MODIFY "Registered rule catalog" to include `dns_c2_beacon`; ADD
   "Requirement: DNS-correlated C2 beacon detection" with the positive plus two negative scenarios.
-- [ ] `host-app-extension-manager` delta: MODIFY the `activate` requirement so it enables the DNS proxy in addition to
-  the content filter.
 
-## 6. Docs plus demo
+## 5. Docs plus demo
 
 - [ ] README: add DNS as the third telemetry stream, note it's the newest component (encrypted-DNS plus failure modes
   are roadmap).
@@ -70,7 +58,6 @@
 
 ## Deferred (separate changes)
 
+- [ ] Enabling the DNS proxy by default in `activate`: the `2026-06-09-dns-proxy-on-by-default` change (host-app/Swift PR).
 - [ ] DNS-proxy `.mobileconfig` for unattended/MDM pre-approval.
-- [ ] Fail-open proxy hardening (timeouts so a proxy fault can't break host DNS); higher priority now that `activate`
-  enables the proxy by default.
 - [ ] Encrypted DNS (DoH/DoT), domain reputation, trained DGA model, NXDOMAIN/beacon-cadence signals.

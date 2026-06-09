@@ -1,0 +1,56 @@
+{
+  "events": [
+    {
+      "event_id": "nu-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3000,
+      "event_type": "fork",
+      "payload": {"child_pid": 6100, "parent_pid": 1}
+    },
+    {
+      "event_id": "nu-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 6100,
+        "ppid": 1,
+        "path": "/tmp/.update",
+        "args": ["/tmp/.update"],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "nu-dns",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3200,
+      "event_type": "dns_query",
+      "payload": {
+        "pid": 6100,
+        "path": "/tmp/.update",
+        "uid": 501,
+        "protocol": "udp",
+        "query_name": "kx7gq2vphj9k3mzw.example.com",
+        "query_type": "A",
+        "response_addresses": ["198.51.100.50"]
+      }
+    },
+    {
+      "event_id": "nu-connect",
+      "host_id": "fixture-host",
+      "timestamp_ns": 3300,
+      "event_type": "network_connect",
+      "payload": {
+        "pid": 6100,
+        "path": "/tmp/.update",
+        "uid": 501,
+        "protocol": "tcp",
+        "direction": "outbound",
+        "remote_address": "203.0.113.99",
+        "remote_port": 443
+      }
+    }
+  ],
+  "expected_findings": []
+}

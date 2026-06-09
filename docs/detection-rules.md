@@ -24,6 +24,7 @@ Hand-edits to this file get overwritten on the next regeneration.
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence (BTM daemon registration) | high | T1543.004 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*) | high | T1548.003 |
 | [`application_control_block`](#application_control_block) | Application control block | medium |  |
+| [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon (suspicious process resolves a domain then connects to it) | high | T1071.004, T1568.002 |
 
 ## suspicious_exec
 
@@ -296,4 +297,34 @@ Surfaces every AUTH_EXEC denial from the extension as an alert in the unified vi
 ### Description
 
 The extension's AUTH_EXEC decision walker denies execs that match an admin-defined application-control rule. Every such denial emits an `application_control_block` event that this built-in rule maps to an alert with `source='application_control'`. The alert carries the matched rule's identifier, severity, and operator-supplied custom message. The dedup key (source, host_id, rule_id, subject), where an app-control alert's subject is its process id, means repeated blocks of the same binary by the same rule on the same process collapse into one alert row.
+
+## dns_c2_beacon
+
+**DNS C2 beacon (suspicious process resolves a domain then connects to it)**  
+Correlates all three streams: a temp/world-writable-path process that resolves a domain (dns_query) and then connects to the resolved address (network_connect).
+
+| | |
+| --- | --- |
+| Rule ID | `dns_c2_beacon` |
+| Severity | `high` |
+| ATT&CK | [`T1071.004`](https://attack.mitre.org/techniques/T1071/004/), [`T1568.002`](https://attack.mitre.org/techniques/T1568/002/) |
+| Event types | `network_connect`, `dns_query`, `exec` |
+
+### Description
+
+Fires on the LAST link of the chain -- an outbound network_connect from a process that was exec'd out of a temporary or world-writable path AND previously issued a dns_query whose resolved addresses include the address being connected to. The single finding cites the dns_query and the network_connect and is attributed to the originating process (its exec), so an analyst sees the full exec -> DNS -> network chain in one alert.
+
+Reverse-direction triggering is deliberate and race-immune: by the time the connection lands, the process's DNS resolutions are already ingested, so the rule holds no cross-batch state. dns_query and network_connect share the network-extension clock, so the resolve-then-connect window is measured on timestamp_ns.
+
+A high-entropy (algorithmically generated) resolved domain escalates the finding to Critical and adds the DGA technique. Ordinary browser traffic does not fire: the rule gates on a suspicious process exec context, which a browser does not satisfy.
+
+### Known false-positive sources
+
+- A tool legitimately staged to a temp path that fetches a hostname and connects to it -- rare on managed fleets; allowlist the path if it recurs.
+
+### Limitations
+
+- Sees classic UDP/TCP DNS only; encrypted DNS (DoH/DoT) bypasses the proxy and is not correlated.
+- v1 gates on a temporary/world-writable exec path; a script-interpreter-with-non-interactive-parent signal is a planned extension.
+- Resolve-then-connect window is bounded (dnsBeaconWindowNs); a beacon that resolves far in advance of connecting is missed by design.
 

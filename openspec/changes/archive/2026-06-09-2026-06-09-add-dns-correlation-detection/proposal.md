@@ -29,11 +29,6 @@ three-stream correlation a spec'd, tested behavior a reviewer can confirm by rea
   values), gates on a suspicion signal to keep false positives near zero on benign browser traffic, and emits one
   `High` finding citing the `exec`, `dns_query`, and `network_connect` events. MITRE: `T1071.004` (Application Layer
   Protocol: DNS), and `T1568.002` (Domain Generation Algorithms) when the domain-entropy signal contributes.
-- Enable the DNS proxy by default in the host app's `activate` flow, so a freshly activated host emits all three streams
-  (exec, network, DNS) without a separate opt-in step. `activate` enables the content filter and the DNS proxy on
-  success; `enable-dns-proxy` / `disable-dns-proxy` remain for independent toggling. This makes DNS the third stream the
-  product leads with, not an opt-in extra. Because the proxy now sits in every activated host's DNS path, fail-open
-  hardening (a proxy fault must not break host DNS) becomes a near-term follow-up.
 - Ship the rule's tests plus traceability: per-package unit and fixture tests (positive and negative), an efficacy
   corpus at `test/efficacy/corpus/T1071.004-dns-c2-beacon/` (`scenario.yaml` plus `expected.yaml`), and a spectrace
   `// spec:` marker on the rule test referencing the new scenario.
@@ -42,10 +37,11 @@ three-stream correlation a spec'd, tested behavior a reviewer can confirm by rea
 
 ### Not in this change (deferred)
 
+- Enabling the DNS proxy by default in the host app's `activate` flow: tracked in the separate
+  `2026-06-09-dns-proxy-on-by-default` change (implemented in the host-app/Swift PR), so the `host-app-extension-manager`
+  spec lands with the code that flips the default.
 - A DNS-proxy `.mobileconfig` for unattended/MDM pre-approval: the spike showed the proxy enables without it on an
   approved host. No `release-packaging` change here.
-- Fail-open proxy hardening (timeouts so a proxy fault can't break host DNS): its own follow-up, now higher priority
-  because `activate` enables the proxy by default.
 - Encrypted DNS (DoH/DoT) visibility, a domain-reputation feed, a full DGA model, and NXDOMAIN / beacon-cadence signals:
   their own later changes.
 - The `endpoint-event-collection` DNS-capture contract is unchanged; the observed `dns_query` payload already matches

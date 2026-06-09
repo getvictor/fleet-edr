@@ -62,6 +62,12 @@ type GraphReader interface {
 	// GetExecChain walks PreviousExecID backwards from the given row to its chain root. Returns at least one element (the input row) and
 	// at most the chain length.
 	GetExecChain(ctx context.Context, current Process) ([]Process, error)
+
+	// GetNetworkEventsForProcess returns the network_connect and dns_query events attributed to (hostID, pid), filtered to the
+	// ingested-time range tr and ordered by timestamp_ns. Used by cross-stream correlation rules (e.g. dns_c2_beacon) to join a
+	// process's DNS resolutions with its outbound connections. Pass a wide tr to retrieve all of a pid's network/DNS events; the
+	// caller bounds the correlation in-memory on timestamp_ns (network_connect and dns_query share the network-extension clock).
+	GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr TimeRange) ([]Event, error)
 }
 
 // MetricsRecorder is the optional OTel hook the engine + intake + pipeline goroutines write to. Nil-safe: cmd/main wires the
