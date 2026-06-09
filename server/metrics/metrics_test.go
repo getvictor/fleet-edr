@@ -205,7 +205,7 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 
 // Compile-time guards: *Recorder must satisfy every hook interface its callers
 // expect. Renaming or changing the signature of any of these hook methods will
-// break compilation here before the consumer packages — catches signature drift
+// break compilation here before the consumer packages - catches signature drift
 // during refactors.
 //
 // detection/api.MetricsRecorder is the consolidated hook surface; the retention

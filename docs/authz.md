@@ -23,7 +23,7 @@ this section is a human-readable mirror.
 | `admin` | host, process, alert, policy, enrollment, user | host.{isolate, kill_process, run_script}, alert lifecycle (acknowledge, resolve, reopen, comment), policy CRUD, enrollment.{revoke, rotate_token}, user.invite |
 | `senior_analyst` | host, process, alert | host.{isolate, kill_process, run_script}, alert lifecycle (acknowledge, resolve, reopen, comment) |
 | `analyst` | host, process, alert | alert.comment |
-| `auditor` | host, process, alert, audit | — |
+| `auditor` | host, process, alert, audit | - |
 
 `super_admin` is the break-glass account's role at first boot. SSO
 operators provisioned via JIT default to `analyst`; promote via the
@@ -73,15 +73,15 @@ diagnosis flow.
 
 | `X-Edr-Authz-Reason` | What it means | What to do |
 |---|---|---|
-| `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | — |
+| `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | - |
 | `no_matching_rule` | The actor's role bindings don't grant the action. | Bind the appropriate role via SQL (see below). |
 | `reauth_required` | The actor's session is past the reauth window (default 30m). The role grants the action; the operator just needs to re-prove possession of credentials. | UI handles this automatically via the reauth modal. If a non-UI client hits it, follow `challenge.reauth_url` and retry. |
 | `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. Wave-1 only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes are wave-2. |
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
-| `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug — the session middleware is misconfigured for the route. Check the route's middleware chain. |
+| `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug - the session middleware is misconfigured for the route. Check the route's middleware chain. |
 
 The audit-log row's `payload` carries `reason` matching the header.
-The granting role is not on the payload today — derive it by joining
+The granting role is not on the payload today - derive it by joining
 `role_bindings` for the actor's `user_id` if needed.
 
 ## Binding a role to a user (wave 1)
@@ -160,16 +160,16 @@ affordance on the next render.
 
 Three test layers protect the chokepoint contract:
 
-- `server/identity/internal/authz/engine_test.go` —
+- `server/identity/internal/authz/engine_test.go` -
   `TestAllow_RoleActionMatrix` pins every (role, action) verdict at
   the engine level; `TestAllow_EveryRegisteredActionGrantedSomewhere`
   asserts every `RegisteredActions` constant is granted by at least
   one seeded role (so an action added without a matching grant in
   `roles.json` doesn't ship as a permanent `no_matching_rule`).
-- `server/identity/internal/authz/policy_test.go` —
+- `server/identity/internal/authz/policy_test.go` -
   `TestPolicy_ActionsParity` keeps `RegisteredActions`, the embedded
   `actions.json` bundle, and the role grants in `roles.json` in sync.
-- `test/arch/chokepoint_coverage_test.go` —
+- `test/arch/chokepoint_coverage_test.go` -
   `TestEveryPrivilegedHandlerCallsHTTPGate` walks every operator
   handler file and asserts each references `HTTPGate`. A new
   privileged route added without the chokepoint call fails the

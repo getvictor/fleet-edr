@@ -51,7 +51,7 @@ and was renamed), that is in scope.
 | "Will be added", "coming soon", "not yet wired" | If the feature shipped, update the doc; if it hasn't, link to a tracking issue or delete. |
 | References to renamed packages / contexts | Sweep against ADR-0004 boundary names. |
 | Test-fixture strings that bake in phase wording (e.g. `"agent_version": "phase8-..."`, `wantBody: "phase6"`) | Rename to a phase-neutral marker; keep the test logic identical. |
-| Testplan section IDs (`Section A.B`, `qa: Sections C + D + F.4`, `D.3a OIDC reauth — ...`) in test names, describe blocks, comments, file names, script names, or fixture constants (alert titles, `TEST_HOST_ID = "qa-host-d3"`, `BG_PASSWORD = "qa-d3-..."`). | Rewrite around what the test pins or what the file holds. File renames done via `git mv` preserve blame; npm scripts + GHA references must be updated to match. |
+| Testplan section IDs (`Section A.B`, `qa: Sections C + D + F.4`, `D.3a OIDC reauth - ...`) in test names, describe blocks, comments, file names, script names, or fixture constants (alert titles, `TEST_HOST_ID = "qa-host-d3"`, `BG_PASSWORD = "qa-d3-..."`). | Rewrite around what the test pins or what the file holds. File renames done via `git mv` preserve blame; npm scripts + GHA references must be updated to match. |
 
 ## Steps
 

@@ -98,7 +98,7 @@ browser login, copy the `edr_session` cookie value from devtools
 and reuse it across many scenario runs until the session expires.
 
 The driver verifies the cookie up front by calling `GET /api/session`. If
-that returns 401, the cookie is expired and the driver fails fast — repeat
+that returns 401, the cookie is expired and the driver fails fast - repeat
 the browser login.
 
 Run one scenario:
@@ -141,7 +141,7 @@ L5 section of `docs/testing-strategy.md`.
    - `UAT_SCRIPT_DIR` -- scripts/uat/ absolute path (for sourcing lib/common.sh)
    It should exit 0 on its own assertions passing, non-zero otherwise.
 3. Drop in an `expected.yaml`. Schema (indented as YAML; `# comments` are
-   tolerated on any line — the driver's awk parser strips inline comments
+   tolerated on any line - the driver's awk parser strips inline comments
    before extracting values):
 
        scenario_id: <name>

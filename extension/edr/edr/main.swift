@@ -189,7 +189,7 @@ private func disableDNSProxy() {
 /// service and presenting NSAlert modals on every accepted
 /// AUTH_EXEC-denied notification. Distinct from the other CLI
 /// modes (one-shot extension activation, filter toggles) which run
-/// dispatchMain and exit on completion — the notify surface has no
+/// dispatchMain and exit on completion - the notify surface has no
 /// terminal state by design.
 ///
 /// Runs as `.accessory` so a modal can appear without the app
@@ -206,7 +206,7 @@ private func runNotifyMode() {
     // of the AppKit run loop. ARC is otherwise free to drop a local
     // whose only remaining "uses" are inside [weak self] event
     // handlers, which would silently take the XPC surface offline in
-    // optimised builds — caught by Gemini and Copilot on PR #157.
+    // optimised builds - caught by Gemini and Copilot on PR #157.
     withExtendedLifetime(listener) {
         app.run()
     }

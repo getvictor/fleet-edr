@@ -109,7 +109,7 @@ export function ProcessTreeView() {
   });
   const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
   // Alert focus mode: when we arrived from an alert link, the tree defaults to showing only
-  // the alerted process plus its ancestors and descendants — "related processes only" — so
+  // the alerted process plus its ancestors and descendants - "related processes only" - so
   // the analyst isn't wading through a forest of unrelated background daemons. Toggleable.
   const [focusAlertChain, setFocusAlertChain] = useState<boolean>(
     () => searchParams.get("alert") !== null,
@@ -145,7 +145,7 @@ export function ProcessTreeView() {
     return findAlertChain(roots, targetId);
   }, [roots, searchParams, focusAlertChain]);
 
-  // Never hide processes that have alerts attached, or that sit on the ancestor path of one —
+  // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
   const preservedIds = useMemo(() => {
     const keep = new Set<number>();
@@ -188,7 +188,7 @@ export function ProcessTreeView() {
     return keep;
   }, [roots, query]);
   const visibleRoots = useMemo(() => {
-    // Predicate for "is this node visible at all" — pulled out to keep the
+    // Predicate for "is this node visible at all" - pulled out to keep the
     // recursive walk below under Sonar's cognitive-complexity cap.
     const isVisible = (n: ProcessNode): boolean => {
       if (alertChainIds && !alertChainIds.has(n.id)) return false;
@@ -451,7 +451,7 @@ export function ProcessTreeView() {
       <PageHeader
         title={
           <span className="process-tree__title">
-            {/* "Hosts" lives in the top nav already — repeating it here is
+            {/* "Hosts" lives in the top nav already - repeating it here is
                 noise. Link the host id itself to the bare host page so the
                 operator can click out of an alert-context view (drops the
                 ?alert=…&process=…&at=… query params) back to the full host
@@ -565,7 +565,7 @@ function nodeMatchesQuery(d: D3Node, q: string): boolean {
   return matchFields(d.name, d.path, d.pid, d.data.args, q);
 }
 
-// matchesQueryRaw is the data-side mirror of nodeMatchesQuery — operates on
+// matchesQueryRaw is the data-side mirror of nodeMatchesQuery - operates on
 // raw ProcessNode rows before the d3 layout runs. Used by the visible-tree
 // pre-filter so the canvas only ever lays out the matches-plus-ancestors set.
 function matchesQueryRaw(n: ProcessNode, q: string): boolean {
@@ -574,7 +574,7 @@ function matchesQueryRaw(n: ProcessNode, q: string): boolean {
 }
 
 function isSystemPath(path: string): boolean {
-  // Any .app bundle is a user-launchable application — keep it visible even if it lives
+  // Any .app bundle is a user-launchable application - keep it visible even if it lives
   // under /System/Library/ (e.g. /System/Library/CoreServices/Finder.app/...).
   if (path.includes(".app/")) return false;
   for (const seg of SYSTEM_PATH_SEGMENTS) {
@@ -591,7 +591,7 @@ function countDescendants(node: ProcessNode): number {
 }
 
 // Given a root list and a target process row id, return the set of ids that form the alert
-// chain — the target, every ancestor back to the top root, and every descendant. If the
+// chain - the target, every ancestor back to the top root, and every descendant. If the
 // target isn't in the tree, returns an empty set (the focus filter will then drop the whole
 // tree, making it visually obvious that the target is out of range).
 function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<number> {
@@ -714,7 +714,7 @@ function renderTree(
 
   // Links. Skip the synthetic-root edges: when there are multiple top-level
   // roots we add a parent node with pid=0 so d3.tree() has a single layout
-  // anchor, but that node isn't drawn — and without this filter the edges
+  // anchor, but that node isn't drawn - and without this filter the edges
   // FROM that invisible parent show up in the canvas as ghost lines drifting
   // off the left side of the tree. The filter is gated on roots.length > 1
   // so a single real root with pid=0 (rare but legal) still gets its outgoing

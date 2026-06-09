@@ -13,13 +13,13 @@ tiers:
 
 The machine-consumable spec is
 [`api/openapi.yaml`](api/openapi.yaml). The OpenAPI 3.1 file is the
-source of truth — this doc is the human overview.
+source of truth - this doc is the human overview.
 
 Every running server also hosts a live browsable copy of the spec via
 Redoc:
 
-- `https://<your-server>/api/docs` — rendered docs page
-- `https://<your-server>/api/openapi.yaml` — raw spec
+- `https://<your-server>/api/docs` - rendered docs page
+- `https://<your-server>/api/openapi.yaml` - raw spec
 
 Both endpoints are unauthenticated (the spec is already public on the
 GitHub release page) and served from the same binary with no external
@@ -44,7 +44,7 @@ UI. There is no versioning header; when v2 lands it gets a parallel
 Request bodies are `application/json; charset=utf-8`. Response bodies,
 when present, use the same type; several endpoints return `204 No
 Content` with an empty body. Compressed request bodies are not
-currently supported — do not set `Content-Encoding: gzip`.
+currently supported - do not set `Content-Encoding: gzip`.
 
 ## Auth models
 
@@ -135,16 +135,16 @@ Error responses use the following shape consistently:
 
 Status codes follow HTTP semantics:
 
-- `400` — malformed request body, invalid query param, wrong enum value
-- `401` — missing / invalid auth (host token or session cookie)
-- `403` — auth present but the caller isn't allowed (revoked
+- `400` - malformed request body, invalid query param, wrong enum value
+- `401` - missing / invalid auth (host token or session cookie)
+- `403` - auth present but the caller isn't allowed (revoked
   enrollment, event `host_id` doesn't match token, etc.)
-- `404` — row not found OR row not visible to this caller (we don't
+- `404` - row not found OR row not visible to this caller (we don't
   leak existence)
-- `409` — conflict (e.g., enrollment already revoked)
-- `429` — rate limited
-- `500` — server-side error. Expect a retry to succeed.
-- `503` — `/readyz` returns this when the DB is unreachable (`status: degraded`), or while the server is draining on SIGTERM
+- `409` - conflict (e.g., enrollment already revoked)
+- `429` - rate limited
+- `500` - server-side error. Expect a retry to succeed.
+- `503` - `/readyz` returns this when the DB is unreachable (`status: degraded`), or while the server is draining on SIGTERM
   before shutdown (`status: draining`), so a load balancer takes the replica out of rotation
 
 ## Generating clients

@@ -16,7 +16,7 @@ import (
 //
 // Enqueue three events A/B/C in order, request a batch of two: the queue MUST return A,B in insertion
 // order and MUST NOT return more than the requested batch size. The scenario's example uses 5/3 but the
-// contract is the same — ordering plus batch-size truncation, both pinned by the assertions below.
+// contract is the same - ordering plus batch-size truncation, both pinned by the assertions below.
 func TestEnqueueDequeue(t *testing.T) {
 	q := openTestQueue(t)
 	ctx := t.Context()
@@ -128,7 +128,7 @@ func TestPrune(t *testing.T) {
 
 // spec:agent-event-queue/pruning-of-old-uploaded-events/prune-removes-old-uploaded-rows
 //
-// Companion to TestPrune above — pins the AND clause "Prune MUST NOT delete events that have not yet been
+// Companion to TestPrune above - pins the AND clause "Prune MUST NOT delete events that have not yet been
 // uploaded." Together the two tests cover the full scenario contract.
 func TestPruneDoesNotDeletePending(t *testing.T) {
 	q := openTestQueue(t)
@@ -268,7 +268,7 @@ func TestEnqueue_CapDropsUploadedFirst(t *testing.T) {
 		t.Fatalf("depth: %v", err)
 	}
 	if depth == 0 {
-		t.Fatalf("all non-uploaded events were dropped — expected uploaded-first policy")
+		t.Fatalf("all non-uploaded events were dropped - expected uploaded-first policy")
 	}
 }
 
@@ -347,7 +347,7 @@ func (s *stubMetrics) hadLossy() bool {
 //
 // Pins the durability invariant the spec describes: an event whose Enqueue returned success MUST survive
 // the agent restarting against the same dbPath. The test simulates restart via Close+reopen, which is a
-// proxy for a true crash rather than an exact replica — a real crash would never call Close. The proxy
+// proxy for a true crash rather than an exact replica - a real crash would never call Close. The proxy
 // is justified for an in-process test because the queue uses SQLite WAL (see queue.go Open DSN) and the
 // underlying driver's default synchronous mode fsyncs the WAL at COMMIT; under those settings the event
 // is on disk before Enqueue returns, and a process death after Enqueue would leave the same persisted
@@ -454,7 +454,7 @@ func TestQueue_UploadFailsAndEventsAreRetried(t *testing.T) {
 // spec:agent-event-queue/idempotent-re-enqueue-of-identical-event-identifiers/an-event-with-a-duplicate-event-id-is-enqueued
 //
 // Reconciliation can re-derive event_ids across restarts, so the queue MUST NOT reject a duplicate
-// event_id at enqueue time — server-side dedup is the source of truth. Enqueueing the same payload twice
+// event_id at enqueue time - server-side dedup is the source of truth. Enqueueing the same payload twice
 // MUST produce two pending rows that both dequeue.
 func TestQueue_DuplicateEventIDIsAccepted(t *testing.T) {
 	q := openTestQueue(t)
@@ -487,7 +487,7 @@ func TestQueue_DuplicateEventIDIsAccepted(t *testing.T) {
 // uploader doesn't crash on an ack that lost its race), and (2) the cap-eviction MUST surface through the lossy-drop
 // metric (so operators see the in-flight loss).
 //
-// MarkUploaded is `UPDATE events SET uploaded = 1 WHERE id = ?` — the missing-row case affects 0 rows and returns
+// MarkUploaded is `UPDATE events SET uploaded = 1 WHERE id = ?` - the missing-row case affects 0 rows and returns
 // nil naturally, no special-case handling needed. The eviction path is exercised by enqueueing enough rows to push
 // the queue past its byte cap; since none of the rows are uploaded=1 yet, the cap drops oldest pending (lossy).
 func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {

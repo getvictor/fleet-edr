@@ -91,7 +91,7 @@ pre-commit:
         exit $matched
 
     # audit_events is append-only. Block any production Go file that
-    # stages an UPDATE or DELETE against the table — the audit trail's
+    # stages an UPDATE or DELETE against the table - the audit trail's
     # integrity is the whole point of the schema, and accidental
     # tampering is the regression this hook exists to catch.
     # The Go test at server/identity/internal/audit/append_only_lint_test.go

@@ -34,7 +34,7 @@ func newCredentialStore(t *testing.T) (*breakglass.CredentialStore, *sqlx.DB, in
 }
 
 // fakeCredential builds a minimal webauthn.Credential the store can persist without requiring a real authenticator. The crypto fields
-// are arbitrary bytes — the credential store does not verify them (that is go-webauthn's job in the ceremony layer).
+// are arbitrary bytes - the credential store does not verify them (that is go-webauthn's job in the ceremony layer).
 func fakeCredential(id, pubkey string, signCount uint32) webauthn.Credential {
 	return webauthn.Credential{
 		ID:        []byte(id),
@@ -119,7 +119,7 @@ func TestCredentialStore_RecordAssertion_Forward(t *testing.T) {
 	assert.True(t, got.LastUsedAt.Valid)
 }
 
-// RecordAssertion rejects a sign_count regression with ErrCredentialClonedDetected — the central security signal of WebAuthn §6.1.1.
+// RecordAssertion rejects a sign_count regression with ErrCredentialClonedDetected - the central security signal of WebAuthn §6.1.1.
 func TestCredentialStore_RecordAssertion_RejectsRegression(t *testing.T) {
 	t.Parallel()
 	s, db, uid := newCredentialStore(t)
@@ -130,7 +130,7 @@ func TestCredentialStore_RecordAssertion_RejectsRegression(t *testing.T) {
 	err = s.RecordAssertion(t.Context(), cred.ID, 8, false)
 	assert.ErrorIs(t, err, breakglass.ErrCredentialClonedDetected)
 
-	// Equal sign_count is also a regression (counter must strictly advance — anything less suggests the authenticator was duplicated and
+	// Equal sign_count is also a regression (counter must strictly advance - anything less suggests the authenticator was duplicated and
 	// the clone re-played a previous assertion).
 	err = s.RecordAssertion(t.Context(), cred.ID, 10, false)
 	assert.ErrorIs(t, err, breakglass.ErrCredentialClonedDetected)

@@ -32,7 +32,7 @@ const applicationControlBlockEventType = "application_control_block"
 func (r *ApplicationControlBlock) ID() string { return "application_control_block" }
 
 // Techniques returns an empty slice. App-control blocks are not mapped to MITRE ATT&CK because the framework's perspective is "the
-// adversary did something" — a successful block is the absence of that. Operators who want ATT&CK badging on app-control alerts can
+// adversary did something" - a successful block is the absence of that. Operators who want ATT&CK badging on app-control alerts can
 // tag the originating rule downstream.
 func (r *ApplicationControlBlock) Techniques() []string { return []string{} }
 

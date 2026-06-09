@@ -50,7 +50,7 @@ func TestIsSnapshotExec(t *testing.T) {
 			want: false,
 		},
 		{
-			// Negative guard — isSnapshotExec is exec-only, not the generic plumbing filter.
+			// Negative guard - isSnapshotExec is exec-only, not the generic plumbing filter.
 			// snapshot_heartbeat events are handled by isPlumbingEvent's switch arm.
 			name: "snapshot_heartbeat is NOT a snapshot exec",
 			evt:  api.Event{EventType: "snapshot_heartbeat", Payload: json.RawMessage(`{"pid":1}`)},

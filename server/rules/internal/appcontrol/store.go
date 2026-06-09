@@ -492,7 +492,7 @@ func (s *Store) GetRuleByID(ctx context.Context, id int64) (api.ApplicationContr
 
 // buildRuleUpdateSetClause renders the SET-clause fragment + args slice for the partial-update fields the caller set in req.
 // Extracted from UpdateRule so the orchestrator's cognitive complexity stays under Sonar's 15-statement threshold (S3776).
-// Returns (clauseFragment, args, ok); ok is false when the caller sent zero mutable fields — the caller maps that to
+// Returns (clauseFragment, args, ok); ok is false when the caller sent zero mutable fields - the caller maps that to
 // ErrAppControlInvalidRequest at the top level.
 func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
 	setClauses := make([]string, 0, 6)
@@ -590,7 +590,7 @@ func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol update rule: %w", err)
 	}
 	// Concurrent delete race: the SELECT above passed but the UPDATE hit zero rows because another transaction removed the row
-	// between the two statements. Fail with ErrAppControlRuleNotFound so the caller sees a stable 404 — without this, the policy
+	// between the two statements. Fail with ErrAppControlRuleNotFound so the caller sees a stable 404 - without this, the policy
 	// version bump below would still fire, triggering a spurious snapshot push to every agent.
 	affected, err := res.RowsAffected()
 	if err != nil {
@@ -637,7 +637,7 @@ func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int6
 		return 0, fmt.Errorf("appcontrol delete rule: %w", err)
 	}
 	// Concurrent delete race: same shape as UpdateRule. If another transaction removed the row between the SELECT and the DELETE,
-	// affected will be 0 — fail with ErrAppControlRuleNotFound so the policy version bump below does not fire and trigger a
+	// affected will be 0 - fail with ErrAppControlRuleNotFound so the policy version bump below does not fire and trigger a
 	// no-op snapshot push.
 	affected, err := res.RowsAffected()
 	if err != nil {
@@ -938,7 +938,7 @@ func validateBulkUpsertItems(items []api.BulkUpsertRuleItem) error {
 
 // lockPolicyForBulkUpsert serialises concurrent bulk-upserts against the same policy by taking a row lock on the parent
 // app_control_policies row inside the txn. Two concurrent bulk-upserts on the same policy would otherwise have a TOCTOU race
-// between preflight (SELECT existing keys) and upsert (INSERT ... ON DUPLICATE KEY UPDATE) — both could classify the same key
+// between preflight (SELECT existing keys) and upsert (INSERT ... ON DUPLICATE KEY UPDATE) - both could classify the same key
 // as Insert and over-report inserted counts. Returns ErrAppControlPolicyNotFound when the policy doesn't exist (the row lock
 // surfaces missing rows as sql.ErrNoRows).
 func lockPolicyForBulkUpsert(ctx context.Context, tx *sqlx.Tx, policyID int64) error {
@@ -1041,7 +1041,7 @@ func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items [
 //
 // Concurrency: the batch takes a row-level lock on the parent app_control_policies row (SELECT ... FOR UPDATE) so two
 // concurrent bulk-upserts on the same policy cannot interleave their preflight + write phases. Items are also sorted by
-// (rule_type, identifier) so lock acquisition order on the underlying rule rows is deterministic — defense-in-depth that
+// (rule_type, identifier) so lock acquisition order on the underlying rule rows is deterministic - defense-in-depth that
 // stays sound if Phase B relaxes the parent-policy row lock.
 //
 // Insert/update classification snapshots the existing (policy_id, rule_type, identifier) keys with one SELECT inside the

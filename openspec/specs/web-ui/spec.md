@@ -7,8 +7,8 @@ investigates a process and its network/DNS activity, kills a running process on 
 server-driven blocklist policy and reviews the deployed detection content. It is the visible product to anyone who is not an
 agent or a backend integration: every operator task documented in the MVP plan happens here.
 
-This specification fixes the user-observable behaviour of each page — what an analyst can see and do, how navigation flows
-between pages, and how authentication boundaries are presented — so the product behaviour can be validated against the spec
+This specification fixes the user-observable behaviour of each page - what an analyst can see and do, how navigation flows
+between pages, and how authentication boundaries are presented - so the product behaviour can be validated against the spec
 without reading the React source.
 
 ## Requirements

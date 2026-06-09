@@ -77,7 +77,7 @@
   // Account section: pushed to the right with margin-left:auto so the user menu
   // sits opposite the brand. Avatar + email + log out, in the order Atlassian /
   // GitHub / Fleet itself use. The avatar is a flat circle with the user's
-  // first letter — no image fetch, fine for a 5-host pilot.
+  // first letter - no image fetch, fine for a 5-host pilot.
   &__account {
     display: flex;
     align-items: center;

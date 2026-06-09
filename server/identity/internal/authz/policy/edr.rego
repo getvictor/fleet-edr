@@ -20,7 +20,7 @@
 #       .scope_id    string ("*" for deployment-wide; concrete id otherwise)
 #   input.actor.session_fresh  bool (reauth-window flag; default is
 #                              false, so policies that gate on it
-#                              default to deny — the safe side)
+#                              default to deny - the safe side)
 #   input.action               string from server/identity/api.RegisteredActions
 #   input.resource.type        "host" | "alert" | "policy" | ...
 #   input.resource.id          string ("*" for deployment-wide; concrete id otherwise)

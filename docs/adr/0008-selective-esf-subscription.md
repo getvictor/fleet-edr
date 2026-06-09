@@ -108,7 +108,7 @@ Decision steps 2 and 3 shipped in PR #307 (the implementing PR for #301):
   (`FileTamperSubscriber`) subscribes to `NOTIFY_CREATE` + `NOTIFY_WRITE`, calls `es_unmute_all_target_paths`, mutes
   `/etc/sudoers` (target-literal) + `/etc/sudoers.d` (target-prefix), then `es_invert_muting(ES_MUTE_INVERSION_TYPE_TARGET_PATH)`
   so it observes ONLY those paths. It re-emits each as a write-mode `open` event, so the server rule is unchanged. The
-  inversion lives on this client alone — it has no auth subscriptions — so `AUTH_EXEC` / Application Control on the primary
+  inversion lives on this client alone - it has no auth subscriptions - so `AUTH_EXEC` / Application Control on the primary
   client are untouched (the client-global-inversion landmine this ADR identified). Validated on edr-dev: sudoers
   create/write fire, a non-sudoers write does not, exec still flows.
 - **Broad `NOTIFY_OPEN` + `NOTIFY_CREATE` dropped from the primary client (step 3).** `sudoers_tamper` was the only rule
@@ -242,5 +242,5 @@ that is a separate decision, not this ADR.
   [ES_MUTE_INVERTED](https://developer.apple.com/documentation/endpointsecurity/es_mute_inverted),
   [WWDC20 Build an Endpoint Security app](https://developer.apple.com/videos/play/wwdc2020/10159/).
 - [Apple Developer Forums: NOTIFY_OPEN ignored by per-event muting](https://developer.apple.com/forums/thread/792707).
-- [Red Canary Mac Monitor — Endpoint Security overview (BTM_LAUNCH_ITEM_ADD)](https://github.com/redcanaryco/mac-monitor/wiki/5.-Endpoint-Security-Overview).
-- [Outflank / Kyle Avery — EDR Internals for macOS and Linux](https://kyleavery.com/posts/edr-internals-macos-linux/).
+- [Red Canary Mac Monitor - Endpoint Security overview (BTM_LAUNCH_ITEM_ADD)](https://github.com/redcanaryco/mac-monitor/wiki/5.-Endpoint-Security-Overview).
+- [Outflank / Kyle Avery - EDR Internals for macOS and Linux](https://kyleavery.com/posts/edr-internals-macos-linux/).

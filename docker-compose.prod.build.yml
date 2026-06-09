@@ -11,7 +11,7 @@ services:
     build:
       # Relative to the file that references it via -f. When compose merges,
       # this context resolves against the directory containing
-      # docker-compose.prod.build.yml — keep both files checked in together
+      # docker-compose.prod.build.yml - keep both files checked in together
       # so operators can invoke them from the repo root without surprise.
       context: .
       dockerfile: server/Dockerfile

@@ -7,7 +7,7 @@
 # A reproducible synthetic-attacker script that fires every shipped detection
 # rule exactly once. Run on a host with the EDR agent installed + enrolled,
 # then check the EDR admin UI for one alert per step. The script is
-# explicitly NOT malicious — every step generates a benign artifact under
+# explicitly NOT malicious - every step generates a benign artifact under
 # /tmp or removes itself; nothing persists, nothing exfiltrates real data.
 #
 # Why each step looks like it does
@@ -25,7 +25,7 @@
 #   ssh victor@192.168.64.5 'bash /tmp/attack-runbook.sh'
 #
 # Then watch alerts in the admin UI at <your-edr-url>/ui/alerts
-# (whatever URL your server is reachable on — TLS for prod, plain HTTP
+# (whatever URL your server is reachable on - TLS for prod, plain HTTP
 # is fine for the lab VM behind a closed network). Expected alert count
 # is printed at the end.
 #
@@ -43,7 +43,7 @@
 #  - A penetration test. It does not chain steps to escalate privileges.
 #  - A reliability harness. It is not idempotent in the sense that running
 #    it twice in 60s might dedupe alerts via the engine's
-#    (rule_id, host_id, process_id) uniqueness — that's normal. Wait a
+#    (rule_id, host_id, process_id) uniqueness - that's normal. Wait a
 #    minute between runs if you want fresh alerts.
 #  - A fuzzer. The synthetic events are exact rule triggers.
 
@@ -54,11 +54,11 @@ set -uEo pipefail
 # -E (errtrace) makes the trap inherit into shell functions; without it
 # only top-level errors fire the trap and per-step failures stay silent.
 # shellcheck disable=SC2154  # `rc` is assigned inside the trap body via $?
-trap 'rc=$?; echo "[runbook] step at line $LINENO exited $rc — continuing"' ERR
+trap 'rc=$?; echo "[runbook] step at line $LINENO exited $rc - continuing"' ERR
 
 # Pin WORKDIR to /tmp/ rather than $TMPDIR. As an unprivileged user $TMPDIR
 # resolves to /var/folders/<gibberish>/T/, which is NOT in the suspicious_exec
-# rule's prefix list — using it would silently render the synthetic_payload
+# rule's prefix list - using it would silently render the synthetic_payload
 # step a no-op against the rule. /tmp/ is what real droppers target on macOS
 # and what the rule expects.
 WORKDIR="/tmp/edr-attack-runbook"
@@ -110,7 +110,7 @@ step_suspicious_exec() {
   # Rule trigger: a shell (/bin/sh / /bin/bash / /bin/zsh) whose PARENT is
   # NOT itself a shell forks a child under /tmp/* within 30s. The rule
   # explicitly skips shell→shell→/tmp chains (suspicious_exec.go:110), so
-  # we cannot just call `/bin/sh -c "$payload"` from this bash script —
+  # we cannot just call `/bin/sh -c "$payload"` from this bash script -
   # the runbook's bash would be the shell parent and the alert would
   # never fire. Use python3 as a non-shell launcher so the chain becomes
   # python3 → /bin/sh → /tmp/synthetic_payload.
@@ -125,12 +125,12 @@ step_suspicious_exec() {
 echo "synthetic payload ran $(date -u)" >> "$0.log"
 PAYLOAD
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "[runbook] python3 not installed — skipping suspicious_exec step"
-    EXPECTED_ALERTS+=("suspicious_exec — SKIPPED (no python3 on this host)")
+    echo "[runbook] python3 not installed - skipping suspicious_exec step"
+    EXPECTED_ALERTS+=("suspicious_exec - SKIPPED (no python3 on this host)")
     return 0
   fi
   /usr/bin/env python3 -c "import subprocess; subprocess.Popen(['/bin/sh', '-c', '$payload && true']).wait()" || true
-  EXPECTED_ALERTS+=("suspicious_exec — python3 → /bin/sh → $payload")
+  EXPECTED_ALERTS+=("suspicious_exec - python3 → /bin/sh → $payload")
   return 0
 }
 
@@ -138,7 +138,7 @@ step_persistence_launchagent() {
   step_header "LaunchAgent persistence drop + launchctl load" "persistence_launchagent"
   # Rule trigger: exec of `launchctl load <plist>` where plist matches
   # ~/Library/LaunchAgents/<name>.plist or /Library/LaunchAgents/<name>.plist.
-  # We DO NOT actually persist anything — the plist is a syntactic
+  # We DO NOT actually persist anything - the plist is a syntactic
   # placeholder; launchctl will fail to load it (missing executable). The
   # rule fires on the EXEC of launchctl load, not on activation success.
   local plist_dir="$HOME/Library/LaunchAgents"
@@ -157,7 +157,7 @@ EOF
   /bin/launchctl load "$plist_path" >/dev/null 2>&1 || true
   /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
   rm -f "$plist_path"
-  EXPECTED_ALERTS+=("persistence_launchagent — launchctl load $plist_path")
+  EXPECTED_ALERTS+=("persistence_launchagent - launchctl load $plist_path")
   return 0
 }
 
@@ -167,12 +167,12 @@ step_dyld_insert() {
   # `DYLD_INSERT_LIBRARIES=` (or `DYLD_LIBRARY_PATH=`) assignment in a
   # position the rule treats as exec-time env (dyld_insert.go:matchDyldArg).
   # The rule's "VAR=val target" branch only sees the assignment when ESF
-  # captures it in the exec's argv — and ESF only captures argv, NOT envp.
+  # captures it in the exec's argv - and ESF only captures argv, NOT envp.
   # Shell prefix syntax (`DYLD_…=… /usr/bin/true`) puts the assignment in
   # envp, which the rule never sees, so the runbook MUST go through
   # `/usr/bin/env` to get the assignment into argv as a literal token.
   /usr/bin/env DYLD_INSERT_LIBRARIES=/tmp/synthetic-not-a-real-dylib.dylib /usr/bin/true || true
-  EXPECTED_ALERTS+=("dyld_insert — /usr/bin/env DYLD_INSERT_LIBRARIES=... /usr/bin/true")
+  EXPECTED_ALERTS+=("dyld_insert - /usr/bin/env DYLD_INSERT_LIBRARIES=... /usr/bin/true")
   return 0
 }
 
@@ -181,7 +181,7 @@ step_osascript_network_exec() {
   # Rule trigger: osascript spawns a process tree containing both a
   # curl/wget descendant AND a downstream exec whose path is under /tmp/
   # within 30s. The rule keys on the EXEC event for the /tmp/* binary,
-  # not on the curl response — so we MUST actually run a binary that
+  # not on the curl response - so we MUST actually run a binary that
   # lives in /tmp (curl writing to /tmp is not enough; the file has to
   # be exec'd). Pre-create a benign stage2 binary so the chain has the
   # /tmp/* exec the rule needs, then have osascript invoke both curl
@@ -195,7 +195,7 @@ step_osascript_network_exec() {
 echo "synthetic stage2 ran $(date -u)" >> "$0.log"
 STAGE2
   /usr/bin/osascript -e "do shell script \"/usr/bin/curl -m 2 -o /dev/null http://127.0.0.1:9/edr-runbook-synthetic 2>/dev/null; $stage2\"" 2>/dev/null || true
-  EXPECTED_ALERTS+=("osascript_network_exec — osascript → (curl + $stage2)")
+  EXPECTED_ALERTS+=("osascript_network_exec - osascript → (curl + $stage2)")
   return 0
 }
 
@@ -206,7 +206,7 @@ step_credential_keychain_dump() {
   # the binary fails immediately on the password prompt rather than
   # hanging. Rule fires on exec regardless of dump success.
   /usr/bin/security dump-keychain </dev/null >/dev/null 2>&1 || true
-  EXPECTED_ALERTS+=("credential_keychain_dump — /usr/bin/security dump-keychain")
+  EXPECTED_ALERTS+=("credential_keychain_dump - /usr/bin/security dump-keychain")
   return 0
 }
 
@@ -222,8 +222,8 @@ step_privilege_launchd_plist_write() {
   # instigator for a `launchctl bootstrap` is Apple's smd, ground-truthed on edr-dev), so this locally-built, unsigned
   # daemon executable fires regardless of the platform-binary instigator (see ADR-0008 and its 2026-05-29 amendment).
   if ! command -v go >/dev/null 2>&1; then
-    echo "[runbook] go not installed — skipping privilege_launchd_plist_write step"
-    EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no Go toolchain on this host)")
+    echo "[runbook] go not installed - skipping privilege_launchd_plist_write step"
+    EXPECTED_ALERTS+=("privilege_launchd_plist_write - SKIPPED (no Go toolchain on this host)")
     return 0
   fi
   local src="$WORKDIR/synthetic_dropper.go"
@@ -287,8 +287,8 @@ func main() {
 }
 GO
   if ! go build -o "$bin" "$src"; then
-    echo "[runbook] go build failed — skipping step"
-    EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (go build failed)")
+    echo "[runbook] go build failed - skipping step"
+    EXPECTED_ALERTS+=("privilege_launchd_plist_write - SKIPPED (go build failed)")
     return 0
   fi
   if [[ "$(id -u)" -ne 0 ]]; then
@@ -296,12 +296,12 @@ GO
     # -n (non-interactive) bails immediately when sudo would otherwise prompt for a password. The runbook runs over SSH
     # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive prompt would deadlock the whole script.
     if ! sudo -n "$bin"; then
-      echo "[runbook] sudo -n unavailable or dropper failed — alert may not have fired"
-      EXPECTED_ALERTS+=("privilege_launchd_plist_write — SKIPPED (no NOPASSWD sudo)")
+      echo "[runbook] sudo -n unavailable or dropper failed - alert may not have fired"
+      EXPECTED_ALERTS+=("privilege_launchd_plist_write - SKIPPED (no NOPASSWD sudo)")
       return 0
     fi
   else
-    "$bin" || echo "[runbook] dropper failed — alert may not have fired"
+    "$bin" || echo "[runbook] dropper failed - alert may not have fired"
   fi
   EXPECTED_ALERTS+=("privilege_launchd_plist_write: registered + removed LaunchDaemon com.synthetic.edr-runbook via launchctl bootstrap")
   return 0
@@ -315,7 +315,7 @@ step_shell_from_office_note() {
   # chain via the Swift test harness; that's tracked separately. Listed
   # here so the runbook output makes the deliberate omission explicit
   # rather than silently leaving operators wondering.
-  EXPECTED_ALERTS+=("shell_from_office — INTENTIONALLY NOT exercised (no Office on the VM)")
+  EXPECTED_ALERTS+=("shell_from_office - INTENTIONALLY NOT exercised (no Office on the VM)")
   return 0
 }
 
@@ -342,7 +342,7 @@ USAGE
   # (the trap fires "step at line N exited 2" and a confused operator wonders
   # why nothing fired). Reject early with a clear message instead.
   if ! [[ "$PACE_SECONDS" =~ ^[0-9]+$ ]]; then
-    echo "[runbook] invalid PACE_SECONDS=\"$PACE_SECONDS\" — must be a non-negative integer" >&2
+    echo "[runbook] invalid PACE_SECONDS=\"$PACE_SECONDS\" - must be a non-negative integer" >&2
     exit 2
   fi
   return 0
@@ -350,7 +350,7 @@ USAGE
 
 main() {
   parse_args "$@"
-  echo "[runbook] Fleet EDR synthetic attacker — $(date -u)"
+  echo "[runbook] Fleet EDR synthetic attacker - $(date -u)"
   echo "[runbook] working dir: $WORKDIR"
   if [[ "$PACE_SECONDS" -gt 0 ]]; then
     echo "[runbook] live-demo pacing: ${PACE_SECONDS}s between steps"

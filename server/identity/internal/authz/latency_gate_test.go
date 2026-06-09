@@ -25,7 +25,7 @@ import (
 //
 // Failure means a Rego edit, an OPA upgrade, or a Go-side change has
 // pushed the chokepoint over the latency budget. Investigate before
-// merging — the chokepoint runs on every privileged request.
+// merging - the chokepoint runs on every privileged request.
 //
 // Run via .github/workflows/authz.yml (no -race), not the main test
 // matrix. Skipped under -short.

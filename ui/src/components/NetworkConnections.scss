@@ -60,7 +60,7 @@
     border-bottom: 0;
   }
 
-  // Remote | Proto | Latest — give the wide IPv6-address column the most space,
+  // Remote | Proto | Latest - give the wide IPv6-address column the most space,
   // cap the narrower columns so long addresses wrap instead of pushing the
   // Latest time off the right edge of the ProcessDetail card.
   th:nth-child(1), td:nth-child(1) { width: auto; }

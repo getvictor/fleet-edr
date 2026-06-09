@@ -1,11 +1,11 @@
 //go:build integration
 
 // Package integration holds cross-context integration tests that exercise
-// scenarios spanning multiple bounded contexts — enroll a host via
+// scenarios spanning multiple bounded contexts - enroll a host via
 // endpoint, ingest events via detection, see an alert, issue a command via
 // response, agent acks. Tests live behind the //go:build integration tag.
 //
-// This package may import any context's bootstrap/ and api/ packages —
+// This package may import any context's bootstrap/ and api/ packages -
 // it sits at the same level as cmd/main, conceptually, just for tests.
 // It cannot import any context's internal/... because Go's internal/ rule
 // blocks the import structurally (test/integration/ lives outside the
@@ -195,7 +195,7 @@ func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
 
 // buildMux mirrors cmd/fleet-edr-server's mux composition for the routes the cross-context tests exercise. Operator routes that
 // require an authenticated admin session are wired the same way as production (Session + CSRF middleware), but tests typically skip
-// the HTTP path for those and call Service methods directly via the Stack handles — session minting + CSRF-token plumbing belongs in
+// the HTTP path for those and call Service methods directly via the Stack handles - session minting + CSRF-token plumbing belongs in
 // dedicated identity tests, not in every cross-context smoke.
 func buildMux(
 	detectionCtx *detectionbootstrap.Detection,

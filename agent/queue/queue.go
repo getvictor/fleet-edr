@@ -2,7 +2,7 @@
 //
 // The queue enforces a byte-size cap (EDR_AGENT_QUEUE_MAX_BYTES). When an
 // Enqueue would push the main DB file past the cap, the queue drops oldest rows to
-// stay bounded. Uploaded rows are dropped first (lossless — they've already reached
+// stay bounded. Uploaded rows are dropped first (lossless - they've already reached
 // the server); if the cap is still exceeded, non-uploaded rows are dropped lossy and
 // a warn log is emitted so the operator sees the backpressure.
 //
@@ -226,7 +226,7 @@ func (q *Queue) Close() error {
 func (q *Queue) Enqueue(ctx context.Context, eventJSON []byte) error {
 	if q.maxBytes > 0 {
 		if err := q.enforceCap(ctx); err != nil {
-			// Log and continue — the insert itself might still succeed and the queue
+			// Log and continue - the insert itself might still succeed and the queue
 			// will self-heal on the next Enqueue.
 			q.logger.WarnContext(ctx, "queue cap enforcement failed", "err", err)
 		}
@@ -269,7 +269,7 @@ func (q *Queue) dbSizeBytes(ctx context.Context) (int64, error) {
 const trimBatch = 500
 
 // enforceCap drops rows until the DB is under maxBytes or there is nothing left to drop. Uploaded rows go first (lossless); if still
-// over, non-uploaded rows go next with a warn log. Returns nil even when nothing was dropped — the cap was not exceeded in that case.
+// over, non-uploaded rows go next with a warn log. Returns nil even when nothing was dropped - the cap was not exceeded in that case.
 func (q *Queue) enforceCap(ctx context.Context) error {
 	size, err := q.dbSizeBytes(ctx)
 	if err != nil {
@@ -329,7 +329,7 @@ func (q *Queue) dropUntilUnderCap(
 }
 
 // deleteOldestUploaded removes up to batch already-uploaded rows, oldest first. Split into two fixed-SQL helpers (rather than
-// one parameterised by a WHERE string) so the queries are static — gosec flags string-concat SQL even when every component is a
+// one parameterised by a WHERE string) so the queries are static - gosec flags string-concat SQL even when every component is a
 // compile-time literal, and "uploaded = 1" vs "uploaded = 0" is the only variation.
 func (q *Queue) deleteOldestUploaded(ctx context.Context, batch int) (int64, error) {
 	res, err := q.db.ExecContext(ctx, `

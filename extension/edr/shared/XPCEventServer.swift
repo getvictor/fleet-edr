@@ -140,11 +140,11 @@ func dispatchInbound(type: String?, data: Data?) -> XPCInboundDispatch {
 /// Shared by the security extension AND the network extension. Each extension instantiates one with its own service
 /// name + logger; the security extension also passes an `onApplicationControl` hook to apply inbound app-control policy,
 /// while the network extension passes nil (it has no inbound control messages). Both get the identical hello-ack
-/// handshake, pending buffer, and peer code-signing — single-sourcing the handshake so it can no longer drift between
+/// handshake, pending buffer, and peer code-signing - single-sourcing the handshake so it can no longer drift between
 /// the two extensions (the network extension previously lacked the handshake entirely; see the hello-ack fix).
 ///
 /// Startup race the buffer handles (issue #11 + #173 review): on extension restart a phantom XPC peer can
-/// connect-and-immediately-disconnect within a few ms — observed empirically as "Peer connected (total: 1)" followed
+/// connect-and-immediately-disconnect within a few ms - observed empirically as "Peer connected (total: 1)" followed
 /// by "Peer disconnected (total: 0)" 10ms later, with the real agent peer arriving a second or two afterwards. Without
 /// the buffer, every event the extension sends in that window (snapshot pass, plus the first few live execs) goes into
 /// an empty peer set and is silently lost. The buffer captures those sends so the next connecting peer drains them on
@@ -203,7 +203,7 @@ final class XPCEventServer {
         }
     }
 
-    // MARK: - Private — all callers run on `queue`
+    // MARK: - Private - all callers run on `queue`
 
     private func broadcastLocked(_ data: Data) {
         let msg = xpc_dictionary_create_empty()
@@ -218,7 +218,7 @@ final class XPCEventServer {
 
     /// flushPendingTo sends every buffered event to the freshly-connected peer in order, then clears the buffer.
     /// Sending to one peer rather than broadcasting to all peers reflects the design contract: a queued event is the
-    /// same event the broadcast would have delivered, and at the moment it was queued there were no peers — the newly
+    /// same event the broadcast would have delivered, and at the moment it was queued there were no peers - the newly
     /// arriving peer is the rightful recipient. If a SECOND peer connects later, that's a separate session and doesn't
     /// get the historical buffer.
     ///
@@ -237,7 +237,7 @@ final class XPCEventServer {
     /// rest so the serial queue can interleave other work between chunks. A live event broadcast during the flush
     /// carries a later timestamp than any buffered (older) event, so the server's timestamp-ordered graph build
     /// tolerates the interleave. If the peer disconnected since the previous chunk (its ERROR handler ran on `queue` and
-    /// removed it from `peers`), the remaining sends would be no-ops against a cancelled connection, so we stop early —
+    /// removed it from `peers`), the remaining sends would be no-ops against a cancelled connection, so we stop early -
     /// consistent with the "stop sending events to a peer once its connection closes" disconnect-cleanup contract.
     private func flushChunks(_ remaining: ArraySlice<Data>, to peer: XPCPeer) {
         guard peers.contains(peer) else {

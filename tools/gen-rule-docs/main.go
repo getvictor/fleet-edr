@@ -64,7 +64,7 @@ func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	b.WriteString("```\n\n")
 	b.WriteString("Hand-edits to this file get overwritten on the next regeneration.\n\n")
 
-	// Index — operators jumping in from a CVE or alert title want a fast
+	// Index - operators jumping in from a CVE or alert title want a fast
 	// lookup. ID is what shows up in alert rows; title is the friendly name.
 	b.WriteString("## Index\n\n")
 	b.WriteString("| Rule ID | Title | Severity | ATT&CK |\n")

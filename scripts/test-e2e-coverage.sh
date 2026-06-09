@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Orchestrate the full E2E coverage pipeline. Builds an instrumented
-# server binary once, then drives it through SEVERAL phases — each
-# with its own env — restarting the binary between phases so the
+# server binary once, then drives it through SEVERAL phases - each
+# with its own env - restarting the binary between phases so the
 # in-memory rate-limit buckets reset cleanly and each phase tests its
 # specific env in isolation. All phases share GOCOVERDIR; the cover
 # runtime writes per-process covcounters.<PID>.* files into one
@@ -116,7 +116,7 @@ start_server() {
   echo "  phase=$phase pid=$SERVER_PID env_overrides=$*"
 
   for i in $(seq 1 30); do
-    # Fail fast if the server PID exited before /readyz answered —
+    # Fail fast if the server PID exited before /readyz answered -
     # otherwise a 8088 hand-off to a foreign process would silently
     # invalidate the coverage profile (no covcounters file from this
     # PID) and pass the readiness check against the wrong server.
@@ -150,7 +150,7 @@ go build -cover -coverpkg=./server/...,./internal/... -o "$BINARY" ./server/cmd/
 echo "$END_GROUP"
 
 # --- phase 1: auth suite (default env) -----------------------------------
-echo "::group::Phase 1 — auth specs (break-glass setup, break-glass login, OIDC sign-in)"
+echo "::group::Phase 1 - auth specs (break-glass setup, break-glass login, OIDC sign-in)"
 start_server "default-env-auth" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
@@ -164,7 +164,7 @@ echo "$END_GROUP"
 # Includes the M5 wire smoke (agent-events-flow.spec.ts) and M6 UI specs (host-list-and-process-tree.spec.ts) - both consume the
 # break-glass setup endpoint, so they share this phase's 5/min token budget with reauth-modal-retry. The set is intentionally short
 # enough that the bucket doesn't overflow within the phase.
-echo "::group::Phase 2 — qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures, agent wire + UI)"
+echo "::group::Phase 2 - qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures, agent wire + UI)"
 start_server "default-env-qa" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
@@ -181,7 +181,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 3: brute-force rate limit -------------------------------------
-echo "::group::Phase 3 — break-glass challenge rate limit (default env)"
+echo "::group::Phase 3 - break-glass challenge rate limit (default env)"
 start_server "default-env-rate-limit" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1
 (
@@ -193,7 +193,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 4: env-specific combo (allowlist + JIT off) -------------------
-echo "::group::Phase 4 — break-glass IP allowlist + OIDC JIT off"
+echo "::group::Phase 4 - break-glass IP allowlist + OIDC JIT off"
 start_server "envspec-allowlist-jit-off" \
   EDR_BREAKGLASS_IP_ALLOWLIST=10.99.99.0/24 \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=0
@@ -208,7 +208,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 5: short session timeouts -------------------------------------
-echo "::group::Phase 5 — session lifecycle (short timeouts env)"
+echo "::group::Phase 5 - session lifecycle (short timeouts env)"
 start_server "short-session-timeouts" \
   EDR_OIDC_ALLOW_JIT_PROVISIONING=1 \
   EDR_SESSION_IDLE_TIMEOUT=5s \

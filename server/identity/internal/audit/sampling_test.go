@@ -19,7 +19,7 @@ func TestShouldSampleRead_RateZero(t *testing.T) {
 	}
 	// Break-glass overrides rate=0.0.
 	assert.True(t, audit.ShouldSampleRead(api.ActionHostRead, true, 0.0))
-	// audit.read overrides rate=0.0 — auditors must see who read audit.
+	// audit.read overrides rate=0.0 - auditors must see who read audit.
 	assert.True(t, audit.ShouldSampleRead(api.ActionAuditRead, false, 0.0))
 }
 
@@ -70,7 +70,7 @@ func TestShouldSampleRead_RateOutOfRange(t *testing.T) {
 // Non-read actions are not in the sample-and-async path; the
 // chokepoint never asks ShouldSampleRead about them. But if it ever
 // did, the function returns false at any rate < 1.0 because the
-// action isn't a read action — we don't want a write action to slip
+// action isn't a read action - we don't want a write action to slip
 // through "this is a read" because of a future enum addition mistake.
 //
 // Today the function doesn't gate on IsReadAction explicitly (the
@@ -86,7 +86,7 @@ func TestShouldSampleRead_NonReadActionPassthrough(t *testing.T) {
 	// whether the action is a "read" or not.
 	assert.False(t, audit.ShouldSampleRead(api.ActionHostIsolate, false, 0.0))
 	assert.True(t, audit.ShouldSampleRead(api.ActionHostIsolate, true, 0.0))
-	// rate=1.0 audits everything regardless of action — chokepoint
+	// rate=1.0 audits everything regardless of action - chokepoint
 	// is responsible for not asking about writes.
 	assert.True(t, audit.ShouldSampleRead(api.ActionHostIsolate, false, 1.0))
 }

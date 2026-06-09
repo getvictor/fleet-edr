@@ -63,7 +63,7 @@ func TestResolveRepoPath_UnresolvableReturnsOriginal(t *testing.T) {
 }
 
 // TestResolveDefaultRepoPath_PromotesDotToRepoRoot pins the more aggressive behaviour for unset flags. The literal `.` trivially
-// resolves cwd-relative — resolveRepoPath would short-circuit at rule 2 and leave a default `--root .` scan scoped to the
+// resolves cwd-relative - resolveRepoPath would short-circuit at rule 2 and leave a default `--root .` scan scoped to the
 // tools/spectrace subdirectory. The default-only variant skips the cwd check so the scan widens to the whole repo, which is the
 // actual intent of running `spectrace check` from any directory.
 func TestResolveDefaultRepoPath_PromotesDotToRepoRoot(t *testing.T) {

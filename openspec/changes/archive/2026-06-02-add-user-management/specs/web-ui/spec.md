@@ -4,7 +4,7 @@
 
 The UI SHALL probe the server's session endpoint on application load and SHALL render
 the SSO login page when the probe indicates no active session. The SSO login page MUST
-present exactly one primary action — "Continue with Okta" — and MUST NOT render an
+present exactly one primary action - "Continue with Okta" - and MUST NOT render an
 email-and-password form, MUST NOT link to the break-glass surface, and MUST NOT hint
 that local login exists. Activating the SSO action MUST navigate the browser to the
 server's SSO entry endpoint, which redirects to the configured Okta issuer. A

@@ -7,11 +7,11 @@ operator-session middleware AND the authorization chokepoint defined by the
 server-identity-authorization capability, so a caller that is not authenticated as an
 operator SHALL receive `401 Unauthorized` and a caller whose role does not grant the
 endpoint's required action SHALL receive `403 Forbidden`. Every endpoint introduced
-by this capability — including (non-exhaustively) `/api/enrollments`,
+by this capability - including (non-exhaustively) `/api/enrollments`,
 `/api/enrollments/{host_id}/revoke`, `/api/policy`, `/api/attack-coverage`,
 `/api/rules`, `/api/users`, `/api/users/{id}`, `/api/users/{id}/disable`,
 `/api/users/{id}/role-bindings`, `/api/users/{id}/role-bindings/{binding_id}`, and
-`/api/roles` — MUST declare the action the chokepoint will be asked to authorize (for
+`/api/roles` - MUST declare the action the chokepoint will be asked to authorize (for
 example, `host.read` for the enrollments listing, `host.revoke_enrollment` for revoke,
 `policy.read` for policy GET, `policy.write` for policy PUT, `user.read` for user
 listing, `user.disable` for disabling a user, `role.bind` for binding or unbinding a

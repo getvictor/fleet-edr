@@ -122,12 +122,12 @@ func TestVerifyPassword_UnknownEmail(t *testing.T) {
 //
 // TestVerifyPassword_TimingInsensitiveToEmail locks in the constant-time property: an unknown email must still run the argon2
 // computation so the presence/absence of an account is not leakable via response time. We can't measure wall time reliably in a unit
-// test, but we can assert the fallback dummy-salt path exists — errors.Is still returns ErrNotFound, but the function did not return
+// test, but we can assert the fallback dummy-salt path exists - errors.Is still returns ErrNotFound, but the function did not return
 // early before the hash loop.
 func TestVerifyPassword_UnknownEmailStillHashes(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	// Two lookups against an empty table — both must fail with ErrNotFound, neither
+	// Two lookups against an empty table - both must fail with ErrNotFound, neither
 	// with a DB error. Coverage-wise this ensures the dummy-salt branch is exercised.
 	for range 2 {
 		_, err := s.VerifyPassword(t.Context(), "nobody@example.com", "whatever")

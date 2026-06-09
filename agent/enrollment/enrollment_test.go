@@ -18,7 +18,7 @@ import (
 const testUUID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 
 // fakeEnrollServer returns a server that accepts a fixed enroll secret and returns a deterministic token. If hits is non-nil, every
-// request increments it — tests can use the counter to assert throttling + retry behaviour without fragile time-based sleeps.
+// request increments it - tests can use the counter to assert throttling + retry behaviour without fragile time-based sleeps.
 func fakeEnrollServer(t *testing.T, secret, wantToken string, hits *atomic.Int64) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +165,7 @@ func TestOnUnauthorized_Throttles(t *testing.T) {
 	require.Equal(t, int64(1), hits.Load(), "first-boot enroll should hit the server once")
 
 	// Two rapid OnUnauthorized calls. Only the first triggers a re-enroll; the second is throttled to the 1-per-minute limit. The counter
-	// makes this observable — without it, a broken throttle would still pass the "no panic" bar.
+	// makes this observable - without it, a broken throttle would still pass the "no panic" bar.
 	ctx := context.Background()
 	tp.OnUnauthorized(ctx)
 	tp.OnUnauthorized(ctx)

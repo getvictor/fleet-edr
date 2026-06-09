@@ -29,7 +29,7 @@ func (s *stubAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decisi
 	return s.decision, s.err
 }
 
-// HTTPGate's allow path returns true and writes nothing to the ResponseWriter — the caller is expected to continue producing the real
+// HTTPGate's allow path returns true and writes nothing to the ResponseWriter - the caller is expected to continue producing the real
 // response. A non-zero default status code (200) appears only because httptest.NewRecorder defaults that way; the helper itself emits
 // no headers/body.
 func TestHTTPGate_Allow(t *testing.T) {
@@ -46,7 +46,7 @@ func TestHTTPGate_Allow(t *testing.T) {
 		"allow path must not set the deny-reason header")
 }
 
-// Deny: 403 + reason on header + JSON `{"error":"forbidden"}` body. The header is the operator UI's signal to surface "forbidden —
+// Deny: 403 + reason on header + JSON `{"error":"forbidden"}` body. The header is the operator UI's signal to surface "forbidden -
 // your role does not allow this action" without parsing a body shape that already varies by failure class.
 func TestHTTPGate_Deny(t *testing.T) {
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: "no_matching_rule"}}
@@ -155,7 +155,7 @@ func TestReauthChallengeFor_OIDCActor(t *testing.T) {
 }
 
 // No actor on ctx → zero challenge. The chokepoint should already have produced no_actor (not reauth_required), so this code path is
-// defensive — guard against a future regression that emits reauth_required without an actor.
+// defensive - guard against a future regression that emits reauth_required without an actor.
 func TestReauthChallengeFor_NoActor(t *testing.T) {
 	ch := api.ReauthChallengeFor(context.Background())
 	assert.Empty(t, ch.AuthMethod)

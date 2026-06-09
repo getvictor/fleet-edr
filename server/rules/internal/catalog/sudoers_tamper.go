@@ -13,7 +13,7 @@ import (
 // SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
 // or any direct child of `/etc/sudoers.d/`. Editing those files grants
 // future shell sessions arbitrary command execution as root, so a
-// successful tamper is an instant escalation primitive — T1548.003.
+// successful tamper is an instant escalation primitive - T1548.003.
 //
 // The rule deliberately does NOT key on code-signing platform-binary
 // status the way persistence_launchagent / privilege_launchd_plist_write
@@ -46,13 +46,13 @@ import (
 // gap, which BTM registration now covers).
 type SudoersTamper struct {
 	// AllowedWriters is the set of absolute writer-process paths the rule should silently accept. Populated from
-	// EDR_SUDOERS_WRITER_ALLOWLIST. Empty by default — every direct write to sudoers fires.
+	// EDR_SUDOERS_WRITER_ALLOWLIST. Empty by default - every direct write to sudoers fires.
 	AllowedWriters map[string]struct{}
 }
 
 func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers — T1548.003
+// Techniques returns the MITRE ATT&CK IDs this rule covers - T1548.003
 // (Abuse Elevation Control Mechanism: Sudo and Sudo Caching).
 func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 
@@ -65,7 +65,7 @@ func (r *SudoersTamper) Doc() api.Documentation {
 		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
 			"`/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as " +
 			"root.\n\n" +
-			"Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries — " +
+			"Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries - " +
 			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
 			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +
 			"admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.\n\n" +
@@ -96,7 +96,7 @@ func (r *SudoersTamper) Doc() api.Documentation {
 var sudoersPath = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`)
 
 // sudoersBytes is the substring fast-path filter applied to the raw JSON payload before json.Unmarshal. NOTIFY_OPEN fires on every
-// file open in the kernel — thousands per second — and writes to sudoers happen on a stable host literally never. Skipping the JSON
+// file open in the kernel - thousands per second - and writes to sudoers happen on a stable host literally never. Skipping the JSON
 // decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal per open" to "one bytes.Contains per
 // open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
 var sudoersBytes = []byte("/etc/sudoers")
@@ -114,12 +114,12 @@ type sudoersOpenPayload struct {
 // fd can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND, ...) don't affect the access mode.
 const sudoersWriteAccessMask = 0x3
 
-// O_TRUNC (0x400) | O_APPEND (0x8) | O_CREAT (0x200) — the bits an
+// O_TRUNC (0x400) | O_APPEND (0x8) | O_CREAT (0x200) - the bits an
 // attacker who actually wants to mutate /etc/sudoers reaches for in
 // the common case (cp / tee / shell `>` / shell `>>` / dd / vi-direct-
 // save all set at least one of these three). macOS sudo opens
 // /etc/sudoers with O_WRONLY (sometimes plus O_NONBLOCK or O_CLOEXEC)
-// to take a LOCK_EX flock for serialised reads — write-mode by access,
+// to take a LOCK_EX flock for serialised reads - write-mode by access,
 // but no intent to modify content. The intent-mask check below
 // suppresses sudo's flock pattern; we scope that suppression to
 // `/usr/bin/sudo` specifically (see evalEvent) so a non-sudo writer
@@ -190,7 +190,7 @@ func (r *SudoersTamper) evalEvent(
 		Severity: api.SeverityHigh,
 		Title:    "Sudoers tamper",
 		Description: fmt.Sprintf(
-			"%s opened %s for writing — sudo escalation surface (MITRE T1548.003)",
+			"%s opened %s for writing - sudo escalation surface (MITRE T1548.003)",
 			proc.Path, p.Path,
 		),
 		ProcessID: proc.ID,

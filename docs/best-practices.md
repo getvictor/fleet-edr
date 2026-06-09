@@ -192,7 +192,7 @@ floor for any project that wants enterprise adoption.
   format + OCI 1.1 referring-artifact storage on by default) is tracked as a
   drop-in pin upgrade once downstream verifiers in our pipeline consume bundles
 - [~] **SLSA Build Level 3** provenance attestations on releases via
-  `actions/attest-build-provenance`. We claim **build level 2** in practice — Apple
+  `actions/attest-build-provenance`. We claim **build level 2** in practice - Apple
   notarization breaks SLSA L3's hermeticity requirement (notarytool reaches Apple's
   network). Documented in the workflow comment; revisit if Apple ever offers an
   offline notary path
@@ -325,9 +325,9 @@ floor for any project that wants enterprise adoption.
   cycles, every input PID appears exactly once), and order-preserving filters
   (e.g. `filterSnapshotEvents` removes only snapshot exec events and preserves
   the order of the rest). Rapid's built-in shrinking + state-machine API are
-  the modern Go choice — `gopter` works but is heavier, and `testing/quick`
+  the modern Go choice - `gopter` works but is heavier, and `testing/quick`
   lacks shrinking. PBT does NOT replace example-based tests for wire-format
-  pinning, security-critical regressions, or named bug repros — those still
+  pinning, security-critical regressions, or named bug repros - those still
   want explicit values. See the detection bounded context's `internal/tests/`
   - `api/api_test.go` for the canonical patterns.
 - [ ] **Snapshot tests** for the React process-tree D3 layout
@@ -737,7 +737,7 @@ already cover those). Adding `LICENSE`
 (MIT) + `SECURITY.md` + `CONTRIBUTING.md` lifted §12 Community signals
 from 42% to 54% and unblocked the rest of that section's doc items.
 `docs/threat-model.md` (STRIDE per component)
-opened §13 Compliance + privacy from 0% to 8% — that section was the
+opened §13 Compliance + privacy from 0% to 8% - that section was the
 last fully-empty area on the checklist.
 
 RBAC + MFA on the UI shipped, lifting §3 from 52% to 62%: OIDC PKCE for

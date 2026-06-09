@@ -29,13 +29,13 @@ private let kinfoSizeSlackEntries = 64
 /// ProcessSnapshotEnumerator walks the live process table at extension startup and emits a
 /// synthetic exec event per running PID. The events carry snapshot=true so the server-side
 /// detection engine drops them from rule evaluation (filter.go, issue #11) but the graph
-/// builder still materialises them into the processes table — the analyst sees Safari,
+/// builder still materialises them into the processes table - the analyst sees Safari,
 /// Slack, Finder, etc. in the tree even though ESF couldn't observe their original
 /// fork/exec because they pre-dated subscribe.
 ///
 /// Why sysctl KERN_PROC_ALL and not proc_listallpids:
 ///
-/// On macOS 26, proc_listallpids is heavily filtered even for root callers — empirically
+/// On macOS 26, proc_listallpids is heavily filtered even for root callers - empirically
 /// returns ~12% of the real process table on a SIP-disabled VM (56 of 473 live PIDs in
 /// QA). The KERN_PROC sysctl is what `ps` uses and surfaces every process the caller has
 /// permission to see, which for a root-level ES extension is everything. The sysctl also
@@ -47,7 +47,7 @@ private let kinfoSizeSlackEntries = 64
 /// If we enumerated first and subscribed second, processes that exec'd in the window
 /// between enumeration and subscribe would be invisible (the snapshot captured a stale
 /// PID; the live stream missed the new exec). Running after subscribe means the small
-/// race window goes the other way — a snapshot may include a process whose exit event
+/// race window goes the other way - a snapshot may include a process whose exit event
 /// was just delivered live. The graph builder's UpdateProcessExit + insertExecWithoutFork
 /// flow handles that duplicate gracefully.
 enum ProcessSnapshotEnumerator {
@@ -83,7 +83,7 @@ enum ProcessSnapshotEnumerator {
     /// listAllProcesses runs the standard sysctl(CTL_KERN, KERN_PROC, KERN_PROC_ALL) size-
     /// probe-then-fill dance, retrying the fill when the table grew in between (ENOMEM).
     /// Returns the live process table as a typed Swift array; an empty result on a
-    /// hard failure is logged at warning and falls through silently — the caller already
+    /// hard failure is logged at warning and falls through silently - the caller already
     /// no-ops on an empty list and the missing snapshot for one boot is preferable to a
     /// crash.
     private static func listAllProcesses() -> [ProcIdentity] {
@@ -99,7 +99,7 @@ enum ProcessSnapshotEnumerator {
             }
             let stride = MemoryLayout<kinfo_proc>.stride
             let probeCount = size / stride
-            // Don't cap the BUFFER size — sysctl returns ENOMEM if the buffer is too
+            // Don't cap the BUFFER size - sysctl returns ENOMEM if the buffer is too
             // small, and retrying with the same kernel-reported size loses every
             // process on a host with > maxEnumeratedPIDs live. Allocate for what the
             // kernel reports + slack, then cap the RESULT count below.
@@ -115,7 +115,7 @@ enum ProcessSnapshotEnumerator {
                 let count = min(maxEnumeratedPIDs, filledSize / stride)
                 return buffer.prefix(count).map(ProcIdentity.init)
             }
-            // ENOMEM means the table grew past our buffer between probe + fill. Retry —
+            // ENOMEM means the table grew past our buffer between probe + fill. Retry -
             // the next probe sees the new size.
             if errno != ENOMEM {
                 logger.warning("kinfo_proc fill failed: errno=\(errno, privacy: .public) attempt=\(attempt, privacy: .public)")
@@ -137,7 +137,7 @@ enum ProcessSnapshotEnumerator {
 
 /// ProcIdentity captures the per-PID identifiers we surface from a kinfo_proc into the
 /// ExecPayload. A named struct rather than a tuple because SwiftLint's large_tuple cap is
-/// 2 — and named fields document the call sites.
+/// 2 - and named fields document the call sites.
 private struct ProcIdentity {
     let pid: pid_t
     let ppid: pid_t

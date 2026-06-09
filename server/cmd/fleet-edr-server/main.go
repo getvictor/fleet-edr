@@ -144,7 +144,7 @@ func run() error {
 	go runIdentity(ctx, identityCtx, logger)
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
-	// resolver, and httpserver.ClientIP's fallback returns the same peer IP the resolver's empty-list path would return — so this saves
+	// resolver, and httpserver.ClientIP's fallback returns the same peer IP the resolver's empty-list path would return - so this saves
 	// one per-request middleware hop in the default deployment (per Copilot review on PR #113).
 	var clientIPResolver *httpserver.ClientIPResolver
 	if len(cfg.TrustedProxies) > 0 {
@@ -449,7 +449,7 @@ func seedAdmin(ctx context.Context, logger *slog.Logger, cfg *config.Config, ide
 	}
 
 	// Gate the banner so a concurrent cluster boot prints exactly one redemption URL rather than one per replica. Fail-open: with
-	// no coordinator wired, or if the lock can't be consulted, emit anyway — a missed banner strands the first operator (there is
+	// no coordinator wired, or if the lock can't be consulted, emit anyway - a missed banner strands the first operator (there is
 	// no out-of-band re-issue path), which is strictly worse than a duplicate (both tokens are valid; redeeming one is enough).
 	if coord == nil {
 		_ = emit(ctx)
@@ -476,7 +476,7 @@ func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plai
 	url := redemptionURL(cfg, plaintext)
 	banner := "" +
 		"================================================================\n" +
-		"BREAK-GLASS ADMIN SETUP (one-shot redemption URL — open in a browser)\n" +
+		"BREAK-GLASS ADMIN SETUP (one-shot redemption URL - open in a browser)\n" +
 		"  Email: " + email + "\n" +
 		"  URL:   " + url + "\n" +
 		"  TTL:   " + ttl.String() + "\n" +
@@ -488,7 +488,7 @@ func printBreakglassBanner(ctx context.Context, logger *slog.Logger, email, plai
 
 // redemptionURL builds the operator-visible redemption URL. Prefers the first BreakglassRPOrigins entry because that is the URL the
 // browser uses to talk to the server (and the WebAuthn engine binds credentials to that origin). Falls back to scheme + ListenAddr
-// when no origin is configured — the dev-localhost path.
+// when no origin is configured - the dev-localhost path.
 func redemptionURL(cfg *config.Config, plaintext string) string {
 	const path = "/admin/break-glass/setup?token="
 	if len(cfg.BreakglassRPOrigins) > 0 {
@@ -597,7 +597,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"GET /api/session",
 		// Application Control admin surface. rulesCtx.RegisterAuthedRoutes mounts these on apiMux; the outer router needs each
 		// path enumerated here so requests reach the session-protected wrapper instead of falling through to the `/` catchall
-		// and 302 → /ui/. Surfaced by the step-8 dry-run on PR #158 — the list-policies API returned the SPA's index.html,
+		// and 302 → /ui/. Surfaced by the step-8 dry-run on PR #158 - the list-policies API returned the SPA's index.html,
 		// which the UI fetch parsed as JSON and errored with "Unexpected token '<'". The Phase A close-out follow-on adds the
 		// five mutation routes + bulk upsert + cross-policy GET + host-groups CRUD + assignments are all enumerated here. Phase B
 		// editable host-group + assignment mutations will replace the 405 handlers at the same routes without churning this list.
@@ -623,7 +623,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		"POST /api/v1/app-control/policies/{id}/assignments",
 		"DELETE /api/v1/app-control/policies/{id}/assignments/{group_id}",
 		// Break-glass reauth ceremony. The handlers are mounted on apiMux via identityCtx.RegisterAuthedRoutes, but the outer
-		// router needs each path enumerated here so the session-protected wrapper actually serves them — otherwise requests
+		// router needs each path enumerated here so the session-protected wrapper actually serves them - otherwise requests
 		// fall through to the `/` catchall and 302 → /ui/, silently breaking the destructive-action reauth path.
 		"POST /api/auth/reauth/challenge", "POST /api/auth/reauth",
 	} {

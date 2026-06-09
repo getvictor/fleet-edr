@@ -4,7 +4,7 @@
 
 Phase A of `add-application-control` shipped a Santa-shaped block engine sitting on EDR-shaped
 plumbing: named policies, per-rule lifecycle metadata, blocked-exec events flowing through the
-unified detection-rules pipeline. Phase A is operationally a blocklist — every rule, when matched,
+unified detection-rules pipeline. Phase A is operationally a blocklist - every rule, when matched,
 denies the exec and notifies. That is a faithful Santa port. It is not the EDR-grade differentiator
 the plan calls for in `ai/policy/plan.md:5-20`.
 
@@ -31,8 +31,8 @@ times for changes that share a single design:
    purposes" implies the opposite). Shipped behavior: only `application_control_block` is emitted on
    deny. The graph builder never materialises a process row; catalog rules
    (`suspicious_exec`, `shell_from_office`, etc.) never observe the attempted exec. The Detect-mode
-   change fixes the spec contradiction by codifying that every AUTH_EXEC decision — allow, block, or
-   detect — emits a corresponding telemetry event so the regular detection pipeline observes the
+   change fixes the spec contradiction by codifying that every AUTH_EXEC decision - allow, block, or
+   detect - emits a corresponding telemetry event so the regular detection pipeline observes the
    attempt regardless of outcome.
 
 The result is a closed loop: an operator sees a `suspicious_exec` detection finding, clicks
@@ -65,12 +65,12 @@ release window.
 - **Map `application_control_would_block` events to alerts** with `source='application_control'`
   and a new `subtype='would_block'` (alerts for actual blocks carry `subtype='block'`). Subtype is a
   string column on the alerts table; existing rows backfill to `'block'`. Alert dedup still keys on
-  `(source, host_id, rule_id, process_id)` — would-block and block alerts for the same
+  `(source, host_id, rule_id, process_id)` - would-block and block alerts for the same
   `(host, rule, process)` triple collapse, which is the behavior an operator wants while iterating
   on a rule's Detect-to-Protect promotion.
 - **REST PATCH endpoint for rule enforcement.** `PATCH /api/v1/app-control/rules/{id}` accepts a
   partial body `{enforcement: "PROTECT"|"DETECT", reason: "..."}`. (The broader rule-mutation PATCH
-  surface — every other mutable field — ships with the Phase A close-out PR.)
+  surface - every other mutable field - ships with the Phase A close-out PR.)
 - **UI: enforcement selector + Promote-to-Protect.** The add-rule modal carries an explicit
   enforcement selector defaulting to `DETECT`. The policy-detail rules table shows the enforcement
   value per row. A `Promote to Protect` action appears per row for `DETECT` rules; clicking it opens
@@ -86,51 +86,51 @@ release window.
 
 ### Modified Capabilities
 
-- `server-application-control` — per-rule `enforcement=DETECT` becomes a first-class semantic; new
+- `server-application-control` - per-rule `enforcement=DETECT` becomes a first-class semantic; new
   `application_control_would_block` event ingest; default value for new rules flips to `DETECT`;
   PATCH endpoint for rule enforcement.
-- `extension-application-control` — AUTH_EXEC decision engine consults `enforcement` and branches:
+- `extension-application-control` - AUTH_EXEC decision engine consults `enforcement` and branches:
   `PROTECT` keeps today's deny+block-event behavior plus the new regular exec event; `DETECT`
   allows the exec and emits `application_control_would_block` plus the regular exec event.
-- `endpoint-event-collection` — new event kind `application_control_would_block`; clarifies that
+- `endpoint-event-collection` - new event kind `application_control_would_block`; clarifies that
   AUTH-denied execs also emit a regular exec event with `decision='blocked'`; resolves the Phase A
   spec contradiction.
-- `server-detection-rules-engine` — `application_control_would_block` events map to alerts with
+- `server-detection-rules-engine` - `application_control_would_block` events map to alerts with
   `source='application_control'` and `subtype='would_block'`; alerts table gains the subtype
   column.
-- `web-ui` — add-rule modal carries an enforcement selector defaulting to DETECT; policy-detail
+- `web-ui` - add-rule modal carries an enforcement selector defaulting to DETECT; policy-detail
   rules table renders enforcement and exposes the Promote-to-Protect action; alerts table
   distinguishes block vs would_block subtypes.
 
 ### Unchanged Capabilities
 
-- `agent-command-executor` — `set_application_control` snapshot already carries `enforcement` per
+- `agent-command-executor` - `set_application_control` snapshot already carries `enforcement` per
   rule. No protocol change.
-- `server-rest-api` — the `/api/v1/app-control/rules/{id}` PATCH endpoint already exists in the
+- `server-rest-api` - the `/api/v1/app-control/rules/{id}` PATCH endpoint already exists in the
   Phase A spec; this change specifies the partial-body shape for the enforcement field.
 
 ## Impact
 
 **Code:**
 
-- `extension/edr/extension/ESFSubscriber.swift` — `handleAuthExec` branches on rule enforcement:
+- `extension/edr/extension/ESFSubscriber.swift` - `handleAuthExec` branches on rule enforcement:
   `PROTECT` keeps today's path; `DETECT` allows + emits the new event. Both paths also emit the
   regular exec event so the graph builder and catalog rules observe the attempt.
-- `extension/edr/extension/EventSerializer.swift` — new `ApplicationControlWouldBlockPayload`
+- `extension/edr/extension/EventSerializer.swift` - new `ApplicationControlWouldBlockPayload`
   struct; `ExecPayload` gains an optional `decision` field.
-- `server/rules/bootstrap/schema.go` — `app_control_rules.enforcement` default flips from
+- `server/rules/bootstrap/schema.go` - `app_control_rules.enforcement` default flips from
   `'PROTECT'` to `'DETECT'`. The `alerts` table gains a `subtype VARCHAR(32) NOT NULL DEFAULT 'block'`
   column.
-- `server/rules/internal/catalog/application_control_would_block.go` — new catalog rule mirroring
+- `server/rules/internal/catalog/application_control_would_block.go` - new catalog rule mirroring
   `application_control_block.go` for the would-block event kind. Maps to an alert with subtype.
-- `server/rules/internal/appcontrol/handler.go` — PATCH handler for rule enforcement (partial
+- `server/rules/internal/appcontrol/handler.go` - PATCH handler for rule enforcement (partial
   body).
-- `server/rules/api/types.go` — add the would-block payload type and the alert subtype constants.
-- `ui/src/components/ApplicationControl/AddRuleModal.tsx` — enforcement selector, default DETECT.
-- `ui/src/components/ApplicationControl/PolicyDetail.tsx` — enforcement column in the rules table
+- `server/rules/api/types.go` - add the would-block payload type and the alert subtype constants.
+- `ui/src/components/ApplicationControl/AddRuleModal.tsx` - enforcement selector, default DETECT.
+- `ui/src/components/ApplicationControl/PolicyDetail.tsx` - enforcement column in the rules table
   plus Promote-to-Protect action.
-- `ui/src/components/AlertList.tsx` — subtype-aware rendering ("Would have blocked" / "Blocked").
-- `ui/src/api.ts` — `patchAppControlRule({id, enforcement, reason})`.
+- `ui/src/components/AlertList.tsx` - subtype-aware rendering ("Would have blocked" / "Blocked").
+- `ui/src/api.ts` - `patchAppControlRule({id, enforcement, reason})`.
 
 **Schema:**
 

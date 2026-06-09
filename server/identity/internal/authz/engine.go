@@ -229,7 +229,7 @@ func (e *Engine) engineErrorDecision(ctx context.Context, actor *api.Actor, acti
 // recordDecision writes the audit row for this Allow call. Failures
 // are logged at WARN, never propagated: an audit-write failure must
 // not turn into a permission deny (the spec's audit-of-audit pattern
-// is explicit on this — we want both signals when both fail, not a
+// is explicit on this - we want both signals when both fail, not a
 // false negative cascading from one).
 //
 // Async-read hybrid path: when the decision is an allow on a non-audit
@@ -436,7 +436,7 @@ func assertActionsParity(data map[string]any) error {
 // decisionFromResultSet pulls the {allow, reason} object out of
 // rego.ResultSet. The Rego module always returns a single decision;
 // an empty result set means the policy fell through without matching
-// the default rule, which is a Rego authoring bug — treat it as
+// the default rule, which is a Rego authoring bug - treat it as
 // engine_error so the operator sees something is wrong rather than
 // a silent deny.
 //
@@ -467,5 +467,5 @@ func decisionFromResultSet(rs rego.ResultSet) (api.Decision, error) {
 }
 
 // Compile-time guard: *Engine satisfies api.AuthZ. Renaming the interface or its method breaks compilation here before the consumer
-// packages — catches signature drift during refactors.
+// packages - catches signature drift during refactors.
 var _ api.AuthZ = (*Engine)(nil)

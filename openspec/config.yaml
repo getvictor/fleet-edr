@@ -39,7 +39,7 @@ context: |
     release workflow gates Apple signing on the release-signing
     GitHub Environment.
 
-  Targets: Apple Silicon, macOS 13+. Pilot scale 10–500 endpoints.
+  Targets: Apple Silicon, macOS 13+. Pilot scale 10 - 500 endpoints.
 
 # Project-wide rules that every artifact must respect.
 rules:

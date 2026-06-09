@@ -10,14 +10,14 @@ import "./AttackCoverage.scss";
 // AttackCoverage renders the MITRE ATT&CK technique coverage that the
 // registered detection rules provide. The data comes from the same
 // /api/attack-coverage endpoint that procurement teams ingest as a
-// Navigator layer JSON — but we render it in-app as a tactic-grouped table
+// Navigator layer JSON - but we render it in-app as a tactic-grouped table
 // because a JSON download is unsatisfying as a demo prop. The pattern matches
 // what Crowdstrike Falcon, SentinelOne Singularity, and Elastic Security all
 // expose: tactic columns, technique rows, "covered by" linkable rule list.
 //
 // We still ship the JSON via the "Export JSON" button so an operator can
 // drop it into the upstream MITRE Navigator UI for the full matrix view if
-// they want — that's the right tool for "look at all 14 tactics at once" and
+// they want - that's the right tool for "look at all 14 tactics at once" and
 // there's no point in re-implementing the matrix renderer here.
 
 type TechniqueWithCoverage = TechniqueMeta & {
@@ -32,7 +32,7 @@ interface CoverageGroup {
 
 // All 14 enterprise tactics in MITRE's canonical kill-chain order. Anything
 // the catalog or server emits that isn't on this list lands at the end via
-// the "leftover" pass below — never silently dropped.
+// the "leftover" pass below - never silently dropped.
 const TACTIC_ORDER = [
   "Reconnaissance",
   "Resource Development",
@@ -132,7 +132,7 @@ export function AttackCoverage() {
               // across tactics (a per-tactic <Table> sized columns from
               // its own widest cell, producing a different layout per
               // section). Tactic names land in colspan rows that act as
-              // visual section headers — same pattern Crowdstrike Falcon
+              // visual section headers - same pattern Crowdstrike Falcon
               // and Elastic Security use for their ATT&CK coverage tables.
               <Table className="attack-coverage__table">
                 <colgroup>
@@ -148,7 +148,7 @@ export function AttackCoverage() {
                   </tr>
                 </thead>
                 {/* One <tbody> per tactic with scope="rowgroup" on the
-                    header — that's the HTML5 idiom for grouping rows under a
+                    header - that's the HTML5 idiom for grouping rows under a
                     label, which lets screen readers announce the tactic as
                     context for each technique row. Visually identical to a
                     Fragment-with-shared-tbody approach. */}
@@ -199,7 +199,7 @@ export function AttackCoverage() {
 // parseCoveringRules pulls rule IDs out of the Navigator-layer "Covered by:"
 // comment string. The server formats it as "Covered by: rule_a, rule_b". We
 // keep this lenient: anything after the first colon, split on "," and trim
-// whitespace from each piece — so a missing space after the comma still
+// whitespace from each piece - so a missing space after the comma still
 // parses cleanly.
 function parseCoveringRules(comment: string | undefined): string[] {
   if (!comment) return [];

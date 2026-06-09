@@ -18,7 +18,7 @@ export interface ProcessTreeAgent {
 
 /**
  * setupProcessTreeDeep runs the process-tree-deep scenario against a freshly minted host id, waits until the
- * processor has materialised at least four process rows (the minimum the scenario produces — gating the
+ * processor has materialised at least four process rows (the minimum the scenario produces - gating the
  * navigation on row count avoids a race where the tree page renders empty before processing catches up),
  * then navigates the supplied page to that host's /ui/hosts/<id> route and waits for at least one tree node
  * to be visible.

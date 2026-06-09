@@ -535,7 +535,7 @@ func TestAppControlREST_CreateRule_InvalidJSON(t *testing.T) {
 	assert.Empty(t, r.audit.snapshot())
 }
 
-// TestAppControlREST_CreateRule_InvalidPolicyID: same shape as the GET path — a non-numeric or zero/negative id maps to 400 with the
+// TestAppControlREST_CreateRule_InvalidPolicyID: same shape as the GET path - a non-numeric or zero/negative id maps to 400 with the
 // typed code before any DB work.
 func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
 	t.Parallel()
@@ -591,7 +591,7 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	// HTTPGate sees an empty tenant_id (no actor on ctx) and returns 403 with reason resource_tenant_missing — that's the correct
+	// HTTPGate sees an empty tenant_id (no actor on ctx) and returns 403 with reason resource_tenant_missing - that's the correct
 	// happy-path posture for a request with no actor reaching the authz gate. The explicit "no actor → 500" branch fires only when
 	// HTTPGate happens to allow (e.g. an AuthZ stub that says yes without checking the actor); allowAllAuthZ in this rig satisfies that,
 	// so this path is exercised.
@@ -1194,7 +1194,7 @@ func TestAppControlREST_BulkUpsertRules_InvalidPolicyID(t *testing.T) {
 }
 
 // TestAppControlREST_BulkUpsertRules_Idempotent confirms re-posting the same payload yields 0 inserted + N updated and the
-// audit log has TWO bulk_upsert rows (one per call). The policy version bumps twice even though no field changed — bulk
+// audit log has TWO bulk_upsert rows (one per call). The policy version bumps twice even though no field changed - bulk
 // upsert always treats the request as a fresh logical operation, which keeps the audit history honest about who re-imported
 // what at which time.
 func TestAppControlREST_BulkUpsertRules_Idempotent(t *testing.T) {
@@ -1319,7 +1319,7 @@ func TestAppControlREST_ListRulesAcrossPolicies_Filters(t *testing.T) {
 }
 
 // TestAppControlREST_ListRulesAcrossPolicies_RejectsInvalidQuery covers the typed 400 paths every malformed query param
-// surfaces. Each case returns application_control.invalid_query — no result data leaks even on bad input.
+// surfaces. Each case returns application_control.invalid_query - no result data leaks even on bad input.
 func TestAppControlREST_ListRulesAcrossPolicies_RejectsInvalidQuery(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})

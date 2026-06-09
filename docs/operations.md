@@ -188,7 +188,7 @@ Validate a handful of Macs before rolling fleet-wide:
 The enroll secret is shared between the server and the install script
 your MDM runs. Rotate it when you suspect it's leaked (committed to
 a public repo, shared over an insecure channel). Existing agents are
-unaffected — they authenticate with their per-host token.
+unaffected - they authenticate with their per-host token.
 
 ```sh
 cd /srv/fleet-edr
@@ -325,7 +325,7 @@ gunzip -c edr-YYYYMMDD.sql.gz \
       mysql -uroot -p"$(cat secrets/mysql_root)" edr
 ```
 
-The agents' persisted host tokens keep working after a restore — the
+The agents' persisted host tokens keep working after a restore - the
 `hosts` table survives, so enrollments don't churn. Expect the
 `last_seen` gauge to tick back to current within ~30s as agents
 reconnect.
@@ -378,7 +378,7 @@ cadence is controlled by `EDR_STALE_PROCESS_INTERVAL` (default `10m`).
 **Agent-side `kill(pid, 0)` sweep** (`EDR_PROCESS_RECONCILE_INTERVAL`,
 default `60s` on the agent). Every interval the agent walks its
 in-memory PID table and probes each tracked PID with `kill(pid, 0)`.
-Any PID that returns `ESRCH` ("no such process") is gone — the agent
+Any PID that returns `ESRCH` ("no such process") is gone - the agent
 emits a synthetic exit event tagged `exit_reason = host_reconciled`,
 which the server records on the row. PIDs younger than 30s are skipped
 to avoid racing the exec; at most 256 synthetic exits are emitted per
@@ -397,7 +397,7 @@ enumerates the live process table when it starts so processes that
 pre-dated subscription (Safari, Slack, system daemons, login session
 processes) appear in the tree alongside organic fork/exec activity.
 These rows would otherwise be force-greyed by the 6h TTL because
-nothing further happens to them at the kernel level — they just keep
+nothing further happens to them at the kernel level - they just keep
 running. To prevent that, the agent emits a periodic liveness
 heartbeat for each such process on the same `EDR_PROCESS_RECONCILE_INTERVAL`
 cadence as the kill-zero sweep; the server uses those heartbeats to
@@ -420,20 +420,20 @@ Core metrics to chart:
 | `edr.enrolled.hosts` | gauge | Should match your MDM's scoped Mac count |
 | `edr.offline.hosts` | gauge | Hosts whose `last_seen` is older than 5 min. Keep near zero |
 | `edr.retention.rows_deleted` | counter | Should tick up every `EDR_RETENTION_INTERVAL` |
-| `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. The counter only increments when the reconciler synthesises an exit (it no-ops when there's nothing stale), so a non-zero rate or spike means the reconciler is firing — typically because a host missed an exec/exit pair. A sustained zero is ambiguous (either no stale processes to reconcile, or the reconciler has wedged); rely on logs/traces or a separate heartbeat to distinguish |
+| `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. The counter only increments when the reconciler synthesises an exit (it no-ops when there's nothing stale), so a non-zero rate or spike means the reconciler is firing - typically because a host missed an exec/exit pair. A sustained zero is ambiguous (either no stale processes to reconcile, or the reconciler has wedged); rely on logs/traces or a separate heartbeat to distinguish |
 | `edr.db.query.duration` | histogram | p99 creeping up = DB overloaded or a slow query regressed |
 | `edr.agent.queue.dropped` | counter | Non-zero = agent's local SQLite queue hit its cap. Investigate connectivity |
 
 Recommended alerts (SigNoz, Grafana, wherever your OTel backend lives):
 
-- `edr.offline.hosts > 10% of edr.enrolled.hosts for 15m` — fleet-wide
+- `edr.offline.hosts > 10% of edr.enrolled.hosts for 15m` - fleet-wide
   connectivity issue.
-- `rate(edr.events.ingested[5m]) == 0 for 5m` — server isn't receiving
+- `rate(edr.events.ingested[5m]) == 0 for 5m` - server isn't receiving
   events. Either all agents are offline (see above), ingress is
   broken, or the server wedged.
 - `rate(edr.retention.rows_deleted[1h]) == 0 for 2h` when
-  `EDR_RETENTION_DAYS > 0` — retention job stuck.
-- `rate(edr.agent.queue.dropped[5m]) > 0` — endpoints losing data.
+  `EDR_RETENTION_DAYS > 0` - retention job stuck.
+- `rate(edr.agent.queue.dropped[5m]) > 0` - endpoints losing data.
 
 Server logs go through the same OTLP pipeline (via `otelslog`) with
 `service.name=fleet-edr-server`. Use them for audit-style queries like
@@ -592,11 +592,11 @@ a comma-separated list of code-signing team IDs, e.g.
 `sudoers_tamper` rule. Direct writes to `/etc/sudoers`,
 `/etc/sudoers.d/*`, `/private/etc/sudoers`, or
 `/private/etc/sudoers.d/*` always fire unless the writing process's
-path is on this list. The two path forms are the same file —
+path is on this list. The two path forms are the same file -
 `/etc` is a symlink to `/private/etc` on macOS and ES reports
-whichever path the caller opened — so alerts can surface either,
+whichever path the caller opened - so alerts can surface either,
 but the allowlist still applies in both cases. visudo / sudoedit
-don't need to be allowlisted — they write a temp file and
+don't need to be allowlisted - they write a temp file and
 atomically rename it, so the rule never sees their open events.
 The typical use case is allowlisting an MDM agent's binary path.
 Set it as a comma-separated list of absolute paths, e.g.
@@ -613,7 +613,7 @@ admin SSH sessions running scripts from `/tmp/` or curling tools
 /tmp/script.sh` is identical at the syscall level to an attacker
 pivoting in via a compromised SSH key). The allowlist suppresses
 the rule when the **non-shell ancestor's path** is on the list, for
-both trigger shapes — the shell and the temp-binary or outbound
+both trigger shapes - the shell and the temp-binary or outbound
 connection still need to be there in their normal positions, this
 knob only changes which root processes count as benign.
 
@@ -626,7 +626,7 @@ EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST=/usr/libexec/sshd-session,/Applications/Ter
 
 Add the absolute path of any other terminal emulator your fleet
 uses (Hyper, kitty, Alacritty, Warp, ...). Tmux and screen don't
-need to be on the list — they appear as the SHELL in the chain
+need to be on the list - they appear as the SHELL in the chain
 (non-shell → tmux → /tmp/...), and tmux's parent is always one of
 the entry points already covered.
 
@@ -657,14 +657,14 @@ EDR_DISABLED_RULES=osascript_network_exec
 
 The rule is then gone from the engine's active set AND from
 `GET /api/rules`, so dashboards, alerts, and `tools/gen-rule-docs`
-all stop referencing it. The disable is **boot-time only** — apply
+all stop referencing it. The disable is **boot-time only** - apply
 a new value by restarting the server; hot reload is intentionally
 out of scope per the spec contract. Unknown rule IDs in the list
 log a WARN at boot (`EDR_DISABLED_RULES references unknown
 rule_id...`) but don't fail the boot, so a stale config doesn't
 take a deployment down.
 
-Prefer the allowlist knobs above when they're expressive enough —
+Prefer the allowlist knobs above when they're expressive enough -
 they silence the noise without giving up the rule's coverage for
 genuinely-malicious inputs. Reach for `EDR_DISABLED_RULES` only
 when the rule is wrong for the environment and an allowlist would
@@ -704,7 +704,7 @@ needing a restart on their end.
 Shrink `EDR_RETENTION_DAYS`, restart the server, wait for one
 retention run. If that isn't enough, the events table is larger than
 your disk; you need either more disk or a shorter window. There is no
-online rebalance — expand storage and restart.
+online rebalance - expand storage and restart.
 
 **`docker compose up -d` fails with `volume edr-mysql-data is in use`.**
 A previous server process didn't shut down cleanly. `docker compose

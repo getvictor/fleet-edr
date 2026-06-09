@@ -13,7 +13,7 @@ import (
 )
 
 // StateCookieName is the HTTP cookie that carries the per-flow secrets the callback needs to verify. HttpOnly + Secure (in TLS
-// deployments) + SameSite=Lax. Lax is REQUIRED — Strict would block the IdP's cross-site GET-redirect that lands the callback.
+// deployments) + SameSite=Lax. Lax is REQUIRED - Strict would block the IdP's cross-site GET-redirect that lands the callback.
 const StateCookieName = "edr_oidc_state"
 
 // stateClaim is the JSON payload signed into the state cookie. State is the OAuth2 state value (echoed in the AuthURL and the callback
@@ -33,7 +33,7 @@ type stateClaim struct {
 var ErrInvalidStateCookie = errors.New("oidc: state cookie invalid")
 
 // EncodeStateClaim serializes c into "<base64url(json)>.<base64url(sig)>" where sig = HMAC-SHA256(payload64, key). The cookie is not
-// confidential — payload64 is plain JSON over base64 so anyone holding the cookie can read state + nonce + code_verifier — but it IS
+// confidential - payload64 is plain JSON over base64 so anyone holding the cookie can read state + nonce + code_verifier - but it IS
 // authenticated against the signing key. An attacker who replays the cookie at a different IdP or with a swapped state value gets a
 // signature mismatch on decode.
 func EncodeStateClaim(key []byte, state, nonce, codeVerifier, redirect string, now time.Time) (string, error) {
@@ -103,7 +103,7 @@ func DecodeStateClaim(key []byte, cookie string, now time.Time, ttl time.Duratio
 		return nil, fmt.Errorf("%w: expired", ErrInvalidStateCookie)
 	}
 	if now.Before(issued.Add(-ttl)) {
-		// Future-dated cookie — clock-skew vector. Reject.
+		// Future-dated cookie - clock-skew vector. Reject.
 		return nil, fmt.Errorf("%w: future-dated", ErrInvalidStateCookie)
 	}
 	return &DecodedState{

@@ -5,7 +5,7 @@
 The system SHALL record an audit row for every authentication outcome, success or
 failure, regardless of authentication method. Action names MUST follow the pattern
 `auth.<flow>.<outcome>` where `<flow>` is one of `oidc` or `breakglass` (named after
-the *flow* that produced the outcome, not the credential type — the break-glass flow
+the *flow* that produced the outcome, not the credential type - the break-glass flow
 combines a local password and a WebAuthn assertion under a single `breakglass` flow
 so dashboards stay cohesive). The action name MUST be one of `auth.oidc.success`,
 `auth.oidc.failure`, `auth.oidc.callback.error`, `auth.breakglass.success`, or

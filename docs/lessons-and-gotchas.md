@@ -165,7 +165,7 @@ quantified 393/393 exec events redacted on edr-dev). It is NOT a per-binary
 
 Effect on app-control rules:
 
-- **TEAMID rules** cannot fire by `team_id` alone — the field is always empty.
+- **TEAMID rules** cannot fire by `team_id` alone - the field is always empty.
 - **SIGNINGID rules** degrade from `<TeamID>:<bundle.id>` to
   `platform:<bundle.id>` for every target, regardless of who actually signed
   the binary.
@@ -174,8 +174,8 @@ Effect on app-control rules:
 
 Workaround (in tree):
 [`SigningInfoFallback`](../extension/edr/extension/SigningInfoFallback.swift)
-reads the binary's signing block via `SecCodeCopySigningInformation` — the
-same path `codesign -dvv` walks — and caches the result per (inode, mtime).
+reads the binary's signing block via `SecCodeCopySigningInformation` - the
+same path `codesign -dvv` walks - and caches the result per (inode, mtime).
 `ESFSubscriber.buildAuthTuple` consults it whenever `target.team_id` is
 empty, so TEAMID matches and the SIGNINGID `<TeamID>:<bundle.id>` shape both
 recover on edr-dev.

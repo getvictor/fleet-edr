@@ -222,12 +222,12 @@ jobs:
           # ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, which the runner exposes
           # automatically because the job declares `id-token: write`.
           # COSIGN_YES skips the interactive "are you sure?" confirmation
-          # for non-interactive CI runs — equivalent to passing --yes on
+          # for non-interactive CI runs - equivalent to passing --yes on
           # every cosign invocation below.
           COSIGN_YES: 'true'
         # `cosign sign-blob` emits a .sig and a .pem (the ephemeral signing
         # cert from Fulcio) per artifact. Every shipped file gets the same
-        # treatment — pkg, mobileconfigs, SHA256SUMS, AND both SBOMs — so
+        # treatment - pkg, mobileconfigs, SHA256SUMS, AND both SBOMs - so
         # a tampered SBOM is just as detectable as a tampered pkg. Both
         # the .sig and the .pem land on the release; verifiers run
         # `cosign verify-blob --certificate <file>.pem --signature
@@ -357,7 +357,7 @@ jobs:
       # the OCI registry as a cosign attestation, which is what makes
       # `cosign download sbom <ref>` work for downstream verifiers.
       #
-      # upload-release-assets: false is load-bearing — the action's
+      # upload-release-assets: false is load-bearing - the action's
       # default would race the parallel macos-pkg job for the GitHub
       # Release that owns the source-tree SBOMs. The image SBOM lives
       # in the registry, not in the Release.

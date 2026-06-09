@@ -57,9 +57,9 @@ WORKDIR /src
 # the "recursively copying context directories" scanner rule.
 #
 # Server binary dependencies:
-#   go.mod + go.sum  — module graph
-#   server/          — the server code + embedded UI assets
-#   internal/        — shared helpers (envparse, observability) referenced
+#   go.mod + go.sum - module graph
+#   server/ - the server code + embedded UI assets
+#   internal/ - shared helpers (envparse, observability) referenced
 #                      by both server and agent packages in the monorepo
 COPY go.mod go.sum ./
 COPY server ./server
@@ -91,7 +91,7 @@ COPY --from=build /out/fleet-edr-server /usr/local/bin/fleet-edr-server
 USER nonroot:nonroot
 EXPOSE 8088
 
-# No HEALTHCHECK here — compose-level healthcheck hitting /readyz owns that so
+# No HEALTHCHECK here - compose-level healthcheck hitting /readyz owns that so
 # the whole stack can key on it. Keeping the image shell-less means a curl-
 # based HEALTHCHECK would need a static binary copy anyway.
 ENTRYPOINT ["/usr/local/bin/fleet-edr-server"]

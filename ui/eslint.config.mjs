@@ -80,8 +80,8 @@ export default defineConfig([
     // Force every fetch primitive that adds CSRF protection to go
     // through attachCsrfHeader() in api.ts. Hardcoding "X-CSRF-Token"
     // (or any case variant) anywhere else risks (a) drifting the
-    // header casing — JS object keys are case-sensitive, so a stray
-    // "X-Csrf-Token" would silently send TWO headers after a merge —
+    // header casing - JS object keys are case-sensitive, so a stray
+    // "X-Csrf-Token" would silently send TWO headers after a merge -
     // and (b) duplicating the unsafe-method + getCsrfToken() guard
     // logic, which is exactly the path that put a CSRF regression
     // into auth.ts's break-glass surface. api.ts itself is the

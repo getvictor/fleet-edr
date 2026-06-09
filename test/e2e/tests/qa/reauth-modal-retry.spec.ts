@@ -125,7 +125,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
         alertId = await seedCriticalAlert(seedDB, {
           hostId: TEST_HOST_ID,
           ruleId: `${TEST_RULE_ID}-oidc`,
-          title: "OIDC reauth modal — critical alert",
+          title: "OIDC reauth modal - critical alert",
         });
       } finally {
         await seedDB.end();
@@ -133,7 +133,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
 
       await page.goto("/ui/alerts");
       const oidcAlertRow = page.locator("tr", {
-        hasText: "OIDC reauth modal — critical alert",
+        hasText: "OIDC reauth modal - critical alert",
       });
       await expect(oidcAlertRow).toBeVisible({ timeout: 15_000 });
 
@@ -165,7 +165,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
       ).toBeVisible();
       await expect(dialog.getByLabel(/password/i)).not.toBeVisible();
 
-      // Click "Continue with single sign-on" — full-page navigate to
+      // Click "Continue with single sign-on" - full-page navigate to
       // /api/auth/login?reauth=1&next=/ui/alerts → dex → callback →
       // back to /ui/alerts with a fresh session.
       await Promise.all([
@@ -184,7 +184,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
 
       // The OIDC reauth path does NOT auto-retry (page navigated away
       // mid-promise; React state is gone). Operator re-clicks Resolve
-      // — chokepoint sees fresh last_auth_at, allows. Same row-scoped
+      // - chokepoint sees fresh last_auth_at, allows. Same row-scoped
       // locator pattern as the first click so the retry can't land on
       // the wrong row.
       await expect(oidcAlertRow).toBeVisible({ timeout: 15_000 });
@@ -192,12 +192,12 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
 
       // Row vanishing is the operator-visible success signal
       // (AlertList's statusFilter="open" + applyStatus filters
-      // resolved rows out of the in-memory list — see
+      // resolved rows out of the in-memory list - see
       // ui/src/components/AlertList.tsx). The helper additionally
       // pins the DB state + the single authz.alert.resolve audit row.
       await expectAlertResolvedAndAudited(
         page,
-        "OIDC reauth modal — critical alert",
+        "OIDC reauth modal - critical alert",
         alertId,
       );
     } finally {
@@ -243,7 +243,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
         alertId = await seedCriticalAlert(setupDB, {
           hostId: TEST_HOST_ID,
           ruleId: `${TEST_RULE_ID}-bg`,
-          title: "break-glass reauth modal — critical alert",
+          title: "break-glass reauth modal - critical alert",
         });
       } finally {
         await setupDB.end();
@@ -251,7 +251,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
 
       await page.goto("/ui/alerts");
       const breakglassAlertRow = page.locator("tr", {
-        hasText: "break-glass reauth modal — critical alert",
+        hasText: "break-glass reauth modal - critical alert",
       });
       await expect(breakglassAlertRow).toBeVisible({ timeout: 15_000 });
 
@@ -286,7 +286,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
       // The modal awaits both the per-IP rate, password verify, and
       // WebAuthn assertion; on success it resolves(true) which
       // triggers useReauthRetry to re-fire the original
-      // updateAlertStatus call. NO page navigation here — the retry
+      // updateAlertStatus call. NO page navigation here - the retry
       // happens inside the React tree.
       await dialog.getByLabel(/password/i).fill(BG_PASSWORD);
       await dialog
@@ -301,7 +301,7 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
       await expect(dialog).toBeHidden({ timeout: 15_000 });
       await expectAlertResolvedAndAudited(
         page,
-        "break-glass reauth modal — critical alert",
+        "break-glass reauth modal - critical alert",
         alertId,
       );
     } finally {

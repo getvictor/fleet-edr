@@ -74,7 +74,7 @@ catches the rare attack where a Developer ID cert is stolen but the
 attacker can't push to our GitHub repo. Skip this step if you don't
 have `cosign` installed; the Apple-signature checks above are
 sufficient for most pilots. (Older releases that pre-date the cosign
-roll-out won't have the `.sig` / `.pem` files — `curl` will return
+roll-out won't have the `.sig` / `.pem` files - `curl` will return
 404, and there's nothing to verify.)
 
 The example below uses the same `v0.1.0` placeholder as Step 1 above;
@@ -228,7 +228,7 @@ sudo installer -pkg fleet-edr-v0.1.1.pkg -target /
 The preinstall script stops the old daemon, the postinstall script
 starts the new one. The persisted host token at
 `/var/db/fleet-edr/enrolled.plist` survives, so the agent keeps its
-existing enrollment — no re-approval needed.
+existing enrollment - no re-approval needed.
 
 ## Uninstall
 

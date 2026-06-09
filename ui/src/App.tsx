@@ -68,7 +68,7 @@ function AuthedApp() {
       } catch (err) {
         if (controller.signal.aborted) return;
         if (!(err instanceof Unauthorized401Error)) {
-          // Network / 5xx — same outcome as 401: send to login. The
+          // Network / 5xx - same outcome as 401: send to login. The
           // server is the source of truth; rendering with stale
           // state is worse than showing the sign-in page.
           // eslint-disable-next-line no-console

@@ -211,7 +211,7 @@ func extractRouteRegistration(call *ast.CallExpr) (string, string, bool) {
 	return method, pattern, true
 }
 
-// stringLitValue extracts the literal value from a string-literal AST node. Returns ok=false for anything else — the lint refuses to
+// stringLitValue extracts the literal value from a string-literal AST node. Returns ok=false for anything else - the lint refuses to
 // assert correctness for routes registered with computed patterns because the pattern's value isn't visible at AST time.
 func stringLitValue(expr ast.Expr) (string, bool) {
 	bl, ok := expr.(*ast.BasicLit)

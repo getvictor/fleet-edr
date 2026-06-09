@@ -31,7 +31,7 @@ coverage:
         only_pulls: false
     patch:
       default:
-        # PATCH-LEVEL GATE STAYS ENFORCING. The chronic flake was the project rollup, not the patch coverage — patch
+        # PATCH-LEVEL GATE STAYS ENFORCING. The chronic flake was the project rollup, not the patch coverage - patch
         # gates have consistently passed in the M13 stack. Per-PR new-code coverage is what we actually want to gate on,
         # and the patch gate enforces that here. Sonar's 80% new-code gate is parallel; codecov is held at 70% so it
         # doesn't gate-out PRs that Sonar already accepts.
@@ -48,13 +48,13 @@ flag_management:
     statuses:
       - type: project
         # Per-flag project rollups (agent / server / ui) are informational for the same reason the overall project
-        # rollup is — codecov's per-flag numbers have been unreliable on this repo and were the most frequent chronic
+        # rollup is - codecov's per-flag numbers have been unreliable on this repo and were the most frequent chronic
         # flake in the M13 stack ("codecov/project/ui at 14.4% vs 70% target" on Go-only PRs that didn't touch the UI
         # tree at all). Demote to informational; sonar's per-PR new-code gate remains the authoritative bar.
         informational: true
         target: 70%
       - type: patch
-        # Per-flag patch target stays enforcing. The chronic flake was the rollup, not the patch — patch gates pin
+        # Per-flag patch target stays enforcing. The chronic flake was the rollup, not the patch - patch gates pin
         # new-code coverage per PR and have been consistently honest. Held at 70%; sonar's 80% new-code gate is
         # parallel.
         target: 70%
@@ -82,7 +82,7 @@ comment:
 # Mirror sonar.coverage.exclusions so the two services agree. Generated code,
 # main entrypoints, test harnesses, the Swift extensions (no Go coverage),
 # the JSON-Schema sources, and the test/ directory all stay off the
-# coverage surface. ui/src/** is NO LONGER in the ignore list — the
+# coverage surface. ui/src/** is NO LONGER in the ignore list - the
 # Playwright E2E run captures UI coverage via V8 + source maps, so we
 # want those lines to count. Keep sonar-project.properties'
 # sonar.coverage.exclusions in sync.

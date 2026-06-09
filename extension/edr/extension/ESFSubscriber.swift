@@ -24,7 +24,7 @@ private let fleetSelfAllowSigningIDs: Set<String> = [
 private let authWorkerConcurrency = 4
 
 /// RetainedAuthMessage owns an es_retain_message'd AUTH_EXEC message for the lifetime of a decision worker (#298). RAII: init
-/// retains, deinit releases, exactly once — so the message is released whether the operation runs to completion or is ever
+/// retains, deinit releases, exactly once - so the message is released whether the operation runs to completion or is ever
 /// dropped before responding (a struct + `defer` would leak the message on the drop/cancel path, Gemini). final + @unchecked
 /// Sendable: the worker is the sole owner between retain and release, so there is no shared mutation of the pointee.
 private final class RetainedAuthMessage: @unchecked Sendable {
@@ -41,7 +41,7 @@ private final class RetainedAuthMessage: @unchecked Sendable {
 /// maxAuthDecisionBacklog caps how many AUTH_EXEC decisions may be queued/in-flight on authDecisionQueue before handleAuthExec
 /// decides inline instead of offloading (#298). maxConcurrentOperationCount bounds parallel WORKERS, not queue DEPTH; without
 /// this cap an exec storm would es_retain_message + enqueue without limit, growing an unbounded backlog of retained messages
-/// whose deadlines expire while they wait (CodeRabbit). On saturation we degrade to the pre-#298 inline path for the excess —
+/// whose deadlines expire while they wait (CodeRabbit). On saturation we degrade to the pre-#298 inline path for the excess -
 /// strictly no worse than the old serial behaviour, and self-limiting since the kernel blocks each exec'ing thread until we
 /// respond. 128 is far above normal concurrent-exec depth. handleAuthExec runs on the single serial ES delivery thread, so
 /// reading operationCount here is race-free.
@@ -186,19 +186,19 @@ final class ESFSubscriber: Sendable {
             return
         }
 
-        // Everything past here may walk SecCode (TeamID / leaf-cert fallback) and stream a SHA-256 over the target — tens of
-        // ms on a multi-MB binary — and it currently runs inline on the kernel's single serial AUTH delivery thread. Offload it
+        // Everything past here may walk SecCode (TeamID / leaf-cert fallback) and stream a SHA-256 over the target - tens of
+        // ms on a multi-MB binary - and it currently runs inline on the kernel's single serial AUTH delivery thread. Offload it
         // to a bounded worker so one slow hash cannot serialize (and, once a queued exec burns its deadline, fail-closed DENY)
         // every other exec on the host (#298). Under a saturated backlog, decide inline rather than growing an unbounded queue
-        // of retained messages — strictly no worse than the pre-#298 serial path. The decision logic, the deadline budget, and
-        // the fail-closed/open posture are all unchanged — only the thread they run on moves.
+        // of retained messages - strictly no worse than the pre-#298 serial path. The decision logic, the deadline budget, and
+        // the fail-closed/open posture are all unchanged - only the thread they run on moves.
         if authDecisionQueue.operationCount >= maxAuthDecisionBacklog {
             decideAndRespond(message)
             return
         }
         let retained = RetainedAuthMessage(message)
         authDecisionQueue.addOperation { [self, retained] in
-            // retained releases the message in deinit when this operation is freed — after decideAndRespond has responded,
+            // retained releases the message in deinit when this operation is freed - after decideAndRespond has responded,
             // exactly once, and even if the operation is ever dropped before running.
             decideAndRespond(retained.message)
         }
@@ -207,7 +207,7 @@ final class ESFSubscriber: Sendable {
     /// decideAndRespond runs the full AUTH_EXEC decision for `message` and responds to the kernel: re-derive the target, walk
     /// the identifier tuple, hash under the deadline budget when BINARY rules exist, decide, and dispatch the verdict +
     /// telemetry. Called on the bounded worker for the offloaded common case, and inline on the ES delivery thread for the
-    /// saturated-backlog fallback (#298). `message` must be valid for the call — guaranteed by RetainedAuthMessage on the
+    /// saturated-backlog fallback (#298). `message` must be valid for the call - guaranteed by RetainedAuthMessage on the
     /// worker path and by the live ES callback on the inline path. C structs are re-derived here (not captured): es_process_t /
     /// stat are non-Sendable and their fields point into the message buffer.
     private func decideAndRespond(_ message: UnsafePointer<es_message_t>) {
@@ -291,7 +291,7 @@ final class ESFSubscriber: Sendable {
         let process = msg.process.pointee
         var exec = msg.event.exec
 
-        // Use the exec target for PID, path, and code signing — msg.process
+        // Use the exec target for PID, path, and code signing - msg.process
         // is the process *before* the exec (e.g., xpcproxy), while
         // exec.target is the new executable being loaded.
         let target = exec.target.pointee
@@ -305,7 +305,7 @@ final class ESFSubscriber: Sendable {
 
         let codeSigning = extractCodeSigning(from: target)
         // NOTIFY_EXEC has no kernel deadline, so the sync compute is the
-        // right call here — every event carries a real hash for downstream
+        // right call here - every event carries a real hash for downstream
         // telemetry. The AUTH callback (which has a deadline) already
         // started a lazy fill for the same (inode, mtime), so the common
         // case is a cache hit. lookupOrCompute returns nil when the file
@@ -388,4 +388,4 @@ final class ESFSubscriber: Sendable {
 
 // isHardenedRuntime + cdhashHexString helpers moved to CDHashHex.swift (PR for #210) to keep this file under SwiftLint's
 // file_length cap. The helpers are pure; ESFSubscriber consumes them via their module-internal symbols (Swift's implicit
-// `internal` access — no explicit modifier is required since both files compile into the same module).
+// `internal` access - no explicit modifier is required since both files compile into the same module).

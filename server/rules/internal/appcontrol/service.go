@@ -65,7 +65,7 @@ type ServiceDeps struct {
 
 // NewService builds a Service. Store + Commands + Hosts are required; passing nil for any of them is a wiring bug and panics so
 // cmd/main surfaces it at boot rather than at the first rule-create. Audit is optional (a nil Audit drops the audit row with a WARN
-// log line — the same posture identity's chokepoint uses today on the read-path async fallback).
+// log line - the same posture identity's chokepoint uses today on the read-path async fallback).
 func NewService(deps ServiceDeps) *Service {
 	if deps.Store == nil {
 		panic("appcontrol.NewService: Store must not be nil")
@@ -151,12 +151,12 @@ func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.A
 //     store.CreateRule.
 //  3. Load the post-bump policy + the full rule list so the snapshot
 //     payload reflects current state (the agent sees an INSERT, not a
-//     diff). If this step fails, the rule is persisted but unenforced
-//     — we emit an audit row marking the compose failure AND return
+//     diff). If this step fails, the rule is persisted but unenforced:
+//     we emit an audit row marking the compose failure AND return
 //     an error so the HTTP layer responds 5xx. The next mutation
 //     re-composes from scratch and the rule reaches every host then.
 //  4. Marshal a `set_application_control` payload via
-//     api.MarshalSetApplicationControlPayload — filters disabled +
+//     api.MarshalSetApplicationControlPayload - filters disabled +
 //     expired rules per the wire contract.
 //  5. Fan out: enqueue one command per enrolled host in the deployment.
 //     Per-host failures are accumulated, not aborted; the audit row
@@ -249,7 +249,7 @@ const (
 //   - `no_assignments`: the policy has no assigned host groups (a posture admins explicitly choose by detaching all groups; alarming
 //     if it happens to the seed Default policy, expected if it happens to a quiescent custom policy).
 //   - `no_hosts_resolved`: every assigned host group resolved successfully but to zero hosts (a fresh deployment before any enroll,
-//     or a custom group whose criteria currently match nothing — *not* an infra failure).
+//     or a custom group whose criteria currently match nothing - *not* an infra failure).
 func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (attempted int, failed int, skipReason string) {
 	groups, err := s.store.ListHostGroupsForPolicy(ctx, policyID)
 	if err != nil {
@@ -347,7 +347,7 @@ func (s *Service) resolveHostGroup(ctx context.Context, g api.HostGroup, cache *
 
 // emitAudit records the rule-create event with fanout counts on the
 // payload. Sync Record (not Submit) so a state-changing call's audit
-// trail is durable — the chokepoint's async path is read-only by
+// trail is durable - the chokepoint's async path is read-only by
 // design. Audit failure is logged but does not bubble up: the rule
 // is committed and the fan-out happened; a missing audit row is a
 // dashboard gap to investigate, not a 500 for the operator.
@@ -410,7 +410,7 @@ func (s *Service) emitAudit(
 // req.Actor pass-through); otherwise a "user:<id>" identifier is synthesised so the event still attributes to a stable subject.
 //
 // Nil-audit visibility: when s.audit is nil the call drops the row but emits a WARN log per the NewService contract. Security
-// mutations otherwise lose their audit signal silently — the operator dashboard would show a normal mutation while the audit log
+// mutations otherwise lose their audit signal silently - the operator dashboard would show a normal mutation while the audit log
 // has nothing to correlate against, which is the failure mode CodeRabbit flagged on PR #188.
 //
 // Failed audit emission is logged but not returned; audit is best-effort relative to the mutation that already committed (same

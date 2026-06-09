@@ -281,7 +281,7 @@ func writeMatrixRows(w io.Writer, scenarios []Scenario, coverage map[string][]Ma
 
 // indexMarkersByScenario groups markers by their canonical ID. Synthetic Swift IDs (`swift:` / `swift-ambiguous:` from
 // resolveSwiftMarker) are dropped because they cannot match any scenario row. Other invalid references (a typo'd ID, a
-// stale slug after a spec rename) are still indexed under their literal ID — they don't render because the row iteration
+// stale slug after a spec rename) are still indexed under their literal ID - they don't render because the row iteration
 // uses the canonical scenario list, not this map's key set. The check subcommand reports those typo'd markers separately
 // as invalid references, so leaving them in the map here is harmless and avoids re-threading the canonical set through
 // the report path. Within a group, markers are sorted by (Layer, SourcePath, SourceLine) so cell rendering is

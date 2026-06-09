@@ -114,7 +114,7 @@ tasks:
       ENABLED so the E2E coverage job (monocart-coverage-reports)
       can walk the .map files and remap V8 coverage of the minified
       bundle back to ui/src/**. Output lands at server/ui/dist/ same
-      as build:ui — replaces the production-shape bundle in-place,
+      as build:ui - replaces the production-shape bundle in-place,
       so re-run plain build:ui afterwards if you need a clean prod
       build. CI calls this from the e2e-test job.
     dir: ui
@@ -436,7 +436,14 @@ tasks:
       Run every fast linter. Does NOT include lint:nilaway (inter-procedural
       analysis, ~tens of seconds) or lint:vulncheck (network-bound; queries
       the vulnerability DB); run those explicitly when needed.
-    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md]
+    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md, lint:dashes]
+
+  lint:dashes:
+    desc: |
+      Fail if any tracked text file contains an em dash (U+2014) or en dash (U+2013). The style forbids them: use ": " or
+      " - " (a spaced ASCII hyphen) instead. Backed by tools/lint-no-emdash.sh; CI gate is .github/workflows/no-emdash.yml.
+    cmds:
+      - bash tools/lint-no-emdash.sh
 
   lint:go:
     desc: |
@@ -555,11 +562,11 @@ tasks:
   dev:certs:
     desc: |
       Generate a localhost TLS cert + key at tmp/dev.crt and tmp/dev.key so dev:server
-      can boot in the same TLS-required posture as production (issue #140 — "dev mirrors
+      can boot in the same TLS-required posture as production (issue #140 - "dev mirrors
       prod"). Prefers mkcert (https://github.com/FiloSottile/mkcert), which installs a
       local CA into the system trust store and issues certs every browser accepts
       without warnings; falls back to openssl self-signed when mkcert is absent (e.g.
-      a fresh CI runner) — browsers warn once and the operator clicks "Advanced ->
+      a fresh CI runner) - browsers warn once and the operator clicks "Advanced ->
       Proceed to localhost".
 
       For warning-free dev, install mkcert once on this workstation:
@@ -569,7 +576,7 @@ tasks:
       Idempotent: the task short-circuits when tmp/dev.crt exists and the cert's
       notAfter is more than 24h from now. Delete tmp/dev.crt (or both files) to force
       regeneration. Cert SAN covers localhost + 127.0.0.1 + ::1; access via any other
-      hostname (e.g. a LAN IP from a UTM VM) shows a cert mismatch — add the extra
+      hostname (e.g. a LAN IP from a UTM VM) shows a cert mismatch - add the extra
       hostname to the mkcert invocation (or to the openssl -addext SAN list in the
       fallback path) and delete tmp/dev.crt to force regeneration.
     generates:
@@ -595,10 +602,10 @@ tasks:
 
   dev:server:
     desc: |
-      Run the server against local MySQL at https://localhost:8088 (issue #140 — dev
+      Run the server against local MySQL at https://localhost:8088 (issue #140 - dev
       mirrors prod). TLS uses the cert pair from `task dev:certs`. Binds 0.0.0.0:8088
       so a UTM/QEMU VM agent on the bridge interface (typically 192.168.64.1 from inside
-      the VM) can reach it; the cert SAN covers localhost + 127.0.0.1 + ::1 only — a
+      the VM) can reach it; the cert SAN covers localhost + 127.0.0.1 + ::1 only - a
       remote host accessing via a different name sees a cert mismatch. On an untrusted
       LAN, override EDR_LISTEN_ADDR back to 127.0.0.1:8088. The DSN uses an empty
       password to match the docker-compose mysql service (MYSQL_ALLOW_EMPTY_PASSWORD=yes);
@@ -634,7 +641,7 @@ tasks:
       # Dev-only deterministic session HMAC key. Required when break-glass or OIDC is
       # configured (the server refuses to boot without it). Production deployments
       # MUST supply a real random secret via EDR_SESSION_SIGNING_KEY_FILE (Docker
-      # secrets convention) — never reuse this placeholder. Length: 49 bytes, well
+      # secrets convention) - never reuse this placeholder. Length: 49 bytes, well
       # past the 32-byte minimum the bootstrap validates.
       EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
       # Default dev mode is break-glass-only (no OIDC IdP wired up). For the OIDC-against-dex
@@ -645,7 +652,7 @@ tasks:
       # browser-observed origin and any RP_ORIGINS entry rejects the WebAuthn ceremony
       # with a generic "Setup failed" in the UI. CookieSecure flips on automatically
       # via cfg.TLSEnabled() in cmd/main, so session + reauth cookies now carry the
-      # Secure attribute — same shape as prod.
+      # Secure attribute - same shape as prod.
       EDR_BREAKGLASS_RP_ID: localhost
       EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
@@ -816,7 +823,7 @@ tasks:
       sign-in JIT-provisions the user as `analyst`; promote via SQL
       per docs/authz.md to test the role matrix.
 
-      HTTPS-only since issue #140 — depends on dev:certs and binds the
+      HTTPS-only since issue #140 - depends on dev:certs and binds the
       dex redirect URL to https://localhost:8088/api/auth/callback;
       config/dex/dev-config.yaml's redirectURIs list mirrors that.
     deps: [dev:certs]
@@ -834,7 +841,7 @@ tasks:
       EDR_BREAKGLASS_RP_ID: localhost
       EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
       # OIDC: point at the local dex from qa:up. Dex itself runs over plain HTTP
-      # on :5556 — that's the dex container's listener, not the EDR's, and the
+      # on :5556 - that's the dex container's listener, not the EDR's, and the
       # OIDC client lib speaks HTTP to the issuer just fine. The redirect URL
       # MUST match config/dex/dev-config.yaml's redirectURIs entry exactly,
       # both sides on https://localhost:8088 (issue #140).

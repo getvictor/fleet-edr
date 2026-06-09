@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { PoliciesList } from "./PoliciesList";
 import * as api from "../../api";
-import type { ApplicationControlPolicy } from "../../types";
+import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";
 
 const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationControlPolicy => ({
   id: 1,
@@ -17,6 +17,22 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
   updated_by: "user:1",
   // Default fixture mirrors the Phase A seed: Default policy assigned to all-hosts is exactly 1 assignment.
   assignment_count: 1,
+  ...over,
+});
+
+const makeRule = (over: Partial<ApplicationControlRule> = {}): ApplicationControlRule => ({
+  id: 1,
+  policy_id: 1,
+  rule_type: "BINARY",
+  identifier: "abc123",
+  action: "BLOCK",
+  enforcement: "ENFORCED",
+  enabled: true,
+  severity: "medium",
+  source: "manual",
+  created_at: "2026-05-14T00:00:00Z",
+  updated_at: "2026-05-14T00:00:00Z",
+  created_by: "system",
   ...over,
 });
 
@@ -88,8 +104,24 @@ describe("PoliciesList", () => {
     await waitFor(() => {
       expect(screen.getByText("Default")).toBeInTheDocument();
     });
-    // The "Rules" column should render the em dash placeholder.
-    expect(screen.getByText("—")).toBeInTheDocument();
+    // The "Rules" column should render the dash placeholder.
+    expect(screen.getByText("-")).toBeInTheDocument();
+  });
+
+  it("renders the rule count when the policy carries a rules array", async () => {
+    vi.mocked(api.listAppControlPolicies).mockResolvedValue([
+      makePolicy({ name: "WithRules", rules: [makeRule({ id: 1 }), makeRule({ id: 2 })] }),
+    ]);
+    render(
+      <MemoryRouter>
+        <PoliciesList />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("WithRules")).toBeInTheDocument();
+    });
+    // rules present, so ruleCount renders the length rather than the "-" placeholder.
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("renders assignment_count with the appropriate singular / plural / zero label", async () => {

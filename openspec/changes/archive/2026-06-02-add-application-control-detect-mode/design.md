@@ -1,15 +1,15 @@
-# Application Control: Detect mode — design notes
+# Application Control: Detect mode - design notes
 
 ## Context
 
 The full Application Control plan lives at `ai/policy/plan.md` and the Phase A blueprint at
 `openspec/changes/add-application-control/`. This change opens the Phase B arc by activating one
-slice of it — per-rule Detect mode — and bundles two adjacent fixes that live on the same AUTH-path
+slice of it - per-rule Detect mode - and bundles two adjacent fixes that live on the same AUTH-path
 code (default-Detect on rule creation; the AUTH-deny telemetry gap).
 
-The remaining Phase B work — Lockdown (`default_action=BLOCK`), allowlist
+The remaining Phase B work - Lockdown (`default_action=BLOCK`), allowlist
 (`action=ALLOW`/`SILENT_BLOCK`), pre-deploy simulation, server-pushed failsafe carve-outs,
-CERTIFICATE/PATH rule types — lives in a separate change so this PR fits the v0.1.0 release window.
+CERTIFICATE/PATH rule types - lives in a separate change so this PR fits the v0.1.0 release window.
 
 **Current state (after the Phase A close-out PR):**
 
@@ -28,7 +28,7 @@ CERTIFICATE/PATH rule types — lives in a separate change so this PR fits the v
 **Constraints:**
 
 - ESF AUTH_EXEC deadline is a hard kernel-side limit. Adding the Detect branch adds zero map
-  lookups — same precedence walk; only the post-walk action changes. No latency budget impact.
+  lookups - same precedence walk; only the post-walk action changes. No latency budget impact.
 - Per ADR-0004, cross-context calls go through `api/` packages. The new event kind flows through
   the existing event channel between `endpoint` and `rules`/`detection`. No new cross-context calls.
 - Per `CLAUDE.md` test-style matrix: PBT for the AUTH-path decision invariants; example-based for
@@ -71,7 +71,7 @@ would force every consumer (event router, alert mapper, alert detail UI) to bran
 and risk silently treating one type as the other when the branch is forgotten. The wire-format
 cost is one new event_type string; the rule shape is otherwise identical to `application_control_block`.
 
-*Alternatives considered:* a discriminator field on `application_control_block`. Rejected — the
+*Alternatives considered:* a discriminator field on `application_control_block`. Rejected - the
 flag's default value becomes the "old shape" assumption and consumers that don't yet branch on it
 silently misattribute. A new event kind makes the unknown-shape case loud.
 
@@ -84,11 +84,11 @@ still pick PROTECT with one click. The PATCH endpoint accepts either value.
 The rationale is the EDR-grade rollout-safety norm CrowdStrike's IOC Management embodies: the
 *easy path* must be the *safe path*. An operator who pastes a rule and clicks Save lands in Detect
 mode, sees would-block alerts, decides whether to promote. An operator who consciously authors a
-PROTECT rule is making a deliberate choice. Inverting this — defaulting to PROTECT — means the
+PROTECT rule is making a deliberate choice. Inverting this - defaulting to PROTECT - means the
 first mistake is a brick, not an alert.
 
 *Alternatives considered:* keep the default at PROTECT and require operators to opt into Detect.
-Rejected — that's the Santa posture, where "Monitor mode" is a global setting and individual rule
+Rejected - that's the Santa posture, where "Monitor mode" is a global setting and individual rule
 authoring assumes the operator knows what they're doing. The EDR-grade posture inverts the
 relationship.
 
@@ -96,9 +96,9 @@ relationship.
 
 The Phase A spec is inconsistent here. The MODIFIED `endpoint-event-collection` "Process exec
 authorization" requirement says `BLOCK`/`PROTECT` denies and "Otherwise the system MUST allow the
-exec and emit an `exec` event describing the new image" — implying the deny path skips the exec
+exec and emit an `exec` event describing the new image" - implying the deny path skips the exec
 event. The ADDED scenario says "the canonical exec channel observes the denied attempt for normal
-telemetry purposes" — implying the opposite. The shipped code follows the MODIFIED requirement.
+telemetry purposes" - implying the opposite. The shipped code follows the MODIFIED requirement.
 
 The Detect-mode change reconciles by codifying that **every AUTH_EXEC decision emits a
 corresponding telemetry event**, with a `decision` field discriminating among `allowed`, `blocked`,
@@ -107,7 +107,7 @@ and `would_block`. Reasoning:
 - Without the regular exec event on deny, the graph builder never materialises a process row for
   the attempted-but-blocked exec. Catalog detection rules (which key on the process graph) don't
   observe the attempt. An attacker probing with a blocked binary triggers only the deduped block
-  alert — the behavioral rules above don't fire on repetition because the events that would feed
+  alert - the behavioral rules above don't fire on repetition because the events that would feed
   them never reach the pipeline.
 - With the regular exec event on deny, repeated blocked attempts feed `suspicious_exec` and friends
   exactly the way an allowed exec would. Two unrelated detection paths (rule-based blocking +
@@ -123,10 +123,10 @@ the AUTH path made a non-trivial decision.
 
 *Alternatives considered:*
 
-- Emit a separate `auth_decision` event for every AUTH_EXEC. Rejected — doubles the AUTH-path
+- Emit a separate `auth_decision` event for every AUTH_EXEC. Rejected - doubles the AUTH-path
   event volume and forces every catalog rule to join across two event kinds for what is logically
   one process exec.
-- Keep AUTH-deny silent on the regular channel. Rejected — that's the status quo, and it's the bug
+- Keep AUTH-deny silent on the regular channel. Rejected - that's the status quo, and it's the bug
   this change fixes.
 
 ### Alert subtype, not a new source
@@ -137,7 +137,7 @@ Phase A blocks become `subtype='block'`; would-blocks become `subtype='would_blo
 Phase B work (allow-with-warn, silent-block) extends the same subtype dimension.
 
 *Alternatives considered:* extend the `source` ENUM to `('detection', 'application_control_block',
-'application_control_would_block')`. Rejected — the source dimension communicates *which subsystem
+'application_control_would_block')`. Rejected - the source dimension communicates *which subsystem
 produced the alert*, and both shapes are produced by application control. Subtype is the right
 axis.
 
@@ -178,12 +178,12 @@ mandates the logical keys above.
 
 *Alternatives considered:*
 
-- *Keep `process_id` in the key for both sources.* Rejected — the original defect this section
+- *Keep `process_id` in the key for both sources.* Rejected - the original defect this section
   fixes. The post-promotion clutter is the user-visible failure mode.
 - *Include subtype in the dedup key.* Rejected for the same reason: would split the
   would_block → block lifecycle into two rows. Phase B simulation (would-allow vs would-block in
   Lockdown) will need its own alert lifecycle anyway and can revisit then.
-- *Use a single key `(source, host_id, rule_id)` for both sources.* Rejected — would collapse
+- *Use a single key `(source, host_id, rule_id)` for both sources.* Rejected - would collapse
   every match of one catalog rule on a host into one row even when the rule legitimately fires on
   distinct processes (e.g. `suspicious_exec` catching three different malware instances on the
   same host). The detection side needs the process dimension.
@@ -215,7 +215,7 @@ generic rule PATCH already in scope.
 - **Telemetry-on-deny volume.** Adding the regular exec event to every blocked AUTH_EXEC roughly
   doubles the event count on the deny path. For typical fleets this is negligible (blocks are
   rare); for a misconfigured-broad-rule scenario the volume is bounded by the same alert dedup
-  that bounds the block-event volume — both share the upload batch.
+  that bounds the block-event volume - both share the upload batch.
 - **`decision` field absence semantics.** The field is absent for ordinary allowed execs and
   present for AUTH-flagged execs. Consumers that switch on `decision` see `nil` for the 99.9% case
   and one of `blocked`/`would_block` otherwise. This is the standard "optional field" Go/Swift
@@ -226,7 +226,7 @@ generic rule PATCH already in scope.
   than rendering blank.
 - **Rule promotion races.** A rule promoted from DETECT to PROTECT while an in-flight
   `application_control_would_block` event is on the upload queue produces a `would_block` alert
-  *after* the rule already has `enforcement=PROTECT`. Operationally this is fine — the alert is
+  *after* the rule already has `enforcement=PROTECT`. Operationally this is fine - the alert is
   historically accurate (the AUTH decision at the time was Detect), and the next exec will block.
   Worth documenting; not worth coordination.
 
@@ -253,7 +253,7 @@ No customer-facing migration. The product has not shipped its first release.
 ## Open Questions
 
 - **Alert subtype rendering.** The visual difference between "would have blocked" and "blocked" in
-  the alerts list — distinct chip color? distinct icon? text-only? Defer to the UI implementation;
+  the alerts list - distinct chip color? distinct icon? text-only? Defer to the UI implementation;
   the spec mandates that the two be visually distinguishable, not a specific palette.
 - **Promote-to-Protect confirmation.** Does promoting a rule require an explicit reason field, or
   is the per-rule audit row sufficient? The spec mandates an audit event on enforcement change;

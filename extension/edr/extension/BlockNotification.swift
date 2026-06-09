@@ -6,7 +6,7 @@ import Foundation
 /// target, which the current Xcode project deliberately doesn't have
 /// (each binary is a thin slice with its own entitlements set).
 ///
-/// Renaming any of these strings is a wire-shape contract break —
+/// Renaming any of these strings is a wire-shape contract break -
 /// the host app's NotificationListener and this NotificationClient
 /// would drift apart and the next AUTH_EXEC denial would silently
 /// fail to surface a user-visible alert.
@@ -31,7 +31,7 @@ let blockNotificationDropDir = "/private/tmp/fleet-edr-notify-drop"
 /// blockNotificationPurgeWindow caps how long a notification file
 /// lives on disk after the extension writes it. The host app's
 /// FSEvents source picks up new files in under a second, so 5
-/// minutes is much longer than the host-app processing time —
+/// minutes is much longer than the host-app processing time -
 /// covers the "host app was offline when the notification fired"
 /// case while preventing /private/tmp from filling up indefinitely
 /// across a fleet of denied execs.
@@ -45,7 +45,7 @@ let blockNotificationPeerRequirement =
     "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
 
 /// BlockNotificationPayload mirrors the host app's Codable shape.
-/// JSON tags are load-bearing — they have to stay in lockstep with
+/// JSON tags are load-bearing - they have to stay in lockstep with
 /// the host-app copy.
 /// See edr/edr/BlockNotification.swift for full field documentation.
 /// In particular:

@@ -1,0 +1,31 @@
+name: No em dashes
+
+# Fails a PR that introduces an em dash (U+2014) or en dash (U+2013) into any tracked text file. The repo style forbids
+# them: use ": " or " - " (a spaced ASCII hyphen) instead (see CLAUDE.md). The check is a fast grep over tracked files, so
+# it runs unconditionally rather than behind a changed-paths gate: an em dash can land in any text file, not a fixed set.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  no-emdash:
+    name: No em dashes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check for em/en dashes in tracked files
+        run: bash tools/lint-no-emdash.sh

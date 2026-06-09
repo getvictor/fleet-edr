@@ -6,9 +6,9 @@ import { openDB, resetDB } from "../../fixtures/db";
 
 // Application Control policy editor (/ui/app-control/policies/<id>). The spec calls out three lifecycle
 // invariants:
-//   1. operator-stages-and-saves-a-policy-change — staged BINARY rule + non-empty reason POSTs and persists.
-//   2. save-is-blocked-without-a-reason — submit stays disabled until the reason is filled.
-//   3. invalid-path-or-hash-is-rejected-at-staging — client-side validation prevents a malformed hash from
+//   1. operator-stages-and-saves-a-policy-change - staged BINARY rule + non-empty reason POSTs and persists.
+//   2. save-is-blocked-without-a-reason - submit stays disabled until the reason is filled.
+//   3. invalid-path-or-hash-is-rejected-at-staging - client-side validation prevents a malformed hash from
 //      being saved and surfaces an operator-visible error.
 //
 // EnsureDefaultPolicy seeds a Default policy at boot. resetDB does NOT touch app_control_policies, so the
@@ -19,7 +19,7 @@ async function defaultPolicyID(db: Connection): Promise<number> {
     "SELECT id FROM app_control_policies WHERE name = 'Default' LIMIT 1",
   )) as [Array<{ id: number | string }>, unknown];
   if (rows.length === 0) {
-    throw new Error("defaultPolicyID: the seed 'Default' policy is missing — bootstrap did not run");
+    throw new Error("defaultPolicyID: the seed 'Default' policy is missing - bootstrap did not run");
   }
   return Number(rows[0].id);
 }

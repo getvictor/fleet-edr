@@ -30,7 +30,7 @@ const UI_DIST = join(REPO_ROOT, "server", "ui", "dist");
 // and Vite emits sibling .map files at
 //   server/ui/dist/assets/index-XYZ.js.map
 // monocart's default resolver would HTTP-fetch the .map URL, which
-// only works while the dev server is alive — and the converter runs
+// only works while the dev server is alive - and the converter runs
 // AFTER the server has been drained for Go coverage. Loading the
 // .map from disk side-steps that ordering constraint.
 function diskPathFor(url) {
@@ -92,7 +92,7 @@ async function main() {
       !sourcePath.includes("/node_modules/"),
   });
 
-  // One malformed JSON file shouldn't poison the merge — a partial
+  // One malformed JSON file shouldn't poison the merge - a partial
   // result is more useful than no result. Skip + log each bad payload
   // so an operator can investigate but the LCOV still emits.
   let merged = 0;

@@ -57,7 +57,7 @@
     // Preserve single newlines inside a paragraph so list-style content
     // (e.g. "1. ...\n2. ..." in suspicious_exec's description) survives
     // rendering. Blank-line splitting still happens at the React level
-    // — this rule only protects the in-paragraph linebreaks HTML would
+    // - this rule only protects the in-paragraph linebreaks HTML would
     // otherwise collapse into a space.
     white-space: pre-line;
   }
@@ -77,7 +77,7 @@
     }
   }
 
-  // Severity pill — same colour vocabulary as the alerts page so an analyst
+  // Severity pill - same colour vocabulary as the alerts page so an analyst
   // moving between alert rows and rule details sees a consistent visual.
   &__sev {
     display: inline-block;

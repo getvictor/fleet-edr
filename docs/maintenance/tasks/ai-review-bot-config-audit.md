@@ -6,12 +6,12 @@
 
 ## Why this matters
 
-`.coderabbit.yaml` (and any future bot configs — Copilot custom instructions,
+`.coderabbit.yaml` (and any future bot configs - Copilot custom instructions,
 Gemini Code Assist style guides, Qodo policy files) sit in the same gap as
 `CLAUDE.md`: they actively shape every PR review but no compiler or CI gate
 catches drift. A path glob that no longer matches the tree, a tool key the
 vendor renamed, a docstring threshold that made sense before test/e2e/
-existed — each silently degrades review quality. Nobody notices until a
+existed - each silently degrades review quality. Nobody notices until a
 real finding gets buried under noise or a regression slips through because
 the path_instruction for that directory was pointing at a dead path.
 
@@ -24,7 +24,7 @@ because most quarters the answer is "no change needed" and the value is in
 Primary: `.coderabbit.yaml`.
 
 Secondary (when they appear): any future PR-review-bot config files
-committed to the repo — `.github/copilot-instructions.md`,
+committed to the repo - `.github/copilot-instructions.md`,
 `.gemini/styleguide.md`, `.qodo/config.yaml`, etc. Treat this audit as the
 catch-all for the class.
 
@@ -47,7 +47,7 @@ For each top-level key in the repo's `.coderabbit.yaml`, confirm:
   from (e.g. an audit-trail option, a security-tuning preset).
 
 Note any deprecation warnings in CodeRabbit's most recent walkthrough on
-a merged PR — the bot itself flags deprecated keys.
+a merged PR - the bot itself flags deprecated keys.
 
 ### 2. Path glob validity
 
@@ -88,9 +88,9 @@ Pull the most recent ~5 PRs and check whether the pre-merge checks
 (`docstrings`, `title`, `description`) fired with the right cadence:
 
 - If the docstring threshold is silently 100%-passing on every PR, it's
-  probably too low — bump.
+  probably too low - bump.
 - If it's failing on every PR, it's too high or the rule is wrong for
-  the file mix — adjust threshold OR add path filters to the docstring
+  the file mix - adjust threshold OR add path filters to the docstring
   surface.
 - Same for title / description rules.
 
@@ -104,7 +104,7 @@ language in the instruction? If the instruction says "audit append-only
 invariant" but the bot is still flagging style nits in that dir, the
 instruction needs to be either tighter or more specific.
 
-Don't grow the instructions during this sweep — the file should NOT
+Don't grow the instructions during this sweep - the file should NOT
 balloon. If something's missing, file an issue and stop. Tighten or
 remove during this pass; expand on a deliberate future PR.
 
@@ -144,7 +144,7 @@ docs/maintenance/tasks/ai-review-bot-config-audit.md.
 
 Steps:
   1. Check CodeRabbit schema currency vs https://docs.coderabbit.ai/reference/configuration
-     and https://docs.coderabbit.ai/reference/yaml-template — flag any deprecated keys
+     and https://docs.coderabbit.ai/reference/yaml-template - flag any deprecated keys
      used in the repo's .coderabbit.yaml.
   2. For every path_filters + path_instructions glob, verify at least one
      file matches the current tree (use `git ls-files`).
@@ -154,7 +154,7 @@ Steps:
   4. Sanity-check pre_merge_checks thresholds against the last ~5 PRs'
      warnings (target ~10-20% trip rate).
   5. Eyeball path_instructions against the last walkthroughs on those
-     paths — are the instructions actually steering the bot?
+     paths - are the instructions actually steering the bot?
   6. Verify multi-platform glob patterns still work for an EDR extending
      beyond macOS.
 

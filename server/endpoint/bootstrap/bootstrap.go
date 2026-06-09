@@ -33,7 +33,7 @@ type Deps struct {
 	EnrollSecret        string
 	EnrollRatePerMinute int
 	// CommandInserter inserts commands the endpoint context emits (today: only rotate_token). Optional: when nil, rotate_token commits the
-	// new bearer to the DB but the agent will not receive a command — it re-enrolls once the grace window expires.
+	// new bearer to the DB but the agent will not receive a command - it re-enrolls once the grace window expires.
 	CommandInserter CommandInserter
 
 	// Audit is the operator-action recorder. Optional: nil disables audit emission for enrollment.revoke + enrollment.rotate_token.

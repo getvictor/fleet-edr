@@ -6,20 +6,20 @@ Phase A of `add-application-control` shipped the chassis: data model, six rule i
 REST surface, the agent command, the extension's decision engine. With the chassis in place the v0.1.0
 release cut surfaces three close-out items that must land before the first non-demo pilot:
 
-- **#205 — Application Control failsafe carve-out has no critical platform-binary allowlist.** The AUTH_EXEC
+- **#205 - Application Control failsafe carve-out has no critical platform-binary allowlist.** The AUTH_EXEC
   failsafe matches only `teamID == extensionTeamID AND signing_id ∈ fleetSelfAllowSigningIDs`. An admin who
   pastes the SHA-256 of `/sbin/launchd`, `xpcproxy`, `fseventsd`, `kextd`, `sysextd`, `systemextensionsd`,
   `WindowServer`, `loginwindow`, `mds`, or any other Apple-signed platform binary into a `BINARY` block rule
   bricks the host on next boot. Phase A explicitly omits the Santa-equivalent platform-binary floor; v0.1.0
   cannot ship to ten-to-five-hundred-endpoint pilots without it.
-- **#208 — BINARY rule cold-cache first-exec bypass.** Phase A's `handleAuthExec` returns `ES_AUTH_RESULT_ALLOW`
+- **#208 - BINARY rule cold-cache first-exec bypass.** Phase A's `handleAuthExec` returns `ES_AUTH_RESULT_ALLOW`
   whenever the `FileHashCache` does not yet have a SHA-256 entry for the exec target. The cache is filled
   asynchronously off the AUTH callback so the second exec catches the rule, but the first one does not. This
   defeats Application Control for any attacker who needs only one execution to win (drop → persist → reboot
   into the persistence path). The bypass is also trivially deterministic via `(dev, inode, mtime)` mutation:
   rename, atomic-replace, or `touch -m` invalidates the cache key on every exec and keeps returning to the
   cold-cache ALLOW path indefinitely.
-- **#207 — CDHASH doc comment misattributes the Hardened-Runtime gate to Santa.** Phase A's `ESFSubscriber.swift`
+- **#207 - CDHASH doc comment misattributes the Hardened-Runtime gate to Santa.** Phase A's `ESFSubscriber.swift`
   comments claim the CDHASH-only-on-Hardened-Runtime gate "mirrors Santa's behavior so a migrating Santa
   admin's mental model carries over." Santa does not gate CDHASH on Hardened Runtime; it enforces CDHASH on
   any signed binary. The gate is OUR choice (page mapping is lazy on non-hardened processes and not
@@ -113,7 +113,7 @@ binary + snapshot were restored to keep edr-dev in a clean state.
 - AUTH_EXEC subscription succeeded and NOTIFY_EXEC events flow (visible via `log stream --debug` as
   `[ESFSubscriber] exec pid=... path=<private>` lines). Establishes that the new `handleAuthExec` and
   `handleExec` paths run for real execs.
-- `/usr/bin/yes` execs cleanly under a snapshot containing the SIGNINGID rule `platform:com.apple.yes` —
+- `/usr/bin/yes` execs cleanly under a snapshot containing the SIGNINGID rule `platform:com.apple.yes` -
   without my carve-out the rule would have DENIED the exec and emitted an `application_control_block` event
   with a corresponding DENY log line. None of that fired. Carve-out is the only code path that produces this
   outcome.
@@ -122,7 +122,7 @@ binary + snapshot were restored to keep edr-dev in a clean state.
 
 `com.fleetdm.edr.securityextension` is ad-hoc-signed on edr-dev (Developer-ID + notarization is not available
 on this VM). Apple's ESF responds to ad-hoc-signed ES clients by redacting `target.team_id=""` AND forcing
-`target.is_platform_binary=true` for EVERY exec the client sees — a per-client policy on ESF clients whose
+`target.is_platform_binary=true` for EVERY exec the client sees - a per-client policy on ESF clients whose
 host extension is not Developer-ID-signed + notarized, not a per-binary `CS_PLATFORM_BINARY` classification.
 Quantified historically: 393/393 exec events on a fresh queue were redacted (issue #187).
 

@@ -1,5 +1,5 @@
 // Package users owns the `users` table that backs UI login. The store exposes a minimal CRUD surface (Create, GetByEmail) because MVP
-// has exactly one admin account — anything more is v1.1. Password hashing uses argon2id with the same parameter set as the enrollment
+// has exactly one admin account - anything more is v1.1. Password hashing uses argon2id with the same parameter set as the enrollment
 // token hash so a future consolidation into a shared `passcrypto` package is mechanical.
 package users
 
@@ -96,7 +96,7 @@ type CreateRequest struct {
 }
 
 // Create inserts a new user and returns the row (without the hash/salt). Email is normalised to lowercase + trimmed before the
-// uniqueness check — customer admins like to type "Admin@Example.COM" and expect it to resolve to the same account.
+// uniqueness check - customer admins like to type "Admin@Example.COM" and expect it to resolve to the same account.
 func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
@@ -122,7 +122,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	return s.Get(ctx, id)
 }
 
-// CreateOIDCRequest is the shape accepted by CreateOIDC. password_* columns are NULL on the resulting row — OIDC users have no
+// CreateOIDCRequest is the shape accepted by CreateOIDC. password_* columns are NULL on the resulting row - OIDC users have no
 // server-stored credential, only an external identity binding.
 type CreateOIDCRequest struct {
 	Email string
@@ -168,7 +168,7 @@ type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// CreateBreakglassRequest is the shape accepted by CreateBreakglass. password_* columns are NULL on the resulting row — the
+// CreateBreakglassRequest is the shape accepted by CreateBreakglass. password_* columns are NULL on the resulting row - the
 // break-glass redemption flow sets them later in the same transaction that consumes the bootstrap token.
 type CreateBreakglassRequest struct {
 	Email string
@@ -210,7 +210,7 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 }
 
 // HashPassword runs argon2id over the plaintext and returns the resulting (hash, salt) pair. Exported so callers (specifically the
-// break-glass FinishSetup flow) can do the CPU-intensive hash BEFORE opening a database transaction — argon2 holds locks for ~30ms per
+// break-glass FinishSetup flow) can do the CPU-intensive hash BEFORE opening a database transaction - argon2 holds locks for ~30ms per
 // call on M-series hardware, which is unacceptable inside a multi-statement transaction.
 func HashPassword(password string) (hash, salt []byte, err error) {
 	if password == "" {
@@ -234,7 +234,7 @@ func (s *Store) SetPassword(ctx context.Context, ec Executor, userID int64, pass
 }
 
 // SetHashedPassword updates password_hash + password_salt for an existing user using a pre-computed argon2 hash. Skips the argon2 CPU
-// work — caller MUST have computed (hash, salt) via HashPassword or an equivalent argon2id-compatible helper. Used by the break-glass
+// work - caller MUST have computed (hash, salt) via HashPassword or an equivalent argon2id-compatible helper. Used by the break-glass
 // FinishSetup flow so the hash runs OUTSIDE the redemption tx.
 func (s *Store) SetHashedPassword(ctx context.Context, ec Executor, userID int64, hash, salt []byte) error {
 	if len(hash) == 0 || len(salt) == 0 {
@@ -304,7 +304,7 @@ func (s *Store) Count(ctx context.Context) (int64, error) {
 
 // VerifyPassword looks up a user by email and verifies the presented password. On
 // success it returns the user without hash/salt. On any failure it returns
-// ErrNotFound (unknown email) or ErrBadPassword (wrong password) — callers should map
+// ErrNotFound (unknown email) or ErrBadPassword (wrong password) - callers should map
 // both to the same client-facing 401 to prevent email enumeration.
 //
 // Runs the argon2id computation even when the email is unknown so the timing profile
@@ -327,7 +327,7 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 		FROM users WHERE email = ?
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Burn the argon2 cycles anyway so we don't leak via timing. The dummy salt is a per-process constant — argon2id is
+		// Burn the argon2 cycles anyway so we don't leak via timing. The dummy salt is a per-process constant - argon2id is
 		// deterministic given the same salt, producing a stable "unknown email" timing profile. (argon2.IDKey still allocates
 		// its output slice; the timing property we care about is work done under the same memory + cost parameters as the real
 		// path, not allocation-free execution.)
@@ -347,7 +347,7 @@ func (s *Store) VerifyPassword(ctx context.Context, email, password string) (*Us
 	}, nil
 }
 
-// dummySalt is the constant-time fallback salt used when an email lookup misses. Its content doesn't matter — we throw away the hash —
+// dummySalt is the constant-time fallback salt used when an email lookup misses. Its content doesn't matter - we throw away the hash -
 // but its length must match the real salt length or the argon2 cost won't match exactly.
 var dummySalt = make([]byte, argonSaltLen)
 

@@ -1,7 +1,7 @@
 ## Context
 
-The plan for this work — including the EDR-grade reframe of the original Santa-parity sketch and the multi-phase
-roadmap — lives at `claude/policy/plan.md`. This document covers only the architectural decisions for the OpenSpec
+The plan for this work - including the EDR-grade reframe of the original Santa-parity sketch and the multi-phase
+roadmap - lives at `claude/policy/plan.md`. This document covers only the architectural decisions for the OpenSpec
 change in flight (Phase A); follow-on phases (Lockdown / allowlist / notifications / simulation, then migration
 accelerators, then threat-intel ingestion, file-access authorization, and removable-media control) will be proposed
 as separate OpenSpec changes.
@@ -94,7 +94,7 @@ source, and the endpoint event-collection capability gains decisioning at AUTH_E
 because the repo's existing convention names capabilities by their owning subsystem prefix (`server-*`,
 `agent-*`, `extension-*`, `ui-*`); merging into one would diverge from that.
 
-### Data model — four tables in the rules context
+### Data model - four tables in the rules context
 
 Four tables: `app_control_policies`, `app_control_rules`, `host_groups`, `app_control_assignments`. The shape is
 the EDR-grade hierarchy (policy is a named ruleset, rules belong to policies, policies are assigned to host
@@ -116,12 +116,12 @@ Reserved columns set in Phase A and silent until Phase B:
 
 *Alternatives considered:*
 
-- One table with `policy_id NULLABLE` and rules implicitly grouped — rejected. The named-policy abstraction
+- One table with `policy_id NULLABLE` and rules implicitly grouped - rejected. The named-policy abstraction
   is the natural unit of versioning, assignment, simulation (Phase B), and audit; making it second-class adds
   no value.
-- An EAV / generic-attribute table for per-rule metadata — rejected. The set of columns we need is small,
+- An EAV / generic-attribute table for per-rule metadata - rejected. The set of columns we need is small,
   bounded, and known. EAV pays for hypothetical extension we don't expect.
-- Per-context FKs between policies / rules / assignments — kept. These are intra-context FKs (all four tables
+- Per-context FKs between policies / rules / assignments - kept. These are intra-context FKs (all four tables
   live in `rules`), which ADR-0004 explicitly permits. ADR-0004's no-cross-context-FK rule does not apply.
 
 ### Rule identifier types and precedence
@@ -175,7 +175,7 @@ snapshot file format is replaced with a typed JSON snapshot keyed by `(rule_type
 - Synchronous signing-info fetch on AUTH. Rejected; the fetch cost is variable (cache hits in
   `Security.framework` make it fast, cold lookups are not). Bounding the AUTH deadline with a sync external
   call is fragile.
-- An in-extension cache by binary path rather than `(inode, mtime)`. Rejected — same path can be a different
+- An in-extension cache by binary path rather than `(inode, mtime)`. Rejected - same path can be a different
   binary if the file is replaced.
 
 ### Block-event → alert pipeline integration
@@ -219,11 +219,11 @@ existing unversioned routes is fine.
 
 A blocked exec emits `application_control_block` with required fields:
 
-- `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier` — identifying the rule.
-- `matched_identifier` — the actual value from the process that hit the rule (e.g. the CDHash that matched).
-- `severity` — copied from the rule.
-- `custom_msg`, `custom_url` — copied from the rule, may be null.
-- `process`, `ancestry` — the standard event fields all exec-related events carry.
+- `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier` - identifying the rule.
+- `matched_identifier` - the actual value from the process that hit the rule (e.g. the CDHash that matched).
+- `severity` - copied from the rule.
+- `custom_msg`, `custom_url` - copied from the rule, may be null.
+- `process`, `ancestry` - the standard event fields all exec-related events carry.
 
 Existing exec events grow optional `cdhash` and `leaf_cert_sha256` fields. They are optional because the
 lazy-cache miss path will silently omit them; the server is tolerant of their absence.
@@ -232,12 +232,12 @@ lazy-cache miss path will silently omit them; the server is tolerant of their ab
 the block fires and the alert needs to reflect the rule as it was at decision time. The five identifying
 fields suffice; downstream views resolve the rule on demand.
 
-### Failsafes — explicitly deferred to Phase B
+### Failsafes - explicitly deferred to Phase B
 
 Failsafe carve-outs (the policy must not be able to block the agent, the system extension, the host app, or
 `launchd`) are a Phase B concern. In Phase A the only enforced action is `BLOCK`; an admin who installs a
 rule that targets the agent will brick the host. That is acceptable in Phase A only because Phase A has no
-default-deny — every block requires an explicit rule, so an admin can only brick themselves by deliberately
+default-deny - every block requires an explicit rule, so an admin can only brick themselves by deliberately
 authoring a rule that targets us. Phase B introduces Lockdown (default-deny), at which point failsafes
 become non-optional.
 

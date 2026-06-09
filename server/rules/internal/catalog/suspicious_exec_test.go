@@ -362,7 +362,7 @@ func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	// python3 (50) -> /bin/sh as shebang interpreter for /tmp/payload.sh (200). payload.path = /bin/sh, argv[1] = /tmp/payload.sh — the
+	// python3 (50) -> /bin/sh as shebang interpreter for /tmp/payload.sh (200). payload.path = /bin/sh, argv[1] = /tmp/payload.sh - the
 	// kernel-resolved shebang shape.
 	events := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
@@ -401,7 +401,7 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
 		{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
-		// argv[2] is the -c command body — happens to contain ".." which
+		// argv[2] is the -c command body - happens to contain ".." which
 		// an unguarded path-traversal heuristic would mistake for a path.
 		{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh","-c","echo 192.168.1.1..."],"uid":501,"gid":20}`)},
@@ -421,7 +421,7 @@ func TestSuspiciousExecSkipsShDashCEvenIfArgContainsDots(t *testing.T) {
 // allowlist, the rule must stay silent. Without the allowlist, the same chain still fires (the second sub-test).
 func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	t.Parallel()
-	// sshd-session -> /bin/sh -> /tmp/payload — the "admin SSH and run a script from /tmp/" shape, observed live during edr-qa.
+	// sshd-session -> /bin/sh -> /tmp/payload - the "admin SSH and run a script from /tmp/" shape, observed live during edr-qa.
 	// Built fresh per subtest because Store.InsertEvents mutates events[i].IngestedAtNs in place; sharing one slice across
 	// parallel subtests would race the writes.
 	makeEvents := func() []api.Event {
@@ -441,7 +441,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 		}
 	}
 
-	t.Run("with sshd-session in allowlist — suppressed", func(t *testing.T) {
+	t.Run("with sshd-session in allowlist - suppressed", func(t *testing.T) {
 		t.Parallel()
 		s := openCatalogStore(t)
 		ctx := t.Context()
@@ -459,7 +459,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 		assert.Empty(t, findings, "allowlisted parent must suppress the finding")
 	})
 
-	t.Run("without allowlist — fires", func(t *testing.T) {
+	t.Run("without allowlist - fires", func(t *testing.T) {
 		t.Parallel()
 		s := openCatalogStore(t)
 		ctx := t.Context()
@@ -485,7 +485,7 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	s := openCatalogStore(t)
 	ctx := t.Context()
 
-	// Batch 1: python3 + /bin/sh — no temp-binary yet, so no firing.
+	// Batch 1: python3 + /bin/sh - no temp-binary yet, so no firing.
 	batch1 := []api.Event{
 		{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
@@ -501,7 +501,7 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	rule := &SuspiciousExec{}
 	findings1, err := rule.Evaluate(ctx, batch1, s.GraphReader())
 	require.NoError(t, err)
-	require.Empty(t, findings1, "no temp-binary in batch 1 — rule must not fire")
+	require.Empty(t, findings1, "no temp-binary in batch 1 - rule must not fire")
 
 	// Batch 2: only the temp-binary exec arrives. The python3 + sh ancestors are already in the store (materialised by batch 1) so the
 	// reverse-walk from temp-exec finds them.

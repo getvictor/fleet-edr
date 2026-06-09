@@ -154,10 +154,10 @@ func isDuplicateKey(err error) bool {
 	return mysqlErr.Number == mysqlErrDupEntry
 }
 
-// jitProvision creates the user + identity + role binding in a single transaction. Email comes from the ID-token claim — non-empty in
+// jitProvision creates the user + identity + role binding in a single transaction. Email comes from the ID-token claim - non-empty in
 // every modern IdP, but if the IdP omits it we fall back to the subject as a stable display value (the audit row records it verbatim).
 // When the email exists already on a different account we surface ErrEmailConflict so the operator path doesn't silently merge
-// identities — that promotion is an admin action.
+// identities - that promotion is an admin action.
 func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, identityID int64, err error) {
 	email := jitEmail(c)
 	tx, err := p.db.BeginTxx(ctx, nil)
@@ -201,7 +201,7 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, iden
 	return user.ID, idID, nil
 }
 
-// jitEmail derives the email used for the JIT users row. Only trust the IdP-supplied email when email_verified=true (or absent — the
+// jitEmail derives the email used for the JIT users row. Only trust the IdP-supplied email when email_verified=true (or absent - the
 // claim is optional in spec, and IdPs that don't emit it rarely allow unverified emails). When the IdP signals an unverified email,
 // fall back to the synthetic subject-prefixed sentinel; an admin promotion path can attach the real email later.
 func jitEmail(c *Claims) string {
@@ -212,7 +212,7 @@ func jitEmail(c *Claims) string {
 }
 
 // recordCreated emits an audit row for a successful JIT provisioning. Soft-fail at the request level: a missing audit row does NOT
-// roll the transaction back — the user is real and reachable. The chokepoint's standard authz rows still capture every subsequent
+// roll the transaction back - the user is real and reachable. The chokepoint's standard authz rows still capture every subsequent
 // action. Per spec, audit-write failures must log at ERROR so the operator pipeline notices the gap.
 func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subject string) {
 	if p.audit == nil {

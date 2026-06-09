@@ -179,7 +179,7 @@ func discardLogger() *slog.Logger {
 //
 // Two Loop instances run side by side. The system-extension service connects and delivers events; the
 // network-extension service's connector always fails Connect. The system loop must keep delivering events
-// while the network loop keeps retrying — independence of the two loops is the property under test.
+// while the network loop keeps retrying - independence of the two loops is the property under test.
 func TestLoop_TwoParallelLoops_NetworkExtensionDown(t *testing.T) {
 	t.Parallel()
 
@@ -417,7 +417,7 @@ func TestLoop_AutoReconnectAfterExtensionRestart(t *testing.T) {
 // delivers "B1". The two events the test observes must be exactly {A1, B1}: events generated against A
 // after Disconnect are simulated as "dropped during the reconnect window" by simply not emitting them on
 // the post-error connector. The property under test is that the Loop tolerates the gap and resumes
-// delivery on the new connection — no error path, no panic, no duplicate.
+// delivery on the new connection - no error path, no panic, no duplicate.
 func TestLoop_DroppedEventsDuringDisconnectAreTolerated(t *testing.T) {
 	t.Parallel()
 
@@ -494,8 +494,8 @@ func TestDispatcher_SendDuringActiveConnection(t *testing.T) {
 
 // spec:agent-xpc-receiver/outbound-policy-push-routed-to-active-connection/policy-push-while-disconnected
 //
-// Before any connector is published — equivalently, between Clear and the next Set during a reconnect
-// window — the Dispatcher returns ErrNoConnector so the commander can mark the push as failed and let the
+// Before any connector is published - equivalently, between Clear and the next Set during a reconnect
+// window - the Dispatcher returns ErrNoConnector so the commander can mark the push as failed and let the
 // server's next push reconverge the agent.
 func TestDispatcher_SendWhileDisconnected(t *testing.T) {
 	t.Parallel()

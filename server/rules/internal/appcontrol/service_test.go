@@ -295,7 +295,7 @@ func TestService_Fanout_NoHostsResolved(t *testing.T) {
 
 // TestService_Fanout_HostListerError covers the resolver-error path: a host group whose criteria type is unknown returns an error
 // from resolveHostGroup, which surfaces as host_lister_error in the audit row. This is also the only Phase A path that exercises
-// the "unknown criteria" error branch — Phase B's tag/hostname/OS resolvers don't exist yet.
+// the "unknown criteria" error branch - Phase B's tag/hostname/OS resolvers don't exist yet.
 func TestService_Fanout_HostListerError(t *testing.T) {
 	svc, store, db, audit := newServiceWithHostsAndAudit(t, func(context.Context) ([]string, error) {
 		t.Fatal("HostLister must not be called when criteria is unknown")

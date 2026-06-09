@@ -7,7 +7,7 @@ import Foundation
 /// buffer is NUL-terminated, so `String(cString: token.data)` can
 /// overread into adjacent memory in the worst case and produce garbage
 /// in the typical case. Use this helper everywhere a Swift String is
-/// derived from an es_string_token_t — paths, team IDs, signing IDs.
+/// derived from an es_string_token_t - paths, team IDs, signing IDs.
 ///
 /// Returns the empty string when the token has no payload (data is
 /// nil or length is zero) OR when the bytes are not valid UTF-8. The

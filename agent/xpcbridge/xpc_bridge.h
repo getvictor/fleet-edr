@@ -31,7 +31,7 @@ void xpc_bridge_disconnect(int handle);
 // Send an "application_control.update" message to the peer on the given handle.
 // The payload is copied into an XPC dictionary under the "data" key alongside
 // "type"="application_control.update". Returns 0 on success, -1 if the handle
-// is invalid or the connection is gone. XPC send is asynchronous — success
+// is invalid or the connection is gone. XPC send is asynchronous - success
 // here means the message was enqueued on the connection, not that the peer
 // received it.
 int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t len);

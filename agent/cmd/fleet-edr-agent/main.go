@@ -188,7 +188,7 @@ func flushOTel(shutdown func(context.Context) error) {
 }
 
 // deriveHostID returns the host identity the agent advertises. An operator override (EDR_HOST_ID) wins; otherwise we read
-// IOPlatformUUID. Failures here are non-fatal — the enrollment step re-derives and fails loudly if needed.
+// IOPlatformUUID. Failures here are non-fatal - the enrollment step re-derives and fails loudly if needed.
 func deriveHostID(ctx context.Context, override string) string {
 	if override != "" {
 		return override
@@ -234,7 +234,7 @@ func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config)
 //
 // We clone http.DefaultTransport (rather than &http.Transport{}) so the agent
 // keeps ProxyFromEnvironment, keep-alive, and the stdlib's hardened
-// dial/idle timeouts — real deployments behind HTTPS_PROXY fail without them.
+// dial/idle timeouts - real deployments behind HTTPS_PROXY fail without them.
 func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
 	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
 	if err != nil {

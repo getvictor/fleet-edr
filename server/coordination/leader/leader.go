@@ -46,7 +46,7 @@ const lockAcquireWaitSeconds = 10
 
 // releaseTimeout bounds the RELEASE_LOCK + connection close on the deferred release path. release runs on a cancellation-stripped
 // context (so the lock is still freed during a graceful shutdown), which otherwise has no deadline; without this cap a hung or
-// unresponsive database could block shutdown — or a WithLock/Lock caller's deferred release — indefinitely.
+// unresponsive database could block shutdown - or a WithLock/Lock caller's deferred release - indefinitely.
 const releaseTimeout = 5 * time.Second
 
 // Coordinator runs work on exactly one replica at a time.
@@ -77,7 +77,7 @@ type Coordinator interface {
 
 	// Lock is the non-closure form of WithLock: it acquires lockName (blocking until held or ctx is cancelled) and returns a release
 	// func the caller MUST invoke (typically deferred) to free the lock. It exists for critical sections that cannot be expressed as
-	// a single closure — notably the boot sequence, which assigns several bounded-context handles that must outlive the locked
+	// a single closure - notably the boot sequence, which assigns several bounded-context handles that must outlive the locked
 	// region. Same short-critical-section constraint as WithLock (no keep-alive). Returns ctx's error if cancelled before acquire.
 	Lock(ctx context.Context, lockName string) (release func(), err error)
 }
@@ -159,7 +159,7 @@ func (c *mysqlCoordinator) RunIfLeader(ctx context.Context, lockName string, fn 
 
 // runAsLeader runs fn while this replica holds the lock. fn runs under a lease context derived from ctx; a keep-alive goroutine
 // pings the lock connection so MySQL's wait_timeout cannot silently close it, and if a ping fails (the connection dropped) it
-// cancels the lease so fn — a long-running loop — stops promptly rather than acting as leader after the lock is gone. The lock is
+// cancels the lease so fn - a long-running loop - stops promptly rather than acting as leader after the lock is gone. The lock is
 // released on return (deferred, so a panic in fn still frees it); the keep-alive is stopped and joined before release so it never
 // touches the connection concurrently with RELEASE_LOCK / Close.
 func (c *mysqlCoordinator) runAsLeader(ctx context.Context, lockName string, conn *sql.Conn, fn func(context.Context) error) error {

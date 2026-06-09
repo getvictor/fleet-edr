@@ -39,7 +39,7 @@ func TestDyldInsert_TableDriven(t *testing.T) {
 			wantFinding: false,
 		},
 		{
-			name:        "DYLD_FALLBACK_LIBRARY_PATH does NOT fire — not on MVP list",
+			name:        "DYLD_FALLBACK_LIBRARY_PATH does NOT fire - not on MVP list",
 			path:        "/bin/ls",
 			args:        []string{"DYLD_FALLBACK_LIBRARY_PATH=/tmp", "/bin/ls"},
 			wantFinding: false,
@@ -52,7 +52,7 @@ func TestDyldInsert_TableDriven(t *testing.T) {
 		},
 		{
 			// Regression: CodeRabbit flagged scanning every argv element as a false-positive vector. echo / printf are the
-			// canonical "data through argv" shapes — the rule must not fire just because a process prints the variable
+			// canonical "data through argv" shapes - the rule must not fire just because a process prints the variable
 			// name.
 			name:        "DYLD_INSERT_LIBRARIES as echo DATA does NOT fire",
 			path:        "/bin/echo",

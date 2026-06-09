@@ -10,7 +10,7 @@ ability to mutate the active blocklist.
 
 This capability defines who is allowed to connect, how connections behave when multiple agents are present, the
 event-broadcast contract, the inbound message types the extensions accept, and what happens on disconnect. It does not
-define the wire schema of events themselves — that is owned by the endpoint event collection capability.
+define the wire schema of events themselves - that is owned by the endpoint event collection capability.
 
 ## Requirements
 

@@ -161,7 +161,7 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	assert.Equal(t, winnerUID, uid2)
 	assert.Equal(t, winnerIdentityID, idID2)
 
-	// And exactly one identities row exists for the subject — the race
+	// And exactly one identities row exists for the subject - the race
 	// did not produce a second.
 	var n int
 	require.NoError(t, db.QueryRowxContext(t.Context(),

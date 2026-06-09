@@ -124,7 +124,7 @@ custom tooling or arch-go capabilities the project doesn't ship.
   (server-side decode/encode) and the Swift extension's event
   serializer is incomplete. The agent itself stores events as opaque
   `json.RawMessage` in its SQLite queue and re-emits them verbatim, so
-  it generally doesn't need a wire/ package of its own — but new
+  it generally doesn't need a wire/ package of its own - but new
   fields the agent has to read (`agent_version`, `host_id`) still
   require an `agent/uploader` change.
 - **`bootstrap` is for production wiring.** Production importers of
