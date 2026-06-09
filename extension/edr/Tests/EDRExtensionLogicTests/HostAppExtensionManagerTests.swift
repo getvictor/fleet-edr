@@ -16,28 +16,30 @@ final class HostAppExtensionManagerTests: XCTestCase {
 
     // swiftlint:disable:next line_length
     // spec:host-app-extension-manager/activate-subcommand-registers-both-extensions-and-enables-the-filter/first-time-activation-on-an-unconfigured-machine
-    func testActivateSubmitsTwoActivationRequestsAndEnablesFilterOnSuccess() {
+    func testActivateSubmitsTwoActivationRequestsAndEnablesFilterAndDNSProxyOnSuccess() {
         // The activate subcommand expands to one activation request per documented extension id followed
-        // by a content-filter enable. main.swift wires the per-request submission to OSSystemExtensionManager
-        // and the post-aggregate enable to NEFilterManager.shared().saveToPreferences(); both fire the user-
-        // approval dialog the first time on an unconfigured machine. The "approval pending" reporting clause
-        // is owned by main.swift's `requestNeedsUserApproval` delegate callback (logs to os.log so an
-        // operator tailing the unified log sees the pending state) and is verified at the VM rehearsal
-        // layer; the spec contract here is the ordered intent list.
+        // by a content-filter enable AND a DNS-proxy enable (DNS is on by default). main.swift wires the
+        // per-request submission to OSSystemExtensionManager and the post-aggregate enables to
+        // NEFilterManager / NEDNSProxyManager saveToPreferences(); both fire the user-approval dialog the
+        // first time on an unconfigured machine. The "approval pending" reporting clause is owned by
+        // main.swift's `requestNeedsUserApproval` delegate callback (logs to os.log so an operator tailing
+        // the unified log sees the pending state) and is verified at the VM rehearsal layer; the spec
+        // contract here is the ordered intent list.
         let plan = intents(for: .activate)
         XCTAssertEqual(plan, [
             .submitActivationRequest(extensionID: HostAppExtensionID.endpointSecurity),
             .submitActivationRequest(extensionID: HostAppExtensionID.networkExtension),
-            .setContentFilterEnabled(true)
+            .setContentFilterEnabled(true),
+            .setDNSProxyEnabled(true)
         ])
 
-        // Once both extension requests report .completed, the post-aggregate step is .enableContentFilter
-        // and the host app's eventual exit code is EXIT_SUCCESS.
+        // Once both extension requests report .completed, the post-aggregate step is
+        // .enableContentFilterThenDNSProxy and the host app's eventual exit code is EXIT_SUCCESS.
         var agg = CompletionAggregator(expected: 2)
         XCTAssertFalse(agg.record(.completed))
         XCTAssertTrue(agg.record(.completed))
         XCTAssertEqual(agg.verdict, .allSucceeded)
-        XCTAssertEqual(postAggregateStep(for: .activate, verdict: agg.verdict), .enableContentFilter)
+        XCTAssertEqual(postAggregateStep(for: .activate, verdict: agg.verdict), .enableContentFilterThenDNSProxy)
         XCTAssertEqual(hostAppExitCode(for: agg.verdict), Int32(EXIT_SUCCESS))
     }
 
@@ -54,7 +56,10 @@ final class HostAppExtensionManagerTests: XCTestCase {
         let plan = intents(for: .activate)
         XCTAssertEqual(plan.first, .submitActivationRequest(extensionID: HostAppExtensionID.endpointSecurity))
         XCTAssertEqual(plan.dropFirst().first, .submitActivationRequest(extensionID: HostAppExtensionID.networkExtension))
-        XCTAssertEqual(plan.last, .setContentFilterEnabled(true))
+        // Activate enables the filter then the DNS proxy, so the plan ends with the DNS-proxy enable and still
+        // contains the content-filter enable.
+        XCTAssertEqual(plan.last, .setDNSProxyEnabled(true))
+        XCTAssertTrue(plan.contains(.setContentFilterEnabled(true)))
         // The exit code for a clean re-activation is EXIT_SUCCESS — same aggregate verdict as the
         // first-time case (both delegates return .completed on a re-activation against approved
         // extensions).

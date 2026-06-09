@@ -153,19 +153,21 @@ func hostAppExitCode(for verdict: AggregateVerdict) -> Int32 {
 }
 
 /// PostAggregateStep is what the host-app does after the activate / deactivate aggregate clears. Activate
-/// chains into enabling the content filter on success; deactivate exits immediately; any failure short-
-/// circuits to exit regardless of subcommand.
+/// chains into enabling the content filter AND then the DNS proxy on success, so a freshly activated host
+/// emits all three telemetry streams (exec, network, DNS) without a separate opt-in; deactivate exits
+/// immediately; any failure short-circuits to exit regardless of subcommand.
 enum PostAggregateStep: Equatable, Sendable {
-    case enableContentFilter
+    case enableContentFilterThenDNSProxy
     case exitImmediately
 }
 
 /// postAggregateStep returns the next step the host-app drives after every extension request has reported.
-/// Mirrors the `if hadFailure { exit FAILURE } else if action != deactivate { enableContentFilter() } else
-/// { exit SUCCESS }` branch in main.swift's `request(_:didFinishWithResult:)` delegate callback.
+/// Mirrors the `if hadFailure { exit FAILURE } else if action == activate { enableContentFilter then
+/// enableDNSProxy } else { exit SUCCESS }` branch in main.swift's `request(_:didFinishWithResult:)` delegate
+/// callback. The DNS proxy is enabled as part of activate so the third telemetry stream is on by default.
 func postAggregateStep(for action: HostAppAction, verdict: AggregateVerdict) -> PostAggregateStep {
     if verdict == .anyFailed { return .exitImmediately }
-    if action == .activate { return .enableContentFilter }
+    if action == .activate { return .enableContentFilterThenDNSProxy }
     return .exitImmediately
 }
 
@@ -182,15 +184,16 @@ enum SubcommandIntent: Equatable, Sendable {
 }
 
 /// intents returns the ordered list of intents a host-app subcommand expands into. Activation submits a
-/// request per extension AND triggers a post-aggregate enable-filter; deactivation submits a request per
-/// extension and stops. The filter / DNS-proxy subcommands toggle one piece of state and intentionally do
-/// NOT activate or deactivate the extensions (the spec's "MUST NOT" clauses are encoded in the empty
-/// no-extension-request prefix here).
+/// request per extension AND triggers a post-aggregate enable of the content filter and then the DNS proxy
+/// (DNS is on by default); deactivation submits a request per extension and stops. The filter / DNS-proxy
+/// subcommands toggle one piece of state and intentionally do NOT activate or deactivate the extensions (the
+/// spec's "MUST NOT" clauses are encoded in the empty no-extension-request prefix here).
 func intents(for action: HostAppAction) -> [SubcommandIntent] {
     switch action {
     case .activate:
         var out: [SubcommandIntent] = HostAppExtensionID.all.map(SubcommandIntent.submitActivationRequest)
         out.append(.setContentFilterEnabled(true))
+        out.append(.setDNSProxyEnabled(true))
         return out
     case .deactivate:
         return HostAppExtensionID.all.map(SubcommandIntent.submitDeactivationRequest)
