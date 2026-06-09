@@ -8,8 +8,9 @@ private let logger = Logger(subsystem: "com.fleetdm.edr", category: "main")
 
 /// ExtensionManager submits activation or deactivation requests for both system extensions (the ESF
 /// system extension and the network extension) and aggregates their completion outcomes through a
-/// CompletionAggregator. On the activate path a successful aggregate chains into enableContentFilter;
-/// on the deactivate path or any failure the host app exits with the verdict's exit code.
+/// CompletionAggregator. On the activate path a successful aggregate chains into enableContentFilter and
+/// then enableDNSProxy (DNS is on by default, so all three telemetry streams come up on activate); on the
+/// deactivate path or any failure the host app exits with the verdict's exit code.
 final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     private let action: HostAppAction
     private var aggregator: CompletionAggregator
@@ -76,22 +77,25 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     }
 
     /// finalizeAggregate is invoked once the aggregator has recorded every expected outcome. Decides
-    /// between chaining into enableContentFilter (activate-on-success) and exiting immediately (deactivate
-    /// or any failure), per the spec contract encoded in postAggregateStep. Named with the `Aggregate`
-    /// suffix because NSObject already declares a `finalize()` method that this method's body has nothing
-    /// to do with — the collision would be a compile error if both kept the same selector.
+    /// between chaining into enableContentFilter-then-enableDNSProxy (activate-on-success) and exiting
+    /// immediately (deactivate or any failure), per the spec contract encoded in postAggregateStep. Named
+    /// with the `Aggregate` suffix because NSObject already declares a `finalize()` method that this method's
+    /// body has nothing to do with - the collision would be a compile error if both kept the same selector.
     private func finalizeAggregate() {
         let verdict = aggregator.verdict
         switch postAggregateStep(for: action, verdict: verdict) {
-        case .enableContentFilter:
-            enableContentFilter()
+        case .enableContentFilterThenDNSProxy:
+            // Enable the content filter, then chain into the DNS proxy so a freshly activated host emits all
+            // three telemetry streams. Both helpers exit(EXIT_SUCCESS) on their default completion; here the
+            // filter's completion enables the DNS proxy (which then exits) instead of exiting itself.
+            enableContentFilter(then: { enableDNSProxy() })
         case .exitImmediately:
             exit(hostAppExitCode(for: verdict))
         }
     }
 }
 
-private func enableContentFilter() {
+private func enableContentFilter(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
             print("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
@@ -114,12 +118,12 @@ private func enableContentFilter() {
                 exit(EXIT_FAILURE)
             }
             print("Content filter enabled successfully")
-            exit(EXIT_SUCCESS)
+            completion()
         }
     }
 }
 
-private func enableDNSProxy() {
+private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
             print("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
@@ -139,7 +143,7 @@ private func enableDNSProxy() {
                 exit(EXIT_FAILURE)
             }
             print("DNS proxy enabled successfully")
-            exit(EXIT_SUCCESS)
+            completion()
         }
     }
 }
