@@ -30,8 +30,8 @@ The following classes of finding are not security vulnerabilities for this proje
 
 - Issues that require physical access to an unlocked, enrolled Mac.
 - Findings that depend on a user already holding root or `kTCCServiceSystemPolicyAllFiles` (Full Disk Access) on the endpoint.
-- Reports that the agent is detected by EDR/AV products on managed hosts - the agent does not attempt to evade detection.
+- Reports that the agent is detected by EDR/AV products on managed hosts: the agent does not attempt to evade detection.
 - Denial of service from a single authorised host against its own server (e.g. flooding `/api/events` with valid tokens). DoS that affects other hosts in the same deployment is in scope.
-- Findings against `ai/`, scratch, or `tmp/` directories - these are developer aids, not shipped artifacts.
+- Findings against `ai/`, scratch, or `tmp/` directories: these are developer aids, not shipped artifacts.
 
 Thank you for helping keep Fleet EDR's users safe.

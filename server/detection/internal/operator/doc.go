@@ -2,7 +2,7 @@
 //
 //	GET /api/hosts                       - list hosts with online status
 //	GET /api/hosts/{host_id}/tree        - process-tree for a host
-//	GET /api/hosts/{host_id}/processes/{pid} - process detail
+//	GET /api/hosts/{host_id}/processes/{pid} : process detail
 //	GET /api/alerts                      - list alerts (filtered)
 //	GET /api/alerts/{id}                 - alert detail + correlated event_ids
 //	PUT /api/alerts/{id}                 - update alert status (audited)

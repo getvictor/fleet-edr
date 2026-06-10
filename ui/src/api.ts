@@ -47,7 +47,7 @@ export interface ReauthChallenge {
 // ReauthRequiredError is thrown whenever the server returns
 // 403 + body { error: "reauth_required", challenge: {...} }. The
 // server gates destructive actions on a fresh-auth window; callers
-// don't invoke this directly - they wrap their mutation through
+// don't invoke this directly: they wrap their mutation through
 // useReauthRetry, which catches the error, runs the per-flow
 // challenge, and retries the original call.
 export class ReauthRequiredError extends Error {
@@ -98,7 +98,7 @@ export function getCsrfToken(): string {
 }
 
 // sanitizeCsrfToken restricts stored values to the shape the server actually mints
-// (URL-safe base64 of a 32-byte CSRF secret - see server/authn.EncodeSessionID). The
+// (URL-safe base64 of a 32-byte CSRF secret: see server/authn.EncodeSessionID). The
 // whitelist blocks any exotic payload that somehow ended up here before hitting
 // sessionStorage, which is what the taint analyzer is flagging. Ceiling is generous
 // so a future server-side change that widens the token (e.g. 64-byte) doesn't
@@ -189,7 +189,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     "Content-Type": "application/json",
     ...(init?.headers as Record<string, string> | undefined),
   };
-  // Attach CSRF on unsafe methods only - GET/HEAD never need it, and sending an
+  // Attach CSRF on unsafe methods only. GET/HEAD never need it, and sending an
   // expired token on those is harmless but wasted bytes.
   attachCsrfHeader(headers, init?.method);
 
@@ -217,7 +217,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     // regular forbidden (which is genuinely "your role does not
     // grant this action") before throwing the typed error so
     // useReauthRetry can pick it up. .clone() so the underlying body
-    // is still readable if this is NOT a reauth deny - falls through
+    // is still readable if this is NOT a reauth deny, which falls through
     // to the !res.ok branch below.
     const reauth = await readReauthChallenge(res);
     if (reauth) throw new ReauthRequiredError(reauth);

@@ -9,7 +9,7 @@ import (
 
 // resolveRepoPath promotes a relative CLI path to its repo-root-relative form when cwd doesn't have it. The intent is
 // that `spectrace check` (with its `--specs-dir openspec/specs` and `--root .` defaults) keeps working when invoked
-// from a subdirectory like `tools/spectrace/` - Copilot raised the concern on PR #281. The resolution rules, in order:
+// from a subdirectory like `tools/spectrace/`. Copilot raised the concern on PR #281. The resolution rules, in order:
 //
 //  1. Absolute path: returned verbatim. The user has been explicit, honour them.
 //  2. Path exists relative to cwd: returned verbatim. This preserves the historical behaviour for callers who pass

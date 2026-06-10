@@ -32,7 +32,7 @@ import { signInViaDex } from "./_setup";
 // throttle clears). To exercise those flows properly an operator
 // needs to run the dev server with EDR_SESSION_IDLE_TIMEOUT >
 // touchThrottle (e.g. 90s) and EDR_SESSION_ABSOLUTE_TIMEOUT
-// comparably bumped - at which point each test's wall clock
+// comparably bumped, at which point each test's wall clock
 // approaches 3-5 minutes. Tracked as a follow-up.
 
 const BREAKGLASS_PASSWORD = "qa-session-lifecycle-password";
@@ -64,7 +64,7 @@ test.describe.serial("session lifecycle", () => {
       await signInViaDex(page, "analyst@qa.local");
 
       // Wait past EDR_SESSION_IDLE_TIMEOUT (15s locally, tighter in
-      // CI - see E2E_OIDC_IDLE_WAIT_MS) without sending any request.
+      // CI: see E2E_OIDC_IDLE_WAIT_MS) without sending any request.
       // The session row's last_seen_at goes stale; the next hit
       // should be evicted.
       await sleep(OIDC_IDLE_WAIT_MS);
@@ -98,7 +98,7 @@ test.describe.serial("session lifecycle", () => {
       }
 
       // Wait past EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT (8s locally,
-      // tighter in CI - see E2E_BREAKGLASS_IDLE_WAIT_MS). OIDC's
+      // tighter in CI: see E2E_BREAKGLASS_IDLE_WAIT_MS). OIDC's
       // longer idle window would still be alive at this point; the
       // break-glass session must be gone.
       await sleep(BREAKGLASS_IDLE_WAIT_MS);

@@ -20,14 +20,14 @@ import (
 )
 
 // Cookie path scope: only sent on /admin/break-glass paths so the challenge cookie doesn't leak to /api/* on the same origin.
-// NO trailing slash: per RFC 6265 §5.1.4, a cookie with Path=/foo/ matches request paths whose prefix is "/foo/" - `/foo` (without
+// NO trailing slash: per RFC 6265 §5.1.4, a cookie with Path=/foo/ matches request paths whose prefix is "/foo/"; `/foo` (without
 // the trailing slash) does NOT match. Since the login route is /admin/break-glass (no trailing slash), the cookie path must be
 // /admin/break-glass for the assertion cookie to round-trip between the GET-challenge POST and the POST-login.
 const cookiePath = "/admin/break-glass"
 
 // reauthCookiePath scopes the reauth challenge cookie to /api/auth/reauth. The login challenge cookie at cookiePath is path-
 // scoped to /admin/break-glass and would NOT round-trip on the reauth POST (browsers only send a cookie when the request path matches
-// the cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name keeps the two flows independent - an operator running a
+// the cookie's Path prefix per RFC 6265 §5.1.4). A separate path AND name keeps the two flows independent: an operator running a
 // break-glass login in one tab and a reauth in another won't have one flow's cookie clobber the other's.
 const reauthCookiePath = "/api/auth/reauth"
 
@@ -50,8 +50,8 @@ const (
 // attestationObject) without inviting OOM via a hostile payload.
 const loginBodyMaxBytes = 64 * 1024
 
-// emailBodyMaxBytes caps the begin-login challenge body - only the
-// email field, so 4 KiB is generous.
+// emailBodyMaxBytes caps the begin-login challenge body. It carries
+// only the email field, so 4 KiB is generous.
 const emailBodyMaxBytes = 4 * 1024
 
 // authReasonHeader is the wire-format header the failure helpers emit. Lifted to a const so Sonar's S1192 (duplicated literal) is
@@ -106,7 +106,7 @@ func NewHandler(opts HandlerOptions) *Handler {
 }
 
 // AllowlistMiddleware returns next wrapped by the configured IP allowlist. When no allowlist is configured (dev mode), returns next
-// unchanged. Exported so cmd/main can apply the same gate to the React UI's break-glass subroutes - without it, an off-allowlist
+// unchanged. Exported so cmd/main can apply the same gate to the React UI's break-glass subroutes. Without it, an off-allowlist
 // caller could load /ui/admin/break-glass and see the React form shell, defeating the path-concealment promise of the API gate.
 func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
 	if h.allowlist == nil {
@@ -126,12 +126,12 @@ func (h *Handler) AllowlistMiddleware(next http.Handler) http.Handler {
 //
 // All paths are pre-auth; the IP allowlist middleware + per-IP rate
 // limit gate access at request time. The GET redirects do NOT consume
-// the rate-limit budget - they're the public landing for an operator
+// the rate-limit budget: they're the public landing for an operator
 // who clicked the printed redemption URL, and a redirect is cheaper
 // than an HTML payload.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	wrap := func(handler http.HandlerFunc) http.Handler {
-		// IP allowlist runs FIRST so off-list callers see a 404 indistinguishable from "no such path" - they must not learn
+		// IP allowlist runs FIRST so off-list callers see a 404 indistinguishable from "no such path": they must not learn
 		// the path exists by bumping into a rate-limit 429.
 		var inner http.Handler = handler
 		if h.allowlist != nil {
@@ -148,15 +148,15 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 }
 
 // RegisterAuthedRoutes mounts the break-glass reauth surface.
-// Both routes assume the operator already has a valid session - they
+// Both routes assume the operator already has a valid session: they
 // run BEHIND the session + CSRF middleware. Calling this method without
 // a non-nil HandlerOptions.Identity panics, so a misconfigured wiring
 // fails at boot rather than producing nil-pointer 500s at request time.
 //
 //	POST /api/auth/reauth/challenge → assertion options + signed
 //	    challenge cookie. The operator's email is read from the
-//	    current session - no email enumeration vector since the
-//	    caller is already authenticated.
+//	    current session, so there is no email enumeration vector since
+//	    the caller is already authenticated.
 //	POST /api/auth/reauth → verify password + assertion against the
 //	    current session's user; on success stamp last_auth_at
 //	    via the identity Service. No new cookie minted.
@@ -589,7 +589,7 @@ func (h *Handler) gateReauthRequest(w http.ResponseWriter, r *http.Request) (*ap
 // challenge cookie before prompting the authenticator.
 //
 // The operator's email is read from the current session, NOT a request
-// body - there's no email-enumeration vector here (the caller is
+// body. There's no email-enumeration vector here (the caller is
 // already authenticated) and reading from session pins the reauth to
 // the operator who's actually signed in. Sessions whose auth_method
 // is not "local_password" get 400 reauth_not_supported; the UI is
@@ -602,7 +602,7 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 	user, err := h.svc.users.Get(ctx, sess.UserID)
 	if err != nil {
-		// Session refers to a deleted user - middleware should have
+		// Session refers to a deleted user; middleware should have
 		// caught this; treat as session-invalid.
 		h.unauthorized(ctx, w)
 		return
@@ -632,7 +632,7 @@ func (h *Handler) handleReauthChallenge(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleReauth verifies password + assertion against the current session's user and stamps last_auth_at to NOW(), resetting the
-// freshness window. No new session is minted - the existing cookie keeps working with a refreshed timestamp. On success returns 200 +
+// freshness window. No new session is minted: the existing cookie keeps working with a refreshed timestamp. On success returns 200 +
 // {"ok": true}; on failure returns 401 invalid_credentials with the same wire-shape as a regular break-glass login so an attacker who
 // hijacks a session cookie cannot enumerate password-correctness via the reauth endpoint.
 func (h *Handler) handleReauth(w http.ResponseWriter, r *http.Request) {

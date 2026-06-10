@@ -6,7 +6,7 @@ import { Page, CDPSession } from "@playwright/test";
 // `navigator.credentials.create()` and `.get()` call on the attached
 // page goes through it instead of real hardware (Touch ID, YubiKey).
 //
-// This is the industry-standard pattern - GitHub, Cloudflare, Twilio,
+// This is the industry-standard pattern. GitHub, Cloudflare, Twilio,
 // Auth0, and every other WebAuthn-aware product test their flows
 // this way. The chrome:// WebAuthn DevTools panel does the same
 // thing under the hood.
@@ -28,7 +28,7 @@ export interface VirtualAuthenticator {
 // what a macOS Touch ID Passkey reports at the protocol level (ctap2,
 // internal transport, resident-key + user-verification both true).
 // automaticPresenceSimulation=true means the authenticator answers
-// every challenge without simulating a fingerprint prompt - tests
+// every challenge without simulating a fingerprint prompt, so tests
 // stay deterministic.
 export async function installVirtualAuthenticator(
   page: Page,

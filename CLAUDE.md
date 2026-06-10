@@ -3,10 +3,10 @@
 The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR.
 Codecov mirrors that threshold. Tests live in three layers:
 
-1. **Per-package unit tests** - co-located with the code, default tag.
-2. **Per-context integration tests** - `server/<context>/internal/tests/`,
+1. **Per-package unit tests**: co-located with the code, default tag.
+2. **Per-context integration tests**: `server/<context>/internal/tests/`,
    `package tests`, real MySQL via `testdb/full.Open(t)`.
-3. **Cross-context integration tests** - `test/integration/`,
+3. **Cross-context integration tests**: `test/integration/`,
    `package integration`, multi-context scenarios.
 
 ### Test-style decision matrix
@@ -47,7 +47,7 @@ UI tests live under `ui/src/**` as `*.test.{ts,tsx}` files co-located with the s
 `npm run test:coverage` for the LCOV that Sonar + codecov read). The conventions:
 
 - **Components**: `@testing-library/react`'s `render` + `screen` + user-event idioms. Mock the API layer via `vi.spyOn(api,
-  ...)` rather than stubbing global `fetch` - keeps the test scoped to the component's behaviour, not the HTTP wire shape.
+  ...)` rather than stubbing global `fetch`; this keeps the test scoped to the component's behaviour, not the HTTP wire shape.
 - **Hooks**: `renderHook` from `@testing-library/react`. The `act()` wrapper is required around state-setter calls.
 - **Pure-logic modules** (URL builders, parsers, validators): plain vitest `describe` / `it` with no React dependency.
 - **WebAuthn / browser globals**: stub via `vi.stubGlobal("navigator", { credentials: { create / get } })` or
@@ -127,7 +127,7 @@ Layered on the global guide. Project-specific:
 - Line wrap source code at 140 characters.
 - Markdown is NOT hard-wrapped: write each paragraph and bullet as one line and let it soft-wrap. Tables are Prettier-aligned (cells padded so column dividers line up). Both are enforced by Prettier (`proseWrap: never`, `.prettierrc.yaml`); run `task lint:md:prose:fix` to reflow, `task lint:md:prose` to check. markdownlint (`task lint:md`) owns Markdown structure; the two are scoped not to overlap.
 - Sentence case for headings.
-- No em dashes: use `:` or `-` with surrounding spaces. Insert a literal em dash (U+2014) only when explicitly asked. Enforced by `task lint:dashes`.
+- No em dashes, and no spaced hyphen (` - `) standing in for one: reword the sentence (prefer shorter sentences) or use a colon. A hyphen is fine only unspaced inside a compound word (`per-IP`) or as a list marker. Insert a literal em dash (U+2014) only when explicitly asked. Enforced by `task lint:dashes`: `tools/lint-no-emdash.sh` bans the dash characters in any tracked text file, `tools/dash-lint` bans the spaced-hyphen use in Markdown prose and in code comments and string literals.
 - Don't run `task db:reset` without explicit user permission.
 - Stateless server (ADR-0010): the server holds no in-process state that survives a request lifetime and that a peer replica
   would need to serve the next request. Durable cross-request state goes in MySQL; per-request state may ride in signed cookies;

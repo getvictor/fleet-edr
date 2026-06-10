@@ -39,7 +39,7 @@ const (
 	// so an in-flight request does not 401 mid-cycle.
 	defaultHostTokenGrace = 5 * time.Minute
 	// defaultOIDCStateCookieTTL is how long the signed state cookie that carries (state, nonce, code_verifier) stays valid. 5 minutes
-	// matches the IdP's typical authorization-code window - long enough to survive an MFA prompt, short enough to bound CSRF replay.
+	// matches the IdP's typical authorization-code window: long enough to survive an MFA prompt, short enough to bound CSRF replay.
 	defaultOIDCStateCookieTTL = 5 * time.Minute
 	// DefaultBreakglassBootstrapTokenTTL mirrors the package-side fallback in server/identity/internal/breakglass/tokens.go. Exposed
 	// at the config layer so cmd/main can build the redemption-URL banner with a non-zero TTL string when the operator did not pin
@@ -81,7 +81,7 @@ type Config struct {
 	//
 	// StaleProcessTTL is the fork-time age past which a still-running
 	// process is force-exited by the reconciler. 0 disables the runner.
-	// Default 6h - long enough to cover normal analyst-session work but
+	// Default 6h: long enough to cover normal analyst-session work but
 	// short enough that overnight greens are gone by morning.
 	StaleProcessTTL time.Duration
 	// StaleProcessInterval is how often the process-TTL reconciler runs.
@@ -89,7 +89,7 @@ type Config struct {
 	StaleProcessInterval time.Duration
 
 	// LaunchAgentAllowlist is the set of plist paths the `persistence_launchagent` rule should silently accept. Populated from
-	// EDR_LAUNCHAGENT_ALLOWLIST (comma-separated absolute paths). Empty by default - every plist load fires.
+	// EDR_LAUNCHAGENT_ALLOWLIST (comma-separated absolute paths). Empty by default: every plist load fires.
 	LaunchAgentAllowlist map[string]struct{}
 
 	// LaunchDaemonTeamIDAllowlist is the set of code-signing team IDs the `privilege_launchd_plist_write` rule should silently accept when
@@ -99,7 +99,7 @@ type Config struct {
 	LaunchDaemonTeamIDAllowlist map[string]struct{}
 
 	// SudoersWriterAllowlist is the set of writer-process absolute paths the `sudoers_tamper` rule should silently accept. Populated from
-	// EDR_SUDOERS_WRITER_ALLOWLIST (comma-separated). Empty by default. visudo doesn't need to be here - it writes via temp-file + rename
+	// EDR_SUDOERS_WRITER_ALLOWLIST (comma-separated). Empty by default. visudo doesn't need to be here: it writes via temp-file + rename
 	// and never opens /etc/sudoers in write mode, so the rule never sees it.
 	SudoersWriterAllowlist map[string]struct{}
 
@@ -107,7 +107,7 @@ type Config struct {
 	// when they sit at the root of a "non-shell -> shell -> /tmp/binary" chain. Populated from EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST
 	// (comma-separated). Empty by default. The recommended value for fleets that allow interactive admin SSH is
 	// `/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal, /Applications/iTerm.app/Contents/MacOS/iTerm2`.
-	// Leave empty on servers where interactive SSH is unusual - the rule's "non-shell -> shell -> /tmp/" shape is then a clean attacker
+	// Leave empty on servers where interactive SSH is unusual: the rule's "non-shell -> shell -> /tmp/" shape is then a clean attacker
 	// indicator.
 	SuspiciousExecParentAllowlist map[string]struct{}
 
@@ -127,7 +127,7 @@ type Config struct {
 	HostTokenGrace time.Duration
 
 	// TrustedProxies is the set of CIDRs (or bare IPs) the server will trust X-Forwarded-For from. Populated from EDR_TRUSTED_PROXIES
-	// (comma-separated). Empty by default - XFF is ignored and the per-IP rate limiter + audit log see the direct TCP peer (issue #81).
+	// (comma-separated). Empty by default: XFF is ignored and the per-IP rate limiter + audit log see the direct TCP peer (issue #81).
 	// Set this to your reverse proxy / load-balancer pool the moment you put an ALB / nginx / Cloudflare in front of fleet-edr-server,
 	// or one user hitting the rate limit will lock out everyone behind the proxy.
 	TrustedProxies []string
@@ -185,7 +185,7 @@ type Config struct {
 	// BreakglassIPAllowlist is the optional CIDR (or bare-IP) list the /admin/break-glass surface gates on. Off-list callers receive a
 	// generic 404. Empty default = no gate (dev workflow shape; production should set this to the operator bastion's CIDR).
 	BreakglassIPAllowlist []string
-	// BreakglassRPID is the WebAuthn relying-party identifier - the canonical host that browser-stored credentials bind to. Typically
+	// BreakglassRPID is the WebAuthn relying-party identifier: the canonical host that browser-stored credentials bind to. Typically
 	// the registrable host portion of the EDR UI URL without scheme (e.g. "edr.example.com"). Required when the break-glass surface is
 	// enabled; changing it post-deploy invalidates every registered credential.
 	BreakglassRPID string
@@ -203,7 +203,7 @@ type Config struct {
 	// corresponding env vars.
 	//
 	// SessionIdleTimeout is the inactivity cap for OIDC-minted
-	// sessions. Idle = NOW() - last_seen_at; the middleware slides
+	// sessions. Idle is NOW() minus last_seen_at; the middleware slides
 	// last_seen_at on every authenticated request so an active
 	// operator never trips it.
 	SessionIdleTimeout time.Duration
@@ -300,7 +300,7 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
-	// NonNegative (not Positive): 0 is the documented "disable the drain wait" sentinel - RunAndShutdown skips the drain phase and
+	// NonNegative (not Positive): 0 is the documented "disable the drain wait" sentinel. RunAndShutdown skips the drain phase and
 	// shuts down immediately. Integration + single-process tests set EDR_SHUTDOWN_DRAIN=0 so they don't sleep the drain window.
 	envparse.NonNegativeDuration(getenv, "EDR_SHUTDOWN_DRAIN", &c.ShutdownDrain, errs)
 	envparse.UnitFraction(getenv, "EDR_AUDIT_READ_SAMPLING", &c.AuditReadSampling, errs)

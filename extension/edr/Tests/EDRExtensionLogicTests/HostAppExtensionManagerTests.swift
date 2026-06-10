@@ -12,7 +12,7 @@ import XCTest
 /// production main.swift is what the rehearsal layer catches.
 final class HostAppExtensionManagerTests: XCTestCase {
 
-    // MARK: - Requirement: Activate subcommand registers both extensions and enables the filter
+    // MARK: Requirement: Activate subcommand registers both extensions and enables the filter
 
     // swiftlint:disable:next line_length
     // spec:host-app-extension-manager/activate-subcommand-registers-both-extensions-and-enables-the-filter/first-time-activation-on-an-unconfigured-machine
@@ -49,7 +49,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         // Re-activation expands to the same intent list as first-time activation; the difference is
         // OS-side. When the same bundle id is already registered, OSSystemExtensionManager invokes the
         // `request(_:actionForReplacingExtension:withExtension:)` delegate callback to ask "drop the old
-        // copy?" - main.swift returns `.replace`, so the running extensions are swapped for the on-disk
+        // copy?" Here main.swift returns `.replace`, so the running extensions are swapped for the on-disk
         // copy without a deactivate-then-activate round trip. The replace policy is a single value pinned
         // in main.swift; this test pins the intent shape (same as first-time) and notes the replacement
         // policy lives there.
@@ -60,7 +60,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         // contains the content-filter enable.
         XCTAssertEqual(plan.last, .setDNSProxyEnabled(true))
         XCTAssertTrue(plan.contains(.setContentFilterEnabled(true)))
-        // The exit code for a clean re-activation is EXIT_SUCCESS - same aggregate verdict as the
+        // The exit code for a clean re-activation is EXIT_SUCCESS: the same aggregate verdict as the
         // first-time case (both delegates return .completed on a re-activation against approved
         // extensions).
         var agg = CompletionAggregator(expected: 2)
@@ -69,7 +69,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(hostAppExitCode(for: agg.verdict), Int32(EXIT_SUCCESS))
     }
 
-    // MARK: - Requirement: Deactivate subcommand removes both extensions
+    // MARK: Requirement: Deactivate subcommand removes both extensions
 
     // spec:host-app-extension-manager/deactivate-subcommand-removes-both-extensions/deactivating-an-active-install
     func testDeactivateSubmitsTwoDeactivationRequestsAndExitsCleanlyOnCompletion() {
@@ -114,7 +114,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(hostAppExitCode(for: agg2.verdict), Int32(EXIT_FAILURE))
     }
 
-    // MARK: - Requirement: Filter enable and disable subcommands
+    // MARK: Requirement: Filter enable and disable subcommands
 
     // spec:host-app-extension-manager/filter-enable-and-disable-subcommands/disable-the-filter-without-removing-the-extension
     func testDisableFilterTogglesOnlyTheFilterAndDoesNotTouchExtensions() {
@@ -140,7 +140,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(plan, [.setContentFilterEnabled(true)])
     }
 
-    // MARK: - Requirement: DNS proxy enable and disable subcommands
+    // MARK: Requirement: DNS proxy enable and disable subcommands
 
     // spec:host-app-extension-manager/dns-proxy-enable-and-disable-subcommands/enable-dns-proxy-on-top-of-an-active-filter
     func testEnableDNSProxyTouchesOnlyDNSProxyAndLeavesFilterAlone() {
@@ -165,7 +165,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         }))
     }
 
-    // MARK: - Requirement: Configuration persists across reboots
+    // MARK: Requirement: Configuration persists across reboots
 
     // spec:host-app-extension-manager/configuration-persists-across-reboots/reboot-recovers-active-configuration
     func testActivateConfigurationsPinIsEnabledTrueSoMacOSRestoresThemOnReboot() {
@@ -174,7 +174,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         // shape is what this test pins: a FilterConfigIntent + DNSProxyConfigIntent with isEnabled=true
         // and the documented provider configuration. When the host comes back up, the OS reloads these
         // preferences, sees isEnabled=true, and reattaches the extensions to the kernel's filter + DNS-
-        // proxy plumbing - at which point event capture resumes without operator action. The OS-side
+        // proxy plumbing. At that point event capture resumes without operator action. The OS-side
         // restore is verified at the system / VM rehearsal layer.
         XCTAssertTrue(activateFilterConfig.isEnabled,
                       "the saved content-filter preference must be isEnabled=true so macOS restores the filter on reboot")
@@ -189,7 +189,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
                        "the DNS-proxy provider must point at the network extension's bundle id so macOS knows which extension to reattach")
     }
 
-    // MARK: - Requirement: Activation reports completion outcomes
+    // MARK: Requirement: Activation reports completion outcomes
 
     // spec:host-app-extension-manager/activation-reports-completion-outcomes/one-extension-completes-immediately-and-the-other-needs-a-reboot
     func testRebootRequiredAggregateExitsSuccessSoOperatorDoesNotRetry() {
@@ -228,7 +228,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(postAggregateStep(for: .activate, verdict: agg.verdict), .exitImmediately)
     }
 
-    // MARK: - Action parsing (supporting coverage)
+    // MARK: Action parsing (supporting coverage)
 
     func testParseHostAppActionRecognisesEveryDocumentedSubcommand() {
         // nil argv defaults to .activate (the documented no-subcommand behavior); every recognised raw
@@ -243,7 +243,7 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(parseHostAppAction("notify"), .notify)
     }
 
-    // MARK: - Requirement: Subcommand parsing fails loudly on unknown input
+    // MARK: Requirement: Subcommand parsing fails loudly on unknown input
 
     // spec:host-app-extension-manager/subcommand-parsing-fails-loudly-on-unknown-input/unknown-subcommand-exits-with-usage-and-non-zero-status
     func testMalformedCLIInvocationReturnsNilSoMainSwiftCanPrintUsageAndExit() {

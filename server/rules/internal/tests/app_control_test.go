@@ -1017,7 +1017,7 @@ func TestAppControl_BulkUpsertRules_BadItemRejectsBatch(t *testing.T) {
 
 // TestAppControl_BulkUpsertRules_EmptyBatchRejected covers the empty-input guard. An empty Items slice is operator confusion
 // (paste with no content); reject as ErrAppControlInvalidRequest so the REST handler returns 400 instead of silently no-op'ing.
-// Both shapes pinned: a nil slice AND an empty non-nil slice (CodeRabbit on PR #190 - Go treats them differently for some
+// Both shapes pinned: a nil slice AND an empty non-nil slice (CodeRabbit on PR #190: Go treats them differently for some
 // reflection paths, so locking both keeps the contract honest).
 func TestAppControl_BulkUpsertRules_EmptyBatchRejected(t *testing.T) {
 	t.Parallel()
@@ -1163,7 +1163,7 @@ func TestAppControl_ListAssignmentsForPolicy_SurfacesSeedAssignment(t *testing.T
 }
 
 // TestAppControl_ListAssignmentsForPolicy_UnknownPolicyReturnsEmpty: returning [] for a policy that does not exist is the
-// correct shape - the handler should not 404 on the assignments collection endpoint. Phase A's seed always has its
+// correct shape: the handler should not 404 on the assignments collection endpoint. Phase A's seed always has its
 // assignment so this dimension only surfaces for synthetic ids; pinning the contract makes Phase B's editable assignments
 // land without changing the response shape on an empty result.
 func TestAppControl_ListAssignmentsForPolicy_UnknownPolicyReturnsEmpty(t *testing.T) {

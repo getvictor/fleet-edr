@@ -21,8 +21,8 @@ protocol BlockAlertPresenter {
 /// process notifications on a dedicated serial queue and hop to the
 /// main queue with `DispatchQueue.main.sync` to show each alert.
 /// The queue's serial nature means two blocked execs back-to-back
-/// produce two modals shown one after the other - never overlapping
-/// - and the receive ordering matches the AUTH_EXEC denial ordering.
+/// produce two modals shown one after the other (never overlapping),
+/// and the receive ordering matches the AUTH_EXEC denial ordering.
 ///
 /// Dedup: a (rule_id, binary_path) tuple seen within the last
 /// `dedupWindow` is suppressed. The extension's AUTH_EXEC handler
@@ -46,7 +46,7 @@ final class BlockAlertPresenterAppKit: NSObject, BlockAlertPresenter {
         queue.async { [weak self] in
             guard let self else { return }
             // Dedup is re-checked synchronously on the main queue
-            // right before the modal is shown - see showAlert.
+            // right before the modal is shown (see showAlert).
             // Checking here too would only suppress arrivals while
             // the queue is idle; a long-open modal can wait minutes,
             // during which more duplicates accumulate and would
@@ -59,7 +59,7 @@ final class BlockAlertPresenterAppKit: NSObject, BlockAlertPresenter {
 
     /// shouldDedup returns true when we've shown an alert with the
     /// same `(rule_id, binary_path)` tuple within `dedupWindow`.
-    /// Called from showAlert on the main queue - the synchronous
+    /// Called from showAlert on the main queue. The synchronous
     /// hop in present() guarantees we re-check at presentation time
     /// rather than enqueue time, so a 60s-open modal followed by 10
     /// queued duplicates produces one new alert (the first that

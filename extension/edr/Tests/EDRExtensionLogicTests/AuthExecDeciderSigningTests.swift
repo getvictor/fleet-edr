@@ -14,7 +14,7 @@ import XCTest
 
 final class AuthExecDeciderSigningTests: XCTestCase {
 
-    // MARK: - SIGNINGID / TEAMID layers
+    // MARK: SIGNINGID / TEAMID layers
 
     // A SIGNINGID rule keyed on a `<team_id>:<signing_id>` identifier matches a signed non-Apple binary whose tuple carries
     // that same prefixed signing identity. The deny verdict (and the matched identifier echoed in the block event) is the
@@ -69,7 +69,7 @@ final class AuthExecDeciderSigningTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: cdRule, matchedIdentifier: "cdhashfirst"))
     }
 
-    // MARK: - Lower-precedence rules dominate BINARY uncertainty (Gemini critical)
+    // MARK: Lower-precedence rules dominate BINARY uncertainty (Gemini critical)
     //
     // Gemini Code Assist flagged the prior behaviour as a security bypass: under fail-open or audit-only postures, a hash
     // timeout would short-circuit the walk and silently disable any SIGNINGID / TEAMID block rules. The corrected semantic

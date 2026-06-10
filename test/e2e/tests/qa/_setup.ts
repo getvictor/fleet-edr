@@ -6,7 +6,7 @@ import {
   VirtualAuthenticator,
 } from "../../fixtures/webauthn";
 
-// Shared dev-only credential for the local dex IdP - matches the bcrypt
+// Shared dev-only credential for the local dex IdP. Matches the bcrypt
 // hashes baked into config/dex/dev-config.yaml. Not a real secret.
 export const dexPassword = "qa-password-123"; // NOSONAR(typescript:S2068)
 
@@ -80,7 +80,7 @@ export async function rebuildQAState(
       // Assert the page lands at the signed-in dashboard. A redirect
       // to /ui/ (or /ui/hosts via the router) means the ceremony fully
       // succeeded; checking for absence of /break-glass/setup alone is
-      // too weak - an error page might also leave that path while
+      // too weak: an error page might also leave that path while
       // failing the user-visible flow.
       await page.waitForURL(
         (url) =>

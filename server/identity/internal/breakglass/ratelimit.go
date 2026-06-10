@@ -20,7 +20,7 @@ const (
 
 	// DefaultPerEmailFailedRatePerMin caps logins against any single break-glass email at 3/min. Distinct from the per-IP bucket so a
 	// botnet spraying many IPs against one email still hits this. NOTE: consume-only token-bucket semantics mean every attempt consumes
-	// one slot - a successful login also burns a token, but break-glass logins are rare by design so the wasted slot is acceptable.
+	// one slot: a successful login also burns a token, but break-glass logins are rare by design so the wasted slot is acceptable.
 	// The pre-attempt consumption is what prevents argon2 + WebAuthn CPU cycles after the budget is exhausted.
 	DefaultPerEmailFailedRatePerMin = 3
 
@@ -29,7 +29,7 @@ const (
 	DefaultSetupRatePerMin = 5
 )
 
-// RateLimits bundles the three buckets the break-glass surface gates on. Each is a *httpserver.IPLimiter - a generic keyed-bucket
+// RateLimits bundles the three buckets the break-glass surface gates on. Each is a *httpserver.IPLimiter, a generic keyed-bucket
 // limiter; the "IP" naming is historical, the limiter itself is keyed on whatever string the caller passes, so we use the same type
 // for the per-email and global-setup buckets.
 type RateLimits struct {

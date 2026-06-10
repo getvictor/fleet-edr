@@ -4,7 +4,7 @@
 
 ## Why this matters
 
-TODO / FIXME / XXX / HACK comments accumulate forever if nobody is responsible for them. Each unaddressed TODO is a tiny piece of trust the codebase is asking the next reader to extend ("yes, this will be fixed someday"). At small counts, that trust is fine; at hundreds, it becomes load-bearing on nothing. This repo currently has very few (≤1 at last count) - the goal is to keep it that way.
+TODO / FIXME / XXX / HACK comments accumulate forever if nobody is responsible for them. Each unaddressed TODO is a tiny piece of trust the codebase is asking the next reader to extend ("yes, this will be fixed someday"). At small counts, that trust is fine; at hundreds, it becomes load-bearing on nothing. This repo currently has very few (≤1 at last count); the goal is to keep it that way.
 
 ## Scope
 
@@ -32,16 +32,16 @@ Excludes: `ai/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g. an
 
    | Verdict | Action |
    | --- | --- |
-   | **Fix now** - small, in scope, will take < 15 min | Fix in this PR |
-   | **File issue** - real work, but not for this sweep | Open GitHub issue, replace TODO with `// see #NNN` |
-   | **Delete** - the TODO is stale (the thing it warned about no longer applies) | Delete the comment |
-   | **Keep** - the TODO is a load-bearing warning to future maintainers | Rewrite as a regular comment without the TODO marker (the marker should imply pending action; if there's no action, it's just documentation) |
+   | **Fix now** (small, in scope, will take < 15 min) | Fix in this PR |
+   | **File issue** (real work, but not for this sweep) | Open GitHub issue, replace TODO with `// see #NNN` |
+   | **Delete** (the TODO is stale: the thing it warned about no longer applies) | Delete the comment |
+   | **Keep** (the TODO is a load-bearing warning to future maintainers) | Rewrite as a regular comment without the TODO marker (the marker should imply pending action; if there's no action, it's just documentation) |
 
 3. Hard rule: at the end of the sweep, no TODO without an issue link should remain. Either it has an `// see #NNN` annotation, or it's been fixed / deleted / rewritten.
 
 ## Output
 
-A PR titled `TODO sweep YYYY-MM-DD` when there are findings. Body lists each hit and the verdict applied. Every run appends a dated entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
+A PR titled `TODO sweep YYYY-MM-DD` when there are findings. Body lists each hit and the verdict applied. Every run appends a dated entry to [`docs/maintenance/log.md`](../log.md) so the cadence is auditable, whether findings landed or not.
 
 ## Prompt template
 
@@ -64,4 +64,4 @@ Open one PR. PR body lists every hit with its verdict. Time budget 30 minutes; i
 
 - [ ] Every comment matching the patterns has been triaged.
 - [ ] No bare TODO without an issue link remains in the codebase.
-- [ ] Dated entry in `docs/maintenance/log.md`.
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md).

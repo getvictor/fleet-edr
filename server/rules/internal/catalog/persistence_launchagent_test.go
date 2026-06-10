@@ -40,14 +40,14 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			wantDescHas: "com.evil.root.plist",
 		},
 		{
-			name:        "launchctl unload does NOT fire - removing persistence is benign",
+			name:        "launchctl unload does NOT fire (removing persistence is benign)",
 			args:        []string{"/bin/launchctl", "unload", "/Users/alice/Library/LaunchAgents/com.evil.agent.plist"},
 			path:        "/bin/launchctl",
 			parentPath:  "/bin/bash",
 			wantFinding: false,
 		},
 		{
-			name:        "launchctl list does NOT fire - no plist argument",
+			name:        "launchctl list does NOT fire (no plist argument)",
 			args:        []string{"/bin/launchctl", "list"},
 			path:        "/bin/launchctl",
 			parentPath:  "/bin/bash",

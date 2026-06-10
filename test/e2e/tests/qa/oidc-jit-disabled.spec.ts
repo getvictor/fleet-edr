@@ -36,7 +36,7 @@ test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
     // The handler 302s the user back to /login?error=unknown_subject.
     // The server's `/` catchall redirects /login to /ui/ and drops
     // the query, so the visible URL after navigation may not show
-    // the error fragment - but the audit row is authoritative.
+    // the error fragment. The audit row, however, is authoritative.
     await page.waitForURL((url) => url.host === "localhost:8088", {
       timeout: 30_000,
     });

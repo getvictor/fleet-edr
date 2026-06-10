@@ -377,7 +377,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 		resp := doPut(t, srv, "/api/alerts/42", `{not valid`)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-		// testifylint flags this as encoded-compare because the constant name contains "JSON" - false positive, the value
+		// testifylint flags this as encoded-compare because the constant name contains "JSON": false positive, the value
 		// "invalid_json" is a plain typed error code (not a JSON document).
 		//nolint:testifylint // encoded-compare false positive on constant name; values are plain strings.
 		assert.Equal(t, errInvalidJSONBody, readErrorEnvelope(t, resp))

@@ -18,8 +18,8 @@ enum PeerCodeSigningRequirement {
     static let teamID = "FDG8Q7N4CC"
 
     /// Cdhash of the locally-built ad-hoc agent binary. Update via `task build:agent` followed by
-    /// `codesign -d -r - agent/tmp/fleet-edr-agent` to read the new hash. Go's deterministic builds keep this stable
-    /// across rebuilds of identical source, so the update cadence matches Go-side code changes, not every build.
+    /// `codesign -d -r -` against `agent/tmp/fleet-edr-agent` to read the new hash. Go's deterministic builds keep this
+    /// stable across rebuilds of identical source, so the update cadence matches Go-side code changes, not every build.
     static let adHocCDHashDebug = "b854184cd523298f078a3281c721ed715c3fe626"
 
     /// Production requirement string: Apple anchor + FDM team ID, nothing else. Used by release-configured extensions.
@@ -140,11 +140,11 @@ func dispatchInbound(type: String?, data: Data?) -> XPCInboundDispatch {
 /// Shared by the security extension AND the network extension. Each extension instantiates one with its own service
 /// name + logger; the security extension also passes an `onApplicationControl` hook to apply inbound app-control policy,
 /// while the network extension passes nil (it has no inbound control messages). Both get the identical hello-ack
-/// handshake, pending buffer, and peer code-signing - single-sourcing the handshake so it can no longer drift between
+/// handshake, pending buffer, and peer code-signing. Single-sourcing the handshake means it can no longer drift between
 /// the two extensions (the network extension previously lacked the handshake entirely; see the hello-ack fix).
 ///
 /// Startup race the buffer handles (issue #11 + #173 review): on extension restart a phantom XPC peer can
-/// connect-and-immediately-disconnect within a few ms - observed empirically as "Peer connected (total: 1)" followed
+/// connect-and-immediately-disconnect within a few ms: observed empirically as "Peer connected (total: 1)" followed
 /// by "Peer disconnected (total: 0)" 10ms later, with the real agent peer arriving a second or two afterwards. Without
 /// the buffer, every event the extension sends in that window (snapshot pass, plus the first few live execs) goes into
 /// an empty peer set and is silently lost. The buffer captures those sends so the next connecting peer drains them on
@@ -203,7 +203,7 @@ final class XPCEventServer {
         }
     }
 
-    // MARK: - Private - all callers run on `queue`
+    // MARK: Private (all callers run on `queue`)
 
     private func broadcastLocked(_ data: Data) {
         let msg = xpc_dictionary_create_empty()
@@ -218,7 +218,7 @@ final class XPCEventServer {
 
     /// flushPendingTo sends every buffered event to the freshly-connected peer in order, then clears the buffer.
     /// Sending to one peer rather than broadcasting to all peers reflects the design contract: a queued event is the
-    /// same event the broadcast would have delivered, and at the moment it was queued there were no peers - the newly
+    /// same event the broadcast would have delivered, and at the moment it was queued there were no peers, so the newly
     /// arriving peer is the rightful recipient. If a SECOND peer connects later, that's a separate session and doesn't
     /// get the historical buffer.
     ///

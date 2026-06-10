@@ -1,4 +1,4 @@
-// L4 (M6) - UI specs that drive the M5 agent fixture and assert on the host list + process tree pages. Four logically-distinct test
+// L4 (M6): UI specs that drive the M5 agent fixture and assert on the host list + process tree pages. Four logically-distinct test
 // cases consolidated into one .spec.ts FILE because each break-glass-setup ceremony burns 2 of the global 5/min token budget; four
 // separate files would exhaust the bucket and the last specs would deadline-out on the setup challenge. A single file with
 // test.describe.serial + a shared `page` lets us pay the 2-token ceremony once at beforeAll, then every test reuses the same
@@ -6,10 +6,10 @@
 // the sessions + webauthn_credentials rows that resetDB would nuke, killing the shared auth).
 //
 // Tests:
-//   1. Empty state - signed-in admin with no hosts sees "No hosts reporting yet."
+//   1. Empty state: signed-in admin with no hosts sees "No hosts reporting yet."
 //   2. Many hosts  - 25 enrolments via enrollHostsBatch all render in <tr> rows
-//   3. Event count - 3 hosts with different scenario lengths render the right Events column value
-//   4. Process tree - process-tree-deep scenario produces a host page that renders
+//   3. Event count: 3 hosts with different scenario lengths render the right Events column value
+//   4. Process tree: process-tree-deep scenario produces a host page that renders
 //
 // Each test is independent post-resetHostData; the order in the describe block is alphabetical-by-purpose, not dependency.
 
@@ -93,7 +93,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
       .poll(() => p.locator("tbody tr").count(), { timeout: 10_000, message: "host list never reached expected row count" })
       .toBe(BATCH_SIZE);
 
-    // Spot-check one enrolled host_id appears in a cell - proves we're rendering THESE rows, not a leftover from a prior run.
+    // Spot-check one enrolled host_id appears in a cell. This proves we're rendering THESE rows, not a leftover from a prior run.
     await expect(p.getByRole("cell", { name: hosts[0].hostId, exact: true })).toBeVisible();
   });
 
@@ -117,7 +117,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
       }),
     );
 
-    // One DB connection for the whole expect.poll - prior version opened+closed per iteration which churned through connections
+    // One DB connection for the whole expect.poll. The prior version opened+closed per iteration which churned through connections
     // (poll runs every 100ms by default) and could hit MySQL's max_connections under suite-wide parallelism.
     const db = await openDB();
     try {

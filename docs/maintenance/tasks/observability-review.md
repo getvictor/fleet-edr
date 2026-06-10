@@ -6,7 +6,7 @@
 
 OTel coverage drifts the same way docs drift. A new endpoint goes in without a span, a new code path raises errors that nobody sees because there's no metric for them, an alert keeps firing once a week with nobody investigating because it became background noise. The compounding cost is real: when an incident hits, the signal you needed is missing because nobody noticed the metric was never wired.
 
-SigNoz is the source of truth for live behaviour (dashboards, alerts, traces, metrics). Browser screenshots are forbidden per MEMORY - every metric / trace claim must be verified through the SigNoz MCP tools.
+SigNoz is the source of truth for live behaviour (dashboards, alerts, traces, metrics). Browser screenshots are forbidden per MEMORY: every metric / trace claim must be verified through the SigNoz MCP tools.
 
 Project policy: do NOT add a Prometheus `/metrics` endpoint. All metrics flow through OTel + the existing OTLP pipeline. This policy is currently captured in per-user MEMORY only; the `adr-audit` task gap list flags this as a candidate for a committed ADR so the policy outlives any single contributor's memory.
 
@@ -100,4 +100,4 @@ body or in docs/maintenance/log.md. Time budget 60 minutes.
 - [ ] Alert noise audit done; noisy alerts tuned or removed.
 - [ ] New trust boundaries have metric coverage.
 - [ ] No new Prometheus instrumentation has snuck in.
-- [ ] Dated entry in `docs/maintenance/log.md`.
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md).

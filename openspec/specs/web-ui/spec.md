@@ -4,7 +4,7 @@
 
 The web UI is the analyst- and operator-facing surface of the Fleet EDR product. It is where a SOC analyst triages alerts, investigates a process and its network/DNS activity, kills a running process on a host, and where an admin manages the server-driven blocklist policy and reviews the deployed detection content. It is the visible product to anyone who is not an agent or a backend integration: every operator task documented in the MVP plan happens here.
 
-This specification fixes the user-observable behaviour of each page - what an analyst can see and do, how navigation flows between pages, and how authentication boundaries are presented - so the product behaviour can be validated against the spec without reading the React source.
+This specification fixes the user-observable behaviour of each page: what an analyst can see and do, how navigation flows between pages, and how authentication boundaries are presented. The product behaviour can then be validated against the spec without reading the React source.
 
 ## Requirements
 
@@ -182,7 +182,7 @@ The UI SHALL provide a rule documentation page reachable by rule id from the cov
 
 ### Requirement: Navigation and action affordances are capability-gated
 
-The UI SHALL hide navigation entries and action controls that the authenticated operator's effective permission set - obtained from the session probe - does not authorize, so an operator is not shown affordances they cannot use. A navigation entry SHALL be hidden when the permission set does not contain the read action that gates its destination surface. An action control SHALL be hidden when the permission set does not contain the action that the control performs. Gating SHALL be derived solely from the server-provided permission set; the UI SHALL NOT contain its own mapping from role names to permitted actions. Hiding an affordance is a usability measure only and SHALL NOT be relied upon as access control; the server remains authoritative for every action.
+The UI SHALL hide navigation entries and action controls that the authenticated operator's effective permission set (obtained from the session probe) does not authorize, so an operator is not shown affordances they cannot use. A navigation entry SHALL be hidden when the permission set does not contain the read action that gates its destination surface. An action control SHALL be hidden when the permission set does not contain the action that the control performs. Gating SHALL be derived solely from the server-provided permission set; the UI SHALL NOT contain its own mapping from role names to permitted actions. Hiding an affordance is a usability measure only and SHALL NOT be relied upon as access control; the server remains authoritative for every action.
 
 #### Scenario: Application control entry hidden without read access
 
@@ -211,7 +211,7 @@ The UI SHALL hide navigation entries and action controls that the authenticated 
 
 ### Requirement: Authorization denials degrade gracefully
 
-The UI SHALL present an authorization denial as a clear, human-readable no-access state and SHALL NOT surface a raw transport error such as `API error: 403`. When the server denies a request the UI believed was permitted - for example because the operator's role changed after the session permission set was fetched - the UI SHALL render the no-access state for that surface or action AND SHALL refresh the permission set from the session endpoint so subsequent rendering reflects the operator's current permissions. The refetch SHALL be deduplicated and throttled so that multiple gated components failing at once, or repeated denials in quick succession, collapse to a single in-flight request rather than a storm of session-endpoint calls. When the permission set is unavailable - for example an older server that does not return one - the UI MAY render affordances optimistically but MUST still degrade any resulting denial gracefully, so an absent permission set can never grant access; only the server can.
+The UI SHALL present an authorization denial as a clear, human-readable no-access state and SHALL NOT surface a raw transport error such as `API error: 403`. When the server denies a request the UI believed was permitted (for example because the operator's role changed after the session permission set was fetched), the UI SHALL render the no-access state for that surface or action AND SHALL refresh the permission set from the session endpoint so subsequent rendering reflects the operator's current permissions. The refetch SHALL be deduplicated and throttled so that multiple gated components failing at once, or repeated denials in quick succession, collapse to a single in-flight request rather than a storm of session-endpoint calls. When the permission set is unavailable (for example an older server that does not return one), the UI MAY render affordances optimistically but MUST still degrade any resulting denial gracefully, so an absent permission set can never grant access; only the server can.
 
 #### Scenario: Deep-link to a gated surface shows a no-access state
 

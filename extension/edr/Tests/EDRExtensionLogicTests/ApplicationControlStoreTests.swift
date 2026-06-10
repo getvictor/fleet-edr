@@ -22,7 +22,7 @@ import Foundation
 import XCTest
 
 final class ApplicationControlStoreTests: XCTestCase {
-    // MARK: - Helpers
+    // MARK: Helpers
 
     /// RuleSpec is a named record for the document() helper's `rules` argument.
     /// A 3-tuple would trip SwiftLint's large_tuple rule (max 2 members); a struct
@@ -90,7 +90,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         return Data(json.utf8)
     }
 
-    // MARK: - ApplicationControlDocument decoder
+    // MARK: ApplicationControlDocument decoder
 
     func testDocumentDecodesValidJSON() throws {
         let data = document(
@@ -108,7 +108,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertEqual(decoded.rules.first?.action, "BLOCK")
     }
 
-    // MARK: - apply: per-rule-type routing
+    // MARK: apply: per-rule-type routing
 
     // spec:endpoint-event-collection/process-exec-authorization/an-exec-of-a-blocklisted-path-is-denied
     //
@@ -183,7 +183,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.pathRules["blocked-binary-hex"])
     }
 
-    // MARK: - apply: monotonic-version gate
+    // MARK: apply: monotonic-version gate
 
     func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_a_stale_snapshot_is_rejected() {
         let store = makeStore()
@@ -229,7 +229,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.binaryRules["baseline"], "newer doc must replace, not merge")
     }
 
-    // MARK: - apply: atomic in-memory swap to the newer snapshot
+    // MARK: apply: atomic in-memory swap to the newer snapshot
 
     // Applying version V then V+1 must leave the in-memory snapshot equal to V+1 immediately after acceptance, with the new
     // doc's rules replacing (not merging with) V's. Pins the "an incoming snapshot replaces the prior one atomically"
@@ -253,7 +253,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.binaryRules["v1-rule"], "the swap replaces wholesale; the prior version's rules are gone")
     }
 
-    // MARK: - apply: first apply writes the typed file, replacing any prior on-disk file
+    // MARK: apply: first apply writes the typed file, replacing any prior on-disk file
 
     /// A legacy / pre-existing file at the storage path must be overwritten by the typed snapshot on first apply. The persist
     /// path uses Data.write(to:options:.atomic), which replaces the destination, so a fresh store loading the same path back
@@ -291,7 +291,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertEqual(decoded.rules.first?.ruleType, "TEAMID")
     }
 
-    // MARK: - apply: deadline_fallback default substitution
+    // MARK: apply: deadline_fallback default substitution
 
     /// A snapshot payload that omits deadline_fallback must decode to the fail-closed posture (FallbackPosture.defaultPosture)
     /// so a deadline-exceeded BINARY consultation DENies by default. Pins "missing deadline_fallback substitutes fail-closed".
@@ -306,7 +306,7 @@ final class ApplicationControlStoreTests: XCTestCase {
                        "omitted deadline_fallback must substitute the fail-closed default")
     }
 
-    // MARK: - apply: cross-policy regression accepted
+    // MARK: apply: cross-policy regression accepted
 
     func testApplyAcceptsDifferentPolicyEvenAtLowerVersion() {
         // The monotonic gate is keyed on policyID -- a different policy can land at any version
@@ -329,7 +329,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.binaryRules["old-policy-rule"])
     }
 
-    // MARK: - apply: malformed input
+    // MARK: apply: malformed input
 
     func testApplyIgnoresMalformedJSON() {
         let store = makeStore()
@@ -347,7 +347,7 @@ final class ApplicationControlStoreTests: XCTestCase {
                        "malformed JSON must not regress previously-applied snapshot")
     }
 
-    // MARK: - apply: unknown rule_type
+    // MARK: apply: unknown rule_type
 
     func testApplySkipsUnknownRuleTypeButLandsKnownOnes() {
         // FRUITCAKE is not a defined rule_type. The store logs a warning and skips
@@ -374,7 +374,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertNil(snapshot.pathRules["weird"])
     }
 
-    // MARK: - persist + loadFromDisk round-trip
+    // MARK: persist + loadFromDisk round-trip
 
     // swiftlint:disable:next line_length
     func test_spec_extension_application_control_snapshot_is_the_source_of_truth_for_decisions_extension_restart_restores_the_last_applied_snapshot() {
@@ -409,7 +409,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.teamIDRules["FDG8Q7N4CC"]?.ruleID, "r2")
     }
 
-    // MARK: - loadFromDisk: cold start
+    // MARK: loadFromDisk: cold start
 
     func testLoadFromDiskWithMissingFileLeavesSnapshotEmpty() {
         // Cold start path: no persisted file at the expected path. The store logs an info-level
@@ -425,7 +425,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertTrue(snapshot.binaryRules.isEmpty)
     }
 
-    // MARK: - loadFromDisk: corrupt file
+    // MARK: loadFromDisk: corrupt file
 
     func testLoadFromDiskWithMalformedFileLeavesSnapshotEmpty() {
         // Corruption path: the persisted JSON is unparseable (truncated write, manual edit, etc).
@@ -446,7 +446,7 @@ final class ApplicationControlStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.policyVersion, 0)
     }
 
-    // MARK: - empty snapshot constant
+    // MARK: empty snapshot constant
 
     func testEmptySnapshotHasNoRulesAndZeroPolicy() {
         // The static .empty is the cold-start state the store falls back to when

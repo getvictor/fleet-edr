@@ -127,7 +127,7 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 // TestAllow_EveryRegisteredActionGrantedSomewhere asserts the seeded
 // role matrix grants each Action constant to at least one role
 // OTHER than super_admin. Catches an action being added to
-// RegisteredActions without a matching grant in roles.json - that
+// RegisteredActions without a matching grant in roles.json: that
 // action would silently produce no_matching_rule for every caller
 // forever, which would land as a 403 the first time a real user
 // invoked it with no obvious diagnosis path. The Rego-side parity
@@ -137,7 +137,7 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 //
 // super_admin is excluded from the probe because its `*` wildcard
 // would silently mask a new action that's only reachable by
-// break-glass - break-glass is for incident response, not routine
+// break-glass. Break-glass is for incident response, not routine
 // operator workflows. The wildcard is exercised separately by
 // TestAllow_RoleActionMatrix; here we want to know that every
 // action has a non-wildcard role that can do it.

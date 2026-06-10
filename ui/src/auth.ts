@@ -1,4 +1,4 @@
-// Pre-auth authentication helpers - break-glass redemption + login,
+// Pre-auth authentication helpers: break-glass redemption + login,
 // OIDC redirect URL builder. The existing api.ts handles the
 // authenticated /api/* surface; this module covers the pre-auth
 // /admin/break-glass/* + /api/auth/* paths the operator hits before
@@ -103,7 +103,7 @@ async function requestJSON<T>(
   // break-glass endpoint returns a JSON envelope, but routing this
   // through res.json() unconditionally turns "successful but empty"
   // into a SyntaxError that surfaces as the generic "Sign-in failed"
-  // fallback - masking what was actually a successful call. Treat
+  // fallback, masking what was actually a successful call. Treat
   // those as `undefined` and let typed call sites decide.
   const noBody = res.status === HTTP_NO_CONTENT
     || res.headers.get("Content-Length") === "0"
@@ -228,7 +228,7 @@ export async function reauthBreakglass(password: string): Promise<void> {
 // action.
 //
 // baseURL is the server-supplied reauthURL from the chokepoint's
-// 403 reauth_required body - the contract from
+// 403 reauth_required body: the contract from
 // server/identity/api/authzhttp.go's ReauthChallenge. Validating it
 // against NEXT_PATH_RE (same-origin path only) means a compromised
 // server response can't steer the redirect off-origin. We append
@@ -243,7 +243,7 @@ export async function reauthBreakglass(password: string): Promise<void> {
 export function reauthOIDC(baseURL: string): void {
   const next = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
   // Mirror oidcLoginUrl's same-origin path validation so a hostile
-  // location (rare - would require a malicious window.history.push or
+  // location (rare, since it would require a malicious window.history.push or
   // similar) can't steer the redirect at the IdP.
   const safeNext = next.length <= MAX_NEXT_PARAM && NEXT_PATH_RE.test(next) ? next : "";
   // Reject anything that isn't a same-origin path with a leading
@@ -257,6 +257,6 @@ export function reauthOIDC(baseURL: string): void {
     : safeBase;
   globalThis.location.assign(url);
   // The assign() call replaces the current document; everything below
-  // is unreachable. Return void rather than throw - see CodeRabbit
+  // is unreachable. Return void rather than throw. See CodeRabbit
   // note re React 19's onUncaughtError surfacing pre-navigation.
 }

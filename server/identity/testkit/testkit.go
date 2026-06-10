@@ -81,7 +81,7 @@ type SeededUser struct {
 // Returns the user id + the cookie/CSRF pair the test plugs into HTTP
 // requests against the protected mux.
 //
-// Cross-context tests use this to skip the full OIDC dance - the OIDC
+// Cross-context tests use this to skip the full OIDC dance. The OIDC
 // callback flow is exhaustively covered in the oidc package's own
 // tests, and a cross-context test re-running the parsing dance would
 // just be re-testing OIDC. The end-state SQL shape and the live
@@ -155,7 +155,7 @@ func AgeSession(t *testing.T, db *sqlx.DB, userID int64, age time.Duration) {
 	t.Helper()
 	ctx := t.Context()
 	_, err := db.ExecContext(ctx,
-		`UPDATE sessions SET last_auth_at = NOW(6) - INTERVAL ? MICROSECOND WHERE user_id = ?`,
+		`UPDATE sessions SET last_auth_at = DATE_SUB(NOW(6), INTERVAL ? MICROSECOND) WHERE user_id = ?`,
 		age.Microseconds(), userID)
 	require.NoErrorf(t, err, "age session for user %d", userID)
 }

@@ -56,7 +56,7 @@ func TestIssueSetup_RoundTrip(t *testing.T) {
 //
 // Pins the persistence clauses of the first-boot scenario that live in this bounded context: IssueSetup inserts exactly one
 // bootstrap_tokens row with kind='breakglass_setup' (the schema column the spec calls `purpose`) and expires_at = now + ttl, and
-// the token is stored hashed (token_hash) - the unhashed plaintext is never persisted. The "single stderr write of the redemption
+// the token is stored hashed (token_hash) so the unhashed plaintext is never persisted. The "single stderr write of the redemption
 // URL /admin/break-glass/setup?token=<token>" and the "unhashed token does not appear in any structured log" clauses live in
 // cmd/main (which composes the banner from this plaintext) and are exercised there, outside the identity bounded context.
 func TestIssueSetup_FirstBootInsertsOneSetupTokenRow(t *testing.T) {

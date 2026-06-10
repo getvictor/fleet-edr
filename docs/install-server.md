@@ -4,9 +4,9 @@ The reference deployment is Docker Compose: MySQL + the server image, with a TLS
 
 ## Deployment topology
 
-The server tier is stateless: it holds no in-process state that outlives a request, so any replica can serve any request and durable state lives in the shared MySQL (see `docs/adr/0010-stateless-server.md`). That makes two topologies available.
+The server tier is stateless: it holds no in-process state that outlives a request, so any replica can serve any request and durable state lives in the shared MySQL (see [`adr/0010-stateless-server.md`](adr/0010-stateless-server.md)). That makes two topologies available.
 
-### Multi-replica (high availability) - reference
+### Multi-replica (high availability): reference
 
 Two or more server replicas behind a load balancer, in front of one MySQL. This is the recommended topology: a replica can be drained and restarted (or rolled to a new version) without a maintenance window, because the load balancer routes around a draining replica and sessions are MySQL-backed, so there are no sticky sessions to strand. Use `packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative to the NGINX proxy that adds active `/readyz` health checks. The setup steps below apply unchanged except that you also generate a shared `session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`), which every replica must share so a session minted on one validates on another.
 
@@ -116,7 +116,7 @@ EDR_TLS_CERT_FILE=/tls/fullchain.pem
 EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
 
-**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs over TLS - issue #140 removed the plaintext-HTTP opt-out, so the EDR server binary cannot serve HTTP under any configuration. Issue the proxy-to-backend cert from your internal CA (or reuse the public cert) and mount it under `./tls/`; the env-var shape is identical to Option A.
+**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs over TLS: issue #140 removed the plaintext-HTTP opt-out, so the EDR server binary cannot serve HTTP under any configuration. Issue the proxy-to-backend cert from your internal CA (or reuse the public cert) and mount it under `./tls/`; the env-var shape is identical to Option A.
 
 ### 5. Pin a version in .env
 
@@ -149,13 +149,13 @@ curl -s https://edr.example.com/readyz | jq .
 
 If you're running with a self-signed cert (lab / air-gapped pilot), either add the CA to the local trust store, pass `--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe. Don't paper over a trust failure with `-k` in an automation script.
 
-Local dev deployment (`task dev:server`, issue #140 - TLS by default with the self-signed cert from `task dev:certs`):
+Local dev deployment (`task dev:server`, issue #140: TLS by default with the self-signed cert from `task dev:certs`):
 
 ```sh
 curl -sk https://localhost:8088/readyz | jq .
 ```
 
-`-k` is acceptable here because the cert is a known self-signed dev cert; never ship `-k` in an automation script against a real deployment - install mkcert locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and the cert validates without the flag.
+`-k` is acceptable here because the cert is a known self-signed dev cert; never ship `-k` in an automation script against a real deployment; install mkcert locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and the cert validates without the flag.
 
 Expect:
 
@@ -174,7 +174,7 @@ If `db.status` is `error` / `unavailable`, MySQL isn't reachable. Check `docker 
 
 ### Redeem the break-glass admin account
 
-The server seeds a single break-glass admin row on first boot with a NULL password. cmd/main prints a one-shot redemption URL to stderr; the operator opens that URL in a browser to set a password and register a WebAuthn credential (atomic redemption). The URL prints on every boot until the credential is stored - once it is, the banner is silent.
+The server seeds a single break-glass admin row on first boot with a NULL password. cmd/main prints a one-shot redemption URL to stderr; the operator opens that URL in a browser to set a password and register a WebAuthn credential (atomic redemption). The URL prints on every boot until the credential is stored; once it is, the banner is silent.
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env logs server \
@@ -192,7 +192,7 @@ BREAK-GLASS ADMIN SETUP (one-shot redemption URL - open in a browser)
 ================================================================
 ```
 
-Open the URL within the TTL (default 1h, tunable via `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL`). The form takes a password (≥ 12 runes) and prompts the authenticator to register a WebAuthn credential; the three writes (token consume + password set + credential persist) commit in a single transaction so a partial failure leaves the token reusable. If the redemption window lapses, restart the server - a fresh token + URL print on every boot until the credential lands.
+Open the URL within the TTL (default 1h, tunable via `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL`). The form takes a password (≥ 12 runes) and prompts the authenticator to register a WebAuthn credential; the three writes (token consume + password set + credential persist) commit in a single transaction so a partial failure leaves the token reusable. If the redemption window lapses, restart the server: a fresh token + URL print on every boot until the credential lands.
 
 ### Log into the UI
 
@@ -206,36 +206,36 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 
 | Env var | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `EDR_DSN` / `EDR_DSN_FILE` | yes | - | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
-| `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | - | Shared secret agents present at enrollment |
+| `EDR_DSN` / `EDR_DSN_FILE` | yes | none | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
+| `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | none | Shared secret agents present at enrollment |
 | `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTPS server binds |
-| `EDR_TLS_CERT_FILE` | **yes** | - | PEM cert. Unconditionally required; the server has no plaintext-HTTP mode (issue #140) |
-| `EDR_TLS_KEY_FILE` | **yes** | - | PEM key (pair with cert) |
+| `EDR_TLS_CERT_FILE` | **yes** | none | PEM cert. Unconditionally required; the server has no plaintext-HTTP mode (issue #140) |
+| `EDR_TLS_KEY_FILE` | **yes** | none | PEM key (pair with cert) |
 | `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
 | `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
 | `EDR_RETENTION_INTERVAL` | no | 1h | How often the retention job runs |
-| `EDR_LAUNCHAGENT_ALLOWLIST` | no | - | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
-| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | - | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
-| `EDR_SUDOERS_WRITER_ALLOWLIST` | no | - | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
-| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | no | - | Comma-separated non-shell parent absolute paths the `suspicious_exec` rule treats as benign roots for BOTH trigger shapes: the `parent → shell → /tmp/binary` chain AND the `parent → shell` followed by an outbound network connection. Recommended on fleets with interactive admin SSH: `/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on servers where interactive SSH is unusual |
-| `EDR_DISABLED_RULES` | no | - | Comma-separated rule IDs to drop from the detection registry at boot. A disabled rule is gone from the engine's active set AND from `GET /api/rules`, so it never evaluates against any batch and never produces alerts until it is re-enabled (requires a server restart). Unknown IDs WARN at boot but don't fail it, so a stale config doesn't take a deployment down. Use the rule IDs printed by `GET /api/rules` (e.g. `suspicious_exec,osascript_network_exec`) |
+| `EDR_LAUNCHAGENT_ALLOWLIST` | no | none | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
+| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | none | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
+| `EDR_SUDOERS_WRITER_ALLOWLIST` | no | none | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
+| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | no | none | Comma-separated non-shell parent absolute paths the `suspicious_exec` rule treats as benign roots for BOTH trigger shapes: the `parent → shell → /tmp/binary` chain AND the `parent → shell` followed by an outbound network connection. Recommended on fleets with interactive admin SSH: `/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on servers where interactive SSH is unusual |
+| `EDR_DISABLED_RULES` | no | none | Comma-separated rule IDs to drop from the detection registry at boot. A disabled rule is gone from the engine's active set AND from `GET /api/rules`, so it never evaluates against any batch and never produces alerts until it is re-enabled (requires a server restart). Unknown IDs WARN at boot but don't fail it, so a stale config doesn't take a deployment down. Use the rule IDs printed by `GET /api/rules` (e.g. `suspicious_exec,osascript_network_exec`) |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
-| `EDR_SESSION_SIGNING_KEY` / `EDR_SESSION_SIGNING_KEY_FILE` | yes when OIDC or break-glass is configured | - | HMAC secret (≥ 32 bytes) signing the OIDC state cookie + the WebAuthn registration session. Rotating it invalidates every session and in-flight ceremony; see [operations.md](operations.md#edr-session-signing-key) |
-| `EDR_BREAKGLASS_RP_ID` | yes in prod | - | WebAuthn relying-party identifier (registrable host, no scheme, no port). Changing post-deploy invalidates every registered credential. See [breakglass.md](breakglass.md#configuration) |
-| `EDR_BREAKGLASS_RP_ORIGINS` | yes in prod | - | Comma-separated absolute URLs accepted as the WebAuthn origin (e.g. `https://edr.example.com`). See [breakglass.md](breakglass.md#configuration) |
+| `EDR_SESSION_SIGNING_KEY` / `EDR_SESSION_SIGNING_KEY_FILE` | yes when OIDC or break-glass is configured | none | HMAC secret (≥ 32 bytes) signing the OIDC state cookie + the WebAuthn registration session. Rotating it invalidates every session and in-flight ceremony; see [operations.md](operations.md#edr-session-signing-key) |
+| `EDR_BREAKGLASS_RP_ID` | yes in prod | none | WebAuthn relying-party identifier (registrable host, no scheme, no port). Changing post-deploy invalidates every registered credential. See [breakglass.md](breakglass.md#configuration) |
+| `EDR_BREAKGLASS_RP_ORIGINS` | yes in prod | none | Comma-separated absolute URLs accepted as the WebAuthn origin (e.g. `https://edr.example.com`). See [breakglass.md](breakglass.md#configuration) |
 | `EDR_BREAKGLASS_RP_DISPLAY_NAME` | no | `EDR Break-glass` | Operator-visible name shown during authenticator enrollment |
 | `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` | no | 1h | Go duration. Lifetime of the first-boot redemption URL |
-| `EDR_BREAKGLASS_IP_ALLOWLIST` | no | - | Comma-separated CIDR list gating `/admin/break-glass*`. Off-list callers get a 404 |
+| `EDR_BREAKGLASS_IP_ALLOWLIST` | no | none | Comma-separated CIDR list gating `/admin/break-glass*`. Off-list callers get a 404 |
 | `EDR_SESSION_IDLE_TIMEOUT` | no | 8h | Inactivity cap for OIDC-minted sessions. Sliding window on last_seen_at |
 | `EDR_SESSION_ABSOLUTE_TIMEOUT` | no | 24h | Hard age cap for OIDC-minted sessions (forces periodic re-auth) |
 | `EDR_REAUTH_WINDOW` | no | 30m | Freshness window for destructive actions (host.isolate, host.kill_process, host.run_script, critical alert resolve) |
 | `EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT` | no | 15m | Strict idle cap for recovery sessions |
 | `EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT` | no | 1h | Absolute cap for recovery sessions |
 | `EDR_AUTH_ALLOW_NO_OIDC` | no | 0 | Dev-only opt-in to boot in break-glass-only mode. Production refuses to start without OIDC unless this is `1`. See [okta-setup.md](okta-setup.md) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | - | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | none | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
 
 Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`, `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents become the value. That's how the compose stack delivers secrets.
 
@@ -247,13 +247,13 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector (SigNoz, Tempo, Datadog OTel
 - **Logs** via `otelslog` with `service.name=fleet-edr-server`.
 - **Metrics**:
 
-  - `edr.events.ingested` (counter, by `host_id`) - accepted events.
+  - `edr.events.ingested` (counter, by `host_id`): accepted events.
   - `edr.alerts.created` (counter, by `rule_id` + `severity`).
-  - `edr.enrolled.hosts` (gauge) - current enrolled count.
-  - `edr.offline.hosts` (gauge) - hosts unseen >5 min.
-  - `edr.retention.rows_deleted` (counter) - rows pruned per run.
+  - `edr.enrolled.hosts` (gauge): current enrolled count.
+  - `edr.offline.hosts` (gauge): hosts unseen >5 min.
+  - `edr.retention.rows_deleted` (counter): rows pruned per run.
   - `edr.db.query.duration` (histogram, by `op`).
-  - `edr.agent.queue.dropped` (counter) - agent-side drops reported back.
+  - `edr.agent.queue.dropped` (counter): agent-side drops reported back.
 
   See [operations.md](operations.md#metrics-and-monitoring) for what to alert on.
 
@@ -327,7 +327,7 @@ Test your restore path quarterly.
 
 ## Troubleshoot
 
-**"unknown database 'edr'"** at server startup - MySQL booted but didn't create the `edr` schema. The compose file sets `MYSQL_DATABASE: edr` so this means MySQL initialized earlier without that var set (an earlier compose file shipped without it) and its volume persisted.
+**"unknown database 'edr'"** at server startup: MySQL booted but didn't create the `edr` schema. The compose file sets `MYSQL_DATABASE: edr` so this means MySQL initialized earlier without that var set (an earlier compose file shipped without it) and its volume persisted.
 
 ```sh
 docker compose -f docker-compose.prod.yml exec mysql \
@@ -336,10 +336,10 @@ docker compose -f docker-compose.prod.yml exec mysql \
 docker compose -f docker-compose.prod.yml restart server
 ```
 
-**Server keeps exiting with "EDR_DSN is required"** - the `edr_dsn` secret file is missing or unreadable. Re-run the secrets step in Setup.
+**Server keeps exiting with "EDR_DSN is required"**: the `edr_dsn` secret file is missing or unreadable. Re-run the secrets step in Setup.
 
-**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"** - either cert path is unset or unreadable. The server has no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying.
+**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"**: either cert path is unset or unreadable. The server has no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying.
 
-**Agents see "enrollment failed: unauthorized"** - the `enroll_secret` on the server and the `EDR_ENROLL_SECRET` the agent reads from `/etc/fleet-edr.conf` are different. Confirm the MDM install-script writes the exact value from `secrets/enroll_secret`.
+**Agents see "enrollment failed: unauthorized"**: the `enroll_secret` on the server and the `EDR_ENROLL_SECRET` the agent reads from `/etc/fleet-edr.conf` are different. Confirm the MDM install-script writes the exact value from `secrets/enroll_secret`.
 
-**Server log shows "exporter export timeout"** - OTel collector is unreachable. Either fix connectivity to `OTEL_EXPORTER_OTLP_ENDPOINT` or unset the var. Server functionality is unaffected; only telemetry is dropped.
+**Server log shows "exporter export timeout"**: OTel collector is unreachable. Either fix connectivity to `OTEL_EXPORTER_OTLP_ENDPOINT` or unset the var. Server functionality is unaffected; only telemetry is dropped.

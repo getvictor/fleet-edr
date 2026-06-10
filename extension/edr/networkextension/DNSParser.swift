@@ -160,7 +160,7 @@ enum DNSParser {
         UInt16(data[offset]) << Wire.bitsPerByte | UInt16(data[offset + 1])
     }
 
-    // MARK: - Private helpers
+    // MARK: Private helpers
 
     private static func skipName(in data: Data, at start: Int) -> Int {
         var offset = start

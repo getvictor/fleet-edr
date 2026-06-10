@@ -15,8 +15,8 @@ A fourth script (`e2-policy-roundtrip.sh`) used to exercise the blocklist policy
 Before running any script:
 
 - **Server**: Fleet EDR server reachable, at least one host enrolled.
-- **VM**: agent installed + sysext active + Full Disk Access granted. Verified via the manual install doc (`docs/install-agent-manual.md`). SSH from this workstation works without an interactive password prompt - keys in `~/.ssh/authorized_keys`. The scripts use `BatchMode=yes` so a missing key fails fast rather than hanging.
-- **Tooling on this workstation**: `bash`, `curl`, `jq`, `ssh`, `scp`, `shellcheck` (optional - only for editing the scripts). The scripts avoid bash-4-only features so macOS's bundled bash 3.2 works.
+- **VM**: agent installed + sysext active + Full Disk Access granted. Verified via the manual install doc ([`install-agent-manual.md`](../../docs/install-agent-manual.md)). SSH from this workstation works without an interactive password prompt: keys in `~/.ssh/authorized_keys`. The scripts use `BatchMode=yes` so a missing key fails fast rather than hanging.
+- **Tooling on this workstation**: `bash`, `curl`, `jq`, `ssh`, `scp`, `shellcheck` (optional, only for editing the scripts). The scripts avoid bash-4-only features so macOS's bundled bash 3.2 works.
 - **Tooling on the VM**: `sqlite3` (for the network-partition queue-depth check), `pfctl` (for the partition itself; ships with macOS), `plutil` (for reading `host_id` from the persisted enrollment). All present in base macOS.
 
 ## Common environment variables
@@ -30,7 +30,7 @@ export VM_SSH_TARGET='victor@192.168.64.5'
 export EDR_SERVER_IP='192.168.64.1'              # E3 only
 ```
 
-`attack-runbook.sh` doesn't talk to the server at all - only SSH access to the VM is required.
+`attack-runbook.sh` doesn't talk to the server at all: only SSH access to the VM is required.
 
 ### Auth flow
 
@@ -39,7 +39,7 @@ The server has no password-based `POST /api/session` route; operator login is OI
 1. Do one browser login (break-glass or OIDC) against the EDR admin UI.
 2. Open devtools → Application → Cookies → copy the `edr_session` cookie value.
 3. `export EDR_SESSION_COOKIE='<paste>'` and reuse across many script runs until the session expires (typical session TTL: 1 hour idle, 8 hours absolute).
-4. If a script bails with "GET /api/session failed HTTP 401" the cookie has expired - repeat the browser login.
+4. If a script bails with "GET /api/session failed HTTP 401" the cookie has expired: repeat the browser login.
 
 ## Running the suite
 
@@ -53,7 +53,7 @@ bash scripts/qa/e4-uninstall.sh               # run last; it removes the agent
 
 The network-partition script records pf's enabled/disabled state before the partition and rolls back to that state on exit. The uninstall script removes the agent by design; rerun with `--reinstall` to put it back.
 
-The uninstall script is destructive in the "agent is gone afterwards" sense - keep it last. Add `--reinstall path/to/fleet-edr-vX.Y.Z.pkg` to also exercise the re-install half (proves `/etc/fleet-edr.conf` is preserved across the round-trip).
+The uninstall script is destructive in the "agent is gone afterwards" sense, so keep it last. Add `--reinstall path/to/fleet-edr-vX.Y.Z.pkg` to also exercise the re-install half (proves `/etc/fleet-edr.conf` is preserved across the round-trip).
 
 ## Filing the QA report
 
@@ -66,7 +66,7 @@ After running the suite, capture the results so the pre-pilot acceptance deliver
 
 ## Known gaps the scripts surface
 
-These are deliberate - the scripts assert what's wired today and report on what isn't, rather than failing loudly on aspirational behaviour:
+These are deliberate: the scripts assert what's wired today and report on what isn't, rather than failing loudly on aspirational behaviour:
 
-- **Per-host event count endpoint (network-partition)**: there isn't one in the v0.1 admin API surface. The script verifies queue drainage on the agent side and the open-alert count server-side, but a precise "no duplicates" check needs a direct DB query - out of scope for a script that runs only against published APIs.
-- **Sysext deactivation timing (uninstall)**: macOS occasionally takes a few seconds longer than the uninstall script waits to fully deactivate the sysext. If `systemextensionsctl list` still shows `activated terminating` immediately after step 3, give it 30s and recheck - that's expected and not a regression.
+- **Per-host event count endpoint (network-partition)**: there isn't one in the v0.1 admin API surface. The script verifies queue drainage on the agent side and the open-alert count server-side, but a precise "no duplicates" check needs a direct DB query, which is out of scope for a script that runs only against published APIs.
+- **Sysext deactivation timing (uninstall)**: macOS occasionally takes a few seconds longer than the uninstall script waits to fully deactivate the sysext. If `systemextensionsctl list` still shows `activated terminating` immediately after step 3, give it 30s and recheck: that's expected and not a regression.

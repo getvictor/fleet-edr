@@ -34,7 +34,7 @@ The system SHALL accept operator login via the configured Okta OpenID Connect (O
 
 ### Requirement: Just-in-time provisioning of unknown SSO users
 
-The system SHALL provision a user account on first successful Okta login when `auth.oidc.allow_jit_provisioning` is enabled and no identity row exists for the incoming `(provider, subject)` pair. The newly-created user SHALL be bound to the deployment's configured default JIT role at the deployment-wide scope (the seeded `analyst` role by default, overridable to another seeded role via `EDR_OIDC_DEFAULT_ROLE`). It MUST NOT inherit any other role from claims (group to role mapping is out of scope for wave 1), and the provisioning SHALL emit an audit row with action `user.created`. When `allow_jit_provisioning` is disabled, an unknown subject SHALL be denied with an audit row whose reason is `oidc.unknown_subject`.
+The system SHALL provision a user account on first successful Okta login when `auth.oidc.allow_jit_provisioning` is enabled and no identity row exists for the incoming `(provider, subject)` pair. The newly-created user SHALL be bound to the deployment's configured default JIT role at the deployment-wide scope (the seeded `analyst` role by default, overridable to another seeded role via `EDR_OIDC_DEFAULT_ROLE`). It MUST NOT inherit any other role from claims (group to role mapping is out of scope for the current release), and the provisioning SHALL emit an audit row with action `user.created`. When `allow_jit_provisioning` is disabled, an unknown subject SHALL be denied with an audit row whose reason is `oidc.unknown_subject`.
 
 #### Scenario: First Okta login auto-provisions an analyst
 
@@ -118,7 +118,7 @@ The system MUST rate-limit break-glass attempts with tighter caps than SSO login
 
 ### Requirement: Reauthentication is required for destructive actions
 
-The system SHALL require a fresh authentication event within the configured reauth window (default 30 minutes for normal sessions; the same window applies to break-glass sessions) before authorizing a destructive action. The set of destructive actions in wave 1 MUST include host isolation, host process kill, host script run, host enrollment revocation, and dismissing an alert whose severity is `critical`. A request whose session has not been re-authenticated within the window MUST be rejected with a typed error so the UI can prompt for re-authentication, and the rejection MUST be recorded in the audit log.
+The system SHALL require a fresh authentication event within the configured reauth window (default 30 minutes for normal sessions; the same window applies to break-glass sessions) before authorizing a destructive action. The set of destructive actions in the current release MUST include host isolation, host process kill, host script run, host enrollment revocation, and dismissing an alert whose severity is `critical`. A request whose session has not been re-authenticated within the window MUST be rejected with a typed error so the UI can prompt for re-authentication, and the rejection MUST be recorded in the audit log.
 
 #### Scenario: Fresh session executes a destructive action
 
@@ -136,7 +136,7 @@ The system SHALL require a fresh authentication event within the configured reau
 
 ### Requirement: A user is the row, an identity is the way to authenticate
 
-The system SHALL distinguish a user (the person) from the identity binding(s) by which the user authenticates. Every user MUST have one or more identity rows; an identity row MUST belong to exactly one user. Identity kinds in wave 1 are `local_password` (used by the break-glass account) and `oidc` (used by SSO-provisioned accounts). The `(provider, subject)` pair on an identity MUST be globally unique so the same Okta account cannot bind to two users in the same deployment.
+The system SHALL distinguish a user (the person) from the identity binding(s) by which the user authenticates. Every user MUST have one or more identity rows; an identity row MUST belong to exactly one user. Identity kinds in the current release are `local_password` (used by the break-glass account) and `oidc` (used by SSO-provisioned accounts). The `(provider, subject)` pair on an identity MUST be globally unique so the same Okta account cannot bind to two users in the same deployment.
 
 #### Scenario: SSO user has exactly one OIDC identity
 

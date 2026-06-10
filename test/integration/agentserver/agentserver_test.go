@@ -7,7 +7,7 @@
 // pumpEvents -> queue -> uploader -> /api/events -> detection processor -> events table -> ListHosts EventCount.
 //
 // One subtest per scenario in the starter corpus (M4 milestone: 5). Each subtest gets its own MySQL test database (testdb/full.Open
-// via integration.Setup) so per-subtest state is isolated. Subtests run serially rather than t.Parallel - see the runScenario
+// via integration.Setup) so per-subtest state is isolated. Subtests run serially rather than t.Parallel; see the runScenario
 // comment below for the connection-pressure rationale.
 //
 // Build tag pairing: `integration` matches the existing test/integration suite gate; `!darwin || !cgo` matches the headless package's

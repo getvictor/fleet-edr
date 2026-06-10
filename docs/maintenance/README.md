@@ -14,10 +14,10 @@ Three rules to keep this from becoming maintenance theatre:
 
 These tasks were chosen with the following deltas in mind, not just generic "review your docs" advice:
 
-- **AI assistant configuration is now part of the codebase.** `CLAUDE.md` (committed) and the per-maintainer `MEMORY.md`, slash commands, and skills under `~/.claude/` and `.claude/` now drift the same way prose docs always have. (Other tools in the ecosystem use `AGENTS.md`, `.cursor/rules`, etc.; this repo standardises on Claude Code so only `CLAUDE.md` is committed.) These rules need a dedicated audit cadence because they are invisible to compilers and linters but actively shape every change.
-- **Living best-practices audits over one-shot style guides.** Modern codebases (Kubernetes, Sigstore, Falco) treat their best-practices docs as periodically re-evaluated checklists, not write-once prose. The repo already does this in `docs/best-practices.md`; the schedule formalises the refresh cadence so unchecked items don't silently rot.
-- **Fitness functions catch architectural drift continuously.** `arch-go.yml` is the structural fitness function; the `architecture-drift.md` task is for the _semantic_ drift that fitness functions can't express (e.g. "context A is reaching into context B's data model conceptually even though the imports are clean").
-- **ADRs need supersession, not just creation.** ADRs that are never marked superseded are worse than missing ADRs because they encode decisions that are no longer in force. The `adr-audit.md` task explicitly looks for ADRs that have been quietly reversed.
+- **AI assistant configuration is now part of the codebase.** [`CLAUDE.md`](../../CLAUDE.md) (committed) and the per-maintainer `MEMORY.md`, slash commands, and skills under `~/.claude/` and `.claude/` now drift the same way prose docs always have. (Other tools in the ecosystem use `AGENTS.md`, `.cursor/rules`, etc.; this repo standardises on Claude Code so only [`CLAUDE.md`](../../CLAUDE.md) is committed.) These rules need a dedicated audit cadence because they are invisible to compilers and linters but actively shape every change.
+- **Living best-practices audits over one-shot style guides.** Modern codebases (Kubernetes, Sigstore, Falco) treat their best-practices docs as periodically re-evaluated checklists, not write-once prose. The repo already does this in [`docs/best-practices.md`](../best-practices.md); the schedule formalises the refresh cadence so unchecked items don't silently rot.
+- **Fitness functions catch architectural drift continuously.** `arch-go.yml` is the structural fitness function; the [`architecture-drift.md`](tasks/architecture-drift.md) task is for the _semantic_ drift that fitness functions can't express (e.g. "context A is reaching into context B's data model conceptually even though the imports are clean").
+- **ADRs need supersession, not just creation.** ADRs that are never marked superseded are worse than missing ADRs because they encode decisions that are no longer in force. The [`adr-audit.md`](tasks/adr-audit.md) task explicitly looks for ADRs that have been quietly reversed.
 - **Threat models decay with the data plane.** A threat model written before mTLS, before the network extension, before per-context boundaries is a liability, not an asset. The schedule treats it as code, not a one-off artefact.
 
 ## What is NOT scheduled here (and why)
@@ -55,7 +55,7 @@ Three options, in order of increasing automation:
 
 1. **Manual.** Open the task file, copy the prompt template into a fresh Claude session, run it on a branch, review the diff, commit. This is the default and the safest. Each task is sized to fit one session.
 2. **`/loop` (foreground recurring).** `/loop /<task-name>` if you want to step through several tasks in one sitting.
-3. **`/schedule` (cron'd remote agent).** Wire monthly / quarterly tasks to remote routines so they propose PRs without prompting. Only do this for tasks whose definition-of-done can be verified by reading a PR. Do NOT schedule tasks that mutate the threat model, ADRs, or `CLAUDE.md` autonomously: those decisions need a human in the loop.
+3. **`/schedule` (cron'd remote agent).** Wire monthly / quarterly tasks to remote routines so they propose PRs without prompting. Only do this for tasks whose definition-of-done can be verified by reading a PR. Do NOT schedule tasks that mutate the threat model, ADRs, or [`CLAUDE.md`](../../CLAUDE.md) autonomously: those decisions need a human in the loop.
 
 ## Adding a new task
 
@@ -71,25 +71,25 @@ Use any existing task file as a template. Update the cadence calendar above and 
 
 ### Documentation hygiene
 
-- [`doc-accuracy-sweep`](tasks/doc-accuracy-sweep.md) - prose-vs-code drift across `docs/`, `README.md`, `CONTRIBUTING.md`
-- [`stale-implementation-references`](tasks/stale-implementation-references.md) - phase numbers, dead branch names, removed files, broken URLs in committed docs
-- [`adr-audit`](tasks/adr-audit.md) - ADR freshness, supersession, missing decisions
-- [`best-practices-refresh`](tasks/best-practices-refresh.md) - industry-delta refresh of `docs/best-practices.md`
+- [`doc-accuracy-sweep`](tasks/doc-accuracy-sweep.md): prose-vs-code drift across `docs/`, [`README.md`](../../README.md), [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
+- [`stale-implementation-references`](tasks/stale-implementation-references.md): phase numbers, dead branch names, removed files, broken URLs in committed docs
+- [`adr-audit`](tasks/adr-audit.md): ADR freshness, supersession, missing decisions
+- [`best-practices-refresh`](tasks/best-practices-refresh.md): industry-delta refresh of [`docs/best-practices.md`](../best-practices.md)
 
 ### Codebase health
 
-- [`todo-fixme-sweep`](tasks/todo-fixme-sweep.md) - fix, file an issue, or delete; never let TODOs accumulate
-- [`dead-code-sweep`](tasks/dead-code-sweep.md) - orphan packages, unused exports, dead UI components, abandoned migrations
-- [`test-suite-health`](tasks/test-suite-health.md) - flaky, skipped, slow, semantically thin
-- [`architecture-drift`](tasks/architecture-drift.md) - semantic boundary violations beyond what `arch-go` catches
+- [`todo-fixme-sweep`](tasks/todo-fixme-sweep.md): fix, file an issue, or delete; never let TODOs accumulate
+- [`dead-code-sweep`](tasks/dead-code-sweep.md): orphan packages, unused exports, dead UI components, abandoned migrations
+- [`test-suite-health`](tasks/test-suite-health.md): flaky, skipped, slow, semantically thin
+- [`architecture-drift`](tasks/architecture-drift.md): semantic boundary violations beyond what `arch-go` catches
 
 ### AI tooling hygiene (new domain)
 
-- [`claude-config-audit`](tasks/claude-config-audit.md) - `.claude/settings*.json`, hooks, slash commands, skills
-- [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md) - `~/.claude/projects/.../MEMORY.md` + `CLAUDE.md` accuracy
-- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md) - `.coderabbit.yaml` + future Copilot/Gemini/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
+- [`claude-config-audit`](tasks/claude-config-audit.md): `.claude/settings*.json`, hooks, slash commands, skills
+- [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md): `~/.claude/projects/.../MEMORY.md` + [`CLAUDE.md`](../../CLAUDE.md) accuracy
+- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md): `.coderabbit.yaml` + future Copilot/Gemini/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
 
 ### Product / cross-cutting
 
-- [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md) - threat model + security boundaries vs current data plane
-- [`observability-review`](tasks/observability-review.md) - OTel coverage, dashboard usefulness, alert noise
+- [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md): threat model + security boundaries vs current data plane
+- [`observability-review`](tasks/observability-review.md): OTel coverage, dashboard usefulness, alert noise

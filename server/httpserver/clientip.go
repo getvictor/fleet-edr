@@ -85,7 +85,7 @@ func parseTrustedPrefix(token string) (netip.Prefix, error) {
 }
 
 // ClientIP resolves the trustworthy client IP for r per the rules in the type doc. Returns "" when r is nil. A nil receiver is treated
-// as an empty trusted list - useful for tests and for the boot path before the resolver is constructed.
+// as an empty trusted list, which is useful for tests and for the boot path before the resolver is constructed.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -149,7 +149,7 @@ func remoteHost(remoteAddr string) string {
 	return host
 }
 
-// parseAddr parses a single XFF entry. Strips a trailing :port via remoteHost first - non-standard but seen in some proxy / NLB setups
+// parseAddr parses a single XFF entry. Strips a trailing :port via remoteHost first: non-standard but seen in some proxy / NLB setups
 // (per Gemini Code Assist review on PR #113). Unmaps IPv4-mapped IPv6 so a "::ffff:10.0.0.1" entry compares against an IPv4 trusted
 // CIDR.
 func parseAddr(s string) (netip.Addr, bool) {
@@ -180,7 +180,7 @@ type clientIPCtxKey struct{}
 // Production code should always call this rather than
 // httpserver.RemoteIP or r.RemoteAddr directly: prod sets the value
 // via middleware, and the fallback keeps tests that don't go through
-// the middleware chain working. The fallback NEVER honours XFF - a
+// the middleware chain working. The fallback NEVER honours XFF: a
 // forgotten middleware wire-up degrades to the secure default rather
 // than letting spoofed XFF through.
 func ClientIP(r *http.Request) string {

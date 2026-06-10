@@ -4,7 +4,7 @@
 - Date: 2026-05-01
 - Deciders: getvictor
 
-> Migration completed 2026-05-03. The five contexts (`identity`, `endpoint`, `rules`, `response`, `detection`) each ship as `api/` + `bootstrap/` + `internal/` + `testkit/`, with `testkit/` providing a coordinated test-fixture surface separate from production wiring. arch-go (`arch-go.yml` + `test/arch/arch_test.go`) runs in strict mode and enforces the bounded-context import rules in CI as a hard-fail gating check. See `docs/architecture-maturity.md` for the audit of what's enforced where, plus the graduation-criteria checklist for when to invest in heavier patterns (ACL packages, event-driven cross-context calls, database-per-context, separate-process split).
+> Migration completed 2026-05-03. The five contexts (`identity`, `endpoint`, `rules`, `response`, `detection`) each ship as `api/` + `bootstrap/` + `internal/` + `testkit/`, with `testkit/` providing a coordinated test-fixture surface separate from production wiring. arch-go (`arch-go.yml` + `test/arch/arch_test.go`) runs in strict mode and enforces the bounded-context import rules in CI as a hard-fail gating check. See [`architecture-maturity.md`](../architecture-maturity.md) for the audit of what's enforced where, plus the graduation-criteria checklist for when to invest in heavier patterns (ACL packages, event-driven cross-context calls, database-per-context, separate-process split).
 
 ## Context
 

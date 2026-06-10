@@ -6,7 +6,7 @@
 
 While work is in flight, docs and code comments accumulate references to the in-progress implementation: "phase 6", "in the `phase7-testkit` branch", "the new alerts table will be added in step 3", "see `ai/mvp/plan.md` for context" (any gitignored path). Once the work lands, those references become misleading: a future reader treats them as part of the permanent architecture and goes hunting for files or phases that no longer exist or never did. Code comments rot the same way as prose, especially package docs (`doc.go`), API surface comments (`type Foo interface { ... }` blocks), and test names that pin a "Phase N" contract that has since become "the contract".
 
-A canonical past example: `docs/best-practices.md` once read "the FK was dropped in phase 5 in favour of code-level validation". The 2026-05-03 sweep rewrote it to "the FK was dropped in favour of code-level validation" - same outcome, no journey. The same sweep cleared ~90 phase-numbered code comments under `agent/`, `extension/`, `server/`, `ui/`, `test/integration/`, plus `arch-go.yml`, `Taskfile.yml`, and the agent LaunchDaemon plist.
+A canonical past example: [`docs/best-practices.md`](../../best-practices.md) once read "the FK was dropped in phase 5 in favour of code-level validation". The 2026-05-03 sweep rewrote it to "the FK was dropped in favour of code-level validation": same outcome, no journey. The same sweep cleared ~90 phase-numbered code comments under `agent/`, `extension/`, `server/`, `ui/`, `test/integration/`, plus `arch-go.yml`, `Taskfile.yml`, and the agent LaunchDaemon plist.
 
 ## Scope
 
@@ -16,7 +16,7 @@ Three buckets, all in scope:
 2. **Committed code comments**: `agent/`, `server/`, `ui/`, `extension/`, `test/`, `scripts/`, plus build configs (`arch-go.yml`, `Taskfile.yml`, `.github/workflows/*`) and the agent's LaunchDaemon plist. Includes `doc.go`, package-level comments, interface and field comments, test-function comments, and string fixtures that bake in phase wording (e.g. `"agent_version": "phase8-..."`).
 3. **Committed `.claude/`**: this repo tracks `.claude/commands/opsx/*.md` and `.claude/skills/openspec-*/SKILL.md`. They drift the same way prose does. The user-level `~/.claude/` and the gitignored project-level `.claude/scheduled_tasks.lock` are out of scope.
 
-Excludes everything in `.gitignore` (today: `ai/` topic-plan tree, `tmp/`, build outputs, lockfile state, node_modules, etc.). Treat the live `.gitignore` as the source of truth - if a path is gitignored, it must not be referenced from committed prose or code. Also excludes `openspec/changes/<change-name>/` trees: OpenSpec change proposals use phase numbering as a planning device for in-flight work, by design. They get archived under `openspec/archive/` when complete; do not rewrite their phase headings while a change is active. If an archived change has phase numbering that has rotted (e.g. documented work that landed and was renamed), that is in scope.
+Excludes everything in `.gitignore` (today: `ai/` topic-plan tree, `tmp/`, build outputs, lockfile state, node_modules, etc.). Treat the live `.gitignore` as the source of truth: if a path is gitignored, it must not be referenced from committed prose or code. Also excludes `openspec/changes/<change-name>/` trees: OpenSpec change proposals use phase numbering as a planning device for in-flight work, by design. They get archived under `openspec/archive/` when complete; do not rewrite their phase headings while a change is active. If an archived change has phase numbering that has rotted (e.g. documented work that landed and was renamed), that is in scope.
 
 ## Patterns to find and triage
 
@@ -58,7 +58,7 @@ Excludes everything in `.gitignore` (today: `ai/` topic-plan tree, `tmp/`, build
 
 ## Output
 
-A PR when there are findings; on every run, append a dated entry to `docs/maintenance/log.md` following the format documented at the top of that file (`YYYY-MM-DD  stale-implementation-references   <done|partial|skipped>  [PR #N | no findings]  [notes]`). The log entry is mandatory whether the run had findings or not - it is the audit trail proving the cadence is being honoured.
+A PR when there are findings; on every run, append a dated entry to [`docs/maintenance/log.md`](../log.md) following the format documented at the top of that file (`YYYY-MM-DD  stale-implementation-references   <done|partial|skipped>  [PR #N | no findings]  [notes]`). The log entry is mandatory whether the run had findings or not. It is the audit trail proving the cadence is being honoured.
 
 ## Prompt template
 
@@ -98,8 +98,8 @@ Open one PR with the format above. Do not exceed 90 minutes.
 ## Definition of done
 
 - [ ] All grep patterns executed and every hit triaged across prose, code comments, and committed `.claude/`.
-- [ ] Dated entry appended to `docs/maintenance/log.md` (mandatory on every run, regardless of findings).
+- [ ] Dated entry appended to [`docs/maintenance/log.md`](../log.md) (mandatory on every run, regardless of findings).
 - [ ] PR opened when there are findings.
-- [ ] No reference to any gitignored file or directory (check `.gitignore` for the current list - today that's `ai/`, `tmp/`, build outputs, lockfiles, etc.) remains in committed prose or code, since such references break for everyone but the author.
+- [ ] No reference to any gitignored file or directory (check `.gitignore` for the current list, which today is `ai/`, `tmp/`, build outputs, lockfiles, etc.) remains in committed prose or code, since such references break for everyone but the author.
 - [ ] No `Phase N` reference remains in package docs, interface comments, or test names that document the _current_ contract.
 - [ ] No `Section A.B` testplan ID remains in tracked file names, npm script names, test/describe blocks, or fixture constants that document the _current_ contract; renamed files use `git mv` so blame survives, and every consumer (npm scripts, shell scripts, CI workflows, gitignored plan docs) is updated in the same PR.

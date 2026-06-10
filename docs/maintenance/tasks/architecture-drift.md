@@ -6,12 +6,12 @@
 
 `arch-go.yml` is the structural fitness function: it catches cross-context imports, internal-package leaks, and layering violations on every PR. What it can NOT catch:
 
-- **Conceptual coupling** - context A "knowing" the schema or invariants of context B even though it imports cleanly through the `api/` boundary. Common pattern: rebuilding a stripped-down version of B's domain model on A's side.
-- **Drift in `internal/` boundaries** - a package that was intended to be private to one context slowly accumulates callers from outside.
-- **God-tables / god-services** - a single struct or table that has become the join point of every context, undoing the bounded-context separation.
-- **Test cross-pollination** - integration tests in one context's `tests/` package quietly poking at another context's tables.
-- **Migration ordering** - schema changes that assume a context boundary that no longer holds.
-- **Abstraction reversal** - interface in package A satisfied only by an implementation in package B that depends on A. The imports are clean; the dependency is a circle.
+- **Conceptual coupling**: context A "knowing" the schema or invariants of context B even though it imports cleanly through the `api/` boundary. Common pattern: rebuilding a stripped-down version of B's domain model on A's side.
+- **Drift in `internal/` boundaries**: a package that was intended to be private to one context slowly accumulates callers from outside.
+- **God-tables / god-services**: a single struct or table that has become the join point of every context, undoing the bounded-context separation.
+- **Test cross-pollination**: integration tests in one context's `tests/` package quietly poking at another context's tables.
+- **Migration ordering**: schema changes that assume a context boundary that no longer holds.
+- **Abstraction reversal**: interface in package A satisfied only by an implementation in package B that depends on A. The imports are clean; the dependency is a circle.
 
 This task is the human-judgment counterpart to `arch-go`.
 
@@ -66,7 +66,7 @@ If a single struct in any context's `api/` is referenced by all four other conte
 - One PR per refactor that's small enough to land safely.
 - Issues filed for each refactor that's not.
 - A short note in the audit summary on whether ADR-0004 still describes intent or needs amending.
-- A dated entry in `docs/maintenance/log.md` on every run, whether findings landed or not - the "no findings" outcome is itself signal that arch-go and the test layout are doing their job.
+- A dated entry in [`docs/maintenance/log.md`](../log.md) on every run, whether findings landed or not. The "no findings" outcome is itself signal that arch-go and the test layout are doing their job.
 
 ## Prompt template
 
@@ -99,4 +99,4 @@ their job.
 - [ ] Boundary heat map captured (paste into PR body or log).
 - [ ] Each finding has a decision (refactor / issue / accept).
 - [ ] If ADR-0004's intent has shifted, an amendment is filed.
-- [ ] Dated entry in `docs/maintenance/log.md`.
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md).

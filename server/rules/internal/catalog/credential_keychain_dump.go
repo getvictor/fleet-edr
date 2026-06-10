@@ -10,12 +10,12 @@ import (
 )
 
 // CredentialKeychainDump fires when a process invokes `/usr/bin/security
-// dump-keychain` - the canonical macOS command for exporting Keychain
+// dump-keychain`, the canonical macOS command for exporting Keychain
 // entries, including saved passwords and private keys. It is almost
 // never legitimate in a managed fleet: admin scripts don't dump the
 // Keychain, and the command is a well-known red-team staple.
 //
-// Detection targets exec events only - no process-tree lookups, no
+// Detection targets exec events only: no process-tree lookups, no
 // network correlation. A shell wrapper (`sh -c "security dump-keychain"`)
 // still surfaces because ESF emits a NOTIFY_EXEC for each execve(), so
 // the security binary shows up as its own exec event regardless of the
@@ -30,7 +30,7 @@ type CredentialKeychainDump struct{}
 
 func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers - T1555.001 (Credentials from Password Stores → Keychain). Apple's own docs
+// Techniques returns the MITRE ATT&CK IDs this rule covers: T1555.001 (Credentials from Password Stores → Keychain). Apple's own docs
 // list `security dump-keychain` as the tool for enumerating Keychain items, and MITRE explicitly cites it on the technique page.
 func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.001"} }
 
@@ -39,7 +39,7 @@ func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.
 func (r *CredentialKeychainDump) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   "Keychain dump (security dump-keychain)",
-		Summary: "Flags exec of /usr/bin/security dump-keychain - the canonical macOS Keychain export command.",
+		Summary: "Flags exec of /usr/bin/security dump-keychain: the canonical macOS Keychain export command.",
 		Description: "Fires when a process invokes `/usr/bin/security` with the `dump-keychain` subcommand. " +
 			"That command exports Keychain entries (saved passwords, private keys) and is the macOS-native equivalent " +
 			"of credential-dumping tooling on Windows. Admin scripts virtually never invoke it; offensive playbooks do.\n\n" +
@@ -53,7 +53,7 @@ func (r *CredentialKeychainDump) Doc() api.Documentation {
 		},
 		Limitations: []string{
 			"Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.",
-			"Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w) - left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.",
+			"Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.",
 		},
 	}
 }
@@ -102,7 +102,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		}
 		if proc == nil {
 			// Defensive: the exec event landed but the process row isn't materialised (e.g. a race where ingestion
-			// delivered the exec before the builder's ProcessBatch ran). Skip this event - we have no process_id to link
+			// delivered the exec before the builder's ProcessBatch ran). Skip this event: we have no process_id to link
 			// the finding to, and the engine won't re-feed this batch. In practice the processor loop always materialises
 			// before detection runs, so this branch is a defensive guard, not a dropped-alert path.
 			continue
@@ -113,7 +113,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			RuleID:      r.ID(),
 			Severity:    api.SeverityHigh,
 			Title:       "Keychain credential dump attempted",
-			Description: fmt.Sprintf("%s invoked with %q - reads all Keychain entries (Keychain credential access, MITRE T1555.001)", p.Path, sub),
+			Description: fmt.Sprintf("%s invoked with %q: reads all Keychain entries (Keychain credential access, MITRE T1555.001)", p.Path, sub),
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},
 		})
@@ -122,7 +122,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 }
 
 // findDumpKeychainArg returns the matched subcommand (e.g. "dump-keychain") and true when argv invokes a flagged subcommand as the
-// security tool's actual subcommand - i.e. the first non-flag token after argv[0]. argv[0] is the binary itself and is skipped; flag
+// security tool's actual subcommand, i.e. the first non-flag token after argv[0]. argv[0] is the binary itself and is skipped; flag
 // tokens (leading `-`) are skipped so `security -v dump-keychain` still matches. A subcommand like `help` that merely mentions the
 // string `dump-keychain` in its arguments (`security help dump-keychain`) does NOT match, because `help` is the first non-flag token.
 func findDumpKeychainArg(argv []string) (string, bool) {

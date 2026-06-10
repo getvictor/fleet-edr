@@ -11,7 +11,7 @@ The `OpenSpec sync` CI gate has a `no-behavior-change` opt-out (label or `[no-be
 ## Repo conventions (do not flag these as issues)
 
 - Go 1.22+ integer range (`for i := range N` where `N` is an `int`) compiles and is the project's preferred form. Do NOT claim it "doesn't compile": that has been a recurring false positive.
-- No em-dashes in code, comments, or docs (use `:` or `-` with surrounding spaces).
+- No em-dashes in code, comments, or docs, and no spaced hyphen (`-`) standing in for one: reword (prefer shorter sentences) or use `:`. A hyphen is fine only unspaced in a compound word (`per-IP`) or as a list marker. Flag a spaced `-` aside as a violation; it is enforced by `tools/dash-lint`.
 - Line wrap is 140 characters for Go; SwiftLint allows 150. Do not flag Go/Swift lines under those limits. Markdown is NOT hard-wrapped (Prettier `proseWrap: never`, enforced by `task lint:md:prose`); do not flag long Markdown prose lines or single-line paragraphs.
 - The macOS deployment target is 26.x and the product minimum is macOS 13+ (ADR-0002); do not flag missing `#available` guards for macOS-13+ APIs (BTM, ESF muting/inversion, etc.).
 

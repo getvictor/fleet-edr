@@ -76,7 +76,7 @@ func New(svc api.Service, opts Options) *Handler {
 	}
 }
 
-// RegisterPublicRoutes wires DELETE /api/session on the given mux. Logout is public (and permissive) by design - a stale cookie still
+// RegisterPublicRoutes wires DELETE /api/session on the given mux. Logout is public (and permissive) by design: a stale cookie still
 // needs a clearing Set-Cookie regardless of session validity.
 func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/session", h.handleLogout)

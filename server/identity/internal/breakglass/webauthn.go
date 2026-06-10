@@ -55,7 +55,7 @@ func NewWebAuthn(opts WebAuthnOptions) (*webauthn.WebAuthn, error) {
 		RPID:          opts.RPID,
 		RPDisplayName: opts.RPDisplayName,
 		RPOrigins:     opts.RPOrigins,
-		// AttestationPreference: indirect - accept anonymized CA attestation (matches the Apple platform authenticator
+		// AttestationPreference: indirect, accepting anonymized CA attestation (matches the Apple platform authenticator
 		// default) but allow direct for hardware keys that prefer it. This balances "operator can see authenticator brand"
 		// against "platform authenticators that refuse direct attestation work".
 		AttestationPreference: protocol.PreferIndirectAttestation,
@@ -70,7 +70,7 @@ func NewWebAuthn(opts WebAuthnOptions) (*webauthn.WebAuthn, error) {
 }
 
 // User adapts identity's users.User + the credential rows owned by that user into the webauthn.User interface go-webauthn requires for
-// Begin/Finish ceremonies. The handle is the user id encoded as fixed-width bytes - opaque (not displayed) and stable across renames,
+// Begin/Finish ceremonies. The handle is the user id encoded as fixed-width bytes: opaque (not displayed) and stable across renames,
 // per WebAuthn §5.4.3.
 type User struct {
 	ID          int64
@@ -88,7 +88,7 @@ func (u User) WebAuthnID() []byte {
 	return out
 }
 
-// WebAuthnName returns the email - operator-friendly when the
+// WebAuthnName returns the email, which is operator-friendly when the
 // browser displays "register a credential for <name>".
 func (u User) WebAuthnName() string { return u.Email }
 

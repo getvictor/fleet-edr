@@ -231,7 +231,7 @@ func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 	r := newRunner(t, pt, q, &killer{dead: dead}, "h", Options{MaxPerPass: 3})
 
 	stats := r.RunOnce(context.Background())
-	// Map iteration is non-deterministic in Go, so we deliberately assert only on the count of reaped PIDs and the table size - never on
+	// Map iteration is non-deterministic in Go, so we deliberately assert only on the count of reaped PIDs and the table size, never on
 	// which specific PIDs survive. Adding "PID X must be reaped" assertions here would flake.
 	assert.Equal(t, 3, stats.Exits)
 	assert.Equal(t, 7, pt.Size(), "only the cap is reaped per pass")
@@ -305,7 +305,7 @@ func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 //     heartbeat. The Heartbeats==0 assertion plus the empty queue pin that clause.
 func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
 	// Regression guard for the issue #173 implementation: only snapshot PIDs heartbeat. A regular live PID must not produce a
-	// heartbeat - the fork/exec/exit stream already keeps the server's row fresh.
+	// heartbeat: the fork/exec/exit stream already keeps the server's row fresh.
 	pt := proctable.New()
 	pt.Update(50, proctable.ProcessInfo{Path: "/bin/regular", StartTime: 0, IsSnapshot: false})
 
@@ -446,7 +446,7 @@ func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 	r := newRunner(t, pt, q, &killer{dead: map[int]bool{42: true}}, "h", Options{})
 
 	// RunOnce logs the per-PID enqueue error and continues so one bad enqueue
-	// doesn't stall the whole pass - there's no error return to assert on.
+	// doesn't stall the whole pass: there's no error return to assert on.
 	stats := r.RunOnce(context.Background())
 	assert.Equal(t, 0, stats.Exits)
 	_, ok := pt.Lookup(42)
@@ -460,7 +460,7 @@ func TestEmitSyntheticExit_NewIDError(t *testing.T) {
 	q := &recorderQueue{}
 	k := &killer{dead: map[int]bool{7: true}}
 	r := newRunner(t, pt, q, k, "h", Options{})
-	// Inject a UUID generator that always fails. Covers the emitSyntheticExit→r.newID error branch - in production this fires only when
+	// Inject a UUID generator that always fails. Covers the emitSyntheticExit→r.newID error branch: in production this fires only when
 	// crypto/rand stops working, which is a fundamental platform failure we still want to surface rather than swallow.
 	r.newID = func() (string, error) { return "", errors.New("rand unavailable") }
 
@@ -479,7 +479,7 @@ func TestEmitSyntheticExit_MarshalError(t *testing.T) {
 	k := &killer{dead: map[int]bool{8: true}}
 	r := newRunner(t, pt, q, k, "h", Options{})
 	// Inject a marshaler that always fails. In production json.Marshal over a map[string]any of int+int+string can't fail, so the test is
-	// the only way to exercise the error branch - and locks in the behaviour that a marshal failure does not crash the pass.
+	// the only way to exercise the error branch, and it locks in the behaviour that a marshal failure does not crash the pass.
 	r.marshal = func(_ any) ([]byte, error) { return nil, errors.New("marshal broken") }
 
 	stats := r.RunOnce(context.Background())

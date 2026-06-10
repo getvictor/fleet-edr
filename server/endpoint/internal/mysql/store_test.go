@@ -83,7 +83,7 @@ func TestVerify_LookupByTokenID(t *testing.T) {
 		assert.Equal(t, uuid, got)
 	}
 
-	// An unknown token with the correct length is ErrTokenMismatch - Verify must not
+	// An unknown token with the correct length is ErrTokenMismatch. Verify must not
 	// silently tolerate mis-shaped tokens by iterating the table.
 	_, err := s.Verify(ctx, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 	assert.ErrorIs(t, err, mysql.ErrTokenMismatch)

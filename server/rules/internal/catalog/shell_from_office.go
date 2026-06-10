@@ -19,7 +19,7 @@ type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers - T1566.001 (Phishing → Spearphishing Attachment) + T1059.004 (Command and
+// Techniques returns the MITRE ATT&CK IDs this rule covers: T1566.001 (Phishing → Spearphishing Attachment) + T1059.004 (Command and
 // Scripting Interpreter → Unix Shell). The chain "Office app → shell" is a textbook post-phish execution step.
 func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
 
@@ -95,7 +95,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 		return nil, fmt.Errorf("get parent pid %d: %w", p.PPID, err)
 	}
 	// Parent not yet materialised, or not an Office binary. The processor marks the whole batch processed after Evaluate returns, so a
-	// re-feed does not happen automatically - missing-parent cases are accepted today; a deferred retry queue is a future improvement.
+	// re-feed does not happen automatically. Missing-parent cases are accepted today; a deferred retry queue is a future improvement.
 	if parent == nil || !officeBinaries[parent.Path] {
 		return nil, nil
 	}

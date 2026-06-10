@@ -97,7 +97,7 @@ func Open(tb testing.TB) *sqlx.DB {
 	dsn := testDSN(tb)
 
 	// Parse the DSN once and fail fast if it's malformed. Returning the original DSN on parse error would silently strip our "isolated
-	// test database" guarantee - the admin connection would keep the original DBName and any DDL we run would land on the shared dev DB.
+	// test database" guarantee: the admin connection would keep the original DBName and any DDL we run would land on the shared dev DB.
 	baseDSN, err := stripDBName(dsn)
 	if err != nil {
 		tb.Fatalf("parse EDR_TEST_DSN: %v", err)
@@ -158,7 +158,7 @@ func sanitizeDBName(testName string) string {
 
 	name := "edr_test_" + processSalt + "_" + testName
 	// Replace characters MySQL rejects in unquoted identifiers + backticks. Backticks specifically would break the DDL
-	// string interpolation in Open() (`CREATE DATABASE \`name\``) if a test name contained one - Go test names allow
+	// string interpolation in Open() (`CREATE DATABASE \`name\``) if a test name contained one. Go test names allow
 	// arbitrary runes, so the defense is mandatory, not theoretical.
 	replacer := strings.NewReplacer("/", "_", " ", "_", "-", "_", ".", "_", "`", "_")
 	name = replacer.Replace(name)

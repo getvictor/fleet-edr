@@ -14,7 +14,7 @@ import XCTest
 
 final class AuthExecDeciderTests: XCTestCase {
 
-    // MARK: - No match returns allow
+    // MARK: No match returns allow
 
     func test_spec_extension_application_control_auth_exec_denial_on_block_match_no_matching_rule_allows_the_exec() {
         let tuple = makeTuple(cdhash: "c0", signingIDPrefixed: "ABC:org.test", teamID: "ABCDEFGHIJ")
@@ -64,7 +64,7 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: teamRule, matchedIdentifier: "ABCDEFGHIJ"))
     }
 
-    // MARK: - CDHASH precedence
+    // MARK: CDHASH precedence
 
     func test_spec_extension_application_control_auth_exec_denial_on_block_match_a_block_rule_denies_the_exec() {
         let rule = makeRule(ruleType: ApplicationControlRuleType.cdhash, identifier: "cdhashvalue")
@@ -103,7 +103,7 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .allow)
     }
 
-    // MARK: - BINARY precedence (hash-driven)
+    // MARK: BINARY precedence (hash-driven)
 
     func testBinaryMatchOnComputedHashReturnsDeny() {
         let rule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "shavalue")
@@ -138,7 +138,7 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: teamRule, matchedIdentifier: "ABCDEFGHIJ"))
     }
 
-    // MARK: - Deadline-exceeded posture matrix
+    // MARK: Deadline-exceeded posture matrix
     //
     // The posture only applies AFTER the precedence walk continues past an unavailable BINARY
     // layer (.deadlineExceeded / .readFailed) and SIGNINGID + TEAMID both fail to match. A
@@ -177,7 +177,7 @@ final class AuthExecDeciderTests: XCTestCase {
         XCTAssertEqual(decision, .allowWithUndecidedAudit(reason: .deadline))
     }
 
-    // MARK: - Read-failed posture matrix
+    // MARK: Read-failed posture matrix
 
     func test_spec_extension_application_control_application_control_undecided_event_read_failed_reason_on_toctou_mismatch_under_fail_closed() {
         let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: nil)
@@ -201,7 +201,7 @@ final class AuthExecDeciderTests: XCTestCase {
 /// are free functions at file scope so both test classes share them without duplication.
 final class AuthExecDeciderPhaseBTests: XCTestCase {
 
-    // MARK: - CERTIFICATE layer (PR for #210)
+    // MARK: CERTIFICATE layer (PR for #210)
 
     /// CERTIFICATE rules match on the 64-char lowercase hex SHA-256 of the leaf X.509 signing certificate. Operators set
     /// these as the surgical level for compromised-Developer-ID response: revoking a leaf cert hash neutralises every
@@ -284,7 +284,7 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: certRule, matchedIdentifier: "leafhashvalue"))
     }
 
-    // MARK: - PATH layer (PR for #210)
+    // MARK: PATH layer (PR for #210)
 
     /// PATH rules match on the canonical absolute path of the exec target. Lowest-trust layer in the ladder by design --
     /// paths are the most operator-spoofable identifier. The test fixture uses an exact canonical form; the canonicaliser
@@ -350,7 +350,7 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
     }
 }
 
-// MARK: - canonicalizePath tests
+// MARK: canonicalizePath tests
 
 /// canonicalizePathTests pin the Swift implementation against the same rules as the server-side
 /// `server/rules/internal/appcontrol/CanonicalizePath`. A PATH rule created in the server is persisted in its canonical

@@ -79,7 +79,7 @@ func Admin(ctx context.Context, us *users.Store, rb *rbac.Store, logger *slog.Lo
 
 // resolveOrCreateAdmin finds the canonical break-glass admin row, creating it if it doesn't exist yet. Idempotent: on a restart the
 // existing row is returned unchanged so the caller can re-issue a fresh redemption token + re-bind super_admin without rewriting the
-// user record. Returns a hard error on any inconsistency (e.g. a non-breakglass row at the canonical email) - there is no pre-release
+// user record. Returns a hard error on any inconsistency (e.g. a non-breakglass row at the canonical email): there is no pre-release
 // deployment to migrate from, so an unexpected state is always a bug, not a known migration path.
 func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Logger) (*users.User, error) {
 	existing, err := us.GetByEmail(ctx, DefaultAdminEmail)

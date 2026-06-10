@@ -80,7 +80,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     /// between chaining into enableContentFilter-then-enableDNSProxy (activate-on-success) and exiting
     /// immediately (deactivate or any failure), per the spec contract encoded in postAggregateStep. Named
     /// with the `Aggregate` suffix because NSObject already declares a `finalize()` method that this method's
-    /// body has nothing to do with - the collision would be a compile error if both kept the same selector.
+    /// body has nothing to do with. The collision would be a compile error if both kept the same selector.
     private func finalizeAggregate() {
         let verdict = aggregator.verdict
         switch postAggregateStep(for: action, verdict: verdict) {
@@ -189,7 +189,7 @@ private func disableDNSProxy() {
 /// service and presenting NSAlert modals on every accepted
 /// AUTH_EXEC-denied notification. Distinct from the other CLI
 /// modes (one-shot extension activation, filter toggles) which run
-/// dispatchMain and exit on completion - the notify surface has no
+/// dispatchMain and exit on completion. The notify surface has no
 /// terminal state by design.
 ///
 /// Runs as `.accessory` so a modal can appear without the app
@@ -206,7 +206,7 @@ private func runNotifyMode() {
     // of the AppKit run loop. ARC is otherwise free to drop a local
     // whose only remaining "uses" are inside [weak self] event
     // handlers, which would silently take the XPC surface offline in
-    // optimised builds - caught by Gemini and Copilot on PR #157.
+    // optimised builds. Caught by Gemini and Copilot on PR #157.
     withExtendedLifetime(listener) {
         app.run()
     }

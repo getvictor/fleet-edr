@@ -2,7 +2,7 @@
 // of a 32-byte random token. The cookie carries the raw token (base64url-encoded); the DB stores only the digest, mirroring the
 // pattern enrollment tokens use so a database compromise does not immediately yield replayable bearer credentials. CSRF tokens are
 // per-session, also 32 random bytes, returned to the client in the login response body and sent back as `X-CSRF-Token` on unsafe
-// methods - those are stored raw because CSRF comparisons happen via constant-time compare, not indexed lookup.
+// methods. Those are stored raw because CSRF comparisons happen via constant-time compare, not indexed lookup.
 package sessions
 
 import (
@@ -56,8 +56,8 @@ var ErrNotFound = errors.New("sessions: not found or expired")
 // the local_password identity row can't be resolved at mint time) and tests that don't track identities can persist
 // valid rows. OIDC + break-glass FinishSetup always populate it.
 //
-// LastAuthAt records the most recent authentication event for this session
-// - initial login, OIDC reauth callback, or break-glass reauth POST. The
+// LastAuthAt records the most recent authentication event for this session:
+// initial login, OIDC reauth callback, or break-glass reauth POST. The
 // chokepoint reads it via Store.IsFresh / Actor.SessionFresh to gate
 // destructive actions.
 type Session struct {
@@ -73,7 +73,7 @@ type Session struct {
 }
 
 // digest returns SHA-256 of the session's raw-bytes id. It's the value we store and
-// look up by - the one-way hash ensures a DB leak does not yield replayable cookies.
+// look up by. The one-way hash ensures a DB leak does not yield replayable cookies.
 func digest(id []byte) []byte {
 	h := sha256.Sum256(id)
 	return h[:]
@@ -181,7 +181,7 @@ func (s *Store) Create(ctx context.Context, userID int64, opts CreateOptions) (*
 	expires := now.Add(s.timeoutsFor(authMethod).Absolute)
 	// All three timestamps are set explicitly from the store's clock so frozen-clock tests and the production wall-clock path stay
 	// self-consistent. The columns' DB defaults (CURRENT_TIMESTAMP(6) on insert, ON UPDATE for last_seen_at) only apply when the field is
-	// omitted from the INSERT or when an UPDATE doesn't name last_seen_at - which Touch / UpdateLastAuthAt always do.
+	// omitted from the INSERT or when an UPDATE doesn't name last_seen_at, which Touch / UpdateLastAuthAt always do.
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token,
 			created_at, last_seen_at, last_auth_at, expires_at)
@@ -271,10 +271,10 @@ func (s *Store) Get(ctx context.Context, plaintextID []byte) (*Session, error) {
 }
 
 // Touch advances last_seen_at to NOW() if the cached value is older than
-// touchThrottle (default 1 minute). Returns the resulting last_seen_at - the
+// touchThrottle (default 1 minute). Returns the resulting last_seen_at: the
 // cached value when no UPDATE was needed, or NOW() when an UPDATE ran. Pass
 // the cached LastSeenAt so a tight loop of Touch calls doesn't rewrite the row
-// when it's already fresh - middleware uses sess.LastSeenAt as the cache.
+// when it's already fresh. Middleware uses sess.LastSeenAt as the cache.
 //
 // On UPDATE failure the cached value is returned with a wrapped error; callers
 // SHOULD log + continue rather than fail the request. Idle expiry is enforced
@@ -287,7 +287,7 @@ func (s *Store) Touch(ctx context.Context, plaintextID []byte, cached time.Time)
 	if now.Sub(cached) < touchThrottle {
 		return cached, nil
 	}
-	// Explicit UPDATE wins over the column's ON UPDATE CURRENT_TIMESTAMP - we
+	// Explicit UPDATE wins over the column's ON UPDATE CURRENT_TIMESTAMP: we
 	// want the value the store's clock returned, not whatever MySQL sees.
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE sessions SET last_seen_at = ? WHERE id = ?
@@ -334,7 +334,7 @@ func (s *Store) IsFresh(sess *Session) bool {
 // handler + operator-facing copy share one source of truth for the value.
 func (s *Store) ReauthWindow() time.Duration { return s.reauthWin }
 
-// Delete removes a session by plaintext id. Idempotent - no error on a row that
+// Delete removes a session by plaintext id. Idempotent: no error on a row that
 // doesn't exist so logout works even when the cookie is already stale on the client.
 func (s *Store) Delete(ctx context.Context, plaintextID []byte) error {
 	if len(plaintextID) != IDLen {

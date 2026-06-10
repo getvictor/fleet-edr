@@ -13,8 +13,8 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the userID tests reference (1, 2, 7, 42 - whatever the
-// test passes to Create). Without this the FK constraint sessions.user_id → users(id) rejects inserts.
+// newTestStore opens a fresh DB and pre-inserts a stub users row whose id is the userID tests reference (1, 2, 7, 42, or whatever
+// the test passes to Create). Without this the FK constraint sessions.user_id → users(id) rejects inserts.
 func newTestStore(t *testing.T, opts sessions.Options) *sessions.Store {
 	t.Helper()
 	db := testdb.Open(t)
@@ -233,7 +233,7 @@ func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {
 	require.NoError(t, err)
 	cached := created.LastSeenAt
 
-	// Three iterations of "20 min activity then a Touch" - total 60 min of
+	// Three iterations of "20 min activity then a Touch": total 60 min of
 	// continuous activity past what would otherwise be a 30-min idle expiry.
 	for range 3 {
 		advance(20 * time.Minute)
@@ -308,7 +308,7 @@ func TestUpdateLastAuthAt_StampsAndBumpsLastSeen(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, s.IsFresh(refreshed), "session must be fresh after UpdateLastAuthAt")
 	assert.WithinDuration(t, nowFn(), refreshed.LastSeenAt, time.Second,
-		"UpdateLastAuthAt must also bump last_seen_at - successful auth is activity")
+		"UpdateLastAuthAt must also bump last_seen_at: successful auth is activity")
 }
 
 // TestUpdateLastAuthAt_UnknownIDReturnsNotFound covers the defensive branch:

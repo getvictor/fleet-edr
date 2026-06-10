@@ -50,13 +50,13 @@ func TestShellFromOffice_TableDriven(t *testing.T) {
 			wantDesc:    "Microsoft Outlook → /bin/dash",
 		},
 		{
-			name:        "Terminal.app → bash does NOT fire - expected",
+			name:        "Terminal.app → bash does NOT fire (expected)",
 			parentPath:  "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
 			shellPath:   "/bin/bash",
 			wantFinding: false,
 		},
 		{
-			name:        "spoofed path name does NOT fire - full-path match",
+			name:        "spoofed path name does NOT fire (full-path match)",
 			parentPath:  "/tmp/Microsoft Word",
 			shellPath:   "/bin/bash",
 			wantFinding: false,

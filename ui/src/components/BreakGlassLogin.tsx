@@ -32,7 +32,7 @@ import "./Login.scss";
 
 // Reason -> message indirection. Stored as a Map (rather than a plain
 // Record<string, string>) so the read site is `.get(reason)` instead
-// of `loginErrorLabels[reason]` - eslint-plugin-security flags
+// of `loginErrorLabels[reason]`: eslint-plugin-security flags
 // computed-property reads on plain objects as object-injection sinks
 // when the key is server-derived. Same shape Login.tsx uses for the
 // OIDC error reasons.

@@ -34,7 +34,7 @@ func filterSnapshotEvents(events []api.Event) []api.Event {
 			continue
 		}
 		// First plumbing event found at index i: copy the prefix that already passed and continue scanning the suffix. Capacity
-		// sized for "everything but this one event" - a reasonable guess that avoids a second alloc when only one plumbing event is
+		// sized for "everything but this one event": a reasonable guess that avoids a second alloc when only one plumbing event is
 		// present, which is the typical extension-startup shape.
 		out := make([]api.Event, 0, len(events)-1)
 		out = append(out, events[:i]...)

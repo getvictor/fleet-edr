@@ -59,7 +59,7 @@ Customers who require PostgreSQL receive their EDR data via a CDC bridge (Debezi
 
 ## References
 
-- `docs/best-practices.md` §10 (the original `[-] will not do` entry that this ADR consolidates).
+- [`best-practices.md`](../best-practices.md) §10 (the original `[-] will not do` entry that this ADR consolidates).
 - `server/bootstrap/db.go` (DSN handling, `parseTime=true` enforcement).
 - `server/detection/internal/mysql/store.go` (the `FOR UPDATE SKIP LOCKED` claim pattern).
 - `server/<context>/bootstrap/schema.go` files (the `CREATE TABLE IF NOT EXISTS` + duplicate-error-swallowing pattern, per bounded context).

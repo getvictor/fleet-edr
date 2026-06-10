@@ -1,11 +1,11 @@
 // L4 smoke test for the M5 Playwright agent fixture: drive each shared M3 scenario through fixtures/agent.ts and confirm the events
-// land in the server's `events` table with the right host_id, event_type, AND event counts. This is the wire test - no UI navigation -
+// land in the server's `events` table with the right host_id, event_type, AND event counts. This is the wire test (no UI navigation)
 // because the fixture's primary contract is "scenario YAML -> /api/events" wire shape. UI specs that use the fixture (host list
 // rendering, process tree, alert detail) build on the wire contract proven here; if this spec is red, the UI specs would also be red
 // but with confusing DOM-level failures, so this one fails first.
 //
 // State management: each test mints a fresh canonical-lowercase UUID via crypto.randomUUID() and passes it as hostIdOverride.
-// This sidesteps the global DB reset that fixtures/db.ts uses for the auth specs - the events table has FK relationships
+// This sidesteps the global DB reset that fixtures/db.ts uses for the auth specs: the events table has FK relationships
 // (alert_events references it) that make a blanket DELETE awkward, and unique host_ids keep tests isolated from prior runs' rows
 // just as effectively. Production agents also use canonical UUIDs (IOPlatformUUID), so what marks these rows as test-only is
 // the hostname (`playwright.lab.local`) + agent_version (`playwright-l4-agent-fixture`) set by the fixture during enrollment, not
@@ -48,7 +48,7 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
           [hostId],
         )) as [Array<{ event_type: string; n: number | string }>, unknown];
 
-        // Exact-set assertion: the event_types in the DB must equal exactly what the scenario declared - no missing types and no
+        // Exact-set assertion: the event_types in the DB must equal exactly what the scenario declared, with no missing types and no
         // surprises (extra inserts would suggest the fixture leaked through to a wrong host, or the server's ingest accepted a
         // mistyped event_type).
         const dbTypes = rows.map((r) => r.event_type).sort((a, b) => a.localeCompare(b, "en"));

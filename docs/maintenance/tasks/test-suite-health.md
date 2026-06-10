@@ -30,7 +30,7 @@ For each skip:
 
 - Was it left behind by a flake hunt? Re-enable; if it really flakes, fix the flake or quarantine into `t.Run("flaky")`.
 - Is it environment-gated (e.g. needs MySQL)? Confirm the gate is the right shape (`testing.Short()`, build tag, env var).
-- Stale skips with no remaining reason - delete the test or unskip.
+- Stale skips with no remaining reason: delete the test or unskip.
 
 ### 2. Slow tests
 
@@ -64,7 +64,7 @@ Spot-check 10 tests at random across the contexts. For each, ask:
 - For PBT: does `rapid.Check` actually shrink to a counter-example when a property is broken? (Test it by mutating the property and confirming a shrunken failure.)
 - For integration tests: are they hitting the real DB via `server/testdb/full.Open` (per CLAUDE.md) and not a mock?
 
-Don't try to fix all thin tests - file findings as issues with a representative example each.
+Don't try to fix all thin tests. File findings as issues with a representative example each.
 
 ### 5. Mutation testing (optional, advanced)
 
@@ -101,4 +101,4 @@ Open one PR for fixes. Open separate issues for thinness findings. Time budget 9
 - [ ] Top-20 slow tests reviewed; accidental slowness fixed or fenced.
 - [ ] `-count=3 -race` suite passes; new flakes fixed or quarantined.
 - [ ] At least 10 random semantic spot-checks done; issues filed for thinness.
-- [ ] Dated entry in `docs/maintenance/log.md` with metrics (skip count, p99 test wallclock).
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md) with metrics (skip count, p99 test wallclock).

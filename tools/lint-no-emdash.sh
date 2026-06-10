@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Fail if any tracked text file contains an em dash (U+2014) or en dash (U+2013).
 #
-# Why: the repo's style forbids em dashes in prose, comments, and user-facing strings (see CLAUDE.md). Use ": " or " - "
-# (a spaced ASCII hyphen) instead. This gate keeps them from creeping back into docs, Go/Swift/TS source, rule Doc()
-# strings (which render on the UI rule pages and in docs/detection-rules.md), and CI/workflow prose.
+# Why: the repo's style forbids em dashes in prose, comments, and user-facing strings (see CLAUDE.md). Reword the sentence
+# (prefer shorter sentences) or use a colon instead; the spaced ASCII hyphen " - " is also banned (tools/dash-lint catches
+# that one). This gate keeps the dash characters from creeping back into docs, Go/Swift/TS source, rule Doc() strings (which
+# render on the UI rule pages and in docs/detection-rules.md), and CI/workflow prose.
 #
 # The dash characters are built with printf from their UTF-8 bytes so this script's own source stays ASCII and does not
 # trip the check. Run via `task lint:dashes`; the CI gate lives in .github/workflows/no-emdash.yml.
@@ -29,7 +30,7 @@ while IFS= read -r -d '' f; do
 done < <(git ls-files -z)
 
 if [ "$found" -ne 0 ]; then
-  echo "::error::Em dash (U+2014) or en dash (U+2013) found above. Replace with ': ' or ' - ' (a spaced ASCII hyphen)." >&2
+  echo "::error::Em dash (U+2014) or en dash (U+2013) found above. Reword the sentence (prefer shorter sentences) or use ':'. The spaced hyphen ' - ' is also banned (see tools/dash-lint)." >&2
   exit 1
 fi
 

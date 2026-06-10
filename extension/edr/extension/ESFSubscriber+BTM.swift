@@ -10,7 +10,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 extension ESFSubscriber {
     /// handleBtmLaunchItemAdd surfaces a Background Task Management launch-item registration as a `btm_launch_item_add`
     /// event. macOS emits NOTIFY_BTM_LAUNCH_ITEM_ADD when launchd registers a LaunchAgent/LaunchDaemon or login item,
-    /// regardless of how the plist landed on disk - the high-signal, low-volume persistence event the server's
+    /// regardless of how the plist landed on disk. This is the high-signal, low-volume persistence event the server's
     /// privilege_launchd_plist_write rule keys on (item_type=daemon, T1543.004). The rule's decision input is the
     /// REGISTERED EXECUTABLE's code-signing (the BTM instigator is Apple's smd for a launchctl-bootstrap registration
     /// and cannot discriminate). That signing is NOT computed here: a SIP-enabled host's extension sandbox denies the

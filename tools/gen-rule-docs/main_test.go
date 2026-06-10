@@ -11,7 +11,7 @@ import (
 )
 
 // TestEveryRuleHasDocs is the gate that prevents shipping a new detection rule without operator-facing documentation.
-// detection.Rule.Doc() returns a struct, so a rule can technically return the zero value - this test catches that. Severity is also
+// detection.Rule.Doc() returns a struct, so a rule can technically return the zero value, which this test catches. Severity is also
 // gated to one of the documented constants so a typo'd value (e.g. "urgent") fails the test instead of silently producing a broken UI
 // severity pill class name and a markdown reference that disagrees with the rest of the codebase.
 func TestEveryRuleHasDocs(t *testing.T) {

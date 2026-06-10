@@ -11,10 +11,10 @@ This is doubly important here because MEMORY.md contains project facts dated to 
 ## Scope
 
 - `CLAUDE.md` at the repo root
-- Per-package `CLAUDE.md` files if any exist (currently none - `git ls-files '**/CLAUDE.md'` to confirm)
+- Per-package `CLAUDE.md` files if any exist (currently none: `git ls-files '**/CLAUDE.md'` to confirm)
 - `~/.claude/projects/<project-id>/memory/MEMORY.md` and the per-topic files it indexes
 
-User-level `~/.claude/CLAUDE.md` is out of scope unless explicitly requested - that's per-user.
+User-level `~/.claude/CLAUDE.md` is out of scope unless explicitly requested: that's per-user.
 
 ## Steps
 
@@ -32,7 +32,7 @@ Open the index and each pointer file. For each entry:
 
 - **Verify dates / specifics**: VM IP addresses, decision dates, branch names. If "phase7-testkit" is now merged, the entry may need to point to a file rather than the branch.
 - **Verify references**: if the entry says "see `docs/best-practices.md`", confirm the line still exists.
-- **Verify "what NOT to save" rule**: if any entry contains code patterns, file paths derivable from the repo, or git history, it shouldn't be in memory - delete.
+- **Verify "what NOT to save" rule**: if any entry contains code patterns, file paths derivable from the repo, or git history, it shouldn't be in memory, so delete it.
 - **Decay check**: project memories ("merge freeze 2026-03-05") expire. After the date passes, the entry should be removed unless it now serves as historical context for an ADR.
 
 ### 3. Cross-check
@@ -47,7 +47,7 @@ If MEMORY.md says X and CLAUDE.md says Y on the same topic, one of them is wrong
 
 - A PR for any `CLAUDE.md` changes (it's committed).
 - Direct edits to MEMORY.md (it's per-user, not committed).
-- A dated entry in `docs/maintenance/log.md` on every run, whether the audit found changes or not - the log is the audit trail proving the cadence is being honoured.
+- A dated entry in [`docs/maintenance/log.md`](../log.md) on every run, whether the audit found changes or not. The log is the audit trail proving the cadence is being honoured.
 
 ## Prompt template
 
@@ -80,4 +80,4 @@ Time budget 45 minutes. Do NOT add new rules in this sweep - additions go throug
 - [ ] No conflict between the two; no duplication.
 - [ ] MEMORY.md index entries are one line each.
 - [ ] PR opened for CLAUDE.md changes.
-- [ ] Dated entry appended to `docs/maintenance/log.md` (mandatory on every run, regardless of findings).
+- [ ] Dated entry appended to [`docs/maintenance/log.md`](../log.md) (mandatory on every run, regardless of findings).

@@ -74,7 +74,7 @@ func TestAllowlist_Allows(t *testing.T) {
 	assert.True(t, empty.Allows(net.ParseIP("203.0.113.10")), "empty allowlist passes")
 }
 
-// Off-allowlist requests get a generic 404 - same body as an unrouted path. Pinned because the spec requires the surface's existence
+// Off-allowlist requests get a generic 404 (same body as an unrouted path). Pinned because the spec requires the surface's existence
 // to NOT be acknowledged to off-list callers.
 func TestAllowlist_Middleware_404sOffList(t *testing.T) {
 	t.Parallel()

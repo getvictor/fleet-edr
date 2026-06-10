@@ -1,6 +1,6 @@
 // Static catalog of MITRE ATT&CK technique metadata for the techniques the
 // shipped detection rules cover. We don't ship the full ATT&CK enterprise
-// matrix (~600 techniques) into the UI bundle - that's what the upstream
+// matrix (~600 techniques) into the UI bundle: that's what the upstream
 // Navigator exists for. This catalog is just the techniques we trigger on
 // today, with their human-readable name and tactic.
 //

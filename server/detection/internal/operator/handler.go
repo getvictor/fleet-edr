@@ -238,7 +238,7 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	// MaxBytesReader caps the body so a malicious client cannot stream an unbounded JSON document to OOM the server. Decode then maps
-	// "request body too large" into the invalid_json envelope - the JSON shape doesn't distinguish the two failure modes, and the
+	// "request body too large" into the invalid_json envelope: the JSON shape doesn't distinguish the two failure modes, and the
 	// downstream client retry is the same regardless (fix the body, resend). See updateAlertStatusBodyCap for the cap rationale.
 	r.Body = http.MaxBytesReader(w, r.Body, updateAlertStatusBodyCap)
 	var body struct {
@@ -263,7 +263,7 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	// alert.resolve on a critical-severity alert requires a fresh auth event. Fetch severity before the gate so the chokepoint
-	// sees Resource.Severity. Other actions (Reopen, Acknowledge) don't need the read but the handler runs it uniformly - alerts are small
+	// sees Resource.Severity. Other actions (Reopen, Acknowledge) don't need the read but the handler runs it uniformly. Alerts are small
 	// + indexed and the row is hot in the buffer pool from the page-warm GET that typically precedes a status update. Fetching also lets
 	// the 404 short-circuit before the chokepoint records an audit row for a non-existent alert.
 	preGate, _, err := h.svc.GetAlert(ctx, id)

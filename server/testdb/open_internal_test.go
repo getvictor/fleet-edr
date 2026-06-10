@@ -12,7 +12,7 @@ import (
 //
 //  1. Distinct testNames produce distinct DB names (after every replacement). The naive replacer collapses `/` and `.` into
 //     `_`, so without the testName-derived hash these would collide.
-//  2. Backticks are replaced - without this, a Go test name containing one would break the CREATE DATABASE DDL.
+//  2. Backticks are replaced. Without this, a Go test name containing one would break the CREATE DATABASE DDL.
 //  3. The DB name fits MySQL's 64-char identifier ceiling.
 //  4. Per-process salt + testName hash are present, so cross-process and within-process collisions are both bounded.
 func TestSanitizeDBName_Properties(t *testing.T) {
@@ -41,7 +41,7 @@ func TestSanitizeDBName_Properties(t *testing.T) {
 			assert.LessOrEqual(t, len(got), 64, "dbName must fit MySQL's 64-char identifier ceiling")
 
 			// (2) Backticks must not survive into the DB name; they would break the DDL string in Open().
-			assert.NotContains(t, got, "`", "backticks must be replaced - they would break CREATE DATABASE `name`")
+			assert.NotContains(t, got, "`", "backticks must be replaced: they would break CREATE DATABASE `name`")
 
 			// (4) The per-process salt is always present so cross-process tests with the same name don't collide.
 			assert.Contains(t, got, processSalt, "per-process salt must be embedded for cross-process uniqueness")

@@ -21,22 +21,22 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 
 - Tone / wording improvements. This task is mechanical.
 - Adding new content. If a doc is missing a section, file an issue and stop.
-- Phase / branch references - those go to the [`stale-implementation-references`](stale-implementation-references.md) sweep.
+- Phase / branch references: those go to the [`stale-implementation-references`](stale-implementation-references.md) sweep.
 
 ## Steps
 
 1. List all markdown files in scope: `git ls-files '*.md' | grep -v ai/ | grep -v tmp/`.
 2. For each file, extract every backticked identifier and every `<path>` or `[link](url)`. A short script in `tmp/` that parses these is cheaper than re-eyeballing each doc.
 3. Verify each reference. Group findings into:
-   - **Broken** - the thing genuinely no longer exists. Fix or remove.
-   - **Renamed** - the thing moved. Update the reference.
-   - **Stale** - the thing exists but means something different now. Note for human review.
+   - **Broken**: the thing genuinely no longer exists. Fix or remove.
+   - **Renamed**: the thing moved. Update the reference.
+   - **Stale**: the thing exists but means something different now. Note for human review.
 4. For URLs, use a simple HEAD-request pass; flag 4xx and 5xx, plus redirects to known login pages.
-5. Open one PR per category. Don't bundle "broken" with "renamed" - review effort differs.
+5. Open one PR per category. Don't bundle "broken" with "renamed": review effort differs.
 
 ## Output
 
-A PR (or set of PRs) with a body section "Doc accuracy sweep - `<YYYY-MM-DD>`" listing every reference touched. Every run appends a dated entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
+A PR (or set of PRs) with a body section "Doc accuracy sweep: `<YYYY-MM-DD>`" listing every reference touched. Every run appends a dated entry to [`docs/maintenance/log.md`](../log.md) so the cadence is auditable whether or not findings landed.
 
 ## Prompt template
 
@@ -66,5 +66,5 @@ month and rotate.
 
 - [ ] Every committed `.md` outside the excluded paths has been visited.
 - [ ] Broken / renamed references either fixed in a PR or filed as an issue with a link to the doc line.
-- [ ] A dated entry exists in `docs/maintenance/log.md` (even if no findings).
+- [ ] A dated entry exists in [`docs/maintenance/log.md`](../log.md) (even if no findings).
 - [ ] No tone changes or new content snuck in.

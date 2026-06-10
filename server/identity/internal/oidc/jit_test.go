@@ -152,7 +152,7 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 
 	// Hand-truncate the identities row's lookup pathway is hard to fake without driver hooks. Instead, prove the resolution path: a second
 	// call for the same subject hits the existing-identity branch. The race-recovery code path is exercised by exposing the duplicate
-	// detection helper at the public boundary; here we cover the merge outcome - same uid + same identity id.
+	// detection helper at the public boundary; here we cover the merge outcome: same uid + same identity id.
 	uid2, idID2, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-race",
 		Email:   "race@example.com",
@@ -161,7 +161,7 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	assert.Equal(t, winnerUID, uid2)
 	assert.Equal(t, winnerIdentityID, idID2)
 
-	// And exactly one identities row exists for the subject - the race
+	// And exactly one identities row exists for the subject. The race
 	// did not produce a second.
 	var n int
 	require.NoError(t, db.QueryRowxContext(t.Context(),

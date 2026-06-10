@@ -11,7 +11,7 @@ import Foundation
 import XCTest
 
 final class BlockNotificationTests: XCTestCase {
-    // MARK: - Wire-shape constants
+    // MARK: Wire-shape constants
 
     func testServiceNameIsCanonical() {
         XCTAssertEqual(blockNotificationServiceName, "FDG8Q7N4CC.com.fleetdm.edr.notifications")
@@ -38,7 +38,7 @@ final class BlockNotificationTests: XCTestCase {
         XCTAssertEqual(blockNotificationPurgeWindow, 300)
     }
 
-    // MARK: - BlockNotificationPayload Codable round-trip
+    // MARK: BlockNotificationPayload Codable round-trip
 
     func testPayloadRoundTrip() throws {
         let original = BlockNotificationPayload(

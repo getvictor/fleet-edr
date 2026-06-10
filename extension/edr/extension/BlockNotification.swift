@@ -45,7 +45,7 @@ let blockNotificationPeerRequirement =
     "anchor apple generic and certificate leaf[subject.OU] = \"FDG8Q7N4CC\""
 
 /// BlockNotificationPayload mirrors the host app's Codable shape.
-/// JSON tags are load-bearing - they have to stay in lockstep with
+/// JSON tags are load-bearing: they have to stay in lockstep with
 /// the host-app copy.
 /// See edr/edr/BlockNotification.swift for full field documentation.
 /// In particular:

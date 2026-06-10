@@ -172,7 +172,7 @@ func TestPostDirect_RoundTrip(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// Lock around BOTH writes - go test -race reports the unsynchronised seenAuthHeader write otherwise.
+		// Lock around BOTH writes: go test -race reports the unsynchronised seenAuthHeader write otherwise.
 		mu.Lock()
 		seenAuthHeader = r.Header.Get("Authorization")
 		received = append(received, body)

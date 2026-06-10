@@ -27,7 +27,7 @@ func newSeedFixture(t *testing.T) (*users.Store, *rbac.Store, *sqlx.DB) {
 // spec:ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup/recovery-after-a-lost-password
 //
 // SeedsOnEmptyTable: admin row inserted with NULL password + is_breakglass=1, AND a super_admin role binding lands in role_bindings.
-// The flow does NOT print a password banner - the redemption URL banner lives in cmd/main.
+// The flow does NOT print a password banner: the redemption URL banner lives in cmd/main.
 //
 // The spec was rewritten in PR #267 to describe the break-glass admin + redemption-URL flow (issue #257). Both
 // scenarios this test pins reduce to the same structural property: "if the users table is empty when the seeder runs,
@@ -82,7 +82,7 @@ func TestAdmin_IdempotentOnRerun(t *testing.T) {
 	require.NotNil(t, second)
 	assert.Equal(t, first.ID, second.ID, "second seed must return the same row")
 
-	// Still exactly one binding - the duplicate-entry on the rbac
+	// Still exactly one binding: the duplicate-entry on the rbac
 	// unique key was swallowed.
 	bindings, err := rb.ListLiveBindings(t.Context(), second.ID)
 	require.NoError(t, err)

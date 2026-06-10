@@ -49,7 +49,7 @@ const (
 // the SigNoz UI emits for a value-panel p99 query against a Histogram-typed metric.
 //
 // Reference: SigNoz query-service v0.40+. If the API contract drifts (older self-hosted installs were on v3 with a different
-// envelope), an operator-facing soft error from the query is the operating mode - the cross-check is a diagnostic, not a gate,
+// envelope), an operator-facing soft error from the query is the operating mode: the cross-check is a diagnostic, not a gate,
 // so a "the SigNoz here speaks v3, the scale runner expects v4" mismatch surfaces in Report.SigNozQueryError and does not flip
 // the Pass bool.
 type signozQueryRequest struct {
@@ -115,7 +115,7 @@ type signozQueryResponse struct {
 }
 
 // querySigNozServerP99 issues a v4 builder query against the SigNoz at baseURL and returns the maximum p99 value observed
-// across the response time series for [start, end]. Returns the duration AS RECEIVED from SigNoz - SigNoz natively reports
+// across the response time series for [start, end]. Returns the duration AS RECEIVED from SigNoz, which natively reports
 // HTTP server duration in MILLISECONDS for OTel-instrumented services, so the runner converts to time.Duration via
 // time.Millisecond. If the response carries no values, returns 0 + a soft error so the caller can record SigNozQueryError
 // without aborting the run.
@@ -192,7 +192,7 @@ func querySigNozServerP99(ctx context.Context, baseURL string, start, end time.T
 	}
 	// SigNoz reports OTel http.server.duration in milliseconds for the EDR server's instrumentation. Multiply the float
 	// AGAINST float64(time.Millisecond) before the time.Duration cast so fractional milliseconds (e.g. 12.34 ms) survive
-	// the conversion - the previous `time.Duration(maxValue) * time.Millisecond` shape truncated to 12 ms before
+	// the conversion. The previous `time.Duration(maxValue) * time.Millisecond` shape truncated to 12 ms before
 	// scaling (Gemini + CodeRabbit #277). If a different SigNoz install reports seconds (older Prometheus-style
 	// histograms), the operator's cross-check will look off by 1000x; the soft-error contract means the report still
 	// lands without flipping Pass.

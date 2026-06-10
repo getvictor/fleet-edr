@@ -4,7 +4,7 @@
 
 ## Why this matters
 
-`.coderabbit.yaml` (and any future bot configs - Copilot custom instructions, Gemini Code Assist style guides, Qodo policy files) sit in the same gap as `CLAUDE.md`: they actively shape every PR review but no compiler or CI gate catches drift. A path glob that no longer matches the tree, a tool key the vendor renamed, a docstring threshold that made sense before test/e2e/ existed - each silently degrades review quality. Nobody notices until a real finding gets buried under noise or a regression slips through because the path_instruction for that directory was pointing at a dead path.
+`.coderabbit.yaml` (and any future bot configs such as Copilot custom instructions, Gemini Code Assist style guides, Qodo policy files) sit in the same gap as [`CLAUDE.md`](../../../CLAUDE.md): they actively shape every PR review but no compiler or CI gate catches drift. A path glob that no longer matches the tree, a tool key the vendor renamed, a docstring threshold that made sense before test/e2e/ existed: each silently degrades review quality. Nobody notices until a real finding gets buried under noise or a regression slips through because the path_instruction for that directory was pointing at a dead path.
 
 This task is the periodic re-grounding. It is deliberately small (30 min) because most quarters the answer is "no change needed" and the value is in _verifying_ that, not in finding work.
 
@@ -12,7 +12,7 @@ This task is the periodic re-grounding. It is deliberately small (30 min) becaus
 
 Primary: `.coderabbit.yaml`.
 
-Secondary (when they appear): any future PR-review-bot config files committed to the repo - `.github/copilot-instructions.md`, `.gemini/styleguide.md`, `.qodo/config.yaml`, etc. Treat this audit as the catch-all for the class.
+Secondary (when they appear): any future PR-review-bot config files committed to the repo, such as [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), `.gemini/styleguide.md`, `.qodo/config.yaml`, etc. Treat this audit as the catch-all for the class.
 
 Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), CodeRabbit's organization-level / dashboard-only settings (those drift separately and the bot's own UI surfaces them).
 
@@ -26,7 +26,7 @@ Skim CodeRabbit's [configuration reference](https://docs.coderabbit.ai/reference
 - The value type still matches (especially enum values for `profile`, `mode`, `level`).
 - No new top-level key was added that this repo would obviously benefit from (e.g. an audit-trail option, a security-tuning preset).
 
-Note any deprecation warnings in CodeRabbit's most recent walkthrough on a merged PR - the bot itself flags deprecated keys.
+Note any deprecation warnings in CodeRabbit's most recent walkthrough on a merged PR: the bot itself flags deprecated keys.
 
 ### 2. Path glob validity
 
@@ -51,8 +51,8 @@ Then look at the FULL tools list in the schema reference for anything _new_ sinc
 
 Pull the most recent ~5 PRs and check whether the pre-merge checks (`docstrings`, `title`, `description`) fired with the right cadence:
 
-- If the docstring threshold is silently 100%-passing on every PR, it's probably too low - bump.
-- If it's failing on every PR, it's too high or the rule is wrong for the file mix - adjust threshold OR add path filters to the docstring surface.
+- If the docstring threshold is silently 100%-passing on every PR, it's probably too low, so bump it.
+- If it's failing on every PR, it's too high or the rule is wrong for the file mix. Adjust the threshold OR add path filters to the docstring surface.
 - Same for title / description rules.
 
 The goal: ~10-20% of PRs trip a warning, not 0% and not 100%.
@@ -61,7 +61,7 @@ The goal: ~10-20% of PRs trip a warning, not 0% and not 100%.
 
 For each `path_instructions` block, read the latest CodeRabbit walkthrough that touched that path. Did the bot's findings reflect the threat-model language in the instruction? If the instruction says "audit append-only invariant" but the bot is still flagging style nits in that dir, the instruction needs to be either tighter or more specific.
 
-Don't grow the instructions during this sweep - the file should NOT balloon. If something's missing, file an issue and stop. Tighten or remove during this pass; expand on a deliberate future PR.
+Don't grow the instructions during this sweep: the file should NOT balloon. If something's missing, file an issue and stop. Tighten or remove during this pass; expand on a deliberate future PR.
 
 ### 6. Multi-platform sanity check
 
@@ -76,7 +76,7 @@ A new platform's code landing should not require rewriting `.coderabbit.yaml` fr
 
 If anything changed: open a PR titled `coderabbit: config audit YYYY-Q\d`, listing each change with a one-line rationale.
 
-Even if nothing changed: append an entry to `docs/maintenance/log.md` recording `done` with `no findings`. The empty entries are how we know the cadence is being honoured.
+Even if nothing changed: append an entry to [`docs/maintenance/log.md`](../log.md) recording `done` with `no findings`. The empty entries are how we know the cadence is being honoured.
 
 ## Output
 

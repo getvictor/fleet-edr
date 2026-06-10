@@ -64,7 +64,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `spectrace - openspec spec-to-test traceability linter
+	fmt.Fprint(os.Stderr, `spectrace: openspec spec-to-test traceability linter
 
 Usage:
   spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]

@@ -10,7 +10,7 @@
 // Why the split exists at all: main.swift carries file-scope executable code (`let action = ...`, the
 // top-level switch on `action`) which is legal only in an executable target's entry-point file. The
 // SwiftPM library target cannot include main.swift, so the pure-logic types it tests live here instead.
-// Both surfaces compile the same file, so spec-tests run against the same code main.swift uses - no
+// Both surfaces compile the same file, so spec-tests run against the same code main.swift uses: no
 // parallel implementation, no desync risk.
 
 import Foundation
@@ -38,7 +38,7 @@ enum HostAppAction: String, Equatable, CaseIterable, Sendable {
 }
 
 /// parseHostAppAction maps an argv string (or nil for "no subcommand provided") to a HostAppAction.
-/// Returns `.activate` ONLY when `arg` is nil (no positional argument at all - the documented default for
+/// Returns `.activate` ONLY when `arg` is nil (no positional argument at all: the documented default for
 /// `edr` invoked with no subcommand). Returns nil for an unrecognised string AND for an empty string so
 /// the caller can refuse the command and print a usage message: `edr ""` is much more likely a shell
 /// expansion bug than an intentional "use default" invocation, and silently defaulting it would defeat
@@ -213,7 +213,7 @@ func intents(for action: HostAppAction) -> [SubcommandIntent] {
 /// FilterConfigIntent is the contract main.swift's `enableContentFilter` saves into NEFilterManager's
 /// preferences. The shape mirrors the NEFilterProviderConfiguration the host-app builds; representing it
 /// here lets tests assert the persisted-config contract without depending on NEFilterManager's runtime
-/// callbacks. The reboot-recovery spec scenario hinges on these fields surviving across reboots - macOS
+/// callbacks. The reboot-recovery spec scenario hinges on these fields surviving across reboots. macOS
 /// owns that persistence; the host-app's job is to call saveToPreferences() with these values set.
 struct FilterConfigIntent: Equatable, Sendable {
     let filterSockets: Bool

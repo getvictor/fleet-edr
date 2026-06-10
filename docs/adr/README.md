@@ -15,7 +15,7 @@ Do **not** write an ADR for a style nit, a local refactor, or a decision the cod
 
 ## Format
 
-Every ADR is a Markdown file named `NNNN-short-slug.md` where `NNNN` is the next available 4-digit number. Use the template at `template.md`.
+Every ADR is a Markdown file named `NNNN-short-slug.md` where `NNNN` is the next available 4-digit number. Use the template at [`template.md`](template.md).
 
 Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR that supersedes the old one (mark the old file `Status: Superseded by NNNN` and link both directions). This gives you a trail of reasoning across time, not a single mutable "current view".
 

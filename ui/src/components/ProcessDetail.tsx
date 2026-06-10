@@ -102,7 +102,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
   // alerts. Wrap both mutations through useReauthRetry so the
   // operator gets an inline reauth modal + the action retries on
   // success. Non-gated mutations (e.g. alert.acknowledge or kill on
-  // a fresh session) pass through unchanged - useReauthRetry is a
+  // a fresh session) pass through unchanged: useReauthRetry is a
   // no-op until the chokepoint throws ReauthRequiredError.
   const sendKillCommand = useCallback(
     async (): Promise<{ id: number }> => createCommand(hostId, "kill_process", { pid: node.pid }),
@@ -133,7 +133,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       .catch((err: unknown) => {
         // Cancelled reauth surfaces as ReauthRequiredError (the hook
         // rethrows the original gate-deny when the operator dismisses
-        // the modal). That isn't a send failure - no command was
+        // the modal). That isn't a send failure: no command was
         // ever dispatched. Leave killCommand untouched so the UI
         // returns to its pre-click state instead of showing a
         // misleading "Failed to send command" row.

@@ -155,7 +155,7 @@ func TestEnvelopes_HostIDOverride(t *testing.T) {
 // outbound connection emits a network_connect envelope whose payload identifies pid, protocol=tcp,
 // direction=outbound, remote_address, and remote_port. Optional path/uid/local_address/local_port/
 // remote_hostname are documented in schema/events.json as omitted-when-unknown (absent from the JSON
-// object, not present with a null value - JSON Schema "optional" is not "nullable" on the wire). The
+// object, not present with a null value: JSON Schema "optional" is not "nullable" on the wire). The
 // fakeagent feeder is the wire-level fixture that the cross-context integration tests use to drive
 // realistic event streams; pinning the network_connect shape here means the same contract that the live
 // network filter produces is what downstream Go consumers (server detection engine, retention, alert

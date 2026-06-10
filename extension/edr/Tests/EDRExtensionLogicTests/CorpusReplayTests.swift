@@ -30,7 +30,7 @@ private struct CorpusEventHeader: Decodable {
 }
 
 final class CorpusReplayTests: XCTestCase {
-    // MARK: - Constants
+    // MARK: Constants
 
     /// Sentinel host_id used in every corpus envelope so the goldens are deterministic. Production
     /// envelopes carry the real IOPlatformUUID; the corpus deliberately uses a fixed sentinel so
@@ -59,7 +59,7 @@ final class CorpusReplayTests: XCTestCase {
         return encoder
     }()
 
-    // MARK: - Seed catalog
+    // MARK: Seed catalog
 
     /// Each seed pairs a filename under the baseline scenario directory with a closure that emits
     /// the canonical bytes when EDR_CORPUS_REGENERATE=1. In the normal verify path, the test reads
@@ -75,7 +75,7 @@ final class CorpusReplayTests: XCTestCase {
         ("application_control_block.json", encodeApplicationControlBlock)
     ]
 
-    // MARK: - Test
+    // MARK: Test
 
     // spec:endpoint-event-collection/capture-is-non-fatal-on-individual-event-errors/one-event-fails-to-serialize
     //
@@ -134,7 +134,7 @@ final class CorpusReplayTests: XCTestCase {
         try assertEveryGoldenRoundTrips(rootedAt: corpusRoot, skipping: baselineDir)
     }
 
-    // MARK: - Helpers
+    // MARK: Helpers
 
     private func assertEveryGoldenRoundTrips(rootedAt root: URL, skipping skipDir: URL) throws {
         let fileManager = FileManager.default
@@ -214,7 +214,7 @@ final class CorpusReplayTests: XCTestCase {
             .appendingPathComponent("corpus", isDirectory: true)
     }
 
-    // MARK: - Seed encoders
+    // MARK: Seed encoders
 
     private static func encodeEnvelope<P: Codable & Sendable>(
         eventID: String,

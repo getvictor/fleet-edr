@@ -2,7 +2,7 @@
 
 This document is Fleet EDR's threat model. It exists for three audiences:
 
-1. **Engineers reviewing security-sensitive PRs** - "does this widen one of the listed threats? does it close a gap?"
+1. **Engineers reviewing security-sensitive PRs**: "does this widen one of the listed threats? does it close a gap?"
 2. **Pilot-customer security reviewers** asking what attack surface the vendor considered before installing the agent on managed endpoints.
 3. **Future contributors** evaluating where investment is most needed.
 
@@ -59,7 +59,7 @@ Trust assumptions:
 | Tampering | Local attacker overwrites the agent binary or LaunchDaemon plist. | SIP protects the install path; the agent binary is Developer-ID-signed and notarized; modification breaks the signature and macOS refuses to launch. |
 | Repudiation | Command lifecycle goes unlogged. | Every command transitions (`pending` → `running` → `success`/`failure`) are persisted both locally (slog) and server-side (`commands` table). Admin actions emit a WARN-level audit log line. |
 | Information disclosure | Sensitive payload data leaks to the agent log. | `os.log` argv redaction; agent's slog handler does not print full event payloads at INFO level; sensitive fields stay at DEBUG (off by default). |
-| Denial of service | SQLite queue grows unbounded, breaks the agent. | `EDR_AGENT_QUEUE_MAX_BYTES` enforces a cap; over-cap rows are dropped + counted in `edr.agent.queue.dropped` (with the `lossy` attribute distinguishing data loss from already-delivered trims). Documented in `docs/operations.md`. |
+| Denial of service | SQLite queue grows unbounded, breaks the agent. | `EDR_AGENT_QUEUE_MAX_BYTES` enforces a cap; over-cap rows are dropped + counted in `edr.agent.queue.dropped` (with the `lossy` attribute distinguishing data loss from already-delivered trims). Documented in [`operations.md`](operations.md). |
 | Elevation of privilege | A network attacker uses the root-running agent to execute arbitrary code. | Agent only executes typed commands (`kill_process`, `rotate_token`) fetched from the server, authenticated by the per-host bearer token. The command-type → handler mapping is exhaustive; unknown types are rejected. |
 
 ### 2. System extension (Swift, ESF)
@@ -80,7 +80,7 @@ Trust assumptions:
 | Spoofing | Attacker installs a competing NE filter. | `NEFilterDataProvider` profiles are MDM-installed and persist until the MDM revokes them; multiple filters can coexist but each has its own bundle ID + team ID fingerprint. |
 | Tampering | NE binary swapped. | Same as sysext (SIP, signed, notarized). |
 | Repudiation | Connection event dropped silently. | Per-connection ID; dropped flow logs via `os_log`. **GAP, low**: no dedicated `edr.network.events.dropped` counter. |
-| Information disclosure | NE captures connection payload bytes. | Configured for **flow-handling-only** - 5-tuple + PID + signing context. Payload bytes are deliberately not captured. This sidesteps wiretap-law concerns and reduces the data-at-rest footprint. |
+| Information disclosure | NE captures connection payload bytes. | Configured for **flow-handling-only**: 5-tuple + PID + signing context. Payload bytes are deliberately not captured. This sidesteps wiretap-law concerns and reduces the data-at-rest footprint. |
 | Denial of service | NE's allow-or-deny verdict latency stalls all connections. | Verdicts are inline with a small per-decision budget; framework falls back to `verdictAllow` if the client extension is unresponsive. |
 | Elevation of privilege | NE bug → root. | NE runs as root by Apple design; minimal surface; uses Apple-vetted `NEFilterDataProvider` API. |
 
@@ -93,13 +93,13 @@ Trust assumptions:
 | Repudiation | Admin action goes unaudited. | Every admin endpoint emits a WARN-level slog line plus span attributes (`edr.admin.action`, `edr.admin.actor`, `edr.admin.reason`). Logs flow via OTLP to an external sink, so an in-server tamper cannot retroactively erase the trace export. |
 | Information disclosure | Database or backup leak exposes credentials. | Passwords + host tokens Argon2id-hashed; DSN + enroll secret loaded via `_FILE` paths (Docker-secrets style) so they are never in env-listing output; TLS 1.3 over the wire; `subtle.ConstantTimeCompare` for CSRF token comparison. **GAP, medium**: encryption at rest for the events table is documented as a deployment requirement, not enforced in code. |
 | Denial of service | Login or enroll endpoint flooded. | Per-IP rate limiting on the break-glass surface (per-IP and per-email caps return `429 Too Many Requests` with `Retry-After`); per-IP rate limiting on enroll (`EDR_ENROLL_RATE_PER_MIN` default 30). The OIDC login path is gated by the IdP's own brute-force defences. Event ingestion is per-token, gated by enrollment. **GAP, low**: no per-host rate limit beyond the per-route caps. |
-| Elevation of privilege | Browser-based attacker uses an admin session. | HttpOnly + Secure + SameSite=Lax session cookies; per-session CSRF token on every unsafe method; HSTS with `includeSubDomains`, two-year max-age; session secret is sanitized to a 256-char base64url charset on read/write. Day-to-day login goes through OIDC, so MFA is delegated to the IdP (Okta, etc.) and is enforced upstream of the EDR. The break-glass surface at `/admin/break-glass` requires WebAuthn (no password-only fallback): see `docs/breakglass.md`. Authorisation is enforced at the OPA-backed chokepoint (`api.HTTPGate`) with role tiers (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); the chokepoint also requires a fresh re-auth (default 30m, `EDR_REAUTH_WINDOW`) for destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical). |
+| Elevation of privilege | Browser-based attacker uses an admin session. | HttpOnly + Secure + SameSite=Lax session cookies; per-session CSRF token on every unsafe method; HSTS with `includeSubDomains`, two-year max-age; session secret is sanitized to a 256-char base64url charset on read/write. Day-to-day login goes through OIDC, so MFA is delegated to the IdP (Okta, etc.) and is enforced upstream of the EDR. The break-glass surface at `/admin/break-glass` requires WebAuthn (no password-only fallback): see [`breakglass.md`](breakglass.md). Authorisation is enforced at the OPA-backed chokepoint (`api.HTTPGate`) with role tiers (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); the chokepoint also requires a fresh re-auth (default 30m, `EDR_REAUTH_WINDOW`) for destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical). |
 
 ### 5. UI (React, embedded in server)
 
 | Category | Threat | Mitigation |
 | --- | --- | --- |
-| Spoofing | Phished credentials. | Day-to-day login is OIDC, so MFA is delegated to the IdP and enforced upstream of the EDR. Break-glass (`/admin/break-glass`) is WebAuthn-mandatory (no password-only fallback), phishing-resistant by design. See `docs/okta-setup.md` and `docs/breakglass.md`. |
+| Spoofing | Phished credentials. | Day-to-day login is OIDC, so MFA is delegated to the IdP and enforced upstream of the EDR. Break-glass (`/admin/break-glass`) is WebAuthn-mandatory (no password-only fallback), phishing-resistant by design. See [`okta-setup.md`](okta-setup.md) and [`breakglass.md`](breakglass.md). |
 | Tampering | Cross-site scripting. | React's default JSX escaping; no `dangerouslySetInnerHTML` in the codebase; ESLint's `no-unsanitized` plugin gates PRs; CodeQL TypeScript SAST is wired. **GAP, medium**: no Content-Security-Policy header. |
 | Repudiation | UI action not auditable. | Every state-changing action goes through a server endpoint with audit logging; the UI is a thin client. The audit log enforces an append-only invariant (a build-time test scans production source for any UPDATE / DELETE against `audit_events` and fails the build if it finds one). Each successful row is dual-emitted to slog at INFO with a stable attribute shape (`action`, `target_type`, `target_id`, `actor_email`, `edr.user.id`, optional `trace_id`, optional `payload`); the async writer also emits structured slog WARNs when it cannot enqueue or persist a row (queue_full, drain_deadline_exceeded, INSERT failure). Both flow through OTLP to the configured collector, so an in-server compromise that drops MySQL writes still leaves the OTel-side record. |
 | Information disclosure | Wrong analyst sees the wrong alert. | The OPA-backed chokepoint (`api.HTTPGate`) gates every privileged endpoint by the actor's role binding (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); requests outside the binding return `403` with a typed deny reason. The product is a single-instance deployment (each customer runs their own server); per-team alert scoping is a follow-on for future host-group / host scoped bindings. |
@@ -124,7 +124,7 @@ Trust assumptions:
 | Spoofing | Attacker pushes a fake `.pkg` claiming to be the EDR. | Pkg is Developer-ID-signed and Apple-notarized; macOS verifies the signature at install; the `.mobileconfig` profile binds the team ID expected for the system extension. |
 | Tampering | Malicious post-install scripts. | Pkg post-install scripts live in `packaging/pkg/` and are reviewable; build is via the signed CI release workflow; no `curl \| bash` at install time. |
 | Repudiation | Install / uninstall not logged. | macOS records `/var/log/install.log`; agent enrollment logs the host's hardware UUID + first-seen time on the server side. |
-| Information disclosure | Enroll secret leaks via process listing or shell history. | The pkg postinstall script (and Fleet's install-script contract - see `packaging/pkg/scripts/postinstall`) writes the enroll secret to root-owned `/etc/fleet-edr.conf`; the agent reads that file via the layering in `agent/config/conffile.go` and `agent/config/config.go`, with env vars only as an override. The conf-file path keeps the secret out of `launchctl print` output. Residual risk is bounded to local root-equivalent access or incorrect file permissions on the conf file. |
+| Information disclosure | Enroll secret leaks via process listing or shell history. | The pkg postinstall script (and Fleet's install-script contract, see `packaging/pkg/scripts/postinstall`) writes the enroll secret to root-owned `/etc/fleet-edr.conf`; the agent reads that file via the layering in `agent/config/conffile.go` and `agent/config/config.go`, with env vars only as an override. The conf-file path keeps the secret out of `launchctl print` output. Residual risk is bounded to local root-equivalent access or incorrect file permissions on the conf file. |
 | Denial of service | MDM-driven mass uninstall. | Out of scope (the MDM is a trust anchor); the agent has no self-uninstall path. |
 | Elevation of privilege | Pre / post-install scripts have a bug, run as root. | Scripts are minimal (write conf file, kickstart LaunchDaemon); reviewed; signed pkg gates execution. |
 
@@ -145,7 +145,7 @@ Trust assumptions:
 | Threat | Mitigation |
 | --- | --- |
 | A bad detection rule causes false-positive storm. | Per-rule unit tests in `server/rules/internal/catalog/<rule>_test.go` cover Evaluate against real event fixtures; the rules-context integration test (`server/rules/internal/tests/integration_test.go`) iterates every shipped rule and locks catalog + doc-shape invariants; `tools/gen-rule-docs` ensures every rule has documented severity + false-positive sources. |
-| A missed detection allows attacker activity through. | Documented in `docs/detection-rules.md` as "Limitations" per rule; ATT&CK coverage page surfaces the gaps. Future work: Atomic Red Team / Caldera replays in CI. |
+| A missed detection allows attacker activity through. | Documented in [`detection-rules.md`](detection-rules.md) as "Limitations" per rule; ATT&CK coverage page surfaces the gaps. Future work: Atomic Red Team / Caldera replays in CI. |
 | Inadvertent denial of service via inline blocking. | The Application Control subsystem (under construction in the `add-application-control` change) is operator-driven, versioned, audited; no automatic blocking based on rule output (alerts emit; blocks require explicit operator action). |
 
 ### Authentication and authorisation
@@ -154,7 +154,7 @@ Trust assumptions:
 | --- | --- |
 | Credential phishing of an EDR operator. | Day-to-day login is OIDC with PKCE; the IdP enforces MFA upstream of the EDR. Break-glass at `/admin/break-glass` is WebAuthn-mandatory (no password-only fallback), phishing-resistant by design. The break-glass surface is gated by `EDR_BREAKGLASS_IP_ALLOWLIST` and per-IP + per-email rate limits; off-allowlist callers see a generic 404 (path existence is concealed). |
 | Stolen session cookie. | Session cookies are HttpOnly + Secure + SameSite=Lax with idle (default 8h) and absolute (default 24h) caps; break-glass sessions are tighter (15m idle / 1h absolute). Destructive actions require a fresh re-auth (default 30m, `EDR_REAUTH_WINDOW`); the chokepoint denies stale-session attempts with a typed `reauth_required` reason that the UI converts into an inline reauth prompt. |
-| Operator escalation past their role. | Every privileged HTTP route is gated by `api.HTTPGate`, an OPA-backed chokepoint that maps the request to a typed action and evaluates it against the actor's role binding. Wave-1 ships five roles (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); the binding source is the `role_bindings` table, populated by the OIDC JIT provisioner (default `analyst`, the lowest-privilege tier; an `admin` promotes via SQL until wave-2 ships group mapping). Architecture tests (`server/identity/internal/authz/...`) gate every new HTTP handler on chokepoint coverage. |
+| Operator escalation past their role. | Every privileged HTTP route is gated by `api.HTTPGate`, an OPA-backed chokepoint that maps the request to a typed action and evaluates it against the actor's role binding. The current release ships five roles (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); the binding source is the `role_bindings` table, populated by the OIDC JIT provisioner (default `analyst`, the lowest-privilege tier; an `admin` promotes via SQL until a future release ships group mapping). Architecture tests (`server/identity/internal/authz/...`) gate every new HTTP handler on chokepoint coverage. |
 | Audit log tamper. | `audit_events` is enforced append-only: a build-time test (`server/identity/internal/audit/append_only_lint_test.go`) scans production source for any UPDATE or DELETE against `audit_events` and fails the build if one appears. Each successful row is dual-emitted to slog at INFO with the action + actor + payload attributes; failures (queue_full, drain_deadline_exceeded, INSERT errors) hit slog at WARN. Both flow through OTLP, so an in-server compromise that drops MySQL writes still leaves the OTel-side record. |
 | Compromise of the OIDC client secret or session signing key. | Both are loaded via `*_FILE` paths (Docker-secrets convention) so they are not in env-listing output. Rotating `EDR_OIDC_CLIENT_SECRET` is a restart; sessions stay valid because they are signed with `EDR_SESSION_SIGNING_KEY` (a separate 32+ byte secret). Rotating `EDR_SESSION_SIGNING_KEY` invalidates every existing session: operators sign back in via OIDC. |
 | First-boot bootstrap-token leak. | The break-glass redemption URL is a one-shot bearer credential printed to stderr at first boot. TTL defaults to 1h (configurable); the token is stored as a SHA-256 hash, not plaintext. Re-printing the banner on every restart until redemption is by design: no leaked banner predates redemption. |
@@ -171,11 +171,11 @@ Trust assumptions:
 
 Copied from the per-component tables for at-a-glance triage. Severity reflects pilot-deployment impact, not theoretical worst case.
 
-**High** - block multi-seat pilots:
+**High**: block multi-seat pilots:
 
-- (None remaining for v0.1 ship. The wave-1 OIDC + WebAuthn break-glass + chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping inside a single deployment is a follow-on feature, not a v0.1 gap.)
+- (None remaining for v0.1 ship. The current OIDC + WebAuthn break-glass + chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping inside a single deployment is a follow-on feature, not a v0.1 gap.)
 
-**Medium** - block a security-mature pilot's procurement:
+**Medium**: block a security-mature pilot's procurement:
 
 - Encryption at rest for the events table (component 6, deployment-mode item).
 - `Content-Security-Policy` header on the UI (component 5).
@@ -183,7 +183,7 @@ Copied from the per-component tables for at-a-glance triage. Severity reflects p
 - `step-security/harden-runner` on CI jobs (supply chain).
 - Signed-commit policy + `CODEOWNERS` + required-review-count (insider).
 
-**Low** - operational hygiene:
+**Low**: operational hygiene:
 
 - Per-host rate limits beyond per-route caps (component 4).
 - Pagination contract on list endpoints (component 5).
@@ -192,10 +192,10 @@ Copied from the per-component tables for at-a-glance triage. Severity reflects p
 ## Out of scope
 
 - **macOS kernel exploits.** SIP, KASLR, kernel signing, and Apple's response cycle own this. Outside the EDR's control surface.
-- **Physical access to the endpoint.** A physically-present attacker with FileVault unlocked is not in this threat model - disk encryption and device-loss policy own that boundary.
+- **Physical access to the endpoint.** A physically-present attacker with FileVault unlocked is not in this threat model; disk encryption and device-loss policy own that boundary.
 - **Compromised MDM.** The MDM is a trust anchor; if it is itself compromised, the deployment chain is broken and the EDR cannot defend against its own legitimate-looking install.
 - **Side-channel attacks.** Timing, cache, Spectre-class. Not in MVP scope.
-- **Anti-forensic evasion at the OS level by an already-root attacker.** A privileged attacker who already has root can disable the sysext via `systemextensionsctl`. Detection of _that_ is the canonical "EDR tamper resistance" line item flagged at `docs/best-practices.md` §1.
+- **Anti-forensic evasion at the OS level by an already-root attacker.** A privileged attacker who already has root can disable the sysext via `systemextensionsctl`. Detection of _that_ is the canonical "EDR tamper resistance" line item flagged at [`best-practices.md`](best-practices.md) §1.
 
 ## Revision policy
 
@@ -203,7 +203,7 @@ Update this document when:
 
 - A new component is added to the architecture (a new daemon, a new service, a new API surface).
 - A new trust boundary is crossed (a webhook out, a SIEM export endpoint, cross-deployment routing).
-- A gap above is closed - move the bullet from "gap" to a citation in the per-component table.
+- A gap above is closed: move the bullet from "gap" to a citation in the per-component table.
 - A new STRIDE category becomes relevant for an existing component (e.g., shipping RBAC opens new spoofing + elevation surfaces that need entries).
 
-Last reviewed against the v0.1.0-rc.\* release line on 2026-05-06, covering the wave-1 auth + authz model (OIDC, WebAuthn break-glass, chokepoint roles, reauth window).
+Last reviewed against the v0.1.0-rc.\* release line on 2026-05-06, covering the current auth + authz model (OIDC, WebAuthn break-glass, chokepoint roles, reauth window).

@@ -111,7 +111,7 @@ func TestCatalog_DisabledRuleIDsHonoredEndToEnd(t *testing.T) {
 			"disabled rule MUST NOT appear in ContentService().ActiveRules() (the engine evaluation set)")
 	}
 	// Sanity: the rest of the catalog still appears so a regression that filtered the wrong subset is caught.
-	assert.Len(t, catalog, 9, "exactly one rule must have been filtered (10 shipped - 1 disabled)")
+	assert.Len(t, catalog, 9, "exactly one rule must have been filtered (10 shipped, 1 disabled)")
 	assert.Len(t, active, 9)
 }
 

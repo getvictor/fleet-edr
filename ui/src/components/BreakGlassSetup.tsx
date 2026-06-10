@@ -83,7 +83,7 @@ export function BreakGlassSetup() {
   const [password, setPassword] = useState("");
   const [credentialName, setCredentialName] = useState("");
   // Initialise the error state from the token-missing branch
-  // synchronously rather than via a useEffect setError dance - the
+  // synchronously rather than via a useEffect setError dance. The
   // initial render already has the token, and a useEffect that sets
   // state on mount is exactly the cascading-render pattern lint
   // flags.
@@ -113,7 +113,7 @@ export function BreakGlassSetup() {
         attestation,
       );
       // Navigate inside the basename-aware router. result.redirect
-      // is "/ui/" - strip the basename so react-router doesn't
+      // is "/ui/": strip the basename so react-router doesn't
       // double-prefix it. The `===` plus `startsWith("/ui/")` guard
       // avoids mis-matching unrelated paths like /uipreview that
       // happen to share the substring.

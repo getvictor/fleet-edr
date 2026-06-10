@@ -1,7 +1,7 @@
 //go:build integration && (!darwin || !cgo)
 
 // Per-PR smoke of the M12 scale runner in ModeHeadless. Companion to the direct-mode smoke in scale_test.go: same shape
-// (small fan-out, short duration, integration.Setup-backed server) but exercises the agent path - each simulated host
+// (small fan-out, short duration, integration.Setup-backed server) but exercises the agent path: each simulated host
 // runs headless.Run with its own queue + uploader + control plane, the runner polls /state for queue_depth, and the
 // resulting report carries the v2 fields. Build tag matches the headless package's gate (`!darwin || !cgo`) so the test
 // only compiles where headless.Run is itself compileable.

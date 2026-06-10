@@ -36,7 +36,7 @@ func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error)
 }
 
 // UpdateLastSeenForSnapshot bumps last_seen_ns on the live snapshot row matching (host_id, pid). Only affects rows where
-// is_snapshot=TRUE AND exit_time_ns IS NULL - non-snapshot rows and already-exited rows are not touched, so a stray heartbeat for a
+// is_snapshot=TRUE AND exit_time_ns IS NULL: non-snapshot rows and already-exited rows are not touched, so a stray heartbeat for a
 // recycled PID cannot resurrect an exited row. Returns nil on success (including the no-row-affected case, which is the common path
 // when the heartbeat lands before the snapshot row arrives or after a re-exec flipped is_snapshot off).
 func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error {
@@ -229,7 +229,7 @@ func (s *Store) ReExec(
 // ordering key for the result. The anchor row sits at depth=0 and
 // each recursion step adds one, so depth tracks structural distance
 // back from `current.PreviousExecID`. ORDER BY depth DESC therefore
-// yields oldest-first - independent of fork_time_ns, which can tie or
+// yields oldest-first, independent of fork_time_ns, which can tie or
 // drift across agents (per Gemini Code Assist + Copilot review on
 // PR #110).
 //

@@ -46,7 +46,7 @@ func TestRedocBundle_NoExternalURLs(t *testing.T) {
 	b, err := assets.ReadFile("embed/redoc.standalone.js")
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), "cdn.redoc.ly",
-		"Redoc bundle still references cdn.redoc.ly - re-apply the same-origin URL patch (see docs.go doc comment)")
+		"Redoc bundle still references cdn.redoc.ly: re-apply the same-origin URL patch (see docs.go doc comment)")
 }
 
 func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
@@ -90,8 +90,8 @@ func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
 	}
 }
 
-// TestETagRevalidation_Returns304 confirms that a conditional GET with a matching If-None-Match skips the body - the key win of the
-// ETag strategy for the spec and logo. Saves bandwidth on repeat loads while still guaranteeing a correct spec after a server upgrade.
+// TestETagRevalidation_Returns304 confirms that a conditional GET with a matching If-None-Match skips the body. That is the key win
+// of the ETag strategy for the spec and logo. Saves bandwidth on repeat loads while still guaranteeing a correct spec after a server upgrade.
 func TestETagRevalidation_Returns304(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)

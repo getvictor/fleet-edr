@@ -15,7 +15,7 @@ Reality on the ground in this codebase, before this ADR is written:
 
 - `internal/observability/observability.go` is a single `Init` call that wires up the tracer provider, meter provider, and logger provider against the same OTLP/gRPC endpoint. The provider trio is installed atomically: any exporter failure leaves the SDK defaults in place and returns an error, so callers never observe a half-initialised stack. All three EDR binaries (`fleet-edr-server`, `fleet-edr-ingest`, `fleet-edr-agent`) call this same `Init`.
 - `server/metrics/metrics.go` and `agent/metrics/metrics.go` expose typed `Recorder` methods (`EventsIngested`, `AlertCreated`, `RetentionRowsDeleted`, `ProcessesTTLReconciled`, `QueueDropped`, `ObserveDBQuery`, plus observable gauges for enrolled and offline host counts). Every instrument is registered against the global OTel meter; there is no second registry. Recorders are nil-safe so call sites do not need defensive checks.
-- `docs/operations.md` documents the metric names operators monitor (`edr.events.ingested`, `edr.alerts.created`, `edr.enrolled.hosts`, `edr.offline.hosts`, `edr.retention.rows_deleted`, `edr.processes.ttl_reconciled`, `edr.db.query.duration`, `edr.agent.queue.dropped`). All eight names follow OTel semconv spelling, not Prometheus snake_case conventions.
+- [`operations.md`](../operations.md) documents the metric names operators monitor (`edr.events.ingested`, `edr.alerts.created`, `edr.enrolled.hosts`, `edr.offline.hosts`, `edr.retention.rows_deleted`, `edr.processes.ttl_reconciled`, `edr.db.query.duration`, `edr.agent.queue.dropped`). All eight names follow OTel semconv spelling, not Prometheus snake_case conventions.
 - The development loop targets a local SigNoz at `localhost:4317` via OTLP/gRPC. Production deployments point `OTEL_EXPORTER_OTLP_*` at whatever OTLP-speaking collector the operator runs (SigNoz, Grafana Alloy, Datadog Agent, AWS Distro for OpenTelemetry, the upstream OpenTelemetry Collector, etc.).
 - There are zero imports of `github.com/prometheus/client_golang` in the module. There has never been a `/metrics` HTTP route registered.
 
@@ -34,7 +34,7 @@ The EDR has exactly one metrics pipeline: OpenTelemetry metrics exported over OT
 
 Operators who need Prometheus-shaped scrape data run an OTel Collector in front of their preferred backend and use the collector's `prometheus` exporter (or `prometheusremotewrite` exporter). The collector becomes the integration seam, not the EDR processes.
 
-Instrumentation rule for new metrics: register the counter, histogram, or observable gauge against the global OTel meter (`otel.Meter("github.com/fleetdm/edr/server/metrics")` for server, the equivalent agent path for agent), expose it through a typed method on the `Recorder` so call sites pass concrete attribute values rather than free-form labels, and document the name + cardinality story in `docs/operations.md`.
+Instrumentation rule for new metrics: register the counter, histogram, or observable gauge against the global OTel meter (`otel.Meter("github.com/fleetdm/edr/server/metrics")` for server, the equivalent agent path for agent), expose it through a typed method on the `Recorder` so call sites pass concrete attribute values rather than free-form labels, and document the name + cardinality story in [`operations.md`](../operations.md).
 
 ## Consequences
 
@@ -69,7 +69,7 @@ Instrumentation rule for new metrics: register the counter, histogram, or observ
 - `internal/observability/observability.go` (the single `Init` that wires tracer + meter + logger to OTLP/gRPC).
 - `server/metrics/metrics.go` (typed `Recorder` over the global OTel meter; counters, histograms, observable gauges).
 - `agent/metrics/metrics.go` (same pattern in the agent).
-- `docs/operations.md` "Metrics and monitoring" section (operator- facing list of metric names + interpretation).
+- [`operations.md`](../operations.md) "Metrics and monitoring" section (operator-facing list of metric names + interpretation).
 - `Taskfile.yml` `dev:server` env block (`OTEL_EXPORTER_OTLP_*` knobs).
 - [OpenTelemetry Collector contrib repo](https://github.com/open-telemetry/opentelemetry-collector-contrib) ships the `prometheus` and `prometheusremotewrite` exporters operators run if they need Prometheus-shaped scrapes off the OTel pipeline.
 - ADR-0003 "EDR is a standalone product, Fleet is a deployment channel" (this ADR's "operators run their own collector" model rhymes with 0003's "MDMs are deployment channels, not the data plane").

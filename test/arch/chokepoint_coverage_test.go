@@ -25,7 +25,7 @@ import (
 // handler in the new package.
 //
 // Pre-auth surfaces (oidc, breakglass, login) are intentionally out:
-// their routes don't gate on operator role bindings - they're the
+// their routes don't gate on operator role bindings: they're the
 // authentication flows themselves. Reauth endpoints under
 // breakglass/handler.go gate on session AuthMethod, which is a
 // session-level check rather than the role-based chokepoint.
@@ -50,7 +50,7 @@ var gateExceptions = map[string]bool{
 // the test if the file declares an HTTP handler function but never
 // makes a real call to HTTPGate. The check is per-file (any handler
 // in the file is "covered" if anywhere in the same file emits an
-// HTTPGate call expression), not per-handler-function - handlers in
+// HTTPGate call expression), not per-handler-function. Handlers in
 // these files share the same Handler struct and the same gating
 // pattern, so file-level coverage matches the convention.
 //
@@ -58,7 +58,7 @@ var gateExceptions = map[string]bool{
 // function expression resolves to an identifier named HTTPGate
 // (matching api.HTTPGate, identityapi.HTTPGate, or any future
 // import alias). String-matching the source would let a file pass
-// by mentioning HTTPGate in a comment or a string literal - that
+// by mentioning HTTPGate in a comment or a string literal: that
 // would weaken the architectural lock the test exists to enforce.
 // False positives are addressed via gateExceptions.
 func TestEveryPrivilegedHandlerCallsHTTPGate(t *testing.T) {
@@ -84,7 +84,7 @@ func TestEveryPrivilegedHandlerCallsHTTPGate(t *testing.T) {
 	// room to be temporarily restructured.
 	require.GreaterOrEqualf(t, handlerFilesScanned, 4,
 		"expected to walk at least 4 handler files across operatorHandlerDirs but "+
-			"only walked %d - the parser likely missed an HTTP handler signature, "+
+			"only walked %d: the parser likely missed an HTTP handler signature, "+
 			"check fileHasHandlerFunc / paramTypeIdents",
 		handlerFilesScanned)
 	require.Emptyf(t, offenders,
@@ -186,7 +186,7 @@ func isRequestPtr(e ast.Expr) bool {
 
 // fileReferencesHTTPGate returns true if the file makes a real call to a function named HTTPGate (matching api.HTTPGate,
 // identityapi.HTTPGate, or any other import-alias spelling). We walk the AST and look for ast.CallExpr nodes whose function expression
-// resolves to that identifier - string-matching the raw source would let comments, doc strings, or unrelated names trip the check and
+// resolves to that identifier. String-matching the raw source would let comments, doc strings, or unrelated names trip the check and
 // silently weaken the architectural lock.
 func fileReferencesHTTPGate(t *testing.T, path string) bool {
 	t.Helper()
@@ -210,7 +210,7 @@ func fileReferencesHTTPGate(t *testing.T, path string) bool {
 
 // calleeName returns the rightmost identifier of a call's function expression: for `api.HTTPGate(…)` the SelectorExpr resolves to
 // "HTTPGate"; for a bare `HTTPGate(…)` (same-package) the Ident itself resolves to "HTTPGate". Any other shape (dynamic dispatch via
-// interface, function literal, etc.) returns "" - operator handlers don't use those, and matching them would risk false positives on
+// interface, function literal, etc.) returns "": operator handlers don't use those, and matching them would risk false positives on
 // unrelated calls.
 func calleeName(fn ast.Expr) string {
 	switch v := fn.(type) {

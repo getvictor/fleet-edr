@@ -33,7 +33,7 @@ The system SHALL record an audit row for every authentication outcome, success o
 
 ### Requirement: Authorization decisions on state-changing actions write an audit row
 
-The system SHALL record an audit row for every authorization decision on a state-changing action, including allow, deny, and error outcomes. Read-only actions SHALL be sampled at a configurable fraction (`audit.read_sampling`, default `0.0` in wave 1). When the actor is a break-glass account, the read-sampling fraction MUST be treated as `1.0` regardless of configuration so every break-glass action is auditable end-to-end.
+The system SHALL record an audit row for every authorization decision on a state-changing action, including allow, deny, and error outcomes. Read-only actions SHALL be sampled at a configurable fraction (`audit.read_sampling`, default `0.0` in the current release). When the actor is a break-glass account, the read-sampling fraction MUST be treated as `1.0` regardless of configuration so every break-glass action is auditable end-to-end.
 
 #### Scenario: State-changing allow is recorded
 
@@ -72,7 +72,7 @@ The system SHALL emit a structured slog record and OTel span attributes for ever
 
 ### Requirement: Append-only persistence
 
-The system SHALL treat the audit table as append-only at the application layer: no production code path SHALL update or delete an existing audit row. Operator-driven retention pruning MAY happen via a documented out-of-band procedure but MUST NOT be exposed in the admin API in wave 1. The schema SHALL be designed so a future dual-database-user setup can revoke `UPDATE` and `DELETE` privileges on the audit table without code changes.
+The system SHALL treat the audit table as append-only at the application layer: no production code path SHALL update or delete an existing audit row. Operator-driven retention pruning MAY happen via a documented out-of-band procedure but MUST NOT be exposed in the admin API in the current release. The schema SHALL be designed so a future dual-database-user setup can revoke `UPDATE` and `DELETE` privileges on the audit table without code changes.
 
 #### Scenario: No code path updates an audit row
 

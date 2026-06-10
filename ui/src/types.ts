@@ -34,7 +34,7 @@ export interface Process {
   // exit_reason distinguishes observed exits ("event")
   // from synthesized ones: "ttl_reconciliation" (server-side TTL force-grey),
   // "pid_reuse" (closed by an incoming fork on the same PID), "reexec"
-  // (superseded by a re-exec on the same PID - see ReExecChain), or
+  // (superseded by a re-exec on the same PID, see ReExecChain), or
   // "host_reconciled" (agent-side kill(pid,0) confirmed the PID is gone).
   // previous_exec_id links back to the prior generation in a same-pid
   // re-exec chain.
@@ -87,7 +87,7 @@ export interface ProcessDetail {
   process: Process;
   network_connections: EventRecord[];
   dns_queries: EventRecord[];
-  // Oldest-first list of prior exec generations on the same PID - populated
+  // Oldest-first list of prior exec generations on the same PID, populated
   // when a process called execve() more than once without forking in
   // between (e.g. shell exec-optimization chains). Empty for the common
   // single-exec case. See server/store/process.go GetExecChain.

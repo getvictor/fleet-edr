@@ -57,7 +57,7 @@ func newStubConnector(s stubScript) *stubConnector {
 	// Unbuffered channels make emitEvent / emitError synchronization points: a sequential onConnect that emits an event
 	// then a terminal error is guaranteed to deliver them in that order to pipeEvents, because the second send cannot
 	// start until the first send is paired with a receive. A buffered design lets both sends complete before pipeEvents
-	// reaches its select, and Go's select then picks randomly between the two ready channels - which makes any test
+	// reaches its select, and Go's select then picks randomly between the two ready channels, which makes any test
 	// that asserts "event delivered, then reconnect" intermittently fail on errors-picked-first.
 	return &stubConnector{
 		script: s,
@@ -157,8 +157,8 @@ func (r *recordingSleep) Sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	}
 	// Yield so an always-failing-connector test (e.g. TestLoop_TwoParallelLoops_NetworkExtensionDown) doesn't busy-spin
-	// the scheduler between iterations. The actual loop semantics under test - that retries occur and that backoff durations
-	// are recorded - are unaffected by the yield, but it keeps the test from monopolizing a P thread under -race.
+	// the scheduler between iterations. The actual loop semantics under test (that retries occur and that backoff durations
+	// are recorded) are unaffected by the yield, but it keeps the test from monopolizing a P thread under -race.
 	runtime.Gosched()
 	return true
 }
@@ -179,7 +179,7 @@ func discardLogger() *slog.Logger {
 //
 // Two Loop instances run side by side. The system-extension service connects and delivers events; the
 // network-extension service's connector always fails Connect. The system loop must keep delivering events
-// while the network loop keeps retrying - independence of the two loops is the property under test.
+// while the network loop keeps retrying: independence of the two loops is the property under test.
 func TestLoop_TwoParallelLoops_NetworkExtensionDown(t *testing.T) {
 	t.Parallel()
 
@@ -364,7 +364,7 @@ func TestLoop_BackoffResetsAfterSuccess(t *testing.T) {
 	require.Equal(t, []byte("ok"), <-seen)
 	durations := sleep.snapshot()
 	require.GreaterOrEqual(t, len(durations), 4)
-	// Two pre-success failures: 1s, 2s. Then the successful session ends - its reconnect retry uses InitialBackoff because the
+	// Two pre-success failures: 1s, 2s. Then the successful session ends: its reconnect retry uses InitialBackoff because the
 	// session was connected. Then the next failure starts the backoff sequence over again at InitialBackoff because it follows the
 	// connected reset.
 	assert.Equal(t, time.Second, durations[0], "first failure")
@@ -417,14 +417,14 @@ func TestLoop_AutoReconnectAfterExtensionRestart(t *testing.T) {
 // delivers "B1". The two events the test observes must be exactly {A1, B1}: events generated against A
 // after Disconnect are simulated as "dropped during the reconnect window" by simply not emitting them on
 // the post-error connector. The property under test is that the Loop tolerates the gap and resumes
-// delivery on the new connection - no error path, no panic, no duplicate.
+// delivery on the new connection: no error path, no panic, no duplicate.
 func TestLoop_DroppedEventsDuringDisconnectAreTolerated(t *testing.T) {
 	t.Parallel()
 
 	factory, _ := scriptedFactory([]stubScript{
 		{onConnect: func(c *stubConnector) {
 			c.emitEvent([]byte("A1"))
-			// Pretend events were generated here on the peer but lost in the reconnect window - we model the loss by NOT
+			// Pretend events were generated here on the peer but lost in the reconnect window: we model the loss by NOT
 			// sending them on this connector and NOT sending them on the next either. With unbuffered channels, the
 			// emitEvent above already blocked until pipeEvents read A1, so the terminal error below is delivered AFTER
 			// the event without needing an explicit handshake.
@@ -494,8 +494,8 @@ func TestDispatcher_SendDuringActiveConnection(t *testing.T) {
 
 // spec:agent-xpc-receiver/outbound-policy-push-routed-to-active-connection/policy-push-while-disconnected
 //
-// Before any connector is published - equivalently, between Clear and the next Set during a reconnect
-// window - the Dispatcher returns ErrNoConnector so the commander can mark the push as failed and let the
+// Before any connector is published (equivalently, between Clear and the next Set during a reconnect
+// window) the Dispatcher returns ErrNoConnector so the commander can mark the push as failed and let the
 // server's next push reconverge the agent.
 func TestDispatcher_SendWhileDisconnected(t *testing.T) {
 	t.Parallel()

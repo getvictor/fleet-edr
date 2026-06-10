@@ -17,9 +17,9 @@ import {
 // @simplewebauthn/browser are stubbed via vi.mock so the tests don't depend on a real navigator.credentials surface.
 //
 // Test conventions match ui/src/api.test.ts:
-// - stubFetch builds a typed fake Response so the helper's res.json() / res.headers.get() / res.status calls all work.
-// - afterEach restores all mocks so test order doesn't matter.
-// - One describe per exported symbol; one it per documented branch.
+//   stubFetch builds a typed fake Response so the helper's res.json() / res.headers.get() / res.status calls all work.
+//   afterEach restores all mocks so test order doesn't matter.
+//   One describe per exported symbol; one it per documented branch.
 
 vi.mock("@simplewebauthn/browser", () => ({
   startRegistration: vi.fn(),
@@ -310,7 +310,7 @@ describe("reauthOIDC", () => {
   });
 
   it("omits next= when the current path itself fails the allowlist", () => {
-    // Pathname with a character outside the regex's allowlist - exercises the safeNext === "" branch.
+    // Pathname with a character outside the regex's allowlist, which exercises the safeNext === "" branch.
     const assignSpy = stubLocation("/ui/with space");
     reauthOIDC("/api/auth/login?reauth=1");
     expect(String(assignSpy.mock.calls[0]?.[0])).toBe("/api/auth/login?reauth=1");

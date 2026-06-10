@@ -315,7 +315,7 @@ func TestHandleLogin_NormalLoginOmitsPromptLogin(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusFound, resp.StatusCode)
 	assert.NotContains(t, resp.Header.Get("Location"), "prompt=login",
-		"normal login must not force prompt=login - the IdP picks its own session policy")
+		"normal login must not force prompt=login: the IdP picks its own session policy")
 }
 
 // RegisterPublicRoutes mounts both routes against a mux. Pinned to

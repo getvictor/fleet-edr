@@ -4,7 +4,7 @@
 
 ## Why this matters
 
-`docs/threat-model.md` is the architectural assertion of who can do what to whom. If it was written before mTLS, before the network extension, before per-context boundaries, before `/etc/fleet-edr.conf`, before the QA VM existed - then it isn't a threat model, it's a fossil. New threats become invisible because they're not on the map.
+[`docs/threat-model.md`](../../threat-model.md) is the architectural assertion of who can do what to whom. If it was written before mTLS, before the network extension, before per-context boundaries, before `/etc/fleet-edr.conf`, before the QA VM existed, then it isn't a threat model, it's a fossil. New threats become invisible because they're not on the map.
 
 CodeQL, OSV-scanner, and Scorecard catch implementation-level CVEs and known patterns. They do NOT catch:
 
@@ -15,7 +15,7 @@ CodeQL, OSV-scanner, and Scorecard catch implementation-level CVEs and known pat
 
 ## Scope
 
-Primary: `docs/threat-model.md`. Supporting: `docs/architecture.md`, `docs/api.md`, `SECURITY.md`, anything under `docs/install-*.md` describing trust boundaries during install.
+Primary: [`docs/threat-model.md`](../../threat-model.md). Supporting: [`docs/architecture.md`](../../architecture.md), [`docs/api.md`](../../api.md), [`SECURITY.md`](../../../SECURITY.md), anything under `docs/install-*.md` describing trust boundaries during install.
 
 ## Steps
 
@@ -45,7 +45,7 @@ If reality and the doc disagree, the doc loses.
 
 ### 2. New surfaces
 
-Diff the current boundary list against the threat model's enumerated boundaries. New surfaces (added since the last refresh) must be added - even if "secure by construction", document the assumption.
+Diff the current boundary list against the threat model's enumerated boundaries. New surfaces (added since the last refresh) must be added. Even if "secure by construction", document the assumption.
 
 ### 3. Threat-actor list
 
@@ -57,9 +57,9 @@ The model should name the actor classes it considers (unprivileged local user, p
 
 ### 4. Cross-check with ADRs
 
-ADR-0003 (standalone product, not Fleet-integrated) is a load-bearing threat-model input - it scopes Fleet to "deployment channel only". Confirm the threat model still expresses that contract correctly.
+ADR-0003 (standalone product, not Fleet-integrated) is a load-bearing threat-model input: it scopes Fleet to "deployment channel only". Confirm the threat model still expresses that contract correctly.
 
-### 5. Cross-check with `docs/best-practices.md` security items
+### 5. Cross-check with [`docs/best-practices.md`](../../best-practices.md) security items
 
 Section "10. Security" (or wherever security items live in the best-practices doc) lists adopted vs unchecked items. Inconsistencies between the two docs are a red flag.
 
@@ -107,4 +107,4 @@ inventory.
 - [ ] New trust boundaries since last refresh are now documented.
 - [ ] Demoted threats have explicit rationale.
 - [ ] PR cross-references ADR-0003 / ADR-0004 if their contract has shifted.
-- [ ] Dated entry in `docs/maintenance/log.md`.
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md).

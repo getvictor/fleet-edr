@@ -1,6 +1,6 @@
 # app-control-block scenario
 
-L5 system/VM coverage for **Application Control active blocking** - the half of the App Control story that detection scenarios (attack-runbook) do not exercise.
+L5 system/VM coverage for **Application Control active blocking**: the half of the App Control story that detection scenarios (attack-runbook) do not exercise.
 
 It is the replacement for the removed `e2-policy-roundtrip.sh` blocklist scenario (`scripts/qa/README.md` "Known gaps"): when the singleton `/api/policy` blocklist became the per-policy `/api/v1/app-control/*` surface (#289 / #290), the old L5 scenario was deleted and its replacement was "tracked separately". This is it. It is also the missing half of the #301 acceptance gate ("Application Control still works", VM-validated on a SIP-on host).
 
@@ -21,12 +21,12 @@ Binaries are built on the VM via `go build` (a locally compiled binary lacks App
 | `SIGNINGID`   | fixture               | `<TeamID>:<bundle.id>`                                                                   |
 | `TEAMID`      | fixture               | 10-char Developer-ID team                                                                |
 
-`CERTIFICATE`, `SIGNINGID`, and `TEAMID` are the **signing-derived** types: they only match a binary that carries a real Apple-issued identity, and that identity must be **distinct from the EDR's own** (`FDG8Q7N4CC`) - a `CERTIFICATE` rule on the EDR's shared leaf, or a `TEAMID` rule on its team, would also match the agent + extension. So they're driven by one externally-signed fixture binary rather than a generated one:
+`CERTIFICATE`, `SIGNINGID`, and `TEAMID` are the **signing-derived** types: they only match a binary that carries a real Apple-issued identity, and that identity must be **distinct from the EDR's own** (`FDG8Q7N4CC`). A `CERTIFICATE` rule on the EDR's shared leaf, or a `TEAMID` rule on its team, would also match the agent + extension. So they're driven by one externally-signed fixture binary rather than a generated one:
 
     UAT_ACBLOCK_FIXTURE_BIN   path on the HOST to a Developer-ID-signed binary with a non-EDR identity
     UAT_ACBLOCK_FIXTURE_ARGS  args that make it exec-and-exit-0 cleanly (default: --version)
 
-A small, self-contained, CLI-safe binary already on most dev Macs works well - e.g. the 1Password CLI `op` (team `2BUA8C4S2C`). The scenario derives the binary's team / signing id / leaf-cert SHA-256 with **read-only** `codesign` on the host (it never executes the fixture there), copies the binary to the VM's `/tmp` (a file, **not** an install - removed on cleanup), execs it only on the VM, and refuses any fixture whose team is the EDR's own. The three share one binary, so each is tested in isolation (post → deny → remove → allow-again) since the precedence ladder would otherwise let a lingering higher-precedence rule mask the next. Unset → all three skip with a clear message; all three are covered at L0 by `AuthExecDeciderPhaseBTests`.
+A small, self-contained, CLI-safe binary already on most dev Macs works well, e.g. the 1Password CLI `op` (team `2BUA8C4S2C`). The scenario derives the binary's team / signing id / leaf-cert SHA-256 with **read-only** `codesign` on the host (it never executes the fixture there), copies the binary to the VM's `/tmp` (a file, **not** an install, removed on cleanup), execs it only on the VM, and refuses any fixture whose team is the EDR's own. The three share one binary, so each is tested in isolation (post → deny → remove → allow-again) since the precedence ladder would otherwise let a lingering higher-precedence rule mask the next. Unset → all three skip with a clear message; all three are covered at L0 by `AuthExecDeciderPhaseBTests`.
 
 ## Prerequisites
 

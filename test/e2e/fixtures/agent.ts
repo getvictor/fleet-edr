@@ -13,7 +13,7 @@
 //
 // Why not port the Go fakeagent library to TypeScript? The YAML scenarios are the single source of truth shared between Go and TS;
 // the envelope-shaping logic is small and stable (seven event types: exec, fork, exit, open, network_connect, dns_query,
-// snapshot_heartbeat - same set as the Go side). Duplicating ~80 LOC of mapping is cheaper than a Go/Node FFI bridge.
+// snapshot_heartbeat, the same set as the Go side). Duplicating ~80 LOC of mapping is cheaper than a Go/Node FFI bridge.
 //
 // Wire-precision note: timestamp_ns is computed with BigInt so the value matches schema/events.json's integer type at full int64
 // precision, then emitted as an unquoted JSON number via a custom serialiser below. Plain `Number(epochMs) * 1e6` would silently
@@ -41,7 +41,7 @@ export interface ScenarioHost {
 }
 
 export interface ScenarioEvent {
-  at: string; // "10ms", "5s", "1h" - parsed via parseGoDuration below.
+  at: string; // "10ms", "5s", "1h", parsed via parseGoDuration below.
   type: string;
   // Type-specific fields. Only those relevant to `type` are honoured.
   pid?: number;
@@ -54,7 +54,7 @@ export interface ScenarioEvent {
   args?: string[];
   cwd?: string;
   exit_code?: number;
-  exit_reason?: string; // schema/events.json exit_payload.exit_reason - matches the Go ScenarioEvent struct.
+  exit_reason?: string; // schema/events.json exit_payload.exit_reason, matches the Go ScenarioEvent struct.
   flags?: number;
   protocol?: string;
   direction?: string;
@@ -80,8 +80,8 @@ export interface Envelope {
   event_id: string;
   host_id: string;
   /**
-   * Nanoseconds since Unix epoch. Stored as BigInt so values past JS's MAX_SAFE_INTEGER (9e15) - which every current-epoch
-   * nanosecond timestamp exceeds - retain int64 precision. Serialised to JSON as an unquoted number via the BigInt-aware
+   * Nanoseconds since Unix epoch. Stored as BigInt so values past JS's MAX_SAFE_INTEGER (9e15), which every current-epoch
+   * nanosecond timestamp exceeds, retain int64 precision. Serialised to JSON as an unquoted number via the BigInt-aware
    * stringify helper below.
    */
   timestamp_ns: bigint;
@@ -110,7 +110,7 @@ export interface AgentScenarioOptions {
 export interface BatchEnrollOptions {
   /**
    * Scenario YAML name (e.g. "quiet-host.yaml") whose timeline is replayed for every host in the batch. Defaults to
-   * "quiet-host.yaml" so each host materialises with a single snapshot_heartbeat event - enough to appear in the host list but
+   * "quiet-host.yaml" so each host materialises with a single snapshot_heartbeat event: enough to appear in the host list but
    * cheap to ingest. Specs that want per-host event variety (e.g. host-list-event-count) override this.
    */
   scenarioFile?: string;
@@ -320,7 +320,7 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
 // parseGoDuration accepts the Go time.Duration string form ("10ms", "5s", "1h", "100us"). Returns nanoseconds as a BigInt so the
 // caller can add the value to a BigInt epoch without precision loss. Fractional input is TRUNCATED toward zero at the nanosecond
 // boundary via integer division (no float intermediates), so "1.5s" yields exactly 1_500_000_000n and "0.1234567899ns" yields 0n.
-// Scenarios written today only use round numbers of ns/us/ms/s, so the truncation never bites - if a scenario ever needs sub-ns
+// Scenarios written today only use round numbers of ns/us/ms/s, so the truncation never bites. If a scenario ever needs sub-ns
 // rounding, that's a separate change to add an explicit round-half-up step.
 function parseGoDuration(input: string): bigint {
   const match = /^(\d+)(?:\.(\d+))?(ns|us|µs|ms|s|m|h)$/.exec(input);

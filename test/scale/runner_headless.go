@@ -229,7 +229,7 @@ func cleanupHeadlessHosts(hosts []*headlessHostState) {
 
 // run drives one simulated host's runtime: spawn headless.Run, wait for control plane up, start /state poller, loop
 // scenario feeder until runCtx done. Errors from individual goroutines accumulate into the host state (lastErr,
-// errorCount) but do not abort the host's loop - per-host robustness mirrors the v1 direct-mode behaviour.
+// errorCount) but do not abort the host's loop. Per-host robustness mirrors the v1 direct-mode behaviour.
 //
 // Two-context lifecycle:
 //
@@ -316,7 +316,7 @@ func (h *headlessHostState) pollState(ctx context.Context, interval time.Duratio
 			if err != nil {
 				// Guard against false-positive error counts at end-of-run: when runCtx expires the in-flight readControlState
 				// returns context.Canceled. Recording that as a poll error would inflate Report.ErrorCount and flip Pass
-				// to false (Gemini #277). Only record when the context is still live - a real /state failure mid-run.
+				// to false (Gemini #277). Only record when the context is still live: a real /state failure mid-run.
 				if ctx.Err() == nil {
 					h.recordErr("poll /state: " + err.Error())
 				}
@@ -334,7 +334,7 @@ func (h *headlessHostState) pollState(ctx context.Context, interval time.Duratio
 
 // finalStateSnapshot reads /state once after the scenario feeder exits so the report carries the end-of-run events_injected
 // and inject_errors counters (the live counter values; the poller's last sample may have been seconds ago). A failed read
-// is logged via recordErr but does not abort - aggregation reports the per-host fields it has.
+// is logged via recordErr but does not abort. Aggregation reports the per-host fields it has.
 func (h *headlessHostState) finalStateSnapshot(ctx context.Context) {
 	client := unixSocketHTTPClient(h.socketPath)
 	state, err := readControlState(ctx, client, h.socketPath)
@@ -405,7 +405,7 @@ func readControlState(ctx context.Context, client *http.Client, socketPath strin
 }
 
 // unixSocketHTTPClient builds an HTTP client whose Transport dials the host's unix socket. The "host" portion of any URL
-// the client sees is ignored - net.Dialer in the Transport overrides the network/addr. A short Timeout keeps a hung
+// the client sees is ignored: net.Dialer in the Transport overrides the network/addr. A short Timeout keeps a hung
 // control plane from blocking the runner's wall clock; the call sites use parent context for cancellation too.
 //
 // DisableKeepAlives is true so each /state poll closes its connection immediately. Without this, the per-host poller

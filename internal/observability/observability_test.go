@@ -14,7 +14,7 @@ import (
 )
 
 // TestBuildResource_ServiceInstanceID pins that a replica's telemetry resource carries service.instance.id when one is set. The
-// attribute lives on the resource, so every span and metric the SDK emits inherits it - which is how an operator tells replicas
+// attribute lives on the resource, so every span and metric the SDK emits inherits it, which is how an operator tells replicas
 // apart in the backend.
 func TestBuildResource_ServiceInstanceID(t *testing.T) {
 	t.Run("spec:server-availability/replica-identity-is-observable-via-service-instance-id/every-emitted-span-carries-the-service-instance-id", func(t *testing.T) {
@@ -75,7 +75,7 @@ func TestInit_Disabled(t *testing.T) {
 //
 // With a non-empty Endpoint, the export pipeline is wired up (the test points it at a dead TCP port to
 // avoid CI flakiness on real collectors). The scenario's spec-relevant clause this test pins is "the
-// SDK is configured to export via OTLP using the standard env vars" - observable through Init
+// SDK is configured to export via OTLP using the standard env vars": observable through Init
 // returning a non-nil shutdown hook and the shutdown call respecting the deadline. End-to-end export
 // to a live collector is validated against the dev SigNoz pipeline; that path is out of scope for an
 // in-process unit test because it requires an external service.

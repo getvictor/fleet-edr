@@ -46,7 +46,7 @@ func TestParseConfFile_MalformedSkipped(t *testing.T) {
 }
 
 func TestLoadConfFile_MissingIsEmpty(t *testing.T) {
-	// A missing conf file is expected on fresh installs before MDM writes anything. Must return empty map without logging - error logs for
+	// A missing conf file is expected on fresh installs before MDM writes anything. Must return empty map without logging: error logs for
 	// ENOENT would spam the startup log every boot.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -56,7 +56,7 @@ func TestLoadConfFile_MissingIsEmpty(t *testing.T) {
 }
 
 func TestLoadConfFile_PermErrorLogged(t *testing.T) {
-	// A file that exists but cannot be read (chmod 0000) must log a warn and return an empty map so the agent still boots - the operator
+	// A file that exists but cannot be read (chmod 0000) must log a warn and return an empty map so the agent still boots. The operator
 	// just won't have the conf-file-sourced defaults.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "forbidden.conf")
@@ -120,7 +120,7 @@ func TestLoad_ConfFileProvidesDefaults(t *testing.T) {
 		}
 		return ""
 	}
-	// No env overrides - only EDR_CONF_FILE is "set" so the conf file's defaults flow through.
+	// No env overrides: only EDR_CONF_FILE is "set" so the conf file's defaults flow through.
 	lookupEnv := func(key string) (string, bool) {
 		if v := getenv(key); v != "" {
 			return v, true

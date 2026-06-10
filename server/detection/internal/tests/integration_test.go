@@ -925,7 +925,7 @@ func TestEngine_OperatorDisablesNoisyRule(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "both rules should fire on both processes in phase 1")
 
 	// Phase 2: operator disables the noisy rule. LoadActive replaces engine.rules with just `quiet`. Seed two
-	// FRESH process rows so neither rule has prior alert dedup keys for those PIDs - this makes ruleA vs ruleB
+	// FRESH process rows so neither rule has prior alert dedup keys for those PIDs. This makes ruleA vs ruleB
 	// outcomes for the new batch distinguishable.
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{quiet}})
 	procC := mustInsertProcess(t, ctx, d, "host-a", 200)
@@ -1452,8 +1452,8 @@ func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 
 // spec:server-rest-api/per-host-process-forest/a-time-range-is-supplied
 //
-// The TimeRange parameter is the load-bearing piece here: this test passes `api.TimeRange{FromNs: now - 1h, ToNs:
-// now + 1h}` to BuildTree, and the assertion that the python -> sh -> /tmp/payload chain appears only succeeds when
+// The TimeRange parameter is the load-bearing piece here: this test passes `api.TimeRange{FromNs: now-1h, ToNs:
+// now+1h}` to BuildTree, and the assertion that the python -> sh -> /tmp/payload chain appears only succeeds when
 // the time-range filter resolves to "alive in window." A regression that ignored the TimeRange (returning every row
 // regardless of lifetime) would pass; a regression that misread the bounds would fail with an empty forest. The
 // HTTP-layer happy path is covered by TestOperatorHTTP_ProcessTree_HappyPath; this service-layer test pins the
@@ -1482,7 +1482,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	}
 	insertEventsViaIngest(ctx, t, d, "h", events)
 
-	// Wait until the LAST exec has been applied - not just until 3 rows exist. A fork creates a row with the parent's path inherited;
+	// Wait until the LAST exec has been applied, not just until 3 rows exist. A fork creates a row with the parent's path inherited;
 	// the exec that follows rewrites that row's path. If we polled on countNodes >= 3 we'd race the window where row 200's path is still
 	// the inherited "/bin/sh" because exec-pl hasn't been processed yet (CI surfaced exactly that as `["/usr/bin/python3", "/bin/sh",
 	// "/bin/sh"]`).
@@ -1552,7 +1552,7 @@ func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
 
 	now := time.Now().UnixNano()
 	// Two exec-without-fork events on the same host: one with cdhash (Hardened-Runtime binary; 40 lowercase hex), one without.
-	// Both must land on processes rows. The no-cdhash row stays NULL - proves the decoder treats the field as optional. This
+	// Both must land on processes rows. The no-cdhash row stays NULL, which proves the decoder treats the field as optional. This
 	// path exercises insertExecWithoutFork; fork+exec + re-exec are covered by the sibling tests below.
 	cdhash := "0123456789abcdef0123456789abcdef01234567"
 	insertEventsViaIngest(ctx, t, d, "h-cdh", []api.Event{
@@ -1763,7 +1763,7 @@ func TestGraph_PendingExitConsumedBySnapshotExec(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		// Query at the exit time itself - the consumed-pending-exit path pulls fork_time
+		// Query at the exit time itself: the consumed-pending-exit path pulls fork_time
 		// back to exit_time, so the row's lifetime is zero. GetProcessByPID requires
 		// fork_time_ns <= atTimeNs AND exit_time_ns >= atTimeNs, both satisfied at exactly
 		// the exit timestamp.
