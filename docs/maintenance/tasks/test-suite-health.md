@@ -72,7 +72,7 @@ If the team has bandwidth, run a mutation test (e.g. `gomutesting`) on one criti
 
 ## Output
 
-A PR with concrete fixes (skips removed, slow tests sped up, flakes quarantined / fixed). A separate issue list for semantic- thinness findings (don't bundle).
+A PR with concrete fixes (skips removed, slow tests sped up, flakes quarantined / fixed). A separate issue list for semantic thinness findings (don't bundle).
 
 ## Prompt template
 

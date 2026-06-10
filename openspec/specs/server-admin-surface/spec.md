@@ -156,7 +156,7 @@ The system SHALL expose `GET /api/attack-coverage` returning a MITRE ATT&CK Navi
 
 ### Requirement: Per-rule documentation endpoint
 
-The system SHALL expose `GET /api/rules` returning the per-rule documentation surface the admin UI's rule-detail page relies on. The response MUST include, for every registered rule, the rule's `id`, the list of ATT&CK `techniques` it covers, and a `doc` object carrying at least `title`, `summary`, `description`, `severity`, and `event_types`. When a rule declares operator- tunable knobs, false-positive sources, or limitations, those MUST be exposed under `config`, `false_positives`, and `limitations` respectively.
+The system SHALL expose `GET /api/rules` returning the per-rule documentation surface the admin UI's rule-detail page relies on. The response MUST include, for every registered rule, the rule's `id`, the list of ATT&CK `techniques` it covers, and a `doc` object carrying at least `title`, `summary`, `description`, `severity`, and `event_types`. When a rule declares operator-tunable knobs, false-positive sources, or limitations, those MUST be exposed under `config`, `false_positives`, and `limitations` respectively.
 
 #### Scenario: Operator reads the rule catalog
 

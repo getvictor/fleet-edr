@@ -11,7 +11,7 @@ Owns its own `package.json` so the UI's `ui/package.json` stays lean on test-onl
 - `tests/auth/break-glass-setup.spec.ts` - WebAuthn redemption ceremony with a virtual authenticator; covers the UI-driven redemption path without a physical Touch ID.
 - `tests/auth/break-glass-login.spec.ts` - day-to-day break-glass login (registration first so a credential row exists, then logout, then sign-back-in).
 - `tests/auth/oidc-login.spec.ts` - SSO sign-in against the local dex (started by `task qa:up`): first-login JIT-provisions, repeat sign-in reuses the existing user row.
-- `tests/qa/` - operator-facing flows on the running server: role matrix + reauth gate + audit-events filters + OIDC state-cookie tampering, break-glass login failure-reason + IP allowlist + per- IP rate limit, OIDC JIT-off rejection, reauth-modal retry (OIDC + break-glass), and session lifecycle (idle eviction + symmetric logout). Run via `npm run qa` (default-env specs) plus `qa:allowlist` / `qa:jit-off` / `qa:rate-limit` / `qa:lifecycle` against env-restarted servers; `scripts/test-e2e-coverage.sh` orchestrates the full pipeline with coverage.
+- `tests/qa/` - operator-facing flows on the running server: role matrix + reauth gate + audit-events filters + OIDC state-cookie tampering, break-glass login failure-reason + IP allowlist + per-IP rate limit, OIDC JIT-off rejection, reauth-modal retry (OIDC + break-glass), and session lifecycle (idle eviction + symmetric logout). Run via `npm run qa` (default-env specs) plus `qa:allowlist` / `qa:jit-off` / `qa:rate-limit` / `qa:lifecycle` against env-restarted servers; `scripts/test-e2e-coverage.sh` orchestrates the full pipeline with coverage.
 
 ## Scope ahead
 

@@ -184,7 +184,7 @@ docker compose -f docker-compose.prod.yml --env-file .env restart server
 
 What the restart invalidates:
 
-- **Every active session.** All signed-in operators land back on `/ui/login` and must re-authenticate via OIDC (or the break-glass surface). Coordinate the restart with on-call so nobody is mid- triage.
+- **Every active session.** All signed-in operators land back on `/ui/login` and must re-authenticate via OIDC (or the break-glass surface). Coordinate the restart with on-call so nobody is mid-triage.
 - **In-flight OIDC sign-in flows.** Anyone partway through the IdP round-trip will hit the callback with a state cookie the new key can't verify; their browser surfaces an OIDC error and they have to restart from `/ui/login`. The window is typically seconds, but a slow IdP / MFA prompt can stretch it to minutes.
 - **In-flight break-glass WebAuthn registration sessions.** Any operator who has loaded a bootstrap-token redemption page but not yet completed the authenticator ceremony will fail at the final step. Reload the redemption URL to restart the ceremony; the bootstrap token itself is not consumed until the credential write succeeds. See [breakglass.md](breakglass.md#first-boot-redemption) for the redemption flow.
 

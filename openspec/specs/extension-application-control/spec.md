@@ -94,7 +94,7 @@ The extension SHALL only consult `CDHASH` rules when the exec target's `cdhash` 
 
 ### Requirement: AUTH_EXEC denial on BLOCK match
 
-When the precedence walk returns a rule whose `action=BLOCK` and `enforcement=PROTECT`, the extension SHALL deny the AUTH_EXEC request so the new image does not run. When the walk returns no match, or returns a rule whose `enforcement` is anything other than `PROTECT`, the extension SHALL allow the AUTH_EXEC request to proceed. The decision SHALL be reached within the AUTH_EXEC deadline. The extension MAY block the AUTH callback on a synchronous BINARY-rule SHA-256 compute bounded by the deadline budget (see the deadline- guarded BINARY hash requirement). The extension MUST NOT block the AUTH callback on `leaf_cert_sha256` fetches; those remain a lazy cache fill.
+When the precedence walk returns a rule whose `action=BLOCK` and `enforcement=PROTECT`, the extension SHALL deny the AUTH_EXEC request so the new image does not run. When the walk returns no match, or returns a rule whose `enforcement` is anything other than `PROTECT`, the extension SHALL allow the AUTH_EXEC request to proceed. The decision SHALL be reached within the AUTH_EXEC deadline. The extension MAY block the AUTH callback on a synchronous BINARY-rule SHA-256 compute bounded by the deadline budget (see the deadline-guarded BINARY hash requirement). The extension MUST NOT block the AUTH callback on `leaf_cert_sha256` fetches; those remain a lazy cache fill.
 
 #### Scenario: A BLOCK rule denies the exec
 

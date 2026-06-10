@@ -92,7 +92,7 @@ The extension moves to **selective, source-side ESF subscription**:
 3. **For file-tamper rules with no BTM equivalent (`sudoers_tamper`): subscribe to `NOTIFY_CREATE` / `NOTIFY_WRITE` (+ `RENAME`) on a DEDICATED second ES client with inverted TARGET-path muting scoped to the sensitive directories only** (`es_unmute_all_target_paths`, mute the watched dirs, then `es_invert_muting` for target-path on that client). Never invert target-path muting on the primary client - it would mute `AUTH_EXEC`.
 4. **Keep `AUTH_EXEC` / `NOTIFY_EXEC` / `FORK` / `EXIT` (and BTM) on the primary client**, with no target-path inversion.
 
-This yields **two ES clients**: a primary client (process graph + AUTH_EXEC + BTM, normal muting) and a dedicated file-tamper client (CREATE/WRITE/RENAME, target-path inverted). Two clients is the only way to combine target-path- selective file monitoring with unfiltered exec authorization, and it cleanly separates blocking-auth from high-volume file telemetry - standard practice for mature ESF sensors.
+This yields **two ES clients**: a primary client (process graph + AUTH_EXEC + BTM, normal muting) and a dedicated file-tamper client (CREATE/WRITE/RENAME, target-path inverted). Two clients is the only way to combine target-path-selective file monitoring with unfiltered exec authorization, and it cleanly separates blocking-auth from high-volume file telemetry - standard practice for mature ESF sensors.
 
 The watched-path set for (3) starts **hardcoded in the extension**, documented as mirroring the rules' target paths. A server-pushed set (riding the existing Application Control XPC snapshot) is the intended end-state once the set grows; that is a separate decision, not this ADR.
 

@@ -69,7 +69,7 @@ Optional environment (only consumed by inner `scripts/qa/*.sh` wrappers that sti
 
 ### Auth flow
 
-The server has no password-based `POST /api/session` route; login is OIDC (browser redirect to dex / IdP) or break-glass WebAuthn (passkey, browser- only). Neither is shell-scriptable. The realistic L5 mechanic is to do ONE browser login, copy the `edr_session` cookie value from devtools (Application → Cookies → `edr_session`), export it as `EDR_SESSION_COOKIE`, and reuse it across many scenario runs until the session expires.
+The server has no password-based `POST /api/session` route; login is OIDC (browser redirect to dex / IdP) or break-glass WebAuthn (passkey, browser-only). Neither is shell-scriptable. The realistic L5 mechanic is to do ONE browser login, copy the `edr_session` cookie value from devtools (Application → Cookies → `edr_session`), export it as `EDR_SESSION_COOKIE`, and reuse it across many scenario runs until the session expires.
 
 The driver verifies the cookie up front by calling `GET /api/session`. If that returns 401, the cookie is expired and the driver fails fast - repeat the browser login.
 

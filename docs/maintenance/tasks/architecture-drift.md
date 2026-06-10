@@ -8,7 +8,7 @@
 
 - **Conceptual coupling** - context A "knowing" the schema or invariants of context B even though it imports cleanly through the `api/` boundary. Common pattern: rebuilding a stripped-down version of B's domain model on A's side.
 - **Drift in `internal/` boundaries** - a package that was intended to be private to one context slowly accumulates callers from outside.
-- **God-tables / god-services** - a single struct or table that has become the join point of every context, undoing the bounded- context separation.
+- **God-tables / god-services** - a single struct or table that has become the join point of every context, undoing the bounded-context separation.
 - **Test cross-pollination** - integration tests in one context's `tests/` package quietly poking at another context's tables.
 - **Migration ordering** - schema changes that assume a context boundary that no longer holds.
 - **Abstraction reversal** - interface in package A satisfied only by an implementation in package B that depends on A. The imports are clean; the dependency is a circle.

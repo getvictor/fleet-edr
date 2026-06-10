@@ -163,4 +163,4 @@ The break-glass surface also depends on `EDR_SESSION_SIGNING_KEY` (the HMAC secr
 - `docs/authz.md` - the role matrix the break-glass admin lands in (super_admin) and the SQL pattern for binding other roles.
 - `docs/install-server.md` - the env vars (`EDR_BREAKGLASS_*`) the server reads at boot.
 - `docs/operations.md` - the `EDR_SESSION_SIGNING_KEY` rotation runbook and what break-glass artefacts a rotation invalidates.
-- `docs/threat-model.md` - the threat coverage the WebAuthn- mandatory break-glass control closes.
+- `docs/threat-model.md` - the threat coverage the WebAuthn-mandatory break-glass control closes.
