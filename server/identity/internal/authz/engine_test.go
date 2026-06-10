@@ -210,7 +210,7 @@ func TestAllow_NoActor_Denied(t *testing.T) {
 // TestAllow_HostScope_NotYetSupported pins the wave-1 scope contract: a binding with scope_type=host on the matching resource is
 // denied with reason scope_not_yet_supported (the wave-2 resolver isn't shipped). Without this assertion a wave-2 author could add the
 // resolver and not realise wave-1 deployments expected the deny.
-// spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/host-scoped-binding-does-not-grant-the-action-in-wave-1
+// spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/host-scoped-binding-does-not-grant-the-action-in-the-current-release
 func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default", api.RoleBinding{

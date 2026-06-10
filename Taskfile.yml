@@ -446,7 +446,7 @@ tasks:
       is .github/workflows/no-emdash.yml.
     cmds:
       - bash tools/lint-no-emdash.sh
-      - go run ./tools/dash-lint
+      - git ls-files -z | go run ./tools/dash-lint
 
   lint:go:
     desc: |

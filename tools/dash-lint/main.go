@@ -10,27 +10,31 @@
 //     literals are in scope; arithmetic in code is not.
 //   - .swift / .ts / .tsx / .js / .jsx / .c / .h / .m / .mm: // line comments and /* block comments */ only.
 //
-// Run via `task lint:dashes`; CI gate is .github/workflows/no-emdash.yml. With no file arguments it lints every tracked file
-// (`git ls-files`); otherwise it lints the paths it is given (used by the lefthook pre-commit hook on staged files).
+// Run via `task lint:dashes`; CI gate is .github/workflows/no-emdash.yml. With file arguments it lints those paths; with none
+// it reads a NUL-delimited file list from stdin (the Taskfile and CI pipe `git ls-files -z` into it, keeping git out of this
+// process so it is not a command-execution surface). Either way, paths in the exclude set are skipped.
 package main
 
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"fmt"
 	"go/scanner"
 	"go/token"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 // maxLineBytes bounds the bufio.Scanner buffer. proseWrap: never makes Markdown paragraphs single (long) lines, so the
 // default 64 KB token cap is raised well past any realistic paragraph or comment line.
 const maxLineBytes = 4 * 1024 * 1024
+
+// findingFmt is the "file:line: snippet" shape every finding is reported in.
+const findingFmt = "%s:%d: %s"
 
 // emDashUse matches a hyphen with a space on both sides, preceded by a non-space, non-hyphen character: the "word - clause"
 // shape. The leading [^\s-] is what keeps list markers ("  - item") and "---" rules / separators from matching.
@@ -44,10 +48,10 @@ var inlineCodeSpan = regexp.MustCompile("`[^`]*`")
 var fenceLine = regexp.MustCompile("^\\s*(```|~~~)")
 
 func main() {
-	files := os.Args[1:]
-	if len(files) == 0 {
+	paths := os.Args[1:]
+	if len(paths) == 0 {
 		var err error
-		files, err = trackedFiles()
+		paths, err = readPathsFromStdin()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "dash-lint:", err)
 			os.Exit(2)
@@ -55,7 +59,10 @@ func main() {
 	}
 
 	var findings []string
-	for _, path := range files {
+	for _, path := range paths {
+		if isExcluded(path) {
+			continue
+		}
 		data, err := os.ReadFile(path) //nolint:gosec // G304: dash-lint exists to read the tracked files it is handed.
 		if err != nil {
 			continue // deleted-from-index path handed in by a hook, etc.
@@ -92,21 +99,19 @@ func isExcluded(p string) bool {
 		p == "docs/maintenance/log.md"
 }
 
-func trackedFiles() ([]string, error) {
-	out, err := exec.CommandContext(context.Background(), "git", "ls-files", "-z").Output()
+// readPathsFromStdin reads a NUL-delimited list of file paths from stdin (as produced by `git ls-files -z`). Reading the list
+// rather than shelling out to git keeps this process free of any command execution.
+func readPathsFromStdin() ([]string, error) {
+	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return nil, fmt.Errorf("git ls-files: %w", err)
+		return nil, fmt.Errorf("read stdin: %w", err)
 	}
 	var files []string
-	for b := range bytes.SplitSeq(out, []byte{0}) {
+	for b := range bytes.SplitSeq(data, []byte{0}) {
 		if len(b) == 0 {
 			continue
 		}
-		p := string(b)
-		if isExcluded(p) {
-			continue
-		}
-		files = append(files, p)
+		files = append(files, string(b))
 	}
 	return files, nil
 }
@@ -130,7 +135,7 @@ func checkMarkdown(path string, data []byte) []string {
 		}
 		stripped := inlineCodeSpan.ReplaceAllString(raw, " ")
 		if emDashUse.MatchString(stripped) {
-			findings = append(findings, fmt.Sprintf("%s:%d: %s", path, lineNo, strings.TrimSpace(raw)))
+			findings = append(findings, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(raw)))
 		}
 	}
 	return findings
@@ -151,9 +156,17 @@ func checkGo(path string, data []byte) []string {
 		// Only prose-bearing tokens: comments, string literals (Doc() descriptions, UI text), and char literals. Never bare
 		// code, where " - " is subtraction.
 		if tok == token.COMMENT || tok == token.STRING || tok == token.CHAR {
-			if emDashUse.MatchString(lit) {
+			// Match on the unquoted value for string/char literals so an escape like "\n - x" (an embedded newline before a
+			// list-ish " - ") is not misread as an em dash; the raw literal would show `n - ` and false-positive.
+			val := lit
+			if tok == token.STRING || tok == token.CHAR {
+				if unquoted, err := strconv.Unquote(lit); err == nil {
+					val = unquoted
+				}
+			}
+			if emDashUse.MatchString(val) {
 				p := fset.Position(pos)
-				findings = append(findings, fmt.Sprintf("%s:%d: %s", path, p.Line, strings.TrimSpace(firstLine(lit))))
+				findings = append(findings, fmt.Sprintf(findingFmt, path, p.Line, strings.TrimSpace(firstLine(lit))))
 			}
 		}
 	}
@@ -171,31 +184,33 @@ func checkCStyleComments(path string, data []byte) []string {
 		lineNo++
 		raw := sc.Text()
 		var commentText string
-		switch {
-		case inBlock:
-			if before, _, closed := strings.Cut(raw, "*/"); closed {
-				commentText = before
-				inBlock = false
-			} else {
-				commentText = raw
-			}
-		default:
-			if _, afterOpen, found := strings.Cut(raw, "/*"); found {
-				if inner, _, closed := strings.Cut(afterOpen, "*/"); closed {
-					commentText = inner
-				} else {
-					commentText = afterOpen
-					inBlock = true
-				}
-			} else if idx := lineCommentStart(raw); idx >= 0 {
-				commentText = raw[idx:]
-			}
-		}
+		commentText, inBlock = cStyleCommentText(raw, inBlock)
 		if commentText != "" && emDashUse.MatchString(commentText) {
-			findings = append(findings, fmt.Sprintf("%s:%d: %s", path, lineNo, strings.TrimSpace(raw)))
+			findings = append(findings, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(raw)))
 		}
 	}
 	return findings
+}
+
+// cStyleCommentText returns the comment portion of one line and the updated block-comment state. It handles // line comments
+// and /* ... */ blocks (single- or multi-line); code and string-literal content is left out.
+func cStyleCommentText(raw string, inBlock bool) (comment string, stillInBlock bool) {
+	if inBlock {
+		if before, _, closed := strings.Cut(raw, "*/"); closed {
+			return before, false
+		}
+		return raw, true
+	}
+	if _, afterOpen, found := strings.Cut(raw, "/*"); found {
+		if inner, _, closed := strings.Cut(afterOpen, "*/"); closed {
+			return inner, false
+		}
+		return afterOpen, true
+	}
+	if idx := lineCommentStart(raw); idx >= 0 {
+		return raw[idx:], false
+	}
+	return "", false
 }
 
 // lineCommentStart returns the index of a // line comment that is not part of a "://" scheme (a crude but effective guard

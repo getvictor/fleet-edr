@@ -36,4 +36,4 @@ jobs:
         run: bash tools/lint-no-emdash.sh
 
       - name: Check for spaced-hyphen em dashes in prose, comments, and strings
-        run: go run ./tools/dash-lint
+        run: git ls-files -z | go run ./tools/dash-lint

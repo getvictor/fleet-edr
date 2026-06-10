@@ -56,6 +56,7 @@ func TestCheckGo(t *testing.T) {
 		{"doc string flagged", "package p\nvar d = \"isolates the host - irreversible\"\n", 1},
 		{"clean code and comment", "package p\n// computes n minus one\nfunc f(n int) int { return n - 1 }\n", 0},
 		{"raw string flagged", "package p\nvar d = `step one - then two`\n", 1},
+		{"escaped newline not flagged", "package p\nvar d = \"\\n - some list item\"\n", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
