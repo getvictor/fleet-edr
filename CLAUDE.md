@@ -124,7 +124,8 @@ those tests fully cover.
 
 Layered on the global guide. Project-specific:
 
-- Line wrap at 140 characters.
+- Line wrap source code at 140 characters.
+- Markdown is NOT hard-wrapped: write each paragraph and bullet as one line and let it soft-wrap. Tables are Prettier-aligned (cells padded so column dividers line up). Both are enforced by Prettier (`proseWrap: never`, `.prettierrc.yaml`); run `task lint:md:prose:fix` to reflow, `task lint:md:prose` to check. markdownlint (`task lint:md`) owns Markdown structure; the two are scoped not to overlap.
 - Sentence case for headings.
 - No em dashes: use `:` or `-` with surrounding spaces. Insert a literal em dash (U+2014) only when explicitly asked. Enforced by `task lint:dashes`.
 - Don't run `task db:reset` without explicit user permission.

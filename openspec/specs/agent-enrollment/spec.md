@@ -2,22 +2,15 @@
 
 ## Purpose
 
-Agent enrollment bootstraps a per-host identity that every subsequent agent-to-server interaction relies on. On first boot,
-the agent presents a deployment-wide shared secret along with the host's hardware UUID and receives back an opaque host token
-that scopes all of its later HTTP traffic. The token is then cached locally so day-two restarts do not re-spend the shared
-secret and do not generate spurious enrollment churn on the server.
+Agent enrollment bootstraps a per-host identity that every subsequent agent-to-server interaction relies on. On first boot, the agent presents a deployment-wide shared secret along with the host's hardware UUID and receives back an opaque host token that scopes all of its later HTTP traffic. The token is then cached locally so day-two restarts do not re-spend the shared secret and do not generate spurious enrollment churn on the server.
 
-The capability exists to draw a clean authentication boundary between "any process that knows the deployment secret" and
-"a specific enrolled host." Once a host is enrolled, the shared secret is no longer used for routine telemetry, command
-polling, or status updates; only the per-host token is. This lets operators rotate or revoke a single host without
-invalidating the rest of the fleet, and prevents a leaked agent token from being used to read any other host's data.
+The capability exists to draw a clean authentication boundary between "any process that knows the deployment secret" and "a specific enrolled host." Once a host is enrolled, the shared secret is no longer used for routine telemetry, command polling, or status updates; only the per-host token is. This lets operators rotate or revoke a single host without invalidating the rest of the fleet, and prevents a leaked agent token from being used to read any other host's data.
 
 ## Requirements
 
 ### Requirement: First-boot enrollment exchange
 
-The system SHALL perform a one-time enrollment by POSTing the shared enroll secret and the host's hardware UUID to the
-server's enroll endpoint, and on success persist the returned host token before issuing any other authenticated request.
+The system SHALL perform a one-time enrollment by POSTing the shared enroll secret and the host's hardware UUID to the server's enroll endpoint, and on success persist the returned host token before issuing any other authenticated request.
 
 #### Scenario: Successful first enrollment
 
@@ -44,8 +37,7 @@ server's enroll endpoint, and on success persist the returned host token before 
 
 ### Requirement: Token persistence is durable and private
 
-The system MUST persist the host token at a configured path with file mode 0600 using a write-temp-then-rename sequence so a
-crash mid-write cannot leave a partial or readable token on disk.
+The system MUST persist the host token at a configured path with file mode 0600 using a write-temp-then-rename sequence so a crash mid-write cannot leave a partial or readable token on disk.
 
 #### Scenario: Atomic write on success
 
@@ -69,8 +61,7 @@ crash mid-write cannot leave a partial or readable token on disk.
 
 ### Requirement: Restart reuses the persisted token
 
-The system SHALL skip the enrollment exchange on subsequent startups whenever a valid token file is present at the configured
-path and the recorded server URL still matches the current configuration.
+The system SHALL skip the enrollment exchange on subsequent startups whenever a valid token file is present at the configured path and the recorded server URL still matches the current configuration.
 
 #### Scenario: Day-two restart with valid token
 
@@ -88,8 +79,7 @@ path and the recorded server URL still matches the current configuration.
 
 ### Requirement: Re-enrollment on token revocation
 
-The system SHALL re-enroll using the deployment secret when the server returns 401 for a previously valid host token, so that
-an operator-initiated revocation or a legitimate token rotation recovers without manual intervention.
+The system SHALL re-enroll using the deployment secret when the server returns 401 for a previously valid host token, so that an operator-initiated revocation or a legitimate token rotation recovers without manual intervention.
 
 #### Scenario: Server returns 401 mid-session
 
@@ -114,8 +104,7 @@ an operator-initiated revocation or a legitimate token rotation recovers without
 
 ### Requirement: Per-host token scoping
 
-The system MUST issue tokens that are scoped to a single host so that one host's token cannot read or write data that belongs
-to any other host.
+The system MUST issue tokens that are scoped to a single host so that one host's token cannot read or write data that belongs to any other host.
 
 #### Scenario: Token cannot read another host's commands
 
@@ -133,8 +122,7 @@ to any other host.
 
 ### Requirement: Enrollment is rate limited per source IP
 
-The system SHALL rate limit enrollment attempts per source IP so that a misconfigured fleet behind a single egress address
-cannot exhaust the server, and so that brute-force attempts on the deployment secret remain expensive.
+The system SHALL rate limit enrollment attempts per source IP so that a misconfigured fleet behind a single egress address cannot exhaust the server, and so that brute-force attempts on the deployment secret remain expensive.
 
 #### Scenario: Excess enroll attempts from one IP
 

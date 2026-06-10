@@ -2,27 +2,15 @@
 
 ## Purpose
 
-Server availability is the set of invariants that let the Fleet EDR control plane stay up across routine operations - schema
-upgrades, replica restarts, and rolling binary cutovers - rather than requiring a maintenance window that takes the EDR offline.
-It is the server-side half of the v0.1.0 availability commitment: the application tier is stateless and horizontally scalable, a
-load balancer can drain a replica cleanly, periodic work runs on exactly one replica, first boot is safe under concurrent replica
-start, and the schema is managed by versioned migrations that a rolling upgrade tolerates.
+Server availability is the set of invariants that let the Fleet EDR control plane stay up across routine operations - schema upgrades, replica restarts, and rolling binary cutovers - rather than requiring a maintenance window that takes the EDR offline. It is the server-side half of the v0.1.0 availability commitment: the application tier is stateless and horizontally scalable, a load balancer can drain a replica cleanly, periodic work runs on exactly one replica, first boot is safe under concurrent replica start, and the schema is managed by versioned migrations that a rolling upgrade tolerates.
 
-This spec defines the behavior the deployment topology and the operator runbook depend on. The migration discipline below is
-load-bearing for the rest: rolling upgrade means two binary versions read and write the same MySQL during a cutover, so the
-schema corpus and the way it is applied must admit both. See `ai/migrations/recommendation.md` and `ai/migrations/ha-architecture.md`
-for the design rationale, and `docs/adr/0009-migrations-via-goose.md` for the migration decision.
+This spec defines the behavior the deployment topology and the operator runbook depend on. The migration discipline below is load-bearing for the rest: rolling upgrade means two binary versions read and write the same MySQL during a cutover, so the schema corpus and the way it is applied must admit both. See `ai/migrations/recommendation.md` and `ai/migrations/ha-architecture.md` for the design rationale, and `docs/adr/0009-migrations-via-goose.md` for the migration decision.
 
 ## Requirements
 
 ### Requirement: Schema is managed by versioned forward-only per-context migrations
 
-The system SHALL apply database schema through versioned, forward-only migration files applied at boot rather than by re-running
-idempotent DDL in process. A bounded context whose schema is managed this way owns an ordered migration corpus and a dedicated
-tracking table recording applied versions, so already-applied migrations are never re-run. Applying such a corpus SHALL be
-idempotent: a boot whose corpus carries no new migration relative to the tracking table MUST make no schema change and MUST
-succeed. Migrations SHALL be forward-only; the system MUST NOT depend on down-migrations for recovery (the documented rollback
-path is restore-from-backup).
+The system SHALL apply database schema through versioned, forward-only migration files applied at boot rather than by re-running idempotent DDL in process. A bounded context whose schema is managed this way owns an ordered migration corpus and a dedicated tracking table recording applied versions, so already-applied migrations are never re-run. Applying such a corpus SHALL be idempotent: a boot whose corpus carries no new migration relative to the tracking table MUST make no schema change and MUST succeed. Migrations SHALL be forward-only; the system MUST NOT depend on down-migrations for recovery (the documented rollback path is restore-from-backup).
 
 Every bounded context that owns database tables (identity, endpoint, rules, response, detection) is managed this way.
 
@@ -42,27 +30,17 @@ Every bounded context that owns database tables (identity, endpoint, rules, resp
 
 ### Requirement: The server holds no in-process state that survives a request lifetime
 
-The server SHALL NOT retain in-process state that outlives a single request and that a peer replica would need to serve a
-subsequent request correctly. Durable state SHALL live in the shared MySQL store; per-request state MAY ride in signed cookies;
-short-lived per-replica performance caches are permitted only when losing them on a restart is harmless. This invariant is what
-lets any replica behind the load balancer serve any request and lets a replica restart without customer-visible state loss. It is
-enforced at review time against `docs/adr/0010-stateless-server.md`. The invariant is observable end to end: state
-written by one replica must be servable by any other replica through the shared store.
+The server SHALL NOT retain in-process state that outlives a single request and that a peer replica would need to serve a subsequent request correctly. Durable state SHALL live in the shared MySQL store; per-request state MAY ride in signed cookies; short-lived per-replica performance caches are permitted only when losing them on a restart is harmless. This invariant is what lets any replica behind the load balancer serve any request and lets a replica restart without customer-visible state loss. It is enforced at review time against `docs/adr/0010-stateless-server.md`. The invariant is observable end to end: state written by one replica must be servable by any other replica through the shared store.
 
 #### Scenario: State written on one replica is served by another
 
 - **GIVEN** durable state was written to the shared MySQL store by a request handled on one replica
 - **WHEN** a later request that depends on that state is routed to a different replica
-- **THEN** the second replica serves it correctly from the shared store, with no reliance on any
-  request-surviving in-process state from the first replica
+- **THEN** the second replica serves it correctly from the shared store, with no reliance on any request-surviving in-process state from the first replica
 
 ### Requirement: SIGTERM produces a load-balancer-drainable graceful shutdown
 
-On SIGTERM the server SHALL begin draining before it closes its listener: it SHALL report not-ready on its readiness probe so a
-load balancer removes the replica from rotation, SHALL keep serving in-flight and newly-accepted requests for a bounded drain
-window, and SHALL then stop accepting new connections and wait for in-flight requests to finish up to a bounded shutdown deadline.
-The process SHALL exit within the drain window plus the shutdown deadline. The drain window is operator-configurable and MAY be
-zero to disable the wait.
+On SIGTERM the server SHALL begin draining before it closes its listener: it SHALL report not-ready on its readiness probe so a load balancer removes the replica from rotation, SHALL keep serving in-flight and newly-accepted requests for a bounded drain window, and SHALL then stop accepting new connections and wait for in-flight requests to finish up to a bounded shutdown deadline. The process SHALL exit within the drain window plus the shutdown deadline. The drain window is operator-configurable and MAY be zero to disable the wait.
 
 #### Scenario: Readiness reports not-ready once draining begins
 
@@ -85,10 +63,7 @@ zero to disable the wait.
 
 ### Requirement: First-boot admin seed is safe under concurrent replica boot
 
-When multiple replicas boot concurrently against a fresh database, the first-boot break-glass admin seed SHALL produce exactly one
-admin row and every replica's seed SHALL succeed. The replica that loses the create race SHALL adopt the existing row rather than
-failing its boot. The break-glass redemption banner SHALL be emitted by at most one replica per concurrent boot, so an operator
-sees a single redemption URL rather than one per replica.
+When multiple replicas boot concurrently against a fresh database, the first-boot break-glass admin seed SHALL produce exactly one admin row and every replica's seed SHALL succeed. The replica that loses the create race SHALL adopt the existing row rather than failing its boot. The break-glass redemption banner SHALL be emitted by at most one replica per concurrent boot, so an operator sees a single redemption URL rather than one per replica.
 
 #### Scenario: Two replicas seeding concurrently produce exactly one admin row
 
@@ -106,8 +81,7 @@ sees a single redemption URL rather than one per replica.
 
 ### Requirement: Replica identity is observable via service.instance.id
 
-Every replica SHALL attach a `service.instance.id` resource attribute to the telemetry it emits so an operator can tell replicas
-apart in the observability backend. The identifier SHALL be stable for the lifetime of the process.
+Every replica SHALL attach a `service.instance.id` resource attribute to the telemetry it emits so an operator can tell replicas apart in the observability backend. The identifier SHALL be stable for the lifetime of the process.
 
 #### Scenario: Every emitted span carries the service instance id
 
@@ -123,11 +97,7 @@ apart in the observability backend. The identifier SHALL be stable for the lifet
 
 ### Requirement: Periodic tasks run on exactly one replica via MySQL advisory locking
 
-The system SHALL run its single-instance periodic maintenance tasks (event retention and the stale-process TTL reconciler) on
-exactly one replica at a time, coordinated through MySQL named advisory locks, even though every replica runs the same binary. A
-replica that does not hold a task's lock SHALL NOT run that task, and SHALL take over when the current holder releases the lock or
-its connection drops. The event processor is explicitly NOT coordinated this way: it scales across replicas via row-level
-SKIP LOCKED claiming, so each replica processes disjoint batches.
+The system SHALL run its single-instance periodic maintenance tasks (event retention and the stale-process TTL reconciler) on exactly one replica at a time, coordinated through MySQL named advisory locks, even though every replica runs the same binary. A replica that does not hold a task's lock SHALL NOT run that task, and SHALL take over when the current holder releases the lock or its connection drops. The event processor is explicitly NOT coordinated this way: it scales across replicas via row-level SKIP LOCKED claiming, so each replica processes disjoint batches.
 
 #### Scenario: Single replica acquires the lease uncontended
 
@@ -158,10 +128,7 @@ SKIP LOCKED claiming, so each replica processes disjoint batches.
 
 ### Requirement: The processor scales across replicas via SKIP LOCKED
 
-The system SHALL claim event batches for processing with row-level `SELECT ... FOR UPDATE SKIP LOCKED` so the event processor runs
-on every replica concurrently, each claiming a disjoint set of unprocessed events, and no event row is claimed by more than one
-replica at a time. This is the deliberate counterpart to the leader-gated periodic tasks: throughput-bound event processing scales
-horizontally across the replica fleet rather than running on a single elected replica.
+The system SHALL claim event batches for processing with row-level `SELECT ... FOR UPDATE SKIP LOCKED` so the event processor runs on every replica concurrently, each claiming a disjoint set of unprocessed events, and no event row is claimed by more than one replica at a time. This is the deliberate counterpart to the leader-gated periodic tasks: throughput-bound event processing scales horizontally across the replica fleet rather than running on a single elected replica.
 
 #### Scenario: Two replicas claim disjoint event batches
 
@@ -172,10 +139,7 @@ horizontally across the replica fleet rather than running on a single elected re
 
 ### Requirement: Sessions and CSRF tokens validate across any replica
 
-A user session and its CSRF token SHALL validate on any replica, not only the one that minted them, because session state lives in
-the shared MySQL store rather than in replica memory. A request bearing a valid session cookie SHALL be authenticated on a replica
-that did not mint the session, and an unsafe request bearing the session's CSRF token SHALL pass CSRF validation on that replica.
-This is what lets the load balancer route a user's requests to any replica without sticky sessions.
+A user session and its CSRF token SHALL validate on any replica, not only the one that minted them, because session state lives in the shared MySQL store rather than in replica memory. A request bearing a valid session cookie SHALL be authenticated on a replica that did not mint the session, and an unsafe request bearing the session's CSRF token SHALL pass CSRF validation on that replica. This is what lets the load balancer route a user's requests to any replica without sticky sessions.
 
 #### Scenario: Session minted on replica A validates on replica B
 
@@ -193,10 +157,7 @@ This is what lets the load balancer route a user's requests to any replica witho
 
 ### Requirement: Schema migrations are safe under rolling upgrade
 
-When several replicas boot concurrently against one database during a rolling upgrade, the system SHALL apply schema migrations
-under a database advisory lock so no two replicas run the migration tool against the same database at once. Every replica SHALL
-still complete its boot-time apply: the per-context tracking table makes an already-applied corpus a no-op, so a replica that
-acquires the lock after another has already applied performs no schema change and boots successfully.
+When several replicas boot concurrently against one database during a rolling upgrade, the system SHALL apply schema migrations under a database advisory lock so no two replicas run the migration tool against the same database at once. Every replica SHALL still complete its boot-time apply: the per-context tracking table makes an already-applied corpus a no-op, so a replica that acquires the lock after another has already applied performs no schema change and boots successfully.
 
 #### Scenario: Goose tracking table lock prevents concurrent apply
 

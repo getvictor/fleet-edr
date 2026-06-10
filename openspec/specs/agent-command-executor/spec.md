@@ -2,22 +2,15 @@
 
 ## Purpose
 
-The agent command executor is the agent's response surface for operator-issued actions. The server queues per-host commands
-in response to UI actions or policy updates; the agent polls for them, runs them locally, and reports an outcome the operator
-can read in the UI. Without this capability, the platform would be a one-way telemetry pipe and operators would have no way
-to terminate a malicious process or push a refreshed blocklist to a specific host.
+The agent command executor is the agent's response surface for operator-issued actions. The server queues per-host commands in response to UI actions or policy updates; the agent polls for them, runs them locally, and reports an outcome the operator can read in the UI. Without this capability, the platform would be a one-way telemetry pipe and operators would have no way to terminate a malicious process or push a refreshed blocklist to a specific host.
 
-The capability is deliberately authoritative on outcome reporting and conservative on dispatch. Commands are scoped to the
-authenticated host so a token compromise on one host cannot drive actions on another, every command transitions through
-explicit acknowledged-then-completed-or-failed states so the operator audit trail is always conclusive, and unknown command
-types or missing dispatch dependencies fail with a clear reason rather than silently accepting and discarding the command.
+The capability is deliberately authoritative on outcome reporting and conservative on dispatch. Commands are scoped to the authenticated host so a token compromise on one host cannot drive actions on another, every command transitions through explicit acknowledged-then-completed-or-failed states so the operator audit trail is always conclusive, and unknown command types or missing dispatch dependencies fail with a clear reason rather than silently accepting and discarding the command.
 
 ## Requirements
 
 ### Requirement: Commands are scoped to the authenticated host
 
-The system SHALL return only the commands queued for the host whose bearer token authenticated the poll, regardless of any
-host identifier the agent includes in the request.
+The system SHALL return only the commands queued for the host whose bearer token authenticated the poll, regardless of any host identifier the agent includes in the request.
 
 #### Scenario: Polling returns only this host's commands
 
@@ -34,8 +27,7 @@ host identifier the agent includes in the request.
 
 ### Requirement: Polling cadence is configurable
 
-The system SHALL poll the server at a configured interval and SHALL handle context cancellation between polls without
-discarding the current poll's response.
+The system SHALL poll the server at a configured interval and SHALL handle context cancellation between polls without discarding the current poll's response.
 
 #### Scenario: Configured interval is honored
 
@@ -53,8 +45,7 @@ discarding the current poll's response.
 
 ### Requirement: Command lifecycle is explicit
 
-The system MUST move each command through a server-visible acknowledged state before execution and through either completed
-or failed after execution, so an operator viewing the UI never sees a stuck pending command after the agent has begun work.
+The system MUST move each command through a server-visible acknowledged state before execution and through either completed or failed after execution, so an operator viewing the UI never sees a stuck pending command after the agent has begun work.
 
 #### Scenario: Successful command transitions
 
@@ -72,8 +63,7 @@ or failed after execution, so an operator viewing the UI never sees a stuck pend
 
 ### Requirement: Process-termination command
 
-The system SHALL execute a kill-process command by sending SIGKILL to the requested process identifier on the local host and
-SHALL report a structured outcome distinguishing success from "no such process" and from permission denied.
+The system SHALL execute a kill-process command by sending SIGKILL to the requested process identifier on the local host and SHALL report a structured outcome distinguishing success from "no such process" and from permission denied.
 
 #### Scenario: Successful kill
 
@@ -96,8 +86,7 @@ SHALL report a structured outcome distinguishing success from "no such process" 
 
 ### Requirement: Set-blocklist command
 
-The system SHALL execute a set-blocklist command by forwarding the policy payload to the local endpoint security extension
-and SHALL report the policy version that was forwarded so operators can confirm convergence per host.
+The system SHALL execute a set-blocklist command by forwarding the policy payload to the local endpoint security extension and SHALL report the policy version that was forwarded so operators can confirm convergence per host.
 
 #### Scenario: Forwarded successfully
 
@@ -121,8 +110,7 @@ and SHALL report the policy version that was forwarded so operators can confirm 
 
 ### Requirement: Unknown command types fail explicitly
 
-The system SHALL reject command types it does not implement by reporting failed with a reason identifying the unknown type,
-rather than acknowledging or silently dropping them.
+The system SHALL reject command types it does not implement by reporting failed with a reason identifying the unknown type, rather than acknowledging or silently dropping them.
 
 #### Scenario: Unknown command type
 
@@ -133,8 +121,7 @@ rather than acknowledging or silently dropping them.
 
 ### Requirement: 401 during command flow triggers re-enrollment
 
-The system MUST signal the enrollment subsystem when the server returns 401 on either a poll or a status report so the agent
-can refresh its host token without operator intervention.
+The system MUST signal the enrollment subsystem when the server returns 401 on either a poll or a status report so the agent can refresh its host token without operator intervention.
 
 #### Scenario: 401 on poll
 

@@ -1,15 +1,10 @@
 # Dead code sweep
 
-**Cadence:** quarterly
-**Time budget:** 90 min
-**Trigger mode:** manual
+**Cadence:** quarterly **Time budget:** 90 min **Trigger mode:** manual
 
 ## Why this matters
 
-Dead code (unused exports, orphan packages, dead UI components, abandoned migrations, unused config keys) is worse than
-hypothetical: future readers will assume it's load-bearing and either reuse it incorrectly or refactor around it. Linters catch
-some of it (`gopls` unused, ESLint `no-unused-vars`) but not orphan exports, dead routes, or "two implementations of the same
-thing where only one is wired".
+Dead code (unused exports, orphan packages, dead UI components, abandoned migrations, unused config keys) is worse than hypothetical: future readers will assume it's load-bearing and either reuse it incorrectly or refactor around it. Linters catch some of it (`gopls` unused, ESLint `no-unused-vars`) but not orphan exports, dead routes, or "two implementations of the same thing where only one is wired".
 
 ## Scope
 
@@ -33,18 +28,14 @@ thing where only one is wired".
    # or: npx knip
    ```
 
-2. Cross-check Go suspects manually - the `internal/`-only convention plus reflection-based wiring (e.g. handler registration)
-   means staticcheck false-positives are common. Confirm by `grep -r '<Symbol>' --include='*.go' | grep -v '_test.go'`.
-3. For each true positive, decide: **delete** / **wire it up** (was the export added speculatively?) / **keep with a comment**
-   explaining why it looks unused (rare; usually means dynamic dispatch, in which case add a `//go:linkname`-style note).
-4. SQL: check the schema for columns / tables not referenced from any Go query. If found, file an issue rather than dropping in
-   this sweep - schema deletes need a migration plan.
+2. Cross-check Go suspects manually - the `internal/`-only convention plus reflection-based wiring (e.g. handler registration) means staticcheck false-positives are common. Confirm by `grep -r '<Symbol>' --include='*.go' | grep -v '_test.go'`.
+3. For each true positive, decide: **delete** / **wire it up** (was the export added speculatively?) / **keep with a comment** explaining why it looks unused (rare; usually means dynamic dispatch, in which case add a `//go:linkname`-style note).
+4. SQL: check the schema for columns / tables not referenced from any Go query. If found, file an issue rather than dropping in this sweep - schema deletes need a migration plan.
 5. Config: `grep -nr 'os.Getenv\|cfg\.' server agent internal` and cross-check against the config struct. Unused fields go.
 
 ## Output
 
-One PR per language ecosystem (don't bundle Go + TS + Swift; review effort differs). PR body must include the dead-code tool's
-output before the change so the diff reviewer can verify the deletions are well-grounded.
+One PR per language ecosystem (don't bundle Go + TS + Swift; review effort differs). PR body must include the dead-code tool's output before the change so the diff reviewer can verify the deletions are well-grounded.
 
 ## Prompt template
 

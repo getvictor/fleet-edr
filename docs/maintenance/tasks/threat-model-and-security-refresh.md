@@ -1,29 +1,21 @@
 # Threat model and security refresh
 
-**Cadence:** quarterly
-**Time budget:** 90-120 min
-**Trigger mode:** manual; also fires on demand whenever the data plane changes shape (new XPC seam, new HTTP endpoint, new
-                  third-party deployment channel, new persistence location)
+**Cadence:** quarterly **Time budget:** 90-120 min **Trigger mode:** manual; also fires on demand whenever the data plane changes shape (new XPC seam, new HTTP endpoint, new third-party deployment channel, new persistence location)
 
 ## Why this matters
 
-`docs/threat-model.md` is the architectural assertion of who can do what to whom. If it was written before mTLS, before the
-network extension, before per-context boundaries, before `/etc/fleet-edr.conf`, before the QA VM existed - then it isn't a threat
-model, it's a fossil. New threats become invisible because they're not on the map.
+`docs/threat-model.md` is the architectural assertion of who can do what to whom. If it was written before mTLS, before the network extension, before per-context boundaries, before `/etc/fleet-edr.conf`, before the QA VM existed - then it isn't a threat model, it's a fossil. New threats become invisible because they're not on the map.
 
 CodeQL, OSV-scanner, and Scorecard catch implementation-level CVEs and known patterns. They do NOT catch:
 
 - New trust boundaries that nobody documented (e.g. a new XPC sender)
 - Trust boundaries removed but still asserted in the doc
-- Threats that the previous model deliberately scoped out and that have since become in-scope (e.g. per-team isolation inside a
-  single deployment if the customer's org structure changes)
+- Threats that the previous model deliberately scoped out and that have since become in-scope (e.g. per-team isolation inside a single deployment if the customer's org structure changes)
 - Authn / authz design assumptions that no longer hold (sessions vs API tokens, CSRF on `POST /api/...`, etc.)
 
 ## Scope
 
-Primary: `docs/threat-model.md`.
-Supporting: `docs/architecture.md`, `docs/api.md`, `SECURITY.md`, anything under `docs/install-*.md` describing trust boundaries
-during install.
+Primary: `docs/threat-model.md`. Supporting: `docs/architecture.md`, `docs/api.md`, `SECURITY.md`, anything under `docs/install-*.md` describing trust boundaries during install.
 
 ## Steps
 
@@ -32,7 +24,7 @@ during install.
 List every trust boundary the system actually has, today, by inspection of the code:
 
 | Boundary | Source of truth |
-|---|---|
+| --- | --- |
 | Agent ↔ extension (XPC) | `extension/edr/` Mach service registration + `agent/` XPC client |
 | Agent ↔ server (HTTP/mTLS) | `agent/uploader` + `server/endpoint/internal/enroll` + `server/endpoint/internal/middleware` |
 | Server ↔ MySQL | `server/*/internal/mysql` |
@@ -53,14 +45,11 @@ If reality and the doc disagree, the doc loses.
 
 ### 2. New surfaces
 
-Diff the current boundary list against the threat model's enumerated boundaries. New surfaces (added since the last refresh)
-must be added - even if "secure by construction", document the assumption.
+Diff the current boundary list against the threat model's enumerated boundaries. New surfaces (added since the last refresh) must be added - even if "secure by construction", document the assumption.
 
 ### 3. Threat-actor list
 
-The model should name the actor classes it considers (unprivileged local user, privileged local user, attacker on the local
-network, attacker who has compromised the agent, etc.). For
-each, ask:
+The model should name the actor classes it considers (unprivileged local user, privileged local user, attacker on the local network, attacker who has compromised the agent, etc.). For each, ask:
 
 - Is the actor still in scope?
 - Have the deploy assumptions changed in a way that adds an actor (e.g. multi-tenancy via Fleet)?
@@ -68,13 +57,11 @@ each, ask:
 
 ### 4. Cross-check with ADRs
 
-ADR-0003 (standalone product, not Fleet-integrated) is a load-bearing threat-model input - it scopes Fleet to "deployment
-channel only". Confirm the threat model still expresses that contract correctly.
+ADR-0003 (standalone product, not Fleet-integrated) is a load-bearing threat-model input - it scopes Fleet to "deployment channel only". Confirm the threat model still expresses that contract correctly.
 
 ### 5. Cross-check with `docs/best-practices.md` security items
 
-Section "10. Security" (or wherever security items live in the best-practices doc) lists adopted vs unchecked items.
-Inconsistencies between the two docs are a red flag.
+Section "10. Security" (or wherever security items live in the best-practices doc) lists adopted vs unchecked items. Inconsistencies between the two docs are a red flag.
 
 ## Output
 

@@ -2,23 +2,15 @@
 
 ## Purpose
 
-The agent event uploader is the durable bridge between the agent's local event queue and the server's ingestion endpoint.
-Endpoint security telemetry is generated continuously, often at peak rates that exceed the prevailing network throughput,
-and the agent has no way to know in advance whether the server is reachable. The uploader's job is to take whatever the
-queue holds, ship it as efficiently as the server's contract allows, and tolerate transient network or server failures
-without losing events or duplicating them at rest.
+The agent event uploader is the durable bridge between the agent's local event queue and the server's ingestion endpoint. Endpoint security telemetry is generated continuously, often at peak rates that exceed the prevailing network throughput, and the agent has no way to know in advance whether the server is reachable. The uploader's job is to take whatever the queue holds, ship it as efficiently as the server's contract allows, and tolerate transient network or server failures without losing events or duplicating them at rest.
 
-The capability draws a clear boundary around delivery semantics. Events are at-least-once on the wire and exactly-once
-at rest because the server deduplicates by event identifier; the uploader holds events in the local queue until the server
-positively acknowledges them, retries with backoff on transient failure, and surfaces authentication failures to the
-enrollment subsystem so token-revocation events do not silently drop telemetry.
+The capability draws a clear boundary around delivery semantics. Events are at-least-once on the wire and exactly-once at rest because the server deduplicates by event identifier; the uploader holds events in the local queue until the server positively acknowledges them, retries with backoff on transient failure, and surfaces authentication failures to the enrollment subsystem so token-revocation events do not silently drop telemetry.
 
 ## Requirements
 
 ### Requirement: Upload uses the host bearer token
 
-The system SHALL include the current host token as an Authorization Bearer header on every event upload request and the
-server SHALL reject requests that do not present a valid host token.
+The system SHALL include the current host token as an Authorization Bearer header on every event upload request and the server SHALL reject requests that do not present a valid host token.
 
 #### Scenario: Upload with a valid token
 
@@ -36,8 +28,7 @@ server SHALL reject requests that do not present a valid host token.
 
 ### Requirement: Successful upload acknowledges events
 
-The system MUST mark events as delivered in its local queue only after the server returns a 2xx status code, so a server-side
-failure during the response cannot cause silent event loss.
+The system MUST mark events as delivered in its local queue only after the server returns a 2xx status code, so a server-side failure during the response cannot cause silent event loss.
 
 #### Scenario: Server returns 200 or 204
 
@@ -55,8 +46,7 @@ failure during the response cannot cause silent event loss.
 
 ### Requirement: Server-side deduplication makes replay safe
 
-The system SHALL be free to retransmit any unacknowledged batch in full because the server deduplicates events on receipt
-using each event's unique identifier.
+The system SHALL be free to retransmit any unacknowledged batch in full because the server deduplicates events on receipt using each event's unique identifier.
 
 #### Scenario: Same batch is delivered twice
 
@@ -67,8 +57,7 @@ using each event's unique identifier.
 
 ### Requirement: Bounded request size
 
-The system MUST cap the size of each upload request and split larger queue contents across multiple requests so that any
-single HTTP request stays within the server's accepted body size and the network's practical MTU for streaming bodies.
+The system MUST cap the size of each upload request and split larger queue contents across multiple requests so that any single HTTP request stays within the server's accepted body size and the network's practical MTU for streaming bodies.
 
 #### Scenario: Queue holds more events than fit in one request
 
@@ -79,17 +68,7 @@ single HTTP request stays within the server's accepted body size and the network
 
 ### Requirement: Over-cap server responses split-and-retry the batch
 
-The system MUST handle HTTP 413 responses from the server by recursively splitting the in-memory batch in half and re-POSTing
-each half until either the half delivers (2xx) or a single-event batch still returns 413. The server emits 413 with two
-distinct diagnostics: `body_too_large` (body bytes exceed the server's request-size cap) and `too_many_events` (event count
-exceeds `MaxIngestEventsPerRequest`); both share the 413 status because both have the same recovery shape (bisect + retry).
-A single-event 413 is the only case where the event is dropped; in that case the uploader MUST emit a WARN log identifying
-the event id and increment a counter (`edr.agent.uploader.events_dropped_too_large`) so operators can dashboard the drop rate
-as a signal of misconfigured agents producing oversize events. The recursive split is bounded by `ceil(log2(N))` for a batch
-of N events, so a 10000-event batch recurses at most ~14 levels before reaching single-event leaves. The split-and-retry path
-is distinct from the quarantine path for generic 4xx responses (which counts consecutive drain-tick failures before sealing
-rows): a 413 is a size signal, not a "the event is malformed" signal, so it must not consume the quarantine budget. Matches
-the recovery shape Splunk HEC and Elastic Beats implement.
+The system MUST handle HTTP 413 responses from the server by recursively splitting the in-memory batch in half and re-POSTing each half until either the half delivers (2xx) or a single-event batch still returns 413. The server emits 413 with two distinct diagnostics: `body_too_large` (body bytes exceed the server's request-size cap) and `too_many_events` (event count exceeds `MaxIngestEventsPerRequest`); both share the 413 status because both have the same recovery shape (bisect + retry). A single-event 413 is the only case where the event is dropped; in that case the uploader MUST emit a WARN log identifying the event id and increment a counter (`edr.agent.uploader.events_dropped_too_large`) so operators can dashboard the drop rate as a signal of misconfigured agents producing oversize events. The recursive split is bounded by `ceil(log2(N))` for a batch of N events, so a 10000-event batch recurses at most ~14 levels before reaching single-event leaves. The split-and-retry path is distinct from the quarantine path for generic 4xx responses (which counts consecutive drain-tick failures before sealing rows): a 413 is a size signal, not a "the event is malformed" signal, so it must not consume the quarantine budget. Matches the recovery shape Splunk HEC and Elastic Beats implement.
 
 #### Scenario: Server returns 413 for a multi-event batch
 
@@ -108,8 +87,7 @@ the recovery shape Splunk HEC and Elastic Beats implement.
 
 ### Requirement: Transient failures retry with backoff
 
-The system SHALL retry transient failures (server 5xx, network errors, timeouts) with exponential backoff up to a configured
-maximum number of attempts before giving up on the current cycle.
+The system SHALL retry transient failures (server 5xx, network errors, timeouts) with exponential backoff up to a configured maximum number of attempts before giving up on the current cycle.
 
 #### Scenario: First attempt times out, second succeeds
 
@@ -127,8 +105,7 @@ maximum number of attempts before giving up on the current cycle.
 
 ### Requirement: 401 triggers re-enrollment
 
-The system MUST signal the enrollment subsystem when the server returns 401 so the agent can refresh its host token, and the
-batch SHALL remain in the queue to be retried under the refreshed token.
+The system MUST signal the enrollment subsystem when the server returns 401 so the agent can refresh its host token, and the batch SHALL remain in the queue to be retried under the refreshed token.
 
 #### Scenario: 401 during upload
 
@@ -147,8 +124,7 @@ batch SHALL remain in the queue to be retried under the refreshed token.
 
 ### Requirement: Permanent client errors are not infinitely retained
 
-The system SHALL stop retrying batches that consistently produce non-401 4xx responses after the configured maximum and
-SHALL emit an audit log entry so the operator can investigate why the server rejected those events.
+The system SHALL stop retrying batches that consistently produce non-401 4xx responses after the configured maximum and SHALL emit an audit log entry so the operator can investigate why the server rejected those events.
 
 #### Scenario: Server consistently returns 4xx for a malformed event
 
@@ -159,8 +135,7 @@ SHALL emit an audit log entry so the operator can investigate why the server rej
 
 ### Requirement: Drain on shutdown
 
-The system SHALL attempt one final upload cycle when the agent receives a shutdown signal so that any events the queue still
-holds get a last chance to reach the server before the process exits.
+The system SHALL attempt one final upload cycle when the agent receives a shutdown signal so that any events the queue still holds get a last chance to reach the server before the process exits.
 
 #### Scenario: Graceful shutdown
 

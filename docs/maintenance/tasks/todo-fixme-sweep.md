@@ -1,28 +1,20 @@
 # TODO / FIXME sweep
 
-**Cadence:** monthly
-**Time budget:** 30 min
-**Trigger mode:** manual
+**Cadence:** monthly **Time budget:** 30 min **Trigger mode:** manual
 
 ## Why this matters
 
-TODO / FIXME / XXX / HACK comments accumulate forever if nobody is responsible for them. Each unaddressed TODO is a tiny piece of
-trust the codebase is asking the next reader to extend ("yes, this will be fixed someday"). At small counts, that trust is fine;
-at hundreds, it becomes load-bearing on nothing. This repo currently has very few (≤1 at last count) - the goal is to keep it
-that way.
+TODO / FIXME / XXX / HACK comments accumulate forever if nobody is responsible for them. Each unaddressed TODO is a tiny piece of trust the codebase is asking the next reader to extend ("yes, this will be fixed someday"). At small counts, that trust is fine; at hundreds, it becomes load-bearing on nothing. This repo currently has very few (≤1 at last count) - the goal is to keep it that way.
 
 ## Scope
 
-All committed source files in `server/`, `agent/`, `internal/`, `ui/`, `extension/`, `test/`, `tools/`, `scripts/`, `schema/`,
-plus `Taskfile.yml`, `lefthook.yml`, `docker-compose*.yml`, and committed Markdown.
+All committed source files in `server/`, `agent/`, `internal/`, `ui/`, `extension/`, `test/`, `tools/`, `scripts/`, `schema/`, plus `Taskfile.yml`, `lefthook.yml`, `docker-compose*.yml`, and committed Markdown.
 
 Excludes: `ai/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g. anything under `dist/`).
 
 ## Steps
 
-1. Find all comments matching `TODO|FIXME|XXX|HACK|DEPRECATED` across the full scope (case-sensitive in code; the patterns below
-   match both line comments `//` and block comments `/* ... */`, accepting some noise from string literals that contain the
-   marker words):
+1. Find all comments matching `TODO|FIXME|XXX|HACK|DEPRECATED` across the full scope (case-sensitive in code; the patterns below match both line comments `//` and block comments `/* ... */`, accepting some noise from string literals that contain the marker words):
 
    ```bash
    # Go
@@ -39,19 +31,17 @@ Excludes: `ai/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g. an
 2. For each hit, decide:
 
    | Verdict | Action |
-   |---|---|
+   | --- | --- |
    | **Fix now** - small, in scope, will take < 15 min | Fix in this PR |
    | **File issue** - real work, but not for this sweep | Open GitHub issue, replace TODO with `// see #NNN` |
    | **Delete** - the TODO is stale (the thing it warned about no longer applies) | Delete the comment |
    | **Keep** - the TODO is a load-bearing warning to future maintainers | Rewrite as a regular comment without the TODO marker (the marker should imply pending action; if there's no action, it's just documentation) |
 
-3. Hard rule: at the end of the sweep, no TODO without an issue link should remain. Either it has an `// see #NNN` annotation, or
-   it's been fixed / deleted / rewritten.
+3. Hard rule: at the end of the sweep, no TODO without an issue link should remain. Either it has an `// see #NNN` annotation, or it's been fixed / deleted / rewritten.
 
 ## Output
 
-A PR titled `TODO sweep YYYY-MM-DD` when there are findings. Body lists each hit and the verdict applied. Every run appends a dated
-entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
+A PR titled `TODO sweep YYYY-MM-DD` when there are findings. Body lists each hit and the verdict applied. Every run appends a dated entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
 
 ## Prompt template
 

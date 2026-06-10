@@ -1,22 +1,14 @@
 # Observability review
 
-**Cadence:** monthly
-**Time budget:** 45-60 min
-**Trigger mode:** manual; uses `mcp__signoz__*` per the global MEMORY rule
+**Cadence:** monthly **Time budget:** 45-60 min **Trigger mode:** manual; uses `mcp__signoz__*` per the global MEMORY rule
 
 ## Why this matters
 
-OTel coverage drifts the same way docs drift. A new endpoint goes in without a span, a new code path raises errors that nobody
-sees because there's no metric for them, an alert keeps firing once a week with nobody investigating because it became
-background noise. The compounding cost is real: when an incident hits, the signal you needed is missing because nobody noticed
-the metric was never wired.
+OTel coverage drifts the same way docs drift. A new endpoint goes in without a span, a new code path raises errors that nobody sees because there's no metric for them, an alert keeps firing once a week with nobody investigating because it became background noise. The compounding cost is real: when an incident hits, the signal you needed is missing because nobody noticed the metric was never wired.
 
-SigNoz is the source of truth for live behaviour (dashboards, alerts, traces, metrics). Browser screenshots are forbidden per
-MEMORY - every metric / trace claim must be verified through the SigNoz MCP tools.
+SigNoz is the source of truth for live behaviour (dashboards, alerts, traces, metrics). Browser screenshots are forbidden per MEMORY - every metric / trace claim must be verified through the SigNoz MCP tools.
 
-Project policy: do NOT add a Prometheus `/metrics` endpoint. All metrics flow through OTel + the existing OTLP pipeline. This
-policy is currently captured in per-user MEMORY only; the `adr-audit` task gap list flags this as a candidate for a committed
-ADR so the policy outlives any single contributor's memory.
+Project policy: do NOT add a Prometheus `/metrics` endpoint. All metrics flow through OTel + the existing OTLP pipeline. This policy is currently captured in per-user MEMORY only; the `adr-audit` task gap list flags this as a candidate for a committed ADR so the policy outlives any single contributor's memory.
 
 ## Scope
 
@@ -29,8 +21,7 @@ ADR so the policy outlives any single contributor's memory.
 
 ### 1. Coverage check
 
-For each context's HTTP handlers, list registered routes (`grep -nE 'mux\.Handle|mux\.HandleFunc|r\.(Get|Post|Put|Delete)'`)
-and confirm:
+For each context's HTTP handlers, list registered routes (`grep -nE 'mux\.Handle|mux\.HandleFunc|r\.(Get|Post|Put|Delete)'`) and confirm:
 
 - Every handler has request / latency / error metrics (or rolls up to a shared middleware that does).
 - Every error path produces a span event or a structured log line that surfaces the error class.
@@ -58,9 +49,7 @@ Noisy alerts that nobody acts on are worse than missing alerts: they teach the t
 
 ### 4. New surface check
 
-Cross-reference the boundaries inventory from
-[`threat-model-and-security-refresh`](threat-model-and-security-refresh.md). Each new boundary should have a metric (request
-count + latency + error rate). If it doesn't, file an issue.
+Cross-reference the boundaries inventory from [`threat-model-and-security-refresh`](threat-model-and-security-refresh.md). Each new boundary should have a metric (request count + latency + error rate). If it doesn't, file an issue.
 
 ### 5. Policy enforcement
 
@@ -70,8 +59,7 @@ Quick grep:
 grep -rE 'prometheus\.|/metrics' server/ agent/ internal/ --include='*.go'
 ```
 
-If anything new has snuck in, file it as a violation of the OTel-only policy and remove (or extract a justification ADR if the
-team genuinely wants to revisit the decision).
+If anything new has snuck in, file it as a violation of the OTel-only policy and remove (or extract a justification ADR if the team genuinely wants to revisit the decision).
 
 ## Output
 

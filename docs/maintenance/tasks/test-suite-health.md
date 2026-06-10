@@ -1,15 +1,10 @@
 # Test-suite health
 
-**Cadence:** quarterly
-**Time budget:** 60-90 min
-**Trigger mode:** manual
+**Cadence:** quarterly **Time budget:** 60-90 min **Trigger mode:** manual
 
 ## Why this matters
 
-A failing test suite gets attention. A *slowly degrading* test suite (flakes, skips, slow cases, semantically thin tests) does
-not, until one day a real regression slips through because nobody trusts a red CI any more. The repo invests heavily in test
-quality (PBT with rapid, fuzz, three-tier integration, `server/testdb/full.Open` as the standard MySQL fixture); the schedule
-keeps that investment from rotting.
+A failing test suite gets attention. A _slowly degrading_ test suite (flakes, skips, slow cases, semantically thin tests) does not, until one day a real regression slips through because nobody trusts a red CI any more. The repo invests heavily in test quality (PBT with rapid, fuzz, three-tier integration, `server/testdb/full.Open` as the standard MySQL fixture); the schedule keeps that investment from rotting.
 
 CI already enforces:
 
@@ -17,13 +12,11 @@ CI already enforces:
 - Coverage on new code ≥ 80% (Codecov + SonarCloud)
 - arch-go boundaries
 
-It does NOT enforce: flake rate, total wallclock time, skipped count, mutation-test signal, or "this test passes but doesn't
-actually test the property it claims to".
+It does NOT enforce: flake rate, total wallclock time, skipped count, mutation-test signal, or "this test passes but doesn't actually test the property it claims to".
 
 ## Scope
 
-`server/**/*_test.go`, `agent/**/*_test.go`, `internal/**/*_test.go`, `test/integration/`, `ui/**/*.test.ts(x)`,
-`extension/edr/**/Tests/`.
+`server/**/*_test.go`, `agent/**/*_test.go`, `internal/**/*_test.go`, `test/integration/`, `ui/**/*.test.ts(x)`, `extension/edr/**/Tests/`.
 
 ## Steps
 
@@ -66,25 +59,20 @@ Any test that doesn't pass all three times is a flake. Fix or quarantine.
 
 Spot-check 10 tests at random across the contexts. For each, ask:
 
-- Does the assertion actually pin the property it claims, or is it asserting a tautology (`require.NotNil(x)` on something the
-  framework guarantees is non-nil)?
-- Are error-path tests checking the *type* of error, or just `err != nil` (which would pass for any failure including
-  framework bugs)?
-- For PBT: does `rapid.Check` actually shrink to a counter-example when a property is broken? (Test it by mutating the property
-  and confirming a shrunken failure.)
+- Does the assertion actually pin the property it claims, or is it asserting a tautology (`require.NotNil(x)` on something the framework guarantees is non-nil)?
+- Are error-path tests checking the _type_ of error, or just `err != nil` (which would pass for any failure including framework bugs)?
+- For PBT: does `rapid.Check` actually shrink to a counter-example when a property is broken? (Test it by mutating the property and confirming a shrunken failure.)
 - For integration tests: are they hitting the real DB via `server/testdb/full.Open` (per CLAUDE.md) and not a mock?
 
 Don't try to fix all thin tests - file findings as issues with a representative example each.
 
 ### 5. Mutation testing (optional, advanced)
 
-If the team has bandwidth, run a mutation test (e.g. `gomutesting`) on one critical package per quarter (`server/detection/`,
-`server/identity/middleware`). Mutation score below 70% on a critical path warrants attention.
+If the team has bandwidth, run a mutation test (e.g. `gomutesting`) on one critical package per quarter (`server/detection/`, `server/identity/middleware`). Mutation score below 70% on a critical path warrants attention.
 
 ## Output
 
-A PR with concrete fixes (skips removed, slow tests sped up, flakes quarantined / fixed). A separate issue list for semantic-
-thinness findings (don't bundle).
+A PR with concrete fixes (skips removed, slow tests sped up, flakes quarantined / fixed). A separate issue list for semantic- thinness findings (don't bundle).
 
 ## Prompt template
 

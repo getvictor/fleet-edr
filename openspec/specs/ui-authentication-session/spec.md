@@ -2,20 +2,9 @@
 
 ## Purpose
 
-The UI authentication session is the operator's identity boundary for the admin web interface. The same HTTP server hosts
-both the agent-facing telemetry API (authenticated by per-host bearer tokens) and the operator-facing admin API
-(authenticated by browser session cookies); without a clean session capability, every UI request would either need to
-prompt for credentials or rely on long-lived bearer tokens stored in the browser, neither of which is acceptable for an
-operator console.
+The UI authentication session is the operator's identity boundary for the admin web interface. The same HTTP server hosts both the agent-facing telemetry API (authenticated by per-host bearer tokens) and the operator-facing admin API (authenticated by browser session cookies); without a clean session capability, every UI request would either need to prompt for credentials or rely on long-lived bearer tokens stored in the browser, neither of which is acceptable for an operator console.
 
-The capability uses an HTTP-only session cookie that the browser cannot read from JavaScript, paired with a per-session
-CSRF token that the operator's UI code reads from `GET /api/session` (once the cookie is set) and echoes on every
-state-changing request. The cookie
-authenticates the request, the CSRF header proves the request originated from the legitimate UI, and the server-side row
-backing the cookie can be revoked at any time by deleting the row. Sessions are persisted in the database, so restarting
-the server does not invalidate them; revocation goes through the row, not the process lifecycle. The endpoints are
-rate-limited and the failure paths are deliberately ambiguous about whether an account exists, so a brute-force attacker
-cannot use them to enumerate operators.
+The capability uses an HTTP-only session cookie that the browser cannot read from JavaScript, paired with a per-session CSRF token that the operator's UI code reads from `GET /api/session` (once the cookie is set) and echoes on every state-changing request. The cookie authenticates the request, the CSRF header proves the request originated from the legitimate UI, and the server-side row backing the cookie can be revoked at any time by deleting the row. Sessions are persisted in the database, so restarting the server does not invalidate them; revocation goes through the row, not the process lifecycle. The endpoints are rate-limited and the failure paths are deliberately ambiguous about whether an account exists, so a brute-force attacker cannot use them to enumerate operators.
 
 ## Requirements
 
@@ -23,39 +12,28 @@ cannot use them to enumerate operators.
 
 The system SHALL mint a session cookie on a successful operator login. The login surface is split across two entry points:
 
-1. **OIDC callback** at `GET /api/auth/callback`. After the operator completes the IdP redirect, the callback handler
-   exchanges the authorization code, runs the JIT provisioner (when enabled), inserts a sessions row, and 302-redirects
-   to the state's pinned post-login URL with the session cookie set.
-2. **Break-glass finish-login** at `POST /admin/break-glass`. After the operator completes the WebAuthn assertion and
-   the password challenge, the handler verifies the credential, inserts a sessions row, and returns 200 with the session
-   cookie set.
+1. **OIDC callback** at `GET /api/auth/callback`. After the operator completes the IdP redirect, the callback handler exchanges the authorization code, runs the JIT provisioner (when enabled), inserts a sessions row, and 302-redirects to the state's pinned post-login URL with the session cookie set.
+2. **Break-glass finish-login** at `POST /admin/break-glass`. After the operator completes the WebAuthn assertion and the password challenge, the handler verifies the credential, inserts a sessions row, and returns 200 with the session cookie set.
 
-Both paths set the session cookie with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`. The per-session
-CSRF token is NOT returned in the login-success response body; the UI reads it from `GET /api/session` once the cookie
-is set, which keeps the login-handler response shapes aligned across the two entry points. There is no `POST /api/session`
-password-form endpoint; sessions are minted only via the OIDC callback or the break-glass surface.
+Both paths set the session cookie with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`. The per-session CSRF token is NOT returned in the login-success response body; the UI reads it from `GET /api/session` once the cookie is set, which keeps the login-handler response shapes aligned across the two entry points. There is no `POST /api/session` password-form endpoint; sessions are minted only via the OIDC callback or the break-glass surface.
 
 #### Scenario: Successful login
 
 - **GIVEN** the operator completes the OIDC IdP redirect with a subject the JIT provisioner accepts
 - **WHEN** the IdP's redirect lands at `/api/auth/callback` with a valid `state` cookie and authorization code
-- **THEN** the server responds 302 to the state's pinned redirect (`/ui/` on the happy path) and sets the session cookie
-  with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`
+- **THEN** the server responds 302 to the state's pinned redirect (`/ui/` on the happy path) and sets the session cookie with `HttpOnly`, `SameSite=Lax`, and (when TLS is enabled) `Secure`
 - **AND** subsequent authenticated requests carrying that cookie are recognized as the same session
 
 #### Scenario: Login with empty fields
 
-- **GIVEN** the client posts a malformed or empty body to a login endpoint (e.g., non-JSON at
-  `POST /admin/break-glass/challenge`, or a body that omits required fields)
+- **GIVEN** the client posts a malformed or empty body to a login endpoint (e.g., non-JSON at `POST /admin/break-glass/challenge`, or a body that omits required fields)
 - **WHEN** the request is processed
-- **THEN** the server responds `400 Bad Request` with a typed `X-Edr-Auth-Reason: body_invalid` header (or the
-  endpoint-specific equivalent)
+- **THEN** the server responds `400 Bad Request` with a typed `X-Edr-Auth-Reason: body_invalid` header (or the endpoint-specific equivalent)
 - **AND** no session is created and no cookie is set
 
 ### Requirement: Login failures do not enumerate accounts
 
-The system MUST return the same 401 response for "no such email" and "wrong password" so an attacker cannot tell from the
-response which emails correspond to real accounts, while still recording the distinction in the server-side audit log.
+The system MUST return the same 401 response for "no such email" and "wrong password" so an attacker cannot tell from the response which emails correspond to real accounts, while still recording the distinction in the server-side audit log.
 
 #### Scenario: Email is unknown
 
@@ -73,10 +51,7 @@ response which emails correspond to real accounts, while still recording the dis
 
 ### Requirement: Passwords are stored as argon2id hashes
 
-The system SHALL persist user passwords as argon2id hashes computed with time cost 3, memory cost 64 MiB, parallelism 4,
-and a 32-byte derived key, using a fresh 16-byte random salt per password. The system SHALL verify the presented password
-by recomputing argon2id with the stored salt under those same parameters and comparing the result to the stored hash with
-a constant-time equality check. The system SHALL NOT store plaintext passwords or reversibly encrypted passwords.
+The system SHALL persist user passwords as argon2id hashes computed with time cost 3, memory cost 64 MiB, parallelism 4, and a 32-byte derived key, using a fresh 16-byte random salt per password. The system SHALL verify the presented password by recomputing argon2id with the stored salt under those same parameters and comparing the result to the stored hash with a constant-time equality check. The system SHALL NOT store plaintext passwords or reversibly encrypted passwords.
 
 #### Scenario: Password verification
 
@@ -91,28 +66,19 @@ a constant-time equality check. The system SHALL NOT store plaintext passwords o
 - **GIVEN** an operator presents a known email with a wrong password
 - **WHEN** the verification path runs
 - **THEN** argon2id is computed under the same parameter set as a successful verification
-- **AND** the per-request CPU cost is comparable to a successful login so that timing does not leak whether the password
-  was the cause of the failure
+- **AND** the per-request CPU cost is comparable to a successful login so that timing does not leak whether the password was the cause of the failure
 
 ### Requirement: Initial operator account is bootstrapped at first startup
 
-The system SHALL ensure a single operator account exists when the server starts with an empty users table by inserting a
-break-glass admin row (NULL password, `is_breakglass = 1`) with the well-known seed email and binding the `super_admin`
-role at global scope. The seed function itself MUST NOT print a password banner; the operator-facing redemption URL is
-logged separately by `cmd/main` on the same startup pass so the operator can complete a one-time WebAuthn enrollment that
-sets a password and registers a credential. There is no in-product password-reset flow; the documented recovery path
-when the operator loses access is to delete the seeded user row and restart the server, which re-runs the seeder and
-logs a new redemption URL.
+The system SHALL ensure a single operator account exists when the server starts with an empty users table by inserting a break-glass admin row (NULL password, `is_breakglass = 1`) with the well-known seed email and binding the `super_admin` role at global scope. The seed function itself MUST NOT print a password banner; the operator-facing redemption URL is logged separately by `cmd/main` on the same startup pass so the operator can complete a one-time WebAuthn enrollment that sets a password and registers a credential. There is no in-product password-reset flow; the documented recovery path when the operator loses access is to delete the seeded user row and restart the server, which re-runs the seeder and logs a new redemption URL.
 
 #### Scenario: First-startup seed
 
 - **GIVEN** the server starts and the users table is empty
 - **WHEN** the seeder runs
 - **THEN** exactly one operator account is inserted with the well-known seed email, NULL password, and `is_breakglass = 1`
-- **AND** a `super_admin` role binding at global scope is inserted alongside the user row so the seeded admin has full
-  privileges on first redemption
-- **AND** the seed function does NOT write a password banner to stderr; the redemption URL is the responsibility of
-  `cmd/main` on the same startup pass
+- **AND** a `super_admin` role binding at global scope is inserted alongside the user row so the seeded admin has full privileges on first redemption
+- **AND** the seed function does NOT write a password banner to stderr; the redemption URL is the responsibility of `cmd/main` on the same startup pass
 
 #### Scenario: Restart with an existing operator
 
@@ -122,16 +88,13 @@ logs a new redemption URL.
 
 #### Scenario: Recovery after a lost password
 
-- **GIVEN** the operator has lost access (the redemption URL was never captured or the only enrolled credential was
-  destroyed)
+- **GIVEN** the operator has lost access (the redemption URL was never captured or the only enrolled credential was destroyed)
 - **WHEN** the operator deletes the seeded user row and restarts the server
-- **THEN** the seeder runs again, inserts a fresh break-glass admin row, and `cmd/main` logs a new redemption URL the
-  operator can use to enrol a credential and set a password
+- **THEN** the seeder runs again, inserts a fresh break-glass admin row, and `cmd/main` logs a new redemption URL the operator can use to enrol a credential and set a password
 
 ### Requirement: GET requests authenticate by cookie alone
 
-The system SHALL authenticate safe-method (GET, HEAD, OPTIONS) requests by validating the session cookie alone, without
-requiring a CSRF header.
+The system SHALL authenticate safe-method (GET, HEAD, OPTIONS) requests by validating the session cookie alone, without requiring a CSRF header.
 
 #### Scenario: GET with valid session
 
@@ -147,8 +110,7 @@ requiring a CSRF header.
 
 ### Requirement: Unsafe requests require both cookie and CSRF header
 
-The system MUST require both the session cookie and a matching CSRF header on every unsafe-method (POST, PUT, DELETE)
-request, and SHALL reject requests that present the cookie without a matching CSRF header.
+The system MUST require both the session cookie and a matching CSRF header on every unsafe-method (POST, PUT, DELETE) request, and SHALL reject requests that present the cookie without a matching CSRF header.
 
 #### Scenario: POST with cookie but no CSRF header
 
@@ -172,8 +134,7 @@ request, and SHALL reject requests that present the cookie without a matching CS
 
 ### Requirement: Logout invalidates the session and clears the cookie
 
-The system SHALL accept a session-deletion request, remove the corresponding session row when found, and always emit a
-cookie-clearing response so the browser stops sending the session cookie even if the server-side row was already gone.
+The system SHALL accept a session-deletion request, remove the corresponding session row when found, and always emit a cookie-clearing response so the browser stops sending the session cookie even if the server-side row was already gone.
 
 #### Scenario: Logout while logged in
 
@@ -191,34 +152,20 @@ cookie-clearing response so the browser stops sending the session cookie even if
 
 ### Requirement: Current-user lookup
 
-The system SHALL expose a session-required GET that returns the currently authenticated operator's
-identity AND the operator's effective permission set, so the UI can discover whether it is logged in,
-which account is active, and which privileged actions the operator may perform, without re-prompting
-for credentials and without a per-action round trip. The effective permission set SHALL be the
-collection of action identifiers the operator is permitted under the active session's role bindings at
-the deployment-wide scope, evaluated consistently with the authorization decision the server enforces.
-A role that grants every action SHALL be expanded to the concrete action identifiers rather than
-returning a wildcard token. The permission set SHALL be present for every authenticated session
-regardless of whether it was established via SSO or via the break-glass surface. The permission set is
-advisory to the UI for presentation only; no client SHALL treat it as authorization, and the server
-SHALL continue to enforce every action at its authorization boundary independently of what the
-permission set contained.
+The system SHALL expose a session-required GET that returns the currently authenticated operator's identity AND the operator's effective permission set, so the UI can discover whether it is logged in, which account is active, and which privileged actions the operator may perform, without re-prompting for credentials and without a per-action round trip. The effective permission set SHALL be the collection of action identifiers the operator is permitted under the active session's role bindings at the deployment-wide scope, evaluated consistently with the authorization decision the server enforces. A role that grants every action SHALL be expanded to the concrete action identifiers rather than returning a wildcard token. The permission set SHALL be present for every authenticated session regardless of whether it was established via SSO or via the break-glass surface. The permission set is advisory to the UI for presentation only; no client SHALL treat it as authorization, and the server SHALL continue to enforce every action at its authorization boundary independently of what the permission set contained.
 
 #### Scenario: Session probe while logged in
 
 - **GIVEN** the client holds a valid session cookie for an operator bound to the `analyst` role
 - **WHEN** the client issues a GET to the session endpoint
-- **THEN** the server returns 200 with the operator's identity, the session's CSRF token, and a
-  permission set containing the analyst actions (for example `host.read`, `process.read`,
-  `alert.read`, `alert.comment`)
+- **THEN** the server returns 200 with the operator's identity, the session's CSRF token, and a permission set containing the analyst actions (for example `host.read`, `process.read`, `alert.read`, `alert.comment`)
 - **AND** the permission set does not contain `host.kill_process` or `application_control.read`
 
 #### Scenario: Higher-privilege role returns a superset
 
 - **GIVEN** the client holds a valid session for an operator bound to `senior_analyst`
 - **WHEN** the client issues a GET to the session endpoint
-- **THEN** the returned permission set additionally contains `host.kill_process`, `host.isolate`,
-  `host.run_script`, and `application_control.read`
+- **THEN** the returned permission set additionally contains `host.kill_process`, `host.isolate`, `host.run_script`, and `application_control.read`
 
 #### Scenario: All-actions role is expanded rather than wildcarded
 
@@ -235,8 +182,7 @@ permission set contained.
 
 ### Requirement: Login attempts are rate limited and audited
 
-The system MUST rate limit login attempts per source IP and MUST emit an audit log entry on every failed login attempt so
-operators can detect brute-force patterns.
+The system MUST rate limit login attempts per source IP and MUST emit an audit log entry on every failed login attempt so operators can detect brute-force patterns.
 
 #### Scenario: Excess login attempts from one IP
 
@@ -254,10 +200,7 @@ operators can detect brute-force patterns.
 
 ### Requirement: Sessions expire 12 hours after issue
 
-The system SHALL set the session lifetime to exactly 12 hours from the moment the session row is created. The cookie's
-`Expires` and `Max-Age` attributes MUST reflect that 12-hour window so the browser stops sending the cookie after it
-elapses, and the server-side row MUST be treated as expired once 12 hours have passed even if the browser does send the
-cookie. After expiry the operator must re-authenticate; expired sessions are not silently extended on use.
+The system SHALL set the session lifetime to exactly 12 hours from the moment the session row is created. The cookie's `Expires` and `Max-Age` attributes MUST reflect that 12-hour window so the browser stops sending the cookie after it elapses, and the server-side row MUST be treated as expired once 12 hours have passed even if the browser does send the cookie. After expiry the operator must re-authenticate; expired sessions are not silently extended on use.
 
 #### Scenario: Cookie carries a 12-hour expiry on login
 
@@ -275,8 +218,7 @@ cookie. After expiry the operator must re-authenticate; expired sessions are not
 
 ### Requirement: Session cookie is HTTP-only and same-site
 
-The system SHALL set the session cookie with HttpOnly and SameSite=Lax so JavaScript on any origin cannot read the
-session identifier and a cross-site form submission cannot silently authenticate as the operator.
+The system SHALL set the session cookie with HttpOnly and SameSite=Lax so JavaScript on any origin cannot read the session identifier and a cross-site form submission cannot silently authenticate as the operator.
 
 #### Scenario: Cookie attributes on login
 

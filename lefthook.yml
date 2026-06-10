@@ -54,14 +54,33 @@ pre-commit:
 
     markdownlint:
       # Lint staged markdown via markdownlint-cli2 (config in .markdownlint-cli2.yaml).
-      # Uses --fix for the safe rules; what cannot be auto-fixed (MD040 language tags,
-      # MD013 long lines) still surfaces and blocks the commit.
+      # Uses --fix for the safe rules; what cannot be auto-fixed (MD040 language tags)
+      # still surfaces and blocks the commit. Prose wrapping + table style are NOT
+      # markdownlint's job here - the prettier-md hook below owns those.
       #
       # npx caches the package after the first download, so steady-state cost is ~1s.
       glob: "**/*.md"
       run: |
         if command -v npx >/dev/null 2>&1; then
           npx -y -p markdownlint-cli2@0.18.1 markdownlint-cli2 --fix {staged_files}
+        fi
+      stage_fixed: true
+
+    prettier-md:
+      # Enforce the no-hard-wrap convention + aligned tables on staged markdown via
+      # Prettier (config in .prettierrc.yaml, proseWrap: never; exclusions in
+      # .prettierignore). --write reflows in place and stage_fixed re-stages, so a
+      # wrapped paragraph is silently collapsed rather than blocking the commit.
+      #
+      # {staged_files} expands to every staged path regardless of glob, and Prettier
+      # errors on files it has no parser for, so filter to .md before invoking (same
+      # pattern as the gofmt hook above). --ignore-path keeps .prettierignore honored.
+      glob: "**/*.md"
+      run: |
+        if command -v npx >/dev/null 2>&1; then
+          md_files=$(printf '%s\n' {staged_files} | grep -E '\.md$' || true)
+          if [ -z "$md_files" ]; then exit 0; fi
+          printf '%s\n' "$md_files" | tr '\n' '\0' | xargs -0 npx -y prettier@3.3.3 --ignore-path .prettierignore --write
         fi
       stage_fixed: true
 

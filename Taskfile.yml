@@ -436,7 +436,7 @@ tasks:
       Run every fast linter. Does NOT include lint:nilaway (inter-procedural
       analysis, ~tens of seconds) or lint:vulncheck (network-bound; queries
       the vulnerability DB); run those explicitly when needed.
-    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md, lint:dashes]
+    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md, lint:md:prose, lint:dashes]
 
   lint:dashes:
     desc: |
@@ -556,6 +556,19 @@ tasks:
     desc: markdownlint-cli2 with --fix to auto-repair the rules it knows how to fix.
     cmds:
       - npx -y -p markdownlint-cli2@0.18.1 markdownlint-cli2 --fix
+
+  lint:md:prose:
+    desc: |
+      Prettier --check over committed Markdown: enforces the no-hard-wrap convention (proseWrap: never) and aligned table columns.
+      Config in .prettierrc.yaml, exclusions in .prettierignore. Fix locally with `task lint:md:prose:fix`. CI gate in
+      .github/workflows/md-lint.yml. Pairs with lint:md (markdownlint owns structure; Prettier owns wrapping + tables).
+    cmds:
+      - npx -y prettier@3.3.3 --check "**/*.md"
+
+  lint:md:prose:fix:
+    desc: Prettier --write over committed Markdown to reflow prose to single lines and align tables (the auto-fix for lint:md:prose).
+    cmds:
+      - npx -y prettier@3.3.3 --write "**/*.md"
 
   # -------- dev loops --------
 

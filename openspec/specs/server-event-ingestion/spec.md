@@ -2,21 +2,15 @@
 
 ## Purpose
 
-Server event ingestion is the write path that accepts telemetry batches posted by enrolled agents and durably persists them
-for downstream processing. It is the only contractual entry point for raw endpoint events into the EDR backend; the process
-graph builder, detection engine, and UI all read from the events that this capability commits.
+Server event ingestion is the write path that accepts telemetry batches posted by enrolled agents and durably persists them for downstream processing. It is the only contractual entry point for raw endpoint events into the EDR backend; the process graph builder, detection engine, and UI all read from the events that this capability commits.
 
-The capability is deliberately stateless beyond the database write so that a deployment can scale it horizontally. The
-ingestion service can run as its own binary (separate from the process that materializes the graph and evaluates rules) so
-that traffic spikes from a fleet of agents do not block detection work or the read API.
+The capability is deliberately stateless beyond the database write so that a deployment can scale it horizontally. The ingestion service can run as its own binary (separate from the process that materializes the graph and evaluates rules) so that traffic spikes from a fleet of agents do not block detection work or the read API.
 
 ## Requirements
 
 ### Requirement: Authenticated batch event submission
 
-The system SHALL expose `POST /api/events` that accepts a JSON array of event envelopes from an enrolled agent. The
-caller MUST present a per-host bearer token in the `Authorization` header; the system MUST reject requests whose token does
-not resolve to an enrolled host.
+The system SHALL expose `POST /api/events` that accepts a JSON array of event envelopes from an enrolled agent. The caller MUST present a per-host bearer token in the `Authorization` header; the system MUST reject requests whose token does not resolve to an enrolled host.
 
 #### Scenario: A valid agent posts a batch
 
@@ -33,8 +27,7 @@ not resolve to an enrolled host.
 
 ### Requirement: Required field validation
 
-The system SHALL validate that every event in a batch carries a non-empty `event_id`, `host_id`, and `event_type`, and a
-non-zero `timestamp_ns`. If any event is missing one of these fields the system MUST reject the entire batch.
+The system SHALL validate that every event in a batch carries a non-empty `event_id`, `host_id`, and `event_type`, and a non-zero `timestamp_ns`. If any event is missing one of these fields the system MUST reject the entire batch.
 
 #### Scenario: A batch contains an event with a missing field
 
@@ -52,8 +45,7 @@ non-zero `timestamp_ns`. If any event is missing one of these fields the system 
 
 ### Requirement: Host identity pinning
 
-The system SHALL verify that every event in the batch carries a `host_id` matching the host identified by the bearer token.
-A compromised or misbehaving agent MUST NOT be able to submit events that claim to originate from a different host.
+The system SHALL verify that every event in the batch carries a `host_id` matching the host identified by the bearer token. A compromised or misbehaving agent MUST NOT be able to submit events that claim to originate from a different host.
 
 #### Scenario: A batch contains a foreign host_id
 
@@ -64,16 +56,9 @@ A compromised or misbehaving agent MUST NOT be able to submit events that claim 
 
 ### Requirement: Body size limit
 
-The system SHALL cap the bytes it reads from the request body of `POST /api/events` at 10 MB. Bodies that exceed the
-cap MUST result in HTTP 413 with a typed `body_too_large` diagnostic, and no events from that batch are persisted. The
-413 status (RFC 9110 §15.5.14) is the canonical "your body exceeded the limit" signal and matches the shape Elastic
-Fleet, Datadog, Splunk HEC, and CrowdStrike's ingestion endpoints all use; an agent that sees 413 SHOULD split larger
-telemetry into multiple batches under the cap rather than retry the same body.
+The system SHALL cap the bytes it reads from the request body of `POST /api/events` at 10 MB. Bodies that exceed the cap MUST result in HTTP 413 with a typed `body_too_large` diagnostic, and no events from that batch are persisted. The 413 status (RFC 9110 §15.5.14) is the canonical "your body exceeded the limit" signal and matches the shape Elastic Fleet, Datadog, Splunk HEC, and CrowdStrike's ingestion endpoints all use; an agent that sees 413 SHOULD split larger telemetry into multiple batches under the cap rather than retry the same body.
 
-The system MUST enforce the cap before allocating a buffer for the body so a malicious or misconfigured caller cannot
-trigger an arbitrary-size allocation. When the request advertises `Content-Length` greater than 10 MB the system MUST
-respond with 413 without reading any of the body; when the request uses chunked transfer-encoding the system MUST
-enforce the cap via a streaming reader and respond with 413 as soon as the cap is crossed.
+The system MUST enforce the cap before allocating a buffer for the body so a malicious or misconfigured caller cannot trigger an arbitrary-size allocation. When the request advertises `Content-Length` greater than 10 MB the system MUST respond with 413 without reading any of the body; when the request uses chunked transfer-encoding the system MUST enforce the cap via a streaming reader and respond with 413 as soon as the cap is crossed.
 
 #### Scenario: An oversized request body is rejected
 
@@ -90,18 +75,9 @@ enforce the cap via a streaming reader and respond with 413 as soon as the cap i
 
 ### Requirement: Per-request event-count limit
 
-The system SHALL cap the number of events the parser accepts in a single batch at 10000 (`MaxIngestEventsPerRequest`).
-Bodies whose event count exceeds the cap MUST result in HTTP 413 with a typed `too_many_events` diagnostic, and no events
-from that batch are persisted. The status is 413 (not 400) so the agent uploader routes the rejection through its
-split-and-retry recovery path: the bisection converges on halves that fit under the cap, so a misconfigured agent producing
-oversize batches recovers without quarantining any events. The body-byte cap and the event-count cap share the same wire
-status (413) but carry distinct `error` strings (`body_too_large` vs `too_many_events`) so operator-facing logs distinguish
-"too big in bytes" from "too many events."
+The system SHALL cap the number of events the parser accepts in a single batch at 10000 (`MaxIngestEventsPerRequest`). Bodies whose event count exceeds the cap MUST result in HTTP 413 with a typed `too_many_events` diagnostic, and no events from that batch are persisted. The status is 413 (not 400) so the agent uploader routes the rejection through its split-and-retry recovery path: the bisection converges on halves that fit under the cap, so a misconfigured agent producing oversize batches recovers without quarantining any events. The body-byte cap and the event-count cap share the same wire status (413) but carry distinct `error` strings (`body_too_large` vs `too_many_events`) so operator-facing logs distinguish "too big in bytes" from "too many events."
 
-The system MUST enforce the cap during streaming decode, so the over-cap event is never allocated. A naive `json.Unmarshal`
-followed by a `len(events)` check would let a 10 MB body of microscopic events allocate the full events slice (~60-80 MB of
-heap for ~140k api.Event structs) before the cap fires; the cap MUST be evaluated as the decoder advances through the array
-so the rejection happens before the (Max+1)th element is materialized.
+The system MUST enforce the cap during streaming decode, so the over-cap event is never allocated. A naive `json.Unmarshal` followed by a `len(events)` check would let a 10 MB body of microscopic events allocate the full events slice (~60-80 MB of heap for ~140k api.Event structs) before the cap fires; the cap MUST be evaluated as the decoder advances through the array so the rejection happens before the (Max+1)th element is materialized.
 
 #### Scenario: A batch with too many events is rejected
 
@@ -112,9 +88,7 @@ so the rejection happens before the (Max+1)th element is materialized.
 
 ### Requirement: Idempotent submission by event_id
 
-The system SHALL treat the `event_id` as the unique key for an event. A re-submission of an event with the same `event_id`
-SHALL be silently dropped without raising an error so that an agent can safely retry a batch after a transient network
-failure.
+The system SHALL treat the `event_id` as the unique key for an event. A re-submission of an event with the same `event_id` SHALL be silently dropped without raising an error so that an agent can safely retry a batch after a transient network failure.
 
 #### Scenario: An agent retries a batch after a network failure
 
@@ -132,9 +106,7 @@ failure.
 
 ### Requirement: Decoupled processing pipeline
 
-The system SHALL persist incoming events with a status that marks them as not yet processed. A separate processing path
-SHALL be responsible for materializing the process graph and running detection rules. The ingestion path MUST NOT block on
-or fail because of downstream processing work.
+The system SHALL persist incoming events with a status that marks them as not yet processed. A separate processing path SHALL be responsible for materializing the process graph and running detection rules. The ingestion path MUST NOT block on or fail because of downstream processing work.
 
 #### Scenario: Ingestion accepts events while the processor is busy
 
@@ -145,9 +117,7 @@ or fail because of downstream processing work.
 
 ### Requirement: Horizontally scalable ingestion service
 
-The system SHALL support running the ingestion endpoint as a standalone service that shares only the database with the
-processing service. Multiple replicas of the ingestion service MUST be able to accept agent traffic concurrently against the
-same database without coordinating with each other.
+The system SHALL support running the ingestion endpoint as a standalone service that shares only the database with the processing service. Multiple replicas of the ingestion service MUST be able to accept agent traffic concurrently against the same database without coordinating with each other.
 
 #### Scenario: Two ingestion replicas run against the same database
 
@@ -158,8 +128,7 @@ same database without coordinating with each other.
 
 ### Requirement: Transparent persistence failure reporting
 
-The system SHALL return HTTP 5xx when the underlying database write fails so that the agent retries the batch. The system
-MUST NOT acknowledge a batch that was not durably persisted.
+The system SHALL return HTTP 5xx when the underlying database write fails so that the agent retries the batch. The system MUST NOT acknowledge a batch that was not durably persisted.
 
 #### Scenario: The database is temporarily unavailable
 

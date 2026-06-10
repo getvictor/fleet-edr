@@ -24,13 +24,13 @@ ignores:
   - "docs/maintenance/log.md"   # free-form journal with unstructured one-line entries
 
 config:
-  # Allow the repo's 140-char prose wrap. Code blocks, tables, and headings
-  # are exempt because hard-wrapping them breaks rendering or copy-paste.
-  MD013:
-    line_length: 140
-    code_blocks: false
-    tables: false
-    headings: false
+  # Line length is OFF. The repo does NOT hard-wrap Markdown prose (CLAUDE.md
+  # "Code style"); Prettier (.prettierrc.yaml, proseWrap: never) collapses each
+  # paragraph and list item to a single line, which by design runs well past any
+  # column limit. MD013 (a maximum-length rule) would flag every such line, so it
+  # directly contradicts the no-wrap convention and is disabled. Prettier owns
+  # wrapping; markdownlint owns structure.
+  MD013: false
 
   # We use raw HTML for collapsible sections (<details>/<summary>) and the
   # occasional shields.io badge. Allowing inline HTML is the practical call.
@@ -46,13 +46,21 @@ config:
     siblings_only: true
 
   # Table-column-style (added in markdownlint v0.38, default-on in newer
-  # markdownlint-cli2 releases). The repo writes tables with compact separator
-  # rows (`|---|`) and spaced data cells (`| x |`) consistently across ~30
-  # tables; that mix is cosmetic and renders fine, but MD060 flags it (200+
-  # findings repo-wide on a version bump). Disable it for the same reason we
-  # disable MD033/MD034: it fights the repo's established style without catching
-  # a real defect. Pin a style here later if we ever want enforced uniformity.
+  # markdownlint-cli2 releases). Left OFF because Prettier (.prettierrc.yaml) now
+  # owns table formatting: it pads every cell to align columns and rewrites
+  # separator rows to `| --- |`. That is the enforced uniform style, applied by
+  # `task lint:md:prose:fix` and gated by `task lint:md:prose`, so a second
+  # markdownlint opinion on table columns is redundant and would only risk
+  # disagreeing with Prettier.
   MD060: false
+
+  # List-marker spacing. OFF because Prettier owns list formatting: when an
+  # ordered-list item contains an indented code block, Prettier writes two spaces
+  # after the marker (`3.  text`) to align the continuation, which MD030 flags
+  # (it wants exactly one). Same call as MD060 - Prettier is the single source of
+  # truth for list/table layout, so a competing markdownlint opinion only creates
+  # an unwinnable disagreement.
+  MD030: false
 
   # Default first-line-h1 stays on so every doc opens with a clear title.
   # MD041: enabled by default.

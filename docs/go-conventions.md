@@ -4,8 +4,7 @@ Go coding conventions for the EDR project, derived from the Fleet codebase.
 
 ## Database access (sqlx)
 
-Use `github.com/jmoiron/sqlx` instead of raw `database/sql`. This gives us struct scanning, named
-parameters, and `IN` clause expansion.
+Use `github.com/jmoiron/sqlx` instead of raw `database/sql`. This gives us struct scanning, named parameters, and `IN` clause expansion.
 
 ### Struct tags
 
@@ -59,15 +58,12 @@ return tx.Commit()
 
 ## Testing (testify)
 
-Use `github.com/stretchr/testify` for assertions. Import `require` for must-pass checks and `assert`
-for soft checks.
+Use `github.com/stretchr/testify` for assertions. Import `require` for must-pass checks and `assert` for soft checks.
 
 ### require vs assert
 
-- **`require`**: stops the test immediately on failure. Use for preconditions and setup steps
-  where continuing would cause confusing follow-on failures.
-- **`assert`**: records the failure but continues. Use for checking multiple independent properties
-  of a result.
+- **`require`**: stops the test immediately on failure. Use for preconditions and setup steps where continuing would cause confusing follow-on failures.
+- **`assert`**: records the failure but continues. Use for checking multiple independent properties of a result.
 
 ```go
 import (
@@ -126,8 +122,7 @@ Use `t.Context()` instead of `context.Background()`.
 
 ## Error handling
 
-Wrap errors with `fmt.Errorf` and `%w` to preserve the error chain. Include a short description of
-the operation that failed:
+Wrap errors with `fmt.Errorf` and `%w` to preserve the error chain. Include a short description of the operation that failed:
 
 ```go
 if err != nil {
@@ -145,8 +140,7 @@ if errors.Is(err, sql.ErrNoRows) {
 
 ## Logging (slog)
 
-Use Go's standard `log/slog` package for structured logging. Pass the logger as a dependency rather
-than using a global.
+Use Go's standard `log/slog` package for structured logging. Pass the logger as a dependency rather than using a global.
 
 ```go
 type Handler struct {
@@ -166,10 +160,7 @@ func (h *Handler) handleError(w http.ResponseWriter, msg string, err error, code
 
 ## HTTP handlers
 
-Use Go 1.22+ `http.ServeMux` method routing (`GET /path/{param}`). Extract path params with
-`r.PathValue()`. This is the recommended starting point for new Go projects. If we later need
-middleware chaining or more complex routing, `go-chi/chi` is the idiomatic step up (the fleet project
-uses `gorilla/mux` for historical reasons).
+Use Go 1.22+ `http.ServeMux` method routing (`GET /path/{param}`). Extract path params with `r.PathValue()`. This is the recommended starting point for new Go projects. If we later need middleware chaining or more complex routing, `go-chi/chi` is the idiomatic step up (the fleet project uses `gorilla/mux` for historical reasons).
 
 ### Handler structure
 
@@ -184,13 +175,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 ### JSON responses
 
-Use `json.NewEncoder(w).Encode(v)` for responses and `json.NewDecoder(r.Body).Decode(&v)` for
-requests.
+Use `json.NewEncoder(w).Encode(v)` for responses and `json.NewDecoder(r.Body).Decode(&v)` for requests.
 
 ## Import grouping
 
-Group imports in two blocks separated by a blank line: standard library first, then third-party and
-internal packages:
+Group imports in two blocks separated by a blank line: standard library first, then third-party and internal packages:
 
 ```go
 import (

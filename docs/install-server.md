@@ -1,100 +1,46 @@
 # Install the Fleet EDR server
 
-The reference deployment is Docker Compose: MySQL + the server image,
-with a TLS-terminating ingress in front. The stack is sized for a single
-customer with 10 to 500 endpoints. Pick a topology below, then follow the
-setup steps.
+The reference deployment is Docker Compose: MySQL + the server image, with a TLS-terminating ingress in front. The stack is sized for a single customer with 10 to 500 endpoints. Pick a topology below, then follow the setup steps.
 
 ## Deployment topology
 
-The server tier is stateless: it holds no in-process state that outlives a
-request, so any replica can serve any request and durable state lives in the
-shared MySQL (see `docs/adr/0010-stateless-server.md`). That makes two
-topologies available.
+The server tier is stateless: it holds no in-process state that outlives a request, so any replica can serve any request and durable state lives in the shared MySQL (see `docs/adr/0010-stateless-server.md`). That makes two topologies available.
 
 ### Multi-replica (high availability) - reference
 
-Two or more server replicas behind a load balancer, in front of one MySQL.
-This is the recommended topology: a replica can be drained and restarted (or
-rolled to a new version) without a maintenance window, because the load
-balancer routes around a draining replica and sessions are MySQL-backed, so
-there are no sticky sessions to strand. Use
-`packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX
-proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative
-to the NGINX proxy that adds active `/readyz` health checks. The setup steps
-below apply unchanged except that you also generate a shared
-`session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`),
-which every replica must share so a session minted on one validates on another.
+Two or more server replicas behind a load balancer, in front of one MySQL. This is the recommended topology: a replica can be drained and restarted (or rolled to a new version) without a maintenance window, because the load balancer routes around a draining replica and sessions are MySQL-backed, so there are no sticky sessions to strand. Use `packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative to the NGINX proxy that adds active `/readyz` health checks. The setup steps below apply unchanged except that you also generate a shared `session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`), which every replica must share so a session minted on one validates on another.
 
-Properties this topology relies on, each pinned by a test in the
-`server-availability` spec: the processor scales across replicas via
-`SKIP LOCKED`; sessions and CSRF tokens validate on any replica; the periodic
-maintenance tasks run on exactly one replica via MySQL advisory locking; and
-schema migrations are applied under an advisory lock so a rolling upgrade never
-runs two migration applies against one database at once.
+Properties this topology relies on, each pinned by a test in the `server-availability` spec: the processor scales across replicas via `SKIP LOCKED`; sessions and CSRF tokens validate on any replica; the periodic maintenance tasks run on exactly one replica via MySQL advisory locking; and schema migrations are applied under an advisory lock so a rolling upgrade never runs two migration applies against one database at once.
 
-The MySQL instance is the remaining single point of failure; bring your own
-replicated/managed MySQL for an HA datastore (out of scope here).
+The MySQL instance is the remaining single point of failure; bring your own replicated/managed MySQL for an HA datastore (out of scope here).
 
 ### Single-replica (small pilot)
 
-One server replica + MySQL, from the root `docker-compose.prod.yml`. Simplest to
-operate and fine for a pilot, but a server restart or upgrade is a brief
-maintenance window rather than a hitless rollout. Move to the multi-replica
-topology when you need upgrades without downtime.
+One server replica + MySQL, from the root `docker-compose.prod.yml`. Simplest to operate and fine for a pilot, but a server restart or upgrade is a brief maintenance window rather than a hitless rollout. Move to the multi-replica topology when you need upgrades without downtime.
 
 ## Availability and SLA
 
-The control-plane availability target for the multi-replica topology is
-**99.9%** (the management, query, ingest, and alerting plane: the UI, the API,
-and `/api/events` ingestion). The full architecture rationale is in
-[ADR-0011](adr/0011-ha-architecture.md).
+The control-plane availability target for the multi-replica topology is **99.9%** (the management, query, ingest, and alerting plane: the UI, the API, and `/api/events` ingestion). The full architecture rationale is in [ADR-0011](adr/0011-ha-architecture.md).
 
-How the topology reaches it: N stateless replicas behind a load balancer mean a
-single replica can crash, be drained, or be rolled to a new version without the
-control plane going down, because the LB routes around any replica that is not
-reporting `/readyz` ready and sessions are MySQL-backed (any replica serves any
-request). Rolling upgrade (see
-[operations.md](operations.md#rolling-upgrade-multi-replica)) is therefore not a
-maintenance window.
+How the topology reaches it: N stateless replicas behind a load balancer mean a single replica can crash, be drained, or be rolled to a new version without the control plane going down, because the LB routes around any replica that is not reporting `/readyz` ready and sessions are MySQL-backed (any replica serves any request). Rolling upgrade (see [operations.md](operations.md#rolling-upgrade-multi-replica)) is therefore not a maintenance window.
 
-**Endpoint protection does not depend on control-plane availability.** This is
-the honest resilience story for a customer:
+**Endpoint protection does not depend on control-plane availability.** This is the honest resilience story for a customer:
 
-- **Enforcement continues during an outage.** Application-control block
-  decisions are made in the macOS system extension from a cached policy
-  snapshot, not by a server round-trip, so a server or network outage does not
-  open a hole in enforcement.
-- **No endpoint data is lost (up to the queue cap).** When the server is
-  unreachable the agent buffers events in its local SQLite queue and uploads
-  them when the server returns; `edr.agent.queue.dropped` increments only if the
-  queue hits its cap. Detection and alerting run server-side, so alerts for
-  events captured during an outage are generated when the backlog uploads
-  (delayed, not lost).
+- **Enforcement continues during an outage.** Application-control block decisions are made in the macOS system extension from a cached policy snapshot, not by a server round-trip, so a server or network outage does not open a hole in enforcement.
+- **No endpoint data is lost (up to the queue cap).** When the server is unreachable the agent buffers events in its local SQLite queue and uploads them when the server returns; `edr.agent.queue.dropped` increments only if the queue hits its cap. Detection and alerting run server-side, so alerts for events captured during an outage are generated when the backlog uploads (delayed, not lost).
 
 Three caveats on the SLA, stated plainly:
 
-1. **It is the control plane, not your infrastructure.** The 99.9% target is the
-   EDR server tier. It is conditional on the load balancer and MySQL you operate
-   being available; the EDR does not monitor or guarantee those.
-2. **MySQL is a single point of failure in the reference stack.** v0.1.0 ships a
-   single MySQL; the customer brings a replicated or managed MySQL for a fully
-   HA datastore. A MySQL outage takes the control plane down regardless of how
-   many server replicas are running (endpoint enforcement still continues, per
-   above).
-3. **Single region, single MySQL writer.** There is no multi-region or
-   active-active deployment in v0.1.0; geo-distribution and read-routing are
-   deferred to a later release.
+1. **It is the control plane, not your infrastructure.** The 99.9% target is the EDR server tier. It is conditional on the load balancer and MySQL you operate being available; the EDR does not monitor or guarantee those.
+2. **MySQL is a single point of failure in the reference stack.** v0.1.0 ships a single MySQL; the customer brings a replicated or managed MySQL for a fully HA datastore. A MySQL outage takes the control plane down regardless of how many server replicas are running (endpoint enforcement still continues, per above).
+3. **Single region, single MySQL writer.** There is no multi-region or active-active deployment in v0.1.0; geo-distribution and read-routing are deferred to a later release.
 
 ## Prerequisites
 
-- A Linux host with Docker Engine 24+ and Docker Compose v2 (`docker
-  compose`, not `docker-compose`).
+- A Linux host with Docker Engine 24+ and Docker Compose v2 (`docker compose`, not `docker-compose`).
 - 4 GB RAM, 2 CPU cores, 20 GB disk.
-- A hostname + TLS certificate (see "TLS setup" below), or an intention
-  to run without TLS for a lab.
-- Inbound TCP to the server's ingress (default port 8088). Outbound to
-  nothing except your OTel collector if you enable metrics.
+- A hostname + TLS certificate (see "TLS setup" below), or an intention to run without TLS for a lab.
+- Inbound TCP to the server's ingress (default port 8088). Outbound to nothing except your OTel collector if you enable metrics.
 
 ## Setup
 
@@ -115,25 +61,18 @@ curl -fsSL -o docker-compose.prod.yml \
     https://raw.githubusercontent.com/getvictor/fleet-edr/main/docker-compose.prod.yml
 ```
 
-**For the multi-replica HA topology**, use the packaging stack instead of the
-single-replica file above. It references sibling config files (the NGINX or
-HAProxy proxy config), so fetch the whole `packaging/` directory rather than a
-single file:
+**For the multi-replica HA topology**, use the packaging stack instead of the single-replica file above. It references sibling config files (the NGINX or HAProxy proxy config), so fetch the whole `packaging/` directory rather than a single file:
 
 ```sh
 git clone --depth 1 https://github.com/getvictor/fleet-edr.git
 cd fleet-edr/packaging   # docker-compose-multi-replica.yml + nginx/ + haproxy/ live here
 ```
 
-The remaining steps are identical; create `secrets/` and `tls/` inside
-`packaging/`.
+The remaining steps are identical; create `secrets/` and `tls/` inside `packaging/`.
 
 ### 3. Create secret files
 
-Three secret files live under `./secrets/` with mode 0600. Docker Compose
-bind-mounts them into the server + mysql containers as
-`/run/secrets/<name>`. None of the values land in any env block or
-`docker inspect` output.
+Three secret files live under `./secrets/` with mode 0600. Docker Compose bind-mounts them into the server + mysql containers as `/run/secrets/<name>`. None of the values land in any env block or `docker inspect` output.
 
 ```sh
 mkdir -p secrets
@@ -145,32 +84,22 @@ printf '%s' "$ENROLL_SECRET" > secrets/enroll_secret
 chmod 0600 secrets/*
 ```
 
-**For the multi-replica HA topology**, also generate the shared session signing
-key. Every replica mounts the same key so a session or OIDC state cookie minted
-on one replica validates on another:
+**For the multi-replica HA topology**, also generate the shared session signing key. Every replica mounts the same key so a session or OIDC state cookie minted on one replica validates on another:
 
 ```sh
 openssl rand -hex 32 > secrets/session_signing_key
 chmod 0600 secrets/session_signing_key
 ```
 
-The `edr_dsn` file contains the same MySQL password embedded into a Go
-DSN. The server reads it via the `EDR_DSN_FILE` pattern (see
-`server/config/file_env.go`) so the password never appears in a compose
-env block.
+The `edr_dsn` file contains the same MySQL password embedded into a Go DSN. The server reads it via the `EDR_DSN_FILE` pattern (see `server/config/file_env.go`) so the password never appears in a compose env block.
 
-Keep `MYSQL_PASS` and `ENROLL_SECRET` somewhere safe. You'll paste
-`ENROLL_SECRET` into your MDM install-script config when you deploy
-agents.
+Keep `MYSQL_PASS` and `ENROLL_SECRET` somewhere safe. You'll paste `ENROLL_SECRET` into your MDM install-script config when you deploy agents.
 
 ### 4. TLS setup
 
 Two options.
 
-**Option A: let the server terminate TLS.**
-Drop `fullchain.pem` + `privkey.pem` into `./tls/` (certbot output works
-directly). The compose bind-mounts `./tls` read-only into the server
-container.
+**Option A: let the server terminate TLS.** Drop `fullchain.pem` + `privkey.pem` into `./tls/` (certbot output works directly). The compose bind-mounts `./tls` read-only into the server container.
 
 ```sh
 mkdir -p tls
@@ -187,12 +116,7 @@ EDR_TLS_CERT_FILE=/tls/fullchain.pem
 EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
 
-**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).**
-The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs
-over TLS - issue #140 removed the plaintext-HTTP opt-out, so the EDR server
-binary cannot serve HTTP under any configuration. Issue the proxy-to-backend
-cert from your internal CA (or reuse the public cert) and mount it under
-`./tls/`; the env-var shape is identical to Option A.
+**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs over TLS - issue #140 removed the plaintext-HTTP opt-out, so the EDR server binary cannot serve HTTP under any configuration. Issue the proxy-to-backend cert from your internal CA (or reuse the public cert) and mount it under `./tls/`; the env-var shape is identical to Option A.
 
 ### 5. Pin a version in .env
 
@@ -203,9 +127,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=
 EOF
 ```
 
-Use the exact tag from the [Releases page](https://github.com/getvictor/fleet-edr/releases).
-`latest` is fine for a lab but unsafe for a pilot because the digest
-drifts silently on each release.
+Use the exact tag from the [Releases page](https://github.com/getvictor/fleet-edr/releases). `latest` is fine for a lab but unsafe for a pilot because the digest drifts silently on each release.
 
 ### 6. Boot the stack
 
@@ -213,8 +135,7 @@ drifts silently on each release.
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-MySQL starts first (healthcheck gates the server), then the server image
-pulls from ghcr.io and comes up.
+MySQL starts first (healthcheck gates the server), then the server image pulls from ghcr.io and comes up.
 
 ## Verify
 
@@ -226,22 +147,15 @@ TLS-terminated deployment:
 curl -s https://edr.example.com/readyz | jq .
 ```
 
-If you're running with a self-signed cert (lab / air-gapped pilot),
-either add the CA to the local trust store, pass
-`--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe.
-Don't paper over a trust failure with `-k` in an automation script.
+If you're running with a self-signed cert (lab / air-gapped pilot), either add the CA to the local trust store, pass `--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe. Don't paper over a trust failure with `-k` in an automation script.
 
-Local dev deployment (`task dev:server`, issue #140 - TLS by default with the
-self-signed cert from `task dev:certs`):
+Local dev deployment (`task dev:server`, issue #140 - TLS by default with the self-signed cert from `task dev:certs`):
 
 ```sh
 curl -sk https://localhost:8088/readyz | jq .
 ```
 
-`-k` is acceptable here because the cert is a known self-signed dev cert; never
-ship `-k` in an automation script against a real deployment - install mkcert
-locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and
-the cert validates without the flag.
+`-k` is acceptable here because the cert is a known self-signed dev cert; never ship `-k` in an automation script against a real deployment - install mkcert locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and the cert validates without the flag.
 
 Expect:
 
@@ -251,21 +165,16 @@ Expect:
   "version": "v0.1.0",
   "uptime_seconds": 12,
   "checks": {
-    "db": {"status": "ok", "latency_ms": 2}
+    "db": { "status": "ok", "latency_ms": 2 }
   }
 }
 ```
 
-If `db.status` is `error` / `unavailable`, MySQL isn't reachable. Check
-`docker compose logs mysql`.
+If `db.status` is `error` / `unavailable`, MySQL isn't reachable. Check `docker compose logs mysql`.
 
 ### Redeem the break-glass admin account
 
-The server seeds a single break-glass admin row on first boot with a
-NULL password. cmd/main prints a one-shot redemption URL to stderr;
-the operator opens that URL in a browser to set a password and register
-a WebAuthn credential (atomic redemption). The URL prints on every
-boot until the credential is stored - once it is, the banner is silent.
+The server seeds a single break-glass admin row on first boot with a NULL password. cmd/main prints a one-shot redemption URL to stderr; the operator opens that URL in a browser to set a password and register a WebAuthn credential (atomic redemption). The URL prints on every boot until the credential is stored - once it is, the banner is silent.
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env logs server \
@@ -283,33 +192,20 @@ BREAK-GLASS ADMIN SETUP (one-shot redemption URL - open in a browser)
 ================================================================
 ```
 
-Open the URL within the TTL (default 1h, tunable via
-`EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL`). The form takes a password
-(≥ 12 runes) and prompts the authenticator to register a WebAuthn
-credential; the three writes (token consume + password set + credential
-persist) commit in a single transaction so a partial failure leaves the
-token reusable. If the redemption window lapses, restart the server -
-a fresh token + URL print on every boot until the credential lands.
+Open the URL within the TTL (default 1h, tunable via `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL`). The form takes a password (≥ 12 runes) and prompts the authenticator to register a WebAuthn credential; the three writes (token consume + password set + credential persist) commit in a single transaction so a partial failure leaves the token reusable. If the redemption window lapses, restart the server - a fresh token + URL print on every boot until the credential lands.
 
 ### Log into the UI
 
-Production deployments authenticate via OIDC: open
-`https://edr.example.com/ui/` and follow "Continue with single sign-on"
-into your IdP. The break-glass account at `/admin/break-glass` exists
-for IdP-down recovery only.
+Production deployments authenticate via OIDC: open `https://edr.example.com/ui/` and follow "Continue with single sign-on" into your IdP. The break-glass account at `/admin/break-glass` exists for IdP-down recovery only.
 
-Local dev (`task dev:server`, `https://localhost:8088/ui/` - accept the
-self-signed cert once if mkcert isn't installed) typically uses the
-seeded break-glass account because no production IdP is configured.
-The hosts page is empty until the first agent enrolls.
+Local dev (`task dev:server`, `https://localhost:8088/ui/` - accept the self-signed cert once if mkcert isn't installed) typically uses the seeded break-glass account because no production IdP is configured. The hosts page is empty until the first agent enrolls.
 
 ## Configuration reference
 
-Non-exhaustive; see `server/config/config.go` for every knob. Anything
-unset uses the documented default.
+Non-exhaustive; see `server/config/config.go` for every knob. Anything unset uses the documented default.
 
 | Env var | Required | Default | Purpose |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `EDR_DSN` / `EDR_DSN_FILE` | yes | - | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
 | `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | - | Shared secret agents present at enrollment |
 | `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTPS server binds |
@@ -341,18 +237,16 @@ unset uses the documented default.
 | `EDR_AUTH_ALLOW_NO_OIDC` | no | 0 | Dev-only opt-in to boot in break-glass-only mode. Production refuses to start without OIDC unless this is `1`. See [okta-setup.md](okta-setup.md) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | - | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
 
-Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`,
-`EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents
-become the value. That's how the compose stack delivers secrets.
+Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`, `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents become the value. That's how the compose stack delivers secrets.
 
 ## OTel metrics and logs
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector (SigNoz, Tempo,
-Datadog OTel, etc.). The server exports:
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector (SigNoz, Tempo, Datadog OTel, etc.). The server exports:
 
 - **Traces** for every HTTP request + DB query.
 - **Logs** via `otelslog` with `service.name=fleet-edr-server`.
 - **Metrics**:
+
   - `edr.events.ingested` (counter, by `host_id`) - accepted events.
   - `edr.alerts.created` (counter, by `rule_id` + `severity`).
   - `edr.enrolled.hosts` (gauge) - current enrolled count.
@@ -361,8 +255,7 @@ Datadog OTel, etc.). The server exports:
   - `edr.db.query.duration` (histogram, by `op`).
   - `edr.agent.queue.dropped` (counter) - agent-side drops reported back.
 
-  See [operations.md](operations.md#metrics-and-monitoring) for what to
-  alert on.
+  See [operations.md](operations.md#metrics-and-monitoring) for what to alert on.
 
 There is no Prometheus scrape endpoint; this is OTel-only.
 
@@ -374,12 +267,7 @@ docker compose -f docker-compose.prod.yml --env-file .env pull server
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-MySQL is not recreated on upgrade; its volume persists. Schema changes
-ship as versioned, forward-only goose migrations that the server applies
-at boot (see [ADR-0009](adr/0009-migrations-via-goose.md)); an
-already-applied corpus is a no-op, so re-running an upgrade is safe. For a
-zero-downtime upgrade of the multi-replica topology, follow the
-[rolling upgrade](operations.md#rolling-upgrade-multi-replica) runbook.
+MySQL is not recreated on upgrade; its volume persists. Schema changes ship as versioned, forward-only goose migrations that the server applies at boot (see [ADR-0009](adr/0009-migrations-via-goose.md)); an already-applied corpus is a no-op, so re-running an upgrade is safe. For a zero-downtime upgrade of the multi-replica topology, follow the [rolling upgrade](operations.md#rolling-upgrade-multi-replica) runbook.
 
 ## Rotate secrets
 
@@ -391,17 +279,13 @@ printf '%s' "$NEW_ENROLL_SECRET" > secrets/enroll_secret
 docker compose -f docker-compose.prod.yml --env-file .env restart server
 ```
 
-Existing agents keep working because they authenticate with the per-host
-token they got at enrollment, not the enroll secret. Push the new value
-to your MDM install-script so the next Mac to enroll uses it.
+Existing agents keep working because they authenticate with the per-host token they got at enrollment, not the enroll secret. Push the new value to your MDM install-script so the next Mac to enroll uses it.
 
-`kill -s HUP` does NOT rotate the enroll secret; only the TLS cert. Use
-`docker compose restart server`.
+`kill -s HUP` does NOT rotate the enroll secret; only the TLS cert. Use `docker compose restart server`.
 
 **TLS cert**:
 
-Drop replacement `fullchain.pem` + `privkey.pem` into `./tls/` and send
-the server a SIGHUP:
+Drop replacement `fullchain.pem` + `privkey.pem` into `./tls/` and send the server a SIGHUP:
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env kill -s HUP server
@@ -443,11 +327,7 @@ Test your restore path quarterly.
 
 ## Troubleshoot
 
-**"unknown database 'edr'"** at server startup - MySQL booted but
-didn't create the `edr` schema. The compose file sets
-`MYSQL_DATABASE: edr` so this means MySQL initialized earlier without
-that var set (an earlier compose file shipped without it) and its volume
-persisted.
+**"unknown database 'edr'"** at server startup - MySQL booted but didn't create the `edr` schema. The compose file sets `MYSQL_DATABASE: edr` so this means MySQL initialized earlier without that var set (an earlier compose file shipped without it) and its volume persisted.
 
 ```sh
 docker compose -f docker-compose.prod.yml exec mysql \
@@ -456,21 +336,10 @@ docker compose -f docker-compose.prod.yml exec mysql \
 docker compose -f docker-compose.prod.yml restart server
 ```
 
-**Server keeps exiting with "EDR_DSN is required"** - the `edr_dsn`
-secret file is missing or unreadable. Re-run the secrets step in Setup.
+**Server keeps exiting with "EDR_DSN is required"** - the `edr_dsn` secret file is missing or unreadable. Re-run the secrets step in Setup.
 
-**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both
-required"** - either cert path is unset or unreadable. The server has
-no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem
-under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE`
-env vars before retrying.
+**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"** - either cert path is unset or unreadable. The server has no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying.
 
-**Agents see "enrollment failed: unauthorized"** - the `enroll_secret`
-on the server and the `EDR_ENROLL_SECRET` the agent reads from
-`/etc/fleet-edr.conf` are different. Confirm the MDM install-script
-writes the exact value from `secrets/enroll_secret`.
+**Agents see "enrollment failed: unauthorized"** - the `enroll_secret` on the server and the `EDR_ENROLL_SECRET` the agent reads from `/etc/fleet-edr.conf` are different. Confirm the MDM install-script writes the exact value from `secrets/enroll_secret`.
 
-**Server log shows "exporter export timeout"** - OTel collector is
-unreachable. Either fix connectivity to `OTEL_EXPORTER_OTLP_ENDPOINT`
-or unset the var. Server functionality is unaffected; only telemetry
-is dropped.
+**Server log shows "exporter export timeout"** - OTel collector is unreachable. Either fix connectivity to `OTEL_EXPORTER_OTLP_ENDPOINT` or unset the var. Server functionality is unaffected; only telemetry is dropped.
