@@ -228,14 +228,15 @@ cross-context foreign keys (ADR-0004). The data plane (`detection`) owns:
 | `hosts` | Enrolled-host roster with last-seen / online status |
 
 `commands` lives in `response`; `enrollments` in `endpoint`; the
-`app_control_*` policy tables in `rules`; users, sessions, roles, and
+`app_control_*` policy tables in `rules`; `users`, `sessions`, `roles`, and
 `audit_events` in `identity`.
 
 ### Read and operator API
 
-Session-gated read endpoints are served per context. Four contexts expose an
-`internal/operator/` package; identity serves its session, auth, and audit
-routes from dedicated packages (`login`, `oidc`, `breakglass`, `audit`):
+These endpoints are session-gated (cookie + CSRF) and back the admin UI. Four
+contexts expose an `internal/operator/` package; `identity` serves its session,
+auth, and audit routes from dedicated packages (`login`, `oidc`, `breakglass`,
+`audit`):
 
 | Endpoint | Context | Returns |
 |----------|---------|---------|
@@ -243,11 +244,16 @@ routes from dedicated packages (`login`, `oidc`, `breakglass`, `audit`):
 | `GET /api/hosts/{host_id}/tree` | detection | Process forest with children, network events |
 | `GET /api/hosts/{host_id}/processes/{pid}` | detection | Process detail with network + DNS |
 | `GET /api/alerts`, `GET /api/alerts/{id}`, `PUT /api/alerts/{id}` | detection | Alert list / detail / status update |
-| `GET /api/commands`, `POST /api/commands`, `PUT /api/commands/{id}` | response | Command polling / create / result |
+| `POST /api/commands`, `GET /api/commands/{id}` | response | Operator issues a command + reads its status |
 | `GET /api/rules`, `GET /api/attack-coverage` | rules | Rule catalog + MITRE Navigator layer |
 | `/api/v1/app-control/*` | rules | Application-control policy CRUD |
-| `POST /api/enroll`, `GET /api/enrollments` | endpoint | Agent enrollment + roster |
+| `GET /api/enrollments`, `POST /api/enrollments/{host_id}/{revoke,rotate}` | endpoint | Enrollment roster + revoke / rotate |
 | `GET /api/session`, `/api/auth/*`, `GET /api/audit-events` | identity | Session, OIDC sign-in, audit log |
+
+The agent-facing routes authenticate with a per-host token (or the enroll
+secret for `POST /api/enroll`), not a session: `POST /api/events` (`detection`),
+`POST /api/enroll` (`endpoint`), and the command channel `GET /api/commands` +
+`PUT /api/commands/{id}` (`response`) that the agent's commander polls.
 
 ### Web UI (`ui/`)
 
