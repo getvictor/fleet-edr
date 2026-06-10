@@ -155,79 +155,105 @@ exponential backoff reconnection (1s initial, 30s max).
 
 ## Server components
 
-### Ingest handler (`server/ingest/`)
+The server is a modular monolith split into five bounded contexts under
+`server/`: `identity`, `endpoint`, `rules`, `response`, and `detection`
+(ADR-0004). Each context owns an `api/` package -- the only surface other
+contexts may import -- a Go-compiler-enforced `internal/` tree, and its own
+`migrations/` schema (ADR-0009). The event data plane lives almost entirely in
+the `detection` context; the subsections below trace a batch through it.
 
-Stateless HTTP endpoint at `POST /api/events`. Validates required fields
-(`event_id`, `host_id`, `event_type`, `timestamp_ns`), enforces 10 MB request
-limit, and inserts into the `events` table with `INSERT IGNORE` for
-idempotent deduplication.
+### Ingest handler (`server/detection/internal/intake/`)
 
-A standalone `fleet-edr-ingest` binary (`server/cmd/fleet-edr-ingest/`) can
-run the ingest handler independently for horizontal scaling.
+Stateless agent-facing handler. `POST /api/events` validates required fields
+(`event_id`, `host_id`, `event_type`, `timestamp_ns`), enforces a 10 MB body
+limit (`MaxIngestBodyBytes`), and inserts into the `events` table with
+`INSERT IGNORE` for idempotent deduplication. The same package serves the
+unauthenticated `/livez` and `/readyz` probes.
 
-### Processor (`server/processor/`)
+A standalone `fleet-edr-ingest` binary (`server/cmd/fleet-edr-ingest/`) runs
+this handler independently for horizontal scaling.
 
-Polls the `events` table for unprocessed rows every 500ms. For each batch:
+### Pipeline (`server/detection/internal/pipeline/`)
 
-1. **Graph builder** (`server/graph/builder.go`) materializes process state:
+Composes the background goroutines detection runs continuously. `processor.go`
+claims a batch of unprocessed `events` rows every `cfg.ProcessInterval`
+(default 500ms). For each batch:
+
+1. **Graph builder** (`server/detection/internal/graph/builder.go`)
+   materializes process state:
    - `fork` -> creates process record
    - `exec` -> updates path, args, uid, gid, code signing, SHA-256
    - `exit` -> sets exit time and code
    - Handles PID reuse, exec-without-fork, fork-without-exec
 
-2. **Detection engine** (`server/detection/engine.go`) evaluates rules:
-   - Iterates registered rules against the event batch
+2. **Detection engine** (`server/detection/internal/engine/engine.go`)
+   evaluates registered rules against the batch:
    - Persists findings as alerts with event linkage
    - Returns errors on alert persistence failures (batch is retried)
 
 3. Marks events as processed (or unclaims on failure for retry)
 
-### Detection rules (`server/detection/rules/`)
+A second goroutine (`processttl.go`) force-completes stale processes every
+`cfg.StaleProcessInterval`.
 
-Rules implement the `detection.Rule` interface:
+### Detection rules (`server/rules/internal/catalog/`)
+
+Concrete rules live in the `rules` context and implement `rules/api.Rule`:
 
 ```go
 type Rule interface {
     ID() string
-    Evaluate(ctx context.Context, events []store.Event, s *store.Store) ([]Finding, error)
+    Techniques() []string          // MITRE ATT&CK technique IDs
+    Doc() Documentation            // operator-facing description + severity
+    Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 }
 ```
 
-Current rules:
+`Evaluate` may walk the historical process graph through `gr` but must not
+mutate state. The shipped catalog (`suspicious_exec` through `dns_c2_beacon`)
+is documented in `docs/detection-rules.md`, generated from each rule's `Doc()`
+by `tools/gen-rule-docs`.
 
-- **suspicious_exec** -- detects when a non-shell process spawns a shell and
-  either (a) a child executes from a suspicious path (`/tmp/`, `/var/tmp/`,
-  `/private/tmp/`, `/dev/shm/`, or path traversal), or (b) the shell or its
-  children make an outbound network connection within 30 seconds.
+### Persistence (MySQL 8.4, ADR-0005)
 
-### Store (`server/store/`)
-
-MySQL 8.4 persistence layer. Five tables:
+Each bounded context owns its own tables in the shared database; there are no
+cross-context foreign keys (ADR-0004). The data plane (`detection`) owns:
 
 | Table | Purpose |
 |-------|---------|
-| `events` | Raw event storage with processed flag for claim/process/mark cycle |
+| `events` | Raw event storage with processed flag for the claim/process/mark cycle |
 | `processes` | Materialized process state (PID, path, args, fork/exec/exit times) |
 | `alerts` | Detection findings with deduplication (host_id, rule_id, process_id) |
 | `alert_events` | Links alerts to triggering events |
-| `commands` | Server-to-agent commands (kill_process) with status lifecycle |
+| `hosts` | Enrolled-host roster with last-seen / online status |
 
-### REST API (`server/api/`)
+`commands` lives in `response`; `enrollments` in `endpoint`; the
+`app_control_*` policy tables in `rules`; `users`, `sessions`, `roles`, and
+`audit_events` in `identity`.
 
-Read endpoints for the UI:
+### Read and operator API
 
-| Endpoint | Returns |
-|----------|---------|
-| `GET /api/hosts` | Host list with event counts and last-seen |
-| `GET /api/hosts/{id}/tree` | Process forest with children, network events |
-| `GET /api/hosts/{id}/processes/{pid}` | Process detail with network + DNS |
-| `GET /api/alerts` | Filterable alert list |
-| `GET /api/alerts/{id}` | Single alert with linked event IDs |
-| `PUT /api/alerts/{id}` | Update alert status |
-| `GET /api/commands` | Agent command polling |
-| `POST /api/commands` | Create command (from UI) |
-| `PUT /api/commands/{id}` | Agent reports command result |
-| `GET /health` | Health check |
+These endpoints are session-gated (cookie + CSRF) and back the admin UI. Four
+contexts expose an `internal/operator/` package; `identity` serves its session,
+auth, and audit routes from dedicated packages (`login`, `oidc`, `breakglass`,
+`audit`):
+
+| Endpoint | Context | Returns |
+|----------|---------|---------|
+| `GET /api/hosts` | detection | Host list with online status |
+| `GET /api/hosts/{host_id}/tree` | detection | Process forest with children, network events |
+| `GET /api/hosts/{host_id}/processes/{pid}` | detection | Process detail with network + DNS |
+| `GET /api/alerts`, `GET /api/alerts/{id}`, `PUT /api/alerts/{id}` | detection | Alert list / detail / status update |
+| `POST /api/commands`, `GET /api/commands/{id}` | response | Operator issues a command + reads its status |
+| `GET /api/rules`, `GET /api/attack-coverage` | rules | Rule catalog + MITRE Navigator layer |
+| `/api/v1/app-control/*` | rules | Application-control policy CRUD |
+| `GET /api/enrollments`, `POST /api/enrollments/{host_id}/{revoke,rotate}` | endpoint | Enrollment roster + revoke / rotate |
+| `GET /api/session`, `/api/auth/*`, `GET /api/audit-events` | identity | Session, OIDC sign-in, audit log |
+
+The agent-facing routes authenticate with a per-host token (or the enroll
+secret for `POST /api/enroll`), not a session: `POST /api/events` (`detection`),
+`POST /api/enroll` (`endpoint`), and the command channel `GET /api/commands` +
+`PUT /api/commands/{id}` (`response`) that the agent's commander polls.
 
 ### Web UI (`ui/`)
 
@@ -242,7 +268,7 @@ embedded bundle.
 
 Pages:
 
-- **Login** -- API key entry (stored in sessionStorage)
+- **Login** -- OIDC sign-in plus break-glass admin redemption (session cookie + CSRF token)
 - **Host list** -- table of enrolled hosts with event counts
 - **Process tree** -- D3 hierarchical tree with click-to-select, alert badges
 - **Process detail** -- side panel with metadata, network connections, DNS
