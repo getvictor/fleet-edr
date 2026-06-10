@@ -2,23 +2,15 @@
 
 ## Purpose
 
-The agent event queue is the durable buffer between the on-device capture pipeline and the upload to the EDR server.
-It exists because the upload path is fundamentally less reliable than the capture path: the device may be offline, the
-server may be temporarily unavailable, the agent may be restarted by the user, and the host may crash. Without
-durability the EDR loses telemetry every time any of those happen. With durability, captured events survive process
-exit and reboot, and the uploader can drain the queue on its own schedule.
+The agent event queue is the durable buffer between the on-device capture pipeline and the upload to the EDR server. It exists because the upload path is fundamentally less reliable than the capture path: the device may be offline, the server may be temporarily unavailable, the agent may be restarted by the user, and the host may crash. Without durability the EDR loses telemetry every time any of those happen. With durability, captured events survive process exit and reboot, and the uploader can drain the queue on its own schedule.
 
-This capability defines the queue's external contract: how events enter, how they are dequeued for upload, how their
-lifecycle is tracked from "captured" to "uploaded" to "pruned", how the queue stays bounded under sustained capture
-without bringing down the host, and what observable guarantees the rest of the agent depends on.
+This capability defines the queue's external contract: how events enter, how they are dequeued for upload, how their lifecycle is tracked from "captured" to "uploaded" to "pruned", how the queue stays bounded under sustained capture without bringing down the host, and what observable guarantees the rest of the agent depends on.
 
 ## Requirements
 
 ### Requirement: Durable enqueue
 
-The queue SHALL persist every successfully enqueued event to non-volatile storage before returning success. An event
-that has been successfully enqueued MUST survive an immediate process exit or host reboot and remain available for
-later dequeue.
+The queue SHALL persist every successfully enqueued event to non-volatile storage before returning success. An event that has been successfully enqueued MUST survive an immediate process exit or host reboot and remain available for later dequeue.
 
 #### Scenario: Agent crashes after enqueue
 
@@ -30,8 +22,7 @@ later dequeue.
 
 ### Requirement: FIFO dequeue of pending events
 
-The queue SHALL return pending (not-yet-uploaded) events in insertion order when the uploader requests a batch. The
-uploader MAY request up to a caller-supplied batch size; the queue MUST return at most that many pending events.
+The queue SHALL return pending (not-yet-uploaded) events in insertion order when the uploader requests a batch. The uploader MAY request up to a caller-supplied batch size; the queue MUST return at most that many pending events.
 
 #### Scenario: Uploader requests a batch
 
@@ -49,13 +40,7 @@ uploader MAY request up to a caller-supplied batch size; the queue MUST return a
 
 ### Requirement: Acknowledgement marks events uploaded
 
-After the uploader successfully posts a batch to the server, it SHALL acknowledge the batch back to the queue by event
-ID. Acknowledged events MUST NOT be returned by subsequent dequeue calls. Acknowledgement of a non-existent ID MUST be
-a no-op rather than an error: the cap-eviction path described under "Bounded storage with operator-visible lossy
-fallback" can drop a pending row out from under an in-flight uploader, so an uploader that holds dequeued event IDs and
-later acknowledges them MUST tolerate the case where some IDs no longer exist. Dequeue does not lock or pin rows
-against eviction; the queue remains a single durable source of truth and the uploader treats acknowledgement as
-best-effort cleanup.
+After the uploader successfully posts a batch to the server, it SHALL acknowledge the batch back to the queue by event ID. Acknowledged events MUST NOT be returned by subsequent dequeue calls. Acknowledgement of a non-existent ID MUST be a no-op rather than an error: the cap-eviction path described under "Bounded storage with operator-visible lossy fallback" can drop a pending row out from under an in-flight uploader, so an uploader that holds dequeued event IDs and later acknowledges them MUST tolerate the case where some IDs no longer exist. Dequeue does not lock or pin rows against eviction; the queue remains a single durable source of truth and the uploader treats acknowledgement as best-effort cleanup.
 
 #### Scenario: Successful upload is acknowledged
 
@@ -73,18 +58,14 @@ best-effort cleanup.
 
 #### Scenario: Cap eviction races an in-flight upload
 
-- **GIVEN** the uploader has dequeued a batch and the queue subsequently evicts the oldest pending rows under the byte
-  cap, including some IDs from that in-flight batch
+- **GIVEN** the uploader has dequeued a batch and the queue subsequently evicts the oldest pending rows under the byte cap, including some IDs from that in-flight batch
 - **WHEN** the uploader posts the batch to the server and then acknowledges the IDs it dequeued
 - **THEN** acknowledgement is a no-op for the IDs the eviction already removed
 - **AND** the eviction is reported through the lossy-drop metric so operators can see that telemetry was lost
 
 ### Requirement: Bounded storage with operator-visible lossy fallback
 
-The queue SHALL enforce an operator-configurable byte cap on its persistent storage. When the cap would be exceeded
-the queue SHALL first drop already-uploaded rows (lossless cleanup), and only when no uploaded rows remain MAY it drop
-the oldest pending rows. Lossy drops of pending events MUST be reported to operators (log warning and a metric) so
-sustained backpressure is visible.
+The queue SHALL enforce an operator-configurable byte cap on its persistent storage. When the cap would be exceeded the queue SHALL first drop already-uploaded rows (lossless cleanup), and only when no uploaded rows remain MAY it drop the oldest pending rows. Lossy drops of pending events MUST be reported to operators (log warning and a metric) so sustained backpressure is visible.
 
 #### Scenario: Cap is reached but uploaded rows can absorb the pressure
 
@@ -111,8 +92,7 @@ sustained backpressure is visible.
 
 ### Requirement: Pruning of old uploaded events
 
-The queue SHALL provide a prune operation that deletes already-uploaded events older than a caller-supplied duration.
-Prune MUST NOT delete events that have not yet been uploaded.
+The queue SHALL provide a prune operation that deletes already-uploaded events older than a caller-supplied duration. Prune MUST NOT delete events that have not yet been uploaded.
 
 #### Scenario: Prune removes old uploaded rows
 
@@ -130,9 +110,7 @@ Prune MUST NOT delete events that have not yet been uploaded.
 
 ### Requirement: Idempotent re-enqueue of identical event identifiers
 
-Because the agent may emit reconciliation events whose identifiers can be re-derived after a restart, the queue MUST
-NOT reject a fresh enqueue solely because an event with the same `event_id` was previously enqueued. Server-side
-idempotency is the single source of truth for de-duplication.
+Because the agent may emit reconciliation events whose identifiers can be re-derived after a restart, the queue MUST NOT reject a fresh enqueue solely because an event with the same `event_id` was previously enqueued. Server-side idempotency is the single source of truth for de-duplication.
 
 #### Scenario: An event with a duplicate event_id is enqueued
 
@@ -143,8 +121,7 @@ idempotency is the single source of truth for de-duplication.
 
 ### Requirement: Queue depth is observable
 
-The queue SHALL expose the count of currently-pending (not-yet-uploaded) events on demand so operators and the agent
-shutdown path can report how much backlog exists.
+The queue SHALL expose the count of currently-pending (not-yet-uploaded) events on demand so operators and the agent shutdown path can report how much backlog exists.
 
 #### Scenario: Depth after several enqueues
 
@@ -154,9 +131,7 @@ shutdown path can report how much backlog exists.
 
 ### Requirement: Storage I/O errors surface to the caller
 
-The queue SHALL return an error from enqueue and dequeue when the underlying storage is unavailable (for example, when
-the disk is full). The caller MUST be able to back off, retry, or shed load on the basis of that error rather than
-silently losing data.
+The queue SHALL return an error from enqueue and dequeue when the underlying storage is unavailable (for example, when the disk is full). The caller MUST be able to back off, retry, or shed load on the basis of that error rather than silently losing data.
 
 #### Scenario: Disk is full during enqueue
 
@@ -167,10 +142,7 @@ silently losing data.
 
 ### Requirement: Synthetic reconciliation events use the same queue
 
-The queue SHALL accept reconciliation events (synthetic exit events emitted by the agent, snapshot exec events emitted by
-the extension, and snapshot heartbeat events emitted by the agent for still-alive snapshot-originated processes) on the
-same path as kernel-observed events, and MUST NOT distinguish them from organic events for the purposes of durability,
-ordering, or upload.
+The queue SHALL accept reconciliation events (synthetic exit events emitted by the agent, snapshot exec events emitted by the extension, and snapshot heartbeat events emitted by the agent for still-alive snapshot-originated processes) on the same path as kernel-observed events, and MUST NOT distinguish them from organic events for the purposes of durability, ordering, or upload.
 
 #### Scenario: Reconciliation exit event is queued and uploaded
 

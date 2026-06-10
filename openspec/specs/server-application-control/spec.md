@@ -2,21 +2,13 @@
 
 ## Purpose
 
-The application control subsystem is the EDR's server-side authority for deciding which executables MAY run on enrolled hosts. It
-owns the durable representation of policies, the rules inside each policy, the host groups those policies are assigned to, the
-REST surface operators use to author and govern those rules, the command contract that fans a policy snapshot out to hosts as
-`set_application_control` commands, and the decision-event contract that comes back from the extension when a rule fires. In this
-phase the only action a rule may take is `BLOCK` and every rule's `enforcement` defaults to `PROTECT`; the engine is shaped so
-detect-vs-protect rollout, default-deny policies, and per-rule expiry can layer on without a migration.
+The application control subsystem is the EDR's server-side authority for deciding which executables MAY run on enrolled hosts. It owns the durable representation of policies, the rules inside each policy, the host groups those policies are assigned to, the REST surface operators use to author and govern those rules, the command contract that fans a policy snapshot out to hosts as `set_application_control` commands, and the decision-event contract that comes back from the extension when a rule fires. In this phase the only action a rule may take is `BLOCK` and every rule's `enforcement` defaults to `PROTECT`; the engine is shaped so detect-vs-protect rollout, default-deny policies, and per-rule expiry can layer on without a migration.
 
 ## Requirements
 
 ### Requirement: Policy is a named, versioned ruleset
 
-The system SHALL represent application control as a collection of named policies per deployment. Each policy
-SHALL carry an immutable identifier, a deployment-unique name, a description, a monotonically increasing
-version that SHALL be incremented on every mutation of the policy or any of its rules, a default action
-constrained to `NONE` in this phase, and timestamps and actor identity for the most recent change.
+The system SHALL represent application control as a collection of named policies per deployment. Each policy SHALL carry an immutable identifier, a deployment-unique name, a description, a monotonically increasing version that SHALL be incremented on every mutation of the policy or any of its rules, a default action constrained to `NONE` in this phase, and timestamps and actor identity for the most recent change.
 
 #### Scenario: A fresh deployment boots and the seed policy is present
 
@@ -39,14 +31,7 @@ constrained to `NONE` in this phase, and timestamps and actor identity for the m
 
 ### Requirement: Rule identifies one binary, signing identity, or path
 
-The system SHALL represent every rule as a row owned by exactly one policy and carrying: a `rule_type` from
-the set `{CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH}`; an `identifier` string whose format is
-determined by `rule_type`; an `action` constrained in this phase to `BLOCK`; an `enforcement` from
-`{PROTECT, DETECT}` defaulting to `PROTECT`; an `enabled` flag; a `severity` from
-`{low, medium, high, critical}` defaulting to `medium`; a `source` from `{admin, imported, intel}` defaulting
-to `admin`; an optional `source_ref`; an optional `custom_msg`; an optional `custom_url`; an optional
-`comment`; an optional `expires_at`; and timestamps and actor identity. The triple
-`(policy_id, rule_type, identifier)` SHALL be unique.
+The system SHALL represent every rule as a row owned by exactly one policy and carrying: a `rule_type` from the set `{CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH}`; an `identifier` string whose format is determined by `rule_type`; an `action` constrained in this phase to `BLOCK`; an `enforcement` from `{PROTECT, DETECT}` defaulting to `PROTECT`; an `enabled` flag; a `severity` from `{low, medium, high, critical}` defaulting to `medium`; a `source` from `{admin, imported, intel}` defaulting to `admin`; an optional `source_ref`; an optional `custom_msg`; an optional `custom_url`; an optional `comment`; an optional `expires_at`; and timestamps and actor identity. The triple `(policy_id, rule_type, identifier)` SHALL be unique.
 
 #### Scenario: Two rules in the same policy can target the same identifier under different types
 
@@ -62,19 +47,14 @@ to `admin`; an optional `source_ref`; an optional `custom_msg`; an optional `cus
 
 ### Requirement: Identifier validation per rule type
 
-The system SHALL validate every rule identifier against the format required by its `rule_type` before
-persisting the rule, and SHALL reject the request with a typed error when the identifier does not match the
-required format. The validation rules are:
+The system SHALL validate every rule identifier against the format required by its `rule_type` before persisting the rule, and SHALL reject the request with a typed error when the identifier does not match the required format. The validation rules are:
 
 - `CDHASH`: exactly 40 lowercase hexadecimal characters.
 - `BINARY`: exactly 64 lowercase hexadecimal characters.
 - `CERTIFICATE`: exactly 64 lowercase hexadecimal characters.
 - `TEAMID`: exactly 10 characters drawn from `[A-Z0-9]`.
-- `SIGNINGID`: either `<TeamID>:<bundle.id>` where `TeamID` matches the `TEAMID` format above, or
-  `platform:<bundle.id>` for Apple platform binaries. The `bundle.id` portion MUST be a non-empty string of
-  ASCII characters drawn from `[A-Za-z0-9._-]`.
-- `PATH`: a macOS-canonical absolute path. The system SHALL canonicalize Apple's well-known symlinks (`/tmp`,
-  `/var`, `/etc`) into their `/private/...` forms before persisting.
+- `SIGNINGID`: either `<TeamID>:<bundle.id>` where `TeamID` matches the `TEAMID` format above, or `platform:<bundle.id>` for Apple platform binaries. The `bundle.id` portion MUST be a non-empty string of ASCII characters drawn from `[A-Za-z0-9._-]`.
+- `PATH`: a macOS-canonical absolute path. The system SHALL canonicalize Apple's well-known symlinks (`/tmp`, `/var`, `/etc`) into their `/private/...` forms before persisting.
 
 #### Scenario: A TeamID with the wrong length is rejected
 
@@ -96,11 +76,7 @@ required format. The validation rules are:
 
 ### Requirement: Host groups and policy assignments
 
-The system SHALL represent host groups as named, deployment-wide objects that describe membership through a
-criteria document. The system SHALL seed a built-in group named `all-hosts` whose criteria match every host.
-The system SHALL allow a policy to be assigned to one or more host groups via a join table carrying
-`(policy_id, host_group_id, priority)`. In this phase only the built-in `all-hosts` group is editable by the
-system itself; user-authored host groups arrive in a follow-on change.
+The system SHALL represent host groups as named, deployment-wide objects that describe membership through a criteria document. The system SHALL seed a built-in group named `all-hosts` whose criteria match every host. The system SHALL allow a policy to be assigned to one or more host groups via a join table carrying `(policy_id, host_group_id, priority)`. In this phase only the built-in `all-hosts` group is editable by the system itself; user-authored host groups arrive in a follow-on change.
 
 #### Scenario: A fresh deployment has an all-hosts group and the Default policy is assigned to it
 
@@ -110,22 +86,16 @@ system itself; user-authored host groups arrive in a follow-on change.
 
 ### Requirement: REST surface for policies, rules, groups, and assignments
 
-The system SHALL expose the application control subsystem under `/api/v1/app-control/` with operator session
-authentication and CSRF protection on every state-changing call. The endpoints SHALL be:
+The system SHALL expose the application control subsystem under `/api/v1/app-control/` with operator session authentication and CSRF protection on every state-changing call. The endpoints SHALL be:
 
 - `GET /api/v1/app-control/policies` and `POST /api/v1/app-control/policies`
-- `GET /api/v1/app-control/policies/{id}`, `PATCH /api/v1/app-control/policies/{id}`,
-  `DELETE /api/v1/app-control/policies/{id}`
-- `POST /api/v1/app-control/policies/{id}/rules` and
-  `POST /api/v1/app-control/policies/{id}/rules:bulkUpsert`
-- `PATCH /api/v1/app-control/rules/{id}`, `DELETE /api/v1/app-control/rules/{id}`,
-  `GET /api/v1/app-control/rules`
-- `GET /api/v1/app-control/host-groups`, `POST /api/v1/app-control/host-groups`,
-  `PATCH /api/v1/app-control/host-groups/{id}`, `DELETE /api/v1/app-control/host-groups/{id}`
+- `GET /api/v1/app-control/policies/{id}`, `PATCH /api/v1/app-control/policies/{id}`, `DELETE /api/v1/app-control/policies/{id}`
+- `POST /api/v1/app-control/policies/{id}/rules` and `POST /api/v1/app-control/policies/{id}/rules:bulkUpsert`
+- `PATCH /api/v1/app-control/rules/{id}`, `DELETE /api/v1/app-control/rules/{id}`, `GET /api/v1/app-control/rules`
+- `GET /api/v1/app-control/host-groups`, `POST /api/v1/app-control/host-groups`, `PATCH /api/v1/app-control/host-groups/{id}`, `DELETE /api/v1/app-control/host-groups/{id}`
 - `POST /api/v1/app-control/policies/{id}/assignments`
 
-Successful responses SHALL be JSON. Errors SHALL follow the API capability's `ErrorResponse` shape. Each
-state-changing endpoint SHALL require a non-empty `actor` and `reason` field in the request body for audit.
+Successful responses SHALL be JSON. Errors SHALL follow the API capability's `ErrorResponse` shape. Each state-changing endpoint SHALL require a non-empty `actor` and `reason` field in the request body for audit.
 
 #### Scenario: An unauthenticated request is rejected
 
@@ -137,40 +107,28 @@ state-changing endpoint SHALL require a non-empty `actor` and `reason` field in 
 
 - **GIVEN** a policy whose rules were created by a prior `bulkUpsert`
 - **WHEN** the operator re-issues the identical `bulkUpsert` payload
-- **THEN** the second run inserts zero new rules and updates the matching ones in place,
-  because the `(rule_type, identifier)` unique key makes the upsert idempotent
+- **THEN** the second run inserts zero new rules and updates the matching ones in place, because the `(rule_type, identifier)` unique key makes the upsert idempotent
 - **AND** the policy ends with the same rule set
 
 ### Requirement: Rule lifecycle audit events
 
-The system SHALL emit an audit event for every create, update, or delete of a policy or a rule. The event
-SHALL include the actor, the reason supplied with the request, the policy and (for rule events) rule
-identifier, and a structured diff of the change. A `bulkUpsert` SHALL emit exactly one audit event covering
-the logical operation rather than one event per touched rule.
+The system SHALL emit an audit event for every create, update, or delete of a policy or a rule. The event SHALL include the actor, the reason supplied with the request, the policy and (for rule events) rule identifier, and a structured diff of the change. A `bulkUpsert` SHALL emit exactly one audit event covering the logical operation rather than one event per touched rule.
 
 #### Scenario: Creating a rule emits an audit event
 
 - **GIVEN** an authenticated operator
 - **WHEN** the operator successfully creates a rule
-- **THEN** the audit log contains a new event with the operator's identity, the supplied reason, the policy
-  and rule identifiers, and a diff describing the created rule
+- **THEN** the audit log contains a new event with the operator's identity, the supplied reason, the policy and rule identifiers, and a diff describing the created rule
 
 #### Scenario: Bulk upsert emits a single audit event
 
 - **GIVEN** an authenticated operator
 - **WHEN** the operator successfully bulk-upserts twenty rules
-- **THEN** the audit log gains exactly one event recording the logical operation and the count of touched
-  rules
+- **THEN** the audit log gains exactly one event recording the logical operation and the count of touched rules
 
 ### Requirement: Command fan-out on policy mutation
 
-The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any
-host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate
-commands. The command payload SHALL carry `{policy_id, policy_version, rules: [...]}` where each rule entry
-includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. Disabled rules and
-expired rules SHALL be omitted from the payload. The system SHALL record the count of unique hosts the
-command was successfully enqueued for and the count of unique hosts the enqueue failed for, and SHALL
-include those counts on the audit event for the mutation.
+The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate commands. The command payload SHALL carry `{policy_id, policy_version, rules: [...]}` where each rule entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. Disabled rules and expired rules SHALL be omitted from the payload. The system SHALL record the count of unique hosts the command was successfully enqueued for and the count of unique hosts the enqueue failed for, and SHALL include those counts on the audit event for the mutation.
 
 #### Scenario: A new rule fans out only to assigned hosts
 
@@ -194,14 +152,7 @@ include those counts on the audit event for the mutation.
 
 ### Requirement: Application control block event contract
 
-The system SHALL accept ingest events of kind `application_control_block` from agents through the same
-host-token-authenticated `POST /api/events` channel that carries every other agent event. The system MUST
-bind every accepted event to the `host_id` resolved by the existing host-token middleware and MUST reject
-events whose envelope `host_id` does not match the authenticated host. Each event MUST carry `policy_id`,
-`policy_version`, `rule_id`, `rule_type`, `rule_identifier`,
-`matched_identifier`, `severity`, `process`, and `ancestry`. The event MAY carry optional `custom_msg` and
-`custom_url`. The system SHALL accept events whose `policy_id` or `rule_id` does not correspond to a known
-rule (so an in-flight block is not lost when a rule is deleted after the block fired).
+The system SHALL accept ingest events of kind `application_control_block` from agents through the same host-token-authenticated `POST /api/events` channel that carries every other agent event. The system MUST bind every accepted event to the `host_id` resolved by the existing host-token middleware and MUST reject events whose envelope `host_id` does not match the authenticated host. Each event MUST carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier`, `matched_identifier`, `severity`, `process`, and `ancestry`. The event MAY carry optional `custom_msg` and `custom_url`. The system SHALL accept events whose `policy_id` or `rule_id` does not correspond to a known rule (so an in-flight block is not lost when a rule is deleted after the block fired).
 
 #### Scenario: A block event for an unknown rule is accepted
 
@@ -211,24 +162,19 @@ rule (so an in-flight block is not lost when a rule is deleted after the block f
 
 #### Scenario: A block event for a now-deleted rule is accepted
 
-- **GIVEN** a rule that existed when the agent denied the exec but was deleted before the event reached the
-  server
+- **GIVEN** a rule that existed when the agent denied the exec but was deleted before the event reached the server
 - **WHEN** the agent posts the `application_control_block` event
 - **THEN** the server accepts and persists the event so the historical decision is not lost
 
 ### Requirement: Bootstrap seeds Default policy and all-hosts group
 
-The system SHALL ensure that, on first server boot, the application control bootstrap produces exactly one
-host group named `all-hosts` whose criteria match every host, exactly one policy named `Default` with zero
-rules and `default_action='NONE'`, with the `Default` policy assigned to the `all-hosts` group. The bootstrap
-MUST be idempotent across repeated server starts.
+The system SHALL ensure that, on first server boot, the application control bootstrap produces exactly one host group named `all-hosts` whose criteria match every host, exactly one policy named `Default` with zero rules and `default_action='NONE'`, with the `Default` policy assigned to the `all-hosts` group. The bootstrap MUST be idempotent across repeated server starts.
 
 #### Scenario: A fresh database boots into a usable state
 
 - **GIVEN** a fresh database
 - **WHEN** the server completes its bootstrap
-- **THEN** the deployment has exactly one host group named `all-hosts`, exactly one policy named `Default`,
-  and exactly one assignment connecting them
+- **THEN** the deployment has exactly one host group named `all-hosts`, exactly one policy named `Default`, and exactly one assignment connecting them
 
 #### Scenario: Bootstrap is idempotent
 

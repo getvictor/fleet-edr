@@ -2,20 +2,15 @@
 
 ## Purpose
 
-The detection rules engine is the analytic layer that turns the materialized process graph and raw event stream into
-behavioral alerts. It runs operator-curated rules against each batch of events that the processor releases, persists the
-resulting findings as alerts, and exposes them to the UI through the read API.
+The detection rules engine is the analytic layer that turns the materialized process graph and raw event stream into behavioral alerts. It runs operator-curated rules against each batch of events that the processor releases, persists the resulting findings as alerts, and exposes them to the UI through the read API.
 
-The capability owns the contract for what an alert is: how a rule firing maps to a row in the alerts table, how repeated
-firings of the same rule against the same process collapse to a single record, how MITRE ATT&CK technique mappings travel
-with each alert, and how a rule failure interacts with the rest of the batch.
+The capability owns the contract for what an alert is: how a rule firing maps to a row in the alerts table, how repeated firings of the same rule against the same process collapse to a single record, how MITRE ATT&CK technique mappings travel with each alert, and how a rule failure interacts with the rest of the batch.
 
 ## Requirements
 
 ### Requirement: Evaluate every registered rule against each batch
 
-The system SHALL evaluate every rule that has been registered with the engine against each batch of events the processor
-delivers. A single rule MAY emit zero, one, or many findings per batch.
+The system SHALL evaluate every rule that has been registered with the engine against each batch of events the processor delivers. A single rule MAY emit zero, one, or many findings per batch.
 
 #### Scenario: A batch produces multiple findings from one rule
 
@@ -32,47 +27,33 @@ delivers. A single rule MAY emit zero, one, or many findings per batch.
 
 ### Requirement: Registered rule catalog
 
-The system SHALL register the following named rules at startup so each becomes evaluable against every batch:
-`suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`,
-`credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, and `dns_c2_beacon`.
+The system SHALL register the following named rules at startup so each becomes evaluable against every batch: `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, and `dns_c2_beacon`.
 
 #### Scenario: The engine reports its rule catalog
 
 - **GIVEN** a running detection engine in its default configuration
 - **WHEN** an operator inspects the catalog of registered rules
-- **THEN** the catalog includes `suspicious_exec`, `shell_from_office`, `osascript_network_exec`,
-  `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`,
-  `sudoers_tamper`, and `dns_c2_beacon`
+- **THEN** the catalog includes `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, and `dns_c2_beacon`
 
 ### Requirement: Persisted alert schema
 
-The system SHALL persist each finding as an alert that carries a host identifier, a rule identifier, a severity
-(`low`, `medium`, `high`, or `critical`), a human-readable title, a human-readable summary or description, an OPTIONAL
-linked process identifier, and the list of MITRE ATT&CK technique identifiers that the firing rule maps to. The process
-identifier is present when the finding is attributable to a live process and absent for process-less findings (for
-example a Background Task Management persistence registration, whose attacker has no live process at registration time).
+The system SHALL persist each finding as an alert that carries a host identifier, a rule identifier, a severity (`low`, `medium`, `high`, or `critical`), a human-readable title, a human-readable summary or description, an OPTIONAL linked process identifier, and the list of MITRE ATT&CK technique identifiers that the firing rule maps to. The process identifier is present when the finding is attributable to a live process and absent for process-less findings (for example a Background Task Management persistence registration, whose attacker has no live process at registration time).
 
 #### Scenario: A rule fires and creates an alert
 
 - **GIVEN** an event batch that satisfies one rule's pattern against a known process
 - **WHEN** the engine evaluates the rule and persists the finding
-- **THEN** the resulting alert row carries the host id, rule id, severity, title, description, linked process id, and
-  technique list of the firing rule
+- **THEN** the resulting alert row carries the host id, rule id, severity, title, description, linked process id, and technique list of the firing rule
 
 #### Scenario: An alert with no attributable process omits the process link
 
 - **GIVEN** a finding produced with no attributable process (a process-less finding)
 - **WHEN** the engine persists the finding as an alert
-- **THEN** the resulting alert row carries no linked process identifier and still records the host id, rule id, severity,
-  title, description, and technique list
+- **THEN** the resulting alert row carries no linked process identifier and still records the host id, rule id, severity, title, description, and technique list
 
 ### Requirement: Alert dedup by subject
 
-The system SHALL deduplicate alerts on the tuple (source, host id, rule id, subject), where the subject is a stable
-identity for the finding: for a process-backed finding the subject is its process identifier (preserving the historical
-(host, rule, process) dedup), and for a process-less finding the firing rule supplies the subject (for example the
-registered launch item). Re-evaluating a rule that yields the same subject on the same host in a later batch MUST NOT
-create a second alert row; the existing alert remains the single record for that finding.
+The system SHALL deduplicate alerts on the tuple (source, host id, rule id, subject), where the subject is a stable identity for the finding: for a process-backed finding the subject is its process identifier (preserving the historical (host, rule, process) dedup), and for a process-less finding the firing rule supplies the subject (for example the registered launch item). Re-evaluating a rule that yields the same subject on the same host in a later batch MUST NOT create a second alert row; the existing alert remains the single record for that finding.
 
 #### Scenario: A rule re-fires on the same process in a later batch
 
@@ -88,8 +69,7 @@ create a second alert row; the existing alert remains the single record for that
 
 ### Requirement: Alert-to-event linkage
 
-The system SHALL record the set of triggering event identifiers for each alert so that the read API can return them on the
-alert detail endpoint and analysts can pivot from the alert to the underlying telemetry.
+The system SHALL record the set of triggering event identifiers for each alert so that the read API can return them on the alert detail endpoint and analysts can pivot from the alert to the underlying telemetry.
 
 #### Scenario: An analyst opens an alert and sees its triggering events
 
@@ -99,8 +79,7 @@ alert detail endpoint and analysts can pivot from the alert to the underlying te
 
 ### Requirement: MITRE ATT&CK technique stamping
 
-The system SHALL stamp each persisted alert with the MITRE ATT&CK technique identifiers declared by the firing rule. The
-stamped list MUST be preserved on the alert row even if the rule's technique mapping is later refined.
+The system SHALL stamp each persisted alert with the MITRE ATT&CK technique identifiers declared by the firing rule. The stamped list MUST be preserved on the alert row even if the rule's technique mapping is later refined.
 
 #### Scenario: A rule advertises ATT&CK techniques
 
@@ -111,9 +90,7 @@ stamped list MUST be preserved on the alert row even if the rule's technique map
 
 ### Requirement: Rule failure isolation, batch retry on persistence failure
 
-The system SHALL isolate a single rule's evaluation failure so that other rules in the batch still run. The system MUST
-NOT silently drop alerts on persistence failures: when persisting a finding fails, the batch is surfaced as failed so the
-processor can retry it.
+The system SHALL isolate a single rule's evaluation failure so that other rules in the batch still run. The system MUST NOT silently drop alerts on persistence failures: when persisting a finding fails, the batch is surfaced as failed so the processor can retry it.
 
 #### Scenario: One rule errors during evaluation
 
@@ -131,8 +108,7 @@ processor can retry it.
 
 ### Requirement: Snapshot exec events are excluded from rule evaluation
 
-The system SHALL exclude `exec` events flagged as snapshot from rule evaluation. Such events describe processes that
-existed before the agent began subscribing and represent historical state, not new attacker activity.
+The system SHALL exclude `exec` events flagged as snapshot from rule evaluation. Such events describe processes that existed before the agent began subscribing and represent historical state, not new attacker activity.
 
 #### Scenario: A snapshot exec is delivered in a batch
 
@@ -143,8 +119,7 @@ existed before the agent began subscribing and represent historical state, not n
 
 ### Requirement: Operator toggling of individual rules
 
-The system SHALL allow an operator to disable individual rules at startup through configuration. A disabled rule MUST NOT
-evaluate against any batch and MUST NOT produce alerts until it is re-enabled.
+The system SHALL allow an operator to disable individual rules at startup through configuration. A disabled rule MUST NOT evaluate against any batch and MUST NOT produce alerts until it is re-enabled.
 
 #### Scenario: An operator disables a noisy rule for their environment
 
@@ -156,31 +131,16 @@ evaluate against any batch and MUST NOT produce alerts until it is re-enabled.
 
 ### Requirement: DNS-correlated C2 beacon detection
 
-The system SHALL register a `dns_c2_beacon` rule that fires when a suspicious process resolves a domain and then
-connects to the resolved address, correlating all three telemetry streams. The rule MUST require, for a single
-originating process: a `dns_query` event carrying one or more `response_addresses`, and a subsequent `network_connect`
-event whose `remote_address` is one of those `response_addresses`, both within a bounded time window for that process.
-Address matching MUST be performed on parsed/normalized IP values (not raw strings) so that equivalent IPv6 forms
-compare equal. When several `dns_query` events for the process match the connection's `remote_address`, the rule MUST
-select the most recent matching query (deterministic tie-break by query name) for finding attribution.
+The system SHALL register a `dns_c2_beacon` rule that fires when a suspicious process resolves a domain and then connects to the resolved address, correlating all three telemetry streams. The rule MUST require, for a single originating process: a `dns_query` event carrying one or more `response_addresses`, and a subsequent `network_connect` event whose `remote_address` is one of those `response_addresses`, both within a bounded time window for that process. Address matching MUST be performed on parsed/normalized IP values (not raw strings) so that equivalent IPv6 forms compare equal. When several `dns_query` events for the process match the connection's `remote_address`, the rule MUST select the most recent matching query (deterministic tie-break by query name) for finding attribution.
 
-The rule MUST gate on a suspicion signal derived from the originating process's exec context (for example an exec from a
-temporary or world-writable path, or a script interpreter with a non-interactive parent) so that ordinary browser
-traffic that resolves and connects to a domain does NOT fire. When the resolved domain also matches a domain-anomaly
-signal (a high-entropy or algorithmically-generated name), the rule MAY raise the finding severity and MUST add the
-`T1568.002` technique.
+The rule MUST gate on a suspicion signal derived from the originating process's exec context (for example an exec from a temporary or world-writable path, or a script interpreter with a non-interactive parent) so that ordinary browser traffic that resolves and connects to a domain does NOT fire. When the resolved domain also matches a domain-anomaly signal (a high-entropy or algorithmically-generated name), the rule MAY raise the finding severity and MUST add the `T1568.002` technique.
 
-A firing alert SHALL cite the `dns_query` and `network_connect` events that compose the chain and SHALL be attributed to
-the originating process (its exec), so an analyst sees the full exec-to-DNS-to-network chain and the engine's per-process
-dedup collapses repeated beacons into a single alert. The rule MUST hold no state between batches; the correlation is
-performed by retrospective graph reads.
+A firing alert SHALL cite the `dns_query` and `network_connect` events that compose the chain and SHALL be attributed to the originating process (its exec), so an analyst sees the full exec-to-DNS-to-network chain and the engine's per-process dedup collapses repeated beacons into a single alert. The rule MUST hold no state between batches; the correlation is performed by retrospective graph reads.
 
 #### Scenario: A suspicious process resolves a domain and connects to the resolved address
 
-- **GIVEN** a process exec'd from a temporary path that issued a `dns_query` for a high-entropy domain whose
-  `response_addresses` include `203.0.113.10`
-- **WHEN** a `network_connect` event for the same process to `remote_address` `203.0.113.10` is evaluated, within the
-  correlation window
+- **GIVEN** a process exec'd from a temporary path that issued a `dns_query` for a high-entropy domain whose `response_addresses` include `203.0.113.10`
+- **WHEN** a `network_connect` event for the same process to `remote_address` `203.0.113.10` is evaluated, within the correlation window
 - **THEN** the engine produces one `dns_c2_beacon` finding
 - **AND** the finding cites the `dns_query` and `network_connect` event identifiers
 - **AND** the finding is attributed to the originating process (its exec)
@@ -188,15 +148,12 @@ performed by retrospective graph reads.
 
 #### Scenario: A browser resolving and connecting to an ordinary domain does not fire
 
-- **GIVEN** a browser process that issued a `dns_query` for an ordinary domain and connected to one of its
-  `response_addresses`
+- **GIVEN** a browser process that issued a `dns_query` for an ordinary domain and connected to one of its `response_addresses`
 - **WHEN** the `network_connect` event is evaluated
-- **THEN** the engine produces no `dns_c2_beacon` finding, because the originating process does not satisfy the
-  suspicious-exec-context gate
+- **THEN** the engine produces no `dns_c2_beacon` finding, because the originating process does not satisfy the suspicious-exec-context gate
 
 #### Scenario: A suspicious process that connects to an address it never resolved does not fire
 
 - **GIVEN** a process exec'd from a temporary path that issued a `dns_query` resolving to `203.0.113.10`
-- **WHEN** the same process emits a `network_connect` to `198.51.100.7`, an address that appears in none of its
-  `dns_query` `response_addresses`
+- **WHEN** the same process emits a `network_connect` to `198.51.100.7`, an address that appears in none of its `dns_query` `response_addresses`
 - **THEN** the engine produces no `dns_c2_beacon` finding, because the resolve-then-connect join is not satisfied

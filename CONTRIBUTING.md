@@ -7,23 +7,14 @@ If you are reporting a security vulnerability, **do not open a public issue**. F
 ## Before you start
 
 - Read [`README.md`](README.md) for the quick start (toolchain pins, MySQL setup, dev server).
-- Read [`docs/architecture.md`](docs/architecture.md) so you know which component (system extension, network extension, agent,
-  server, UI) your change touches.
-- For non-trivial changes, open an issue first describing the problem you are solving. We would rather discuss the approach
-  before you write the code than reject a finished PR for being out of scope.
+- Read [`docs/architecture.md`](docs/architecture.md) so you know which component (system extension, network extension, agent, server, UI) your change touches.
+- For non-trivial changes, open an issue first describing the problem you are solving. We would rather discuss the approach before you write the code than reject a finished PR for being out of scope.
 
 ## Toolchain
 
-Pinned in [`.tool-versions`](.tool-versions). Install [`mise`](https://mise.jdx.dev/) (or `asdf`) and run `mise install` to
-match local, CI, and AI-agent sandbox versions. Pre-commit hooks live in [`lefthook.yml`](lefthook.yml); install once with
-`lefthook install`.
+Pinned in [`.tool-versions`](.tool-versions). Install [`mise`](https://mise.jdx.dev/) (or `asdf`) and run `mise install` to match local, CI, and AI-agent sandbox versions. Pre-commit hooks live in [`lefthook.yml`](lefthook.yml); install once with `lefthook install`.
 
-After cloning, run `task install`. The first `task lint:go` auto-builds the custom golangci-lint binary at
-`tmp/golangci-lint-custom` (via the `lint:install` dep) with the repo's in-tree `commentwrap` plugin baked in (see
-[`tools/comment-wrap-check/lint/`](tools/comment-wrap-check/lint/) and [`.custom-gcl.yml`](.custom-gcl.yml)); subsequent runs
-short-circuit via Taskfile's sources/generates. Editor integrations or terminal invocations of upstream `golangci-lint run`
-return "unknown linter: commentwrap" because the plugin only exists in the custom build; point your editor at
-`tmp/golangci-lint-custom` (or run `task lint:install` once to materialize it).
+After cloning, run `task install`. The first `task lint:go` auto-builds the custom golangci-lint binary at `tmp/golangci-lint-custom` (via the `lint:install` dep) with the repo's in-tree `commentwrap` plugin baked in (see [`tools/comment-wrap-check/lint/`](tools/comment-wrap-check/lint/) and [`.custom-gcl.yml`](.custom-gcl.yml)); subsequent runs short-circuit via Taskfile's sources/generates. Editor integrations or terminal invocations of upstream `golangci-lint run` return "unknown linter: commentwrap" because the plugin only exists in the custom build; point your editor at `tmp/golangci-lint-custom` (or run `task lint:install` once to materialize it).
 
 CI is the backstop, not the floor. If a check fails locally, fix it before pushing; do not push hoping CI will pass.
 
@@ -39,32 +30,22 @@ CI is the backstop, not the floor. If a check fails locally, fix it before pushi
 | Markdown / prose | [`.markdownlint-cli2.yaml`](.markdownlint-cli2.yaml) (run with `task lint:md`); sentence case headings, wrap at 140 chars, no em-dashes |
 | Commits | Imperative mood, focused scope, one logical change per commit |
 
-If a linter disagrees with a specific change, prefer fixing the code over disabling the rule. Suppression with a `nolint` /
-`eslint-disable` / `swiftlint:disable` directive needs a one-line justification on the same line.
+If a linter disagrees with a specific change, prefer fixing the code over disabling the rule. Suppression with a `nolint` / `eslint-disable` / `swiftlint:disable` directive needs a one-line justification on the same line.
 
 ## Tests
 
-Run `task test` before pushing. Targeted runs: `task test:go`, `task test:ui`. Use subtests (`t.Run`) and table-driven cases
-in Go. Integration tests hit a real MySQL on port 33307; do not mock the database in store-layer tests.
+Run `task test` before pushing. Targeted runs: `task test:go`, `task test:ui`. Use subtests (`t.Run`) and table-driven cases in Go. Integration tests hit a real MySQL on port 33307; do not mock the database in store-layer tests.
 
-Coverage is measured by SonarCloud; the new-code coverage gate is 80%. PRs that add code without adding tests will fail the
-gate.
+Coverage is measured by SonarCloud; the new-code coverage gate is 80%. PRs that add code without adding tests will fail the gate.
 
-For the full picture (the seven-layer test pyramid, the fake-agent / headless-agent integration layer, the captured ESF
-event corpus, the detection-efficacy corpus, and spec-to-test traceability), see
-[`docs/testing-strategy.md`](docs/testing-strategy.md). Read it before adding a new detection rule, touching the agent / server
-wire format, changing anything in `extension/edr/`, or modifying a SHALL / MUST scenario under `openspec/specs/`.
+For the full picture (the seven-layer test pyramid, the fake-agent / headless-agent integration layer, the captured ESF event corpus, the detection-efficacy corpus, and spec-to-test traceability), see [`docs/testing-strategy.md`](docs/testing-strategy.md). Read it before adding a new detection rule, touching the agent / server wire format, changing anything in `extension/edr/`, or modifying a SHALL / MUST scenario under `openspec/specs/`.
 
 ## Pull requests
 
 - Branch off `main`. Keep the diff focused; large refactors should be split into reviewable chunks.
-- Write a PR description that explains the *why*, not just the *what*. Link the issue it closes.
+- Write a PR description that explains the _why_, not just the _what_. Link the issue it closes.
 - A PR is ready to merge when CI is green, the SonarCloud quality gate is green, and at least one maintainer has approved.
-- **Behavior changes update the spec.** A PR touching a detection rule, `schema/events.json`, or the detection DDL must
-  update `openspec/specs/**`; the `OpenSpec sync` CI gate enforces it. A no-behavior touch of those paths (comment,
-  refactor, gofmt, dep bump) asserts `no-behavior-change` (label or `[no-behavior-change]` in the PR title) to clear the
-  gate: an auditable claim a reviewer verifies, never a way to skip the spec for a real behavior change. The label is a
-  one-time repo setup:
+- **Behavior changes update the spec.** A PR touching a detection rule, `schema/events.json`, or the detection DDL must update `openspec/specs/**`; the `OpenSpec sync` CI gate enforces it. A no-behavior touch of those paths (comment, refactor, gofmt, dep bump) asserts `no-behavior-change` (label or `[no-behavior-change]` in the PR title) to clear the gate: an auditable claim a reviewer verifies, never a way to skip the spec for a real behavior change. The label is a one-time repo setup:
 
   ```sh
   gh label create no-behavior-change \
@@ -79,17 +60,14 @@ wire format, changing anything in `extension/edr/`, or modifying a SHALL / MUST 
 
 Touching auth, crypto, the network extension, or the ingestion pipeline triggers extra scrutiny:
 
-- Reviewers will look for the threat-model implications. Read [`docs/threat-model.md`](docs/threat-model.md) and call out the
-  STRIDE category your change affects in the PR description.
+- Reviewers will look for the threat-model implications. Read [`docs/threat-model.md`](docs/threat-model.md) and call out the STRIDE category your change affects in the PR description.
 - Constant-time comparisons for any token / hash check (`subtle.ConstantTimeCompare`).
 - No new untrusted-input -> SQL / shell / log-injection sinks.
 - Add a test that exercises the failure path, not just the happy path.
 
 ## Recurring maintenance
 
-Maintainers run periodic codebase-hygiene sweeps (doc accuracy, stale implementation references, ADR audit, dead-code, etc.).
-Cadence, scope, and runnable prompts live in [`docs/maintenance/`](docs/maintenance/). External contributors do not need to run
-these, but PRs that surface issues those sweeps would catch are welcome.
+Maintainers run periodic codebase-hygiene sweeps (doc accuracy, stale implementation references, ADR audit, dead-code, etc.). Cadence, scope, and runnable prompts live in [`docs/maintenance/`](docs/maintenance/). External contributors do not need to run these, but PRs that surface issues those sweeps would catch are welcome.
 
 ## Reporting bugs
 
@@ -103,6 +81,4 @@ For non-security bugs, open a [GitHub issue](https://github.com/getvictor/fleet-
 
 ## License
 
-By contributing, you agree that your contribution is licensed under the [MIT License](LICENSE) and that you have the right
-to grant that license. We do not require a CLA today; we may add a DCO sign-off requirement before opening the project to
-broader external contribution.
+By contributing, you agree that your contribution is licensed under the [MIT License](LICENSE) and that you have the right to grant that license. We do not require a CLA today; we may add a DCO sign-off requirement before opening the project to broader external contribution.

@@ -1,9 +1,6 @@
 # Fleet EDR server: docker-compose quickstart
 
-This stack runs the fleet-edr-server + MySQL on a single host. It's the
-simplest way to stand up the server for a pilot deployment of 10-500 agents.
-For larger fleets, use this as the starting shape and split MySQL onto its
-own instance.
+This stack runs the fleet-edr-server + MySQL on a single host. It's the simplest way to stand up the server for a pilot deployment of 10-500 agents. For larger fleets, use this as the starting shape and split MySQL onto its own instance.
 
 ## One-time setup
 
@@ -39,15 +36,9 @@ curl -sk https://localhost:8088/readyz | jq .
 # {"status":"ok","checks":{"db":{"status":"ok","latency_ms":N}}}
 ```
 
-`-k` bypasses cert verification for the local self-signed probe; production
-automation against a real Let's Encrypt-issued cert should drop it.
+`-k` bypasses cert verification for the local self-signed probe; production automation against a real Let's Encrypt-issued cert should drop it.
 
-The first-boot break-glass redemption URL prints to stderr until the
-admin redeems it; capture with `docker compose -f docker-compose.prod.yml
---env-file .env logs server | grep -B 1 -A 4 BREAK-GLASS`. Open the URL in a
-browser within the TTL (default 1h) to set a password and register a
-WebAuthn credential. See `docs/install-server.md` for the full first-boot
-flow.
+The first-boot break-glass redemption URL prints to stderr until the admin redeems it; capture with `docker compose -f docker-compose.prod.yml --env-file .env logs server | grep -B 1 -A 4 BREAK-GLASS`. Open the URL in a browser within the TTL (default 1h) to set a password and register a WebAuthn credential. See `docs/install-server.md` for the full first-boot flow.
 
 ## Upgrade
 
@@ -57,55 +48,34 @@ docker compose -f docker-compose.prod.yml --env-file .env pull server
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-No DB migration needed within the v0.1.x series; schema is `CREATE TABLE IF
-NOT EXISTS` throughout.
+No DB migration needed within the v0.1.x series; schema is `CREATE TABLE IF NOT EXISTS` throughout.
 
 ## Secret rotation
 
-**Enroll secret**. Overwrite `secrets/enroll_secret` with the new value and
-restart the server so it re-reads the secret file:
+**Enroll secret**. Overwrite `secrets/enroll_secret` with the new value and restart the server so it re-reads the secret file:
 
 ```sh
 docker compose -f docker-compose.prod.yml --env-file .env restart server
 ```
 
-Existing per-host tokens are not affected by enroll-secret rotation because
-they were derived at enroll time, not re-verified against the secret on
-every auth. SIGHUP is NOT wired for secret reload; only TLS cert reload
-responds to it.
+Existing per-host tokens are not affected by enroll-secret rotation because they were derived at enroll time, not re-verified against the secret on every auth. SIGHUP is NOT wired for secret reload; only TLS cert reload responds to it.
 
-**MySQL root password**. Overwrite both `secrets/mysql_root` and
-`secrets/edr_dsn` with the new password, then `docker compose up -d
---force-recreate mysql server`. The volume data persists across recreates.
+**MySQL root password**. Overwrite both `secrets/mysql_root` and `secrets/edr_dsn` with the new password, then `docker compose up -d --force-recreate mysql server`. The volume data persists across recreates.
 
-**TLS cert**. Drop new `tls/fullchain.pem` + `tls/privkey.pem`. The server
-watches SIGHUP for TLS reload; `docker compose kill -s HUP server` swaps
-the cert without dropping active connections.
+**TLS cert**. Drop new `tls/fullchain.pem` + `tls/privkey.pem`. The server watches SIGHUP for TLS reload; `docker compose kill -s HUP server` swaps the cert without dropping active connections.
 
 ## OTel metrics + logs
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` in `.env` to your SigNoz / collector
-endpoint. The server emits:
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` in `.env` to your SigNoz / collector endpoint. The server emits:
 
 - Traces for every HTTP request + DB query.
 - Logs via `otelslog` with `service.name=fleet-edr-server`.
-- Metrics: `edr.events.ingested`, `edr.alerts.created`,
-  `edr.enrolled.hosts`, `edr.offline.hosts`,
-  `edr.retention.rows_deleted`, `edr.db.query.duration`,
-  `edr.agent.queue.dropped`. See
-  [docs/install-server.md](docs/install-server.md#otel-metrics-and-logs)
-  for the full list and
-  [docs/operations.md](docs/operations.md#metrics-and-monitoring) for
-  what to alert on.
+- Metrics: `edr.events.ingested`, `edr.alerts.created`, `edr.enrolled.hosts`, `edr.offline.hosts`, `edr.retention.rows_deleted`, `edr.db.query.duration`, `edr.agent.queue.dropped`. See [docs/install-server.md](docs/install-server.md#otel-metrics-and-logs) for the full list and [docs/operations.md](docs/operations.md#metrics-and-monitoring) for what to alert on.
 
 There is no Prometheus scrape endpoint.
 
 ## Known limits
 
 - Single MySQL instance; no replicas. For pilots ≤500 agents this is fine.
-- No horizontal scaling of the server instance yet. A second replica would
-  need a shared enroll-secret rotation mechanism (currently each replica
-  reads its own secret file) and a sticky session or shared cookie store.
-  Tracked as future work for the post-MVP scaling story.
-- No automatic backup of `edr-mysql-data`. Operators run their own
-  `mysqldump` or volume snapshot schedule.
+- No horizontal scaling of the server instance yet. A second replica would need a shared enroll-secret rotation mechanism (currently each replica reads its own secret file) and a sticky session or shared cookie store. Tracked as future work for the post-MVP scaling story.
+- No automatic backup of `edr-mysql-data`. Operators run their own `mysqldump` or volume snapshot schedule.

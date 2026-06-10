@@ -1,15 +1,10 @@
 # Doc accuracy sweep
 
-**Cadence:** monthly
-**Time budget:** 60-90 min including human review
-**Trigger mode:** manual or `/schedule`
+**Cadence:** monthly **Time budget:** 60-90 min including human review **Trigger mode:** manual or `/schedule`
 
 ## Why this matters
 
-Docs in `docs/`, `README.md`, `CONTRIBUTING.md`, and per-package READMEs reference specific files, functions, ports, env vars, table
-names, and CLI commands. Each refactor breaks some of these silently, and each broken reference erodes the doc's credibility (and
-makes onboarding harder). Linters won't catch "this function moved", "this port changed", or "this command no longer exists",
-because the prose form is unstructured.
+Docs in `docs/`, `README.md`, `CONTRIBUTING.md`, and per-package READMEs reference specific files, functions, ports, env vars, table names, and CLI commands. Each refactor breaks some of these silently, and each broken reference erodes the doc's credibility (and makes onboarding harder). Linters won't catch "this function moved", "this port changed", or "this command no longer exists", because the prose form is unstructured.
 
 ## Scope
 
@@ -31,8 +26,7 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 ## Steps
 
 1. List all markdown files in scope: `git ls-files '*.md' | grep -v ai/ | grep -v tmp/`.
-2. For each file, extract every backticked identifier and every `<path>` or `[link](url)`. A short script in `tmp/` that
-   parses these is cheaper than re-eyeballing each doc.
+2. For each file, extract every backticked identifier and every `<path>` or `[link](url)`. A short script in `tmp/` that parses these is cheaper than re-eyeballing each doc.
 3. Verify each reference. Group findings into:
    - **Broken** - the thing genuinely no longer exists. Fix or remove.
    - **Renamed** - the thing moved. Update the reference.
@@ -42,8 +36,7 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 
 ## Output
 
-A PR (or set of PRs) with a body section "Doc accuracy sweep - `<YYYY-MM-DD>`" listing every reference touched. Every run appends
-a dated entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
+A PR (or set of PRs) with a body section "Doc accuracy sweep - `<YYYY-MM-DD>`" listing every reference touched. Every run appends a dated entry to `docs/maintenance/log.md` so the cadence is auditable - whether findings landed or not.
 
 ## Prompt template
 

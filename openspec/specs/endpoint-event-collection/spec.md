@@ -2,31 +2,21 @@
 
 ## Purpose
 
-Endpoint event collection is the on-device telemetry source for the Fleet EDR product. It captures the security-relevant
-operating-system activity that downstream detection rules, the process-tree UI, and incident-response workflows depend on:
-process lifecycle (exec / fork / exit / open), outbound and inbound network flows attributed to the originating process,
-and DNS queries with their resolved answers. Without this layer there is no signal - every other component in the system
-is consuming or relaying what this capability emits.
+Endpoint event collection is the on-device telemetry source for the Fleet EDR product. It captures the security-relevant operating-system activity that downstream detection rules, the process-tree UI, and incident-response workflows depend on: process lifecycle (exec / fork / exit / open), outbound and inbound network flows attributed to the originating process, and DNS queries with their resolved answers. Without this layer there is no signal - every other component in the system is consuming or relaying what this capability emits.
 
-The behavior described here is the contract agents and the server depend on. It defines what events appear, what fields
-each event carries, how events are uniquely identified, and how the host that produced them is identified, so that the
-ingest path, the storage schema, and the React UI can reason about the wire format without reading device source code.
+The behavior described here is the contract agents and the server depend on. It defines what events appear, what fields each event carries, how events are uniquely identified, and how the host that produced them is identified, so that the ingest path, the storage schema, and the React UI can reason about the wire format without reading device source code.
 
 ## Requirements
 
 ### Requirement: Process lifecycle event capture
 
-The system SHALL emit a `fork` event when a monitored process forks, an `exec` event when a process replaces its image,
-and an `exit` event when a process exits. Each event MUST carry the originating PID and any additional fields documented
-for that event type.
+The system SHALL emit a `fork` event when a monitored process forks, an `exec` event when a process replaces its image, and an `exit` event when a process exits. Each event MUST carry the originating PID and any additional fields documented for that event type.
 
 #### Scenario: A user runs a shell command
 
 - **GIVEN** the endpoint event capture is running
 - **WHEN** a user launches `/bin/ls` from a shell
-- **THEN** the system emits an `exec` event whose payload includes the new image path, the argument vector, the parent
-  PID, the effective UID and GID, and the code-signing identity (team ID, signing ID, platform-binary flag) when the
-  binary is signed
+- **THEN** the system emits an `exec` event whose payload includes the new image path, the argument vector, the parent PID, the effective UID and GID, and the code-signing identity (team ID, signing ID, platform-binary flag) when the binary is signed
 - **AND** the system later emits an `exit` event for the same PID with the process exit status
 
 #### Scenario: A daemon forks a worker
@@ -37,41 +27,28 @@ for that event type.
 
 ### Requirement: Launch-item registration event capture
 
-The system SHALL emit a `btm_launch_item_add` event when launchd registers a launch item (a LaunchDaemon, LaunchAgent,
-or login item) via Background Task Management. The payload MUST carry the item type, the launch item path, the registered
-executable path when available, the MDM-managed flag, and the code-signing identity of the REGISTERED EXECUTABLE
-(`executable_code_signing`: team ID, signing ID, platform-binary flag) evaluated out-of-band, because the event provides
-code-signing for the instigator process but not for the to-be-launched executable.
+The system SHALL emit a `btm_launch_item_add` event when launchd registers a launch item (a LaunchDaemon, LaunchAgent, or login item) via Background Task Management. The payload MUST carry the item type, the launch item path, the registered executable path when available, the MDM-managed flag, and the code-signing identity of the REGISTERED EXECUTABLE (`executable_code_signing`: team ID, signing ID, platform-binary flag) evaluated out-of-band, because the event provides code-signing for the instigator process but not for the to-be-launched executable.
 
 #### Scenario: A LaunchDaemon is registered via Background Task Management
 
 - **GIVEN** the endpoint event capture is running
 - **WHEN** launchd registers a system LaunchDaemon (for example via `launchctl bootstrap`)
-- **THEN** the system emits a `btm_launch_item_add` event whose payload includes `item_type=daemon`, the launch item
-  path, the registered executable path, the MDM-managed flag, and the registered executable's code-signing identity
+- **THEN** the system emits a `btm_launch_item_add` event whose payload includes `item_type=daemon`, the launch item path, the registered executable path, the MDM-managed flag, and the registered executable's code-signing identity
 
 ### Requirement: Sensitive-path file-modification capture
 
-The system SHALL emit a write-mode `open` event when a process creates or writes a file under a fixed set of sensitive
-target paths (currently `/etc/sudoers` and any direct child of `/etc/sudoers.d/`), carrying the writing process PID, the
-file path, and write-mode access flags. The system SHALL NOT forward a broad stream of file opens: collection is scoped
-at the source to those sensitive target paths via a dedicated Endpoint Security client with inverted target-path muting,
-kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes
-to paths outside the sensitive set MUST NOT be collected.
+The system SHALL emit a write-mode `open` event when a process creates or writes a file under a fixed set of sensitive target paths (currently `/etc/sudoers` and any direct child of `/etc/sudoers.d/`), carrying the writing process PID, the file path, and write-mode access flags. The system SHALL NOT forward a broad stream of file opens: collection is scoped at the source to those sensitive target paths via a dedicated Endpoint Security client with inverted target-path muting, kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes to paths outside the sensitive set MUST NOT be collected.
 
 #### Scenario: A write to a sensitive path is captured
 
 - **GIVEN** the extension is running with the sensitive-path file-modification client active
 - **WHEN** a process writes to `/etc/sudoers` (or a direct child of `/etc/sudoers.d/`)
-- **THEN** a write-mode `open` event is emitted carrying the writing process PID, the file path, and the
-  write-mode access flags
+- **THEN** a write-mode `open` event is emitted carrying the writing process PID, the file path, and the write-mode access flags
 - **AND** the event reaches the server and is available to the detection pipeline
 
 ### Requirement: Process exec authorization
 
-The system SHALL evaluate every exec against the active blocklist before allowing the new image to run. When the target
-binary path is on the blocklist the system MUST deny the exec so the image never executes; otherwise the system MUST
-allow the exec and emit a notification event for it.
+The system SHALL evaluate every exec against the active blocklist before allowing the new image to run. When the target binary path is on the blocklist the system MUST deny the exec so the image never executes; otherwise the system MUST allow the exec and emit a notification event for it.
 
 #### Scenario: An exec of a blocklisted path is denied
 
@@ -89,36 +66,26 @@ allow the exec and emit a notification event for it.
 
 ### Requirement: Outbound socket flow capture
 
-The system SHALL emit a `network_connect` event for every outbound socket flow seen by the network filter, attributing
-the flow to the source process. Inbound flows SHALL be tagged with `direction = inbound`. The system MUST NOT block
-flows on the basis of capture; capture is observation-only.
+The system SHALL emit a `network_connect` event for every outbound socket flow seen by the network filter, attributing the flow to the source process. Inbound flows SHALL be tagged with `direction = inbound`. The system MUST NOT block flows on the basis of capture; capture is observation-only.
 
 #### Scenario: A process opens an outbound TCP connection
 
 - **GIVEN** the network filter is enabled
 - **WHEN** a process initiates an outbound TCP connection to a remote endpoint
-- **THEN** the system emits a `network_connect` event whose payload identifies the source PID, the source binary path,
-  the effective UID, the protocol (`tcp` or `udp`), the direction (`outbound`), the remote address, the remote port, the
-  local address, the local port, and - when the system can derive it from the flow - the remote hostname
+- **THEN** the system emits a `network_connect` event whose payload identifies the source PID, the source binary path, the effective UID, the protocol (`tcp` or `udp`), the direction (`outbound`), the remote address, the remote port, the local address, the local port, and - when the system can derive it from the flow - the remote hostname
 - **AND** the flow is allowed to proceed unmodified
 
 ### Requirement: DNS query capture
 
-When DNS proxying is enabled, the system SHALL emit a `dns_query` event for each DNS query seen by the DNS proxy and a
-follow-on `dns_query` event carrying the resolved addresses when the upstream resolver replies. DNS proxying is opt-in
-(see the host-app extension manager capability), so a host with the DNS proxy disabled emits no `dns_query` events at
-all and that absence is not a contract violation. Capture failures MUST NOT prevent the query or its response from
-being forwarded to the originally-intended resolver.
+When DNS proxying is enabled, the system SHALL emit a `dns_query` event for each DNS query seen by the DNS proxy and a follow-on `dns_query` event carrying the resolved addresses when the upstream resolver replies. DNS proxying is opt-in (see the host-app extension manager capability), so a host with the DNS proxy disabled emits no `dns_query` events at all and that absence is not a contract violation. Capture failures MUST NOT prevent the query or its response from being forwarded to the originally-intended resolver.
 
 #### Scenario: An application resolves a hostname over UDP
 
 - **GIVEN** DNS proxying is enabled
 - **WHEN** an application sends a UDP DNS query for a hostname
 - **THEN** the system forwards the query unchanged to the originally-intended resolver
-- **AND** the system emits a `dns_query` event identifying the source PID, source path, effective UID, query name,
-  query type, and protocol (`udp`)
-- **AND** when the resolver replies with one or more addresses the system emits a follow-on `dns_query` event carrying
-  the resolved addresses in `response_addresses`
+- **AND** the system emits a `dns_query` event identifying the source PID, source path, effective UID, query name, query type, and protocol (`udp`)
+- **AND** when the resolver replies with one or more addresses the system emits a follow-on `dns_query` event carrying the resolved addresses in `response_addresses`
 
 #### Scenario: A DNS query that cannot be parsed is still forwarded
 
@@ -129,18 +96,13 @@ being forwarded to the originally-intended resolver.
 
 ### Requirement: Canonical event envelope
 
-Every event the system emits SHALL be serialized as a JSON envelope with the fields `event_id`, `host_id`,
-`timestamp_ns`, `event_type`, and `payload`. `event_id` MUST be a UUID unique to that event, `host_id` MUST identify the
-device that produced the event and MUST be stable across reboots of that device, `timestamp_ns` MUST be nanoseconds
-since the Unix epoch, and `event_type` MUST be one of the documented values (`exec`, `fork`, `exit`, `open`,
-`network_connect`, `dns_query`).
+Every event the system emits SHALL be serialized as a JSON envelope with the fields `event_id`, `host_id`, `timestamp_ns`, `event_type`, and `payload`. `event_id` MUST be a UUID unique to that event, `host_id` MUST identify the device that produced the event and MUST be stable across reboots of that device, `timestamp_ns` MUST be nanoseconds since the Unix epoch, and `event_type` MUST be one of the documented values (`exec`, `fork`, `exit`, `open`, `network_connect`, `dns_query`).
 
 #### Scenario: An event envelope is well-formed
 
 - **GIVEN** any captured event
 - **WHEN** the system serializes the event
-- **THEN** the resulting bytes parse as a JSON object containing `event_id`, `host_id`, `timestamp_ns`, `event_type`,
-  and `payload`
+- **THEN** the resulting bytes parse as a JSON object containing `event_id`, `host_id`, `timestamp_ns`, `event_type`, and `payload`
 - **AND** `event_type` matches one of the documented enum values
 - **AND** the payload conforms to the schema for that event type
 
@@ -153,11 +115,7 @@ since the Unix epoch, and `event_type` MUST be one of the documented values (`ex
 
 ### Requirement: Reconciliation events are tagged
 
-The system SHALL distinguish synthesized reconciliation events from kernel-observed events. Synthetic exit events
-emitted to close out processes whose kernel exit notification was missed SHALL carry `exit_reason = host_reconciled`,
-synthetic exec events emitted at startup to materialize processes that already existed before subscription SHALL carry
-`snapshot = true`, and liveness pings for those snapshot-originated processes SHALL be emitted as a distinct event type
-`snapshot_heartbeat` carrying only the process identifier in its payload.
+The system SHALL distinguish synthesized reconciliation events from kernel-observed events. Synthetic exit events emitted to close out processes whose kernel exit notification was missed SHALL carry `exit_reason = host_reconciled`, synthetic exec events emitted at startup to materialize processes that already existed before subscription SHALL carry `snapshot = true`, and liveness pings for those snapshot-originated processes SHALL be emitted as a distinct event type `snapshot_heartbeat` carrying only the process identifier in its payload.
 
 #### Scenario: Agent fills a missing exit event
 
@@ -181,8 +139,7 @@ synthetic exec events emitted at startup to materialize processes that already e
 
 ### Requirement: Capture is non-fatal on individual event errors
 
-The system SHALL continue capturing subsequent events when serialization, attribution, or upstream forwarding of a
-single event fails. A single malformed event MUST NOT take the capture pipeline offline.
+The system SHALL continue capturing subsequent events when serialization, attribution, or upstream forwarding of a single event fails. A single malformed event MUST NOT take the capture pipeline offline.
 
 #### Scenario: One event fails to serialize
 

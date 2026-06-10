@@ -2,27 +2,15 @@
 
 ## Purpose
 
-The host app is the small command-line entry point that installers, MDM scripts, and operators use to bring the EDR's
-on-device components into and out of an active state. It owns no telemetry, no policy, and no network - it exists
-purely to drive Apple's system-extension activation flow, the Network Extension content-filter configuration, and the
-DNS proxy configuration. Without it, the system extension and network extension are inert binaries on disk; with it,
-they are registered with the operating system, surfaced in System Settings for user approval, and bound to the
-configurations that make them actually capture events.
+The host app is the small command-line entry point that installers, MDM scripts, and operators use to bring the EDR's on-device components into and out of an active state. It owns no telemetry, no policy, and no network - it exists purely to drive Apple's system-extension activation flow, the Network Extension content-filter configuration, and the DNS proxy configuration. Without it, the system extension and network extension are inert binaries on disk; with it, they are registered with the operating system, surfaced in System Settings for user approval, and bound to the configurations that make them actually capture events.
 
-The behavior described here is the contract operators rely on. It defines which subcommands exist, what each one does
-to the OS-managed extension and filter state, how concurrent activations of the two extensions are handled, and how
-the configurations persist across reboots so the EDR comes back online without operator intervention.
+The behavior described here is the contract operators rely on. It defines which subcommands exist, what each one does to the OS-managed extension and filter state, how concurrent activations of the two extensions are handled, and how the configurations persist across reboots so the EDR comes back online without operator intervention.
 
 ## Requirements
 
 ### Requirement: Activate subcommand registers both extensions and enables the filter
 
-The host app SHALL provide an `activate` subcommand that submits an activation request for both the system extension
-(Endpoint Security) and the network extension, and on success enables both the network content filter AND the DNS proxy.
-Enabling the DNS proxy as part of `activate` makes the third telemetry stream (DNS) on by default, so a freshly
-activated host emits correlated exec, network, and DNS events without a separate opt-in step. The DNS proxy remains
-independently toggleable afterward via `disable-dns-proxy` / `enable-dns-proxy`. The user MAY be required to approve the
-extensions in System Settings; the subcommand MUST report when approval is pending.
+The host app SHALL provide an `activate` subcommand that submits an activation request for both the system extension (Endpoint Security) and the network extension, and on success enables both the network content filter AND the DNS proxy. Enabling the DNS proxy as part of `activate` makes the third telemetry stream (DNS) on by default, so a freshly activated host emits correlated exec, network, and DNS events without a separate opt-in step. The DNS proxy remains independently toggleable afterward via `disable-dns-proxy` / `enable-dns-proxy`. The user MAY be required to approve the extensions in System Settings; the subcommand MUST report when approval is pending.
 
 #### Scenario: First-time activation on an unconfigured machine
 
@@ -42,8 +30,7 @@ extensions in System Settings; the subcommand MUST report when approval is pendi
 
 ### Requirement: Deactivate subcommand removes both extensions
 
-The host app SHALL provide a `deactivate` subcommand that submits a deactivation request for both extensions. After
-successful deactivation, the extensions MUST no longer run on the device.
+The host app SHALL provide a `deactivate` subcommand that submits a deactivation request for both extensions. After successful deactivation, the extensions MUST no longer run on the device.
 
 #### Scenario: Deactivating an active install
 
@@ -61,8 +48,7 @@ successful deactivation, the extensions MUST no longer run on the device.
 
 ### Requirement: Filter enable and disable subcommands
 
-The host app SHALL provide `enable-filter` and `disable-filter` subcommands that toggle the system-wide content filter
-on or off. Toggling the filter MUST NOT activate or deactivate either extension.
+The host app SHALL provide `enable-filter` and `disable-filter` subcommands that toggle the system-wide content filter on or off. Toggling the filter MUST NOT activate or deactivate either extension.
 
 #### Scenario: Disable the filter without removing the extension
 
@@ -80,8 +66,7 @@ on or off. Toggling the filter MUST NOT activate or deactivate either extension.
 
 ### Requirement: DNS proxy enable and disable subcommands
 
-The host app SHALL provide `enable-dns-proxy` and `disable-dns-proxy` subcommands that toggle the DNS proxy provider on
-or off. The DNS proxy is independent of the content filter; toggling one MUST NOT toggle the other.
+The host app SHALL provide `enable-dns-proxy` and `disable-dns-proxy` subcommands that toggle the DNS proxy provider on or off. The DNS proxy is independent of the content filter; toggling one MUST NOT toggle the other.
 
 #### Scenario: Enable DNS proxy on top of an active filter
 
@@ -99,8 +84,7 @@ or off. The DNS proxy is independent of the content filter; toggling one MUST NO
 
 ### Requirement: Configuration persists across reboots
 
-Once the host app has enabled the content filter or the DNS proxy, the configuration SHALL persist across reboots so the
-extensions resume capture without operator action after the host comes back up.
+Once the host app has enabled the content filter or the DNS proxy, the configuration SHALL persist across reboots so the extensions resume capture without operator action after the host comes back up.
 
 #### Scenario: Reboot recovers active configuration
 
@@ -113,28 +97,19 @@ extensions resume capture without operator action after the host comes back up.
 
 ### Requirement: Subcommand parsing fails loudly on unknown input
 
-The host app SHALL refuse to interpret a malformed invocation as a valid action. A malformed invocation
-is any of: a subcommand that is not in the documented set (typo, deprecated name), an empty subcommand
-argument (`edr ""`, typically the result of a shell-expansion bug), or one or more extra positional
-arguments after a valid subcommand (`edr deactivate typo`). On any of these the host app MUST print a
-usage message that lists the documented subcommands and MUST exit with a non-zero status. The host app
-MUST NOT silently default malformed input to an activation request and MUST NOT silently drop extra
-positional arguments.
+The host app SHALL refuse to interpret a malformed invocation as a valid action. A malformed invocation is any of: a subcommand that is not in the documented set (typo, deprecated name), an empty subcommand argument (`edr ""`, typically the result of a shell-expansion bug), or one or more extra positional arguments after a valid subcommand (`edr deactivate typo`). On any of these the host app MUST print a usage message that lists the documented subcommands and MUST exit with a non-zero status. The host app MUST NOT silently default malformed input to an activation request and MUST NOT silently drop extra positional arguments.
 
 #### Scenario: Unknown subcommand exits with usage and non-zero status
 
 - **GIVEN** the host app binary
-- **WHEN** an operator runs `edr` with any of these malformed forms: a subcommand the binary does not
-  recognise (for example a typo `deactvate`), an empty subcommand argument (`edr ""`), or extra
-  positional arguments after a valid subcommand (`edr deactivate typo`)
+- **WHEN** an operator runs `edr` with any of these malformed forms: a subcommand the binary does not recognise (for example a typo `deactvate`), an empty subcommand argument (`edr ""`), or extra positional arguments after a valid subcommand (`edr deactivate typo`)
 - **THEN** the host app prints a usage message listing the documented subcommands
 - **AND** the host app exits with a non-zero status
 - **AND** the host app does NOT submit an activation request
 
 ### Requirement: Activation reports completion outcomes
 
-The host app SHALL report whether each activation completed immediately, completed but requires a reboot to take effect,
-or failed. The exit status MUST reflect failure if any submitted request reports an error.
+The host app SHALL report whether each activation completed immediately, completed but requires a reboot to take effect, or failed. The exit status MUST reflect failure if any submitted request reports an error.
 
 #### Scenario: One extension completes immediately and the other needs a reboot
 

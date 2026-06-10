@@ -2,9 +2,12 @@ name: Markdown lint
 
 # See go-lint.yml for the gate-then-analyze pattern rationale.
 #
-# Catches MD040 (untagged fenced code blocks), MD031/MD032/MD022/MD009/MD012
-# (whitespace hygiene around fences, lists, headings), and MD041 (first-line
-# heading). Config is at .markdownlint-cli2.yaml at the repo root.
+# Two gates, scoped not to overlap:
+#   - markdownlint (.markdownlint-cli2.yaml) owns structure: MD040 (untagged
+#     fenced code blocks), MD031/MD032/MD022/MD009/MD012 (whitespace hygiene),
+#     MD041 (first-line heading).
+#   - Prettier (.prettierrc.yaml, proseWrap: never) owns prose wrapping + table
+#     column alignment - the repo's no-hard-wrap convention.
 
 on:
   push:
@@ -12,6 +15,8 @@ on:
     paths:
       - "**/*.md"
       - ".markdownlint-cli2.yaml"
+      - ".prettierrc.yaml"
+      - ".prettierignore"
       - "Taskfile.yml"
       - ".github/workflows/md-lint.yml"
   pull_request:
@@ -41,7 +46,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          PATTERN='\.md$|^\.markdownlint-cli2\.yaml$|^Taskfile\.yml$|^\.github/workflows/md-lint\.yml$'
+          PATTERN='\.md$|^\.markdownlint-cli2\.yaml$|^\.prettierrc\.yaml$|^\.prettierignore$|^Taskfile\.yml$|^\.github/workflows/md-lint\.yml$'
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running unconditionally."
@@ -78,5 +83,8 @@ jobs:
           version: 3.50.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Lint markdown via Taskfile
+      - name: Lint markdown structure via Taskfile
         run: task lint:md
+
+      - name: Check markdown prose wrap + table style via Taskfile
+        run: task lint:md:prose

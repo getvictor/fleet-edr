@@ -1,23 +1,16 @@
 # Claude config audit
 
-**Cadence:** quarterly
-**Time budget:** 60 min
-**Trigger mode:** manual
+**Cadence:** quarterly **Time budget:** 60 min **Trigger mode:** manual
 
 ## Why this matters
 
-`.claude/` (settings, skills, slash commands, hooks) and the user-level `~/.claude/` config now shape every coding session as
-strongly as `lefthook.yml` shapes every commit. Drift here is invisible - there's no compiler, no test, and the harness will
-silently obey stale rules. A skill that references a file that no longer exists, a hook that runs a deleted task, or a permission
-that was sensible once but now masks a security warning all degrade the agent without anyone noticing.
+`.claude/` (settings, skills, slash commands, hooks) and the user-level `~/.claude/` config now shape every coding session as strongly as `lefthook.yml` shapes every commit. Drift here is invisible - there's no compiler, no test, and the harness will silently obey stale rules. A skill that references a file that no longer exists, a hook that runs a deleted task, or a permission that was sensible once but now masks a security warning all degrade the agent without anyone noticing.
 
 This is a 2025-2026-era maintenance domain that didn't exist when most "best practices" docs were written.
 
 ## Scope
 
-`.claude/` is gitignored in this repo (see `.gitignore`), so this audit operates on each maintainer's local checkout, not on a
-PR. The same reviewer running this task quarter after quarter is the right pattern; the audit log entry records the date and
-"no findings" or a summary of changes.
+`.claude/` is gitignored in this repo (see `.gitignore`), so this audit operates on each maintainer's local checkout, not on a PR. The same reviewer running this task quarter after quarter is the right pattern; the audit log entry records the date and "no findings" or a summary of changes.
 
 Files in scope (all per-maintainer, none committed):
 
@@ -27,8 +20,7 @@ Files in scope (all per-maintainer, none committed):
 - `.claude/scheduled_tasks.lock` (informational)
 - Any hook entries in those settings files
 
-User-level `~/.claude/` (settings, MEMORY index, user-level skills) is out of scope unless explicitly requested - that's
-cross-project.
+User-level `~/.claude/` (settings, MEMORY index, user-level skills) is out of scope unless explicitly requested - that's cross-project.
 
 ## Steps
 
@@ -58,20 +50,16 @@ For each file in `.claude/commands/` and `.claude/skills/`:
 
 - Does the description still match what the command does?
 - Are referenced files / scripts still present?
-- Is it ever invoked (check session history if available)? An unused slash command isn't free - it adds to the model's
-  selection space and confuses the human user.
-- If the command would now be better expressed as a built-in skill (e.g. `/ai-review-fixes-edr` is already a skill - no need
-  for a duplicate command), consolidate.
+- Is it ever invoked (check session history if available)? An unused slash command isn't free - it adds to the model's selection space and confuses the human user.
+- If the command would now be better expressed as a built-in skill (e.g. `/ai-review-fixes-edr` is already a skill - no need for a duplicate command), consolidate.
 
 ### 4. Cross-check with `~/.claude/MEMORY.md`
 
-The user-level memory is loaded into every session. If a project-level skill or command duplicates guidance that's already in
-memory, that's redundancy noise. Pick one.
+The user-level memory is loaded into every session. If a project-level skill or command duplicates guidance that's already in memory, that's redundancy noise. Pick one.
 
 ### 5. Settings shape
 
-Skim the schema docs (or run `claude config --help`) for any new settings that have been added since the last audit. Examples:
-new hook events, new permission shapes, new statusline options. The harness changes; the config can lag.
+Skim the schema docs (or run `claude config --help`) for any new settings that have been added since the last audit. Examples: new hook events, new permission shapes, new statusline options. The harness changes; the config can lag.
 
 ## Output
 

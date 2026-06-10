@@ -1,36 +1,26 @@
 # Best-practices refresh
 
-**Cadence:** quarterly
-**Time budget:** 90 min
-**Trigger mode:** manual
+**Cadence:** quarterly **Time budget:** 90 min **Trigger mode:** manual
 
 ## Why this matters
 
-`docs/best-practices.md` is explicitly a "living self-audit" against industry peers (CrowdStrike, SentinelOne, Elastic Security,
-Falco, Kubernetes, Sigstore, osquery, Fleet, Wazuh). Items get checked when the repo adopts them and unchecked when they're known
-gaps. The document only serves its purpose if the *unchecked* items are revisited as the industry moves: a gap that was acceptable
-a year ago (e.g. SBOMs, Sigstore signing, OCSF export) may now be a credibility liability for an open-source EDR.
+`docs/best-practices.md` is explicitly a "living self-audit" against industry peers (CrowdStrike, SentinelOne, Elastic Security, Falco, Kubernetes, Sigstore, osquery, Fleet, Wazuh). Items get checked when the repo adopts them and unchecked when they're known gaps. The document only serves its purpose if the _unchecked_ items are revisited as the industry moves: a gap that was acceptable a year ago (e.g. SBOMs, Sigstore signing, OCSF export) may now be a credibility liability for an open-source EDR.
 
-This task does the opposite of the doc-accuracy sweep: that one fixes broken references; this one updates the *substance* of the
-audit against what peers shipped this quarter.
+This task does the opposite of the doc-accuracy sweep: that one fixes broken references; this one updates the _substance_ of the audit against what peers shipped this quarter.
 
 ## Scope
 
-Primary: `docs/best-practices.md`. Secondary: `docs/threat-model.md` (covered by its own task) and `docs/architecture.md` (drift
-caught by the doc-accuracy sweep).
+Primary: `docs/best-practices.md`. Secondary: `docs/threat-model.md` (covered by its own task) and `docs/architecture.md` (drift caught by the doc-accuracy sweep).
 
 ## Steps
 
 ### 1. Re-confirm checked items
 
-For every `[x]` in the document, verify the cited file / function / dashboard still exists and still implements the claim.
-Demote to `[~]` if partial, `[ ]` if regressed. This is the only place this task overlaps with doc-accuracy - fold the result
-into either PR, but always re-verify the claim, not just the path.
+For every `[x]` in the document, verify the cited file / function / dashboard still exists and still implements the claim. Demote to `[~]` if partial, `[ ]` if regressed. This is the only place this task overlaps with doc-accuracy - fold the result into either PR, but always re-verify the claim, not just the path.
 
 ### 2. Industry delta scan
 
-Skim the latest releases and roadmap notes from these projects (read their CHANGELOG / release notes / blog within the last
-quarter):
+Skim the latest releases and roadmap notes from these projects (read their CHANGELOG / release notes / blog within the last quarter):
 
 - **Falco** - new ESF / eBPF detection patterns, rule-format changes
 - **Sigstore** (cosign / fulcio / rekor) - signing, attestation, transparency log practices
@@ -43,7 +33,7 @@ quarter):
 - **CrowdStrike / SentinelOne / Elastic Security** public release notes - capabilities they shipped that move the bar
 - **Fleet, Jamf Pro, Jamf Protect** release notes (we care about deployment surface)
 
-Note: this is *industry awareness*, not a duty to adopt everything. The output is a delta list, not a backlog explosion.
+Note: this is _industry awareness_, not a duty to adopt everything. The output is a delta list, not a backlog explosion.
 
 ### 3. Update the doc
 
@@ -51,14 +41,12 @@ For each delta:
 
 - If the repo already does it informally, add a checked or partial item with a code reference.
 - If it's a real gap and worth doing, leave it unchecked with a one-line rationale (which keeps it visible).
-- If it's a real gap that's deliberately *not* worth doing, mark it `[-]` with the rationale ("we don't do FIM because the
-  per-host I/O cost outweighs the detection lift for our threat model").
-- If a checked item has been *deprecated* by the industry, demote it and explain.
+- If it's a real gap that's deliberately _not_ worth doing, mark it `[-]` with the rationale ("we don't do FIM because the per-host I/O cost outweighs the detection lift for our threat model").
+- If a checked item has been _deprecated_ by the industry, demote it and explain.
 
 ### 4. Cross-link
 
-Where the doc cites a new ADR-worthy decision (e.g. "decided not to ship a Prometheus endpoint, OTel only"), check whether an ADR
-exists. If not, add a candidate to the ADR audit gap list.
+Where the doc cites a new ADR-worthy decision (e.g. "decided not to ship a Prometheus endpoint, OTel only"), check whether an ADR exists. If not, add a candidate to the ADR audit gap list.
 
 ## Output
 

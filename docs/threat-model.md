@@ -2,20 +2,13 @@
 
 This document is Fleet EDR's threat model. It exists for three audiences:
 
-1. **Engineers reviewing security-sensitive PRs** - "does this widen one of
-   the listed threats? does it close a gap?"
-2. **Pilot-customer security reviewers** asking what attack surface the
-   vendor considered before installing the agent on managed endpoints.
+1. **Engineers reviewing security-sensitive PRs** - "does this widen one of the listed threats? does it close a gap?"
+2. **Pilot-customer security reviewers** asking what attack surface the vendor considered before installing the agent on managed endpoints.
 3. **Future contributors** evaluating where investment is most needed.
 
-Format is STRIDE per component, with each cell either citing the existing
-mitigation or flagging a `GAP` with severity (high / medium / low) reflecting
-pilot-deployment impact, not theoretical worst-case.
+Format is STRIDE per component, with each cell either citing the existing mitigation or flagging a `GAP` with severity (high / medium / low) reflecting pilot-deployment impact, not theoretical worst-case.
 
-Scope is the system as it ships in the v0.1.0-rc.* line: Go agent + Swift
-system extension + Swift network extension on macOS endpoints, Go server
-with MySQL backend, embedded React UI, MDM-driven deployment. Out of scope
-is everything in the closing section.
+Scope is the system as it ships in the v0.1.0-rc.\* line: Go agent + Swift system extension + Swift network extension on macOS endpoints, Go server with MySQL backend, embedded React UI, MDM-driven deployment. Out of scope is everything in the closing section.
 
 ## Trust boundaries
 
@@ -52,14 +45,9 @@ is everything in the closing section.
 
 Trust assumptions:
 
-- **The MDM is a trust anchor.** It delivers the signed `.pkg` and the two
-  configuration profiles (system-extension allowlist, network-extension
-  allowlist). A compromised MDM is out of scope.
-- **The endpoint kernel and Apple frameworks are trusted.** ESF, NEFD,
-  launchd, SIP. Their integrity is Apple's responsibility.
-- **The MySQL instance is on a private network.** Direct DB-network
-  compromise is out of scope; anything past the Compose network is the
-  operator's responsibility.
+- **The MDM is a trust anchor.** It delivers the signed `.pkg` and the two configuration profiles (system-extension allowlist, network-extension allowlist). A compromised MDM is out of scope.
+- **The endpoint kernel and Apple frameworks are trusted.** ESF, NEFD, launchd, SIP. Their integrity is Apple's responsibility.
+- **The MySQL instance is on a private network.** Direct DB-network compromise is out of scope; anything past the Compose network is the operator's responsibility.
 
 ## Per-component threats
 
@@ -181,14 +169,11 @@ Trust assumptions:
 
 ## Known gaps with severity
 
-Copied from the per-component tables for at-a-glance triage. Severity reflects
-pilot-deployment impact, not theoretical worst case.
+Copied from the per-component tables for at-a-glance triage. Severity reflects pilot-deployment impact, not theoretical worst case.
 
 **High** - block multi-seat pilots:
 
-- (None remaining for v0.1 ship. The wave-1 OIDC + WebAuthn break-glass +
-  chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping
-  inside a single deployment is a follow-on feature, not a v0.1 gap.)
+- (None remaining for v0.1 ship. The wave-1 OIDC + WebAuthn break-glass + chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping inside a single deployment is a follow-on feature, not a v0.1 gap.)
 
 **Medium** - block a security-mature pilot's procurement:
 
@@ -206,33 +191,19 @@ pilot-deployment impact, not theoretical worst case.
 
 ## Out of scope
 
-- **macOS kernel exploits.** SIP, KASLR, kernel signing, and Apple's response
-  cycle own this. Outside the EDR's control surface.
-- **Physical access to the endpoint.** A physically-present attacker with
-  FileVault unlocked is not in this threat model - disk encryption and
-  device-loss policy own that boundary.
-- **Compromised MDM.** The MDM is a trust anchor; if it is itself
-  compromised, the deployment chain is broken and the EDR cannot defend
-  against its own legitimate-looking install.
+- **macOS kernel exploits.** SIP, KASLR, kernel signing, and Apple's response cycle own this. Outside the EDR's control surface.
+- **Physical access to the endpoint.** A physically-present attacker with FileVault unlocked is not in this threat model - disk encryption and device-loss policy own that boundary.
+- **Compromised MDM.** The MDM is a trust anchor; if it is itself compromised, the deployment chain is broken and the EDR cannot defend against its own legitimate-looking install.
 - **Side-channel attacks.** Timing, cache, Spectre-class. Not in MVP scope.
-- **Anti-forensic evasion at the OS level by an already-root attacker.** A
-  privileged attacker who already has root can disable the sysext via
-  `systemextensionsctl`. Detection of *that* is the canonical "EDR tamper
-  resistance" line item flagged at `docs/best-practices.md` §1.
+- **Anti-forensic evasion at the OS level by an already-root attacker.** A privileged attacker who already has root can disable the sysext via `systemextensionsctl`. Detection of _that_ is the canonical "EDR tamper resistance" line item flagged at `docs/best-practices.md` §1.
 
 ## Revision policy
 
 Update this document when:
 
-- A new component is added to the architecture (a new daemon, a new service,
-  a new API surface).
-- A new trust boundary is crossed (a webhook out, a SIEM export endpoint,
-  cross-deployment routing).
-- A gap above is closed - move the bullet from "gap" to a citation in the
-  per-component table.
-- A new STRIDE category becomes relevant for an existing component (e.g.,
-  shipping RBAC opens new spoofing + elevation surfaces that need entries).
+- A new component is added to the architecture (a new daemon, a new service, a new API surface).
+- A new trust boundary is crossed (a webhook out, a SIEM export endpoint, cross-deployment routing).
+- A gap above is closed - move the bullet from "gap" to a citation in the per-component table.
+- A new STRIDE category becomes relevant for an existing component (e.g., shipping RBAC opens new spoofing + elevation surfaces that need entries).
 
-Last reviewed against the v0.1.0-rc.\* release line on 2026-05-06,
-covering the wave-1 auth + authz model (OIDC, WebAuthn break-glass,
-chokepoint roles, reauth window).
+Last reviewed against the v0.1.0-rc.\* release line on 2026-05-06, covering the wave-1 auth + authz model (OIDC, WebAuthn break-glass, chokepoint roles, reauth window).

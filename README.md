@@ -1,35 +1,29 @@
 # Fleet EDR
 
 <!-- License & release -->
-[![License: MIT](https://img.shields.io/github/license/getvictor/fleet-edr?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/getvictor/fleet-edr?include_prereleases&style=flat-square)](https://github.com/getvictor/fleet-edr/releases)
+
+[![License: MIT](https://img.shields.io/github/license/getvictor/fleet-edr?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/getvictor/fleet-edr?include_prereleases&style=flat-square)](https://github.com/getvictor/fleet-edr/releases)
 
 <!-- Build & quality -->
-![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square)
-[![Tests](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml)
-[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr)
-[![Coverage](https://img.shields.io/codecov/c/github/getvictor/fleet-edr?style=flat-square&logo=codecov)](https://codecov.io/gh/getvictor/fleet-edr)
+
+![Go version](https://img.shields.io/github/go-mod/go-version/getvictor/fleet-edr?filename=go.mod&style=flat-square) [![Tests](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/test.yml) [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=getvictor_fleet-edr&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=getvictor_fleet-edr) [![Coverage](https://img.shields.io/codecov/c/github/getvictor/fleet-edr?style=flat-square&logo=codecov)](https://codecov.io/gh/getvictor/fleet-edr)
 
 <!-- Security scanners -->
-[![CodeQL](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml)
-[![govulncheck](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml)
-[![OSV-Scanner](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml)
+
+[![CodeQL](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/codeql.yml) [![govulncheck](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/go-vulncheck.yml) [![OSV-Scanner](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/getvictor/fleet-edr/actions/workflows/osv-scanner.yml)
 
 <!-- Supply chain -->
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12994/badge)](https://www.bestpractices.dev/projects/12994)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/getvictor/fleet-edr/badge)](https://scorecard.dev/viewer/?uri=github.com/getvictor/fleet-edr)
-[![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
-[![cosign keyless](https://img.shields.io/badge/cosign-keyless-9cf?style=flat-square&logo=sigstore)](docs/best-practices.md#4-supply-chain-security)
 
-Fleet EDR is an open-source endpoint detection and response system for macOS fleets. It gives security teams real-time visibility
-into process and network activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph,
-and ships response actions (kill, token rotation, app-control block) without a SaaS dependency.
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12994/badge)](https://www.bestpractices.dev/projects/12994) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/getvictor/fleet-edr/badge)](https://scorecard.dev/viewer/?uri=github.com/getvictor/fleet-edr) [![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev/spec/v1.0/levels#build-l2) [![cosign keyless](https://img.shields.io/badge/cosign-keyless-9cf?style=flat-square&logo=sigstore)](docs/best-practices.md#4-supply-chain-security)
+
+Fleet EDR is an open-source endpoint detection and response system for macOS fleets. It gives security teams real-time visibility into process and network activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph, and ships response actions (kill, token rotation, app-control block) without a SaaS dependency.
 
 ## Try the demo (no Mac required)
 
 Evaluate Fleet EDR in about five minutes with one command. No Apple Silicon Mac, MDM, or Apple-granted entitlement needed.
 
 <!-- Demo recording: replace this line with the published release-asset link. -->
+
 Demo recording: _coming soon_ -- extension activation, a correlated detection, and an AUTH_EXEC block, captured on a real Mac.
 
 ```sh
@@ -41,12 +35,7 @@ Then open <https://localhost:8088/ui/>, accept the self-signed certificate warni
 - Email: `demo@fleet-edr.local`
 - Password: `demo`
 
-You'll see two real macOS hosts -- an engineer laptop (`alex-mbp`) and a CI build server (`ci-builder`) -- each with a deep
-process graph and correlated `network_connect` + `dns_query` activity drawn from genuine scrubbed captures. Woven into that
-ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec -> DNS -> outbound
-connection correlated across all three streams) on the laptop; sudoers tampering, launchd persistence, and an
-application-control block on the build server. Every alert is produced by the real ingestion + detection pipeline, not
-hand-inserted rows. The benign browsing and build activity raises no false alarms.
+You'll see two real macOS hosts -- an engineer laptop (`alex-mbp`) and a CI build server (`ci-builder`) -- each with a deep process graph and correlated `network_connect` + `dns_query` activity drawn from genuine scrubbed captures. Woven into that ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec -> DNS -> outbound connection correlated across all three streams) on the laptop; sudoers tampering, launchd persistence, and an application-control block on the build server. Every alert is produced by the real ingestion + detection pipeline, not hand-inserted rows. The benign browsing and build activity raises no false alarms.
 
 To run from a local source build instead of the pinned release images:
 
@@ -56,55 +45,32 @@ docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --
 
 ### Demo notes
 
-- The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an
-  MDM, and Apple Silicon, so it cannot run in Docker. The recording linked above (once published) captures it on a real Mac;
-  this stack exercises the server, UI, and detection pipeline.
-- The demo data is genuine: the seeder replays two scrubbed real-Mac captures (hundreds of events each, with their real
-  process trees, network connections, and DNS lookups intact) through the real `POST /api/events` ingest path, weaves the
-  attack scenarios into that ambient activity, and lets the server's own processor materialize the graph and fire the alerts.
-  Captures are scrubbed of identity strings and remapped to RFC 5737 / RFC 3849 documentation IP ranges, preserving the
-  DNS-to-connection correlation.
+- The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an MDM, and Apple Silicon, so it cannot run in Docker. The recording linked above (once published) captures it on a real Mac; this stack exercises the server, UI, and detection pipeline.
+- The demo data is genuine: the seeder replays two scrubbed real-Mac captures (hundreds of events each, with their real process trees, network connections, and DNS lookups intact) through the real `POST /api/events` ingest path, weaves the attack scenarios into that ambient activity, and lets the server's own processor materialize the graph and fire the alerts. Captures are scrubbed of identity strings and remapped to RFC 5737 / RFC 3849 documentation IP ranges, preserving the DNS-to-connection correlation.
 - Response actions (kill, isolate) are visible and enqueue, but never complete because no live agent is connected.
-- TLS uses a self-signed `localhost` certificate, so the browser shows a one-time warning. The stack is for evaluation only:
-  empty MySQL password and checked-in dev secrets. Do not expose it this stack to the public internet.
-- SSO is the documented path. Admin onboarding via break-glass is also available: a redemption URL prints to the server logs
-  on first boot (`docker compose -f docker-compose.demo.yml logs server | grep -i break-glass`); redeeming it needs a
-  WebAuthn authenticator.
-- If your browser does not resolve `*.localhost` to `127.0.0.1` (most Chromium and Firefox builds do), add
-  `127.0.0.1 dex.demo.localhost` to your hosts file so the SSO redirect can reach the bundled IdP.
+- TLS uses a self-signed `localhost` certificate, so the browser shows a one-time warning. The stack is for evaluation only: empty MySQL password and checked-in dev secrets. Do not expose it this stack to the public internet.
+- SSO is the documented path. Admin onboarding via break-glass is also available: a redemption URL prints to the server logs on first boot (`docker compose -f docker-compose.demo.yml logs server | grep -i break-glass`); redeeming it needs a WebAuthn authenticator.
+- If your browser does not resolve `*.localhost` to `127.0.0.1` (most Chromium and Firefox builds do), add `127.0.0.1 dex.demo.localhost` to your hosts file so the SSO redirect can reach the bundled IdP.
 
 ## Operator docs
 
 Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):
 
-- [`docs/install-server.md`](docs/install-server.md) -- stand up the
-  Docker Compose stack.
-- [`docs/install-agent-manual.md`](docs/install-agent-manual.md) --
-  evaluate on 1-5 Macs without an MDM.
-- [`docs/mdm-deployment.md`](docs/mdm-deployment.md) -- deploy via any
-  MDM (Jamf, Kandji, Intune, mosyle, Fleet).
-- [`docs/fleet-deployment.md`](docs/fleet-deployment.md) -- Fleet
-  MDM-specific recipe.
-- [`docs/operations.md`](docs/operations.md) -- day-2 ops runbook
-  (upgrades, rotations, backups, troubleshooting).
-- [`docs/detection-rules.md`](docs/detection-rules.md) -- per-rule
-  behaviour, ATT&CK mapping, severity, and configuration env vars.
-  Generated from the rule source via `go run ./tools/gen-rule-docs`.
-- [`docs/api.md`](docs/api.md) + [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
-  -- HTTP API reference.
+- [`docs/install-server.md`](docs/install-server.md) -- stand up the Docker Compose stack.
+- [`docs/install-agent-manual.md`](docs/install-agent-manual.md) -- evaluate on 1-5 Macs without an MDM.
+- [`docs/mdm-deployment.md`](docs/mdm-deployment.md) -- deploy via any MDM (Jamf, Kandji, Intune, mosyle, Fleet).
+- [`docs/fleet-deployment.md`](docs/fleet-deployment.md) -- Fleet MDM-specific recipe.
+- [`docs/operations.md`](docs/operations.md) -- day-2 ops runbook (upgrades, rotations, backups, troubleshooting).
+- [`docs/detection-rules.md`](docs/detection-rules.md) -- per-rule behaviour, ATT&CK mapping, severity, and configuration env vars. Generated from the rule source via `go run ./tools/gen-rule-docs`.
+- [`docs/api.md`](docs/api.md) + [`docs/api/openapi.yaml`](docs/api/openapi.yaml) -- HTTP API reference.
 
 ## Architecture
 
 ### On-device
 
-- **System extension** (Swift) -- subscribes to macOS Endpoint Security Framework events
-  (exec, fork, exit, open) and captures process metadata, code signing info, and file hashes
-- **Network extension** (Swift) -- monitors TCP/UDP connections via NEFilterDataProvider with
-  process attribution, and resolves DNS via NEDNSProxyProvider to emit `dns_query` events (query
-  name, type, resolved addresses) per process. DNS is the newest of the three telemetry streams;
-  encrypted-DNS (DoH/DoT) visibility and failure-mode hardening are on the roadmap
-- **Agent daemon** (Go) -- receives events from extensions over XPC, queues them in SQLite,
-  and uploads to the server
+- **System extension** (Swift) -- subscribes to macOS Endpoint Security Framework events (exec, fork, exit, open) and captures process metadata, code signing info, and file hashes
+- **Network extension** (Swift) -- monitors TCP/UDP connections via NEFilterDataProvider with process attribution, and resolves DNS via NEDNSProxyProvider to emit `dns_query` events (query name, type, resolved addresses) per process. DNS is the newest of the three telemetry streams; encrypted-DNS (DoH/DoT) visibility and failure-mode hardening are on the roadmap
+- **Agent daemon** (Go) -- receives events from extensions over XPC, queues them in SQLite, and uploads to the server
 
 ### Server
 
@@ -135,10 +101,7 @@ curl https://mise.run | sh      # any Unix; installs to ~/.local/bin/mise
 brew install mise               # macOS with Homebrew
 ```
 
-Only run **one** of those two lines. Running both will put two copies of
-`mise` on disk and leave an extra entry on PATH. If mise is already installed,
-skip to 0b. See <https://mise.jdx.dev/getting-started.html> for other
-installers.
+Only run **one** of those two lines. Running both will put two copies of `mise` on disk and leave an extra entry on PATH. If mise is already installed, skip to 0b. See <https://mise.jdx.dev/getting-started.html> for other installers.
 
 ### 0b. Activate mise in your shell (one-time, per shell)
 
@@ -148,9 +111,7 @@ echo 'eval "$(mise activate zsh)"'  >> ~/.zshrc    # zsh
 echo 'eval "$(mise activate bash)"' >> ~/.bashrc   # bash
 ```
 
-Then open a new terminal (or `exec $SHELL`) so the activation takes effect.
-Without this step `mise install` downloads tools but they don't appear on
-PATH -- `which task` / `which lefthook` come up empty.
+Then open a new terminal (or `exec $SHELL`) so the activation takes effect. Without this step `mise install` downloads tools but they don't appear on PATH -- `which task` / `which lefthook` come up empty.
 
 ### 1. Install every pinned tool
 
@@ -158,11 +119,7 @@ PATH -- `which task` / `which lefthook` come up empty.
 mise install   # reads .tool-versions; asdf users: asdf install
 ```
 
-Fetches Go, Node, golangci-lint, lefthook, and task at the versions pinned in
-`.tool-versions`. CI installs the same pins for Go + Node + golangci-lint
-(`go-version-file: go.mod`, explicit `node-version`, pinned `golangci-lint`);
-the Task and Lefthook installers in CI track the same minor series but aren't
-byte-for-byte locked to the patch version.
+Fetches Go, Node, golangci-lint, lefthook, and task at the versions pinned in `.tool-versions`. CI installs the same pins for Go + Node + golangci-lint (`go-version-file: go.mod`, explicit `node-version`, pinned `golangci-lint`); the Task and Lefthook installers in CI track the same minor series but aren't byte-for-byte locked to the patch version.
 
 ### 2. Install git hooks
 
@@ -190,15 +147,11 @@ task dev:server
 # Then open https://localhost:8088/ui/
 ```
 
-`task dev:server` boots break-glass-only (no SSO). To exercise the SSO sign-in flow locally against the
-bundled dex IdP, run `task qa:up` then `task dev:server:qa-oidc`; see [`docs/okta-setup.md`](docs/okta-setup.md)
-for configuring a real OIDC tenant.
+`task dev:server` boots break-glass-only (no SSO). To exercise the SSO sign-in flow locally against the bundled dex IdP, run `task qa:up` then `task dev:server:qa-oidc`; see [`docs/okta-setup.md`](docs/okta-setup.md) for configuring a real OIDC tenant.
 
 ## Production deployment
 
-For pilot deployments, pull a signed `.pkg` and both `.mobileconfig`
-profiles from the [Releases page](https://github.com/getvictor/fleet-edr/releases)
-and hand them to any MDM. The server runs as a container stack:
+For pilot deployments, pull a signed `.pkg` and both `.mobileconfig` profiles from the [Releases page](https://github.com/getvictor/fleet-edr/releases) and hand them to any MDM. The server runs as a container stack:
 
 ```bash
 # Pick a pinned release; `latest` is fine for dev but not safe for prod.
@@ -221,11 +174,9 @@ On each agent host the MDM pushes:
 - `edr-system-extension.mobileconfig` (pre-approves the ES sysext)
 - `edr-tcc-fda.mobileconfig` (grants Full Disk Access)
 - `fleet-edr-<version>.pkg` (the agent + host app + sysext)
-- Optionally: `/etc/fleet-edr.conf` with `EDR_SERVER_URL` and `EDR_ENROLL_SECRET`
-  written by the install script before `installer -pkg` runs.
+- Optionally: `/etc/fleet-edr.conf` with `EDR_SERVER_URL` and `EDR_ENROLL_SECRET` written by the install script before `installer -pkg` runs.
 
-Fleet's install-script contract is the shape the MDM writes the conf file
-in; any other MDM can replicate it with a one-liner preinstall.
+Fleet's install-script contract is the shape the MDM writes the conf file in; any other MDM can replicate it with a one-liner preinstall.
 
 ## Running tests
 
@@ -236,5 +187,4 @@ task test:ui     # Vitest
 task lint        # golangci-lint, eslint, swiftlint, actionlint
 ```
 
-Prefer `task --list` over memorising commands; the Taskfile is the source of truth
-for reproducible invocations.
+Prefer `task --list` over memorising commands; the Taskfile is the source of truth for reproducible invocations.
