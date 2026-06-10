@@ -12,6 +12,7 @@ package metrics
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -32,6 +33,18 @@ const (
 // indexed batch reads, hundreds of milliseconds on the worst-case unindexed retention scans.
 var dbQueryHistogramBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
+// httpDurationBuckets is the OTel HTTP semantic-convention default bucket set for http.server.request.duration, in seconds.
+// Using the conventional boundaries keeps p50/p95/p99 readings comparable with any other OTel-instrumented service and with
+// SigNoz's built-in expectations for this metric.
+var httpDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
+
+// knownHTTPMethods bounds the http.request.method label. An unrecognized method (a scanner sending garbage verbs) collapses to
+// "_OTHER" per the OTel HTTP semantic conventions, so a flood of junk methods cannot inflate the metric's cardinality.
+var knownHTTPMethods = map[string]bool{
+	http.MethodGet: true, http.MethodHead: true, http.MethodPost: true, http.MethodPut: true, http.MethodPatch: true,
+	http.MethodDelete: true, http.MethodConnect: true, http.MethodOptions: true, http.MethodTrace: true,
+}
+
 // GaugeSource is the read-only contract used by the observable gauges. The OTel reader invokes the callbacks on its collection
 // cadence; the callback issues a live DB query each time. Interface not concrete struct so tests can swap in fakes without pulling in
 // a MySQL dependency.
@@ -49,6 +62,7 @@ type Recorder struct {
 	retentionRowsDeleted metric.Int64Counter
 	processesReconciled  metric.Int64Counter
 	queueDropped         metric.Int64Counter
+	httpRequestDuration  metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
 	enrolledGauge metric.Int64ObservableGauge
@@ -112,6 +126,15 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.agent.queue.dropped",
 		metric.WithDescription("Events dropped by agent queue cap. Attribute `lossy=true` means data loss; `lossy=false` means already-delivered rows trimmed for space."),
 		metric.WithUnit("{event}"),
+	)
+	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
+	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
+	// filter gives the error rate, and the buckets give latency quantiles, so this one instrument covers the full RED picture.
+	r.httpRequestDuration, _ = meter.Float64Histogram(
+		"http.server.request.duration",
+		metric.WithDescription("Duration of inbound HTTP requests, by route + method + status. The per-request access log only fires for 4xx/5xx/slow; this metric is the volume + latency signal."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(httpDurationBuckets...),
 	)
 
 	if gauges != nil {
@@ -203,6 +226,27 @@ func (r *Recorder) ObserveDBQuery(ctx context.Context, op string, d time.Duratio
 		return
 	}
 	r.dbQueryDuration.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("op", op)))
+}
+
+// ObserveHTTPRequest records one inbound HTTP request's latency on the http.server.request.duration histogram. `route` must be
+// the matched route TEMPLATE (e.g. "/api/hosts/{host_id}/tree"), never the raw path: a raw path carrying ids would make every
+// host its own time series. The caller passes "unmatched" for requests that hit no route. `method` is normalized against the
+// known-verb set so a garbage method collapses to "_OTHER". Status code is bounded by construction.
+func (r *Recorder) ObserveHTTPRequest(ctx context.Context, method, route string, statusCode int, d time.Duration) {
+	if r == nil || r.httpRequestDuration == nil {
+		return
+	}
+	if !knownHTTPMethods[method] {
+		method = "_OTHER"
+	}
+	if route == "" {
+		route = "unmatched"
+	}
+	r.httpRequestDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
+		attribute.String("http.request.method", method),
+		attribute.String("http.route", route),
+		attribute.Int("http.response.status_code", statusCode),
+	))
 }
 
 // RetentionRowsDeleted satisfies retention.MetricsRecorder.

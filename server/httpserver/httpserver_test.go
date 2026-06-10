@@ -113,6 +113,9 @@ func TestBuild_AccessLogLevels(t *testing.T) {
 	mux.HandleFunc("GET /ok", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("GET /bad", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
 	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(30 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
@@ -120,12 +123,13 @@ func TestBuild_AccessLogLevels(t *testing.T) {
 	mux.HandleFunc("GET /boom", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	h := Build(mux, Options{Logger: logger, SlowThreshold: 10 * time.Millisecond})
+	rec := &fakeRequestMetrics{}
+	h := Build(mux, Options{Logger: logger, SlowThreshold: 10 * time.Millisecond, Metrics: rec})
 
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	for _, path := range []string{"/ok", "/slow", "/boom"} {
+	for _, path := range []string{"/ok", "/bad", "/slow", "/boom"} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
 		require.NoError(t, err)
 		resp, err := http.DefaultClient.Do(req)
@@ -134,7 +138,7 @@ func TestBuild_AccessLogLevels(t *testing.T) {
 	}
 
 	lines := splitLines(t, logs.Bytes())
-	require.Len(t, lines, 3)
+	require.Len(t, lines, 4)
 
 	byPath := map[string]map[string]any{}
 	for _, ln := range lines {
@@ -143,10 +147,39 @@ func TestBuild_AccessLogLevels(t *testing.T) {
 		byPath[rec["path"].(string)] = rec
 	}
 
-	assert.Equal(t, "INFO", byPath["/ok"]["level"])
+	// Healthy 2xx drops to debug (the noise fix); client errors stay at info; slow + 5xx stay at warn.
+	assert.Equal(t, "DEBUG", byPath["/ok"]["level"])
+	assert.Equal(t, "INFO", byPath["/bad"]["level"])
 	assert.Equal(t, "WARN", byPath["/slow"]["level"])
 	assert.Equal(t, true, byPath["/slow"]["slow"])
 	assert.Equal(t, "WARN", byPath["/boom"]["level"])
+	// The route template (not the raw path) is stamped on the line and is what the metric is labeled by.
+	assert.Equal(t, "/ok", byPath["/ok"]["route"])
+
+	// Every request, including the healthy 2xx that no longer logs at info, is recorded on the metric.
+	require.Len(t, rec.calls, 4)
+	got := map[string]metricCall{}
+	for _, c := range rec.calls {
+		got[c.route] = c
+	}
+	assert.Equal(t, http.MethodGet, got["/ok"].method)
+	assert.Equal(t, http.StatusOK, got["/ok"].status)
+	assert.Equal(t, http.StatusBadRequest, got["/bad"].status)
+	assert.Equal(t, http.StatusInternalServerError, got["/boom"].status)
+}
+
+type metricCall struct {
+	method, route string
+	status        int
+	dur           time.Duration
+}
+
+// fakeRequestMetrics captures ObserveHTTPRequest calls so the access-log test can assert the metric is recorded for every
+// request (including the healthy ones that no longer log) with the route template, not the raw path.
+type fakeRequestMetrics struct{ calls []metricCall }
+
+func (f *fakeRequestMetrics) ObserveHTTPRequest(_ context.Context, method, route string, status int, d time.Duration) {
+	f.calls = append(f.calls, metricCall{method: method, route: route, status: status, dur: d})
 }
 
 func TestBuild_RecoversPanic(t *testing.T) {
@@ -208,4 +241,31 @@ func splitLines(t *testing.T, b []byte) [][]byte {
 	}
 	lines := bytes.Split(bytes.TrimRight(b, "\n"), []byte("\n"))
 	return lines
+}
+
+// TestBuild_AccessLog_UnmatchedRouteLabel pins the Gemini + Copilot fix: a request matching no route logs and records the route
+// as "unmatched" (not ""), so the access-log attribute and the metric label agree.
+func TestBuild_AccessLog_UnmatchedRouteLabel(t *testing.T) {
+	installTracer(t)
+	var logs bytes.Buffer
+	logger := newLogger(&logs)
+	rec := &fakeRequestMetrics{}
+	h := Build(http.NewServeMux(), Options{Logger: logger, Metrics: rec}) // empty mux: every request is an unmatched 404
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/no/such/path", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	lines := splitLines(t, logs.Bytes())
+	require.Len(t, lines, 1)
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(lines[0], &line))
+	assert.Equal(t, "unmatched", line["route"])
+	require.Len(t, rec.calls, 1)
+	assert.Equal(t, "unmatched", rec.calls[0].route)
 }

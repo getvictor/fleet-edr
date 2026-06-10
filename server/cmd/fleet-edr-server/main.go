@@ -156,7 +156,7 @@ func run() error {
 		logger.InfoContext(ctx, "trusting X-Forwarded-For from proxies", "trusted", cfg.TrustedProxies)
 	}
 
-	srv := newHTTPServer(cfg, mux, logger, clientIPResolver)
+	srv := newHTTPServer(cfg, mux, logger, clientIPResolver, metricsRec)
 	if err := configureTLS(ctx, logger, srv, cfg); err != nil {
 		return err
 	}
@@ -524,12 +524,19 @@ func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, l
 	}
 }
 
-func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, clientIPResolver *httpserver.ClientIPResolver) *http.Server {
+func newHTTPServer(
+	cfg *config.Config,
+	mux *http.ServeMux,
+	logger *slog.Logger,
+	clientIPResolver *httpserver.ClientIPResolver,
+	metricsRec *metrics.Recorder,
+) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:           logger,
 		ServiceName:      serviceName,
 		TLSEnabled:       cfg.TLSEnabled(),
 		ClientIPResolver: clientIPResolver,
+		Metrics:          metricsRec,
 	})
 	return &http.Server{
 		Addr:         cfg.ListenAddr,

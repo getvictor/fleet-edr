@@ -381,3 +381,29 @@ func appendObserveDBQueryViolations(bads []observeDBQueryViolation, file *ast.Fi
 	})
 	return bads
 }
+
+// spec:observability-instrumentation/http-server-request-duration/inbound-requests-are-timed-by-route-method-and-status
+//
+// ObserveHTTPRequest records on the OTel-semantic-convention http.server.request.duration histogram. The test pins: (a) two
+// requests sharing method+route+status collapse into one series with count 2, (b) a distinct status is its own series, and
+// (c) the cardinality guards fire: an unknown method collapses to "_OTHER" and an empty route to "unmatched".
+func TestObserveHTTPRequest(t *testing.T) {
+	r, collect := newTestRecorder(t, nil, Options{})
+	ctx := context.Background()
+	r.ObserveHTTPRequest(ctx, "POST", "/api/events", 200, 50*time.Millisecond)
+	r.ObserveHTTPRequest(ctx, "POST", "/api/events", 200, 70*time.Millisecond)
+	r.ObserveHTTPRequest(ctx, "GET", "/api/hosts/{host_id}/tree", 500, 5*time.Millisecond)
+	r.ObserveHTTPRequest(ctx, "BREW", "", 418, time.Millisecond)
+
+	rm := collect()
+	const name = "http.server.request.duration"
+	assert.Equal(t, uint64(2), findHistogramCount(t, rm, name, map[string]any{
+		"http.request.method": "POST", "http.route": "/api/events", "http.response.status_code": int64(200),
+	}), "two POST /api/events 200s share one series")
+	assert.Equal(t, uint64(1), findHistogramCount(t, rm, name, map[string]any{
+		"http.request.method": "GET", "http.route": "/api/hosts/{host_id}/tree", "http.response.status_code": int64(500),
+	}))
+	assert.Equal(t, uint64(1), findHistogramCount(t, rm, name, map[string]any{
+		"http.request.method": "_OTHER", "http.route": "unmatched", "http.response.status_code": int64(418),
+	}), "unknown method -> _OTHER and empty route -> unmatched (cardinality guard)")
+}

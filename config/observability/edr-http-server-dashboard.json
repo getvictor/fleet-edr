@@ -1,0 +1,184 @@
+{
+  "title": "EDR HTTP server (RED)",
+  "description": "Rate / Errors / Duration for the EDR server's inbound HTTP surface, built on the http.server.request.duration histogram (OpenTelemetry HTTP semantic convention; emitted by the access-log middleware in server/httpserver). This replaces grepping per-request INFO access logs: healthy 2xx/3xx requests no longer log at info, so this dashboard is the volume + latency signal. Import via SigNoz Dashboards -> Import. Queries assume the server exports via OTLP with service.name=fleet-edr-server. The histogram is labeled by http.route (the matched route TEMPLATE, e.g. /api/hosts/{host_id}/tree, never the raw path), http.request.method, and http.response.status_code. SigNoz's import dialog re-numbers panels and may re-pick quantile selectors; the layout block is a starting hint only.",
+  "tags": ["edr", "http", "red"],
+  "layout": [
+    {"i": "1", "x": 0, "y": 0, "w": 6, "h": 4},
+    {"i": "2", "x": 6, "y": 0, "w": 6, "h": 4},
+    {"i": "3", "x": 0, "y": 4, "w": 6, "h": 4},
+    {"i": "4", "x": 6, "y": 4, "w": 6, "h": 4},
+    {"i": "5", "x": 0, "y": 8, "w": 6, "h": 4},
+    {"i": "6", "x": 6, "y": 8, "w": 6, "h": 4}
+  ],
+  "panels": [
+    {
+      "id": "1",
+      "title": "Request rate by route (R)",
+      "description": "Per-second request throughput from the histogram's observation count, grouped by route template. The high-frequency POST /api/events ingest path dominates; a sudden change in its rate is the fleet's heartbeat. Other routes (GET /api/hosts, /api/alerts) show operator + UI traffic.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "queryName": "A",
+              "aggregateAttribute": {"key": "http.server.request.duration", "type": "", "dataType": "float64", "isColumn": true},
+              "aggregateOperator": "rate",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"}
+                ]
+              },
+              "groupBy": [{"key": "http.route", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2",
+      "title": "Error rate: 5xx by route (E)",
+      "description": "Per-second rate of server-error (5xx) responses, grouped by route. This is the access log's old WARN lines turned into a metric: any sustained non-zero series is a route that is failing. Pair with the 4xx panel to separate server faults from client/auth rejections.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "queryName": "A",
+              "aggregateAttribute": {"key": "http.server.request.duration", "type": "", "dataType": "float64", "isColumn": true},
+              "aggregateOperator": "rate",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
+                  {"key": {"key": "http.response.status_code", "type": "tag"}, "op": ">=", "value": "500"}
+                ]
+              },
+              "groupBy": [{"key": "http.route", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3",
+      "title": "Duration p95 by route (D)",
+      "description": "95th-percentile request latency per route, in seconds, computed from the histogram buckets. The access-log slow-warn threshold is 500ms; a route whose p95 climbs toward that is the regression to chase before it starts emitting WARN lines.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "queryName": "A",
+              "aggregateAttribute": {"key": "http.server.request.duration", "type": "", "dataType": "float64", "isColumn": true},
+              "aggregateOperator": "p95",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"}
+                ]
+              },
+              "groupBy": [{"key": "http.route", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "p95"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "4",
+      "title": "Duration p99 by route (D)",
+      "description": "99th-percentile request latency per route, in seconds. The tail that p95 hides: a flat p95 with a spiky p99 points at intermittent slow paths (cold caches, lock contention, a slow downstream) rather than a uniform regression.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "queryName": "A",
+              "aggregateAttribute": {"key": "http.server.request.duration", "type": "", "dataType": "float64", "isColumn": true},
+              "aggregateOperator": "p99",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"}
+                ]
+              },
+              "groupBy": [{"key": "http.route", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "p99"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5",
+      "title": "Request rate by status code",
+      "description": "Throughput split by exact HTTP status code. The 2xx/3xx/4xx/5xx mix at a glance: a rising 401/403 series is auth pressure (failed sessions, reauth gating), a rising 4xx on the ingest path is malformed agent batches, and any 5xx is a server fault.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "queryName": "A",
+              "aggregateAttribute": {"key": "http.server.request.duration", "type": "", "dataType": "float64", "isColumn": true},
+              "aggregateOperator": "rate",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"}
+                ]
+              },
+              "groupBy": [{"key": "http.response.status_code", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "rate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "6",
+      "title": "Top routes by request volume",
+      "description": "Table of total request count by route over the selected window, highest first. Quick capacity view: which endpoints carry the load and where to focus latency work. POST /api/events should top it in any real fleet.",
+      "panelTypes": "table",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "queryName": "A",
+              "aggregateAttribute": {"key": "http.server.request.duration", "type": "", "dataType": "float64", "isColumn": true},
+              "aggregateOperator": "count",
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"}
+                ]
+              },
+              "groupBy": [{"key": "http.route", "type": "tag"}],
+              "stepInterval": 60,
+              "timeAggregation": "count"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

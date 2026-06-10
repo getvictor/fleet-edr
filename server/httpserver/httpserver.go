@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -32,10 +33,25 @@ import (
 // latency upgrade from info to warn so SigNoz can alert on regressions without sampling every request.
 const defaultSlowThreshold = 500 * time.Millisecond
 
+// accessLogMsg is the slog message for the per-request access log. Shared across the status branches so the literal is defined once.
+const accessLogMsg = "http request"
+
+// HTTPRequestRecorder is the access-log middleware's hook for recording per-request latency on a metric. *metrics.Recorder satisfies
+// it. Kept as a local interface (rather than importing the metrics package) so httpserver stays decoupled and tests can pass a
+// fake. nil disables the recording.
+type HTTPRequestRecorder interface {
+	// ObserveHTTPRequest records one request's latency. route is the matched route TEMPLATE ("/api/hosts/{host_id}/tree") or
+	// "unmatched"; the implementation owns label cardinality.
+	ObserveHTTPRequest(ctx context.Context, method, route string, statusCode int, d time.Duration)
+}
+
 // Options configures the middleware chain.
 type Options struct {
 	// Logger is required; all middleware logs through it.
 	Logger *slog.Logger
+	// Metrics, when set, receives one ObserveHTTPRequest call per request from the access-log layer. nil disables it (e.g. the
+	// ingest-only binary or unit tests that don't assert metrics).
+	Metrics HTTPRequestRecorder
 	// ServiceName is the operation name passed to otelhttp.NewHandler; used in the span name prefix.
 	ServiceName string
 	// SlowThreshold upgrades access-log lines to warn when the handler took longer than this. Zero uses the default (defaultSlowThreshold
@@ -65,7 +81,7 @@ func Build(handler http.Handler, opts Options) http.Handler {
 
 	h := handler
 	h = recoverMiddleware(opts.Logger)(h)
-	h = accessLog(opts.Logger, opts.SlowThreshold)(h)
+	h = accessLog(opts.Logger, opts.SlowThreshold, opts.Metrics)(h)
 	if opts.TLSEnabled {
 		h = hstsHeader()(h)
 	}
@@ -143,32 +159,60 @@ func recoverMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// accessLog emits one log line per request. Status 5xx or duration > slowThreshold upgrade to warn.
-func accessLog(logger *slog.Logger, slowThreshold time.Duration) func(http.Handler) http.Handler {
+// routeTemplate extracts the path template from a ServeMux pattern: "POST /api/events" -> "/api/events", "/healthz" -> "/healthz".
+// The path begins at the first '/', after any optional "METHOD " and host. Returns "" for an empty pattern (no route matched).
+func routeTemplate(pattern string) string {
+	if i := strings.IndexByte(pattern, '/'); i >= 0 {
+		return pattern[i:]
+	}
+	return ""
+}
+
+// accessLog records each request's latency on the metrics hook and logs the noteworthy ones. The per-request line is NOT an
+// info-level firehose: healthy 2xx/3xx requests log at debug (off in prod), client errors (4xx) at info, and 5xx or
+// slow (> slowThreshold) requests at warn. The volume + latency signal for every request, including the healthy ones, lives in
+// the http.server.request.duration metric instead, so high-frequency endpoints (POST /api/events) no longer drown the log.
+func accessLog(logger *slog.Logger, slowThreshold time.Duration, recorder HTTPRequestRecorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			rw := &statusCapture{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
 			dur := time.Since(start)
+			ctx := r.Context()
+
+			// r.Pattern is the route template the ServeMux matched (set on this request before the handler ran); it is bounded by
+			// the route table. Strip the leading "METHOD " (and any host) so the label is just the path template. Empty means no
+			// route matched (404 / scanner traffic): use "unmatched" rather than the raw path to bound cardinality. Resolve it here
+			// (not just inside the recorder) so the log attribute and the metric label agree on the same "unmatched" value.
+			route := routeTemplate(r.Pattern)
+			if route == "" {
+				route = "unmatched"
+			}
+			if recorder != nil {
+				recorder.ObserveHTTPRequest(ctx, r.Method, route, rw.status, dur)
+			}
 
 			attrs := []any{
 				"method", r.Method,
 				"path", r.URL.Path,
+				"route", route,
 				"status", rw.status,
 				"bytes", rw.bytes,
 				"duration_ms", dur.Milliseconds(),
 				"remote_addr", ClientIP(r),
 			}
 
-			ctx := r.Context()
 			switch {
 			case rw.status >= http.StatusInternalServerError:
-				logger.WarnContext(ctx, "http request", attrs...)
+				logger.WarnContext(ctx, accessLogMsg, attrs...)
 			case slowThreshold > 0 && dur > slowThreshold:
-				logger.WarnContext(ctx, "http request (slow)", append(attrs, "slow", true)...)
+				logger.WarnContext(ctx, accessLogMsg+" (slow)", append(attrs, "slow", true)...)
+			case rw.status >= http.StatusBadRequest:
+				logger.InfoContext(ctx, accessLogMsg, attrs...)
 			default:
-				logger.InfoContext(ctx, "http request", attrs...)
+				// Healthy 2xx/3xx: debug only. The metric carries the rate + latency; logging every one is the noise this avoids.
+				logger.DebugContext(ctx, accessLogMsg, attrs...)
 			}
 		})
 	}
