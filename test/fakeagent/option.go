@@ -40,7 +40,7 @@ func WithSpeed(multiplier float64) Option {
 // WithBatchSize controls how many envelopes PostDirect bundles into a single /api/events POST. Default 100. Has no effect on
 // FeedControlPlane, which posts one envelope per /event call by design (the headless binary's control plane mirrors the production
 // receiver's one-event-at-a-time semantics). Panics on n <= 0 because PostDirect's `for start += cfg.batchSize` loop would either
-// never advance (n=0, infinite loop) or run backwards (n<0) - neither is a recoverable state, and the panic gives the test author
+// never advance (n=0, infinite loop) or run backwards (n<0). Neither is a recoverable state, and the panic gives the test author
 // a clear stack to the misconfiguration rather than a hanging or unbounded test run.
 func WithBatchSize(n int) Option {
 	if n <= 0 {

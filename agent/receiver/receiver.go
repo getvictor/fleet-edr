@@ -138,7 +138,7 @@ func (r *Receiver) SendApplicationControl(payload []byte) error {
 //
 // Issue #178: macOS XPC can silently route an open connection to a stale
 // Mach port after a system-extension respawn, with no error event ever
-// surfacing. Ping is the agent's positive liveness probe - call it
+// surfacing. Ping is the agent's positive liveness probe: call it
 // periodically; a failure is the signal to reconnect.
 //
 // We snapshot the handle under r.mu but release the lock before calling
@@ -162,7 +162,7 @@ func (r *Receiver) Ping(timeout time.Duration) error {
 	rc := int(C.xpc_bridge_ping(C.int(handle), C.uint64_t(timeout.Nanoseconds())))
 	if rc != 0 {
 		// The C bridge collapses "timeout waiting for hello-ack" and "slot
-		// torn down concurrently" into a single -1 - the caller's response
+		// torn down concurrently" into a single -1. The caller's response
 		// (force a reconnect) is the same either way, so distinguishing the
 		// two doesn't change behaviour. The error string names the service
 		// and timeout so the warning log lines that wrap this error are

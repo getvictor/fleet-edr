@@ -1,6 +1,6 @@
 # M12 scale-test harness
 
-UAT plan milestone M12 (see `ai/uat/plan.md` and `docs/testing-strategy.md`). Fans out N simulated EDR hosts against one server for D wall-clock duration, records client-observed POST /api/events latency, and asserts the documented pass criteria.
+UAT plan milestone M12 (see `ai/uat/plan.md` and [`testing-strategy.md`](../../docs/testing-strategy.md)). Fans out N simulated EDR hosts against one server for D wall-clock duration, records client-observed POST /api/events latency, and asserts the documented pass criteria.
 
 The harness exists in two shapes:
 
@@ -79,7 +79,7 @@ The runner ships two load shapes selected via `--mode`:
 
 | Mode | What it measures | When to use |
 | --- | --- | --- |
-| `direct` (default) | Server-side ingest p99 under fan-in (each host POSTs directly to `/api/events` via `fakeagent.PostDirect`) | Most baseline runs; v1 contract |
+| `direct` (default) | Server-side ingest p99 under fan-in (each host POSTs directly to `/api/events` via `fakeagent.PostDirect`) | Most baseline runs; current contract |
 | `headless` | Agent-side queue depth under fan-in (each host runs `headless.Run` with its own SQLite queue + uploader + control plane; the runner polls `/state` for queue_depth on every tick) | Catching uploader regressions (batch-size drift, backoff drift) that direct mode bypasses; #232 closure |
 
 The headless mode is gated by the same build tag as the `headless` package (`!darwin || !cgo`). On macOS dev boxes that default to CGO enabled, rebuild with `CGO_ENABLED=0` (the scaledriver build) or run the lane in a Linux container. On Linux the runner pre-flights `RLIMIT_NOFILE`: 100 headless hosts need at least 1000 file descriptors so the default 1024 ceiling is borderline; raise with `ulimit -n 4096` for any non-trivial fan-out.
@@ -94,7 +94,7 @@ Per-host fields populated only in headless mode:
 }
 ```
 
-Aggregate fields populated only in headless mode (with `omitempty` so a direct-mode report stays binary-identical to its v1 shape):
+Aggregate fields populated only in headless mode (with `omitempty` so a direct-mode report stays binary-identical to its current shape):
 
 ```json
 {
@@ -121,7 +121,7 @@ Pass `--signoz-url=http://localhost:8080` to enrich the report with the SigNoz-r
 }
 ```
 
-A large positive `client_server_delta_p99` points at network + balancer + agent-side queue time as the dominant contributor rather than server work. A failed SigNoz query is a soft error (`signoz_query_error` field), not a gate - the cross-check is a diagnostic, not a contract.
+A large positive `client_server_delta_p99` points at network + balancer + agent-side queue time as the dominant contributor rather than server work. A failed SigNoz query is a soft error (`signoz_query_error` field), not a gate: the cross-check is a diagnostic, not a contract.
 
 ## What this layer does NOT do
 

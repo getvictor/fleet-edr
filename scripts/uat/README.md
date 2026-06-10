@@ -2,7 +2,7 @@
 
 Asserted automation around the dogfood QA scripts under `scripts/qa/`. The driver at `scripts/uat/system-test.sh` SSHs into the SIP-enabled `edr-qa` VM, optionally installs the candidate PKG and waits for system-extension activation, runs a scenario's `attack.sh`, then polls the server's REST API for the expected detections.
 
-This is the L5 layer of the testing pyramid (per `docs/testing-strategy.md` and `ai/uat/extension-testing.md`): unlike L0..L4 it does not run per PR; it runs against release candidates and on the developer's own machine against a SIP-on VM. For per-PR signal on extension wire shapes see L0 unit tests (M7) and L0 corpus replay (M8). Running L5 from a dedicated self-hosted GitHub Actions runner (so the cron lane and release tags fire automatically) is tracked as a follow-up; for now the harness runs locally only.
+This is the L5 layer of the testing pyramid (per [`testing-strategy.md`](../../docs/testing-strategy.md) and `ai/uat/extension-testing.md`): unlike L0..L4 it does not run per PR; it runs against release candidates and on the developer's own machine against a SIP-on VM. For per-PR signal on extension wire shapes see L0 unit tests (M7) and L0 corpus replay (M8). Running L5 from a dedicated self-hosted GitHub Actions runner (so the cron lane and release tags fire automatically) is tracked as a follow-up; for now the harness runs locally only.
 
 ## Difference vs `scripts/qa/`
 
@@ -71,7 +71,7 @@ Optional environment (only consumed by inner `scripts/qa/*.sh` wrappers that sti
 
 The server has no password-based `POST /api/session` route; login is OIDC (browser redirect to dex / IdP) or break-glass WebAuthn (passkey, browser-only). Neither is shell-scriptable. The realistic L5 mechanic is to do ONE browser login, copy the `edr_session` cookie value from devtools (Application → Cookies → `edr_session`), export it as `EDR_SESSION_COOKIE`, and reuse it across many scenario runs until the session expires.
 
-The driver verifies the cookie up front by calling `GET /api/session`. If that returns 401, the cookie is expired and the driver fails fast - repeat the browser login.
+The driver verifies the cookie up front by calling `GET /api/session`. If that returns 401, the cookie is expired and the driver fails fast: repeat the browser login.
 
 Run one scenario:
 
@@ -93,7 +93,7 @@ Options:
 
 `edr-qa` (192.168.64.7) runs with SIP enabled + Gatekeeper enabled + auto-update disabled, all six toggles flipped off so the macOS version does not drift between snapshot revert and test. That matches what a pilot customer's MDM-deployed Mac actually looks like -- which is what L5 must validate against.
 
-`edr-dev` (192.168.64.5) runs with SIP disabled for fast iteration. Running L5 there would catch nothing extra over L0/L4 and would contaminate `edr-qa`'s "clean-pre-install" snapshot if we cross-wired them. The VM environment requirements (SIP enabled, Gatekeeper enabled, snapshot-restored per run, no Xcode / Homebrew) are spelled out in the L5 section of `docs/testing-strategy.md`.
+`edr-dev` (192.168.64.5) runs with SIP disabled for fast iteration. Running L5 there would catch nothing extra over L0/L4 and would contaminate `edr-qa`'s "clean-pre-install" snapshot if we cross-wired them. The VM environment requirements (SIP enabled, Gatekeeper enabled, snapshot-restored per run, no Xcode / Homebrew) are spelled out in the L5 section of [`testing-strategy.md`](../../docs/testing-strategy.md).
 
 ## Adding a new scenario
 
@@ -102,7 +102,7 @@ Options:
     - `UAT_VM_SSH_TARGET` -- ssh target
     - `UAT_HOST_ID` -- the VM's host_id on the server
     - `UAT_SCRIPT_DIR` -- scripts/uat/ absolute path (for sourcing lib/common.sh) It should exit 0 on its own assertions passing, non-zero otherwise.
-3.  Drop in an `expected.yaml`. Schema (indented as YAML; `# comments` are tolerated on any line - the driver's awk parser strips inline comments before extracting values):
+3.  Drop in an `expected.yaml`. Schema (indented as YAML; `# comments` are tolerated on any line, since the driver's awk parser strips inline comments before extracting values):
 
         scenario_id: <name>
         description: <one line for operator logs>

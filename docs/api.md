@@ -6,7 +6,7 @@ Fleet EDR exposes a single HTTP API surface split across three audience tiers:
 - **Browsers** (the admin UI) authenticate with a session cookie + CSRF token. Everything the UI does is reachable as a JSON API from the same endpoints.
 - **Operators / load balancers** hit `/livez`, `/readyz`, `/health` unauthenticated.
 
-The machine-consumable spec is [`api/openapi.yaml`](api/openapi.yaml). The OpenAPI 3.1 file is the source of truth - this doc is the human overview.
+The machine-consumable spec is [`api/openapi.yaml`](api/openapi.yaml). The OpenAPI 3.1 file is the source of truth: this doc is the human overview.
 
 Every running server also hosts a live browsable copy of the spec via Redoc:
 
@@ -27,7 +27,7 @@ All endpoints are rooted at `/api/` except the health probes and the UI. There i
 
 ## Content type
 
-Request bodies are `application/json; charset=utf-8`. Response bodies, when present, use the same type; several endpoints return `204 No Content` with an empty body. Compressed request bodies are not currently supported - do not set `Content-Encoding: gzip`.
+Request bodies are `application/json; charset=utf-8`. Response bodies, when present, use the same type; several endpoints return `204 No Content` with an empty body. Compressed request bodies are not currently supported: do not set `Content-Encoding: gzip`.
 
 ## Auth models
 
@@ -65,7 +65,7 @@ Endpoints that require the session cookie:
 - `GET /api/commands/{id}`, `POST /api/commands`
 - `GET /api/enrollments`, `POST /api/enrollments/{host_id}/revoke`
 - `GET /api/attack-coverage` -- ATT&CK Navigator layer JSON describing which techniques the registered rules cover.
-- `GET /api/rules` -- per-rule documentation surfaced by the UI's `/ui/rules/<id>` page; same data feeds `docs/detection-rules.md`.
+- `GET /api/rules` -- per-rule documentation surfaced by the UI's `/ui/rules/<id>` page; same data feeds [`detection-rules.md`](detection-rules.md).
 
 ### No auth
 

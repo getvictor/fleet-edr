@@ -52,7 +52,7 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, 
 
 	select {
 	case <-ctx.Done():
-		// slog doesn't honour ctx.Done()/cancellation - it just reads the ctx for trace-id correlation - so logging through
+		// slog doesn't honour ctx.Done()/cancellation; it just reads the ctx for trace-id correlation. Logging through
 		// the cancelled ctx here is fine and keeps the shutdown log on the same trace as the request that triggered it.
 		logger.InfoContext(ctx, "shutdown starting", "reason", ctx.Err(), "drain", drainDelay)
 		if drain != nil {
@@ -60,7 +60,7 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, 
 		}
 		// Stay up for the drain window so the LB sees /readyz flip to 503 and drains this replica before the listener closes;
 		// in-flight and new requests keep being served meanwhile. The bounded drain + ShutdownTimeout deadline guarantees the
-		// process exits. NOTE: a second SIGTERM is NOT a faster escape hatch - signal.NotifyContext keeps relaying the signal
+		// process exits. NOTE: a second SIGTERM is NOT a faster escape hatch. signal.NotifyContext keeps relaying the signal
 		// until its stop func runs (deferred in cmd/main to after this returns), so a second SIGTERM is swallowed rather than
 		// delivered to the default handler. An operator who needs an immediate stop sends SIGKILL, which cannot be intercepted.
 		if drainDelay > 0 {
@@ -76,7 +76,7 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, 
 	}
 
 	// Derive the shutdown deadline context from ctx via WithoutCancel so it inherits ctx's values (trace-id, logger attrs) but NOT ctx's
-	// cancellation - otherwise srv.Shutdown would return immediately because ctx is already Done. http.Server.Shutdown uses its context
+	// cancellation: otherwise srv.Shutdown would return immediately because ctx is already Done. http.Server.Shutdown uses its context
 	// purely to decide when to give up on in-flight connections, so a fresh, timeout-bounded, values-inherited context is the correct
 	// shape.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownTimeout)

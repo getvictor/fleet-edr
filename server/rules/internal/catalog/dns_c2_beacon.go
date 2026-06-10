@@ -217,8 +217,9 @@ func lookupProcessSkewTolerant(ctx context.Context, s api.GraphReader, hostID st
 }
 
 // ingestedLookupRange returns the ingested-time range for the pid's network/DNS query. When the connection's ingest time is known it
-// bounds the scan to [connectIngestedNs - dnsBeaconWindowNs - pad, connectIngestedNs + pad] so a long-lived pid's history isn't scanned
-// wholesale; the precise resolve-then-connect window is enforced in-memory on timestamp_ns. When the ingest time is unset (0, e.g.
+// bounds the scan to the interval starting at (connectIngestedNs minus dnsBeaconWindowNs minus pad) and ending at (connectIngestedNs
+// plus pad), so a long-lived pid's history isn't scanned wholesale; the precise resolve-then-connect window is enforced in-memory on
+// timestamp_ns. When the ingest time is unset (0, e.g.
 // fixture replay) it returns the full range so the in-memory correlation still sees every candidate row.
 func ingestedLookupRange(connectIngestedNs int64) api.TimeRange {
 	if connectIngestedNs <= 0 {

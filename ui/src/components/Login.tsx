@@ -23,7 +23,7 @@ interface LoginProps {
 // errorMessages maps the wire reason header (set by the OIDC
 // handler's error redirect) onto operator-readable copy. Stored as
 // a Map so the read site is `errorMessages.get(reason)` rather than
-// `errorMessages[reason]` - eslint-plugin-security's
+// `errorMessages[reason]`. eslint-plugin-security's
 // object-injection sink heuristic flags computed-property reads on
 // plain objects, and the Map form sidesteps it cleanly.
 const errorMessages = new Map<string, string>([
@@ -62,7 +62,7 @@ export function Login({ next }: LoginProps) {
     : null;
 
   // Track whether the operator clicked "Continue" so we can disable
-  // the button while the browser navigates (UX nicety - without it
+  // the button while the browser navigates (a UX nicety; without it
   // a slow IdP redirect leaves the user wondering whether the click
   // registered).
   const [navigating, setNavigating] = useState(false);

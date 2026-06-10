@@ -40,8 +40,8 @@ func (r *recAudit) Record(_ context.Context, e api.AuditEvent) error {
 // no signed assertion is needed.
 //
 // http://localhost:8088 appears throughout this file (and the rest of the breakglass
-// tests). It looks inconsistent with issue #140 - which made the server binary HTTPS-
-// only - but it is intentional. These tests exercise the breakglass handler in
+// tests). It looks inconsistent with issue #140 (which made the server binary HTTPS-
+// only), but it is intentional. These tests exercise the breakglass handler in
 // isolation via httptest.NewServer, which is plaintext HTTP by Go-stdlib convention
 // (matches fleetdm/fleet's test pattern and every other Go server we benchmarked).
 // The WebAuthn library validates the claimed `origin` against RPOrigins as a string
@@ -467,7 +467,7 @@ func TestRegisterAuthedRoutes_RequiresIdentity(t *testing.T) {
 }
 
 // Reauth challenge for an OIDC session returns 400 reauth_not_supported. The UI is expected to dispatch OIDC reauth via
-// /api/auth/login?reauth=1 instead - the break-glass POST flow doesn't apply.
+// /api/auth/login?reauth=1 instead: the break-glass POST flow doesn't apply.
 func TestHandleReauthChallenge_OIDCSessionRejected(t *testing.T) {
 	t.Parallel()
 	h, _, _, _ := newHandlerWithIdentity(t)
@@ -597,7 +597,7 @@ func TestHandleReauth_OIDCSessionRejected(t *testing.T) {
 }
 
 // Reauth challenge for a break-glass user with no registered credentials returns 400 no_credentials. Pinned because reauth must not
-// silently succeed against an account whose credentials were rotated out from under a still-valid session - the operator should see
+// silently succeed against an account whose credentials were rotated out from under a still-valid session. The operator should see
 // the same error a fresh break-glass login would surface.
 func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
 	t.Parallel()
@@ -623,7 +623,7 @@ func TestHandleReauthChallenge_NoCredentials(t *testing.T) {
 	assert.Equal(t, "no_credentials", resp.Header.Get("X-Edr-Auth-Reason"))
 }
 
-// Reauth challenge with no session on ctx returns 500. Defense-in-depth against a routing misconfig - the handler must not silently
+// Reauth challenge with no session on ctx returns 500. Defense-in-depth against a routing misconfig: the handler must not silently
 // continue without an authenticated session.
 func TestHandleReauthChallenge_NoSession(t *testing.T) {
 	t.Parallel()
@@ -669,7 +669,7 @@ func TestHandleReauth_BodyInvalid(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Use a valid encoded challenge cookie so we get past challenge_* branches and exercise body_invalid specifically. Easiest:
-	// hit the challenge endpoint first (with a credentialed user) to mint a real cookie. Not worth it here - just verify the wire shape
+	// hit the challenge endpoint first (with a credentialed user) to mint a real cookie. Not worth it here. Just verify the wire shape
 	// of "tampered cookie" branch ALREADY covers body validation indirectly. Instead, send invalid JSON with no cookie so we land on
 	// challenge_missing first; that's already tested above. This test pins the handler's tolerance to a malformed JSON header value as a
 	// separate signal.

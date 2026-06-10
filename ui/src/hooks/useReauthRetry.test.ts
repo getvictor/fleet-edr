@@ -9,11 +9,11 @@ import type { ReauthChallenge } from "../api";
 // These tests exercise the state-machine + single-flight + retry contract documented at the top of useReauthRetry.ts.
 //
 // Test idioms used throughout:
-//   - act(async () => { x; await Promise.resolve(); }) - wraps state updates triggered by resolve() so React can flush
+//   - act(async () => { x; await Promise.resolve(); }) wraps state updates triggered by resolve() so React can flush
 //     them inside the act() boundary. The `await Promise.resolve()` makes the arrow legitimately async (eslint
 //     require-await) and lets the microtask queue drain so the hook's post-resolve setState calls land before the
 //     assertions on result.current.* observe them.
-//   - kickOff(...) helper - runs result.current.call(...) inside act, attaches a no-op .catch so vitest's
+//   - kickOff(...) helper: runs result.current.call(...) inside act, attaches a no-op .catch so vitest's
 //     unhandled-rejection tracker stays quiet between kickoff and the eventual `expect(...).rejects` assert. Returns the
 //     promise without a non-null assertion.
 
@@ -124,7 +124,7 @@ describe("useReauthRetry", () => {
       // the stub still throws/returns synchronously in the same microtask.
       await Promise.resolve();
       attempts += 1;
-      // Every call throws ReauthRequiredError exactly once - the first time each call is invoked. Track per-call.
+      // Every call throws ReauthRequiredError exactly once, the first time each call is invoked. Track per-call.
       if (attempts <= 2) throw new ReauthRequiredError(fakeChallenge);
       return `attempt-${String(attempts)}`;
     });

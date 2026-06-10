@@ -4,7 +4,7 @@
 
 The extensions expose a private XPC channel that local agents use to receive events and to push policy updates back into the device. This channel is the trust boundary between Apple-mediated kernel-side capture (system extension and network extension entitlements) and the userland Go agent that owns enrollment, queueing, and upload. Anything connecting to it must prove cryptographic provenance, because a connected peer is granted both the firehose of endpoint telemetry and the ability to mutate the active blocklist.
 
-This capability defines who is allowed to connect, how connections behave when multiple agents are present, the event-broadcast contract, the inbound message types the extensions accept, and what happens on disconnect. It does not define the wire schema of events themselves - that is owned by the endpoint event collection capability.
+This capability defines who is allowed to connect, how connections behave when multiple agents are present, the event-broadcast contract, the inbound message types the extensions accept, and what happens on disconnect. It does not define the wire schema of events themselves: that is owned by the endpoint event collection capability.
 
 ## Requirements
 

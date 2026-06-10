@@ -66,7 +66,7 @@ export async function resetAndSignIn(page: Page): Promise<VirtualAuthenticator> 
 }
 
 /**
- * resetHostData wipes the agent-side tables - events, processes, hosts, enrollments - and the dependent alert_events / alerts rows.
+ * resetHostData wipes the agent-side tables (events, processes, hosts, enrollments) and the dependent alert_events / alerts rows.
  * The order respects FK constraints: alert_events references both alerts and events, and alerts references processes, so children
  * first, then parents. Tests that want a clean host-list view call this; auth-only specs don't need it (and fixtures/db.ts's resetDB
  * deliberately leaves these tables alone so the existing reauth-modal spec keeps its hosts row available across runs).

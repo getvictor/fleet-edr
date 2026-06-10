@@ -428,7 +428,7 @@ type BulkUpsertRulesRequest struct {
 
 // BulkUpsertResult is the wire shape returned to a successful bulk-upsert. Inserted + Updated are the per-row outcome counts
 // classified by snapshotting the existing (policy_id, rule_type, identifier) keys inside the same SELECT ... FOR UPDATE that
-// serialises the batch - items whose key was already present count as Updated, the rest as Inserted. Rules is the full
+// serialises the batch: items whose key was already present count as Updated, the rest as Inserted. Rules is the full
 // post-upsert row set in the order the request supplied so a UI can render the final state without an extra round trip.
 type BulkUpsertResult struct {
 	Inserted int                      `json:"inserted"`
@@ -636,7 +636,7 @@ type SetApplicationControlPayload struct {
 // notification (Step 4), or block event (Step 4) needs lands here so
 // the wire shape is stable across the demo cut and the rest of
 // Phase A. Disabled and expired rules are NOT included in the
-// payload - the fan-out filters them so the agent never sees them.
+// payload: the fan-out filters them so the agent never sees them.
 //
 // RuleID is the stable string identifier (e.g. "app_control:42") that
 // the extension echoes back in the `application_control_block` event
@@ -692,7 +692,7 @@ func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []App
 	// arrives with DeadlineFallback="") AND any non-empty but unrecognised value to DefaultFallbackPosture. The second branch
 	// is the defensive one: a stray bad value sneaking into the policy struct (typo on a future REST surface, copy-paste from
 	// an external feed, schema drift on the v0.1.x DB migration) must not reach the extension snapshot as a literal it cannot
-	// decode - the extension's FallbackPosture enum is strict, and a snapshot decode failure deactivates Application Control
+	// decode: the extension's FallbackPosture enum is strict, and a snapshot decode failure deactivates Application Control
 	// until the next valid push.
 	posture := p.DeadlineFallback
 	if !IsValidFallbackPosture(posture) {

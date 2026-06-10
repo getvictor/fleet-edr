@@ -9,7 +9,7 @@ import Foundation
 import XCTest
 
 final class DNSParserTests: XCTestCase {
-    // MARK: - Packet builders (kept compact so the test bodies read as assertions on
+    // MARK: Packet builders (kept compact so the test bodies read as assertions on
     // canonical byte sequences, not packet-construction boilerplate).
 
     /// header builds the 12-byte fixed DNS header. id, qdcount, ancount tunables are
@@ -63,7 +63,7 @@ final class DNSParserTests: XCTestCase {
         return bytes
     }
 
-    // MARK: - queryName
+    // MARK: queryName
 
     func testQueryNameSimpleDotSeparated() {
         var packet = header(id: 0x1234, qdcount: 1, ancount: 0)
@@ -124,7 +124,7 @@ final class DNSParserTests: XCTestCase {
         XCTAssertNil(DNSParser.queryName(from: packet))
     }
 
-    // MARK: - queryType
+    // MARK: queryType
 
     func testQueryTypeRecognizesKnownTypes() {
         let cases: [(qtype: UInt16, expected: String)] = [
@@ -164,7 +164,7 @@ final class DNSParserTests: XCTestCase {
         XCTAssertEqual(DNSParser.queryType(from: header(id: 0, qdcount: 0, ancount: 0)), "unknown")
     }
 
-    // MARK: - responseAddresses
+    // MARK: responseAddresses
 
     func testResponseAddressesSingleIPv4() {
         var packet = header(id: 0x1234, qdcount: 1, ancount: 1)

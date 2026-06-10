@@ -1,8 +1,6 @@
 # End-to-end test suite
 
-Playwright-based E2E tests that drive Chrome against a running EDR server. Sister to `test/integration/` (Go cross-context) and `test/arch/` (architecture invariants); covers everything in between
-
-- the UI + server wire shapes + the network-attached auth flows that Go integration tests skip because they need a real browser.
+Playwright-based E2E tests that drive Chrome against a running EDR server. Sister to `test/integration/` (Go cross-context) and `test/arch/` (architecture invariants); covers everything in between: the UI + server wire shapes + the network-attached auth flows that Go integration tests skip because they need a real browser.
 
 Owns its own `package.json` so the UI's `ui/package.json` stays lean on test-only dependencies.
 
@@ -15,7 +13,7 @@ Owns its own `package.json` so the UI's `ui/package.json` stays lean on test-onl
 
 ## Scope ahead
 
-The structure is built for the wave-2 ambition: cover the major operator-facing flows (hosts list, alerts, policy, isolate, audit read) plus the agent enrollment + event-ingestion path with a real or fake host fixture. The test/e2e/ root is the home; group by feature under `tests/` (e.g., `tests/hosts/`, `tests/alerts/`, `tests/agent/`, etc.).
+The structure is built for a future release: cover the major operator-facing flows (hosts list, alerts, policy, isolate, audit read) plus the agent enrollment + event-ingestion path with a real or fake host fixture. The test/e2e/ root is the home; group by feature under `tests/` (e.g., `tests/hosts/`, `tests/alerts/`, `tests/agent/`, etc.).
 
 ## Setup
 
@@ -56,7 +54,7 @@ Playwright's `webServer` config auto-starts `task dev:server:qa-oidc` when no se
 
 `fixtures/webauthn.ts` wires a CTAP2 virtual authenticator into the Chrome DevTools Protocol session. Once installed, `navigator.credentials.create()` / `.get()` calls on the page route through the virtual authenticator instead of real hardware. Same mechanism Chrome's DevTools "WebAuthn" panel exposes manually.
 
-`automaticPresenceSimulation: true` means the authenticator answers every challenge without simulating a fingerprint prompt - tests stay deterministic.
+`automaticPresenceSimulation: true` means the authenticator answers every challenge without simulating a fingerprint prompt. Tests stay deterministic.
 
 ## DB state
 
@@ -66,4 +64,4 @@ Each test resets the operator-side tables (users beyond the seeded admin, sessio
 
 ## CI
 
-Not wired into CI yet (issue #116 covers the GH Actions integration). The local-run path is enough for the wave-1 ship; CI integration follows once the wave-2 test surface stabilizes.
+Not wired into CI yet (issue #116 covers the GH Actions integration). The local-run path is enough for the current release; CI integration follows once the future test surface stabilizes.

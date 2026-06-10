@@ -33,7 +33,7 @@ const (
 	defaultInterval = 60 * time.Second
 
 	// defaultMinAge is the fallback for Options.MinAge. The window guards
-	// against racing a brand-new exec - see the Options.MinAge comment.
+	// against racing a brand-new exec: see the Options.MinAge comment.
 	defaultMinAge = 30 * time.Second
 
 	// defaultMaxPerPass caps synthetic-exit emissions per tick.
@@ -65,7 +65,7 @@ type KillFunc func(pid int, sig syscall.Signal) error
 // Options configures the reconciler. Zero values fall back to defaults.
 type Options struct {
 	// Interval between reconciliation passes. Zero or negative values fall back to the default. Default 60s. Disabling the loop entirely
-	// is a wiring decision - the agent main skips constructing the runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level API
+	// is a wiring decision: the agent main skips constructing the runner when EDR_PROCESS_RECONCILE_INTERVAL=0; the package-level API
 	// always runs.
 	Interval time.Duration
 
@@ -100,7 +100,7 @@ type Reconciler struct {
 	now        func() time.Time
 	kill       KillFunc
 	// newID and marshal are seams for tests so the rare error paths in emitSyntheticExit are reachable. Default to crypto/rand-backed
-	// newUUIDv4 and stdlib json.Marshal - both effectively never fail in production on a healthy host. Tests inject failing versions to
+	// newUUIDv4 and stdlib json.Marshal. Both effectively never fail in production on a healthy host. Tests inject failing versions to
 	// lock in our error-handling shape (issue: synthetic exits must surface queue-affecting failures rather than silently skip a PID).
 	newID   func() (string, error)
 	marshal func(any) ([]byte, error)
@@ -154,7 +154,7 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 }
 
 // Run loops until ctx is cancelled, emitting one log line per non-zero pass. Blocks; intended for a dedicated goroutine. Per-PID
-// failures inside RunOnce are logged inline and never propagate up - one bad enqueue must not stall the whole pass - so RunOnce
+// failures inside RunOnce are logged inline and never propagate up (one bad enqueue must not stall the whole pass), so RunOnce
 // returns a PassStats with per-event-kind counters and Run branches on Exits + Heartbeats both being zero to suppress noisy
 // "nothing happened" log lines on quiet hosts.
 func (r *Reconciler) Run(ctx context.Context) {
@@ -195,7 +195,7 @@ type PassStats struct {
 func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 	hostID := r.hostID()
 	if hostID == "" {
-		// No host_id yet - the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
+		// No host_id yet: the enroll flow hasn't completed. Skip the pass rather than emit events with an empty host_id (the
 		// server's ingest handler would reject the whole batch on the first one).
 		return PassStats{}
 	}
@@ -206,7 +206,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 
 	for pid, info := range r.pt.Snapshot() {
 		if pid <= 0 {
-			// Skip PID 0 / negative - kill(0, 0) signals all processes in the caller's process group, kill(-1, 0) signals
+			// Skip PID 0 / negative: kill(0, 0) signals all processes in the caller's process group, kill(-1, 0) signals
 			// every process the caller may signal. Neither is what we want.
 			continue
 		}
@@ -215,8 +215,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 		}
 		// kill(pid, 0) is the standard liveness probe. Three outcomes drive the per-PID decision:
 		//   nil   - pid exists and we may signal it; treat as alive. Snapshot PIDs emit a heartbeat; live PIDs no-op.
-		//   ESRCH - "no such process"; emit a synthetic exit and drop the entry.
-		//   EPERM - pid exists but we lack permission. The kernel only sets EPERM after confirming the pid exists, so this is
+		//   ESRCH: "no such process"; emit a synthetic exit and drop the entry.
+		//   EPERM: pid exists but we lack permission. The kernel only sets EPERM after confirming the pid exists, so this is
 		//           positive proof of liveness. Snapshot PIDs still emit a heartbeat so the server's TTL reconciler doesn't
 		//           prematurely close them (per review on PR #180). Non-root dev runs hit this for root-owned PIDs.
 		err := r.kill(int(pid), 0)
@@ -239,7 +239,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) PassStats {
 			stats.Exits++
 		case err == nil, errors.Is(err, syscall.EPERM):
 			// PID alive (either signallable or we lacked permission, which itself proves the pid exists). Only snapshot PIDs
-			// need a heartbeat - live PIDs are kept fresh by the natural fork/exec/exit stream and don't need a separate
+			// need a heartbeat: live PIDs are kept fresh by the natural fork/exec/exit stream and don't need a separate
 			// liveness ping.
 			if !info.IsSnapshot {
 				continue

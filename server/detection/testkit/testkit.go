@@ -8,12 +8,12 @@
 //
 // Three things live here today:
 //
-//  1. ApplySchema - thin wrapper over bootstrap.ApplySchema so tests
+//  1. ApplySchema: thin wrapper over bootstrap.ApplySchema so tests
 //     get the same DDL production gets.
-//  2. Scenario - a per-test fixture that pairs detection's *mysql.Store
+//  2. Scenario: a per-test fixture that pairs detection's *mysql.Store
 //     and *graph.Builder so callers can insert events and materialise
 //     the process graph the rule under test will read.
-//  3. Replay - fixture-driven rule-test runner: caller points at a dir
+//  3. Replay: fixture-driven rule-test runner. The caller points at a dir
 //     of <case>.json files, each becomes a sub-test asserting the
 //     rule's findings match expected_findings.
 //

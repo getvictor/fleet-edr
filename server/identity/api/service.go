@@ -58,7 +58,7 @@ type Service interface {
 
 	// UpdateLastAuthAt stamps the session's freshness timestamp to
 	// NOW(), resetting the reauth window. Called from the break-glass
-	// reauth POST endpoint after credential verification - the same
+	// reauth POST endpoint after credential verification: the same
 	// cookie keeps working with a refreshed timestamp, no new session
 	// minted. Returns ErrSessionNotFound when no session matches the
 	// token.
@@ -79,8 +79,8 @@ type Service interface {
 	// TouchSession advances the session's last_seen_at to NOW(), throttled so a tight-loop of authenticated requests collapses to one
 	// DB write per ~minute. The Session middleware calls it on every authed request as the sliding-extension mechanism behind the
 	// idle timeout. cachedLastSeen lets the store skip the UPDATE without a SELECT when the cached value is already fresh. Returns the
-	// resulting last_seen_at - when the throttle skipped the UPDATE this is cachedLastSeen, otherwise the store clock at write time.
+	// resulting last_seen_at: when the throttle skipped the UPDATE this is cachedLastSeen, otherwise the store clock at write time.
 	// Caller should plumb the returned value back onto its cached *Session so a chain of Touches inside the same throttle window stays a
-	// no-op against the updated cache. Errors are non-fatal - a missed touch costs at most the throttle window of idle granularity.
+	// no-op against the updated cache. Errors are non-fatal: a missed touch costs at most the throttle window of idle granularity.
 	TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) (time.Time, error)
 }

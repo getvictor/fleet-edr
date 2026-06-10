@@ -14,7 +14,7 @@ type ProcessInfo struct {
 	StartTime int64 // timestamp_ns from the exec/fork event
 	// IsSnapshot marks PIDs introduced by the ESF startup snapshot pass (issue #11). The reconcile loop emits a snapshot_heartbeat
 	// event per tick for live snapshot PIDs so the server's TTL reconciler (issue #173) keeps the row alive past the 6h cutoff. A
-	// subsequent live exec for the same PID overwrites the entry via pt.Update and IsSnapshot naturally flips back to false - no
+	// subsequent live exec for the same PID overwrites the entry via pt.Update and IsSnapshot naturally flips back to false: no
 	// special case needed.
 	IsSnapshot bool
 }

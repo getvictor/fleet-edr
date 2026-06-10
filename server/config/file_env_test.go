@@ -70,7 +70,7 @@ func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
 }
 
 // TestFileBackedGetenv_NilLoggerUsesDefault locks in the safe-fallback path so callers (e.g. early bootstrap code that hasn't built
-// a logger yet) can pass nil and still get a working decorator. Drives the missing-_FILE branch specifically - that branch is the
+// a logger yet) can pass nil and still get a working decorator. Drives the missing-_FILE branch specifically: that branch is the
 // only one that exercises the nil-logger fallback (`logger.WarnContext` would panic on a nil logger if the fallback weren't applied),
 // so a regression there must be observable in this test.
 func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
@@ -103,7 +103,7 @@ func TestWriteSecretFile(t *testing.T) {
 }
 
 func TestWriteSecretFile_BadDir(t *testing.T) {
-	// Pointing at a path under a non-existent parent surfaces the os.WriteFile error rather than swallowing it - operators tracing config
+	// Pointing at a path under a non-existent parent surfaces the os.WriteFile error rather than swallowing it. Operators tracing config
 	// issues need to see the path-not-found error verbatim.
 	_, err := WriteSecretFile(filepath.Join(t.TempDir(), "missing-dir"), "x", "v")
 	require.Error(t, err)

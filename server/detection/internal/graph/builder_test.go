@@ -26,7 +26,7 @@ func TestBuilder_PendingExit_Issue176(t *testing.T) {
 	t.Run("expires after TTL and is not inherited by a later recycled PID", func(t *testing.T) {
 		t.Parallel()
 		// Construct a Builder with a controllable clock. store=nil is safe because none of the buffer-management methods
-		// (bufferPendingExit / consumePendingExit / sweepPendingExits) touch q.store - those calls live on the path that
+		// (bufferPendingExit / consumePendingExit / sweepPendingExits) touch q.store: those calls live on the path that
 		// goes through handleExec / handleExit's UPDATE round-trips.
 		var (
 			mu  sync.Mutex

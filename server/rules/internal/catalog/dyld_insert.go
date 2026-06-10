@@ -14,7 +14,7 @@ import (
 // dylibs, a classic macOS code-injection technique.
 //
 // Known limitation: the ESF extension does not (yet) capture the full env map, so this
-// rule only catches the "explicit prefix" cases - either the env vars appear in argv
+// rule only catches the "explicit prefix" cases: either the env vars appear in argv
 // (shell style `VAR=x /bin/true`) or the caller invoked `env VAR=x target`. Inherited
 // env vars are invisible until the extension learns to serialise them; that extension
 // change is tracked alongside the data-lifecycle work in the best-practices checklist.
@@ -24,7 +24,7 @@ type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers - T1574.006 (Hijack Execution Flow → Dynamic Linker Hijacking).
+// Techniques returns the MITRE ATT&CK IDs this rule covers: T1574.006 (Hijack Execution Flow → Dynamic Linker Hijacking).
 // Sub-technique chosen deliberately: the rule catches DYLD_* env-var abuse specifically, not the broader "Hijack Execution Flow"
 // parent.
 func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
@@ -37,8 +37,8 @@ func (r *DyldInsert) Doc() api.Documentation {
 		Summary: "Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).",
 		Description: "Detects the classic macOS code-injection primitive: launching a process with " +
 			"`DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into " +
-			"the new process before main(). The rule fires on the leading argv slot only - `VAR=value /path/to/bin` " +
-			"shell form, or `env VAR=value /path/to/bin` - so substring noise (curl POST data, echo, etc.) does " +
+			"the new process before main(). The rule fires on the leading argv slot only (the `VAR=value /path/to/bin` " +
+			"shell form, or the `env VAR=value /path/to/bin` invocation), so substring noise (curl POST data, echo, etc.) does " +
 			"not false-positive.\n\n" +
 			"The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw " +
 			"event payload for responders.",
@@ -46,11 +46,11 @@ func (r *DyldInsert) Doc() api.Documentation {
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
 			"Local development of code that itself uses DYLD_INSERT_LIBRARIES (rare; usually scoped to non-managed dev hosts).",
-			"Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch - investigate why an admin script is setting these vars at all.",
+			"Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch: investigate why an admin script is setting these vars at all.",
 		},
 		Limitations: []string{
 			"Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.",
-			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched - higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.",
+			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.",
 		},
 	}
 }

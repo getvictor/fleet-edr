@@ -10,7 +10,7 @@ import "./ApplicationControl.scss";
 // PoliciesList renders the Application Control policy
 // roster. In the demo cut the seeded `Default` policy is the only
 // row; multi-policy is post-demo, so the "New policy" button renders
-// disabled with a "coming soon" tooltip - honest scaffolding rather
+// disabled with a "coming soon" tooltip: honest scaffolding rather
 // than a 404. The list is the entry point for the camera-facing
 // admin surface (demo beat #1).
 export function PoliciesList() {

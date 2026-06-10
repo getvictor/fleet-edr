@@ -19,7 +19,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 ///
 /// Wire shape on disk is the same `BlockNotificationPayload` Codable
 /// that the XPC path used, so the host app's decoder needs no
-/// changes - only the transport.
+/// changes: only the transport.
 ///
 /// Concurrency: a dedicated serial queue keeps writes ordered. The
 /// extension is the sole writer; the host app is the sole reader.
@@ -28,7 +28,7 @@ final class NotificationClient {
 
     private let queue = DispatchQueue(label: "com.fleetdm.edr.securityextension.notification-client")
     // Encoder is configured once. Sorted keys makes a captured wire
-    // sample diffable across runs - useful for the unified-log
+    // sample diffable across runs, useful for the unified-log
     // forensic trail, not for behavior. The host-app side dedups on
     // (rule_id, binary_path), not on byte-identical JSON.
     private let encoder: JSONEncoder = {
@@ -48,7 +48,7 @@ final class NotificationClient {
     /// Sequence:
     ///   1. Ensure the drop directory exists with the correct
     ///      ownership (root) and mode (1777). If a non-root principal
-    ///      created it first, repair via chown + chmod - we run as
+    ///      created it first, repair via chown + chmod: we run as
     ///      root and have the authority to do so.
     ///   2. Encode the payload + write to a tempfile.
     ///   3. chmod the tempfile to 0644 BEFORE the rename, so the
@@ -89,7 +89,7 @@ final class NotificationClient {
     /// encodePayload renders the JSON bytes the host app's
     /// JSONDecoder consumes. Failure here is a programmer error
     /// (the payload is a fixed struct with no failable
-    /// initializers) - log and bail so the call site doesn't get
+    /// initializers). Log and bail so the call site doesn't get
     /// noisier handling a case that shouldn't happen.
     private func encodePayload(_ payload: BlockNotificationPayload) -> Data? {
         do {
@@ -101,7 +101,7 @@ final class NotificationClient {
     }
 
     /// ensureDropDirectory makes the rendezvous directory exist at
-    /// the right ownership AND permissions. Idempotent - called on
+    /// the right ownership AND permissions. Idempotent: called on
     /// every notify so a manually-deleted or maliciously-recreated
     /// directory doesn't break subsequent blocks.
     ///

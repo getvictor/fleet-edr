@@ -218,7 +218,7 @@ func auditLogLevel(e api.AuditEvent) slog.Level {
 }
 
 // auditDecision extracts the decision string from the audit event's payload, normalizing the two payload shapes the codebase emits
-// (chokepoint's {allow: bool} and breakglass/oidc's {decision: str}). Returns "allow" / "deny" / "error" / "unspecified" - the OTel
+// (chokepoint's {allow: bool} and breakglass/oidc's {decision: str}). Returns "allow" / "deny" / "error" / "unspecified". The OTel
 // attribute lands in SigNoz's traces UI where operators filter on it.
 func auditDecision(e api.AuditEvent) string {
 	if p := e.Payload; p != nil {
@@ -242,7 +242,7 @@ func auditDecision(e api.AuditEvent) string {
 	return "unspecified"
 }
 
-// auditReason extracts the reason string. Empty when no reason is declared on the payload - that's still a valid OTel attribute
+// auditReason extracts the reason string. Empty when no reason is declared on the payload: that's still a valid OTel attribute
 // (queries on edr.audit.reason=” surface 'reasonless' rows like user.created which carry no decision context).
 func auditReason(e api.AuditEvent) string {
 	if p := e.Payload; p != nil {

@@ -21,7 +21,7 @@ const meterName = "github.com/fleetdm/edr/agent/metrics"
 const unitEvent = "{event}"
 
 // gaugeCallbackTimeout caps each observable-gauge callback so a wedged source (e.g. a SQLite WAL contention spike) cannot
-// hold the OTel collection cycle indefinitely. 2s mirrors the server-side gauges in server/metrics - long enough for a
+// hold the OTel collection cycle indefinitely. 2s mirrors the server-side gauges in server/metrics: long enough for a
 // stalled DB read to either complete or surface the timeout cleanly.
 const gaugeCallbackTimeout = 2 * time.Second
 
@@ -35,7 +35,7 @@ type QueueDepthSource interface {
 // Recorder is the nil-safe write surface agent components use. Backed by the global OTel meter; when `observability.Init`
 // leaves the SDK at its no-op default (no OTEL_EXPORTER_OTLP_ENDPOINT set), Add is a no-op and the Recorder costs nothing.
 //
-// The observable-gauge fields are retained for GC reasons only - OTel's Int64ObservableGauge keeps a closure that captures
+// The observable-gauge fields are retained for GC reasons only. OTel's Int64ObservableGauge keeps a closure that captures
 // the source; dropping the *gauge reference would let the runtime collect the registration and the callback would stop
 // firing on the next GC cycle.
 type Recorder struct {

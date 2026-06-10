@@ -4,7 +4,7 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "Serializer")
 
-// MARK: - Payload types
+// MARK: Payload types
 
 struct NetworkConnectPayload: Codable, Sendable {
     let pid: pid_t
@@ -48,7 +48,7 @@ struct DNSQueryPayload: Codable, Sendable {
     }
 }
 
-// MARK: - Event envelope (same as ESF extension)
+// MARK: Event envelope (same as ESF extension)
 
 struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {
     let eventID: String
@@ -66,7 +66,7 @@ struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {
     }
 }
 
-// MARK: - Serializer
+// MARK: Serializer
 
 final class NetworkEventSerializer: Sendable {
     private let encoder: JSONEncoder = {

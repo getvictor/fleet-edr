@@ -32,7 +32,7 @@ func TestGenerateFlowSecrets(t *testing.T) {
 		"code_challenge must be S256 of verifier per RFC 7636 §4.2")
 }
 
-// Two consecutive calls produce different secrets - every flow has its own entropy. A repeat would be a critical security bug
+// Two consecutive calls produce different secrets: every flow has its own entropy. A repeat would be a critical security bug
 // (replayable state + nonce).
 func TestGenerateFlowSecrets_Unique(t *testing.T) {
 	t.Parallel()

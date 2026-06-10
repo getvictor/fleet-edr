@@ -120,7 +120,7 @@ func decodeHostEnvelopes(raw []byte, file string) ([]fakeagent.Envelope, string,
 	return envs, hostID, nil
 }
 
-// shiftEnvelopesToRecent rewrites every envelope's timestamp so the latest event lands at (now - recentTailOffset), preserving the
+// shiftEnvelopesToRecent rewrites every envelope's timestamp so the latest event lands recentTailOffset before now, preserving the
 // inter-event deltas of the original capture. This makes the replayed graph read as recent activity without compressing the
 // timeline, so the UI's time structure and the per-process event ordering stay faithful to the real capture. Returns the input
 // unchanged when empty. The capture's timestamps are device-clock nanoseconds; shifting by a constant preserves all relative order.

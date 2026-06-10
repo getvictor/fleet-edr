@@ -62,7 +62,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         return false
     }
 
-    // MARK: - UDP flow handling
+    // MARK: UDP flow handling
 
     private func handleUDPFlow(_ flow: NEAppProxyUDPFlow) {
         let (pid, uid) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
@@ -166,7 +166,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    // MARK: - TCP flow handling
+    // MARK: TCP flow handling
 
     private func handleTCPFlow(_ flow: NEAppProxyTCPFlow) {
         let (pid, uid) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
@@ -279,7 +279,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    // MARK: - Telemetry
+    // MARK: Telemetry
 
     private func emitDNSTelemetry(datagram: Data, ctx: FlowContext, proto: String) {
         guard let queryName = DNSParser.queryName(from: datagram) else { return }

@@ -44,7 +44,7 @@ func newIdentity(t *testing.T) *bootstrap.Identity {
 func newIdentityWithDB(t *testing.T) (*bootstrap.Identity, *sqlx.DB) {
 	t.Helper()
 	// testdb/full.Open is the project's standard MySQL fixture for per-context integration tests. It applies every context's schema
-	// (including identity's), so the tables exist before store.New runs the alerts FK - which means we don't strictly need to re-run
+	// (including identity's), so the tables exist before store.New runs the alerts FK, which means we don't strictly need to re-run
 	// identityCtx.ApplySchema here. We do it anyway to exercise the production code path and assert it is idempotent.
 	s := full.Open(t)
 

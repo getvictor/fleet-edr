@@ -16,9 +16,9 @@ import (
 
 // ErrCredentialClonedDetected is returned by RecordAssertion when the authenticator's reported sign_count has not advanced past the
 // stored value. Per WebAuthn §6.1.1, a sign_count regression indicates the credential was cloned (or that the authenticator itself
-// does not maintain a counter, which the implementation is permitted to ignore - but for break-glass we treat any regression as
-// suspicious and refuse the assertion).
-var ErrCredentialClonedDetected = errors.New("breakglass: webauthn sign_count regression - possible cloned credential")
+// does not maintain a counter, which the implementation is permitted to ignore). For break-glass we treat any regression as
+// suspicious and refuse the assertion.
+var ErrCredentialClonedDetected = errors.New("breakglass: webauthn sign_count regression: possible cloned credential")
 
 // ErrCredentialNotFound is returned by FindByID when no row matches the supplied credential id. Distinguished from a generic store
 // error so the assertion handler can map it to the directed `webauthn.unknown_credential` reason.
@@ -167,7 +167,7 @@ func (s *CredentialStore) RecordAssertion(ctx context.Context, credID []byte, ne
 }
 
 // FindByID returns the row for a single credential id (raw bytes, not base64). Used by the login form's GET handler to assert at least
-// one credential exists for the user before issuing a challenge - a user with zero credentials cannot satisfy WebAuthn at all and the
+// one credential exists for the user before issuing a challenge. A user with zero credentials cannot satisfy WebAuthn at all and the
 // form should render an admin-recovery hint instead.
 func (s *CredentialStore) FindByID(ctx context.Context, credID []byte) (*CredentialRow, error) {
 	var row CredentialRow
@@ -252,7 +252,7 @@ func decodeTransports(s string) []protocol.AuthenticatorTransport {
 }
 
 // nullableString wraps a string in sql.NullString so the empty case inserts NULL rather than the empty string (the column allows NULL
-// but disallows the empty string semantically - credentials without a name should read NULL when listed).
+// but disallows the empty string semantically: credentials without a name should read NULL when listed).
 func nullableString(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{}

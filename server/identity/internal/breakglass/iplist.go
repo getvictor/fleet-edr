@@ -10,7 +10,7 @@ import (
 )
 
 // Allowlist is the optional IP gate that wraps the break-glass
-// surface. Off-allowlist requests receive a generic 404 - the spec
+// surface. Off-allowlist requests receive a generic 404: the spec
 // is explicit that the path's existence MUST NOT be acknowledged to
 // off-list callers, so an attacker probing for `/admin/break-glass`
 // from outside the operator's bastion-host subnet sees the same

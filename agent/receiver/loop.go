@@ -1,8 +1,8 @@
 // Package receiver: Loop owns the reconnect/backoff/heartbeat machinery that
 // drives a single XPC service's connection lifecycle. It depends on the
 // Connector interface (production: *Receiver, tests: a stub) so the loop
-// semantics - exponential backoff, post-success reset, heartbeat-driven
-// reconnect, clean shutdown - can be exercised without standing up a real
+// semantics (exponential backoff, post-success reset, heartbeat-driven
+// reconnect, clean shutdown) can be exercised without standing up a real
 // Mach service. The agent main wires one Loop per service (ESF + network
 // extension) plus a Dispatcher so outbound application_control pushes can
 // route to whichever connector is currently active.
@@ -35,7 +35,7 @@ const (
 
 // Connector represents a single XPC connection's lifecycle. Production code satisfies it with *Receiver; tests pass a deterministic
 // stub. The Loop constructs one fresh Connector per reconnect cycle via a ConnectorFactory, so a Connector's Connect / Disconnect
-// contract only needs to support one connect followed by one disconnect - re-use across cycles is not required.
+// contract only needs to support one connect followed by one disconnect: re-use across cycles is not required.
 type Connector interface {
 	Connect() error
 	Disconnect()

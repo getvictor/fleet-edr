@@ -56,7 +56,7 @@ type TokenStore struct {
 	db *sqlx.DB
 }
 
-// NewTokenStore constructs a TokenStore. Panics if db is nil - a
+// NewTokenStore constructs a TokenStore. Panics if db is nil: a
 // store backed by no connection has no useful behavior.
 func NewTokenStore(db *sqlx.DB) *TokenStore {
 	if db == nil {

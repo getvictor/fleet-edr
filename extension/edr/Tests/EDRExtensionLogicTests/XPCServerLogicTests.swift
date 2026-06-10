@@ -15,7 +15,7 @@ import XCTest
 /// VM layer per docs/testing-strategy.md.
 final class XPCServerLogicTests: XCTestCase {
 
-    // MARK: - Requirement: Mach service registration
+    // MARK: Requirement: Mach service registration
 
     // spec:extension-xpc-server/mach-service-registration/an-agent-connects-to-the-system-extension
     func testSingleValidatedPeerLandsInTheBroadcastSet() {
@@ -42,7 +42,7 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertTrue(peers.contains(1) && peers.contains(2))
     }
 
-    // MARK: - Requirement: Peer code-signing validation
+    // MARK: Requirement: Peer code-signing validation
 
     // spec:extension-xpc-server/peer-code-signing-validation/a-peer-with-the-wrong-team-id-is-rejected
     func testProductionRequirementPinsTheFleetTeamID() {
@@ -97,7 +97,7 @@ final class XPCServerLogicTests: XCTestCase {
         }
     }
 
-    // MARK: - Requirement: Event broadcast to all connected peers
+    // MARK: Requirement: Event broadcast to all connected peers
 
     // spec:extension-xpc-server/event-broadcast-to-all-connected-peers/an-event-is-broadcast-to-multiple-agents
     func testBroadcastFanOutCoversEveryPeerInTheSet() {
@@ -132,7 +132,7 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(buffer.entries, [Data([0x02]), Data([0x03]), Data([0x04])])
     }
 
-    // MARK: - Requirement: Inbound policy update
+    // MARK: Requirement: Inbound policy update
 
     // spec:extension-xpc-server/inbound-policy-update/the-agent-pushes-a-new-blocklist
     func testApplicationControlUpdateWithDataDispatchesToApplyApplicationControl() {
@@ -158,7 +158,7 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(dispatchInbound(type: "application_control.update", data: Data()), .rejectMissingData)
     }
 
-    // MARK: - Requirement: Hello handshake and reply
+    // MARK: Requirement: Hello handshake and reply
 
     // spec:extension-xpc-server/hello-handshake-and-reply/the-agent-sends-a-hello-after-connecting
     func testHelloDispatchesHelloAckAndBufferDrainsToHelloingPeerInOrder() {
@@ -196,7 +196,7 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(buffer.entries, [Data("a".utf8), Data("b".utf8), Data("c".utf8)])
     }
 
-    // MARK: - Requirement: Forward compatibility for unknown messages
+    // MARK: Requirement: Forward compatibility for unknown messages
 
     // spec:extension-xpc-server/forward-compatibility-for-unknown-messages/future-agent-sends-a-new-message-type
     func testUnknownMessageTypeDispatchesToIgnoreWithoutMutatingAnyState() {
@@ -209,7 +209,7 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(dispatchInbound(type: nil, data: Data("x".utf8)), .ignore)
     }
 
-    // MARK: - Requirement: Disconnect cleanup
+    // MARK: Requirement: Disconnect cleanup
 
     // spec:extension-xpc-server/disconnect-cleanup/one-of-two-agents-goes-away
     func testRemovingOnePeerLeavesTheOtherInTheBroadcastSet() {

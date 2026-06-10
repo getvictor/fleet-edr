@@ -86,8 +86,8 @@ final class NetworkFilter: NEFilterDataProvider {
 }
 
 /// hostPort destructures a Network.NWEndpoint.hostPort into (host-string, port).
-/// Returns ("", 0) for nil or for non-hostPort variants (service, unix-path, url)
-/// - none of which we emit into the network_connect telemetry today.
+/// Returns ("", 0) for nil or for non-hostPort variants (service, unix-path, url).
+/// None of those variants are emitted into the network_connect telemetry today.
 private func hostPort(from endpoint: Network.NWEndpoint?) -> (String, UInt16) {
     guard let endpoint, case let .hostPort(host, port) = endpoint else {
         return ("", 0)

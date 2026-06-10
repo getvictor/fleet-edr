@@ -42,7 +42,7 @@ struct ApplicationControlSnapshot {
 /// ApplicationControlRule mirrors one entry in the wire payload. Codable so
 /// the same struct decodes both an incoming XPC payload and the persisted
 /// snapshot file on disk. Field names use snake_case in JSON to match the
-/// server's `server/rules/api.SetApplicationControlRule` JSON tags - a
+/// server's `server/rules/api.SetApplicationControlRule` JSON tags: a
 /// rename on either side is a contract break and the round-trip test on the
 /// server side is the gate.
 ///
@@ -169,7 +169,7 @@ final class ApplicationControlStore {
     }
 
     /// loadFromDisk reads the persisted snapshot at startup. Missing file or
-    /// decode error fails open (empty snapshot) - the agent will push the
+    /// decode error fails open (empty snapshot): the agent will push the
     /// current snapshot on its next command poll cycle. Never fatal.
     func loadFromDisk() {
         let url = URL(fileURLWithPath: storagePath)
@@ -210,8 +210,8 @@ final class ApplicationControlStore {
         var applied = false
         lock.withLock { current in
             // Monotonic-version gate. A duplicate delivery (same version) is
-            // not an error - the agent retries on its next poll if the
-            // previous cycle's ack failed - but we still skip the swap so
+            // not an error (the agent retries on its next poll if the
+            // previous cycle's ack failed), but we still skip the swap so
             // the disk write doesn't fire for a no-op.
             if snapshot.policyID == current.policyID && snapshot.policyVersion <= current.policyVersion {
                 return
@@ -281,7 +281,7 @@ final class ApplicationControlStore {
     }
 
     /// persist writes the raw payload to disk atomically. Data.write(to:options:.atomic)
-    /// is implemented as write-temp-then-rename internally - Foundation manages
+    /// is implemented as write-temp-then-rename internally: Foundation manages
     /// the temp file and the rename in a single atomic swap that handles the
     /// destination-already-exists case correctly. No manual mv dance and no
     /// non-atomic window where the destination is missing.

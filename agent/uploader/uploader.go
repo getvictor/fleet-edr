@@ -212,7 +212,7 @@ func (u *Uploader) drainBatch(ctx context.Context) (int, error) {
 //  2. 401 (clientError with statusCode=401): leave queued (OnAuthFail has been signalled by doUpload), return the error.
 //  3. 413 (requestEntityTooLargeError) with len(batch) > 1: bisect the batch and recurse on each half. Halves that deliver are
 //     marked uploaded as part of their own recursive call; halves that still 413 recurse until single-event leaves.
-//  4. 413 (requestEntityTooLargeError) with len(batch) == 1: drop the event - MarkUploaded so the queue stops surfacing it, emit
+//  4. 413 (requestEntityTooLargeError) with len(batch) == 1: drop the event. MarkUploaded so the queue stops surfacing it, emit
 //     a WARN log with the event id, and increment the events_dropped_too_large counter. Per the spec, 413 does NOT
 //     consume the quarantine budget because the recovery shape differs (size signal, not "malformed event" signal).
 //  5. Other 4xx: route through recordClientErrorAndAudit (the existing #253 quarantine path).
@@ -269,7 +269,7 @@ func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEven
 	if errors.As(err, &clientErr) && u.cfg.ClientErrorQuarantineThreshold > 0 {
 		u.recordClientErrorAndAudit(ctx, ids, clientErr.statusCode, len(batch))
 	}
-	// Context cancellation / deadline is an EXPECTED outcome during graceful shutdown - the shutdown drain runs against a
+	// Context cancellation / deadline is an EXPECTED outcome during graceful shutdown: the shutdown drain runs against a
 	// bounded WithTimeout context, and one truncated drain attempt on a degraded server is not an operator-actionable error
 	// (Gemini #276). Log at warn so dashboards keyed on uploader error rate don't false-trip on every shutdown.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -315,7 +315,7 @@ func (u *Uploader) handleBodyTooLarge(ctx context.Context, batch []queue.QueuedE
 
 // dropOverSizeEvent is the single-event 413 drop path lifted out of handleBodyTooLarge so the parent stays linear (Sonar
 // S3776 cognitive-complexity budget) and the spec-required event_id extraction has one call site. The event_id is pulled
-// out of EventJSON via a minimal Unmarshal into a struct holding only the event_id field - if the JSON is malformed or the
+// out of EventJSON via a minimal Unmarshal into a struct holding only the event_id field. If the JSON is malformed or the
 // field is missing, the log line carries an empty event_id and the queue row id (event_db_id) still uniquely identifies the
 // event for operators (Copilot #276 spec-compliance fix).
 func (u *Uploader) dropOverSizeEvent(ctx context.Context, ev queue.QueuedEvent) error {
@@ -373,7 +373,7 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 			return nil
 		}
 
-		// Don't retry client errors (4xx) - only server/network errors are retryable. 413 is its own non-retryable type because
+		// Don't retry client errors (4xx): only server/network errors are retryable. 413 is its own non-retryable type because
 		// the caller (uploadBatch) branches into split-and-retry rather than the quarantine path; returning it from the retry
 		// loop preserves the typed-error chain that errors.As inspects upstream.
 		var tooLargeErr *requestEntityTooLargeError
@@ -411,7 +411,7 @@ func (e *clientError) Error() string {
 }
 
 // requestEntityTooLargeError represents an HTTP 413 (Request Entity Too Large) response. The server uses this status for
-// two diagnostics that share the same agent-side recovery shape - `body_too_large` (body bytes exceed the per-request
+// two diagnostics that share the same agent-side recovery shape: `body_too_large` (body bytes exceed the per-request
 // cap) and `too_many_events` (event count exceeds MaxIngestEventsPerRequest); both route through split-and-retry. Kept
 // distinct from clientError so the caller can
 // route to the split-and-retry recovery path without re-inspecting statusCode, and so a future addition of another
@@ -447,7 +447,7 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 
 	if resp.StatusCode == http.StatusUnauthorized && u.cfg.OnAuthFail != nil {
 		// Surface the 401 to the enrollment package so it can re-enroll. We fall through to the 4xx branch below,
-		// so this fires at most once per drain tick (not per retry - clientError is non-retryable). The callback is itself
+		// so this fires at most once per drain tick (not per retry, since clientError is non-retryable). The callback is itself
 		// rate-limited, so repeated drain ticks while the token is stale are safe.
 		u.cfg.OnAuthFail(ctx)
 	}

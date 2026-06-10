@@ -100,7 +100,7 @@ final class NotificationListener {
 
     /// verifyDropDirectory refuses to start the watcher unless the
     /// drop directory exists with the expected ownership and mode.
-    /// The host app does NOT create the directory itself - the
+    /// The host app does NOT create the directory itself: the
     /// extension (running as root) is the canonical creator. If we
     /// created the dir from a user session, a local non-root user
     /// could win the bootstrap race and we'd silently start reading

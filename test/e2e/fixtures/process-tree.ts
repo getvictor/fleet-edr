@@ -18,10 +18,10 @@ export interface ProcessTreeAgent {
 
 /**
  * setupProcessTreeDeep runs the process-tree-deep scenario against a freshly minted host id, waits until the
- * processor has materialised at least four process rows (the minimum the scenario produces - gating the
- * navigation on row count avoids a race where the tree page renders empty before processing catches up),
- * then navigates the supplied page to that host's /ui/hosts/<id> route and waits for at least one tree node
- * to be visible.
+ * processor has materialised at least four process rows (the minimum the scenario produces), then navigates
+ * the supplied page to that host's /ui/hosts/<id> route and waits for at least one tree node to be visible.
+ * Gating the navigation on row count avoids a race where the tree page renders empty before processing
+ * catches up.
  *
  * Returns the host id so the caller can use it for cross-referencing DB rows (e.g. asserting a kill command
  * landed against the right host_id).

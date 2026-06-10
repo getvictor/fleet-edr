@@ -1,6 +1,6 @@
 # L6 detection efficacy harness
 
-Walks an in-tree attack-scenario corpus + an ambient-noise corpus through the real EDR server (composed via `test/integration.Setup`) and asserts two aggregate gates per `docs/testing-strategy.md`:
+Walks an in-tree attack-scenario corpus + an ambient-noise corpus through the real EDR server (composed via `test/integration.Setup`) and asserts two aggregate gates per [`testing-strategy.md`](../../docs/testing-strategy.md):
 
 - Detection rate >= 95% across all attack scenarios.
 - False-positive rate <= 1% across all noise scenarios.

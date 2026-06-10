@@ -27,10 +27,10 @@ const fdsPerHeadlessHost = 10
 func ulimitCheckForHeadless(hostCount int) error {
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
-		// Getrlimit failure is rare on Linux (it's a vDSO syscall) and not catastrophic - the caller can still try the
+		// Getrlimit failure is rare on Linux (it's a vDSO syscall) and not catastrophic: the caller can still try the
 		// run and discover the EMFILE on the run path. Surface as a soft warning (not an error) so a kernel that
 		// rejects the call (containers, seccomp policies) does not block headless mode entirely. Logging is what makes
-		// it visible to operators (Copilot #277 - the previous silent-return left them guessing whether the pre-flight
+		// it visible to operators (Copilot #277: the previous silent-return left them guessing whether the pre-flight
 		// ran).
 		slog.Default().Warn("scale: RLIMIT_NOFILE pre-flight skipped (Getrlimit failed); continuing without FD check",
 			"err", err)

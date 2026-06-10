@@ -229,7 +229,7 @@ func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ServerURL = srv.URL
-	// TokenFn present but returns "" - the unenrolled-agent shape the spec scenario describes.
+	// TokenFn present but returns "": the unenrolled-agent shape the spec scenario describes.
 	cfg.TokenFn = func() string { return "" }
 	cfg.MaxRetries = 3
 
@@ -620,7 +620,7 @@ func TestUpload_413_SingleEventDrops_MetricAndAudit(t *testing.T) {
 
 // TestUpload_413NotMistakenForGeneric4xx pins the quarantine-budget contract: a 413 must NOT consume the
 // ClientErrorQuarantineThreshold counter (a 413 is a size signal, not a malformed-event signal). The complementary
-// assertion - generic 4xx (e.g. 400) must NOT trigger the events_dropped_too_large counter - is also pinned here so
+// assertion (generic 4xx, e.g. 400, must NOT trigger the events_dropped_too_large counter) is also pinned here so
 // both error-classification regressions are caught by one test.
 //
 // Setup: one event in the queue, server always returns 400 (not 413). After one drainOnce:
@@ -660,7 +660,7 @@ func TestUpload_413NotMistakenForGeneric4xx(t *testing.T) {
 // Pins the design where the server returns 413 (not 400) for `too_many_events` so the agent routes the rejection through
 // split-and-retry instead of the quarantine path (Copilot #276). The agent's requestEntityTooLargeError branch fires on any 413
 // regardless of the diagnostic string, so this test mirrors the multi-event-split scenario but uses an over-cap event
-// count rather than over-cap body bytes - same 413, same recovery. Setup: 4-event batch, server returns 413 with
+// count rather than over-cap body bytes: same 413, same recovery. Setup: 4-event batch, server returns 413 with
 // too_many_events when the body has >2 events. Expected: 1 x 413 followed by 2 x 200 on the halves, depth=0 after drain.
 func TestUpload_413_TooManyEventsRoutedThroughSplit(t *testing.T) {
 	q := openTestQueue(t)
@@ -752,7 +752,7 @@ func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
 	// Core assertion: server must see exactly 2 POSTs (initial 413 + first-half), NOT 3. The skipped second-half POST is
 	// what proves the cancel guard works (Gemini #276). We deliberately don't assert queue depth here: the cancel races
 	// with the first half's MarkUploaded, so either both events stay queued (if cancel landed before the SQLite write) or
-	// only the second half stays queued (if MarkUploaded ran before cancel was observed). Either outcome is correct - the
+	// only the second half stays queued (if MarkUploaded ran before cancel was observed). Either outcome is correct: the
 	// server's idempotent-by-event_id dedup contract handles any duplicate on the next drain tick.
 	assert.Equal(t, int32(2), posts.Load(),
 		"server MUST see exactly 2 POSTs (initial 413 + first-half); the second-half POST MUST be skipped after cancel")
@@ -769,7 +769,7 @@ func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
 //     RecordClientError bumps the row's client_error_count from 0->1, 1->2, 2->3 across the three ticks.
 //  4. On the 3rd tick, the post-bump value reaches the threshold; RecordClientError sets uploaded=1 in the same
 //     transaction and returns the row id as newly-quarantined. The audit-class log line fires once.
-//  5. A 4th drainOnce returns immediately because DequeueBatch filters on uploaded=0 - the row is no longer visible.
+//  5. A 4th drainOnce returns immediately because DequeueBatch filters on uploaded=0: the row is no longer visible.
 //
 // The assertion that locks in "MUST NOT retransmit indefinitely" is: the server's request counter stops climbing
 // after the 3rd tick. The audit log line is asserted via a buffered slog handler.

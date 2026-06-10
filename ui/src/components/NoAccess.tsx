@@ -8,8 +8,8 @@ interface NoAccessProps {
 // an operator reaches a surface or action their role does not permit. It replaces the
 // raw `Error: API error: 403` that leaked through before capability gating (ADR-0012).
 //
-// It is intentionally generic and reveals nothing beyond "you lack access" - no role
-// names, no required-permission identifiers - so it is safe to show on a deep-link by
+// It is intentionally generic and reveals nothing beyond "you lack access": no role
+// names and no required-permission identifiers. That makes it safe to show on a deep-link by
 // an operator who should not even know the surface exists.
 export function NoAccess({ surface }: NoAccessProps) {
   return (

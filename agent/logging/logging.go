@@ -73,7 +73,7 @@ func parseLevel(s string) (slog.Level, error) {
 }
 
 // levelFilter drops records below the configured level before they reach the wrapped handler. Applied to the otelslog bridge because
-// its own Enabled() always returns true - without this filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN
+// its own Enabled() always returns true. Without this filter, DEBUG/INFO records would leak to OTLP even when EDR_LOG_LEVEL is WARN
 // or ERROR.
 type levelFilter struct {
 	level slog.Level

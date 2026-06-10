@@ -33,7 +33,7 @@ const errorMessageByCode = new Map<string, string>([
 
 export function EditRuleModal({ open, rule, onClose, onSaved }: EditRuleModalProps) {
   // initialState mirrors the rule's mutable fields at the moment the modal opened. The submit handler diffs current state
-  // against this baseline so the PATCH body only carries fields that actually changed - that keeps the audit log honest
+  // against this baseline so the PATCH body only carries fields that actually changed, which keeps the audit log honest
   // (a 1-field-changed PATCH audits as a 1-field change, not a 5-field rewrite).
   const initialState = useMemo(() => ({
     severity: rule?.severity ?? "medium",

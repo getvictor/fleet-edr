@@ -51,7 +51,7 @@ The system SHALL seed five roles at startup and SHALL keep their `is_builtin` fl
 
 ### Requirement: Role bindings carry a scope so future scoping is non-breaking
 
-Every role binding SHALL carry a `scope_type` from the set `{'global', 'host_group', 'host'}` and a `scope_id`. The product is a single-instance deployment, so wave 1 SHALL enforce only `scope_type='global'` (with `scope_id='*'`), which means "deployment-wide". A binding with a non-`global` `scope_type` MUST be persisted but MUST NOT be honored by the chokepoint until the corresponding scope resolver ships. A binding MAY carry an `expires_at`; an expired binding MUST be treated as if it did not exist when the chokepoint evaluates a request.
+Every role binding SHALL carry a `scope_type` from the set `{'global', 'host_group', 'host'}` and a `scope_id`. The product is a single-instance deployment, so the current release SHALL enforce only `scope_type='global'` (with `scope_id='*'`), which means "deployment-wide". A binding with a non-`global` `scope_type` MUST be persisted but MUST NOT be honored by the chokepoint until the corresponding scope resolver ships. A binding MAY carry an `expires_at`; an expired binding MUST be treated as if it did not exist when the chokepoint evaluates a request.
 
 #### Scenario: Deployment-wide binding grants the action
 
@@ -59,7 +59,7 @@ Every role binding SHALL carry a `scope_type` from the set `{'global', 'host_gro
 - **WHEN** the chokepoint evaluates a request for that action
 - **THEN** the decision is `{allow: true, reason: "granted"}`
 
-#### Scenario: Host-scoped binding does not grant the action in wave 1
+#### Scenario: Host-scoped binding does not grant the action in the current release
 
 - **GIVEN** a role binding with `scope_type='host'` and `scope_id` matching the resource host id
 - **WHEN** the chokepoint evaluates a request that would only be authorized via the host scope

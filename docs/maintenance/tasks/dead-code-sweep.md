@@ -10,7 +10,7 @@ Dead code (unused exports, orphan packages, dead UI components, abandoned migrat
 
 - Go: unused exports across `server/`, `agent/`, `internal/`. Use `staticcheck -checks=U1000` or `go-deadcode`.
 - TypeScript: dead components, dead exports, orphan files in `ui/src/`. Use `ts-prune` or `knip`.
-- Swift: rarely used but worth a pass - orphan files in `extension/edr/`.
+- Swift: rarely used but worth a pass for orphan files in `extension/edr/`.
 - SQL: migrations that reference columns / tables nobody reads any more.
 - Config: keys in `server/config` (and `agent/config` for the agent daemon) with no consumer.
 - HTTP routes: registered handlers with no client (UI / agent / curl).
@@ -28,9 +28,9 @@ Dead code (unused exports, orphan packages, dead UI components, abandoned migrat
    # or: npx knip
    ```
 
-2. Cross-check Go suspects manually - the `internal/`-only convention plus reflection-based wiring (e.g. handler registration) means staticcheck false-positives are common. Confirm by `grep -r '<Symbol>' --include='*.go' | grep -v '_test.go'`.
+2. Cross-check Go suspects manually: the `internal/`-only convention plus reflection-based wiring (e.g. handler registration) means staticcheck false-positives are common. Confirm by `grep -r '<Symbol>' --include='*.go' | grep -v '_test.go'`.
 3. For each true positive, decide: **delete** / **wire it up** (was the export added speculatively?) / **keep with a comment** explaining why it looks unused (rare; usually means dynamic dispatch, in which case add a `//go:linkname`-style note).
-4. SQL: check the schema for columns / tables not referenced from any Go query. If found, file an issue rather than dropping in this sweep - schema deletes need a migration plan.
+4. SQL: check the schema for columns / tables not referenced from any Go query. If found, file an issue rather than dropping in this sweep: schema deletes need a migration plan.
 5. Config: `grep -nr 'os.Getenv\|cfg\.' server agent internal` and cross-check against the config struct. Unused fields go.
 
 ## Output
@@ -66,4 +66,4 @@ Time budget 90 minutes total; if a single language has too many findings, sweep 
 - [ ] Each language's dead-code tool ran cleanly (or its output documented).
 - [ ] Each true positive deleted, wired up, or commented.
 - [ ] Schema / route findings filed as issues, not silently deleted.
-- [ ] Dated entry in `docs/maintenance/log.md`.
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md).

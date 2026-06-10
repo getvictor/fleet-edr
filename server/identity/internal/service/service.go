@@ -101,7 +101,7 @@ func (s *service) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 // Two queries: one for users (already on the call path of every login
 // today, so the row is hot in MySQL's buffer pool) and one for the
 // caller's live role bindings. Returns ErrUserNotFound if the user
-// row has been deleted out from under a still-valid session - the
+// row has been deleted out from under a still-valid session: the
 // caller (session middleware) maps it to a 401 + cookie clear.
 //
 // sessionFresh is the reauth-window flag the middleware computes from
@@ -146,14 +146,14 @@ func (s *service) IsFresh(sess *api.Session) bool {
 	if sess == nil {
 		return false
 	}
-	// Reconstruct a sessions.Session shell with LastAuthAt - that's
+	// Reconstruct a sessions.Session shell with LastAuthAt: that's
 	// the only field the store's IsFresh inspects.
 	return s.sessions.IsFresh(&sessions.Session{LastAuthAt: sess.LastAuthAt})
 }
 
 // TouchSession advances the session's last_seen_at if the cached value is older than the store's throttle window. Wraps
 // sessions.Store.Touch. Returns the resulting last_seen_at (cachedLastSeen when the throttle skipped, otherwise NOW()) so the
-// middleware can refresh its cached *Session - without that, a long-running request that touches the row mid-flight would hand the
+// middleware can refresh its cached *Session. Without that, a long-running request that touches the row mid-flight would hand the
 // next request a stale cache and force another write inside the throttle window. Errors are returned; middleware logs + continues
 // since a missed touch costs at most one minute of idle granularity.
 func (s *service) TouchSession(ctx context.Context, sessionToken []byte, cachedLastSeen time.Time) (time.Time, error) {

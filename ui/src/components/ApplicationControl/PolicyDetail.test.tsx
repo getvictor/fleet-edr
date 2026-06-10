@@ -89,7 +89,7 @@ describe("PolicyDetail", () => {
   });
 
   // PolicyDetail mounts the modals as siblings. Each modal renders a <dialog> that, even when closed in JSDOM, keeps its
-  // children in the DOM - so RTL queries against `screen` match labels in closed dialogs too. Scope to the dialog addressed by
+  // children in the DOM, so RTL queries against `screen` match labels in closed dialogs too. Scope to the dialog addressed by
   // its accessible name AND require its `open` attribute to be set so a test that fires the action but doesn't actually open
   // the dialog (e.g. a regression in the wiring) fails loudly instead of false-passing on the closed dialog. Addresses the
   // Copilot finding on PR #189.
@@ -294,7 +294,7 @@ describe("PolicyDetail", () => {
     fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), {
       target: { value: "LEGACY" },
     });
-    // CDHASH rule's comment is "legacy paste" - case-insensitive match should surface only it.
+    // CDHASH rule's comment is "legacy paste"; a case-insensitive match should surface only it.
     expect(identifiersInTable().map((id) => id.slice(0, 8))).toEqual(["bbbb2222"]);
   });
 

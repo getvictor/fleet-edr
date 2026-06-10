@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// pingerConnector is a Connector stub whose only configured method is Ping - used by the heartbeat-isolation tests below to drive
+// pingerConnector is a Connector stub whose only configured method is Ping, used by the heartbeat-isolation tests below to drive
 // runHeartbeat without also exercising the connect / event-pump paths. Methods unrelated to Ping panic so an accidental wider use
 // surfaces immediately.
 type pingerConnector struct {

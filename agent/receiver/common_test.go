@@ -38,7 +38,7 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 	dropped := Event{Data: []byte("dropped")}
 
 	tryDeliverEvent(ch, first, "svc-xpc")
-	// Channel now full. The next call MUST drop without blocking - if the implementation regressed to a blocking send, the test
+	// Channel now full. The next call MUST drop without blocking. If the implementation regressed to a blocking send, the test
 	// would otherwise deadlock until go test's package-level timeout (default 10m). Use a tight time.After timeout so a regression
 	// fails the test in a second instead of hanging the suite.
 	done := make(chan struct{})

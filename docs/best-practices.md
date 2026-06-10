@@ -27,7 +27,7 @@ The detection surface is the product. Treat detection content as code: versioned
 - [ ] **File quarantine** with cryptographic chain of custody (move to vault, hash before and after, signed manifest)
 - [ ] **Network isolation** action (deny all but management traffic to a single host)
 - [ ] **Memory acquisition** for forensics on demand
-- [ ] **DNS query monitoring** (the `dns-monitoring.md` doc exists but the data plane is not yet wired through ESF / NE)
+- [ ] **DNS query monitoring** (the [`dns-monitoring.md`](dns-monitoring.md) doc exists but the data plane is not yet wired through ESF / NE)
 - [ ] **USB / removable-media device events**
 - [ ] **File integrity monitoring** (FIM) for sensitive paths
 - [ ] **Persistence-mechanism coverage**: LaunchAgents (have), LaunchDaemons, login items, cron, sudoers, kernel extensions, browser extensions
@@ -108,7 +108,7 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] Dependabot `cooldown` (10 days default, 30 for majors) plus version grouping
 - [x] Major-version updates ignored for code deps (security overrides bypass)
 - [x] **Sigstore / cosign** signed release artifacts via keyless OIDC: every pkg, mobileconfig, SHA256SUMS, SBOM, AND the GHCR server image gets a `.sig` + `.pem` on each release tag (`.github/workflows/release.yml`). Cosign v3 (bundle format + OCI 1.1 referring-artifact storage on by default) is tracked as a drop-in pin upgrade once downstream verifiers in our pipeline consume bundles
-- [~] **SLSA Build Level 3** provenance attestations on releases via `actions/attest-build-provenance`. We claim **build level 2** in practice - Apple notarization breaks SLSA L3's hermeticity requirement (notarytool reaches Apple's network). Documented in the workflow comment; revisit if Apple ever offers an offline notary path
+- [~] **SLSA Build Level 3** provenance attestations on releases via `actions/attest-build-provenance`. We claim **build level 2** in practice: Apple notarization breaks SLSA L3's hermeticity requirement (notarytool reaches Apple's network). Documented in the workflow comment; revisit if Apple ever offers an offline notary path
 - [x] **SBOM generation** at build time -- both CycloneDX and SPDX via `anchore/sbom-action` (syft underneath), attached to releases. Server image SBOM also pushed as a cosign attestation on the registry side
 - [x] **OpenSSF Scorecard** workflow + badge in README (`.github/workflows/scorecard.yml`)
 - [~] **OpenSSF Best Practices Badge** (CII): Passing badge shipped (project #12994). Silver is gated on adding a second maintainer (Silver requires two-person review and bus-factor >=2), so it stays open until co-maintainer onboarding
@@ -160,12 +160,12 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] React component tests with Vitest + Testing Library
 - [x] Test helpers and shared fixtures (per-context `server/<context>/testkit/testkit.go`)
 - [x] **Three-layer test split** aligned with bounded contexts (per ADR-0004). Layer 1: per-package unit tests, default tag, co-located with the code; use `server/testdb.Open(t)` + the relevant context's `bootstrap.ApplySchema` (or external `_test` packages where the cycle bites). Layer 2: per-context integration tests at `server/<context>/internal/tests/`, `package tests`, scoped to one context's public surface (compiler refuses cross-context internals); use `server/testdb/full.Open(t)` for the full multi-schema fixture. Layer 3: cross-context integration tests at `test/integration/` exercise scenarios spanning multiple contexts
-- [x] Subtest + table-driven test convention (per `CLAUDE.md`)
+- [x] Subtest + table-driven test convention (per [`CLAUDE.md`](../CLAUDE.md))
 - [x] Load-test harness (`test/loadtest.go`)
 - [ ] **End-to-end tests** (Playwright / Cypress) covering login -> alert -> ack -> close
 - [ ] **API contract tests** -- generated from OpenAPI, run against the live server
 - [ ] **Fuzz tests** for the JSON event parser and any HTTP body that comes from the agent (Go has built-in `go test -fuzz`)
-- [~] **Property-based tests** via `pgregory.net/rapid` for components with clear algebraic invariants. Use when the property holds across an input space larger than what a table-driven test reasonably enumerates: serialization round-trips (`Marshal ∘ Unmarshal == identity`, `Scan ∘ Value == identity`), state-machine matrices (alert lifecycle, process lifecycle), graph algorithms (process tree build / re-exec chain walk: every non-root has a real parent in the tree, no cycles, every input PID appears exactly once), and order-preserving filters (e.g. `filterSnapshotEvents` removes only snapshot exec events and preserves the order of the rest). Rapid's built-in shrinking + state-machine API are the modern Go choice - `gopter` works but is heavier, and `testing/quick` lacks shrinking. PBT does NOT replace example-based tests for wire-format pinning, security-critical regressions, or named bug repros - those still want explicit values. See the detection bounded context's `internal/tests/`
+- [~] **Property-based tests** via `pgregory.net/rapid` for components with clear algebraic invariants. Use when the property holds across an input space larger than what a table-driven test reasonably enumerates: serialization round-trips (`Marshal ∘ Unmarshal == identity`, `Scan ∘ Value == identity`), state-machine matrices (alert lifecycle, process lifecycle), graph algorithms (process tree build / re-exec chain walk: every non-root has a real parent in the tree, no cycles, every input PID appears exactly once), and order-preserving filters (e.g. `filterSnapshotEvents` removes only snapshot exec events and preserves the order of the rest). Rapid's built-in shrinking + state-machine API are the modern Go choice: `gopter` works but is heavier, and `testing/quick` lacks shrinking. PBT does NOT replace example-based tests for wire-format pinning, security-critical regressions, or named bug repros; those still want explicit values. See the detection bounded context's `internal/tests/`
   - `api/api_test.go` for the canonical patterns.
 - [ ] **Snapshot tests** for the React process-tree D3 layout
 - [ ] **Visual-regression tests** (Playwright screenshots or Chromatic) on UI components
@@ -212,7 +212,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [x] JSON event schema (`schema/events.json` -- consumed by both agent and server)
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration time so the policy is reviewable in `main.go`
-- [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml`, prose overview at `docs/api.md`, AND hosted rendering at `/api/docs` via embedded Redoc (D1 deliverable: zero external network calls, served from `server/apidocs/embed`). Still missing: handler/client codegen via `oapi-codegen` / `openapi-typescript`, so today the spec and the Go handlers can still drift without CI catching it
+- [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml`, prose overview at [`api.md`](api.md), AND hosted rendering at `/api/docs` via embedded Redoc (D1 deliverable: zero external network calls, served from `server/apidocs/embed`). Still missing: handler/client codegen via `oapi-codegen` / `openapi-typescript`, so today the spec and the Go handlers can still drift without CI catching it
 - [ ] **AsyncAPI 3.0 spec** for the event envelope (the JSON Schema covers payload but not the upload contract)
 - [x] **OpenAPI lint in CI** -- `@redocly/cli lint` runs on every PR + push at `.github/workflows/openapi-lint.yml`. Failures gate the merge
 - [ ] **API contract tests** generated from OpenAPI via `schemathesis` (property-based, hits a live server, catches handler/spec drift) or `dredd`. Pairs naturally with the lint job above
@@ -286,21 +286,21 @@ The observability stack is unusually strong here for an early-stage project; thi
 
 These cost almost nothing and disproportionately drive adoption.
 
-- [x] `README.md` with quick-start that actually works
-- [x] Architecture document (`docs/architecture.md`)
-- [x] Lessons-and-gotchas log (`docs/lessons-and-gotchas.md`)
-- [x] Go conventions doc (`docs/go-conventions.md`)
-- [x] DNS monitoring design doc (`docs/dns-monitoring.md`)
+- [x] [`README.md`](../README.md) with quick-start that actually works
+- [x] Architecture document ([`architecture.md`](architecture.md))
+- [x] Lessons-and-gotchas log ([`lessons-and-gotchas.md`](lessons-and-gotchas.md))
+- [x] Go conventions doc ([`go-conventions.md`](go-conventions.md))
+- [x] DNS monitoring design doc ([`dns-monitoring.md`](dns-monitoring.md))
 - [ ] Issue templates at `.github/ISSUE_TEMPLATE/` (bug, story, reliability). Not committed yet; slash-skills that reference them (`create-bug`, `create-story`, `create-reliability`) live in the user's global `~/.claude/skills/` only.
 - [x] **`LICENSE`** at the repo root: MIT, copyright `Victor Lyuboslavsky and contributors`. Matches Fleet's license choice; permissive enough for any pilot-customer procurement scanner. Future relicensing flexibility hinges on a CLA / DCO before external contributors arrive (separate community-signals item below)
-- [x] **`SECURITY.md`** at the repo root: directs reporters to GitHub's private vulnerability reporting flow (`/security/advisories/new`). Scoped to the maintainer-only mailbox without exposing a personal email address. Lifts OpenSSF Scorecard's Security-Policy check from 0 → 10.
-- [x] **`CONTRIBUTING.md`** at the repo root: pointers to build / test (Taskfile, lefthook, `.tool-versions`), per-language style sources of truth (`docs/go-conventions.md`, `.golangci.yml`, ESLint, swiftlint), Sonar new-code coverage gate, the `Co-Authored-By` policy, and a security-PR checklist tied back to `docs/threat-model.md`. DCO sign-off noted as a future requirement, not enforced today
+- [x] **[`SECURITY.md`](../SECURITY.md)** at the repo root: directs reporters to GitHub's private vulnerability reporting flow (`/security/advisories/new`). Scoped to the maintainer-only mailbox without exposing a personal email address. Lifts OpenSSF Scorecard's Security-Policy check from 0 → 10.
+- [x] **[`CONTRIBUTING.md`](../CONTRIBUTING.md)** at the repo root: pointers to build / test (Taskfile, lefthook, `.tool-versions`), per-language style sources of truth ([`go-conventions.md`](go-conventions.md), `.golangci.yml`, ESLint, swiftlint), Sonar new-code coverage gate, the `Co-Authored-By` policy, and a security-PR checklist tied back to [`threat-model.md`](threat-model.md). DCO sign-off noted as a future requirement, not enforced today
 - [ ] **`CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1)
 - [ ] **`CODEOWNERS`** for review routing
 - [ ] **PR template** with checklist (tests, docs, security review)
 - [ ] **`SUPPORT.md`** explaining where to ask questions
 - [ ] **GitHub Discussions** enabled for design conversations
-- [x] **Architecture Decision Records** at `docs/adr/NNNN-title.md` with template + index at `docs/adr/README.md`; seeded with the single-module, Apple-Silicon-only, and standalone-product decisions. Add new ones as non-obvious trade-offs land.
+- [x] **Architecture Decision Records** at `docs/adr/NNNN-title.md` with template + index at [`README.md`](adr/README.md); seeded with the single-module, Apple-Silicon-only, and standalone-product decisions. Add new ones as non-obvious trade-offs land.
 - [ ] **Public roadmap** (GitHub Projects or `ROADMAP.md`)
 - [ ] **`OWNERS` / governance** doc for once external contributors arrive
 - [ ] **Demo video** or live sandbox linked from README
@@ -351,8 +351,8 @@ A 2024-2026 industry shift: AI coding assistants (Claude Code, Cursor, Copilot, 
 
 ### Repo conventions for AI assistants
 
-- [x] **Project-level AI assistant config** -- committed `CLAUDE.md` at the repo root captures testing conventions, bounded-context layout, dev-environment quirks, and code-style rules, so any contributor or AI agent can start cold. Maintainers may layer per-user global config on top, but nothing here depends on it
-- [ ] **`.cursorrules`** and/or **`.github/copilot-instructions.md`** mirrors of the same conventions for non-Claude users
+- [x] **Project-level AI assistant config** -- committed [`CLAUDE.md`](../CLAUDE.md) at the repo root captures testing conventions, bounded-context layout, dev-environment quirks, and code-style rules, so any contributor or AI agent can start cold. Maintainers may layer per-user global config on top, but nothing here depends on it
+- [ ] **`.cursorrules`** and/or **[`.github/copilot-instructions.md`](../.github/copilot-instructions.md)** mirrors of the same conventions for non-Claude users
 - [ ] **MCP servers committed to the repo** -- shared tooling configs (SigNoz, SonarQube, Unblocked) so every contributor's AI agent has the same runtime context
 
 ### AI-assisted code review
@@ -364,7 +364,7 @@ A 2024-2026 industry shift: AI coding assistants (Claude Code, Cursor, Copilot, 
 
 ### Provenance and risk hygiene for AI-generated code
 
-- [x] Per-user policy on `Co-Authored-By` lines (this user: never; documented in auto-memory). Worth promoting into `CONTRIBUTING.md` once that file exists so it binds external contributors too
+- [x] Per-user policy on `Co-Authored-By` lines (this user: never; documented in auto-memory). Worth promoting into [`CONTRIBUTING.md`](../CONTRIBUTING.md) once that file exists so it binds external contributors too
 - [ ] **DCO sign-off (`Signed-off-by`)** required on PRs -- forces every contributor (human or AI) to attest to the DCO terms; doubles as a paper trail for AI provenance and is the Linux Foundation's preferred alternative to CLAs
 - [ ] **AI-generated code license stance** documented (training-data contamination risk; cite OpenSSF AI/ML Working Group guidance + Linux Foundation AI policy)
 
@@ -404,6 +404,6 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | macOS platform hygiene         | 6       | 12    | 50% |
 | AI-assisted engineering        | 2       | 17    | 12% |
 
-The supply-chain hardening track shipped Sigstore signing (cosign keyless on every release artifact), CycloneDX + SPDX SBOMs, SLSA build provenance at level 2 (Apple notarization breaks L3's hermeticity requirement), OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck. A real SonarCloud coverage gate (≥80% on new code, per PR) closed the last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59% to 64%. Wiring Codecov alongside (CODECOV_TOKEN scoped to the `codecov` environment, agent + server flags, thresholds matching the Sonar gate so the two never disagree) lifted §5 to 68% and added the procurement-recognized Codecov badge to the README without stacking a second coverage authority. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing the existing hardened-runtime + minimal-entitlements pipeline that notarization already enforces, lifted §11 Build/release from 17% to 50% (with GoReleaser and Linux init-system + distro packaging both flipped to will-not-do since the custom workflow + Apple-Silicon-only MVP scope already cover those). Adding `LICENSE` (MIT) + `SECURITY.md` + `CONTRIBUTING.md` lifted §12 Community signals from 42% to 54% and unblocked the rest of that section's doc items. `docs/threat-model.md` (STRIDE per component) opened §13 Compliance + privacy from 0% to 8% - that section was the last fully-empty area on the checklist.
+The supply-chain hardening track shipped Sigstore signing (cosign keyless on every release artifact), CycloneDX + SPDX SBOMs, SLSA build provenance at level 2 (Apple notarization breaks L3's hermeticity requirement), OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck. A real SonarCloud coverage gate (≥80% on new code, per PR) closed the last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59% to 64%. Wiring Codecov alongside (CODECOV_TOKEN scoped to the `codecov` environment, agent + server flags, thresholds matching the Sonar gate so the two never disagree) lifted §5 to 68% and added the procurement-recognized Codecov badge to the README without stacking a second coverage authority. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing the existing hardened-runtime + minimal-entitlements pipeline that notarization already enforces, lifted §11 Build/release from 17% to 50% (with GoReleaser and Linux init-system + distro packaging both flipped to will-not-do since the custom workflow + Apple-Silicon-only MVP scope already cover those). Adding `LICENSE` (MIT) + [`SECURITY.md`](../SECURITY.md) + [`CONTRIBUTING.md`](../CONTRIBUTING.md) lifted §12 Community signals from 42% to 54% and unblocked the rest of that section's doc items. [`threat-model.md`](threat-model.md) (STRIDE per component) opened §13 Compliance + privacy from 0% to 8%: that section was the last fully-empty area on the checklist.
 
 RBAC + MFA on the UI shipped, lifting §3 from 52% to 62%: OIDC PKCE for the day-to-day path (`server/identity/internal/oidc`), WebAuthn-mandatory break-glass for IdP-down recovery (`server/identity/internal/breakglass`), and a five-role OPA / Rego chokepoint (`server/identity/internal/authz`). The remaining big gaps that buyers ask about are the rest of the §12 community-signals checklist (CODE_OF_CONDUCT, CODEOWNERS, PR template, OpenSSF CII Best Practices badge), the detection-content surface (ATT&CK mapping is wired but Sigma / YARA / IOC management still wait for v1.1), and the AI-era hygiene that enterprise procurement is starting to ask for (CISA Secure by Design, OWASP LLM Top 10, AI provenance policy).

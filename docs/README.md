@@ -1,6 +1,6 @@
 # Fleet EDR documentation
 
-Operator-facing documentation for Fleet EDR. For developer setup see the repo-root `README.md`.
+Operator-facing documentation for Fleet EDR. For developer setup see the repo-root [`README.md`](../README.md).
 
 ## Who reads what
 

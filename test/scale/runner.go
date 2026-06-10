@@ -161,7 +161,7 @@ type Options struct {
 //
 // v2 fields (#232 headless mode): the QueueDepth* + ServerLatency* + ClientServerDelta* fields are populated only when the
 // run used Mode=ModeHeadless. Their JSON tags carry `,omitempty` so a direct-mode report still encodes to its original
-// shape - committed baselines stay binary-identical until a baseline is recaptured under the new mode.
+// shape: committed baselines stay binary-identical until a baseline is recaptured under the new mode.
 type Report struct {
 	StartTime          time.Time     `json:"start_time"`
 	EndTime            time.Time     `json:"end_time"`
@@ -182,7 +182,7 @@ type Report struct {
 	FailReasons        []string      `json:"fail_reasons,omitempty"`
 	PerHost            []HostReport  `json:"per_host"`
 
-	// v2 fields - headless mode only.
+	// v2 fields (headless mode only).
 
 	// QueueDepthSamples is the total number of /state polls aggregated into the percentile fields below. Zero when the
 	// run did not poll (direct mode) so a downstream reader can distinguish "headless run but the poller never sampled
@@ -200,7 +200,7 @@ type Report struct {
 	// Options.SigNozURL was empty or the query failed; SigNozQueryError captures the latter.
 	ServerLatencyP99 *time.Duration `json:"server_latency_p99,omitempty"`
 
-	// ClientServerDeltaP99 is LatencyP99 - ServerLatencyP99 (network + balancer + agent-side queue time). Positive
+	// ClientServerDeltaP99 is LatencyP99 minus ServerLatencyP99 (network + balancer + agent-side queue time). Positive
 	// values mean the client observed more latency than the server measured; large positive deltas point at a balancer
 	// or queue-side problem, not server work.
 	ClientServerDeltaP99 *time.Duration `json:"client_server_delta_p99,omitempty"`
@@ -219,7 +219,7 @@ type HostReport struct {
 	LastError        string        `json:"last_error,omitempty"`
 	LatencyP99       time.Duration `json:"latency_p99"`
 
-	// v2 fields - headless mode only. Mirror the omitempty pattern in Report so a direct-mode HostReport JSON-encodes
+	// v2 fields (headless mode only). Mirror the omitempty pattern in Report so a direct-mode HostReport JSON-encodes
 	// to its v1 shape.
 
 	// EventsInjected is the final /state events_injected counter at run end. Reflects total envelopes the scenario
@@ -482,7 +482,7 @@ func percentileSorted(sorted []time.Duration, p float64) time.Duration {
 	if p >= 100 {
 		return sorted[len(sorted)-1]
 	}
-	// Nearest-rank method: rank index = ceil(p/100 * N) - 1, clamped to [0, N-1]. Matches the convention used by Prometheus
+	// Nearest-rank method: rank index = ceil(p/100 * N) minus 1, clamped to [0, N-1]. Matches the convention used by Prometheus
 	// histogram_quantile for under-resolution buckets and produces stable values for small N. The 0.5 + truncation produces
 	// banker's-style rounding without pulling in math.Round.
 	const halfStep = 0.5

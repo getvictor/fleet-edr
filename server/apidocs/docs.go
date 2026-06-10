@@ -1,6 +1,6 @@
 // Package apidocs serves the self-hosted OpenAPI documentation: an embedded
 // Redoc renderer at GET /api/docs and the underlying spec at GET
-// /api/openapi.yaml. Both routes are unauthenticated on purpose - the spec
+// /api/openapi.yaml. Both routes are unauthenticated on purpose: the spec
 // content is already public on the GitHub release page and procurement
 // teams expect to be able to browse a customer-site's API surface without
 // credentials.
@@ -55,11 +55,11 @@ var (
 )
 
 // bundleHash is the 12-char content-hash cache-buster appended to the embedded Redoc bundle URL in the served HTML. Computed once
-// at init. A new Redoc version (new bundle bytes) flips the hash and the browser refetches the script immediately - no stale-cache
+// at init. A new Redoc version (new bundle bytes) flips the hash and the browser refetches the script immediately, with no stale-cache
 // window. The logo and spec use a separate ETag-based revalidation strategy; see the package doc comment for the rationale.
 var bundleHash = contentHash12(bundleBytes)
 
-// Precomputed ETag values - full 64-char hex of sha256(content). Returned in the ETag header and compared against If-None-Match on
+// Precomputed ETag values: full 64-char hex of sha256(content). Returned in the ETag header and compared against If-None-Match on
 // subsequent requests to serve 304s without writing a body.
 var (
 	specETag = `"` + contentHashFull(specBytes) + `"`
@@ -82,7 +82,7 @@ const (
 func mustReadAsset(path string) []byte {
 	b, err := assets.ReadFile(path)
 	if err != nil {
-		// Should never fire - the //go:embed directive fails at compile time when a referenced file is missing. Panicking here
+		// Should never fire: the //go:embed directive fails at compile time when a referenced file is missing. Panicking here
 		// surfaces a developer bug rather than a runtime 500.
 		panic(fmt.Sprintf("docs: embedded asset %q missing: %v", path, err))
 	}
@@ -100,7 +100,7 @@ func contentHashFull(b []byte) string {
 }
 
 // indexHTML renders the Redoc bootstrap page. Kept inline (not an embedded file) because it's tiny and we want to stamp the bundleHash
-// cache-buster into the script src at request time. Everything is served from the same origin - zero external scripts, fonts,
+// cache-buster into the script src at request time. Everything is served from the same origin: zero external scripts, fonts,
 // or images, so the page loads cleanly offline and gives no cross-origin privacy concerns.
 func indexHTML() string {
 	return fmt.Sprintf(`<!DOCTYPE html>
@@ -122,7 +122,7 @@ body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "S
 }
 
 // RegisterRoutes wires /api/docs + /api/docs/redoc.standalone.js + /api/docs/logo-mini.svg + /api/openapi.yaml onto the given mux.
-// Callers mount these on the public (pre-auth) mux - the spec is already public on GitHub releases and gating the hosted renderer
+// Callers mount these on the public (pre-auth) mux: the spec is already public on GitHub releases and gating the hosted renderer
 // would only add friction for evaluators.
 func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/docs", serveIndex)
@@ -140,7 +140,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 func serveIndex(w http.ResponseWriter, _ *http.Request) {
 	setSecurityHeaders(w)
 	w.Header().Set(headerContentType, "text/html; charset=utf-8")
-	// No caching on the index - cheap to regenerate and means a new bundleHash rolls out on the next request. The heavy JS bundle gets
+	// No caching on the index: cheap to regenerate and means a new bundleHash rolls out on the next request. The heavy JS bundle gets
 	// long caching via its hash-busted URL.
 	w.Header().Set(headerCacheControl, "no-store")
 	if _, err := fmt.Fprint(w, indexHTML()); err != nil {
@@ -151,7 +151,7 @@ func serveIndex(w http.ResponseWriter, _ *http.Request) {
 func serveBundle(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	w.Header().Set(headerContentType, "application/javascript; charset=utf-8")
-	// Bundle URL carries its own ?v=<hash> cache-buster, so a long max-age is safe - the browser can serve the cached copy without
+	// Bundle URL carries its own ?v=<hash> cache-buster, so a long max-age is safe: the browser can serve the cached copy without
 	// revalidating until we bump Redoc, at which point the URL itself changes.
 	w.Header().Set(headerCacheControl, "public, max-age=3600")
 	http.ServeContent(w, r, "redoc.standalone.js", epoch, bytes.NewReader(bundleBytes))

@@ -133,7 +133,7 @@ extension ESFSubscriber {
     /// emitBlockNotification fires the desktop-notification XPC
     /// message to the host app's listener. Called after the DENY
     /// response so the kernel is already unblocked; the alert is
-    /// post-hoc UX. Fire-and-forget - NotificationClient swallows
+    /// post-hoc UX. Fire-and-forget: NotificationClient swallows
     /// errors so a missing host app (the LaunchAgent hasn't
     /// started yet, or the user logged out) doesn't slow the
     /// AUTH_EXEC handler down.

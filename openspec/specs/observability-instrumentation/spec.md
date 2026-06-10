@@ -81,7 +81,7 @@ The system SHALL expose two observable gauges, `edr.enrolled.hosts` and `edr.off
 
 ### Requirement: Trace propagation through the request pipeline
 
-The system SHALL accept inbound W3C `traceparent` and `baggage` headers and propagate the resulting span context through the ingest, processor, and detection pipelines so that downstream backends can stitch the request into one trace. The system MUST attach span attributes that name the entity each span operates on - in particular `host_id` on ingest spans, and `rule_id` plus an alert count on detection spans - so analysts can navigate from an alert back to the upstream telemetry.
+The system SHALL accept inbound W3C `traceparent` and `baggage` headers and propagate the resulting span context through the ingest, processor, and detection pipelines so that downstream backends can stitch the request into one trace. The system MUST attach span attributes that name the entity each span operates on (in particular `host_id` on ingest spans, and `rule_id` plus an alert count on detection spans) so analysts can navigate from an alert back to the upstream telemetry.
 
 #### Scenario: Inbound traceparent is honoured
 

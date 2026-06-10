@@ -61,7 +61,7 @@ func NewBuilder(s *mysql.Store, logger *slog.Logger) *Builder {
 }
 
 // bufferPendingExit records an exit event whose UPDATE found no row, so a later snapshot exec for the same PID can carry the exit
-// through to the synthesised row (issue #176). Overwrites any prior pending exit for the same (host, pid) - the newest exit signal
+// through to the synthesised row (issue #176). Overwrites any prior pending exit for the same (host, pid): the newest exit signal
 // is authoritative since the previous one didn't bind either.
 func (b *Builder) bufferPendingExit(hostID string, pid int, pe pendingExit) {
 	pe.expiresAt = b.now().Add(pendingExitTTL)
@@ -230,8 +230,8 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 	}
 
 	// Snapshot dedup: a snapshot exec for a PID that already has a fully-materialised live row would otherwise hit the re-exec branch
-	// below and replace the live row (real args, code_signing, sha256) with a sparse snapshot row. The race window is small but real
-	// - see issue #11 review: extension's snapshot pass fires ~ms after es_subscribe, and any process the live stream observed in
+	// below and replace the live row (real args, code_signing, sha256) with a sparse snapshot row. The race window is small but real.
+	// See issue #11 review: extension's snapshot pass fires ~ms after es_subscribe, and any process the live stream observed in
 	// that window is in `processes` before the snapshot batch ingests. Drop the snapshot exec; the live data is the authoritative one.
 	if p.Snapshot && current != nil && current.ExecTimeNs != nil {
 		return nil
@@ -291,7 +291,7 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 	// just happened to emit later). Inserting fork_time_ns = exec_time, exit_time_ns =
 	// buffered exit_time would produce a row with fork > exit, which GetProcessByPID's
 	// "alive at atTimeNs" predicate rejects entirely. Pull fork_time_ns back to the exit
-	// time so the row is born already-exited with a zero-length lifetime - best we can
+	// time so the row is born already-exited with a zero-length lifetime: best we can
 	// do given the snapshot exec carries no real fork time. last_seen_ns mirrors the same
 	// timestamp so the row doesn't look "fresh" to the TTL reconciler.
 	if p.Snapshot {

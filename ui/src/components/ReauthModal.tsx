@@ -1,4 +1,4 @@
-// ReauthModal - inline reauth prompt. Wired by useReauthRetry
+// ReauthModal: inline reauth prompt. Wired by useReauthRetry
 // when a destructive action lands on a stale session: the chokepoint
 // returns 403 + reauth_required, the hook catches it, this modal
 // renders, and on completion the original mutation retries once.
@@ -15,7 +15,7 @@
 // Renders as a native <dialog> opened via showModal() so the browser
 // provides backdrop, focus trap, and Escape-to-cancel for free. The
 // onCancel handler maps Escape + the mirrored backdrop click onto
-// resolve(false) - cancellation surfaces the original gate-deny back
+// resolve(false). Cancellation surfaces the original gate-deny back
 // through the hook so the wrapped mutation's onError fires (rather
 // than silent success).
 

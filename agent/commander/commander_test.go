@@ -140,7 +140,7 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	c.executeSetApplicationControl(t.Context(), cmd)
 
 	require.Len(t, sender.sent, 1)
-	// Byte equality, not JSONEq - the commander's contract with the extension is "forward the exact payload bytes the server sent",
+	// Byte equality, not JSONEq: the commander's contract with the extension is "forward the exact payload bytes the server sent",
 	// not "forward some JSON equivalent". Re-marshalling could change field ordering or whitespace and the test must catch that.
 	assert.Equal(t, []byte(rawPayload), sender.sent[0],
 		"commander must forward the raw payload bytes, not a re-marshalled copy")

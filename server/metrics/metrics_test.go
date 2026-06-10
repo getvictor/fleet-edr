@@ -205,7 +205,7 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 
 // Compile-time guards: *Recorder must satisfy every hook interface its callers
 // expect. Renaming or changing the signature of any of these hook methods will
-// break compilation here before the consumer packages - catches signature drift
+// break compilation here before the consumer packages: catches signature drift
 // during refactors.
 //
 // detection/api.MetricsRecorder is the consolidated hook surface; the retention
@@ -257,7 +257,7 @@ func (g failingGauges) OfflineHosts(context.Context, time.Duration) (int, error)
 // contract the spec scenario describes is what keeps the `op` attribute from inflating SigNoz's time-series space
 // without limit when a contributor accidentally passes a dynamic value (host id, table row, error message). A failure
 // here means either (a) a new call site needs to be added to boundedDBOps, or (b) someone passed a non-literal
-// expression and the `op` attribute is no longer statically bounded - both block merge.
+// expression and the `op` attribute is no longer statically bounded. Either case blocks merge.
 //
 // Test files are intentionally excluded from the walk: metrics_test.go itself passes synthetic ops like "op" and
 // "insert_event" to exercise the recorder, and policing those would couple test scaffolding to the production
@@ -290,7 +290,7 @@ func TestObserveDBQuery_OperationNamesAreBounded(t *testing.T) {
 	for _, b := range bads {
 		rel, _ := filepath.Rel(root, b.path)
 		if b.value == "" {
-			fmt.Fprintf(&msg, "  %s:%d: non-literal `op` argument - the static-analyzer cannot prove bounded cardinality\n", rel, b.line)
+			fmt.Fprintf(&msg, "  %s:%d: non-literal `op` argument: the static-analyzer cannot prove bounded cardinality\n", rel, b.line)
 			continue
 		}
 		fmt.Fprintf(&msg, "  %s:%d: literal %q not in BoundedDBOps\n", rel, b.line, b.value)

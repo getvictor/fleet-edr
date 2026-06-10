@@ -71,7 +71,7 @@ type AppControlHandler struct {
 }
 
 // NewAppControl builds the application-control operator handler. svc + authz are required; logger defaults to slog.Default. A nil
-// authz would bypass the role matrix entirely - the same panic-on-nil posture the catalog handler uses.
+// authz would bypass the role matrix entirely: the same panic-on-nil posture the catalog handler uses.
 func NewAppControl(svc *appcontrol.Service, authz identityapi.AuthZ, logger *slog.Logger) *AppControlHandler {
 	if svc == nil {
 		panic("rules operator.NewAppControl: Service must not be nil")
@@ -532,7 +532,7 @@ func (h *AppControlHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// parsePositiveInt64Path extracts the {id} path value and parses it as a positive int64. Used by parsePolicyID + parseRuleID - both
+// parsePositiveInt64Path extracts the {id} path value and parses it as a positive int64. Used by parsePolicyID + parseRuleID, both
 // of which previously had identical implementations (Sonar S4144). The thin per-route wrappers keep call-site readability ("we're
 // pulling a policy id here") while collapsing the implementation to one source of truth.
 func parsePositiveInt64Path(r *http.Request) (int64, bool) {

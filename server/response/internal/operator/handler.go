@@ -152,7 +152,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Fetch first so the chokepoint can gate on the command's host_id. Reading by id alone leaks "command N exists" but no payload,
-	// and matches what GET /api/commands/{id} did before this PR - the chokepoint then enforces host.read against the resolved host so
+	// and matches what GET /api/commands/{id} did before this PR. The chokepoint then enforces host.read against the resolved host so
 	// future host-scoped roles can deny without special-casing the commands → host relationship at the policy layer.
 	cmd, err := h.svc.Get(ctx, id)
 	switch {

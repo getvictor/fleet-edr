@@ -92,7 +92,7 @@ func TestIngestedLookupRange(t *testing.T) {
 	assert.Equal(t, int64(0), full.FromNs)
 	assert.Equal(t, int64(math.MaxInt64), full.ToNs)
 
-	// Known ingest time (production): bounded to [t - window - pad, t + pad] so a long-lived pid isn't scanned wholesale.
+	// Known ingest time (production): bounded to the interval from (t minus window minus pad) up to (t plus pad) so a long-lived pid isn't scanned wholesale.
 	connectIngested := int64(1_000_000_000_000)
 	bounded := ingestedLookupRange(connectIngested)
 	assert.Equal(t, connectIngested-dnsBeaconWindowNs-ingestLookupPadNs, bounded.FromNs)

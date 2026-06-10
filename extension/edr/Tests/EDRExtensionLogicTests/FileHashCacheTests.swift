@@ -35,7 +35,7 @@ final class FileHashCacheTests: XCTestCase {
         SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
-    // MARK: - lookup
+    // MARK: lookup
 
     func testLookupReturnsNilForUncachedFile() throws {
         let file = try makeTempFile(bytes: Data("lookup-cold".utf8))
@@ -44,7 +44,7 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertNil(FileHashCache.shared.lookup(stat: file.stat))
     }
 
-    // MARK: - lookupOrCompute
+    // MARK: lookupOrCompute
 
     func testLookupOrComputeReturnsExpectedHashAndCaches() throws {
         let payload = Data("hello cache".utf8)
@@ -115,7 +115,7 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertEqual(hash, expectedSHA256(of: payload))
     }
 
-    // MARK: - startLazyFill
+    // MARK: startLazyFill
 
     func testStartLazyFillPopulatesCacheEventually() throws {
         // The lazy fill is async on a userInitiated concurrent queue. The test
@@ -153,7 +153,7 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertEqual(FileHashCache.shared.lookup(stat: file.stat), expected)
     }
 
-    // MARK: - lookupOrComputeWithDeadline (issue #208)
+    // MARK: lookupOrComputeWithDeadline (issue #208)
 
     /// generousDeadlineMachAbs returns a mach absolute time several seconds in the future. Used by tests that want the
     /// sync compute path to run to completion against a normal-sized payload. mach_absolute_time + (seconds in ns) /
@@ -234,7 +234,7 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertEqual(outcome, .readFailed)
     }
 
-    // MARK: - Sync hash drives the BINARY-rule decision (issue #208 close-out)
+    // MARK: Sync hash drives the BINARY-rule decision (issue #208 close-out)
     //
     // These tests cross the FileHashCache → decideAuthExec boundary: the deadline-bounded sync SHA-256 produces the
     // HashOutcome that the pure decider consumes, and a BINARY rule keyed on that hash must DENY. This is the unit-level

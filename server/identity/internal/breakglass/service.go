@@ -35,7 +35,7 @@ type Service struct {
 }
 
 // WebAuthnEngine is the slice of *webauthn.WebAuthn the service consumes. Exposed as an interface so test code can swap in a fake
-// without standing up a real browser ceremony - the production path uses *webauthn.WebAuthn (which satisfies the interface natively),
+// without standing up a real browser ceremony. The production path uses *webauthn.WebAuthn (which satisfies the interface natively),
 // tests use a fake that returns deterministic SessionData + Credential values.
 type WebAuthnEngine interface {
 	BeginRegistration(
@@ -54,7 +54,7 @@ type WebAuthnEngine interface {
 	) (*webauthn.Credential, error)
 }
 
-// ServiceOptions carries every dependency Service needs at construction time. Empty values trip a panic in NewService - every
+// ServiceOptions carries every dependency Service needs at construction time. Empty values trip a panic in NewService: every
 // dependency is load-bearing in production.
 type ServiceOptions struct {
 	DB          *sqlx.DB
@@ -241,7 +241,7 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	})
 	if err != nil {
 		// Setup committed; only the post-commit session mint failed. The redemption is a one-shot, so we MUST NOT return an
-		// error that suggests the operator should retry the URL - the token is already consumed. Return a successful result
+		// error that suggests the operator should retry the URL: the token is already consumed. Return a successful result
 		// with Session=nil; the handler renders a "log in via /admin/break-glass" hint instead of setting the cookie.
 		s.logger.ErrorContext(ctx, "breakglass post-commit session mint failed",
 			"err", err, "user_id", req.User.ID,
@@ -251,8 +251,8 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	return &FinishSetupResult{Session: sess, CredentialID: credID}, nil
 }
 
-// resolveLocalPasswordIdentityID inserts the local_password identity row for the redeeming user, OR - when the row already exists
-// from an earlier seed - finds it. Distinguishes duplicate-key (the only acceptable path to "row already exists") from any other
+// resolveLocalPasswordIdentityID inserts the local_password identity row for the redeeming user. When the row already exists
+// from an earlier seed, it finds it instead. Distinguishes duplicate-key (the only acceptable path to "row already exists") from any other
 // DB failure: a transient outage or permission glitch must propagate so the redemption rolls back instead of silently committing a
 // partial account.
 func (s *Service) resolveLocalPasswordIdentityID(
@@ -296,7 +296,7 @@ type LoginChallenge struct {
 }
 
 // BeginLogin issues a WebAuthn assertion challenge for the supplied email. Returns ErrNoCredentials when the user exists but has no
-// registered credential (the spec scenario "operator who lost every authenticator" - admin must reissue a token). User enumeration:
+// registered credential (the spec scenario "operator who lost every authenticator": admin must reissue a token). User enumeration:
 // a non-existent email also surfaces ErrNoCredentials so an attacker cannot probe for valid emails via response shape.
 func (s *Service) BeginLogin(ctx context.Context, email string) (*LoginChallenge, *users.User, error) {
 	u, err := s.users.GetByEmail(ctx, email)

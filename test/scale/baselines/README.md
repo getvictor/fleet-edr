@@ -4,15 +4,15 @@ Two canonical M12 scale-test baselines captured on a representative developer ma
 
 | File | Mode | Measures | Regenerate |
 | --- | --- | --- | --- |
-| `baseline-direct.json` | direct (v1) | Server-side ingest p99 under fan-in (each host POSTs to `/api/events` directly) | `task uat:scale -- --duration=30m --insecure-tls=true --output=test/scale/baselines/baseline-direct.json` |
-| `baseline-headless.json` | headless (v2, #232) | Agent-side queue depth under fan-in (each host runs `headless.Run`; runner polls `/state` for queue_depth) | `CGO_ENABLED=0 task uat:scale -- --mode=headless --duration=30m --insecure-tls=true --output=test/scale/baselines/baseline-headless.json` |
+| `baseline-direct.json` | direct | Server-side ingest p99 under fan-in (each host POSTs to `/api/events` directly) | `task uat:scale -- --duration=30m --insecure-tls=true --output=test/scale/baselines/baseline-direct.json` |
+| `baseline-headless.json` | headless | Agent-side queue depth under fan-in (each host runs `headless.Run`; runner polls `/state` for queue_depth) | `CGO_ENABLED=0 task uat:scale -- --mode=headless --duration=30m --insecure-tls=true --output=test/scale/baselines/baseline-headless.json` |
 
 Run against an idle `task dev:server` with mkcert TLS skip enabled (`--insecure-tls=true`). The headless run requires `CGO_ENABLED=0` on macOS because the headless package is gated `!darwin || !cgo`; Linux runs natively.
 
 ## Pass criteria reflected in the baselines
 
 - **Direct**: `latency_p99 < 250ms` (plan target), `error_count == 0`, `observation_count > 0`. The `latency_*` fields are populated; `queue_depth_*` are zero (direct mode bypasses the queue).
-- **Headless**: `error_count == 0`, `observation_count > 0`, and optionally `queue_depth_max < pass_max_queue_depth` when the operator passes `--pass-max-queue-depth=N`. The `latency_*` fields are 0 by design - per-envelope client latency is meaningless through the queue, so the latency story lives in the SigNoz cross-check (`--signoz-url=http://localhost:8080`) which records `server_latency_p99` + `client_server_delta_p99` when enabled.
+- **Headless**: `error_count == 0`, `observation_count > 0`, and optionally `queue_depth_max < pass_max_queue_depth` when the operator passes `--pass-max-queue-depth=N`. The `latency_*` fields are 0 by design: per-envelope client latency is meaningless through the queue, so the latency story lives in the SigNoz cross-check (`--signoz-url=http://localhost:8080`) which records `server_latency_p99` + `client_server_delta_p99` when enabled.
 
 ## Triage workflow
 

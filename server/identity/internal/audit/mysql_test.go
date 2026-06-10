@@ -376,7 +376,7 @@ func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 	assert.Equal(t, "authz.host.isolate", entry["action"])
 }
 
-// Spec contract: every break-glass action emits slog at WARN - regardless of outcome - because the recovery surface is the
+// Spec contract: every break-glass action emits slog at WARN regardless of outcome, because the recovery surface is the
 // high-privilege path and every interaction is operationally noteworthy. server-identity-audit-log spec: "WARN when ... the action is
 // a break-glass action."
 //
@@ -537,7 +537,7 @@ func parseJSONLogs(t *testing.T, raw []byte) []map[string]any {
 	return entries
 }
 
-// Sanity: the action constants are stable strings - anyone changing them is renaming wire-shape contracts, and this test fails loudly
+// Sanity: the action constants are stable strings. Anyone changing them is renaming wire-shape contracts, and this test fails loudly
 // so the rename gets caught at code-review time.
 func TestAuditAction_StableConstants(t *testing.T) {
 	t.Parallel()

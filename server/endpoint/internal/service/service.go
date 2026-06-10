@@ -46,7 +46,7 @@ type Options struct {
 	Logger *slog.Logger
 
 	// Commands queues commands the endpoint service emits (today: only rotate_token). Optional: when nil, rotation will commit the new
-	// bearer in the DB but the agent will not receive a command - it will re-enroll once the grace window expires.
+	// bearer in the DB but the agent will not receive a command: it will re-enroll once the grace window expires.
 	Commands CommandInserter
 
 	// Audit is the operator-action audit recorder. Nil disables audit

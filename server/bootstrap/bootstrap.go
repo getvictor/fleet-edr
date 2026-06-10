@@ -28,7 +28,7 @@ import (
 const otelFlushTimeout = 5 * time.Second
 
 // instanceID returns this process's OTel service.instance.id. It is generated once (sync.OnceValue) and stable for the process
-// lifetime, so every span and metric the binary emits carries the same replica identifier - which is what lets an operator tell
+// lifetime, so every span and metric the binary emits carries the same replica identifier. That is what lets an operator tell
 // replicas apart in the backend behind a load balancer (server-availability: replica identity). A random UUID is used rather than
 // the hostname so the identifier is unique even when two replicas share a hostname (e.g. host-network pods).
 var instanceID = sync.OnceValue(uuid.NewString)
@@ -58,7 +58,7 @@ type Options struct {
 
 // Init runs the daemon prelude. On any error the partial state is torn down before returning so the caller only has to check err.
 // Returns ctx first so the caller's main() threads it through the rest of the program explicitly (rather than reaching it through
-// env.Ctx - a struct-stashed context is a Go anti-pattern). The caller is responsible for calling env.Cancel (on clean exit) and
+// env.Ctx, since a struct-stashed context is a Go anti-pattern). The caller is responsible for calling env.Cancel (on clean exit) and
 // env.FlushOTel (on every exit path, ideally via defer immediately after Init returns).
 func Init(opts Options) (context.Context, *Env, error) {
 	cfg, err := config.Load()
@@ -84,7 +84,7 @@ func Init(opts Options) (context.Context, *Env, error) {
 		InstrumentationName: opts.ServiceName,
 	})
 	if err != nil {
-		// Best-effort OTel flush before we bail - the partial OTLP state would
+		// Best-effort OTel flush before we bail: the partial OTLP state would
 		// otherwise leak a pending batch.
 		flushWithTimeout(shutdownOTel)
 		cancel()

@@ -440,10 +440,13 @@ tasks:
 
   lint:dashes:
     desc: |
-      Fail if any tracked text file contains an em dash (U+2014) or en dash (U+2013). The style forbids them: use ": " or
-      " - " (a spaced ASCII hyphen) instead. Backed by tools/lint-no-emdash.sh; CI gate is .github/workflows/no-emdash.yml.
+      Two dash gates. (1) tools/lint-no-emdash.sh: no em dash (U+2014) or en dash (U+2013) in any tracked text file.
+      (2) tools/dash-lint: no spaced-hyphen em dash (a hyphen with a space on both sides) in Markdown prose or in code
+      comments / string literals. Both forbid the dash-as-aside; reword (prefer shorter sentences) or use a colon. CI gate
+      is .github/workflows/no-emdash.yml.
     cmds:
       - bash tools/lint-no-emdash.sh
+      - git ls-files -z | go run ./tools/dash-lint
 
   lint:go:
     desc: |

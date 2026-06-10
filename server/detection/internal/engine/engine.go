@@ -97,7 +97,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 // evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
 // can be grouped by rule in downstream dashboards. The span is annotated with alert_count after the rule returns; on rule-evaluate
 // failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
-// persistence fails - rule-evaluation errors are logged + swallowed so a buggy rule doesn't block the rest.
+// persistence fails: rule-evaluation errors are logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []api.Event) error {
 	ctx, span := tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))

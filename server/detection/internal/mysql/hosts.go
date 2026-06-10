@@ -22,7 +22,7 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return hosts, nil
 }
 
-// CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` at or before (now - threshold). Used by the OTel
+// CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` at or before the cutoff (now minus threshold). Used by the OTel
 // `edr.offline.hosts` gauge. The `<=` boundary matches HostList.tsx's predicate so the UI pill and gauge agree on hosts seen exactly
 // at the cutoff. A host with last_seen_ns == 0 (never seen) counts as offline.
 func (s *Store) CountOfflineHosts(ctx context.Context, threshold time.Duration) (int, error) {
@@ -66,7 +66,7 @@ func (s *Store) UpdateHostLastSeen(ctx context.Context, hostID string, now time.
 // statement.
 //
 // Issue #91: the prior shape was one ExecContext per distinct host_id
-// in the batch - N round-trips inside the ingest hot path. The
+// in the batch: N round-trips inside the ingest hot path. The
 // multi-row VALUES clause folds that to one round-trip. The (host_id,
 // event_count, last_seen_ns) per-host triple is unique within a
 // single call (we aggregate into byHost first), so ON DUPLICATE KEY

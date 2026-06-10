@@ -11,8 +11,8 @@ import { rebuildQAState, signInViaDex } from "./_setup";
 // cookie tampering wire check, and the /api/audit-events query
 // filters.
 //
-// None of these flows actually exercise the break-glass admin - they
-// all run as dex-provisioned users - so rebuildQAState is called
+// None of these flows actually exercise the break-glass admin. They
+// all run as dex-provisioned users, so rebuildQAState is called
 // WITHOUT withBreakglass, conserving the global break-glass setup
 // rate limit (DefaultSetupRatePerMin = 5/min, 2 tokens per ceremony)
 // for the other default-env specs that DO need it
@@ -36,8 +36,8 @@ async function tryIsolate(req: APIRequestContext, csrf: string) {
 // still reject" branch. The role matrix is about RBAC, not the
 // command-insert pipeline, so we accept 201 (full success) plus the
 // 400 family that the Insert layer emits for unknown host_ids /
-// wave-1 unsupported command_types. Any other status - 500, 502,
-// 401, 403 - is a regression the test must catch.
+// wave-1 unsupported command_types. Any other status (500, 502,
+// 401, 403) is a regression the test must catch.
 const CHOKEPOINT_ALLOWED_STATUSES = new Set([201, 400]);
 
 test.describe.serial("RBAC, reauth, and audit flows", () => {
@@ -158,7 +158,7 @@ test.describe.serial("RBAC, reauth, and audit flows", () => {
     // We assert on the 302 location header directly (maxRedirects: 0)
     // rather than following the redirect chain to the SPA, because
     // the server's `/` catchall currently redirects `/login` → `/ui/`
-    // and drops the ?error= query string - separate UX defect to file
+    // and drops the ?error= query string: separate UX defect to file
     // (oidc/handler.go:325 should redirect to /ui/login?error=...).
     // The OIDC handler's own behaviour, which is what this test
     // pins, is correct at the 302.
@@ -173,7 +173,7 @@ test.describe.serial("RBAC, reauth, and audit flows", () => {
       const dexLocation = loginResp.headers()["location"];
       // Defensive assertion: if a future server bug ever returns a 302
       // with no Location header, .match() would throw "Cannot read
-      // properties of undefined" - useless. Surface the actual cause.
+      // properties of undefined" and be useless. Surface the actual cause.
       expect(dexLocation).toBeTruthy();
       const stateMatch = dexLocation.match(/[?&]state=([^&]+)/);
       expect(stateMatch).not.toBeNull();

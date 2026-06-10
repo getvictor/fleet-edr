@@ -25,7 +25,7 @@ import {
 import "./ApplicationControl.scss";
 
 // ActiveModal is the union that captures which per-row modal is currently open. Encoding mutual exclusion in the type closes
-// the Copilot finding on PR #189 - the previous shape kept two independent `useState` slots and relied on call-site discipline
+// the Copilot finding on PR #189. The previous shape kept two independent `useState` slots and relied on call-site discipline
 // to avoid opening two modals at once. Now `add`, `edit`, `confirm-delete`, and `confirm-toggle` are exclusive by construction
 // and a future helper that forgets to clear the previous state is a type error rather than a UX bug.
 type ActiveModal =
@@ -46,8 +46,8 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
 // truncateIdentifier renders the leading 16 chars of a SHA-256
 // identifier so the rules table stays scannable without dropping the
 // disambiguating prefix. Full value is in the row's title attribute
-// for inspection. Identifiers shorter than the cap render verbatim
-// - TEAMID / SIGNINGID rules (post-demo) would otherwise come back
+// for inspection. Identifiers shorter than the cap render verbatim:
+// TEAMID / SIGNINGID rules (post-demo) would otherwise come back
 // cropped.
 const IDENTIFIER_DISPLAY_CHARS = 16;
 function truncateIdentifier(value: string): string {

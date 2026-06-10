@@ -89,7 +89,7 @@ test.describe("break-glass redemption ceremony", () => {
     await expect(page).toHaveURL(/\/ui(\/|$|\?)/);
 
     // Top nav surfaces the signed-in email (or at least the
-    // sign-out control - varies by build).
+    // sign-out control, which varies by build).
     const topNav = page.locator("[data-testid='top-nav'], nav").first();
     await expect(topNav).toBeVisible();
   });

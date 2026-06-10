@@ -13,7 +13,7 @@ import (
 )
 
 // TestParseUnifiedDiffNewRanges pins the hunk-header parse. Each row exercises one shape the parser will see in the wild:
-// implicit count (just `+a`), explicit count (`+a,b`), pure-deletion (`+a,0` - skipped), and a multi-hunk diff.
+// implicit count (just `+a`), explicit count (`+a,b`), pure-deletion (`+a,0`, which is skipped), and a multi-hunk diff.
 func TestParseUnifiedDiffNewRanges(t *testing.T) {
 	cases := []struct {
 		name string

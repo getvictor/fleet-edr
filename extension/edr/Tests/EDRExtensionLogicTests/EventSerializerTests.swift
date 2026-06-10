@@ -26,7 +26,7 @@ final class EventSerializerTests: XCTestCase {
 
     private let decoder = JSONDecoder()
 
-    // MARK: - ExecPayload
+    // MARK: ExecPayload
 
     // spec:endpoint-event-collection/process-lifecycle-event-capture/a-user-runs-a-shell-command
     //
@@ -160,7 +160,7 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertEqual(decoded.snapshot, false)
     }
 
-    // MARK: - ForkPayload, ExitPayload, OpenPayload
+    // MARK: ForkPayload, ExitPayload, OpenPayload
 
     // spec:endpoint-event-collection/process-lifecycle-event-capture/a-daemon-forks-a-worker
     //
@@ -201,7 +201,7 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertEqual(decoded.path, "/etc/hosts")
     }
 
-    // MARK: - CodeSigning
+    // MARK: CodeSigning
 
     func testCodeSigningWireKeys() throws {
         let signing = CodeSigning(teamID: "FDG8Q7N4CC", signingID: "com.fleetdm.edr", flags: 0x600, isPlatformBinary: false)
@@ -212,7 +212,7 @@ final class EventSerializerTests: XCTestCase {
         )
     }
 
-    // MARK: - ApplicationControlBlockPayload
+    // MARK: ApplicationControlBlockPayload
 
     func testApplicationControlBlockPayloadRoundTrip() throws {
         let payload = ApplicationControlBlockPayload(
@@ -247,7 +247,7 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertFalse(json.contains("custom_url"))
     }
 
-    // MARK: - EventEnvelope
+    // MARK: EventEnvelope
 
     // spec:endpoint-event-collection/canonical-event-envelope/an-event-envelope-is-well-formed
     //

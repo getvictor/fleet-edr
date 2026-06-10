@@ -10,7 +10,7 @@ import {
 // Break-glass login wrong-password path: the wire response collapses
 // to a generic invalid_credentials (to resist user/credential
 // enumeration), but the audit row carries the precise reason
-// password.mismatch - so an operator scanning the audit log can tell
+// password.mismatch, so an operator scanning the audit log can tell
 // a password failure apart from a missing-user / bad-assertion / no-
 // credentials rejection. Sibling shape coverage at the Go layer is in
 // server/identity/internal/breakglass/handler_test.go.

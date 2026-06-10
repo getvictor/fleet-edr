@@ -11,7 +11,7 @@ import (
 )
 
 // TestOsascriptNetworkExec exercises the download-and-exec chain detection. The rule fires only when a single osascript process's 30s
-// descendant tree contains BOTH a curl/wget exec AND an exec out of a suspicious path - either alone is not enough.
+// descendant tree contains BOTH a curl/wget exec AND an exec out of a suspicious path: either alone is not enough.
 func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 	t.Parallel()
 	s := openCatalogStore(t)
@@ -47,7 +47,7 @@ func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 }
 
 // Negative: osascript alone with a curl child but no temp-path exec. Download without a
-// following exec is not a droppers pattern - could be a legitimate script fetch.
+// following exec is not a droppers pattern: could be a legitimate script fetch.
 func TestOsascriptNetworkExec_DownloadOnlyDoesNotFire(t *testing.T) {
 	t.Parallel()
 	s := openCatalogStore(t)
@@ -143,7 +143,7 @@ func TestOsascriptNetworkExec_DetectsShebangScriptInArgs(t *testing.T) {
 
 // TestOsascriptNetworkExec_RealRunbookChainShape mirrors the exact 3-level chain observed on edr-qa: osascript -> /bin/sh -c (the
 // wrapper that AppleScript's `do shell script` always spawns) -> [curl, shebang-sh /tmp/x]. The intermediate sh's argv[2] is the full
-// command string starting with /usr/bin/curl - that must NOT be counted as a tempExec match. Only the grandchild shell (whose argv[1]
+// command string starting with /usr/bin/curl, which must NOT be counted as a tempExec match. Only the grandchild shell (whose argv[1]
 // is the script path) is the real signal. This ordering also tickles the iteration: the intermediate sh comes before curl + the
 // shebang sh in BFS order.
 func TestOsascriptNetworkExec_RealRunbookChainShape(t *testing.T) {
@@ -206,7 +206,7 @@ func TestOsascriptNetworkExec_CrossBatchTempExec(t *testing.T) {
 	rule := &OsascriptNetworkExec{}
 	findings1, err := rule.Evaluate(ctx, batch1, s.GraphReader())
 	require.NoError(t, err)
-	require.Empty(t, findings1, "no temp-exec yet - rule must not fire on the osascript event alone")
+	require.Empty(t, findings1, "no temp-exec yet: rule must not fire on the osascript event alone")
 
 	// Batch 2: descendants land in a later flush. osascript already in store
 	// from batch 1's materialise; the temp-exec walks up to find it.

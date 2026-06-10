@@ -80,7 +80,7 @@ type AsyncOptions struct {
 // safe to call Submit on immediately; Run must also be invoked (in a
 // separate goroutine) for events to actually drain to the store.
 //
-// Panics if store is nil - a writer that buffers events with nowhere
+// Panics if store is nil: a writer that buffers events with nowhere
 // to send them is a footgun and exists only as a programming error.
 func NewAsyncWriter(store *Store, opts AsyncOptions) *AsyncWriter {
 	if store == nil {
@@ -161,8 +161,9 @@ func (w *AsyncWriter) shutdown() {
 	w.drain()
 }
 
-// writeOne wraps Store.Record with panic recovery and a fresh bounded context. An INSERT error is not a hard error for the writer loop
-// - log + continue. The chokepoint's sync path remains the durable signal for failure modes where MySQL is genuinely unavailable.
+// writeOne wraps Store.Record with panic recovery and a fresh bounded context. An INSERT error is not a hard error for the writer
+// loop: it logs and continues. The chokepoint's sync path remains the durable signal for failure modes where MySQL is genuinely
+// unavailable.
 func (w *AsyncWriter) writeOne(e api.AuditEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownDrainPerEvent)
 	defer cancel()

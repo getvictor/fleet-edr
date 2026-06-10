@@ -1,6 +1,6 @@
 // Package envparse provides the small handful of validated env-var parsers that
 // the fleet-edr server and agent both need. Lives in its own module (wired via
-// go.work) so both binaries share the same validation surface - previously the
+// go.work) so both binaries share the same validation surface. Previously the
 // same four helpers were copy-pasted into server/config and agent/config and
 // drifted every time a new knob landed.
 //
@@ -86,7 +86,7 @@ func NonNegativeInt64(getenv Getenv, key string, dst *int64, errs *[]error) {
 }
 
 // PositiveDuration parses key as a Go duration (e.g. "5s", "1h") and requires it to be > 0. Zero or negative durations are invariably
-// wrong - callers feed these into time.NewTicker which panics on non-positive values.
+// wrong: callers feed these into time.NewTicker which panics on non-positive values.
 func PositiveDuration(getenv Getenv, key string, dst *time.Duration, errs *[]error) {
 	v := getenv(key)
 	if v == "" {
@@ -104,7 +104,7 @@ func PositiveDuration(getenv Getenv, key string, dst *time.Duration, errs *[]err
 }
 
 // NonNegativeDuration parses key as a Go duration and requires it to be >= 0. "0" / "0s" explicitly disables the feature gated by this
-// setting - use when the caller treats zero as "off" (e.g. disable a TTL reconciler entirely).
+// setting: use when the caller treats zero as "off" (e.g. disable a TTL reconciler entirely).
 func NonNegativeDuration(getenv Getenv, key string, dst *time.Duration, errs *[]error) {
 	v := getenv(key)
 	if v == "" {
@@ -158,7 +158,7 @@ func Allowlist(v string) map[string]struct{} {
 }
 
 // Assert the compile-time shape of the helpers via this unused function. Catches someone accidentally dropping a parameter without
-// updating all call sites when they refactor - the package has no tests today but this block at least keeps the signatures honest
+// updating all call sites when they refactor. The package has no tests today but this block at least keeps the signatures honest
 // under `go vet`.
 var _ = func() error {
 	var errs []error

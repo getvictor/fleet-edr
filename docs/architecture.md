@@ -177,7 +177,7 @@ type Rule interface {
 }
 ```
 
-`Evaluate` may walk the historical process graph through `gr` but must not mutate state. The shipped catalog (`suspicious_exec` through `dns_c2_beacon`) is documented in `docs/detection-rules.md`, generated from each rule's `Doc()` by `tools/gen-rule-docs`.
+`Evaluate` may walk the historical process graph through `gr` but must not mutate state. The shipped catalog (`suspicious_exec` through `dns_c2_beacon`) is documented in [`detection-rules.md`](detection-rules.md), generated from each rule's `Doc()` by `tools/gen-rule-docs`.
 
 ### Persistence (MySQL 8.4, ADR-0005)
 
@@ -277,4 +277,4 @@ go test ./agent/... ./internal/...
 
 ### VM testing
 
-For testing with real system extensions, use a macOS VM with SIP disabled and developer mode on. See `docs/lessons-and-gotchas.md` for VM-specific setup notes. The host app must be in `/Applications/` and signed with the Fleet org certificate.
+For testing with real system extensions, use a macOS VM with SIP disabled and developer mode on. See [`lessons-and-gotchas.md`](lessons-and-gotchas.md) for VM-specific setup notes. The host app must be in `/Applications/` and signed with the Fleet org certificate.

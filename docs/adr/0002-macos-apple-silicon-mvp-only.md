@@ -23,7 +23,7 @@ MVP targets macOS 13+ on Apple Silicon only. Intel Macs are a deliberate non-dec
 
 - One signing + notarisation pipeline, one QA VM, one architecture to optimise the Go + Swift build for.
 - ESF APIs can be used at their most recent stable surface without back-porting concerns.
-- The event envelope in `schema/events.json` can speak ESF vocabulary directly for MVP, with the explicit understanding that the envelope will be audited before a Linux or Windows agent ships (see `docs/best-practices.md` #2 "Platform-agnostic event envelope").
+- The event envelope in `schema/events.json` can speak ESF vocabulary directly for MVP, with the explicit understanding that the envelope will be audited before a Linux or Windows agent ships (see [`best-practices.md`](../best-practices.md) #2 "Platform-agnostic event envelope").
 
 **Bad:**
 
@@ -41,5 +41,5 @@ MVP targets macOS 13+ on Apple Silicon only. Intel Macs are a deliberate non-dec
 
 ## References
 
-- `docs/best-practices.md` section 2 (Cross-platform reach) captures the partial-adoption state.
+- [`best-practices.md`](../best-practices.md) section 2 (Cross-platform reach) captures the partial-adoption state.
 - Apple [deprecation of kernel extensions](https://developer.apple.com/support/kernel-extensions/).

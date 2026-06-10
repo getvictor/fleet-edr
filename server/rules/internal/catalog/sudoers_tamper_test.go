@@ -31,7 +31,7 @@ func TestSudoersTamper_TechniquesMapping(t *testing.T) {
 }
 
 // TestSudoersTamper_AllowedEdgeCases pins the contract of allowed(): nil allowlist always returns false; populated allowlist hits
-// exact path matches. We don't normalise (no trailing-slash stripping, no case folding) - matching is byte-equal.
+// exact path matches. We don't normalise (no trailing-slash stripping, no case folding): matching is byte-equal.
 func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
 	t.Parallel()
 	rNoList := &SudoersTamper{}

@@ -14,11 +14,11 @@ Five built-in roles ship with the server. Their grants are the source of truth i
 | `admin` | host, process, alert, policy, enrollment, user | host.{isolate, kill_process, run_script}, alert lifecycle (acknowledge, resolve, reopen, comment), policy CRUD, enrollment.{revoke, rotate_token}, user.invite |
 | `senior_analyst` | host, process, alert | host.{isolate, kill_process, run_script}, alert lifecycle (acknowledge, resolve, reopen, comment) |
 | `analyst` | host, process, alert | alert.comment |
-| `auditor` | host, process, alert, audit | - |
+| `auditor` | host, process, alert, audit | (none) |
 
 `super_admin` is the break-glass account's role at first boot. SSO operators provisioned via JIT default to `analyst`; promote via the SQL pattern below.
 
-The five-role layout is wave-1; wave-2 will add an admin API for role management. For wave-1 the `INSERT IGNORE` seed at boot guarantees the rows exist, and the `is_builtin=1` column protects them from accidental delete via a future admin endpoint.
+The five-role layout is current; a future release will add an admin API for role management. In the current release the `INSERT IGNORE` seed at boot guarantees the rows exist, and the `is_builtin=1` column protects them from accidental delete via a future admin endpoint.
 
 ## How a 403 reads on the wire
 
@@ -55,25 +55,25 @@ Reading the `X-Edr-Authz-Reason` header (or the matching `audit_events` row's `p
 
 | `X-Edr-Authz-Reason` | What it means | What to do |
 | --- | --- | --- |
-| `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | - |
+| `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | (none) |
 | `no_matching_rule` | The actor's role bindings don't grant the action. | Bind the appropriate role via SQL (see below). |
 | `reauth_required` | The actor's session is past the reauth window (default 30m). The role grants the action; the operator just needs to re-prove possession of credentials. | UI handles this automatically via the reauth modal. If a non-UI client hits it, follow `challenge.reauth_url` and retry. |
-| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. Wave-1 only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes are wave-2. |
+| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. The current release only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes are coming soon. |
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
-| `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug - the session middleware is misconfigured for the route. Check the route's middleware chain. |
+| `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug: the session middleware is misconfigured for the route. Check the route's middleware chain. |
 
-The audit-log row's `payload` carries `reason` matching the header. The granting role is not on the payload today - derive it by joining `role_bindings` for the actor's `user_id` if needed.
+The audit-log row's `payload` carries `reason` matching the header. The granting role is not on the payload today: derive it by joining `role_bindings` for the actor's `user_id` if needed.
 
-## Binding a role to a user (wave 1)
+## Binding a role to a user (current release)
 
-There is no admin API in wave 1; bindings go in via SQL. The shape mirrors `server/identity/bootstrap/schema.go`:
+There is no admin API in the current release; bindings go in via SQL. The shape mirrors `server/identity/bootstrap/schema.go`:
 
 ```sql
 INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
 VALUES (
   <user_id>,           -- users.id
   'admin',             -- one of: super_admin, admin, senior_analyst, analyst, auditor
-  'global',            -- wave-1 honours only the deployment-wide scope
+  'global',            -- the current release honours only the deployment-wide scope
   '*'                  -- wildcard for the deployment-wide scope
 );
 ```
@@ -86,11 +86,11 @@ To revoke: `DELETE FROM role_bindings WHERE user_id = <user_id> AND role_id = 'a
 
 The implementation lives in `server/identity/internal/authz/`. `Engine.Allow` evaluates a single `data.edr.authz.decision` query against an embedded OPA / Rego module (`server/identity/internal/authz/policy/edr.rego`); the role-grant table is `policy/data/roles.json`. Every call also threads through `AuditRecorder.Record` so the deny dashboard reads from the same table the chokepoint writes to.
 
-See `docs/architecture.md` for the bounded-context split and `docs/adr/0004-modular-monolith-bounded-contexts.md` for why the chokepoint sits inside the `identity` context but exposes a public `api.AuthZ` interface every other context calls.
+See [`architecture.md`](architecture.md) for the bounded-context split and [`0004-modular-monolith-bounded-contexts.md`](adr/0004-modular-monolith-bounded-contexts.md) for why the chokepoint sits inside the `identity` context but exposes a public `api.AuthZ` interface every other context calls.
 
 ## UI capability gating
 
-The web UI hides navigation entries and action controls an operator's role does not confer, so an analyst never sees a Kill process button or an Application control tab they cannot use. This is a usability layer only: the chokepoint above remains the sole security boundary, and the UI keeps handling a `403` gracefully (it never relies on hiding as a control). See `docs/adr/0012-capability-based-ui-gating.md` for the decision and trade-offs.
+The web UI hides navigation entries and action controls an operator's role does not confer, so an analyst never sees a Kill process button or an Application control tab they cannot use. This is a usability layer only: the chokepoint above remains the sole security boundary, and the UI keeps handling a `403` gracefully (it never relies on hiding as a control). See [`0012-capability-based-ui-gating.md`](adr/0012-capability-based-ui-gating.md) for the decision and trade-offs.
 
 The UI learns what to show from the session probe. `GET /api/session` returns a `permissions` array: the flat set of action identifiers the operator's role bindings confer, computed server-side from the same `roles.json` grants the chokepoint evaluates (the `super_admin` `*` wildcard expanded to the concrete action set; the wire never carries `*`). The UI gates on those exact identifiers, so a gate maps 1:1 to a chokepoint check and to an `authz.<action>` audit row: one vocabulary end to end, no separate role-to-feature mapping in the frontend.
 

@@ -5,10 +5,10 @@ import { openDB, resetDB } from "../../fixtures/db";
 import { setupProcessTreeDeep } from "../../fixtures/process-tree";
 
 // Process tree node-select + detail panel + kill control. The spec splits this surface into three scenarios:
-//   1. selecting-a-process-opens-the-detail-panel - click a node, panel renders.
-//   2. process-detail-surfaces-investigation-fields - the panel shows path, args, UID/GID, SHA-256, signing,
+//   1. selecting-a-process-opens-the-detail-panel: click a node, panel renders.
+//   2. process-detail-surfaces-investigation-fields: the panel shows path, args, UID/GID, SHA-256, signing,
 //      attributed network/DNS, and the re-exec chain (when present).
-//   3. operator-kills-a-running-process - click "Kill process", UI issues a kill command and reflects the
+//   3. operator-kills-a-running-process: click "Kill process", UI issues a kill command and reflects the
 //      command's lifecycle (pending / completed / failed) for the PID.
 //
 // The agent fixture's process-tree-deep scenario produces ≥4 process rows, which is the smallest tree the
@@ -39,7 +39,7 @@ test.describe("process tree detail and kill control", () => {
   test("clicking a process node opens the detail panel for that PID", async ({ page, agent }) => {
     await setupProcessTreeDeep(page, agent);
 
-    // Click the first node (any node - the spec just asserts that activating a node opens the panel; the
+    // Click the first node (any node will do): the spec just asserts that activating a node opens the panel; the
     // panel's content is exercised by the next test). .first() avoids the case where multiple nodes share
     // a label and Playwright's strict mode would refuse to click.
     await page.locator("svg g.node").first().click();
@@ -54,7 +54,7 @@ test.describe("process tree detail and kill control", () => {
     await page.locator("svg g.node").first().click();
 
     // The detail panel renders the fields as a <dl> with <dt>FIELD</dt><dd>VALUE</dd> pairs. We assert on
-    // the labels rather than the values because the scenario can pick any node - some fields (UID, GID,
+    // the labels rather than the values because the scenario can pick any node. Some fields (UID, GID,
     // SHA-256, signing) are only present when the event stream supplied them, while PID, PPID, Path, and
     // Fork are always rendered. Per the spec, the PANEL must SHOW these fields when present; rendering a
     // <dt> for every required label proves the panel is wired to display them.
@@ -83,7 +83,7 @@ test.describe("process tree detail and kill control", () => {
 
     // Click the kill button; the UI POSTs to /api/commands with command_type=kill_process. The spec doesn't
     // require an agent to actually receive the command in this test (the dev environment has no live agent),
-    // so we assert on the wire+DB side-effect rather than on a "completed" status - the spec says the UI
+    // so we assert on the wire+DB side-effect rather than on a "completed" status. The spec says the UI
     // "reflects the command's lifecycle state (pending, completed, or failed)", which a "pending" badge
     // satisfies.
     const [response] = await Promise.all([

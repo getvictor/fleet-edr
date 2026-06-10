@@ -8,7 +8,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// sensitive target paths for content changes (ADR-0008, #301). It is separate from the primary ESFSubscriber client for one
 /// hard ESF reason: target-path mute *inversion* (`es_invert_muting`) is client-global, and `AUTH_EXEC`'s "target" is the
 /// executable being launched. Inverting target-path muting to "observe only /etc/sudoers*" on a client that also handles
-/// `AUTH_EXEC` would filter exec authorization (and Application Control) by that same path list - breaking enforcement. So the
+/// `AUTH_EXEC` would filter exec authorization (and Application Control) by that same path list, breaking enforcement. So the
 /// inversion lives here, on a client with NO auth subscriptions (exactly what `es_invert_muting`'s documentation requires),
 /// and the primary client keeps unfiltered exec authorization.
 ///

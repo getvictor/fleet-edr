@@ -4,7 +4,7 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "EventSerializer")
 
-// MARK: - Payload types
+// MARK: Payload types
 
 struct CodeSigning: Codable, Sendable {
     let teamID: String
@@ -99,7 +99,7 @@ struct ExecPayload: Codable, Sendable {
         try container.encodeIfPresent(codeSigning, forKey: .codeSigning)
         try container.encodeIfPresent(sha256, forKey: .sha256)
         try container.encodeIfPresent(cdhash, forKey: .cdhash)
-        // Only emit snapshot when true - keeps the live-exec wire shape stable
+        // Only emit snapshot when true: keeps the live-exec wire shape stable
         // and avoids tripping the server detection-engine bytes.Contains gate
         // on a `"snapshot":false` payload (false events would correctly be
         // kept by the JSON probe, but we want zero wire change for live exec).
@@ -225,7 +225,7 @@ struct BtmLaunchItemAddPayload: Codable, Sendable {
     }
 }
 
-// MARK: - Event envelope
+// MARK: Event envelope
 
 struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {
     let eventID: String
@@ -243,7 +243,7 @@ struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {
     }
 }
 
-// MARK: - Serializer
+// MARK: Serializer
 
 /// Serializes ESF event payloads into the canonical JSON event envelope.
 final class EventSerializer: Sendable {
