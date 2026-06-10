@@ -27,17 +27,19 @@ Excludes everything in `.gitignore` (today: `ai/` topic-plan tree, `tmp/`, build
 | Any gitignored path (today: `ai/<topic>/plan.md`, `tmp/`, lockfiles, build outputs, etc.) referenced from committed prose or code | Strip; the path is gitignored, so the link is broken for everyone but the author. Cross-check `.gitignore` for the full list. |
 | "TODO: implement X in the next phase" | Convert to GitHub issue or delete. Committed content should describe what _exists_. |
 | "Will be added", "coming soon", "not yet wired" | If the feature shipped, update the doc; if it hasn't, link to a tracking issue or delete. |
+| `wave-\d` / `wave \d` release-train labels (`wave-1 setup`, `wave-2 will add ...`) in customer-facing docs | Rewrite to audience-neutral terms: "the current release" / "a future release" / "coming soon". These are internal roadmap markers that mislead external readers. Leave genuine external version strings alone (API paths like `/oauth2/v1/`, release tags like `v0.1`). |
 | References to renamed packages / contexts | Sweep against ADR-0004 boundary names. |
 | Test-fixture strings that bake in phase wording (e.g. `"agent_version": "phase8-..."`, `wantBody: "phase6"`) | Rename to a phase-neutral marker; keep the test logic identical. |
 | Testplan section IDs (`Section A.B`, `qa: Sections C + D + F.4`, `D.3a OIDC reauth - ...`) in test names, describe blocks, comments, file names, script names, or fixture constants (alert titles, `TEST_HOST_ID = "qa-host-d3"`, `BG_PASSWORD = "qa-d3-..."`). | Rewrite around what the test pins or what the file holds. File renames done via `git mv` preserve blame; npm scripts + GHA references must be updated to match. |
 
 ## Steps
 
-1. Run grep patterns across the scope. The first runs over every tracked file (prose + code + committed `.claude/`); the second is markdown-scoped because "will be" is too noisy in Go/TS/Swift; the third catches any path-style link to a gitignored location that leaks into committed prose or code comments; the fourth catches testplan section IDs baked into committed code. The exclude lists below should track `.gitignore` - if the ignored topic-plan tree is ever renamed again, update the `:!ai/` excludes here (and audit committed prose for the old name).
+1. Run grep patterns across the scope. The first runs over every tracked file (prose + code + committed `.claude/`); the second and third are markdown-scoped because the "will be" / "wave-N" roadmap markers are too noisy in Go/TS/Swift; the fourth catches any path-style link to a gitignored location that leaks into committed prose or code comments; the fifth catches testplan section IDs baked into committed code. The exclude lists below should track `.gitignore` - if the ignored topic-plan tree is ever renamed again, update the `:!ai/` excludes here (and audit committed prose for the old name).
 
    ```bash
    git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!ai/' ':!tmp/' ':!openspec/changes/'
    git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!ai/' ':!tmp/' ':!openspec/changes/' '*.md'
+   git grep -niE 'wave[- ]?[0-9]' -- ':!ai/' ':!tmp/' ':!openspec/changes/' '*.md'
    # Detect any gitignored path leaking into committed prose/code. Today the topic-plan tree is `ai/`;
    # add patterns for any other gitignored locations that show up in `.gitignore` (build outputs, lockfiles, etc.)
    # that are plausibly referenced in prose.
@@ -48,7 +50,7 @@ Excludes everything in `.gitignore` (today: `ai/` topic-plan tree, `tmp/`, build
    grep -nE '"qa:[a-g][0-9]?":' package.json test/e2e/package.json 2>/dev/null || true
    ```
 
-   The third grep excludes the committed `.claude/` tree because OpenSpec slash commands legitimately reference `.claude/` paths in their own bodies; sweep that tree manually instead. All four greps exclude `openspec/changes/` because OpenSpec change proposals use phase numbering as in-flight planning structure; sweep `openspec/archive/` instead when an archived change has rotted. The fourth grep + the ls-files / package.json checks catch the QA-testplan-section-ID flavour of rot (`Section D.3`, `qa: Sections C + D + F.4`, `section-a6-allowlist.spec.ts`, `qa:a6`); the row in the patterns table above explains how to rewrite each hit. Rename files via `git mv` so blame survives; update every consumer (npm scripts, `scripts/*.sh`, `.github/workflows/*.yml`, gitignored QA-plan doc under `ai/` if present) in the same PR.
+   The fourth grep excludes the committed `.claude/` tree because OpenSpec slash commands legitimately reference `.claude/` paths in their own bodies; sweep that tree manually instead. All five greps exclude `openspec/changes/` because OpenSpec change proposals use phase numbering as in-flight planning structure; sweep `openspec/archive/` instead when an archived change has rotted. The fifth grep + the ls-files / package.json checks catch the QA-testplan-section-ID flavour of rot (`Section D.3`, `qa: Sections C + D + F.4`, `section-a6-allowlist.spec.ts`, `qa:a6`); the row in the patterns table above explains how to rewrite each hit. Rename files via `git mv` so blame survives; update every consumer (npm scripts, `scripts/*.sh`, `.github/workflows/*.yml`, gitignored QA-plan doc under `ai/` if present) in the same PR.
 
 2. For each hit, decide: **rewrite around outcome** / **delete** / **convert to issue**.
 3. Confirm by also reading the surrounding paragraph or function: "phase 5" might be a legitimate reference to the _fifth phase of an attack chain_, not a project phase. `Step 3 of 7` in `scripts/qa/attack-runbook.sh` is rendered to the operator console at runtime; that's a legitimate use of step numbering.
@@ -73,13 +75,14 @@ numbered list items, runtime per-step header rendering, or OpenSpec change plann
 
   git grep -niE 'phase [0-9]|phase[0-9]|step [0-9] of|iteration [0-9]' -- ':!ai/' ':!tmp/' ':!openspec/changes/'
   git grep -niE 'will be|coming soon|not yet wired|todo:' -- ':!ai/' ':!tmp/' ':!openspec/changes/' '*.md'
+  git grep -niE 'wave[- ]?[0-9]' -- ':!ai/' ':!tmp/' ':!openspec/changes/' '*.md'
   git grep -nE 'ai/' -- ':!ai/' ':!tmp/' ':!.claude/' ':!openspec/changes/'
   git grep -niE 'Section [A-G]\.[0-9]|Sections [A-G]\.[0-9]' -- ':!ai/' ':!tmp/' ':!openspec/changes/'
   git ls-files | grep -E 'section-[a-g][0-9]|sections-[a-g]' || true
   grep -nE '"qa:[a-g][0-9]?":' package.json test/e2e/package.json 2>/dev/null || true
 
-The third grep targets the current gitignored topic-plan tree (`ai/`); if `.gitignore` adds another
-ignored prose-like location later, extend the third grep to cover it.
+The fourth grep targets the current gitignored topic-plan tree (`ai/`); if `.gitignore` adds another
+ignored prose-like location later, extend that grep to cover it.
 
 For each genuine finding: rewrite the sentence around the surviving outcome (no "phase X" or
 "Section A.B" wording), delete it, or convert to a GitHub issue if it's a real TODO. For

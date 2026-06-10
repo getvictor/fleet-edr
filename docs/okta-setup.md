@@ -1,14 +1,14 @@
 # Okta SSO setup
 
-The EDR server speaks OIDC with PKCE. Okta is the reference IdP for v1 deployments - every other conformant OIDC provider follows the same shape, but the screen names and field labels in this guide are Okta's. Sister IdPs (Azure AD, Google Workspace, Auth0) need only the issuer URL, client ID, client secret, and redirect URL adjusted; the EDR-side env vars do not change.
+The EDR server speaks OIDC with PKCE. Okta is the reference IdP - every other conformant OIDC provider follows the same shape, but the screen names and field labels in this guide are Okta's. Sister IdPs (Azure AD, Google Workspace, Auth0) need only the issuer URL, client ID, client secret, and redirect URL adjusted; the EDR-side env vars do not change.
 
-This is a wave-1 setup: SSO covers everyday operator login. The break-glass account at `admin@fleet-edr.local` is the only path in when SSO is unavailable (see `docs/breakglass.md`).
+SSO covers everyday operator login. The break-glass account at `admin@fleet-edr.local` is the only path in when SSO is unavailable (see [`breakglass.md`](breakglass.md)).
 
 ## Prerequisites
 
 - An Okta tenant with admin access. Free developer tenants (`*.okta.com`, `*.oktapreview.com`) work for staging; production deployments use the customer's existing tenant.
 - The externally reachable HTTPS URL of the EDR server. The redirect URL must use `https://` for production tenants - Okta rejects `http://` redirect URLs outside `localhost`.
-- The break-glass account already redeemed (so an operator can recover if SSO breaks during config). See `docs/breakglass.md`.
+- The break-glass account already redeemed (so an operator can recover if SSO breaks during config). See [`breakglass.md`](breakglass.md).
 
 ## Create the application
 
@@ -32,7 +32,7 @@ In the **General Settings** step:
 
 Replace `<edr-host>` with the externally reachable host that browsers hit. The EDR server validates that the `redirect_uri` it sends to Okta exactly matches `EDR_OIDC_REDIRECT_URL`, which itself must exactly match the value Okta has on file: query strings, trailing slashes, and case all matter.
 
-The sign-out redirect is informational for the wave-1 build (the EDR UI's logout calls `DELETE /api/session` to drop the local session, not Okta's RP-initiated logout). It still needs to be on Okta's allowlist if you ever add the RP-initiated path; preconfiguring it costs nothing.
+The sign-out redirect is informational in the current release (the EDR UI's logout calls `DELETE /api/session` to drop the local session, not Okta's RP-initiated logout). It still needs to be on Okta's allowlist if you ever add the RP-initiated path; preconfiguring it costs nothing.
 
 ## Assignments
 
@@ -41,7 +41,7 @@ In the **Assignments** step:
 - Pick **Allow everyone in your organization to access** for a small pilot, OR **Limit access to selected groups** and bind a group (typically `edr-operators`) for tighter control.
 - Click **Save**.
 
-Wave-1 does NOT consume Okta groups. Every JIT-provisioned user lands in the lowest-privilege role (`analyst`); see `docs/authz.md` for the role matrix and the SQL pattern an `admin` uses to promote the new operator. Wave-2 will add a `groups` claim to the scope set and map Okta groups to EDR roles; until then, who can sign in is the only knob.
+The current release does NOT consume Okta groups. Every JIT-provisioned user lands in the lowest-privilege role (`analyst`); see [`authz.md`](authz.md) for the role matrix and the SQL pattern an `admin` uses to promote the new operator. A future release will add a `groups` claim to the scope set and map Okta groups to EDR roles; until then, who can sign in is the only knob.
 
 ## Note the client credentials
 
@@ -82,7 +82,7 @@ EDR_REAUTH_WINDOW=30m
 
 Notes on the optional knobs:
 
-- **Scopes.** The wave-1 default `openid,email,profile` gives the callback the claims the JIT provisioner needs (`sub`, `email`, `name`). Adding scopes Okta hasn't granted on the application fails the consent step at Okta, not the EDR server. Do not add `groups` until wave-2.
+- **Scopes.** The current default `openid,email,profile` gives the callback the claims the JIT provisioner needs (`sub`, `email`, `name`). Adding scopes Okta hasn't granted on the application fails the consent step at Okta, not the EDR server. Do not add `groups` until group-to-role mapping ships in a future release.
 - **JIT provisioning.** `EDR_OIDC_ALLOW_JIT_PROVISIONING=1` (default) creates a user + identity + `analyst` role binding on first successful sign-in. Set to `0` to require an operator to pre-create the user via SQL; an unknown subject then sees a directed `403 unknown_subject` instead of being auto-onboarded.
 - **State cookie TTL.** Defaults to 5 minutes - long enough for a password manager and an MFA prompt. Tune up for tenants that gate on slow upstream MFA (push notifications, hardware key roundtrip).
 - **Session timeouts.** OIDC-minted sessions slide on every authenticated request up to `EDR_SESSION_ABSOLUTE_TIMEOUT`. The reauth window applies to destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical) and forces a fresh IdP prompt when `last_auth_at` is older than `EDR_REAUTH_WINDOW`.
@@ -106,7 +106,7 @@ ORDER BY occurred_at DESC
 LIMIT 50;
 ```
 
-The `payload.reason` column on a failure narrows the cause (`unknown_subject`, `email_conflict`, `state_mismatch`, `exchange_failed`, etc.). Cross-reference with `docs/threat-model.md` for the threats each failure mode covers.
+The `payload.reason` column on a failure narrows the cause (`unknown_subject`, `email_conflict`, `state_mismatch`, `exchange_failed`, etc.). Cross-reference with [`threat-model.md`](threat-model.md) for the threats each failure mode covers.
 
 ## Troubleshooting
 
@@ -121,7 +121,7 @@ The `payload.reason` column on a failure narrows the cause (`unknown_subject`, `
 
 ## Related docs
 
-- `docs/breakglass.md` - the recovery path when SSO is unavailable.
-- `docs/install-server.md` - the rest of the `EDR_*` env vars the server reads at boot.
-- `docs/authz.md` - the role matrix and the role JIT-provisioned OIDC users inherit (wave-1: every new identity lands in `analyst`; admins promote via SQL).
-- `docs/threat-model.md` - the threat coverage the OIDC + reauth controls close.
+- [`breakglass.md`](breakglass.md) - the recovery path when SSO is unavailable.
+- [`install-server.md`](install-server.md) - the rest of the `EDR_*` env vars the server reads at boot.
+- [`authz.md`](authz.md) - the role matrix and the role JIT-provisioned OIDC users inherit (currently every new identity lands in `analyst`; admins promote via SQL).
+- [`threat-model.md`](threat-model.md) - the threat coverage the OIDC + reauth controls close.
