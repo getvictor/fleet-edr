@@ -524,7 +524,13 @@ func runIdentity(ctx context.Context, identityCtx *identitybootstrap.Identity, l
 	}
 }
 
-func newHTTPServer(cfg *config.Config, mux *http.ServeMux, logger *slog.Logger, clientIPResolver *httpserver.ClientIPResolver, metricsRec *metrics.Recorder) *http.Server {
+func newHTTPServer(
+	cfg *config.Config,
+	mux *http.ServeMux,
+	logger *slog.Logger,
+	clientIPResolver *httpserver.ClientIPResolver,
+	metricsRec *metrics.Recorder,
+) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:           logger,
 		ServiceName:      serviceName,

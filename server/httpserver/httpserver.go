@@ -33,10 +33,13 @@ import (
 // latency upgrade from info to warn so SigNoz can alert on regressions without sampling every request.
 const defaultSlowThreshold = 500 * time.Millisecond
 
-// RequestMetrics is the access-log middleware's hook for recording per-request latency on a metric. *metrics.Recorder satisfies
+// accessLogMsg is the slog message for the per-request access log. Shared across the status branches so the literal is defined once.
+const accessLogMsg = "http request"
+
+// HTTPRequestRecorder is the access-log middleware's hook for recording per-request latency on a metric. *metrics.Recorder satisfies
 // it. Kept as a local interface (rather than importing the metrics package) so httpserver stays decoupled and tests can pass a
 // fake. nil disables the recording.
-type RequestMetrics interface {
+type HTTPRequestRecorder interface {
 	// ObserveHTTPRequest records one request's latency. route is the matched route TEMPLATE ("/api/hosts/{host_id}/tree") or
 	// "unmatched"; the implementation owns label cardinality.
 	ObserveHTTPRequest(ctx context.Context, method, route string, statusCode int, d time.Duration)
@@ -48,7 +51,7 @@ type Options struct {
 	Logger *slog.Logger
 	// Metrics, when set, receives one ObserveHTTPRequest call per request from the access-log layer. nil disables it (e.g. the
 	// ingest-only binary or unit tests that don't assert metrics).
-	Metrics RequestMetrics
+	Metrics HTTPRequestRecorder
 	// ServiceName is the operation name passed to otelhttp.NewHandler; used in the span name prefix.
 	ServiceName string
 	// SlowThreshold upgrades access-log lines to warn when the handler took longer than this. Zero uses the default (defaultSlowThreshold
@@ -169,7 +172,7 @@ func routeTemplate(pattern string) string {
 // info-level firehose: healthy 2xx/3xx requests log at debug (off in prod), client errors (4xx) at info, and 5xx or
 // slow (> slowThreshold) requests at warn. The volume + latency signal for every request, including the healthy ones, lives in
 // the http.server.request.duration metric instead, so high-frequency endpoints (POST /api/events) no longer drown the log.
-func accessLog(logger *slog.Logger, slowThreshold time.Duration, recorder RequestMetrics) func(http.Handler) http.Handler {
+func accessLog(logger *slog.Logger, slowThreshold time.Duration, recorder HTTPRequestRecorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -179,9 +182,13 @@ func accessLog(logger *slog.Logger, slowThreshold time.Duration, recorder Reques
 			ctx := r.Context()
 
 			// r.Pattern is the route template the ServeMux matched (set on this request before the handler ran); it is bounded by
-			// the route table. Strip the leading "METHOD " (and any host) so the metric label is just the path template. Empty
-			// means no route matched (404 / scanner traffic): record it as "unmatched" rather than the raw path to bound cardinality.
+			// the route table. Strip the leading "METHOD " (and any host) so the label is just the path template. Empty means no
+			// route matched (404 / scanner traffic): use "unmatched" rather than the raw path to bound cardinality. Resolve it here
+			// (not just inside the recorder) so the log attribute and the metric label agree on the same "unmatched" value.
 			route := routeTemplate(r.Pattern)
+			if route == "" {
+				route = "unmatched"
+			}
 			if recorder != nil {
 				recorder.ObserveHTTPRequest(ctx, r.Method, route, rw.status, dur)
 			}
@@ -198,14 +205,14 @@ func accessLog(logger *slog.Logger, slowThreshold time.Duration, recorder Reques
 
 			switch {
 			case rw.status >= http.StatusInternalServerError:
-				logger.WarnContext(ctx, "http request", attrs...)
+				logger.WarnContext(ctx, accessLogMsg, attrs...)
 			case slowThreshold > 0 && dur > slowThreshold:
-				logger.WarnContext(ctx, "http request (slow)", append(attrs, "slow", true)...)
+				logger.WarnContext(ctx, accessLogMsg+" (slow)", append(attrs, "slow", true)...)
 			case rw.status >= http.StatusBadRequest:
-				logger.InfoContext(ctx, "http request", attrs...)
+				logger.InfoContext(ctx, accessLogMsg, attrs...)
 			default:
 				// Healthy 2xx/3xx: debug only. The metric carries the rate + latency; logging every one is the noise this avoids.
-				logger.DebugContext(ctx, "http request", attrs...)
+				logger.DebugContext(ctx, accessLogMsg, attrs...)
 			}
 		})
 	}

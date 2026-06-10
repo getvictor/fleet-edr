@@ -242,3 +242,30 @@ func splitLines(t *testing.T, b []byte) [][]byte {
 	lines := bytes.Split(bytes.TrimRight(b, "\n"), []byte("\n"))
 	return lines
 }
+
+// TestBuild_AccessLog_UnmatchedRouteLabel pins the Gemini + Copilot fix: a request matching no route logs and records the route
+// as "unmatched" (not ""), so the access-log attribute and the metric label agree.
+func TestBuild_AccessLog_UnmatchedRouteLabel(t *testing.T) {
+	installTracer(t)
+	var logs bytes.Buffer
+	logger := newLogger(&logs)
+	rec := &fakeRequestMetrics{}
+	h := Build(http.NewServeMux(), Options{Logger: logger, Metrics: rec}) // empty mux: every request is an unmatched 404
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/no/such/path", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	lines := splitLines(t, logs.Bytes())
+	require.Len(t, lines, 1)
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(lines[0], &line))
+	assert.Equal(t, "unmatched", line["route"])
+	require.Len(t, rec.calls, 1)
+	assert.Equal(t, "unmatched", rec.calls[0].route)
+}
