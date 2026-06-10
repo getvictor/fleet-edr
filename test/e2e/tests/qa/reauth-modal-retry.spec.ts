@@ -232,10 +232,15 @@ test.describe.serial("reauth modal retry after stale-session denial", () => {
         await page
           .getByRole("button", { name: /register security key/i })
           .click();
+        // 30s (not the 15s used elsewhere): this navigation is gated on the
+        // full WebAuthn registration ceremony - VA create() + server-side
+        // credential persistence + session mint + redirect - which can exceed
+        // 15s under CI load and flaked here once (the redirect lands a hair
+        // late). Matches the OIDC navigation budgets above.
         await page.waitForURL(
           (url) =>
             !url.pathname.includes("break-glass") && !url.pathname.includes("login"),
-          { timeout: 15_000 },
+          { timeout: 30_000 },
         );
 
         // The admin user lands signed-in with super_admin (per seed)
