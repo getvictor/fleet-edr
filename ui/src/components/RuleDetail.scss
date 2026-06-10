@@ -16,11 +16,18 @@
     color: $core-fleet-black;
   }
 
+  // Section headings (Description, Configuration). Global h2 carries no top
+  // margin, so add the section gap here. It sits above the heading rather than
+  // on the preceding meta table, whose bottom margin would otherwise be trapped
+  // inside the bordered .table-wrapper card and read as an empty trailing row.
+  h2 {
+    margin-top: $pad-large;
+  }
+
   // The Severity / ATT&CK / Event-types meta block: small inline table with
   // labels in the left column and values on the right.
   &__meta {
     width: auto;
-    margin-bottom: $pad-large;
 
     th, td {
       padding-top: $pad-small;
