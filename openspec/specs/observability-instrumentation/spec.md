@@ -63,6 +63,17 @@ The system SHALL expose a histogram named `edr.db.query.duration` that records t
 - **WHEN** the operator queries the histogram in the backend
 - **THEN** the distinct `op` values match the documented stable set and do not include host ids, table-row values, or other high-cardinality data
 
+### Requirement: HTTP server request duration
+
+The system SHALL expose a histogram named `http.server.request.duration` (the OpenTelemetry HTTP semantic-convention name, in seconds) that records the latency of every inbound HTTP request. Each sample MUST carry `http.request.method`, `http.route`, and `http.response.status_code` attributes, where `http.route` is the matched route TEMPLATE (for example `/api/hosts/{host_id}/tree`) and never the raw path, so high-frequency endpoints do not explode metric cardinality; an unrecognized method MUST collapse to `_OTHER` and a request that matched no route MUST use the route value `unmatched`. Because this metric carries the per-request rate and latency signal, the access log MUST NOT emit an info-level line per successful request: healthy 2xx/3xx requests log at debug, 4xx at info, 5xx or slow requests at warn.
+
+#### Scenario: Inbound requests are timed by route, method, and status
+
+- **GIVEN** the server handles inbound HTTP requests
+- **WHEN** a request completes
+- **THEN** a sample is recorded on `http.server.request.duration` labeled with the request's method, matched route template, and response status code
+- **AND** requests sharing a method, route template, and status code collapse into one time series
+
 ### Requirement: Observable host-fleet gauges
 
 The system SHALL expose two observable gauges, `edr.enrolled.hosts` and `edr.offline.hosts`, evaluated on each collection cycle by the OTel reader. The enrolled gauge MUST report the number of non-revoked enrollments. The offline gauge MUST report the number of hosts whose last-seen timestamp exceeds the configured offline threshold. A failed callback MUST NOT take down the collection cycle for other gauges.
