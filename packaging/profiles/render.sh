@@ -21,6 +21,16 @@ set -eu
 
 : "${APPLE_TEAM_ID:?missing}"
 
+# Apple Team IDs are exactly 10 characters of A-Z / 0-9. Reject anything else
+# before rendering: a malformed value can pass plutil -lint (it only checks
+# XML validity) yet embed a team id that never matches in the payload's
+# AllowedSystemExtensions keys and CodeRequirement strings, producing a
+# profile that installs but silently approves nothing.
+if ! printf '%s' "$APPLE_TEAM_ID" | grep -qE '^[A-Z0-9]{10}$'; then
+    echo "error: APPLE_TEAM_ID must be a 10-character Apple Team ID (A-Z, 0-9); got '$APPLE_TEAM_ID'" >&2
+    exit 1
+fi
+
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 DIST="$ROOT/dist"
 TEMPLATES="$ROOT/packaging/profiles"
@@ -31,9 +41,9 @@ for tmpl in edr-system-extension edr-tcc-fda; do
     OUT="$DIST/$tmpl.mobileconfig"
 
     echo "==> rendering $tmpl"
-    # Escape sed-replacement metacharacters so an unexpected APPLE_TEAM_ID
-    # value (containing /, &, or \) fails loudly at plutil -lint instead of
-    # silently emitting corrupted XML.
+    # Defense-in-depth behind the format guard above: escape sed-replacement
+    # metacharacters so even a future loosening of the guard cannot emit
+    # corrupted XML.
     escaped_team_id=$(printf '%s' "$APPLE_TEAM_ID" | sed 's/[&/\\]/\\&/g')
     sed "s/__TEAM_ID__/$escaped_team_id/g" "$SRC" > "$OUT"
     plutil -lint "$OUT"
