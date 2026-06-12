@@ -130,42 +130,15 @@ func (s *Store) insertEventsAtOnce(ctx context.Context, events []api.Event, inge
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
-	// Insert the whole batch with a handful of multi-row INSERT IGNORE statements rather than one statement per event. At fleet
-	// scale a batch carries hundreds of events, and one round-trip per event dominated ingest latency (a ~100-event batch was
-	// ~100 sequential round-trips, seconds of wall time). Chunked to stay under MySQL's placeholder + max_allowed_packet limits.
-	// INSERT IGNORE keeps the statement idempotent, so withDeadlockRetry can re-run it safely.
-	allInserted := true
-	for start := 0; start < len(events); start += eventInsertChunkRows {
-		end := min(start+eventInsertChunkRows, len(events))
-		chunk := events[start:end]
-		placeholders := make([]string, len(chunk))
-		args := make([]any, 0, len(chunk)*6)
-		for i := range chunk {
-			payloadBytes, err := json.Marshal(chunk[i].Payload)
-			if err != nil {
-				return fmt.Errorf("marshal payload for %s: %w", chunk[i].EventID, err)
-			}
-			placeholders[i] = "(?, ?, ?, ?, ?, ?)"
-			args = append(args, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs, ingestedAtNs, chunk[i].EventType, payloadBytes)
-		}
-		res, err := tx.ExecContext(ctx, `INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES `+
-			strings.Join(placeholders, ", "), args...)
-		if err != nil {
-			return fmt.Errorf("insert events chunk [%d:%d]: %w", start, end, err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected: %w", err)
-		}
-		if int(affected) != len(chunk) {
-			allInserted = false // at least one duplicate event_id was IGNOREd in this chunk
-		}
+	allInserted, err := insertEventChunks(ctx, tx, events, ingestedAtNs)
+	if err != nil {
+		return err
 	}
 
-	// Stamp the caller's slice with the persisted ingested_at_ns (the graph builder reads it). Fast path: when every row was newly
-	// inserted, they all carry this batch's ingestedAtNs, so no extra query is needed. Slow path: a duplicate event_id keeps the
-	// ingested_at_ns from its first insert, so read the real values back. Resolve inside the tx but write to the slice only after a
-	// successful commit, so a rolled-back / retried attempt never leaves the caller's slice half-stamped.
+	// Resolve the persisted ingested_at_ns to stamp back onto the caller's slice (the graph builder reads it). Fast path: when
+	// every row was newly inserted they all carry this batch's ingestedAtNs, so no extra query is needed and persisted stays nil.
+	// Slow path: a duplicate event_id keeps the ingested_at_ns from its first insert, so read the real values back. Resolve inside
+	// the tx but write to the slice only after a successful commit, so a rolled-back / retried attempt never half-stamps it.
 	var persisted map[string]int64
 	if !allInserted {
 		persisted, err = selectIngestedAt(ctx, tx, events)
@@ -177,18 +150,69 @@ func (s *Store) insertEventsAtOnce(ctx context.Context, events []api.Event, inge
 		return fmt.Errorf("commit: %w", err)
 	}
 
-	if allInserted {
+	stampIngestedAt(events, ingestedAtNs, persisted)
+	return nil
+}
+
+// insertEventChunks writes the batch as a handful of multi-row INSERT IGNORE statements rather than one statement per event. At
+// fleet scale a batch carries hundreds of events, and one round-trip per event dominated ingest latency (a ~100-event batch was
+// ~100 sequential round-trips, seconds of wall time). Chunked to stay under MySQL's placeholder + max_allowed_packet limits.
+// INSERT IGNORE keeps the statement idempotent, so withDeadlockRetry can re-run it safely. Returns false if any chunk dropped a
+// duplicate event_id (which the caller resolves via selectIngestedAt).
+func insertEventChunks(ctx context.Context, tx *sqlx.Tx, events []api.Event, ingestedAtNs int64) (bool, error) {
+	allInserted := true
+	for start := 0; start < len(events); start += eventInsertChunkRows {
+		end := min(start+eventInsertChunkRows, len(events))
+		chunk := events[start:end]
+		placeholders, args, err := eventInsertArgs(chunk, ingestedAtNs)
+		if err != nil {
+			return false, err
+		}
+		res, err := tx.ExecContext(ctx, `INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES `+
+			strings.Join(placeholders, ", "), args...)
+		if err != nil {
+			return false, fmt.Errorf("insert events chunk [%d:%d]: %w", start, end, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("rows affected: %w", err)
+		}
+		if int(affected) != len(chunk) {
+			allInserted = false // at least one duplicate event_id was IGNOREd in this chunk
+		}
+	}
+	return allInserted, nil
+}
+
+// eventInsertArgs builds the placeholder rows and flattened args for one INSERT chunk, marshaling each payload to JSON.
+func eventInsertArgs(chunk []api.Event, ingestedAtNs int64) ([]string, []any, error) {
+	placeholders := make([]string, len(chunk))
+	args := make([]any, 0, len(chunk)*6)
+	for i := range chunk {
+		payloadBytes, err := json.Marshal(chunk[i].Payload)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal payload for %s: %w", chunk[i].EventID, err)
+		}
+		placeholders[i] = "(?, ?, ?, ?, ?, ?)"
+		args = append(args, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs, ingestedAtNs, chunk[i].EventType, payloadBytes)
+	}
+	return placeholders, args, nil
+}
+
+// stampIngestedAt writes the persisted ingest time onto the caller's slice. persisted is nil on the fast path (every row newly
+// inserted with this batch's ingestedAtNs); otherwise it maps event_id to the value read back for the duplicate path.
+func stampIngestedAt(events []api.Event, ingestedAtNs int64, persisted map[string]int64) {
+	if persisted == nil {
 		for i := range events {
 			events[i].IngestedAtNs = ingestedAtNs
 		}
-		return nil
+		return
 	}
 	for i := range events {
 		if ts, ok := persisted[events[i].EventID]; ok {
 			events[i].IngestedAtNs = ts
 		}
 	}
-	return nil
 }
 
 // selectIngestedAt reads the persisted ingested_at_ns for each event_id, chunked to stay under MySQL's placeholder limit. Used on
