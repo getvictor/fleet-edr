@@ -7,8 +7,16 @@ services:
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: edr
-    # Cap binlog retention at 1 day. Default is 30 days
-    command: ["--binlog-expire-logs-seconds=86400"]
+    # Cap binlog retention at 1 day (default 30). The two durability flags relax per-commit
+    # fsync: on Docker Desktop's virtualized volume the default (flush_log_at_trx_commit=1,
+    # sync_binlog=1) fsyncs redo + binlog on every commit, which stalls single-row writes for
+    # hundreds of ms at random and trips the server's 500ms slow-request warn. `=2` fsyncs the
+    # redo log ~once/sec (loses at most ~1s of writes on a host crash, irrelevant for dev) and
+    # sync_binlog=0 drops the per-commit binlog fsync. Dev/test only; never use in production.
+    command:
+      - "--binlog-expire-logs-seconds=86400"
+      - "--innodb-flush-log-at-trx-commit=2"
+      - "--sync-binlog=0"
     ports:
       - "127.0.0.1:33306:3306"
     volumes:
@@ -27,8 +35,13 @@ services:
       MYSQL_DATABASE: edr_test
     # Raise max_connections above the 151 default. The parallel integration suite (issue
     # #172) peaks at 200+ concurrent connections; the matching CI step in test.yml does the
-    # same via `SET GLOBAL` since the GHA service container has no volume mount.
-    command: ["--max-connections=500"]
+    # same via `SET GLOBAL` since the GHA service container has no volume mount. The two
+    # durability flags relax per-commit fsync (same rationale as the dev mysql service above):
+    # faster integration-test commits, and the test DB is disposable so durability is moot.
+    command:
+      - "--max-connections=500"
+      - "--innodb-flush-log-at-trx-commit=2"
+      - "--sync-binlog=0"
     ports:
       - "127.0.0.1:33307:3306"
     healthcheck:
