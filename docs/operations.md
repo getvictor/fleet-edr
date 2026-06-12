@@ -263,7 +263,7 @@ Core metrics to chart:
 | `edr.offline.hosts` | gauge | Hosts whose `last_seen` is older than 5 min. Keep near zero |
 | `edr.retention.rows_deleted` | counter | Should tick up every `EDR_RETENTION_INTERVAL` |
 | `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. The counter only increments when the reconciler synthesises an exit (it no-ops when there's nothing stale), so a non-zero rate or spike means the reconciler is firing, typically because a host missed an exec/exit pair. A sustained zero is ambiguous (either no stale processes to reconcile, or the reconciler has wedged); rely on logs/traces or a separate heartbeat to distinguish |
-| `edr.db.query.duration` | histogram | p99 creeping up = DB overloaded or a slow query regressed |
+| `db.sql.latency` | histogram | DB call latency, emitted by the otelsql driver instrumentation (not a bespoke metric). p99 creeping up = DB overloaded or a slow query regressed |
 | `edr.agent.queue.dropped` | counter | Non-zero = agent's local SQLite queue hit its cap. Investigate connectivity |
 
 Recommended alerts (SigNoz, Grafana, wherever your OTel backend lives):

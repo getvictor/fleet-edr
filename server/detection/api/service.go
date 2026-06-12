@@ -74,7 +74,6 @@ type GraphReader interface {
 // metrics.Recorder; tests pass nil.
 type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
-	ObserveDBQuery(ctx context.Context, op string, d time.Duration)
 	AlertCreated(ctx context.Context, ruleID, severity string)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.

@@ -191,13 +191,8 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	insertStart := time.Now()
-	insertErr := h.store.InsertEvents(ctx, events)
-	if h.metrics != nil {
-		h.metrics.ObserveDBQuery(ctx, "insert_events", time.Since(insertStart))
-	}
-	if insertErr != nil {
-		h.logger.ErrorContext(ctx, "insert error", "err", insertErr)
+	if err := h.store.InsertEvents(ctx, events); err != nil {
+		h.logger.ErrorContext(ctx, "insert error", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
@@ -206,12 +201,8 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		h.metrics.EventsIngested(ctx, pinnedHostID, len(events))
 	}
 
-	upsertStart := time.Now()
 	if err := h.store.UpsertHosts(ctx, events); err != nil {
 		h.logger.ErrorContext(ctx, "upsert hosts", "err", err)
-	}
-	if h.metrics != nil {
-		h.metrics.ObserveDBQuery(ctx, "upsert_hosts", time.Since(upsertStart))
 	}
 
 	w.WriteHeader(http.StatusOK)
