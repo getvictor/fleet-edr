@@ -41,7 +41,8 @@ printf '%s' "$APPLE_DEV_ID_INSTALLER_P12_BASE64" | base64 --decode > "$INST_P12"
 
 # `-T` grants each binary listed permission to use the imported private key
 # without a GUI prompt. `/usr/bin/security` must be in the list because
-# `security cms -S` (used by profiles/sign.sh to sign .mobileconfig files)
+# `security cms -S` (used by release-secrets-check.yml to exercise the
+# Developer ID Installer private key against a scratch plist)
 # is implemented as a subcommand of the security binary itself. Missing
 # that entry causes `security cms` to hang forever in CI waiting on a
 # Keychain Access dialog that has no GUI to display.

@@ -119,10 +119,10 @@ jobs:
           APPLE_TEAM_ID: FDG8Q7N4CC
         run: ./packaging/pkg/build.sh v0.0.0-dryrun --dry-run
 
-      - name: Render profiles dry-run
+      - name: Render profiles
         env:
           APPLE_TEAM_ID: FDG8Q7N4CC
-        run: ./packaging/profiles/sign.sh --dry-run
+        run: ./packaging/profiles/render.sh
 
       - name: Shellcheck packaging scripts
         run: |
@@ -133,7 +133,7 @@ jobs:
             packaging/pkg/uninstall.sh \
             packaging/pkg/scripts/preinstall \
             packaging/pkg/scripts/postinstall \
-            packaging/profiles/sign.sh
+            packaging/profiles/render.sh
 
       - name: Summarize dry-run output
         # pkgutil --expand explodes each component pkg into a DIRECTORY (Bom +

@@ -6,7 +6,7 @@ Fleet and Fleet EDR are independent products. Fleet owns MDM + osquery; Fleet ED
 
 ## Prerequisites
 
-- A Fleet server (version 4.48+) with MDM turned on and an Apple APNs + ABM (Apple Business Manager) push certificate uploaded. Macs must be ADE-enrolled or manually UAMDM-enrolled. Without UAMDM, macOS refuses the restricted payloads in our two profiles.
+- A Fleet server (version 4.86+) with MDM turned on and an Apple APNs + ABM (Apple Business Manager) push certificate uploaded. Macs must be ADE-enrolled or manually UAMDM-enrolled. Without UAMDM, macOS refuses the restricted payloads in our two profiles.
 - `fleetctl` installed locally and authenticated (`fleetctl login`). The UI also works; this doc uses `fleetctl` because every step is reproducible.
 - A running Fleet EDR server with a known enroll secret (the value in `./secrets/enroll_secret` from [install-server.md](install-server.md)).
 - Downloaded release artifacts from [GitHub Releases](https://github.com/getvictor/fleet-edr/releases):
@@ -17,23 +17,23 @@ Fleet and Fleet EDR are independent products. Fleet owns MDM + osquery; Fleet ED
 
 ## Scope
 
-Decide which Macs get the EDR before you start. In Fleet this is a **team**. Every artifact below scopes to a team; to ship to "all Macs", use the No-team special team.
+Decide which Macs get the EDR before you start. In Fleet this grouping is a **fleet**. Every artifact below scopes to a fleet; to cover Macs you haven't put in a named fleet, use the built-in Unassigned fleet.
 
 ```sh
-fleetctl get teams
-# Pick the team id + name. Examples below assume team "EDR pilot".
+fleetctl get fleets
+# Pick the fleet id + name. Examples below assume fleet "EDR pilot".
 ```
 
 ## Step 1: push the two profiles
 
-Fleet's "custom settings" feature sends a `.mobileconfig` verbatim to the Macs in a team's scope. Both of our profiles go here.
+Fleet's "custom settings" feature sends a `.mobileconfig` verbatim to the Macs in a fleet's scope. Both of our profiles go here.
 
 ```sh
 fleetctl apply -f - <<'EOF'
 apiVersion: v1
-kind: team
+kind: fleet
 spec:
-  team:
+  fleet:
     name: EDR pilot
     mdm:
       macos_settings:
@@ -91,7 +91,7 @@ Upload the pkg + script bundle:
 
 ```sh
 fleetctl software add \
-    --team "EDR pilot" \
+    --fleet "EDR pilot" \
     --path fleet-edr-v0.1.0.pkg \
     --pre-install-script fleet-edr-install.sh
 ```
@@ -123,7 +123,7 @@ Push a new pkg version by re-running `fleetctl software add` with the newer file
 
 ```sh
 fleetctl software add \
-    --team "EDR pilot" \
+    --fleet "EDR pilot" \
     --path fleet-edr-v0.1.1.pkg \
     --pre-install-script fleet-edr-install.sh
 ```
@@ -146,13 +146,13 @@ fi
 EOF
 
 fleetctl software add \
-    --team "EDR pilot" \
+    --fleet "EDR pilot" \
     --path fleet-edr-v0.1.1.pkg \
     --pre-install-script fleet-edr-install.sh \
     --uninstall-script fleet-edr-uninstall.sh
 ```
 
-To remove the profiles as well, edit the team's YAML and drop the two `custom_settings` entries. Fleet removes the profiles from each Mac on the next check-in; macOS tears down the TCC grants and sysext allow-list within minutes.
+To remove the profiles as well, edit the fleet's YAML and drop the two `custom_settings` entries. Fleet removes the profiles from each Mac on the next check-in; macOS tears down the TCC grants and sysext allow-list within minutes.
 
 ## Rotate the enroll secret
 
@@ -167,10 +167,17 @@ Existing hosts keep working because they authenticate with their per-host token,
 
 ## Troubleshoot
 
+**"Couldn't add. Configuration profiles can't be signed. Fleet will sign the profile for you."** The uploaded profile carries a CMS signature; Fleet signs profiles itself at delivery and rejects pre-signed uploads. Releases v0.1.1-rc.12 and earlier shipped the two profiles CMS-signed; current releases ship them unsigned. Either grab the profiles from a newer release or strip the signature, keeping the shipped filename so Fleet's replace-in-place tracking still works:
+
+```sh
+security cms -D -i edr-system-extension.mobileconfig -o edr-system-extension-stripped.mobileconfig
+mv edr-system-extension-stripped.mobileconfig edr-system-extension.mobileconfig
+```
+
 **Profile stuck at "pending" in Fleet.** The Mac isn't UAMDM-enrolled. Open **Hosts > <host> > MDM** in Fleet; if it says "Enrolled (manual)" without UAMDM, re-enroll via ADE or walk the user through the manual UAMDM prompt in System Settings. Restricted payloads will not install otherwise.
 
 **Software package says "installed" but the pkg never ran.** Fleet considers a package "installed" once the pre-install script succeeds and the installer command starts. If the pkg itself fails, check **Hosts > <host> > Scripts** for the installer stdout/stderr.
 
-**Agent enrolls but events don't appear in the EDR UI.** The TCC FDA profile didn't reach the Mac. Check `sudo profiles list | grep tcc-fda` on the host; if missing, re-scope the profile to the team. After it lands, kick the daemon: `sudo launchctl kickstart -k system/com.fleetdm.edr.agent`.
+**Agent enrolls but events don't appear in the EDR UI.** The TCC FDA profile didn't reach the Mac. Check `sudo profiles list | grep tcc-fda` on the host; if missing, re-scope the profile to the fleet. After it lands, kick the daemon: `sudo launchctl kickstart -k system/com.fleetdm.edr.agent`.
 
 **Install script runs but `/etc/fleet-edr.conf` is empty or missing a variable.** A custom variable referenced by the script isn't defined in Fleet. The script uses `set -eu`, so an unset `FLEET_SECRET_*` fails fast; check **Settings > Integrations > MDM > Custom variables**.
