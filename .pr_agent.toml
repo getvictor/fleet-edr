@@ -1,12 +1,53 @@
-# Configuration for Qodo code review tool
+# Qodo code review configuration. Reviewed quarterly per
+# docs/maintenance/tasks/ai-review-bot-config-audit.md.
+#
+# Qodo reads this file from the DEFAULT branch, not the PR branch, so changes
+# here take effect on the first PR after the change merges to main.
+#
+# Companion files Qodo also reads from the repo root:
+#   best_practices.md            curated review guidance (suggestions)
+#   pr_compliance_checklist.yaml custom per-PR compliance checks
+# Qodo additionally auto-ingests CLAUDE.md as a compliance source; the
+# compliance_user_guidelines below steer that away from known false positives.
 
 [github_app]
-# Do not auto-run anything when a PR is opened
-pr_commands = []
-# Do not auto-run anything on new commits / pushes
-handle_push_trigger = false
+# Paid plan since 2026-06-12: run the agentic review automatically when a PR
+# opens. Describe is deliberately NOT auto-run; the maintainer owns PR bodies.
+pr_commands = [
+    "/agentic_review",
+]
+# Re-review on every push so findings always match the head SHA. Qodo edits
+# its single review comment in place rather than posting a new one per push,
+# which is also what the ai-review-fixes-edr skill's wait loop expects.
+handle_push_trigger = true
+push_commands = [
+    "/agentic_review",
+]
 
-# Keep the review tool available for manual comment commands
 [review_agent]
 enabled = true
 publish_output = true
+# Inline comments only for action-required findings; lower tiers stay in the
+# summary comment. Ranks: 3 = action_required, 2 = remediation_recommended,
+# 1 = informational.
+inline_comments_severity_threshold = 3
+issues_user_guidelines = """
+This is an EDR (endpoint detection and response) product; security and hot-path performance findings are the priority.
+Prioritize: bypassed or reordered authorization checks, TOCTOU races, blocking calls or network access on Endpoint Security
+callback paths (code-signing evaluation there must pass kSecCSNoNetworkAccess / .noNetworkAccess), unbounded CPU or memory in
+kernel-adjacent handlers, IPC peer-validation gaps (audit_token + code-signing requirement on every XPC channel), trusting
+userspace-claimed fields where a kernel-vouched value exists (use audit_token-derived PIDs, not es_process_t claims), secrets
+or PII in log statements, audit-log tampering (audit_events is append-only), weak crypto, and SQL injection.
+Performance on ingestion paths (ES event handling, event upload pipeline, MySQL writes on the ingest path) is a correctness
+concern: flag per-event allocations, N+1 queries, and lock contention there.
+Do not flag: style or formatting that linters own (golangci-lint, SwiftLint, Prettier, dash-lint); Go 1.26 language and stdlib
+features (integer range expressions, strings.SplitSeq) as compile errors; the word "fleet"/"fleets" in docs/fleet-deployment.md
+(Fleet renamed teams to fleets in v4.82, the doc is correct); long Markdown lines (prose is never hard-wrapped, enforced by
+Prettier proseWrap: never).
+"""
+compliance_user_guidelines = """
+Files under openspec/ use literal tool-parsed section markers: "## ADDED Requirements", "## MODIFIED Requirements",
+"## REMOVED Requirements", "### Requirement: ...", "#### Scenario: ...". These exact strings are part of the OpenSpec file
+format and are exempt from sentence-case heading rules. Markdown prose is intentionally not hard-wrapped; long lines are not
+violations.
+"""

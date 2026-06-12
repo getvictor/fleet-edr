@@ -12,6 +12,13 @@
     {"type": "deletion"},
     {"type": "non_fast_forward"},
     {
+      "type": "copilot_code_review",
+      "parameters": {
+        "review_on_push": true,
+        "review_draft_pull_requests": false
+      }
+    },
+    {
       "type": "pull_request",
       "parameters": {
         "required_approving_review_count": 0,
