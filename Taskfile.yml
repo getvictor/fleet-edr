@@ -934,20 +934,12 @@ tasks:
       - ./packaging/pkg/build.sh {{.TAG}}
 
   profiles:render:
-    desc: Render the two .mobileconfig templates with APPLE_TEAM_ID substituted (unsigned).
-    cmds:
-      - APPLE_TEAM_ID={{.APPLE_TEAM_ID | default "FDG8Q7N4CC"}} ./packaging/profiles/sign.sh --dry-run
-
-  profiles:sign:
     desc: |
-      Render + sign both .mobileconfig profiles with the Developer ID
-      Installer cert. Requires APPLE_TEAM_ID env var and the installer cert
-      in the login keychain.
-    preconditions:
-      - sh: test -n "${APPLE_TEAM_ID}"
-        msg: "APPLE_TEAM_ID must be exported"
+      Render the two .mobileconfig templates with APPLE_TEAM_ID substituted.
+      Profiles ship unsigned by design; MDM channels sign them at delivery
+      (Fleet rejects pre-signed uploads).
     cmds:
-      - ./packaging/profiles/sign.sh
+      - APPLE_TEAM_ID={{.APPLE_TEAM_ID | default "FDG8Q7N4CC"}} ./packaging/profiles/render.sh
 
   docker:server:
     desc: |

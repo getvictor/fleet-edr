@@ -8,7 +8,7 @@ For the Fleet-specific recipe see [fleet-deployment.md](fleet-deployment.md). Fo
 
 Three artifacts, delivered in this order:
 
-1. **Two signed `.mobileconfig` profiles** pushed via MDM "custom settings". Pre-approves the ES system extension and grants Full Disk Access. These must arrive BEFORE the pkg so the sysext activates silently on install.
+1. **Two unsigned `.mobileconfig` profiles** pushed via MDM "custom settings". Pre-approves the ES system extension and grants Full Disk Access. These must arrive BEFORE the pkg so the sysext activates silently on install. The profiles ship unsigned on purpose: every supported MDM signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright.
 2. **An install script** your MDM runs before the pkg installer. It writes `/etc/fleet-edr.conf` with the enroll secret + server URL.
 3. **The signed `.pkg`** pushed via MDM "software installer".
 
@@ -27,9 +27,18 @@ All three files live on the [GitHub Release page](https://github.com/getvictor/f
 | Artifact                 | Filename on Release                 | Notes                                                  |
 | ------------------------ | ----------------------------------- | ------------------------------------------------------ |
 | Pkg installer            | `fleet-edr-<version>.pkg`           | Signed with Developer ID Installer, notarized, stapled |
-| System-extension profile | `edr-system-extension.mobileconfig` | Signed with Developer ID Installer (CMS)               |
-| TCC FDA profile          | `edr-tcc-fda.mobileconfig`          | Signed with Developer ID Installer (CMS)               |
+| System-extension profile | `edr-system-extension.mobileconfig` | Unsigned XML; your MDM signs it at delivery            |
+| TCC FDA profile          | `edr-tcc-fda.mobileconfig`          | Unsigned XML; your MDM signs it at delivery            |
 | Checksums                | `SHA256SUMS`                        | Verify downloads before uploading to your MDM          |
+
+Releases v0.1.1-rc.12 and earlier shipped the two profiles CMS-signed with the Developer ID Installer identity. If your MDM refuses a pre-signed profile (Fleet does), strip the signature from BOTH profiles and rename each stripped file back to the shipped filename before uploading:
+
+```sh
+for profile in edr-system-extension edr-tcc-fda; do
+  security cms -D -i "$profile.mobileconfig" -o "$profile-stripped.mobileconfig"
+  mv "$profile-stripped.mobileconfig" "$profile.mobileconfig"
+done
+```
 
 Download all four, verify checksums, then upload the three artifacts into your MDM.
 

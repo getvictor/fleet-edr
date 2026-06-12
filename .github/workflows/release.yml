@@ -1,7 +1,7 @@
 # Release workflow. Fires when a tag matching v* pushes. Produces:
 #
 # - Signed + notarized macOS .pkg (darwin/arm64) attached to the GitHub Release
-# - Two signed .mobileconfig profiles (System Extensions + TCC FDA)
+# - Two unsigned .mobileconfig profiles (System Extensions + TCC FDA); MDM channels sign them at delivery
 # - SHA256SUMS for all uploaded artifacts
 # - ghcr.io/getvictor/fleet-edr-server:{tag,latest} for linux/amd64 + arm64
 #
@@ -99,27 +99,28 @@ jobs:
             ./packaging/pkg/build.sh "$RELEASE_TAG"
           fi
 
-      # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-and-signed-on-a-real-release
+      # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-unsigned
       #
-      # The real-release branch (DRY_RUN empty) calls `sign.sh` with the Developer ID Installer identity loaded by the
-      # earlier ci-setup.sh step. sign.sh substitutes APPLE_TEAM_ID into the .mobileconfig templates and signs the result
-      # so MDM channels (Fleet, Jamf, Kandji, Intune, mosyle) accept the profiles as managed configuration.
-      - name: Sign mobileconfig profiles
+      # Both branches render the .mobileconfig templates with APPLE_TEAM_ID substituted and ship them UNSIGNED. The
+      # system-extension and TCC payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji, Intune, mosyle)
+      # signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright. Download authenticity is
+      # provided by the cosign signatures attached below, not by a CMS wrapper on the profile.
+      - name: Render mobileconfig profiles
         if: env.DRY_RUN == ''
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: ./packaging/profiles/sign.sh
+        run: ./packaging/profiles/render.sh
 
-      # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-without-signing-on-a-dry-run
+      # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-unsigned
       #
-      # The dry-run branch (workflow_dispatch from a topic branch) renders the same .mobileconfig templates with the
-      # literal APPLE_TEAM_ID hardcoded above but skips the signing step. Operators inspecting the dry-run artifacts can
-      # verify the team id substitution + template content without burning a Developer ID Installer signature.
-      - name: Render unsigned profiles (dry-run)
+      # The dry-run branch (workflow_dispatch from a topic branch) renders the same templates with the literal
+      # APPLE_TEAM_ID hardcoded above, so operators inspecting the dry-run artifacts can verify the team id substitution
+      # + template content. The output is byte-identical to a real release's profiles for the same team id.
+      - name: Render mobileconfig profiles (dry-run)
         if: env.DRY_RUN != ''
         env:
           APPLE_TEAM_ID: FDG8Q7N4CC
-        run: ./packaging/profiles/sign.sh --dry-run
+        run: ./packaging/profiles/render.sh
 
       # Source-tree SBOMs in both common formats, generated BEFORE
       # SHA256SUMS so the SBOM files get hashed alongside the pkg and
