@@ -1,9 +1,12 @@
 #!/bin/sh
 # Post-install script for Fleet EDR.
 #
-# Runs after pkg payload is laid down. Loads the LaunchDaemon (which activates
-# the sysext via the host app's XPC request on first run) and ensures var/db +
-# var/log directories exist.
+# Runs after pkg payload is laid down. Loads the agent LaunchDaemon, ensures
+# var/db + var/log directories exist, and starts the activation LaunchAgent in
+# the console user's GUI session so the system extensions activate immediately
+# on hosts where someone is logged in. (The agent daemon does NOT activate
+# extensions; only the host app running in a user session can submit the
+# OSSystemExtensionRequest.)
 #
 # Fleet's install-script contract writes /etc/fleet-edr.conf BEFORE invoking
 # `installer`, so by the time we run, the agent has its enroll secret + server
@@ -47,5 +50,28 @@ if [ "$rc" -ne 0 ] && [ "$rc" -ne 37 ]; then
     exit "$rc"
 fi
 /bin/launchctl kickstart -k "system/${LABEL}"
+
+# spec:release-packaging/installation-activates-the-system-extensions/install-with-a-user-logged-in-activates-immediately
+#
+# Start the activation LaunchAgent in the console user's GUI session so the
+# extensions activate now instead of at the next login. Installs that happen
+# at the loginwindow skip this (no console user); the LaunchAgent's RunAtLoad
+# covers them on the next login. Nothing here may fail the install: a Mac
+# where activation needs the user's click still installed correctly.
+ACTIVATE_LA=/Library/LaunchAgents/com.fleetdm.edr.activate.plist
+CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)
+if [ -f "$ACTIVATE_LA" ] && [ "$CONSOLE_UID" -gt 0 ]; then
+    # bootstrap returns 37 ("already loaded") on reinstalls; kickstart re-runs
+    # the activation LaunchAgent in that case so an upgrade re-activates the
+    # new bundle. If BOTH fail, say so on stderr (which installer captures
+    # into /var/log/install.log) so the failure is diagnosable, but still
+    # exit 0: the LaunchAgent's RunAtLoad retries at the next login.
+    if ! /bin/launchctl bootstrap "gui/$CONSOLE_UID" "$ACTIVATE_LA" 2>/dev/null; then
+        if ! /bin/launchctl kickstart -k "gui/$CONSOLE_UID/com.fleetdm.edr.activate" 2>/dev/null; then
+            echo "postinstall: could not start com.fleetdm.edr.activate in gui/$CONSOLE_UID;" \
+                "extension activation deferred to next login" >&2
+        fi
+    fi
+fi
 
 exit 0

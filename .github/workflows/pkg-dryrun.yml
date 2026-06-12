@@ -157,3 +157,21 @@ jobs:
           test -f /tmp/expanded/agent.pkg/Scripts/preinstall && \
           test -f /tmp/expanded/agent.pkg/Scripts/postinstall && \
             echo OK
+          # spec:release-packaging/installation-activates-the-system-extensions/install-at-the-loginwindow-activates-at-next-login
+          #
+          # The activation LaunchAgent must ship in the app component: its RunAtLoad is the
+          # only thing that activates the extensions on hosts installed at the loginwindow.
+          # lsbom reads the component BOM without unpacking the payload.
+          echo "=== activation LaunchAgent present in app.pkg ==="
+          lsbom /tmp/expanded/app.pkg/Bom | grep -F "Library/LaunchAgents/com.fleetdm.edr.activate.plist" && \
+            echo OK
+          # spec:release-packaging/installation-activates-the-system-extensions/install-with-a-user-logged-in-activates-immediately
+          #
+          # The logged-in path lives in the postinstall, which spectrace cannot scan (no .sh
+          # extension), so assert its shape here: the script the pkg actually ships must
+          # bootstrap the activation LaunchAgent into the console user's gui domain.
+          echo "=== postinstall bootstraps the activation LaunchAgent ==="
+          # shellcheck disable=SC2016  # the $-names are literal text to find in the script, not expansions
+          grep -F 'launchctl bootstrap "gui/$CONSOLE_UID" "$ACTIVATE_LA"' \
+            /tmp/expanded/agent.pkg/Scripts/postinstall && \
+            echo OK

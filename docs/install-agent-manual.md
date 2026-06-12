@@ -127,7 +127,7 @@ The postinstall script loads the LaunchDaemon. The agent starts immediately, rea
 
 ## Step 5: approve the system extension
 
-The installer only stages the sysext; activating it requires a human click on a Mac that isn't MDM-managed. macOS shows a "System Extension Blocked" notification the first time the host app tries to activate it.
+The pkg's activation LaunchAgent (`com.fleetdm.edr.activate`) runs the host app's `activate` right after install (and again at every login), but on a Mac that isn't MDM-managed the activation still requires a human click. macOS shows a "System Extension Blocked" notification when the host app tries to activate it.
 
 1. Open **System Settings > Privacy & Security**.
 2. Scroll to "Security". You'll see _"System extension blocked. Click to allow"_ or a similar message.

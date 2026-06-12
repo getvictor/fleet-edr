@@ -56,7 +56,7 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 Upload `edr-system-extension.mobileconfig` to your MDM as a custom configuration profile and scope it to the Macs that will run the agent.
 
-What the profile does: pre-approves the bundle ID `com.fleetdm.edr.securityextension` under team ID `FDG8Q7N4CC` in the `com.apple.system-extension-policy` payload. When the pkg installer runs the host app's sysext-activation request, macOS finds the pre-approval, skips the user prompt, and activates the sysext immediately.
+What the profile does: pre-approves the bundle ID `com.fleetdm.edr.securityextension` under team ID `FDG8Q7N4CC` in the `com.apple.system-extension-policy` payload. When the pkg's activation LaunchAgent runs the host app's sysext-activation request, macOS finds the pre-approval, skips the user prompt, and activates the sysext immediately.
 
 Verify on a target Mac:
 
@@ -117,9 +117,9 @@ The pkg's install flow:
 
 1. `installationCheck()` validates the Mac is Apple Silicon + macOS 13+.
 2. Preinstall script stops any existing `com.fleetdm.edr.agent` LaunchDaemon and deactivates any prior sysext (idempotent; no-op on fresh installs).
-3. Payload lands under `/usr/local/bin`, `/Applications`, `/Library/LaunchDaemons`, `/Library/Application Support/com.fleetdm.edr`.
+3. Payload lands under `/usr/local/bin`, `/Applications`, `/Library/LaunchDaemons`, `/Library/LaunchAgents`, `/Library/Application Support/com.fleetdm.edr`.
 4. Postinstall script loads the LaunchDaemon (`launchctl bootstrap system ...`) and kickstarts it. The agent reads `/etc/fleet-edr.conf`, enrolls, starts polling.
-5. On first agent-to-sysext XPC call, the host app triggers sysext activation. Thanks to Step 1's profile, this is silent.
+5. Postinstall also starts the activation LaunchAgent (`com.fleetdm.edr.activate`) in the console user's GUI session, which runs the host app's `activate` and brings up the system extensions. Thanks to Step 1's profile this is silent. If nobody is logged in at install time (loginwindow, ADE), activation happens at the next login instead: the LaunchAgent runs at every login, which also re-activates the new bundle after upgrades. Until activation, the agent runs and enrolls but logs `receiver connect` warnings; that's the expected pre-activation state, not a failure.
 
 Verify on a target Mac:
 

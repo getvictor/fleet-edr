@@ -21,6 +21,15 @@ if [ -f "$PLIST" ]; then
     /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
 fi
 
+# Boot the activation LaunchAgent out of the console user's GUI session so an
+# upgrade doesn't replace the app bundle under a running activate. No-op on
+# fresh installs and at the loginwindow.
+ACTIVATE_LA=/Library/LaunchAgents/com.fleetdm.edr.activate.plist
+CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)
+if [ -f "$ACTIVATE_LA" ] && [ "$CONSOLE_UID" -gt 0 ]; then
+    /bin/launchctl bootout "gui/$CONSOLE_UID" "$ACTIVATE_LA" 2>/dev/null || true
+fi
+
 # Deactivate the running system extension so the bundle can be replaced.
 # Derive the team ID from the installed host app's codesign output so this
 # script tracks whatever team ID the previous install was signed under,
