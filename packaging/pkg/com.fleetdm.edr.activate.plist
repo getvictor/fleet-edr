@@ -8,7 +8,9 @@
     exits, so this is idempotent and doubles as re-activation after an app upgrade. The
     postinstall additionally bootstraps this agent into the console user's GUI domain at
     install time so a logged-in host activates immediately rather than at next login.
-    No KeepAlive: the activate subcommand exits when done.
+    No KeepAlive: the activate subcommand exits when done. On an unmanaged Mac the
+    process intentionally stays alive while approval is pending (the live request is
+    what System Settings' Allow button completes); it exits once approved or denied.
 -->
 <plist version="1.0">
 <dict>

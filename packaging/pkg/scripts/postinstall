@@ -62,10 +62,16 @@ ACTIVATE_LA=/Library/LaunchAgents/com.fleetdm.edr.activate.plist
 CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)
 if [ -f "$ACTIVATE_LA" ] && [ "$CONSOLE_UID" -gt 0 ]; then
     # bootstrap returns 37 ("already loaded") on reinstalls; kickstart re-runs
-    # the agent in that case so an upgrade re-activates the new bundle.
-    /bin/launchctl bootstrap "gui/$CONSOLE_UID" "$ACTIVATE_LA" 2>/dev/null \
-        || /bin/launchctl kickstart -k "gui/$CONSOLE_UID/com.fleetdm.edr.activate" 2>/dev/null \
-        || true
+    # the activation LaunchAgent in that case so an upgrade re-activates the
+    # new bundle. If BOTH fail, say so on stderr (which installer captures
+    # into /var/log/install.log) so the failure is diagnosable, but still
+    # exit 0: the LaunchAgent's RunAtLoad retries at the next login.
+    if ! /bin/launchctl bootstrap "gui/$CONSOLE_UID" "$ACTIVATE_LA" 2>/dev/null; then
+        if ! /bin/launchctl kickstart -k "gui/$CONSOLE_UID/com.fleetdm.edr.activate" 2>/dev/null; then
+            echo "postinstall: could not start com.fleetdm.edr.activate in gui/$CONSOLE_UID;" \
+                "extension activation deferred to next login" >&2
+        fi
+    fi
 fi
 
 exit 0
