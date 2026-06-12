@@ -16,7 +16,7 @@ pr_compliances:
       no behavior, or the diff changes no observable behavior.
     failure_criteria: >-
       The diff changes observable behavior (detection rules under server/rules/internal/catalog/,
-      schema/events.json, server/detection/bootstrap/schema.go, API handlers, event emission) with
+      schema/events.json, server/detection/migrations/, API handlers, event emission) with
       no openspec/specs/** update and no valid no-behavior-change assertion.
 
   - title: "New wire-format fields have a round-trip test"
