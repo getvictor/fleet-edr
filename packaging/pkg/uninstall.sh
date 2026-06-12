@@ -38,6 +38,17 @@ if [ -f "$PLIST" ]; then
     rm -f "$PLIST"
 fi
 
+# spec:release-packaging/installation-activates-the-system-extensions/uninstall-removes-the-activation-launchagent
+echo "==> removing activation LaunchAgent"
+ACTIVATE_LA=/Library/LaunchAgents/com.fleetdm.edr.activate.plist
+if [ -f "$ACTIVATE_LA" ]; then
+    CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)
+    if [ "$CONSOLE_UID" -gt 0 ]; then
+        /bin/launchctl bootout "gui/$CONSOLE_UID" "$ACTIVATE_LA" 2>/dev/null || true
+    fi
+    rm -f "$ACTIVATE_LA"
+fi
+
 echo "==> deactivating system extension"
 # Derive the team ID from the installed host app rather than hardcoding; an
 # operator who re-signed with a different team ID (fork, team migration)

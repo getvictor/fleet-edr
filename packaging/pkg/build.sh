@@ -256,6 +256,20 @@ else
         "$STAGE/app-root/Applications/Fleet EDR.app"
 fi
 
+# spec:release-packaging/installation-activates-the-system-extensions/install-with-a-user-logged-in-activates-immediately
+#
+# Activation LaunchAgent rides in the app component because it launches the
+# app: OSSystemExtensionRequest must come from the host app in a user session,
+# so login-time (RunAtLoad) plus the postinstall's gui-domain bootstrap are
+# what turn "pkg installed" into "extensions activated" without an operator.
+# The gui-domain bootstrap lives in packaging/pkg/scripts/postinstall, which
+# spectrace cannot scan (no .sh extension); this staging block plus that
+# script are the scenario's enforcement surface.
+mkdir -p "$STAGE/app-root/Library/LaunchAgents"
+cp "$ROOT/packaging/pkg/com.fleetdm.edr.activate.plist" \
+    "$STAGE/app-root/Library/LaunchAgents/com.fleetdm.edr.activate.plist"
+chmod 0644 "$STAGE/app-root/Library/LaunchAgents/com.fleetdm.edr.activate.plist"
+
 echo "==> packaging app component pkg"
 sign_pkg pkgbuild \
     --identifier com.fleetdm.edr.app \

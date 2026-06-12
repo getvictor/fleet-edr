@@ -56,21 +56,21 @@ sudo profiles list | grep fleetdm
 #   com.fleetdm.edr.profile.tcc-fda
 ```
 
-## Step 2: upload the pkg + install script together
+## Step 2: add the pkg with a custom install script
 
-Fleet's software installer bundles a `.pkg` and an optional pre-install script into a single "software package". We use that bundle to ship the pkg AND the enroll-secret write in one deploy step.
+Fleet's software packages carry an `install_script` that replaces the default install command. We use that script to write the enroll-secret config AND run the installer in one step, so the sequencing is guaranteed (unlike generic MDMs where you fight with install-script ordering). Fleet has no separate pre-install script concept; the only pre-install hook is `pre_install_query`, an osquery SQL condition, which we don't need.
 
-Write the install script to a local file:
+Write the install and uninstall scripts to local files:
 
 ```sh
 cat > fleet-edr-install.sh <<'EOF'
 #!/bin/sh
 set -eu
 
-# Fleet's agent expands $FLEET_SECRET_* into the value of the
+# Fleet's agent expands FLEET_SECRET_* into the value of the
 # corresponding custom variable at runtime. Define them at
 # Settings > Integrations > MDM > Variables (or via fleetctl).
-EDR_SERVER_URL="${FLEET_SECRET_EDR_SERVER_URL:-https://edr.example.com}"
+EDR_SERVER_URL="$FLEET_SECRET_EDR_SERVER_URL"
 EDR_ENROLL_SECRET="$FLEET_SECRET_EDR_ENROLL_SECRET"
 
 install -m 0600 /dev/null /etc/fleet-edr.conf
@@ -78,6 +78,17 @@ cat > /etc/fleet-edr.conf <<CONF
 EDR_SERVER_URL=$EDR_SERVER_URL
 EDR_ENROLL_SECRET=$EDR_ENROLL_SECRET
 CONF
+
+# $INSTALLER_PATH is set by fleetd to the downloaded pkg's location.
+installer -pkg "$INSTALLER_PATH" -target /
+EOF
+
+cat > fleet-edr-uninstall.sh <<'EOF'
+#!/bin/sh
+set -eu
+if [ -x "/Library/Application Support/com.fleetdm.edr/uninstall.sh" ]; then
+    "/Library/Application Support/com.fleetdm.edr/uninstall.sh"
+fi
 EOF
 ```
 
@@ -87,16 +98,40 @@ Define the two secrets in Fleet so the script can reference them without ever co
 2. Add `EDR_SERVER_URL` with your server's URL.
 3. Add `EDR_ENROLL_SECRET` with the value from `./secrets/enroll_secret` on the server.
 
-Upload the pkg + script bundle:
+**Via fleetctl:** extend the same fleet spec from Step 1 with a `software` section. The CLI path references the pkg by URL (Fleet downloads it server-side); point it at the GitHub Release asset and pin the hash from `SHA256SUMS`:
 
 ```sh
-fleetctl software add \
-    --fleet "EDR pilot" \
-    --path fleet-edr-v0.1.0.pkg \
-    --pre-install-script fleet-edr-install.sh
+fleetctl apply -f - <<'EOF'
+apiVersion: v1
+kind: fleet
+spec:
+  fleet:
+    name: EDR pilot
+    software:
+      packages:
+        - url: https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg
+          hash_sha256: <sha256 of the pkg, from SHA256SUMS>
+          install_script:
+            path: ./fleet-edr-install.sh
+          uninstall_script:
+            path: ./fleet-edr-uninstall.sh
+EOF
 ```
 
-Fleet runs the pre-install script first, then `installer -pkg` against the uploaded `.pkg`. The script writes the config file the pkg's postinstall step needs, so the sequencing is guaranteed (unlike generic MDMs where you fight with install-script ordering).
+**Via the Fleet UI** (this path accepts a local pkg file instead of a URL):
+
+1. **Software > Add software > Custom package**, with the "EDR pilot" fleet selected in the scope picker.
+2. **Choose file** and select `fleet-edr-v0.1.0.pkg`.
+3. Expand **Advanced options** and replace the default install script with the contents of `fleet-edr-install.sh`; paste `fleet-edr-uninstall.sh` into the uninstall script field.
+4. **Add software**.
+
+Adding the package only makes it available to the fleet; nothing installs yet. An install triggers per host in one of three ways:
+
+- **Manually**: **Hosts > \<host\> > Software**, find Fleet EDR, **Actions > Install**.
+- **Self-service**: if enabled on the package, end users install it from Fleet Desktop's Self-service tab.
+- **Automatic install**: check **Automatic install** when adding the package in the UI. Fleet creates a policy that installs the EDR on every in-scope host that doesn't have it, which is what you want for a fleet-wide rollout. The checkbox exists only on the add flow (not edit), and the `fleetctl apply` YAML path doesn't expose it; to automate a CLI-managed package, attach it to a policy automation instead.
+
+When an install fires, fleetd downloads the pkg to the host and runs the install script, which writes the config file the pkg's postinstall step needs and then invokes `installer` itself.
 
 Verify on a target Mac after Fleet runs the install:
 
@@ -105,12 +140,15 @@ Verify on a target Mac after Fleet runs the install:
 sudo launchctl print system/com.fleetdm.edr.agent | grep 'state ='
 # Expect: state = running
 
-# Sysext activated silently (thanks to the system-extension profile)
+# Sysext activated silently (the pkg's activation LaunchAgent + the
+# system-extension profile). If this prints nothing and nobody was logged
+# in when the pkg installed, activation fires at the next login.
 systemextensionsctl list | grep fleetdm
 # Expect: * * FDG8Q7N4CC com.fleetdm.edr.securityextension ... [activated enabled]
 
-# Agent enrolled with the server
-sudo tail -n 20 /var/log/fleet-edr-agent.log | grep enrolled
+# Agent enrolled with the server (grep the whole log; enrollment happens
+# once at startup and scrolls out of a tail quickly)
+grep "agent enrolled" /var/log/fleet-edr-agent.log
 ```
 
 ## Step 3: confirm in the EDR admin UI
@@ -119,14 +157,18 @@ Open `https://<your-edr-server>/ui/`. The Macs that finished the Fleet-driven in
 
 ## Upgrade
 
-Push a new pkg version by re-running `fleetctl software add` with the newer file. Fleet replaces the software package in-place; the install script doesn't change.
+**Via fleetctl:** bump the `url` and `hash_sha256` in the Step 2 spec to the new release and re-apply. Fleet replaces the software package in-place; the install script doesn't change.
 
-```sh
-fleetctl software add \
-    --fleet "EDR pilot" \
-    --path fleet-edr-v0.1.1.pkg \
-    --pre-install-script fleet-edr-install.sh
+```yaml
+- url: https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg
+  hash_sha256: <sha256 of the new pkg>
+  install_script:
+    path: ./fleet-edr-install.sh
+  uninstall_script:
+    path: ./fleet-edr-uninstall.sh
 ```
+
+**Via the Fleet UI:** **Software**, select the Fleet EDR package (with the "EDR pilot" fleet in scope), then **Actions > Edit**, choose the newer pkg file, and save. The scripts carry over unless you change them.
 
 On each Mac the EDR pkg's preinstall stops the old daemon and the postinstall starts the new one. The host token at `/var/db/fleet-edr/enrolled.plist` survives the upgrade so agents don't re-enroll.
 
@@ -134,23 +176,7 @@ If the new release changes one of the two `.mobileconfig` profiles, push the new
 
 ## Uninstall
 
-Fleet's software UI supports uninstall scripts on a software package. Add one:
-
-```sh
-cat > fleet-edr-uninstall.sh <<'EOF'
-#!/bin/sh
-set -eu
-if [ -x "/Library/Application Support/com.fleetdm.edr/uninstall.sh" ]; then
-    "/Library/Application Support/com.fleetdm.edr/uninstall.sh"
-fi
-EOF
-
-fleetctl software add \
-    --fleet "EDR pilot" \
-    --path fleet-edr-v0.1.1.pkg \
-    --pre-install-script fleet-edr-install.sh \
-    --uninstall-script fleet-edr-uninstall.sh
-```
+The uninstall script attached in Step 2 wraps the pkg's bundled `uninstall.sh`, which removes the daemon, host app, and system extension. Trigger it per host in the Fleet UI: **Hosts > \<host\> > Software**, find Fleet EDR, then **Actions > Uninstall**. There is no fleetctl command for a per-host uninstall; script results land under **Hosts > \<host\> > Activity**.
 
 To remove the profiles as well, edit the fleet's YAML and drop the two `custom_settings` entries. Fleet removes the profiles from each Mac on the next check-in; macOS tears down the TCC grants and sysext allow-list within minutes.
 
@@ -161,7 +187,8 @@ The secret is stored as a Fleet custom variable (`FLEET_SECRET_EDR_ENROLL_SECRET
 1. Generate a new value on the EDR server and write it to `./secrets/enroll_secret` (see [install-server.md](install-server.md#rotate-secrets)).
 2. Restart the server so the new secret takes effect: `docker compose restart server`.
 3. In Fleet: **Settings > Integrations > MDM > Custom variables**, update `EDR_ENROLL_SECRET` to the new value.
-4. Re-run `fleetctl software add` so Fleet re-pushes the install script with the new variable value.
+
+There is nothing to re-upload: `$FLEET_SECRET_*` variables expand when the install script runs on a host, so the next install picks up the rotated value automatically.
 
 Existing hosts keep working because they authenticate with their per-host token, not the enroll secret. The rotated secret only matters the next time a brand-new Mac enrolls.
 
@@ -178,7 +205,7 @@ done
 
 **Profile stuck at "pending" in Fleet.** The Mac isn't UAMDM-enrolled. Open **Hosts > <host> > MDM** in Fleet; if it says "Enrolled (manual)" without UAMDM, re-enroll via ADE or walk the user through the manual UAMDM prompt in System Settings. Restricted payloads will not install otherwise.
 
-**Software package says "installed" but the pkg never ran.** Fleet considers a package "installed" once the pre-install script succeeds and the installer command starts. If the pkg itself fails, check **Hosts > <host> > Scripts** for the installer stdout/stderr.
+**Software install reports "failed" or the pkg never ran.** The install script owns both the config write and the `installer -pkg` call, so its exit status is the install result. Check **Hosts > \<host\> > Activity** and open the install details for the script's stdout/stderr; a non-zero exit from `installer` (or an unset `$FLEET_SECRET_*` variable tripping `set -eu`) shows up there.
 
 **Agent enrolls but events don't appear in the EDR UI.** The TCC FDA profile didn't reach the Mac. Check `sudo profiles list | grep tcc-fda` on the host; if missing, re-scope the profile to the fleet. After it lands, kick the daemon: `sudo launchctl kickstart -k system/com.fleetdm.edr.agent`.
 

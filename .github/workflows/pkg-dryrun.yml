@@ -157,3 +157,11 @@ jobs:
           test -f /tmp/expanded/agent.pkg/Scripts/preinstall && \
           test -f /tmp/expanded/agent.pkg/Scripts/postinstall && \
             echo OK
+          # spec:release-packaging/installation-activates-the-system-extensions/install-at-the-loginwindow-activates-at-next-login
+          #
+          # The activation LaunchAgent must ship in the app component: its RunAtLoad is the
+          # only thing that activates the extensions on hosts installed at the loginwindow.
+          # lsbom reads the component BOM without unpacking the payload.
+          echo "=== activation LaunchAgent present in app.pkg ==="
+          lsbom /tmp/expanded/app.pkg/Bom | grep -F "Library/LaunchAgents/com.fleetdm.edr.activate.plist" && \
+            echo OK

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    LaunchAgent that activates the Fleet EDR system extensions. OSSystemExtensionRequest
+    must be submitted by the host app running in a user (Aqua) session: a root daemon or
+    the pkg postinstall cannot do it. RunAtLoad makes activation happen at every login;
+    re-activation when already active replaces the extensions with the current bundle and
+    exits, so this is idempotent and doubles as re-activation after an app upgrade. The
+    postinstall additionally bootstraps this agent into the console user's GUI domain at
+    install time so a logged-in host activates immediately rather than at next login.
+    No KeepAlive: the activate subcommand exits when done.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fleetdm.edr.activate</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/Fleet EDR.app/Contents/MacOS/edr</string>
+        <string>activate</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
