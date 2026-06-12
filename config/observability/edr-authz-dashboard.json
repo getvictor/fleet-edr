@@ -1,122 +1,156 @@
 {
+  "version": "v5",
   "title": "EDR auth + authz",
-  "description": "Operator dashboard for the wave-1 auth + authz surface. Imported into SigNoz via Dashboards -> Import. Every successful audit row is dual-emitted to slog at INFO with stable attribute keys (action, target_type, target_id, actor_email, edr.user.id, optional trace_id + payload), and the async writer emits structured slog WARNs on drops + INSERT errors. Panel queries below assume the EDR server is exporting via OTLP with service.name=fleet-edr-server. SigNoz's import dialog re-numbers panels; the layout block is a starting hint only.",
+  "description": "Authentication and authorization activity for the EDR server: audit decisions, denied actions, and auth rejections. Import via SigNoz: Dashboards -> New dashboard -> Import JSON. Requires the server to export OTLP with service.name=fleet-edr-server.",
   "tags": ["edr", "auth", "authz"],
+  "uploadedGrafana": false,
+  "panelMap": {},
+  "variables": {},
   "layout": [
-    {"i": "1", "x": 0, "y": 0, "w": 6, "h": 4},
-    {"i": "2", "x": 6, "y": 0, "w": 6, "h": 4},
-    {"i": "3", "x": 0, "y": 4, "w": 6, "h": 4},
-    {"i": "4", "x": 6, "y": 4, "w": 6, "h": 4}
+    { "i": "audit-by-decision", "x": 0, "y": 0, "w": 6, "h": 4, "moved": false, "static": false },
+    { "i": "denied-by-action", "x": 6, "y": 0, "w": 6, "h": 4, "moved": false, "static": false },
+    { "i": "auth-fail-reason", "x": 0, "y": 4, "w": 6, "h": 4, "moved": false, "static": false },
+    { "i": "audit-activity", "x": 6, "y": 4, "w": 6, "h": 4, "moved": false, "static": false }
   ],
-  "panels": [
+  "widgets": [
     {
-      "id": "1",
-      "title": "Authz deny rate by reason",
-      "description": "Count of audit-row INFO logs whose action starts with authz. and whose payload.allow = false, grouped by payload.reason. The chokepoint emits exactly one such row per privileged HTTP request (allow + deny), so this panel is a faithful proxy for chokepoint deny rate. A baseline of low-volume reauth_required denies is healthy (operators triggering the freshness gate); a sudden spike on no_matching_rule or no_actor is worth chasing. Cross-reference with HTTP traces (status_code=403) to attribute denies to specific routes.",
+      "id": "audit-by-decision",
+      "title": "Audit events by decision",
+      "description": "Every audited action grouped by its decision: allow (granted), deny (authz chokepoint refused), error (auth/OIDC failure), unspecified (context-free rows like enrollment.rotate_token or logout that carry no allow/deny). A baseline of allow plus occasional unspecified is healthy; any sustained deny or error series is the thing to chase.",
       "panelTypes": "graph",
+      "yAxisUnit": "cps",
+      "legendPosition": "bottom",
+      "contextLinks": { "linksData": [] },
+      "selectedLogFields": [],
+      "selectedTracesFields": [],
+      "thresholds": [],
       "query": {
         "queryType": "builder",
+        "promql": [],
+        "clickhouse_sql": [],
         "builder": {
+          "queryFormulas": [],
           "queryData": [
             {
-              "dataSource": "logs",
               "queryName": "A",
-              "aggregateOperator": "count",
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
-                  {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^authz\\."},
-                  {"key": {"key": "payload.allow", "type": "tag"}, "op": "=", "value": "false"}
-                ]
-              },
-              "groupBy": [{"key": "payload.reason", "type": "tag"}],
+              "dataSource": "traces",
+              "expression": "A",
               "stepInterval": 60,
-              "timeAggregation": "rate"
+              "aggregations": [{ "expression": "count()" }],
+              "filter": { "expression": "edr.audit.action EXISTS" },
+              "groupBy": [{ "key": "edr.audit.decision", "dataType": "string", "type": "tag" }],
+              "legend": "{{edr.audit.decision}}",
+              "functions": [],
+              "having": { "expression": "" },
+              "orderBy": [],
+              "selectColumns": []
             }
           ]
         }
       }
     },
     {
-      "id": "2",
-      "title": "Login outcomes (OIDC + break-glass)",
-      "description": "Stack of successful and failed logins across both auth surfaces. Reads directly from audit-row INFO logs: OIDC emits auth.oidc.success / auth.oidc.failure / auth.oidc.callback.error; break-glass emits auth.breakglass.success / auth.breakglass.failure on the day-to-day login flow. A flat success line plus a sustained failure line means brute-force or a misconfig; a failure spike with no success spike often means the IdP is down.",
+      "id": "denied-by-action",
+      "title": "Denied + errored audit events by action",
+      "description": "Count of audit events whose decision is deny or error, grouped by action. This is the security signal: which privileged operations are being refused by the authz chokepoint (deny) or failing auth (error, e.g. auth.oidc.failure, auth.breakglass.failure). Cross-reference the HTTP dashboard's 401/403 series to attribute denies to specific routes.",
       "panelTypes": "graph",
+      "yAxisUnit": "cps",
+      "legendPosition": "bottom",
+      "contextLinks": { "linksData": [] },
+      "selectedLogFields": [],
+      "selectedTracesFields": [],
+      "thresholds": [],
       "query": {
         "queryType": "builder",
+        "promql": [],
+        "clickhouse_sql": [],
         "builder": {
+          "queryFormulas": [],
           "queryData": [
             {
-              "dataSource": "logs",
               "queryName": "A",
-              "aggregateOperator": "count",
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
-                  {"key": {"key": "action", "type": "tag"}, "op": "REGEXP", "value": "^auth\\.(oidc|breakglass)\\."}
-                ]
-              },
-              "groupBy": [{"key": "action", "type": "tag"}],
+              "dataSource": "traces",
+              "expression": "A",
               "stepInterval": 60,
-              "timeAggregation": "rate"
+              "aggregations": [{ "expression": "count()" }],
+              "filter": { "expression": "edr.audit.decision IN ('deny', 'error')" },
+              "groupBy": [{ "key": "edr.audit.action", "dataType": "string", "type": "tag" }],
+              "legend": "{{edr.audit.action}}",
+              "functions": [],
+              "having": { "expression": "" },
+              "orderBy": [],
+              "selectColumns": []
             }
           ]
         }
       }
     },
     {
-      "id": "3",
-      "title": "Break-glass redemption rate",
-      "description": "Count of auth.breakglass.bootstrap audit rows. Emitted on successful redemption (token issuance itself is not audited), so this panel charts how often the operator completes the WebAuthn-mandatory setup flow. A non-zero rate outside a deploy window means a manual SQL recovery insert was redeemed; a sustained zero with a known token outstanding means the operator never finished the ceremony.",
+      "id": "auth-fail-reason",
+      "title": "Auth rejections by reason",
+      "description": "Bearer/session auth failures grouped by edr.auth.reason, set by the auth middleware on every 401 (server/httpserver/authfail.go). invalid_token / missing_bearer dominate when an agent is misconfigured or a token was revoked; a sudden spike from one source is the signal that caught the stray tokenless agent. Distinct from the authz deny panel above: this is authentication (who are you), that is authorization (may you).",
       "panelTypes": "graph",
+      "yAxisUnit": "cps",
+      "legendPosition": "bottom",
+      "contextLinks": { "linksData": [] },
+      "selectedLogFields": [],
+      "selectedTracesFields": [],
+      "thresholds": [],
       "query": {
         "queryType": "builder",
+        "promql": [],
+        "clickhouse_sql": [],
         "builder": {
+          "queryFormulas": [],
           "queryData": [
             {
-              "dataSource": "logs",
               "queryName": "A",
-              "aggregateOperator": "count",
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
-                  {"key": {"key": "action", "type": "tag"}, "op": "=", "value": "auth.breakglass.bootstrap"}
-                ]
-              },
+              "dataSource": "traces",
+              "expression": "A",
               "stepInterval": 60,
-              "timeAggregation": "rate"
+              "aggregations": [{ "expression": "count()" }],
+              "filter": { "expression": "edr.auth.reason EXISTS" },
+              "groupBy": [{ "key": "edr.auth.reason", "dataType": "string", "type": "tag" }],
+              "legend": "{{edr.auth.reason}}",
+              "functions": [],
+              "having": { "expression": "" },
+              "orderBy": [],
+              "selectColumns": []
             }
           ]
         }
       }
     },
     {
-      "id": "4",
-      "title": "Audit-write failures (drops + INSERT errors)",
-      "description": "The async audit writer emits a slog WARN when it cannot enqueue (queue_full / writer_stopped / drain_deadline_exceeded) or when an INSERT into audit_events fails. Any non-zero rate here is a hard alert: the audit log is the spec's append-only invariant and dropping rows breaks it. Drop logs carry a 'reason' attribute; INSERT-failure logs carry an 'err' attribute instead. Grouping by body cleanly splits the two cases.",
-      "panelTypes": "graph",
+      "id": "audit-activity",
+      "title": "Audit activity by action",
+      "description": "Total audited operations over the window, highest first. The operator audit trail at a glance: logins, alert triage, command issuance, enrollment revoke/rotate, application-control rule changes. Use it to spot anomalous volume (a burst of enrollment.revoke, an off-hours policy change) worth opening the trace for.",
+      "panelTypes": "table",
+      "yAxisUnit": "none",
+      "legendPosition": "bottom",
+      "contextLinks": { "linksData": [] },
+      "selectedLogFields": [],
+      "selectedTracesFields": [],
+      "thresholds": [],
       "query": {
         "queryType": "builder",
+        "promql": [],
+        "clickhouse_sql": [],
         "builder": {
+          "queryFormulas": [],
           "queryData": [
             {
-              "dataSource": "logs",
               "queryName": "A",
-              "aggregateOperator": "count",
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {"key": {"key": "service.name", "type": "resource"}, "op": "=", "value": "fleet-edr-server"},
-                  {"key": {"key": "severity_text", "type": "tag"}, "op": "=", "value": "WARN"},
-                  {"key": {"key": "body", "type": "tag"}, "op": "REGEXP", "value": "audit (dropped|async record failed)"}
-                ]
-              },
-              "groupBy": [{"key": "body", "type": "tag"}],
+              "dataSource": "traces",
+              "expression": "A",
               "stepInterval": 60,
-              "timeAggregation": "rate"
+              "aggregations": [{ "expression": "count() as 'events'" }],
+              "filter": { "expression": "edr.audit.action EXISTS" },
+              "groupBy": [{ "key": "edr.audit.action", "dataType": "string", "type": "tag", "isColumn": true }],
+              "functions": [],
+              "having": { "expression": "" },
+              "orderBy": [],
+              "selectColumns": []
             }
           ]
         }
