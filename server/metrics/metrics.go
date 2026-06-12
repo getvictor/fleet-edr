@@ -28,11 +28,6 @@ const (
 	defaultOfflineThreshold = 5 * time.Minute
 )
 
-// dbQueryHistogramBuckets is the explicit-bucket boundary set for the DB query duration histogram, in seconds. Spaced to give
-// p50/p95/p99 fidelity over the SQL latencies this codebase actually sees: sub-millisecond on single-row reads, low milliseconds on
-// indexed batch reads, hundreds of milliseconds on the worst-case unindexed retention scans.
-var dbQueryHistogramBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
-
 // httpDurationBuckets is the OTel HTTP semantic-convention default bucket set for http.server.request.duration, in seconds.
 // Using the conventional boundaries keeps p50/p95/p99 readings comparable with any other OTel-instrumented service and with
 // SigNoz's built-in expectations for this metric.
@@ -58,7 +53,6 @@ type GaugeSource interface {
 type Recorder struct {
 	eventsIngested       metric.Int64Counter
 	alertsCreated        metric.Int64Counter
-	dbQueryDuration      metric.Float64Histogram
 	retentionRowsDeleted metric.Int64Counter
 	processesReconciled  metric.Int64Counter
 	queueDropped         metric.Int64Counter
@@ -105,12 +99,6 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.alerts.created",
 		metric.WithDescription("Detection alerts created (dedup-skipped alerts not counted), by rule + severity."),
 		metric.WithUnit("{alert}"),
-	)
-	r.dbQueryDuration, _ = meter.Float64Histogram(
-		"edr.db.query.duration",
-		metric.WithDescription("Server-side DB write latency, by op. Read as histogram for p95."),
-		metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(dbQueryHistogramBuckets...),
 	)
 	r.retentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.rows_deleted",
@@ -195,37 +183,6 @@ func (r *Recorder) AlertCreated(ctx context.Context, ruleID, severity string) {
 		attribute.String("rule_id", ruleID),
 		attribute.String("severity", severity),
 	))
-}
-
-// boundedDBOps is the documented stable set of `op` values that may be passed to ObserveDBQuery. The list is enforced
-// by TestObserveDBQuery_OperationNamesAreBounded in metrics_test.go, which walks the server tree via go/ast and fails
-// the build if any non-test caller passes a string literal that isn't in this slice. The bound exists because the `op`
-// attribute lands on the OTel histogram as a cardinality dimension; a dynamic value (host id, table row, error
-// message) would inflate the time-series cardinality without bound and quickly exhaust the SigNoz aggregation budget.
-// Add a new entry here when you add a new ObserveDBQuery call site; the test will tell you which one is missing.
-//
-// The variable is unexported so callers outside this package cannot mutate the canonical set at runtime; the
-// BoundedDBOps() accessor below returns a defensive copy for the static-analyzer test + any future reflection caller.
-var boundedDBOps = []string{
-	"insert_events", // detection/internal/intake/handler.go: POST /api/events batch insert
-	"upsert_hosts",  // detection/internal/intake/handler.go: POST /api/events host last-seen update
-}
-
-// BoundedDBOps returns a defensive copy of the canonical `op` allowlist. Callers (notably the static-analyzer test in
-// metrics_test.go) should treat the return value as read-only; mutating the slice does not affect the in-package source.
-func BoundedDBOps() []string {
-	out := make([]string, len(boundedDBOps))
-	copy(out, boundedDBOps)
-	return out
-}
-
-// ObserveDBQuery records the latency of a store method. `op` must be a bounded set of stable short names; see
-// BoundedDBOps for the canonical set and the static-analyzer test that enforces it.
-func (r *Recorder) ObserveDBQuery(ctx context.Context, op string, d time.Duration) {
-	if r == nil || r.dbQueryDuration == nil {
-		return
-	}
-	r.dbQueryDuration.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("op", op)))
 }
 
 // ObserveHTTPRequest records one inbound HTTP request's latency on the http.server.request.duration histogram. `route` must be

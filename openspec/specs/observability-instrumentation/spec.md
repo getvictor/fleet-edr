@@ -47,21 +47,9 @@ The system SHALL expose the following counters with stable names so dashboards a
 - **WHEN** the dropped events were already delivered (lossless trim) or had not yet been delivered (lossy drop)
 - **THEN** `edr.agent.queue.dropped` is incremented with a `lossy` boolean attribute reflecting which case applied
 
-### Requirement: DB query latency histogram
+### Requirement: DB client metrics via standard driver instrumentation
 
-The system SHALL expose a histogram named `edr.db.query.duration` that records the latency of each instrumented store operation. Every recorded sample MUST carry an `op` attribute drawn from a bounded, stable set of short names (for example `insert_event`, `update_host_last_seen`) so that dashboards can compute per-operation p50/p95/p99 without dynamic-cardinality explosions.
-
-#### Scenario: A store operation records its latency
-
-- **GIVEN** an instrumented store operation
-- **WHEN** the operation completes
-- **THEN** a sample is recorded against `edr.db.query.duration` with the operation's stable name as the `op` attribute
-
-#### Scenario: Operation names are bounded
-
-- **GIVEN** the set of `op` values across a representative workload
-- **WHEN** the operator queries the histogram in the backend
-- **THEN** the distinct `op` values match the documented stable set and do not include host ids, table-row values, or other high-cardinality data
+The system SHALL emit database-client latency and connection-pool metrics through the standard OpenTelemetry SQL driver instrumentation (otelsql), not a bespoke per-call-site metric. The pool is opened through otelsql so every query is timed by the driver as a `db.sql.latency` histogram (with `db.client.connection.*` pool gauges) without any instrumentation code at the call sites. This avoids a hand-maintained operation-name allowlist and gives complete coverage of every query rather than only the few that were manually instrumented. Per-query timing with full request context remains available on the otelsql spans.
 
 ### Requirement: HTTP server request duration
 

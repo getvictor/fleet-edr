@@ -252,7 +252,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector (SigNoz, Tempo, Datadog OTel
   - `edr.enrolled.hosts` (gauge): current enrolled count.
   - `edr.offline.hosts` (gauge): hosts unseen >5 min.
   - `edr.retention.rows_deleted` (counter): rows pruned per run.
-  - `edr.db.query.duration` (histogram, by `op`).
+  - `db.sql.latency` (histogram): DB call latency, emitted by the otelsql driver instrumentation.
   - `edr.agent.queue.dropped` (counter): agent-side drops reported back.
 
   See [operations.md](operations.md#metrics-and-monitoring) for what to alert on.
