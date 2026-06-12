@@ -3,9 +3,9 @@
 <!--
     System Extensions allow-list. Pre-approves the Fleet EDR Endpoint Security
     extension so it activates without the "System Extension Blocked" dialog.
-    Deploy via MDM custom settings. Signed with Developer ID Installer cert at
-    release time (see packaging/profiles/sign.sh); the __TEAM_ID__ token is
-    substituted with the value of APPLE_TEAM_ID.
+    Deploy via MDM custom settings. Ships unsigned on purpose; the MDM signs
+    it at delivery (see packaging/profiles/render.sh). The __TEAM_ID__ token
+    is substituted with the value of APPLE_TEAM_ID.
 
     Identifiers here match the actual bundle IDs shipped by the pkg. If those
     change, update both the host app Info.plist + the AllowedSystemExtensions

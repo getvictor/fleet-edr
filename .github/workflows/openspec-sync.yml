@@ -49,8 +49,10 @@ jobs:
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
 
           # Behavior-bearing paths: the detection rule catalog (rule logic), the event wire schema, and the detection
-          # DDL (persistence semantics). Test files and fixtures under the catalog are not behavior changes.
-          BEHAVIOR='^server/rules/internal/catalog/.*\.go$|^schema/events\.json$|^server/detection/bootstrap/schema\.go$'
+          # DDL (persistence semantics). The DDL moved from bootstrap/schema.go to goose migrations in PR #115/#309;
+          # this regex must track that location or persistence changes silently bypass the gate.
+          # Test files and fixtures under the catalog are not behavior changes.
+          BEHAVIOR='^server/rules/internal/catalog/.*\.go$|^schema/events\.json$|^server/detection/migrations/.*\.sql$'
           behavior_files=$(echo "$files" | grep -E "$BEHAVIOR" | grep -vE '_test\.go$|/fixtures/' || true)
 
           if [[ -z "$behavior_files" ]]; then

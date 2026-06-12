@@ -1,0 +1,81 @@
+# Custom Qodo compliance checks, evaluated per PR by the agentic review.
+# Format reference: https://docs.qodo.ai/code-review/qodo-merge/features/custom-compliance
+# These mirror the PR minimum requirements in CLAUDE.md ("UAT and integration
+# test layers") so a gap surfaces in review before a human reads the diff.
+
+pr_compliances:
+  - title: "Behavior changes update the spec"
+    compliance_label: true
+    objective: >-
+      Any observable behavior change (bug fix, feature, detection rule, wire or event shape, API,
+      persistence semantics) must update openspec/specs/** in the same PR. Non-trivial deltas also
+      add an openspec/changes/ proposal.
+    success_criteria: >-
+      The diff changes observable behavior AND updates openspec/specs/**, or the PR carries the
+      no-behavior-change label / "[no-behavior-change]" title marker and the diff genuinely changes
+      no behavior, or the diff changes no observable behavior.
+    failure_criteria: >-
+      The diff changes observable behavior (detection rules under server/rules/internal/catalog/,
+      schema/events.json, server/detection/migrations/, API handlers, event emission) with
+      no openspec/specs/** update and no valid no-behavior-change assertion.
+
+  - title: "New wire-format fields have a round-trip test"
+    compliance_label: true
+    objective: >-
+      Every new wire-format struct or event field ships a property-based round-trip test
+      (Marshal then Unmarshal equals identity) using pgregory.net/rapid.
+    success_criteria: >-
+      New serialized fields in the event envelope, batch encoding, or DB scan/value types come with
+      a rapid-based round-trip test exercising the new field.
+    failure_criteria: >-
+      A new serialized field or wire struct appears with no accompanying property-based round-trip
+      test in the same PR.
+
+  - title: "New detection rules ship an efficacy corpus"
+    compliance_label: true
+    objective: >-
+      Every new detection rule under server/rules/internal/catalog/ ships
+      test/efficacy/corpus/T<MITRE-id>/scenario.yaml plus expected.yaml (and attack.sh when system
+      or VM coverage is needed).
+    success_criteria: >-
+      New catalog rules come with matching corpus scenario and expected files in the same PR.
+    failure_criteria: >-
+      A new rule lands in server/rules/internal/catalog/ with no corresponding
+      test/efficacy/corpus/ addition.
+
+  - title: "No new cross-request in-process state"
+    compliance_label: true
+    objective: >-
+      ADR-0010 stateless server: the server holds no in-process state that survives a request and
+      that a peer replica would need. Durable state goes in MySQL; per-request state may ride in
+      signed cookies.
+    success_criteria: >-
+      No new package-level or long-lived map, channel, or queue holding cross-request state in
+      server code, or any such addition carries an explicit per-replica "safe to lose" comment.
+    failure_criteria: >-
+      The diff adds an in-process map, channel, queue, or cache in server code that stores state
+      across requests without a "safe to lose" justification.
+
+  - title: "Endpoint Security callbacks stay non-blocking"
+    compliance_label: true
+    objective: >-
+      Code on the ES callback path must not block on the network or unbounded work; code-signing
+      evaluation there must pass .noNetworkAccess.
+    success_criteria: >-
+      Diffs touching ES handlers in extension/ keep work bounded and pass .noNetworkAccess to any
+      SecStaticCodeCheckValidity / signing evaluation on that path.
+    failure_criteria: >-
+      The diff introduces network access, synchronous I/O, or signing evaluation without
+      .noNetworkAccess inside an ES callback handler.
+
+  - title: "Live VM verification for agent and extension changes"
+    compliance_label: false
+    objective: >-
+      Agent or extension changes touching ESF, XPC, or the event wire format must be exercised on a
+      live macOS VM before RC, and the PR description must say so.
+    success_criteria: >-
+      PRs touching ESF handlers, XPC plumbing, or the wire format mention VM verification (edr-dev
+      or edr-qa) in the description, or explicitly defer it to the RC gate.
+    failure_criteria: >-
+      An ESF / XPC / wire-format change has no mention of VM verification or an RC-gate deferral in
+      the PR description.
