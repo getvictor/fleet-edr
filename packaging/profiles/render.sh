@@ -31,7 +31,11 @@ for tmpl in edr-system-extension edr-tcc-fda; do
     OUT="$DIST/$tmpl.mobileconfig"
 
     echo "==> rendering $tmpl"
-    sed "s/__TEAM_ID__/$APPLE_TEAM_ID/g" "$SRC" > "$OUT"
+    # Escape sed-replacement metacharacters so an unexpected APPLE_TEAM_ID
+    # value (containing /, &, or \) fails loudly at plutil -lint instead of
+    # silently emitting corrupted XML.
+    escaped_team_id=$(printf '%s' "$APPLE_TEAM_ID" | sed 's/[&/\\]/\\&/g')
+    sed "s/__TEAM_ID__/$escaped_team_id/g" "$SRC" > "$OUT"
     plutil -lint "$OUT"
 done
 

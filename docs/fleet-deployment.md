@@ -167,11 +167,13 @@ Existing hosts keep working because they authenticate with their per-host token,
 
 ## Troubleshoot
 
-**"Couldn't add. Configuration profiles can't be signed. Fleet will sign the profile for you."** The uploaded profile carries a CMS signature; Fleet signs profiles itself at delivery and rejects pre-signed uploads. Releases v0.1.1-rc.12 and earlier shipped the two profiles CMS-signed; current releases ship them unsigned. Either grab the profiles from a newer release or strip the signature, keeping the shipped filename so Fleet's replace-in-place tracking still works:
+**"Couldn't add. Configuration profiles can't be signed. Fleet will sign the profile for you."** The uploaded profile carries a CMS signature; Fleet signs profiles itself at delivery and rejects pre-signed uploads. Releases v0.1.1-rc.12 and earlier shipped the two profiles CMS-signed; current releases ship them unsigned. Either grab the profiles from a newer release or strip the signature from both profiles, keeping the shipped filenames so Fleet's replace-in-place tracking still works:
 
 ```sh
-security cms -D -i edr-system-extension.mobileconfig -o edr-system-extension-stripped.mobileconfig
-mv edr-system-extension-stripped.mobileconfig edr-system-extension.mobileconfig
+for profile in edr-system-extension edr-tcc-fda; do
+  security cms -D -i "$profile.mobileconfig" -o "$profile-stripped.mobileconfig"
+  mv "$profile-stripped.mobileconfig" "$profile.mobileconfig"
+done
 ```
 
 **Profile stuck at "pending" in Fleet.** The Mac isn't UAMDM-enrolled. Open **Hosts > <host> > MDM** in Fleet; if it says "Enrolled (manual)" without UAMDM, re-enroll via ADE or walk the user through the manual UAMDM prompt in System Settings. Restricted payloads will not install otherwise.

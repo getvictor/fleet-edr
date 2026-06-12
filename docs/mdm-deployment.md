@@ -31,7 +31,14 @@ All three files live on the [GitHub Release page](https://github.com/getvictor/f
 | TCC FDA profile          | `edr-tcc-fda.mobileconfig`          | Unsigned XML; your MDM signs it at delivery            |
 | Checksums                | `SHA256SUMS`                        | Verify downloads before uploading to your MDM          |
 
-Releases v0.1.1-rc.12 and earlier shipped the two profiles CMS-signed with the Developer ID Installer identity. If your MDM refuses a pre-signed profile (Fleet does), strip the signature first: `security cms -D -i edr-system-extension.mobileconfig -o edr-system-extension-stripped.mobileconfig`, then rename the stripped file back to the shipped filename before uploading.
+Releases v0.1.1-rc.12 and earlier shipped the two profiles CMS-signed with the Developer ID Installer identity. If your MDM refuses a pre-signed profile (Fleet does), strip the signature from BOTH profiles and rename each stripped file back to the shipped filename before uploading:
+
+```sh
+for profile in edr-system-extension edr-tcc-fda; do
+  security cms -D -i "$profile.mobileconfig" -o "$profile-stripped.mobileconfig"
+  mv "$profile-stripped.mobileconfig" "$profile.mobileconfig"
+done
+```
 
 Download all four, verify checksums, then upload the three artifacts into your MDM.
 
