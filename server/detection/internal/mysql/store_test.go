@@ -87,6 +87,51 @@ func TestStore_InsertEventsAtPinsTimestamp(t *testing.T) {
 		"InsertEventsAt must pin the deterministic ingest timestamp")
 }
 
+// TestStore_InsertEventsAt_DuplicateStampsPersistedIngestedAt pins the batched-insert behavior: a duplicate event_id (dropped by
+// INSERT IGNORE) keeps the ingested_at_ns from its FIRST insert, and the caller's slice is stamped with that persisted value, not
+// the current batch's. A genuinely-new row in the same batch still gets the current batch's time.
+func TestStore_InsertEventsAt_DuplicateStampsPersistedIngestedAt(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	first := []api.Event{{EventID: "dup-1", HostID: "h", TimestampNs: 100, EventType: "fork", Payload: json.RawMessage(`{}`)}}
+	require.NoError(t, s.InsertEventsAt(ctx, first, 1000))
+	require.Equal(t, int64(1000), first[0].IngestedAtNs)
+
+	second := []api.Event{
+		{EventID: "dup-1", HostID: "h", TimestampNs: 100, EventType: "fork", Payload: json.RawMessage(`{}`)},
+		{EventID: "dup-2", HostID: "h", TimestampNs: 200, EventType: "fork", Payload: json.RawMessage(`{}`)},
+	}
+	require.NoError(t, s.InsertEventsAt(ctx, second, 2000))
+	assert.Equal(t, int64(1000), second[0].IngestedAtNs, "duplicate keeps its original persisted ingested_at_ns, not the new batch's 2000")
+	assert.Equal(t, int64(2000), second[1].IngestedAtNs, "newly inserted row in the same batch gets the new ingest time")
+
+	count, err := s.CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count, "dup-1 deduped; only dup-2 added")
+}
+
+// TestStore_InsertEventsAt_ChunksLargeBatch inserts more events than eventInsertChunkRows so the multi-row INSERT spans more than
+// one chunk, and asserts every row across the chunk boundary is persisted and stamped.
+func TestStore_InsertEventsAt_ChunksLargeBatch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	const n = 600 // > eventInsertChunkRows (500): forces two chunks
+	events := make([]api.Event, n)
+	for i := range events {
+		events[i] = api.Event{EventID: "chunk-" + strconv.Itoa(i), HostID: "h", TimestampNs: int64(i + 1), EventType: "fork", Payload: json.RawMessage(`{}`)}
+	}
+	require.NoError(t, s.InsertEventsAt(ctx, events, 7777))
+	for i := range events {
+		require.Equal(t, int64(7777), events[i].IngestedAtNs, "row %d across the chunk boundary must be stamped", i)
+	}
+
+	count, err := s.CountEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(n), count)
+}
+
 func TestStore_InsertEvents_EmptyIsNoOp(t *testing.T) {
 	// The empty-slice fast path returns nil without touching the DB. Important for the retry wrapper: an empty insert must
 	// not waste a deadlock-retry budget on a no-op transaction.
