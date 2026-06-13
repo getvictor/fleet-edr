@@ -116,7 +116,7 @@ EDR_TLS_CERT_FILE=/tls/fullchain.pem
 EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
 
-**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint; the proxy-to-EDR hop also runs over TLS: issue #140 removed the plaintext-HTTP opt-out, so the EDR server binary cannot serve HTTP under any configuration. Issue the proxy-to-backend cert from your internal CA (or reuse the public cert) and mount it under `./tls/`; the env-var shape is identical to Option A.
+**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint. By default the proxy-to-EDR hop also runs over TLS (issue #140 makes the server terminate TLS itself): issue the proxy-to-backend cert from your internal CA or reuse the public cert, mount it under `./tls/`, and the env-var shape is identical to Option A. If your platform cannot present a backend certificate (most PaaS edges, including Render, proxy plaintext to the service), set `EDR_TLS_TERMINATED_BY_PROXY=1` instead and omit the cert files: the server then listens plaintext HTTP on the assumption that the proxy terminates TLS in front of it. The flag and cert files are mutually exclusive. For the Render one-click path see [deploy-render.md](deploy-render.md).
 
 ### 5. Pin a version in .env
 
@@ -209,7 +209,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_DSN` / `EDR_DSN_FILE` | yes | none | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
 | `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | none | Shared secret agents present at enrollment |
 | `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTPS server binds |
-| `EDR_TLS_CERT_FILE` | **yes** | none | PEM cert. Unconditionally required; the server has no plaintext-HTTP mode (issue #140) |
+| `EDR_TLS_CERT_FILE` | **yes** | none | PEM cert. Required unless `EDR_TLS_TERMINATED_BY_PROXY=1`; the server has no _unguarded_ plaintext-HTTP mode (issue #140) |
 | `EDR_TLS_KEY_FILE` | **yes** | none | PEM key (pair with cert) |
 | `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
 | `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
@@ -338,7 +338,7 @@ docker compose -f docker-compose.prod.yml restart server
 
 **Server keeps exiting with "EDR_DSN is required"**: the `edr_dsn` secret file is missing or unreadable. Re-run the secrets step in Setup.
 
-**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"**: either cert path is unset or unreadable. The server has no plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying.
+**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"**: either cert path is unset or unreadable. The server has no unguarded plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying. (Behind a TLS-terminating proxy that cannot present a backend cert, set `EDR_TLS_TERMINATED_BY_PROXY=1` and omit the cert files instead.)
 
 **Agents see "enrollment failed: unauthorized"**: the `enroll_secret` on the server and the `EDR_ENROLL_SECRET` the agent reads from `/etc/fleet-edr.conf` are different. Confirm the MDM install-script writes the exact value from `secrets/enroll_secret`.
 

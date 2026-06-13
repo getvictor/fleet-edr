@@ -1,0 +1,93 @@
+# Render blueprint for the Fleet EDR server. One-click getting-started deploy:
+# the server behind Render's TLS-terminating edge plus a bundled MySQL.
+# Deploy agents to your Macs separately via an MDM (see docs/fleet-deployment.md).
+#
+# Render terminates TLS at its edge and proxies plaintext HTTP to the service on
+# $PORT, so the server runs with EDR_TLS_TERMINATED_BY_PROXY=1 (its gated
+# exception to mandatory-TLS, issue #140). Agents connect to Render's
+# publicly-trusted https URL, so the data plane is encrypted end-to-edge with no
+# certificate management. The server self-applies schema migrations on boot
+# under a MySQL advisory lock, so there is no preDeployCommand. No Redis: the
+# server is stateless (ADR-0010) and keeps all durable state in MySQL.
+services:
+  - name: fleet-edr-server
+    type: web
+    runtime: image
+    plan: standard
+    image:
+      url: 'ghcr.io/getvictor/fleet-edr-server:latest'
+    healthCheckPath: /readyz
+    envVars:
+      # Render injects PORT; bind all interfaces so the edge proxy can reach us.
+      - key: EDR_LISTEN_ADDR
+        value: '0.0.0.0:10000'
+      - key: PORT
+        value: 10000
+      # The gated plaintext-HTTP opt-in. Safe here precisely because Render's
+      # edge terminates TLS in front of this service.
+      - key: EDR_TLS_TERMINATED_BY_PROXY
+        value: '1'
+      # Render's proxy fronts every request; trust its forwarded client IP so
+      # per-IP enroll rate limiting buckets by the real agent, not the proxy.
+      - key: EDR_TRUSTED_PROXIES
+        value: '10.0.0.0/8'
+      - key: EDR_LOG_FORMAT
+        value: json
+      # Generated once by Render and shown in the dashboard. Copy it into your
+      # MDM install script as the agent enroll secret (docs/fleet-deployment.md).
+      - key: EDR_ENROLL_SECRET
+        generateValue: true
+      # Identity bootstrap requires a session signing key whenever break-glass is
+      # configured (which it is here, via EDR_AUTH_ALLOW_NO_OIDC). Without it the
+      # server exits on first boot. Render generates and persists it.
+      - key: EDR_SESSION_SIGNING_KEY
+        generateValue: true
+      # The server composes EDR_DSN from these parts (Render can't interpolate
+      # one env var into another, so we wire the host:port + generated password
+      # discretely, the same shape Fleet's blueprint uses).
+      - key: EDR_MYSQL_ADDRESS
+        fromService:
+          name: fleet-edr-mysql
+          type: pserv
+          property: hostport
+      - key: EDR_MYSQL_DATABASE
+        fromService:
+          name: fleet-edr-mysql
+          type: pserv
+          envVarKey: MYSQL_DATABASE
+      - key: EDR_MYSQL_USERNAME
+        fromService:
+          name: fleet-edr-mysql
+          type: pserv
+          envVarKey: MYSQL_USER
+      - key: EDR_MYSQL_PASSWORD
+        fromService:
+          name: fleet-edr-mysql
+          type: pserv
+          envVarKey: MYSQL_PASSWORD
+      # Break-glass admin bootstrap: the server prints a one-time break-glass
+      # redemption URL to the logs on first boot. To complete break-glass sign-in
+      # on the assigned Render URL, set EDR_BREAKGLASS_RP_ID to the host and
+      # EDR_BREAKGLASS_RP_ORIGINS to https://<host> post-deploy (see
+      # docs/deploy-render.md), or configure OIDC instead.
+      - key: EDR_AUTH_ALLOW_NO_OIDC
+        value: '1'
+
+  - name: fleet-edr-mysql
+    type: pserv
+    runtime: docker
+    plan: standard
+    repo: https://github.com/render-examples/mysql
+    disk:
+      name: mysql
+      mountPath: /var/lib/mysql
+      sizeGB: 10
+    envVars:
+      - key: MYSQL_DATABASE
+        value: edr
+      - key: MYSQL_USER
+        value: edr
+      - key: MYSQL_PASSWORD
+        generateValue: true
+      - key: MYSQL_ROOT_PASSWORD
+        generateValue: true

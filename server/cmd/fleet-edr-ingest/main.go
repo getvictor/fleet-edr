@@ -126,7 +126,13 @@ func run() error {
 		WriteTimeout: httpWriteTimeout,
 		IdleTimeout:  httpIdleTimeout,
 	}
-	if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
+	// Honor EDR_TLS_TERMINATED_BY_PROXY here too: config validation allows missing cert files in that mode, so calling
+	// ConfigureTLS with empty paths would fail to load a keypair and brick ingest boot behind a proxy. Leaving TLSConfig nil
+	// makes RunAndShutdown serve plaintext, matching the main server.
+	if cfg.TLSTerminatedByProxy {
+		logger.WarnContext(ctx, "ingest serving plaintext HTTP: EDR_TLS_TERMINATED_BY_PROXY=1 is set; only safe behind a "+
+			"TLS-terminating proxy", "listen_addr", cfg.ListenAddr)
+	} else if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,
 		AllowTLS12: cfg.AllowTLS12,

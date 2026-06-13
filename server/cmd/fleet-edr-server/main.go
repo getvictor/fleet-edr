@@ -219,7 +219,7 @@ func openIdentity(
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:                 db,
 		Logger:             logger,
-		CookieSecure:       cfg.TLSEnabled(),
+		CookieSecure:       cfg.ExternalTLS(),
 		AuditReadSampling:  cfg.AuditReadSampling,
 		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
 		SessionSigningKey:  cfg.SessionSigningKey,
@@ -504,6 +504,15 @@ func redemptionURL(cfg *config.Config, plaintext string) string {
 }
 
 func configureTLS(ctx context.Context, logger *slog.Logger, srv *http.Server, cfg *config.Config) error {
+	if cfg.TLSTerminatedByProxy {
+		// Leave srv.TLSConfig nil so RunAndShutdown serves plaintext HTTP. Config validation already guaranteed no cert files are
+		// set in this mode. Warn loudly so an operator who set the flag by accident (no proxy actually in front) sees that the
+		// data plane is plaintext on the bind address.
+		logger.WarnContext(ctx, "serving plaintext HTTP: EDR_TLS_TERMINATED_BY_PROXY=1 is set; this is only safe behind a "+
+			"TLS-terminating proxy (PaaS edge, ALB, nginx). Do not expose this bind address directly to agents or the internet.",
+			"listen_addr", cfg.ListenAddr)
+		return nil
+	}
 	return httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,
@@ -532,9 +541,11 @@ func newHTTPServer(
 	metricsRec *metrics.Recorder,
 ) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{
-		Logger:           logger,
-		ServiceName:      serviceName,
-		TLSEnabled:       cfg.TLSEnabled(),
+		Logger:      logger,
+		ServiceName: serviceName,
+		// HSTS keys on the client-facing scheme: emit it when a front proxy terminates TLS too, since the browser reaches us
+		// over HTTPS. Safe under the accidental-flag case because browsers ignore HSTS received over a direct plain-HTTP hit.
+		TLSEnabled:       cfg.ExternalTLS(),
 		ClientIPResolver: clientIPResolver,
 		Metrics:          metricsRec,
 	})

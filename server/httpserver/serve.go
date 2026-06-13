@@ -27,9 +27,10 @@ func (d *DrainState) BeginDrain() { d.draining.Store(true) }
 // IsDraining reports whether graceful-shutdown draining has begun.
 func (d *DrainState) IsDraining() bool { return d.draining.Load() }
 
-// RunAndShutdown starts srv on TLS in a background goroutine, blocks until ctx is cancelled or the server returns a fatal error,
-// then performs a graceful shutdown. ConfigureTLS must have populated srv.TLSConfig beforehand so the empty-string cert/key
-// arguments are correct. The plaintext-HTTP path was removed in issue #140; production binaries can only serve TLS.
+// RunAndShutdown starts srv in a background goroutine, blocks until ctx is cancelled or the server returns a fatal error, then
+// performs a graceful shutdown. It serves TLS when srv.TLSConfig is populated (ConfigureTLS ran, the default), and plaintext HTTP
+// when it is nil. The server terminates TLS itself by default (issue #140); the nil-TLSConfig plaintext path is reached only when
+// the operator opts into EDR_TLS_TERMINATED_BY_PROXY, i.e. a TLS-terminating proxy is in front (callers skip ConfigureTLS then).
 //
 // Returns the server-side error on abnormal exit, or nil on a ctx-driven graceful shutdown (which also logs "shutdown complete"
 // on the way out).
@@ -42,8 +43,16 @@ func (d *DrainState) IsDraining() bool { return d.draining.Load() }
 func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, drain *DrainState, drainDelay time.Duration) error {
 	serverErr := make(chan error, 1)
 	go func() {
-		// ConfigureTLS owns the cert source via GetCertificate; pass empty strings.
-		serveErr := srv.ListenAndServeTLS("", "")
+		// srv.TLSConfig is populated by ConfigureTLS when the server terminates TLS itself. When it's nil the operator opted into
+		// EDR_TLS_TERMINATED_BY_PROXY (a TLS-terminating proxy is in front), so we serve plaintext HTTP. Branching on TLSConfig
+		// keeps the proxy-mode plumbing out of this function's signature and its two callers.
+		var serveErr error
+		if srv.TLSConfig != nil {
+			// ConfigureTLS owns the cert source via GetCertificate; pass empty strings.
+			serveErr = srv.ListenAndServeTLS("", "")
+		} else {
+			serveErr = srv.ListenAndServe()
+		}
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			serverErr <- serveErr
 		}
