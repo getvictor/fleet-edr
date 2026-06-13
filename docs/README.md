@@ -17,9 +17,13 @@ Operator-facing documentation for Fleet EDR. For developer setup see the repo-ro
 | Recovering when SSO is unavailable, registering a second security key     | [`breakglass.md`](breakglass.md)                     |
 | Reviewing what threats v0.1 covers and where the gaps are                 | [`threat-model.md`](threat-model.md)                 |
 
+## Getting started
+
+The fastest path to an evaluation: deploy the server on Render (one click, TLS and MySQL handled for you), then push the agent to your Macs through Fleet MDM. See [deploy-render.md](deploy-render.md) for the server and [fleet-deployment.md](fleet-deployment.md) for the agents.
+
 ## Shape of a Fleet EDR deployment
 
-- **Server**: container image `ghcr.io/getvictor/fleet-edr-server` running behind your TLS-terminating ingress, backed by MySQL 8.4. Serves the agent ingestion API, the admin web UI, and the OTel metric pipeline.
+- **Server**: container image `ghcr.io/getvictor/fleet-edr-server` running behind your TLS-terminating ingress (or [Render](deploy-render.md), which provides the ingress), backed by MySQL 8.4. Serves the agent ingestion API, the admin web UI, and the OTel metric pipeline.
 - **Agent**: signed + notarized `.pkg` installed on each macOS endpoint. Runs as a LaunchDaemon, receives events from an embedded system extension over XPC, queues them in SQLite, uploads to the server.
 - **MDM profiles**: two unsigned `.mobileconfig` files that pre-approve the system extension and grant Full Disk Access. Delivered by whichever MDM the customer uses; the MDM signs them at delivery time.
 - **Install script**: a one-line Bash snippet your MDM runs before the `.pkg` installer to drop the enroll secret into `/etc/fleet-edr.conf`.

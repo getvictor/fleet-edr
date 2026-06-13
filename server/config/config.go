@@ -59,6 +59,12 @@ type Config struct {
 	TLSCertFile  string
 	TLSKeyFile   string
 	AllowTLS12   bool
+	// TLSTerminatedByProxy lets the server listen plaintext HTTP when a TLS-terminating proxy (a PaaS edge like Render, or an
+	// ALB / nginx / Cloudflare) sits in front. It is the gated exception to the mandatory-TLS default (issue #140): the default
+	// still refuses to boot without certs, but an operator who sets EDR_TLS_TERMINATED_BY_PROXY=1 asserts that something in front
+	// terminates TLS, so the data plane is still encrypted end-to-edge. Setting it together with cert files is rejected as
+	// ambiguous. This is the same posture Fleet ships (FLEET_SERVER_TLS=false behind Render/ALB).
+	TLSTerminatedByProxy bool
 	// ShutdownDrain is how long RunAndShutdown keeps serving after SIGTERM (with /readyz reporting 503) before closing the
 	// listener, so a load balancer drains this replica first. Default 30s; 0 disables the drain wait. From EDR_SHUTDOWN_DRAIN.
 	ShutdownDrain    time.Duration
@@ -222,6 +228,19 @@ type Config struct {
 	ReauthWindow time.Duration
 }
 
+// composeDSN builds a go-sql-driver DSN from discrete EDR_MYSQL_* parts, or returns "" if any required part is missing. The parts
+// mirror the values a PaaS blueprint can wire from a managed/bundled MySQL service (host:port + generated user/password/db).
+func composeDSN(getenv func(string) string) string {
+	addr := getenv("EDR_MYSQL_ADDRESS")
+	user := getenv("EDR_MYSQL_USERNAME")
+	pass := getenv("EDR_MYSQL_PASSWORD")
+	db := getenv("EDR_MYSQL_DATABASE")
+	if addr == "" || user == "" || pass == "" || db == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true", user, pass, addr, db)
+}
+
 // TLSEnabled reports whether TLS cert and key are both set.
 func (c Config) TLSEnabled() bool {
 	return c.TLSCertFile != "" && c.TLSKeyFile != ""
@@ -293,13 +312,25 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 // loadCoreEnv reads required strings + scalar feature flags. The TLS certificate paths land here too because they're optionalStr;
 // their cross-field validation runs in loadTLSConfig once both sides are known.
 func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
-	requireStr(&c.DSN, "EDR_DSN", getenv, errs, true)
+	// EDR_DSN is the canonical single-string DSN. When it is empty, compose one from discrete parts
+	// (EDR_MYSQL_ADDRESS/USERNAME/PASSWORD/DATABASE). PaaS blueprints (Render's fromService, and the same shape on Fly / ECS) hand
+	// the DB host:port and a generated password to separate env vars and cannot interpolate them into one DSN string, so the
+	// compose-from-parts path is what makes a one-click blueprint work. An explicit EDR_DSN always wins.
+	optionalStr(&c.DSN, "EDR_DSN", getenv)
+	if c.DSN == "" {
+		c.DSN = composeDSN(getenv)
+	}
+	if c.DSN == "" {
+		*errs = append(*errs, errors.New(
+			"EDR_DSN is required (or supply EDR_MYSQL_ADDRESS + EDR_MYSQL_USERNAME + EDR_MYSQL_PASSWORD + EDR_MYSQL_DATABASE)"))
+	}
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, errs, true)
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 
 	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
+	c.TLSTerminatedByProxy = getenv("EDR_TLS_TERMINATED_BY_PROXY") == "1"
 	// NonNegative (not Positive): 0 is the documented "disable the drain wait" sentinel. RunAndShutdown skips the drain phase and
 	// shuts down immediately. Integration + single-process tests set EDR_SHUTDOWN_DRAIN=0 so they don't sleep the drain window.
 	envparse.NonNegativeDuration(getenv, "EDR_SHUTDOWN_DRAIN", &c.ShutdownDrain, errs)
@@ -314,9 +345,21 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 // loadTLSConfig validates the TLS configuration's cross-field
 // invariants now that loadCoreEnv has populated the cert paths.
 func loadTLSConfig(c *Config, errs *[]error) {
+	if c.TLSTerminatedByProxy {
+		// Gated exception to #140: a TLS-terminating proxy is in front, so the server listens plaintext HTTP. Reject cert files
+		// alongside it: the operator either terminates TLS here (cert files, no flag) or at the proxy (flag, no cert files), never
+		// a confused half-and-half where the cert files silently win or are silently ignored.
+		if c.TLSCertFile != "" || c.TLSKeyFile != "" {
+			*errs = append(*errs, errors.New(
+				"EDR_TLS_TERMINATED_BY_PROXY=1 is mutually exclusive with EDR_TLS_CERT_FILE/EDR_TLS_KEY_FILE: "+
+					"terminate TLS at the proxy (flag only) or at the server (cert files only), not both"))
+		}
+		return
+	}
 	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
 		*errs = append(*errs, errors.New(
-			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required: the server has no plaintext-HTTP mode (issue #140)"))
+			"EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required unless EDR_TLS_TERMINATED_BY_PROXY=1: "+
+				"the server has no unguarded plaintext-HTTP mode (issue #140)"))
 		return
 	}
 	// Fail fast on unreadable / mismatched cert material so boot exits before bootstrap.New mutates the DB (admin seeding prints

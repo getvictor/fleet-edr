@@ -42,8 +42,16 @@ func (d *DrainState) IsDraining() bool { return d.draining.Load() }
 func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, drain *DrainState, drainDelay time.Duration) error {
 	serverErr := make(chan error, 1)
 	go func() {
-		// ConfigureTLS owns the cert source via GetCertificate; pass empty strings.
-		serveErr := srv.ListenAndServeTLS("", "")
+		// srv.TLSConfig is populated by ConfigureTLS when the server terminates TLS itself. When it's nil the operator opted into
+		// EDR_TLS_TERMINATED_BY_PROXY (a TLS-terminating proxy is in front), so we serve plaintext HTTP. Branching on TLSConfig
+		// keeps the proxy-mode plumbing out of this function's signature and its two callers.
+		var serveErr error
+		if srv.TLSConfig != nil {
+			// ConfigureTLS owns the cert source via GetCertificate; pass empty strings.
+			serveErr = srv.ListenAndServeTLS("", "")
+		} else {
+			serveErr = srv.ListenAndServe()
+		}
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			serverErr <- serveErr
 		}

@@ -106,6 +106,7 @@ func TestLoad(t *testing.T) {
 			wantErr: "EDR_ENROLL_SECRET",
 		},
 		{
+			// spec:server-availability/tls-may-be-terminated-by-a-front-proxy/mandatory-tls-remains-the-default
 			name: "TLS cert + key unconditionally required (no opt-out)",
 			env: map[string]string{
 				"EDR_DSN":           "x",
@@ -130,6 +131,79 @@ func TestLoad(t *testing.T) {
 				"EDR_TLS_CERT_FILE": "/tmp/edr.crt",
 			},
 			wantErr: "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required",
+		},
+		{
+			// spec:server-availability/tls-may-be-terminated-by-a-front-proxy/proxy-termination-opt-in-allows-plaintext-http
+			name: "EDR_TLS_TERMINATED_BY_PROXY allows boot without certs",
+			env: map[string]string{
+				"EDR_DSN":                     "x",
+				"EDR_ENROLL_SECRET":           "s",
+				"EDR_AUTH_ALLOW_NO_OIDC":      "1",
+				"EDR_TLS_TERMINATED_BY_PROXY": "1",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.True(t, c.TLSTerminatedByProxy)
+				assert.False(t, c.TLSEnabled(), "proxy-terminated mode does not terminate TLS at the server")
+			},
+		},
+		{
+			// spec:server-availability/tls-may-be-terminated-by-a-front-proxy/proxy-flag-and-cert-files-are-mutually-exclusive
+			name: "EDR_TLS_TERMINATED_BY_PROXY with cert files is rejected",
+			env: map[string]string{
+				"EDR_DSN":                     "x",
+				"EDR_ENROLL_SECRET":           "s",
+				"EDR_TLS_TERMINATED_BY_PROXY": "1",
+				"EDR_TLS_CERT_FILE":           certFile,
+				"EDR_TLS_KEY_FILE":            keyFile,
+			},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name: "EDR_DSN composed from EDR_MYSQL_* parts when DSN unset",
+			env: map[string]string{
+				"EDR_MYSQL_ADDRESS":      "db.internal:3306",
+				"EDR_MYSQL_USERNAME":     "edr",
+				"EDR_MYSQL_PASSWORD":     "secret",
+				"EDR_MYSQL_DATABASE":     "edr",
+				"EDR_ENROLL_SECRET":      "s",
+				"EDR_TLS_CERT_FILE":      certFile,
+				"EDR_TLS_KEY_FILE":       keyFile,
+				"EDR_AUTH_ALLOW_NO_OIDC": "1",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "edr:secret@tcp(db.internal:3306)/edr?parseTime=true", c.DSN)
+			},
+		},
+		{
+			name: "explicit EDR_DSN wins over parts",
+			env: map[string]string{
+				"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+				"EDR_MYSQL_ADDRESS":      "db.internal:3306",
+				"EDR_MYSQL_USERNAME":     "edr",
+				"EDR_MYSQL_PASSWORD":     "secret",
+				"EDR_MYSQL_DATABASE":     "edr",
+				"EDR_ENROLL_SECRET":      "s",
+				"EDR_TLS_CERT_FILE":      certFile,
+				"EDR_TLS_KEY_FILE":       keyFile,
+				"EDR_AUTH_ALLOW_NO_OIDC": "1",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "root@tcp(127.0.0.1:3306)/edr?parseTime=true", c.DSN)
+			},
+		},
+		{
+			name: "partial EDR_MYSQL_* parts still error (no DSN)",
+			env: map[string]string{
+				"EDR_MYSQL_ADDRESS":  "db.internal:3306",
+				"EDR_MYSQL_USERNAME": "edr",
+				"EDR_ENROLL_SECRET":  "s",
+				"EDR_TLS_CERT_FILE":  certFile,
+				"EDR_TLS_KEY_FILE":   keyFile,
+			},
+			wantErr: "EDR_DSN is required",
 		},
 		{
 			name: "missing every required var reports each",
