@@ -32,6 +32,11 @@ jobs:
     with:
       # Recursive scan of every manifest in the repo: go.mod (agent + server),
       # ui/package-lock.json, and .github/workflows pins.
+      #
+      # Advisory suppressions live in an osv-scanner.toml next to the scanned
+      # lockfile (osv-scanner auto-loads it), NOT here. Today: ui/osv-scanner.toml
+      # ignores one Deno-only esbuild advisory. Audit those files when reviewing
+      # what this gate lets through.
       scan-args: |-
         --recursive
         ./
