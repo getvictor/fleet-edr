@@ -179,6 +179,7 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			name: "composed DSN escapes special chars in generated password",
+			// #nosec G101 -- test fixture: not a real credential.
 			env: map[string]string{
 				"EDR_MYSQL_ADDRESS":      "db.internal:3306",
 				"EDR_MYSQL_USERNAME":     "edr",
