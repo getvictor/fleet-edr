@@ -22,4 +22,12 @@ id = "GHSA-gv7w-rqvm-qjhr"
 # esbuild is a build-time dev dependency: it is not present in the production UI
 # bundle the server embeds. Revisit when a vite release depends on esbuild
 # >=0.28.1, at which point bump vite and drop this entry.
-reason = "Deno-only advisory; this is a Node/npm project so the vulnerable path is unused. esbuild is a build-time dev dep not shipped in the bundle, and no vite release yet pulls the fixed esbuild 0.28.1 (forcing it breaks the build). Revisit when vite supports esbuild >=0.28.1."
+# TOML multi-line string with trailing-backslash continuations: the newlines are
+# stripped, so osv-scanner still reads one logical line, and the source stays
+# under the repo's 140-char wrap.
+reason = """\
+Deno-only advisory; this is a Node/npm project so the vulnerable path is unused. \
+esbuild is a build-time dev dep not shipped in the bundle, and no vite release yet \
+pulls the fixed esbuild 0.28.1 (forcing it breaks the build). Revisit when vite \
+supports esbuild >=0.28.1.\
+"""
