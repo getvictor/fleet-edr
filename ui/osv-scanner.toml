@@ -1,0 +1,25 @@
+# OSV-Scanner ignore list for the ui/ npm dependency tree. osv-scanner auto-loads
+# the osv-scanner.toml that sits next to the scanned lockfile (here
+# ui/package-lock.json), so this file must live in ui/, not the repo root, for the
+# CI scan (.github/workflows/osv-scanner.yml, `--recursive ./`) to honor it. Every
+# entry must carry a reason a reviewer can audit; prefer fixing the dependency over
+# ignoring it.
+
+[[IgnoredVulns]]
+id = "GHSA-gv7w-rqvm-qjhr"
+# esbuild <=0.28.0 (we have 0.25.12, transitive via vite -> ui dev/build tooling).
+# Ignored for two independent reasons:
+#   1. Not applicable to this project's runtime. The advisory is a Deno-specific
+#      flaw: esbuild's Deno module downloads its native binary without SHA-256
+#      verification, so an attacker controlling NPM_CONFIG_REGISTRY can inject a
+#      binary. The Node.js install path (what npm + vite use here) performs that
+#      integrity check, and this repo has no Deno toolchain. The vulnerable code
+#      path is never exercised.
+#   2. No compatible fix exists. The fix is only in esbuild 0.28.1, but every
+#      vite release through the latest (8.x) pins esbuild ^0.25 / ^0.27; none
+#      require >=0.28.1. Forcing esbuild 0.28.1 via an npm override breaks the
+#      vite build (incompatible transform target handling, 208 errors).
+# esbuild is a build-time dev dependency: it is not present in the production UI
+# bundle the server embeds. Revisit when a vite release depends on esbuild
+# >=0.28.1, at which point bump vite and drop this entry.
+reason = "Deno-only advisory; this is a Node/npm project so the vulnerable path is unused. esbuild is a build-time dev dep not shipped in the bundle, and no vite release yet pulls the fixed esbuild 0.28.1 (forcing it breaks the build). Revisit when vite supports esbuild >=0.28.1."
