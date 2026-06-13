@@ -219,7 +219,7 @@ func openIdentity(
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:                 db,
 		Logger:             logger,
-		CookieSecure:       cfg.TLSEnabled(),
+		CookieSecure:       cfg.ExternalTLS(),
 		AuditReadSampling:  cfg.AuditReadSampling,
 		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
 		SessionSigningKey:  cfg.SessionSigningKey,
@@ -541,9 +541,11 @@ func newHTTPServer(
 	metricsRec *metrics.Recorder,
 ) *http.Server {
 	handler := httpserver.Build(mux, httpserver.Options{
-		Logger:           logger,
-		ServiceName:      serviceName,
-		TLSEnabled:       cfg.TLSEnabled(),
+		Logger:      logger,
+		ServiceName: serviceName,
+		// HSTS keys on the client-facing scheme: emit it when a front proxy terminates TLS too, since the browser reaches us
+		// over HTTPS. Safe under the accidental-flag case because browsers ignore HSTS received over a direct plain-HTTP hit.
+		TLSEnabled:       cfg.ExternalTLS(),
 		ClientIPResolver: clientIPResolver,
 		Metrics:          metricsRec,
 	})

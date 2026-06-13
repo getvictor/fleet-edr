@@ -27,9 +27,10 @@ func (d *DrainState) BeginDrain() { d.draining.Store(true) }
 // IsDraining reports whether graceful-shutdown draining has begun.
 func (d *DrainState) IsDraining() bool { return d.draining.Load() }
 
-// RunAndShutdown starts srv on TLS in a background goroutine, blocks until ctx is cancelled or the server returns a fatal error,
-// then performs a graceful shutdown. ConfigureTLS must have populated srv.TLSConfig beforehand so the empty-string cert/key
-// arguments are correct. The plaintext-HTTP path was removed in issue #140; production binaries can only serve TLS.
+// RunAndShutdown starts srv in a background goroutine, blocks until ctx is cancelled or the server returns a fatal error, then
+// performs a graceful shutdown. It serves TLS when srv.TLSConfig is populated (ConfigureTLS ran, the default), and plaintext HTTP
+// when it is nil. The server terminates TLS itself by default (issue #140); the nil-TLSConfig plaintext path is reached only when
+// the operator opts into EDR_TLS_TERMINATED_BY_PROXY, i.e. a TLS-terminating proxy is in front (callers skip ConfigureTLS then).
 //
 // Returns the server-side error on abnormal exit, or nil on a ctx-driven graceful shutdown (which also logs "shutdown complete"
 // on the way out).

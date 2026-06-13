@@ -25,7 +25,8 @@ No Redis is needed: the server is stateless (ADR-0010) and keeps all durable sta
 
 ## After it is up
 
-- **Grab the break-glass admin password.** On first boot the server prints a one-time admin password to its logs. In the Render dashboard open the `fleet-edr-server` service logs and search for the break-glass banner. Use it to sign in at `/ui/`, then configure OIDC (set `EDR_OIDC_ISSUER` and remove `EDR_AUTH_ALLOW_NO_OIDC`) for ongoing access.
+- **Enable break-glass sign-in for your Render URL.** Break-glass uses WebAuthn, which binds credentials to a specific host, so on a non-localhost deployment you must tell the server its public host. Once Render assigns the URL, set two env vars on the `fleet-edr-server` service and let it redeploy: `EDR_BREAKGLASS_RP_ID=<your-service>.onrender.com` and `EDR_BREAKGLASS_RP_ORIGINS=https://<your-service>.onrender.com`. Without them the break-glass ceremony fails. (Skip this if you configure OIDC instead, below.)
+- **Redeem the break-glass admin.** On first boot the server prints a one-time break-glass redemption URL (not a password) to its logs. In the Render dashboard open the `fleet-edr-server` service logs and search for the break-glass banner, open the URL, and register a passkey to become admin. Then configure OIDC (set `EDR_OIDC_ISSUER` and remove `EDR_AUTH_ALLOW_NO_OIDC`) for ongoing access.
 - **Grab the enroll secret.** In the `fleet-edr-server` service, **Environment** tab, copy the generated `EDR_ENROLL_SECRET`. Your MDM install script needs it (it is the `EDR_ENROLL_SECRET` in [fleet-deployment.md](fleet-deployment.md)'s install script).
 - **Note your server URL.** `https://<your-service>.onrender.com` is the `EDR_SERVER_URL` agents enroll against. Set it as the `FLEET_SECRET_EDR_SERVER_URL` (or equivalent) in your MDM.
 

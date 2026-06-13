@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
+
 	"github.com/fleetdm/edr/internal/envparse"
 )
 
@@ -229,7 +231,10 @@ type Config struct {
 }
 
 // composeDSN builds a go-sql-driver DSN from discrete EDR_MYSQL_* parts, or returns "" if any required part is missing. The parts
-// mirror the values a PaaS blueprint can wire from a managed/bundled MySQL service (host:port + generated user/password/db).
+// mirror the values a PaaS blueprint can wire from a managed/bundled MySQL service (host:port + generated user/password/db). It
+// goes through go-sql-driver's Config.FormatDSN rather than fmt.Sprintf so a generated password containing DSN metacharacters
+// (`@`, `:`, `/`, `?`) is escaped instead of corrupting the DSN. PaaS blueprints generate such passwords routinely, so naive
+// string interpolation would intermittently brick boot (the same round-trip rationale as testdb's replaceDBName).
 func composeDSN(getenv func(string) string) string {
 	addr := getenv("EDR_MYSQL_ADDRESS")
 	user := getenv("EDR_MYSQL_USERNAME")
@@ -238,12 +243,26 @@ func composeDSN(getenv func(string) string) string {
 	if addr == "" || user == "" || pass == "" || db == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true", user, pass, addr, db)
+	dc := mysqldriver.NewConfig()
+	dc.User = user
+	dc.Passwd = pass
+	dc.Net = "tcp"
+	dc.Addr = addr
+	dc.DBName = db
+	dc.ParseTime = true
+	return dc.FormatDSN()
 }
 
-// TLSEnabled reports whether TLS cert and key are both set.
+// TLSEnabled reports whether the server terminates TLS itself (cert and key both set).
 func (c Config) TLSEnabled() bool {
 	return c.TLSCertFile != "" && c.TLSKeyFile != ""
+}
+
+// ExternalTLS reports whether the client-facing connection is HTTPS: either the server terminates TLS itself, or a front proxy
+// does (EDR_TLS_TERMINATED_BY_PROXY). Browser-facing security wiring (Secure cookies, HSTS) keys on this rather than TLSEnabled
+// so a behind-proxy deployment still marks cookies Secure and emits HSTS, since the browser only ever reaches us over HTTPS.
+func (c Config) ExternalTLS() bool {
+	return c.TLSEnabled() || c.TLSTerminatedByProxy
 }
 
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.

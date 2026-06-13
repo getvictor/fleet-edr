@@ -37,6 +37,11 @@ services:
       # MDM install script as the agent enroll secret (docs/fleet-deployment.md).
       - key: EDR_ENROLL_SECRET
         generateValue: true
+      # Identity bootstrap requires a session signing key whenever break-glass is
+      # configured (which it is here, via EDR_AUTH_ALLOW_NO_OIDC). Without it the
+      # server exits on first boot. Render generates and persists it.
+      - key: EDR_SESSION_SIGNING_KEY
+        generateValue: true
       # The server composes EDR_DSN from these parts (Render can't interpolate
       # one env var into another, so we wire the host:port + generated password
       # discretely, the same shape Fleet's blueprint uses).
@@ -60,8 +65,11 @@ services:
           name: fleet-edr-mysql
           type: pserv
           envVarKey: MYSQL_PASSWORD
-      # Break-glass admin bootstrap: the server prints a one-time admin password
-      # to the logs on first boot. OIDC can be configured post-deploy.
+      # Break-glass admin bootstrap: the server prints a one-time break-glass
+      # redemption URL to the logs on first boot. To complete break-glass sign-in
+      # on the assigned Render URL, set EDR_BREAKGLASS_RP_ID to the host and
+      # EDR_BREAKGLASS_RP_ORIGINS to https://<host> post-deploy (see
+      # docs/deploy-render.md), or configure OIDC instead.
       - key: EDR_AUTH_ALLOW_NO_OIDC
         value: '1'
 

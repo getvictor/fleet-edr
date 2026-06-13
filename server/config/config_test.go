@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -174,6 +175,43 @@ func TestLoad(t *testing.T) {
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
 				assert.Equal(t, "edr:secret@tcp(db.internal:3306)/edr?parseTime=true", c.DSN)
+			},
+		},
+		{
+			name: "composed DSN escapes special chars in generated password",
+			env: map[string]string{
+				"EDR_MYSQL_ADDRESS":      "db.internal:3306",
+				"EDR_MYSQL_USERNAME":     "edr",
+				"EDR_MYSQL_PASSWORD":     "p@ss:w/rd?x",
+				"EDR_MYSQL_DATABASE":     "edr",
+				"EDR_ENROLL_SECRET":      "s",
+				"EDR_TLS_CERT_FILE":      certFile,
+				"EDR_TLS_KEY_FILE":       keyFile,
+				"EDR_AUTH_ALLOW_NO_OIDC": "1",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				// Round-trips through go-sql-driver: parsing the composed DSN must recover the exact password, which naive
+				// fmt.Sprintf interpolation would corrupt on the '@' / ':' / '/' / '?' characters.
+				parsed, err := mysqldriver.ParseDSN(c.DSN)
+				require.NoError(t, err)
+				assert.Equal(t, "p@ss:w/rd?x", parsed.Passwd)
+				assert.Equal(t, "db.internal:3306", parsed.Addr)
+				assert.True(t, parsed.ParseTime)
+			},
+		},
+		{
+			name: "ExternalTLS true under proxy termination",
+			env: map[string]string{
+				"EDR_DSN":                     "x",
+				"EDR_ENROLL_SECRET":           "s",
+				"EDR_AUTH_ALLOW_NO_OIDC":      "1",
+				"EDR_TLS_TERMINATED_BY_PROXY": "1",
+			},
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.False(t, c.TLSEnabled(), "server does not terminate TLS in proxy mode")
+				assert.True(t, c.ExternalTLS(), "external connection is HTTPS via the proxy, so cookies/HSTS stay secure")
 			},
 		},
 		{
