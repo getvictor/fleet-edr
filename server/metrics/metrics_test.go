@@ -131,6 +131,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.EventsIngested(ctx, "host-b", 2)
 	r.AlertCreated(ctx, "dyld_insert", "high")
 	r.RetentionRowsDeleted(ctx, 42)
+	r.ProcessRetentionRowsDeleted(ctx, 7)
 	r.QueueDropped(ctx, 3, false)
 	r.QueueDropped(ctx, 5, true)
 
@@ -140,6 +141,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	assert.Equal(t, int64(2), findSum(t, rm, "edr.events.ingested", map[string]any{"host_id": "host-b"}))
 	assert.Equal(t, int64(1), findSum(t, rm, "edr.alerts.created", map[string]any{"rule_id": "dyld_insert", "severity": "high"}))
 	assert.Equal(t, int64(42), findSum(t, rm, "edr.retention.rows_deleted", nil))
+	assert.Equal(t, int64(7), findSum(t, rm, "edr.retention.processes.rows_deleted", nil))
 	assert.Equal(t, int64(3), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": false}))
 	assert.Equal(t, int64(5), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": true}))
 	assert.Equal(t, int64(3), findGauge(t, rm, "edr.enrolled.hosts"))
@@ -185,6 +187,7 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 		r.EventsIngested(ctx, "h", 1)
 		r.AlertCreated(ctx, "r", "s")
 		r.RetentionRowsDeleted(ctx, 1)
+		r.ProcessRetentionRowsDeleted(ctx, 1)
 		r.QueueDropped(ctx, 1, false)
 		r.QueueDropped(ctx, 1, true)
 	})

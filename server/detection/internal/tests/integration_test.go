@@ -30,6 +30,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/internal/intake"
+	"github.com/fleetdm/edr/server/detection/internal/pipeline"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -237,6 +238,7 @@ type recordingMetrics struct {
 	alertsCreated       int
 	processesReconciled int64
 	rowsDeleted         int64
+	processRowsDeleted  int64
 }
 
 func (m *recordingMetrics) EventsIngested(_ context.Context, _ string, n int) {
@@ -258,6 +260,11 @@ func (m *recordingMetrics) RetentionRowsDeleted(_ context.Context, n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.rowsDeleted += n
+}
+func (m *recordingMetrics) ProcessRetentionRowsDeleted(_ context.Context, n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.processRowsDeleted += n
 }
 
 func (m *recordingMetrics) snapshot() (events, alerts int, reconciled, deleted int64) {
@@ -1372,6 +1379,77 @@ func TestBootstrap_FullModeRunsAllGoroutines(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after ctx cancel")
 	}
+}
+
+// spec:server-process-graph-builder/completed-process-records-are-pruned-after-the-retention-window/a-completed-record-older-than-the-window-is-pruned
+// spec:server-process-graph-builder/completed-process-records-are-pruned-after-the-retention-window/a-live-record-is-never-pruned
+// spec:server-process-graph-builder/completed-process-records-are-pruned-after-the-retention-window/a-completed-record-referenced-by-an-alert-is-retained
+//
+// Exercises the processes prune added to the retention runner (issue #360) end to end against real MySQL: only a completed,
+// alert-free, past-cutoff row is deleted; live rows (NULL exit, snapshot or not) and an alert-referenced completed row survive.
+func TestRetention_PrunesCompletedProcesses(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+
+	const dayNs = int64(24 * time.Hour)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nowNs := now.UnixNano()
+
+	// insertProc returns the new row id. exitNs <= 0 means a live (NULL exit_time_ns) row.
+	insertProc := func(forkNs, exitNs int64, snapshot bool) int64 {
+		t.Helper()
+		var exit any
+		if exitNs > 0 {
+			exit = exitNs
+		}
+		res, err := db.ExecContext(ctx, `
+			INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns, exit_time_ns, is_snapshot)
+			VALUES ('host-ret', 0, 0, '/bin/x', ?, ?, ?)`,
+			forkNs, exit, snapshot)
+		require.NoError(t, err)
+		id, err := res.LastInsertId()
+		require.NoError(t, err)
+		return id
+	}
+
+	oldCompleted := insertProc(nowNs-40*dayNs, nowNs-31*dayNs, false)  // exited before cutoff -> prune
+	recentCompleted := insertProc(nowNs-2*dayNs, nowNs-1*dayNs, false) // exited after cutoff -> keep
+	oldLiveSnapshot := insertProc(nowNs-40*dayNs, 0, true)             // live snapshot baseline -> keep
+	oldLiveOrphan := insertProc(nowNs-40*dayNs, 0, false)              // live non-snapshot (NULL exit) -> keep
+	oldAlerted := insertProc(nowNs-40*dayNs, nowNs-31*dayNs, false)    // past cutoff but alert-referenced -> keep
+
+	// Reference oldAlerted from an alert so the FK guard (ON DELETE RESTRICT) must skip it.
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO alerts (host_id, rule_id, severity, title, description, subject, process_id)
+		VALUES ('host-ret', 'r1', 'low', 't', 'd', ?, ?)`,
+		strconv.FormatInt(oldAlerted, 10), oldAlerted)
+	require.NoError(t, err)
+
+	rec := &recordingMetrics{}
+	runner := pipeline.NewRetention(db, pipeline.RetentionOptions{
+		RetentionDays: 30,
+		Metrics:       rec,
+		Now:           func() time.Time { return now },
+	})
+	deleted, err := runner.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted, "only the old completed alert-free process is pruned")
+
+	exists := func(id int64) bool {
+		var n int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM processes WHERE id = ?`, id).Scan(&n))
+		return n == 1
+	}
+	assert.False(t, exists(oldCompleted), "completed process older than the window is pruned")
+	assert.True(t, exists(recentCompleted), "completed process inside the window is kept")
+	assert.True(t, exists(oldLiveSnapshot), "live snapshot working-set row is never pruned")
+	assert.True(t, exists(oldLiveOrphan), "live (NULL-exit) non-snapshot row is never pruned")
+	assert.True(t, exists(oldAlerted), "alert-referenced process is retained (FK guard)")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, int64(1), rec.processRowsDeleted, "process-prune metric counts the single deleted row")
 }
 
 func TestBootstrap_IntakeModeIsNoOp(t *testing.T) {
