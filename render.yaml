@@ -75,9 +75,13 @@ services:
 
   - name: fleet-edr-mysql
     type: pserv
-    runtime: docker
+    # Run the official MySQL image directly so the bundled DB matches the
+    # 8.4.9 we build, test, and ship against everywhere else (docker-compose*.yml,
+    # packaging/, CI). The old render-examples/mysql repo pinned 8.0.24.
+    runtime: image
     plan: standard
-    repo: https://github.com/render-examples/mysql
+    image:
+      url: 'docker.io/library/mysql:8.4.9@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084'
     disk:
       name: mysql
       mountPath: /var/lib/mysql
