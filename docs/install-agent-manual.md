@@ -57,7 +57,7 @@ If any of these fail, STOP. Don't install. File an issue at https://github.com/g
 
 ### Optional: verify the Sigstore signature
 
-Releases that ship Sigstore signatures also publish a `<file>.sig` and `<file>.pem` next to every artifact. The signature ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
+Releases publish a `<file>.sig` and `<file>.pem` next to every artifact. The signature ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
 
 The example below uses the same `v0.1.1` placeholder as Step 1 above; substitute whatever release tag you actually downloaded.
 
@@ -74,6 +74,8 @@ cosign verify-blob \
     fleet-edr-v0.1.1.pkg
 # Expect: "Verified OK"
 ```
+
+On cosign v2.6+ the `--certificate` and `--signature` flags print a deprecation warning; verification still succeeds. v0.1.1 ships the `.sig` / `.pem` pair these flags expect, so the warning is harmless. Migrating signing to the single-bundle format is tracked in [#369](https://github.com/getvictor/fleet-edr/issues/369).
 
 The same pattern (`<file>.sig` + `<file>.pem`) covers `SHA256SUMS` and both `.mobileconfig` profiles. If you're verifying the server image instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.1.1` with the same identity / issuer flags.
 
