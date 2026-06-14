@@ -9,7 +9,7 @@ For a self-hosted server with your own TLS certificates instead, see the product
 The [`render.yaml`](../render.yaml) blueprint provisions two services:
 
 - **`fleet-edr-server`** (web): the `ghcr.io/getvictor/fleet-edr-server` image behind Render's TLS-terminating edge. It listens plaintext HTTP inside Render's network (`EDR_TLS_TERMINATED_BY_PROXY=1`) while agents reach it over Render's publicly-trusted `https://…onrender.com` URL, so the data plane is encrypted end to edge with zero certificate management. Schema migrations apply automatically on boot.
-- **`fleet-edr-mysql`** (private service): a MySQL instance with a 10 GB disk, reachable only from the server. Good for pilots; swap to a managed database later by setting `EDR_DSN` on the server and removing this service.
+- **`fleet-edr-mysql`** (private service): a MySQL 8.4 instance (the official image, matching the version the rest of the stack builds and tests against) with a 10 GB disk, reachable only from the server. Good for pilots; swap to a managed database later by setting `EDR_DSN` on the server and removing this service.
 
 No Redis is needed: the server is stateless (ADR-0010) and keeps all durable state in MySQL.
 
@@ -25,8 +25,8 @@ No Redis is needed: the server is stateless (ADR-0010) and keeps all durable sta
 
 ## After it is up
 
-- **Enable break-glass sign-in for your Render URL.** Break-glass uses WebAuthn, which binds credentials to a specific host, so on a non-localhost deployment you must tell the server its public host. Once Render assigns the URL, set two env vars on the `fleet-edr-server` service and let it redeploy: `EDR_BREAKGLASS_RP_ID=<your-service>.onrender.com` and `EDR_BREAKGLASS_RP_ORIGINS=https://<your-service>.onrender.com`. Without them the break-glass ceremony fails. (Skip this if you configure OIDC instead, below.)
-- **Redeem the break-glass admin.** On first boot the server prints a one-time break-glass redemption URL (not a password) to its logs. In the Render dashboard open the `fleet-edr-server` service logs and search for the break-glass banner, open the URL, and register a passkey to become admin. Then configure OIDC (set `EDR_OIDC_ISSUER` and remove `EDR_AUTH_ALLOW_NO_OIDC`) for ongoing access.
+- **Enable break-glass sign-in for your Render URL.** Break-glass uses WebAuthn, which binds credentials to a specific host, so on a non-localhost deployment you must tell the server its public host. Once Render assigns the URL, set two env vars on the `fleet-edr-server` service and let it redeploy: `EDR_BREAKGLASS_RP_ID=<your-service>.onrender.com` and `EDR_BREAKGLASS_RP_ORIGINS=https://<your-service>.onrender.com`. Without them the break-glass ceremony fails.
+- **Redeem the break-glass admin.** On first boot the server prints a one-time break-glass redemption URL (not a password) to its logs. In the Render dashboard open the `fleet-edr-server` service logs and search for the break-glass banner, open the URL, and register a passkey to become admin. Then configure OIDC for ongoing access: set `EDR_OIDC_ISSUER`, `EDR_OIDC_CLIENT_ID`, `EDR_OIDC_CLIENT_SECRET`, and `EDR_OIDC_REDIRECT_URL` together (the server rejects a partial OIDC config), and remove `EDR_AUTH_ALLOW_NO_OIDC`; see [okta-setup.md](okta-setup.md) for the IdP-side steps.
 - **Grab the enroll secret.** In the `fleet-edr-server` service, **Environment** tab, copy the generated `EDR_ENROLL_SECRET`. Your MDM install script needs it (it is the `EDR_ENROLL_SECRET` in [fleet-deployment.md](fleet-deployment.md)'s install script).
 - **Note your server URL.** `https://<your-service>.onrender.com` is the `EDR_SERVER_URL` agents enroll against. Set it as the `FLEET_SECRET_EDR_SERVER_URL` (or equivalent) in your MDM.
 

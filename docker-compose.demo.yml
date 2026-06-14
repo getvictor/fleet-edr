@@ -81,7 +81,7 @@ services:
       - tls:/tls
 
   server:
-    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-v0.1.1-rc.9}
+    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-v0.1.1}
     restart: unless-stopped
     depends_on:
       mysql:
@@ -115,7 +115,7 @@ services:
       - tls:/tls:ro
 
   seeder:
-    image: ghcr.io/getvictor/fleet-edr-demo-seed:${EDR_VERSION:-v0.1.1-rc.9}
+    image: ghcr.io/getvictor/fleet-edr-demo-seed:${EDR_VERSION:-v0.1.1}
     # One-shot: enrolls hosts, replays the corpus, verifies, then exits 0.
     restart: "no"
     depends_on:

@@ -330,10 +330,6 @@ On `deadline-exceeded` or `read-failed` outcomes the SHA-256 cache is NOT popula
 
 v0.1.0 wires the posture through the snapshot payload but does NOT yet persist a per-policy value in the database; every snapshot ships with `fail-closed`. The v0.1.x follow-up adds a DB column and the REST surface to set it per policy.
 
-### Upgrading from a v0.1.0-rc.\* RC
-
-The cold-cache ALLOW path is removed. Pilots that ran the RC under that posture will, after upgrade, see the first exec of any unhashed binary either DENY (the v0.1.0 default) or take a small latency hit while the sync hash runs (tens of ms on typical multi-MB binaries; the safety margin is 500 ms below the kernel deadline). To preview the rate of fallback events before flipping a fleet, install the v0.1.x release that adds the per-policy posture knob and run with `audit-only` for a day; the `application_control_undecided` event stream gives the operator the rate.
-
 ### Legacy endpoints
 
 The `add-application-control` OpenSpec change deleted the singleton `/api/policy` endpoints and the `set_blocklist` agent command. The new REST surface lives under `/api/v1/app-control/*`.
