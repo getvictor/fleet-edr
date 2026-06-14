@@ -62,7 +62,7 @@ Notes:
 
 ## What it does
 
-- **Real-time macOS monitoring.** The system extension captures process execution, fork/exit, file access, DNS queries, and network connections, streamed continuously to your server.
+- **Real-time macOS monitoring.** On-device extensions capture process execution, fork/exit, file access, DNS queries, and network connections, streamed continuously to your server.
 - **Process-graph correlation.** The server reconstructs a live per-host process tree, so every alert carries the full ancestry that led to it.
 - **Behavioral detections.** A catalog of rules covering credential access, persistence, privilege escalation, process injection, command-and-control beaconing, and suspicious execution, including detections that correlate exec, DNS, and network together.
 - **Application control.** Block execution by binary hash, path, CDHash, signing ID, team ID, or leaf certificate, enforced on the endpoint at exec time.
@@ -77,7 +77,7 @@ For the full per-release capability list, see the [changelog](CHANGELOG.md).
 
 - **System extension** (Swift): subscribes to macOS Endpoint Security Framework events (exec, fork, exit, open) and captures process metadata, code-signing info, and file hashes.
 - **Network extension** (Swift): monitors TCP/UDP connections with process attribution, and resolves DNS to emit per-process `dns_query` events.
-- **Agent daemon** (Go): receives events from the extensions over XPC, buffers them in a durable SQLite queue, and uploads to the server (store-and-forward, so an outage loses nothing).
+- **Agent daemon** (Go): receives events from the extensions over XPC, buffers them in a durable SQLite queue, and uploads to the server (store-and-forward, so a transient outage doesn't lose events).
 
 ### Server
 
@@ -120,7 +120,7 @@ Building from source or contributing? See [`CONTRIBUTING.md`](CONTRIBUTING.md) f
 ```bash
 mise install        # install pinned tools (Go, Node, golangci-lint, lefthook, task) from .tool-versions
 lefthook install    # format + lint on commit, build + tsc on push
-task install        # builds the custom golangci-lint (with the commentwrap plugin)
+task lint:install   # builds the custom golangci-lint (with the commentwrap plugin)
 
 task db:up          # local MySQL on 33306 (dev) / 33307 (test)
 task build:ui       # build the UI, embedded into the server binary
