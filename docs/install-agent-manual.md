@@ -97,7 +97,7 @@ EOF
 sudo chmod 0600 /etc/fleet-edr.conf
 ```
 
-Replace `https://edr.example.com` with your server URL and `paste-the-enroll-secret-here` with the value from the server's `./secrets/enroll_secret` file.
+Replace `https://edr.example.com` with your server URL and `paste-the-enroll-secret-here` with the value from the server's `./secrets/enroll_secret` file or `EDR_ENROLL_SECRET` env var.
 
 ## Step 4: install the pkg
 
@@ -127,24 +127,30 @@ What the installer laid down:
 
 The postinstall script loads the LaunchDaemon. The agent starts immediately, reads `/etc/fleet-edr.conf`, enrolls with the server, and begins polling for commands.
 
-## Step 5: approve the system extension
+## Step 5: approve the system extensions
 
-The pkg's activation LaunchAgent (`com.fleetdm.edr.activate`) runs the host app's `activate` right after install (and again at every login), but on a Mac that isn't MDM-managed the activation still requires a human click. macOS shows a "System Extension Blocked" notification when the host app tries to activate it.
+Fleet EDR ships two system extensions: an Endpoint Security extension (`com.fleetdm.edr.securityextension`, process and file events) and a Network Extension (`com.fleetdm.edr.networkextension`, network and DNS events). The pkg's activation LaunchAgent (`com.fleetdm.edr.activate`) runs the host app's `activate` right after install (and again at every login), but on a Mac that isn't MDM-managed each extension needs a human to approve it. macOS posts a notification when the host app requests activation.
 
-1. Open **System Settings > Privacy & Security**.
-2. Scroll to "Security". You'll see _"System extension blocked. Click to allow"_ or a similar message.
-3. Click **Allow**. Authenticate with your user password.
-4. The sysext enters `activated waiting for user` → `activated enabled`.
+On macOS 15 (Sequoia) and later:
+
+1. Open **System Settings > General > Login Items & Extensions**.
+2. Under **Extensions**, open **Endpoint Security Extensions**, enable **Fleet EDR**, and authenticate with your user password.
+3. Open **Network Extensions** and enable **Fleet EDR** the same way. macOS also prompts to allow it to filter network content; click **Allow**.
+
+On macOS 13 and 14 (Ventura and Sonoma), the controls live under **System Settings > Privacy & Security > Security** instead: click **Allow** on the _"System extension blocked"_ message for each extension and authenticate.
+
+Each extension moves `activated waiting for user` → `activated enabled`.
 
 Verify:
 
 ```sh
-systemextensionsctl list
-# Expect a row showing:
-#   * * FDG8Q7N4CC com.fleetdm.edr.securityextension (x.y.z) Fleet EDR Security Extension [activated enabled]
+systemextensionsctl list | grep fleetdm
+# Expect two rows, both ending [activated enabled]:
+#   ... com.fleetdm.edr.securityextension ... [activated enabled]
+#   ... com.fleetdm.edr.networkextension  ... [activated enabled]
 ```
 
-Until the sysext is activated, the agent runs but sees no ES events. The agent log repeats `receiver reconnecting ...` while it waits for the sysext's XPC service to come up. That's expected.
+Until both extensions are activated, the agent runs but sees no events. The agent log repeats `receiver reconnecting ...` while it waits for the extensions' XPC service to come up. That's expected.
 
 ## Step 6: grant Full Disk Access
 
