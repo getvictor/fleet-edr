@@ -20,7 +20,7 @@ Fleet EDR is an open-source endpoint detection and response (EDR) system for mac
 
 ## Get started
 
-Two ways in: deploy it on real Macs, or look first with the Mac-free demo.
+Either deploy it and enroll real Macs, or try it first with the Mac-free demo.
 
 ### Deploy it
 
@@ -32,7 +32,7 @@ Two steps. Stand up a server, then push the agent to your Macs.
 
   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/getvictor/fleet-edr)
 
-- **Self-host the container** on any container host (Docker, Kubernetes, AWS ECS/EKS, GCP, Azure, or your own VM). The server is a standard multi-arch Linux image. Setup, secrets, and TLS: [docs/install-server.md](docs/install-server.md).
+- **Or self-host the container** on any container host (Docker, Kubernetes, AWS ECS/EKS, GCP, Azure, or your own VM). The server is a standard multi-arch Linux image. Setup, secrets, and TLS: [docs/install-server.md](docs/install-server.md).
 
 **2. Deploy the agent to your Macs** (Apple Silicon, macOS 26+). The agent ships as a Developer ID-signed, notarized `.pkg` plus two `.mobileconfig` profiles, delivered by your MDM.
 
