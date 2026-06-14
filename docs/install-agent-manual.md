@@ -17,21 +17,21 @@ For production deployments of more than a handful of Macs, use [mdm-deployment.m
 
 ## Step 1: download the pkg
 
-Pick a release from https://github.com/getvictor/fleet-edr/releases and download the `.pkg` to the target Mac. Example for v0.1.0:
+Pick a release from https://github.com/getvictor/fleet-edr/releases and download the `.pkg` to the target Mac. Example for v0.1.1:
 
 ```sh
 cd ~/Downloads
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg
 ```
 
 Verify the download against the published SHA256SUMS:
 
 ```sh
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/SHA256SUMS
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
-Expect: `fleet-edr-v0.1.0.pkg: OK`.
+Expect: `fleet-edr-v0.1.1.pkg: OK`.
 
 ## Step 2: verify the signature
 
@@ -39,17 +39,17 @@ Before you run an installer you didn't build, confirm Gatekeeper trusts it. Thes
 
 ```sh
 # Signed by us + notarized by Apple
-pkgutil --check-signature fleet-edr-v0.1.0.pkg
+pkgutil --check-signature fleet-edr-v0.1.1.pkg
 # Expect:
 #   Status: signed by a developer certificate issued by Apple for distribution
 #   Notarization: trusted by the Apple notary service
 
 # Stapled ticket embedded (works offline)
-xcrun stapler validate fleet-edr-v0.1.0.pkg
+xcrun stapler validate fleet-edr-v0.1.1.pkg
 # Expect: "The validate action worked!"
 
 # Gatekeeper's install assessment
-spctl -a -v --type install fleet-edr-v0.1.0.pkg
+spctl -a -v --type install fleet-edr-v0.1.1.pkg
 # Expect: "accepted / source=Notarized Developer ID"
 ```
 
@@ -59,23 +59,23 @@ If any of these fail, STOP. Don't install. File an issue at https://github.com/g
 
 Releases that ship Sigstore signatures also publish a `<file>.sig` and `<file>.pem` next to every artifact. The signature ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots. (Older releases that pre-date the cosign roll-out won't have the `.sig` / `.pem` files: `curl` will return 404, and there's nothing to verify.)
 
-The example below uses the same `v0.1.0` placeholder as Step 1 above; substitute whatever release tag you actually downloaded.
+The example below uses the same `v0.1.1` placeholder as Step 1 above; substitute whatever release tag you actually downloaded.
 
 ```sh
 # Install cosign if you don't have it: brew install cosign
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg.sig
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg.pem
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg.sig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg.pem
 
 cosign verify-blob \
-    --certificate fleet-edr-v0.1.0.pkg.pem \
-    --signature fleet-edr-v0.1.0.pkg.sig \
+    --certificate fleet-edr-v0.1.1.pkg.pem \
+    --signature fleet-edr-v0.1.1.pkg.sig \
     --certificate-identity-regexp '^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-    fleet-edr-v0.1.0.pkg
+    fleet-edr-v0.1.1.pkg
 # Expect: "Verified OK"
 ```
 
-The same pattern (`<file>.sig` + `<file>.pem`) covers `SHA256SUMS` and both `.mobileconfig` profiles. If you're verifying the server image instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.1.0` with the same identity / issuer flags.
+The same pattern (`<file>.sig` + `<file>.pem`) covers `SHA256SUMS` and both `.mobileconfig` profiles. If you're verifying the server image instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.1.1` with the same identity / issuer flags.
 
 ## Step 3: write the config file
 
@@ -100,7 +100,7 @@ Replace `https://edr.example.com` with your server URL and `paste-the-enroll-sec
 ## Step 4: install the pkg
 
 ```sh
-sudo installer -pkg ~/Downloads/fleet-edr-v0.1.0.pkg -target /
+sudo installer -pkg ~/Downloads/fleet-edr-v0.1.1.pkg -target /
 ```
 
 Expect:
@@ -182,7 +182,7 @@ In the admin UI (https://edr.example.com/ui/):
 Download the newer `.pkg` and run `installer -pkg` again. The installer detects the existing receipts and performs an upgrade:
 
 ```sh
-sudo installer -pkg fleet-edr-v0.1.1.pkg -target /
+sudo installer -pkg fleet-edr-v0.1.2.pkg -target /
 ```
 
 The preinstall script stops the old daemon, the postinstall script starts the new one. The persisted host token at `/var/db/fleet-edr/enrolled.plist` survives, so the agent keeps its existing enrollment; no re-approval needed.
