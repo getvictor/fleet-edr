@@ -2,7 +2,7 @@
 # Server and ingest CLI defaults match these ports.
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4.9
     container_name: fleet-edr-mysql
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
@@ -28,7 +28,7 @@ services:
       retries: 10
 
   mysql_test:
-    image: mysql:8.4
+    image: mysql:8.4.9
     container_name: fleet-edr-mysql_test
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
