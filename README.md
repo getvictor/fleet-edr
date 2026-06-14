@@ -16,71 +16,93 @@
 
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12994/badge)](https://www.bestpractices.dev/projects/12994) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/getvictor/fleet-edr/badge)](https://scorecard.dev/viewer/?uri=github.com/getvictor/fleet-edr) [![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev/spec/v1.0/levels#build-l2) [![cosign keyless](https://img.shields.io/badge/cosign-keyless-9cf?style=flat-square&logo=sigstore)](docs/best-practices.md#4-supply-chain-security)
 
-Fleet EDR is an open-source endpoint detection and response system for macOS fleets. It gives security teams real-time visibility into process and network activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph, and ships response actions (kill, token rotation, app-control block) without a SaaS dependency.
+Fleet EDR is an open-source endpoint detection and response (EDR) system for macOS fleets. It gives security teams real-time visibility into process, network, and DNS activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph, and can block execution or kill a process on the endpoint. It is fully self-hosted: your own server, your own data, no SaaS dependency.
 
-## Try the demo (no Mac required)
+## Get started
 
-Evaluate Fleet EDR in about five minutes with one command. No Apple Silicon Mac, MDM, or Apple-granted entitlement needed.
+Two ways in: deploy it on real Macs, or look first with the Mac-free demo.
 
-<!-- Demo recording: replace this line with the published release-asset link. -->
+### Deploy it
 
-Demo recording: _coming soon_ -- extension activation, a correlated detection, and an AUTH_EXEC block, captured on a real Mac.
+Two steps. Stand up a server, then push the agent to your Macs.
+
+**1. Stand up the server.**
+
+- **One-click on Render (fastest).** The blueprint provisions the server and a MySQL database behind Render's TLS edge, so there are no certificates to manage. Full walkthrough: [docs/deploy-render.md](docs/deploy-render.md).
+
+  [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/getvictor/fleet-edr)
+
+- **Self-host the container** on any container host (Docker, Kubernetes, AWS ECS/EKS, GCP, Azure, or your own VM). The server is a standard multi-arch Linux image. Setup, secrets, and TLS: [docs/install-server.md](docs/install-server.md).
+
+**2. Deploy the agent to your Macs** (Apple Silicon, macOS 26+). The agent ships as a Developer ID-signed, notarized `.pkg` plus two `.mobileconfig` profiles, delivered by your MDM.
+
+- **Via MDM** (Fleet, Jamf, Kandji, Intune, mosyle): the vendor-neutral contract is in [docs/mdm-deployment.md](docs/mdm-deployment.md); the Fleet-specific recipe is in [docs/fleet-deployment.md](docs/fleet-deployment.md).
+- **Manually on 1 to 5 Macs** (no MDM, for evaluation): [docs/install-agent-manual.md](docs/install-agent-manual.md).
+
+Once agents enroll, open the server's `/ui/` to watch hosts, process trees, and alerts in real time.
+
+### Try the demo (no Mac required)
+
+Want to look before deploying? Evaluate the full server, UI, and detection pipeline in about five minutes. No Apple Silicon Mac, MDM, or Apple entitlement needed.
 
 ```sh
 docker compose -f docker-compose.demo.yml up
 ```
 
-Then open <https://localhost:8088/ui/>, accept the self-signed certificate warning, and sign in with the bundled SSO account:
+Open <https://localhost:8088/ui/>, accept the self-signed certificate warning, and sign in with the bundled SSO account `demo@fleet-edr.local` / `demo`.
 
-- Email: `demo@fleet-edr.local`
-- Password: `demo`
+You'll see two real macOS hosts (an engineer laptop and a CI build server), each with a deep process graph and correlated network and DNS activity drawn from genuine scrubbed captures. Woven into that ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec, DNS, and outbound connection correlated across all three streams), plus sudoers tampering, launchd persistence, and an application-control block. Every alert comes from the real ingestion and detection pipeline, not hand-inserted rows, and the benign activity raises no false alarms.
 
-You'll see two real macOS hosts -- an engineer laptop (`alex-mbp`) and a CI build server (`ci-builder`) -- each with a deep process graph and correlated `network_connect` + `dns_query` activity drawn from genuine scrubbed captures. Woven into that ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec -> DNS -> outbound connection correlated across all three streams) on the laptop; sudoers tampering, launchd persistence, and an application-control block on the build server. Every alert is produced by the real ingestion + detection pipeline, not hand-inserted rows. The benign browsing and build activity raises no false alarms.
+Notes:
 
-To run from a local source build instead of the pinned release images:
+- The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement and Apple Silicon, so it cannot run in Docker. The demo exercises the server, UI, and detection pipeline; deploy on a real Mac (above) to see live capture.
+- Response actions enqueue but never complete in the demo because no live agent is connected.
+- Evaluation only: empty MySQL password, self-signed cert, checked-in dev secrets. Do not expose it to the internet.
+- To build the demo images from source instead of pulling the release tag: `docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --build`.
 
-```sh
-docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --build
-```
+## What it does
 
-### Demo notes
+- **Real-time macOS monitoring.** The system extension captures process execution, fork/exit, file access, DNS queries, and network connections, streamed continuously to your server.
+- **Process-graph correlation.** The server reconstructs a live per-host process tree, so every alert carries the full ancestry that led to it.
+- **Behavioral detections.** A catalog of rules covering credential access, persistence, privilege escalation, process injection, command-and-control beaconing, and suspicious execution, including detections that correlate exec, DNS, and network together.
+- **Application control.** Block execution by binary hash, path, CDHash, signing ID, team ID, or leaf certificate, enforced on the endpoint at exec time.
+- **Response.** Kill a running process on a host on demand.
+- **Operator UI with RBAC, SSO, and an append-only audit log.** OIDC single sign-on plus a WebAuthn break-glass path, five built-in roles, and an immutable record of every privileged action.
 
-- The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement, an MDM, and Apple Silicon, so it cannot run in Docker. The recording linked above (once published) captures it on a real Mac; this stack exercises the server, UI, and detection pipeline.
-- The demo data is genuine: the seeder replays two scrubbed real-Mac captures (hundreds of events each, with their real process trees, network connections, and DNS lookups intact) through the real `POST /api/events` ingest path, weaves the attack scenarios into that ambient activity, and lets the server's own processor materialize the graph and fire the alerts. Captures are scrubbed of identity strings and remapped to RFC 5737 / RFC 3849 documentation IP ranges, preserving the DNS-to-connection correlation.
-- Response actions (kill, isolate) are visible and enqueue, but never complete because no live agent is connected.
-- TLS uses a self-signed `localhost` certificate, so the browser shows a one-time warning. The stack is for evaluation only: empty MySQL password and checked-in dev secrets. Do not expose it this stack to the public internet.
-- SSO is the documented path. Admin onboarding via break-glass is also available: a redemption URL prints to the server logs on first boot (`docker compose -f docker-compose.demo.yml logs server | grep -i break-glass`); redeeming it needs a WebAuthn authenticator.
-- If your browser does not resolve `*.localhost` to `127.0.0.1` (most Chromium and Firefox builds do), add `127.0.0.1 dex.demo.localhost` to your hosts file so the SSO redirect can reach the bundled IdP.
+For the full per-release capability list, see the [changelog](CHANGELOG.md).
 
-## Operator docs
-
-Running Fleet EDR (not developing it)? Start with [`docs/`](docs/):
-
-- [`docs/install-server.md`](docs/install-server.md) -- stand up the Docker Compose stack.
-- [`docs/install-agent-manual.md`](docs/install-agent-manual.md) -- evaluate on 1-5 Macs without an MDM.
-- [`docs/mdm-deployment.md`](docs/mdm-deployment.md) -- deploy via any MDM (Jamf, Kandji, Intune, mosyle, Fleet).
-- [`docs/fleet-deployment.md`](docs/fleet-deployment.md) -- Fleet MDM-specific recipe.
-- [`docs/operations.md`](docs/operations.md) -- day-2 ops runbook (upgrades, rotations, backups, troubleshooting).
-- [`docs/detection-rules.md`](docs/detection-rules.md) -- per-rule behaviour, ATT&CK mapping, severity, and configuration env vars. Generated from the rule source via `go run ./tools/gen-rule-docs`.
-- [`docs/api.md`](docs/api.md) + [`docs/api/openapi.yaml`](docs/api/openapi.yaml) -- HTTP API reference.
-
-## Architecture
+## How it works
 
 ### On-device
 
-- **System extension** (Swift) -- subscribes to macOS Endpoint Security Framework events (exec, fork, exit, open) and captures process metadata, code signing info, and file hashes
-- **Network extension** (Swift) -- monitors TCP/UDP connections via NEFilterDataProvider with process attribution, and resolves DNS via NEDNSProxyProvider to emit `dns_query` events (query name, type, resolved addresses) per process. DNS is the newest of the three telemetry streams; encrypted-DNS (DoH/DoT) visibility and failure-mode hardening are on the roadmap
-- **Agent daemon** (Go) -- receives events from extensions over XPC, queues them in SQLite, and uploads to the server
+- **System extension** (Swift): subscribes to macOS Endpoint Security Framework events (exec, fork, exit, open) and captures process metadata, code-signing info, and file hashes.
+- **Network extension** (Swift): monitors TCP/UDP connections with process attribution, and resolves DNS to emit per-process `dns_query` events.
+- **Agent daemon** (Go): receives events from the extensions over XPC, buffers them in a durable SQLite queue, and uploads to the server (store-and-forward, so an outage loses nothing).
 
 ### Server
 
-- **Ingestion API** -- accepts event batches from agents over HTTP
-- **Processor** -- materializes a per-host process graph from raw events and runs detection rules
-- **Detection engine** -- evaluates behavioral rules against materialized process trees
-- **MySQL storage** -- events, processes, alerts, and commands
-- **Web UI** (React/TypeScript) -- process tree visualization, alert management, and response actions
+- **Ingestion API**: accepts event batches from agents over HTTP.
+- **Processor**: materializes a per-host process graph from raw events and runs the detection rules.
+- **MySQL storage**: events, processes, alerts, and commands. The server is stateless (ADR-0010), so it scales as multiple replicas behind a load balancer.
+- **Web UI** (React/TypeScript): process-tree visualization, alert management, and response actions.
 
-## Components
+## Documentation
+
+Operator and reference docs live in [`docs/`](docs/):
+
+| Topic                                                    | Doc                                                                   |
+| -------------------------------------------------------- | --------------------------------------------------------------------- |
+| Deploy the server on Render                              | [`deploy-render.md`](docs/deploy-render.md)                           |
+| Self-host the server stack                               | [`install-server.md`](docs/install-server.md)                         |
+| Deploy the agent via any MDM                             | [`mdm-deployment.md`](docs/mdm-deployment.md)                         |
+| Fleet MDM recipe                                         | [`fleet-deployment.md`](docs/fleet-deployment.md)                     |
+| Evaluate on 1 to 5 Macs without an MDM                   | [`install-agent-manual.md`](docs/install-agent-manual.md)             |
+| Day-2 ops: upgrades, rotations, backups, troubleshooting | [`operations.md`](docs/operations.md)                                 |
+| Detection rules: behavior, ATT&CK mapping, configuration | [`detection-rules.md`](docs/detection-rules.md)                       |
+| HTTP API reference                                       | [`api.md`](docs/api.md) + [`api/openapi.yaml`](docs/api/openapi.yaml) |
+| Architecture decisions (the "why")                       | [`adr/`](docs/adr/)                                                   |
+
+Repository layout:
 
 ```text
 extension/edr/       Swift system extension + network extension (Xcode project)
@@ -88,103 +110,28 @@ agent/               Go agent daemon (XPC receiver, SQLite queue, uploader)
 server/              Go server (ingestion, processor, detection, REST API)
 internal/            Shared packages (envparse, etc.)
 ui/                  React/TypeScript frontend (Vite, D3.js process tree)
-docs/adr/            Architecture Decision Records -- the "why" behind non-obvious choices
+docs/                Operator + reference docs, ADRs
 ```
 
-## First-time setup
+## Development
 
-### 0a. Install mise (pick one)
+Building from source or contributing? See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide. The short version:
 
 ```bash
-curl https://mise.run | sh      # any Unix; installs to ~/.local/bin/mise
-# --- OR ---
-brew install mise               # macOS with Homebrew
+mise install        # install pinned tools (Go, Node, golangci-lint, lefthook, task) from .tool-versions
+lefthook install    # format + lint on commit, build + tsc on push
+task install        # builds the custom golangci-lint (with the commentwrap plugin)
+
+task db:up          # local MySQL on 33306 (dev) / 33307 (test)
+task build:ui       # build the UI, embedded into the server binary
+task dev:server     # run the server at https://localhost:8088/ui/ (break-glass-only auth)
+
+task test           # everything (Go + UI); requires MySQL
+task --list         # the Taskfile is the source of truth for all commands
 ```
 
-Only run **one** of those two lines. Running both will put two copies of `mise` on disk and leave an extra entry on PATH. If mise is already installed, skip to 0b. See <https://mise.jdx.dev/getting-started.html> for other installers.
+`task dev:server` runs break-glass-only. To exercise SSO locally against the bundled dex IdP, run `task qa:up` then `task dev:server:qa-oidc`; see [`docs/okta-setup.md`](docs/okta-setup.md) for a real OIDC tenant.
 
-### 0b. Activate mise in your shell (one-time, per shell)
+## License
 
-```bash
-echo 'eval "$(mise activate zsh)"'  >> ~/.zshrc    # zsh
-# --- OR ---
-echo 'eval "$(mise activate bash)"' >> ~/.bashrc   # bash
-```
-
-Then open a new terminal (or `exec $SHELL`) so the activation takes effect. Without this step `mise install` downloads tools but they don't appear on PATH -- `which task` / `which lefthook` come up empty.
-
-### 1. Install every pinned tool
-
-```bash
-mise install   # reads .tool-versions; asdf users: asdf install
-```
-
-Fetches Go, Node, golangci-lint, lefthook, and task at the versions pinned in `.tool-versions`. CI installs the same pins for Go + Node + golangci-lint (`go-version-file: go.mod`, explicit `node-version`, pinned `golangci-lint`); the Task and Lefthook installers in CI track the same minor series but aren't byte-for-byte locked to the patch version.
-
-### 2. Install git hooks
-
-```bash
-lefthook install   # format + lint on commit, build + tsc on push
-```
-
-### 3. Discover available commands
-
-```bash
-task --list
-```
-
-## Quick start
-
-```bash
-# Start MySQL (local dev + test on ports 33306/33307)
-task db:up
-
-# Build the UI (embedded in the server binary via server/ui/dist/)
-task build:ui
-
-# Run the server (HTTPS-only since #140; serves tmp/dev.crt: mkcert-trusted if mkcert is installed, else a self-signed cert)
-task dev:server
-# Then open https://localhost:8088/ui/
-```
-
-`task dev:server` boots break-glass-only (no SSO). To exercise the SSO sign-in flow locally against the bundled dex IdP, run `task qa:up` then `task dev:server:qa-oidc`; see [`docs/okta-setup.md`](docs/okta-setup.md) for configuring a real OIDC tenant.
-
-## Production deployment
-
-For pilot deployments, pull a signed `.pkg` and both `.mobileconfig` profiles from the [Releases page](https://github.com/getvictor/fleet-edr/releases) and hand them to any MDM. The server runs as a container stack:
-
-```bash
-# Pick a pinned release; `latest` is fine for dev but not safe for prod.
-echo 'EDR_VERSION=v0.1.0' > .env
-
-# See docker-compose.prod.README.md for the full secret + TLS setup.
-mkdir -p secrets tls
-MYSQL_PASS=$(openssl rand -hex 24)
-printf '%s' "$MYSQL_PASS" > secrets/mysql_root
-printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > secrets/edr_dsn
-ENROLL_SECRET=$(openssl rand -hex 32)
-printf '%s' "$ENROLL_SECRET" > secrets/enroll_secret
-chmod 0600 secrets/*
-
-docker compose -f docker-compose.prod.yml --env-file .env up -d
-```
-
-On each agent host the MDM pushes:
-
-- `edr-system-extension.mobileconfig` (pre-approves the ES sysext)
-- `edr-tcc-fda.mobileconfig` (grants Full Disk Access)
-- `fleet-edr-<version>.pkg` (the agent + host app + sysext)
-- Optionally: `/etc/fleet-edr.conf` with `EDR_SERVER_URL` and `EDR_ENROLL_SECRET` written by the install script before `installer -pkg` runs.
-
-Fleet's install-script contract is the shape the MDM writes the conf file in; any other MDM can replicate it with a one-liner preinstall.
-
-## Running tests
-
-```bash
-task test        # everything (Go + UI) -- requires MySQL
-task test:go     # Go with race detector
-task test:ui     # Vitest
-task lint        # golangci-lint, eslint, swiftlint, actionlint
-```
-
-Prefer `task --list` over memorising commands; the Taskfile is the source of truth for reproducible invocations.
+[MIT](LICENSE)
