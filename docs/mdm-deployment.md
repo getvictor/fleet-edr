@@ -8,7 +8,7 @@ For the Fleet-specific recipe see [fleet-deployment.md](fleet-deployment.md). Fo
 
 Three artifacts, delivered in this order:
 
-1. **Two unsigned `.mobileconfig` profiles** pushed via MDM "custom settings". Pre-approves the ES system extension and grants Full Disk Access. These must arrive BEFORE the pkg so the sysext activates silently on install. The profiles ship unsigned on purpose: every supported MDM signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright.
+1. **Two unsigned `.mobileconfig` profiles** pushed via MDM "custom settings". Pre-approves the Endpoint Security and Network system extensions and grants Full Disk Access. These must arrive BEFORE the pkg so the extensions activate silently on install. The profiles ship unsigned on purpose: every supported MDM signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright.
 2. **An install script** your MDM runs before the pkg installer. It writes `/etc/fleet-edr.conf` with the enroll secret + server URL.
 3. **The signed `.pkg`** pushed via MDM "software installer".
 
@@ -35,10 +35,10 @@ Download all four, verify checksums, then upload the three artifacts into your M
 
 ```sh
 cd ~/Downloads
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/edr-system-extension.mobileconfig
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/edr-tcc-fda.mobileconfig
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/SHA256SUMS
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/edr-system-extension.mobileconfig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/edr-tcc-fda.mobileconfig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 # All three artifacts should print "OK".
 ```
@@ -47,7 +47,7 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 Upload `edr-system-extension.mobileconfig` to your MDM as a custom configuration profile and scope it to the Macs that will run the agent.
 
-What the profile does: pre-approves the bundle ID `com.fleetdm.edr.securityextension` under team ID `FDG8Q7N4CC` in the `com.apple.system-extension-policy` payload. When the pkg's activation LaunchAgent runs the host app's sysext-activation request, macOS finds the pre-approval, skips the user prompt, and activates the sysext immediately.
+What the profile does: pre-approves the bundle IDs `com.fleetdm.edr.securityextension` and `com.fleetdm.edr.networkextension` under team ID `FDG8Q7N4CC` in the `com.apple.system-extension-policy` payload. When the pkg's activation LaunchAgent runs the host app's sysext-activation request, macOS finds the pre-approval, skips the user prompt, and activates both extensions immediately.
 
 Verify on a target Mac:
 
@@ -102,7 +102,7 @@ EOF
 
 ## Step 4: push the pkg
 
-Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope to the same Macs. The release tag is part of the filename verbatim (e.g., tag `v0.1.0` ships as `fleet-edr-v0.1.0.pkg`).
+Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope to the same Macs. The release tag is part of the filename verbatim (e.g., tag `v0.1.1` ships as `fleet-edr-v0.1.1.pkg`).
 
 The pkg's install flow:
 
@@ -119,9 +119,9 @@ Verify on a target Mac:
 sudo launchctl print system/com.fleetdm.edr.agent | grep 'state ='
 # Expect: "state = running"
 
-# Sysext activated
+# Both system extensions activated
 systemextensionsctl list | grep fleetdm
-# Expect a row ending "[activated enabled]"
+# Expect two rows, both ending "[activated enabled]"
 
 # Recent log
 sudo tail -n 20 /var/log/fleet-edr-agent.log
