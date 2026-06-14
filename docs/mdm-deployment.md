@@ -1,6 +1,6 @@
 # MDM deployment (vendor-neutral)
 
-Fleet EDR is designed to ship through any MDM that can deliver a `.pkg` + two `.mobileconfig` profiles + a one-line install script. This works with Jamf Pro, Kandji, Intune, mosyle, Fleet, and any equivalent platform.
+Fleet EDR ships through any MDM that can deliver a `.pkg` + two `.mobileconfig` profiles + a one-line install script: Jamf Pro, Kandji, Intune, mosyle, Fleet, or any equivalent platform.
 
 For the Fleet-specific recipe see [fleet-deployment.md](fleet-deployment.md). For single-Mac eval without an MDM see [install-agent-manual.md](install-agent-manual.md).
 
@@ -12,7 +12,7 @@ Three artifacts, delivered in this order:
 2. **An install script** your MDM runs before the pkg installer. It writes `/etc/fleet-edr.conf` with the enroll secret + server URL.
 3. **The signed `.pkg`** pushed via MDM "software installer".
 
-Every MDM exposes these three primitives under different names. The mapping is in the vendor-specific section at the bottom.
+Each MDM names these three primitives differently; the mapping is in the vendor-specific section below.
 
 ## Why this shape
 

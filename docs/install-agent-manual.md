@@ -35,7 +35,7 @@ Expect: `fleet-edr-v0.1.0.pkg: OK`.
 
 ## Step 2: verify the signature
 
-Before you run an installer you didn't build, confirm Gatekeeper trusts it. These checks pass without any developer tools installed; they use binaries shipped in the base macOS image.
+Before you run an installer you didn't build, confirm Gatekeeper trusts it. These checks need no developer tools; they use binaries in the base macOS image.
 
 ```sh
 # Signed by us + notarized by Apple
