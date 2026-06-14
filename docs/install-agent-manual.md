@@ -150,17 +150,18 @@ systemextensionsctl list | grep fleetdm
 #   ... com.fleetdm.edr.networkextension  ... [activated enabled]
 ```
 
-Until both extensions are activated, the agent runs but sees no events. The agent log repeats `receiver reconnecting ...` while it waits for the extensions' XPC service to come up. That's expected.
+Until both extensions are activated, the agent runs but sees no events. The agent log repeats `receiver connect` warnings while it waits for the extensions' XPC service to come up. That's expected (if the warnings persist after activation, see Step 6).
 
 ## Step 6: grant Full Disk Access
 
-The sysext's Endpoint Security client requires Full Disk Access to observe file events. Without it, `es_new_client` returns `ERR_NOT_PERMITTED` and no events flow.
+The Endpoint Security extension creates its ES client with `es_new_client`, which requires Full Disk Access. The extension is a separate TCC identity from the host app, so granting FDA to `/Applications/Fleet EDR.app` does NOT cover it. Without its own grant, `es_new_client` returns `ERR_NOT_PERMITTED`, the extension exits and relaunches in a loop, and the agent logs repeated `receiver connect` / `xpc_bridge_connect failed` warnings even though `systemextensionsctl` shows `activated enabled`.
 
 1. Open **System Settings > Privacy & Security > Full Disk Access**.
-2. Click the `+` button. Authenticate.
-3. Navigate to `/Applications/Fleet EDR.app` and add it.
-4. Also add `/usr/local/bin/fleet-edr-agent` (use Cmd+Shift+G in the file picker to type the path directly).
-5. Toggle both entries ON.
+2. After Step 5's activation the extension appears in the list as **"extension"** (its bundle display name, not "Fleet EDR"). Toggle **"extension"** ON and authenticate. This is the entry that lets `es_new_client` succeed.
+3. Add the agent: click **+**, press Cmd+Shift+G, enter `/usr/local/bin/fleet-edr-agent`, and toggle it ON.
+4. If no **"extension"** entry is listed, reset its TCC state and reboot to force a fresh prompt: `sudo tccutil reset SystemPolicyAllFiles com.fleetdm.edr.securityextension`.
+
+Granting FDA mid-loop lets the next relaunch succeed within a few seconds; if the warnings don't clear, reboot. You don't need to grant FDA to the Network Extension ("networkextension") or to `/Applications/Fleet EDR.app`.
 
 ## Step 7: verify end-to-end
 
@@ -174,7 +175,7 @@ sudo launchctl print system/com.fleetdm.edr.agent | grep state
 # Expect: "state = running"
 
 # Recent log
-sudo tail -n 20 /var/log/fleet-edr-agent.log
+sudo tail -n 100 /var/log/fleet-edr-agent.log
 # Expect an "agent enrolled" line near the top, then periodic
 # "http request" lines as the commander polls.
 ```
@@ -227,5 +228,7 @@ sudo launchctl kickstart -k system/com.fleetdm.edr.agent
 **Agent log shows `tls: failed to verify certificate: x509: ...`.** Server's TLS cert isn't trusted by the system. Either install the CA that signed it into the system trust store, or use the `EDR_SERVER_FINGERPRINT` pin. Compute the value with `openssl x509 -in fullchain.pem -noout -fingerprint -sha256` and paste the hex output into the config file (optionally with a `sha256:` prefix; the `:` separators between bytes are accepted too). Don't set `EDR_ALLOW_INSECURE=1` unless you're in a lab.
 
 **System extension stays in `activated waiting for user` forever.** Someone disabled Automation + extensions in the OS. Easiest fix: revoke the install, reinstall with the MDM path (which pushes the sysext-allow-list profile so the prompt doesn't appear).
+
+**`receiver connect` / `xpc_bridge_connect failed` warnings repeat while `systemextensionsctl list` shows `activated enabled`.** The Endpoint Security extension is exiting on launch for lack of Full Disk Access. Confirm with `log show --last 10m --predicate 'subsystem == "com.fleetdm.edr.securityextension"' | grep "ES client"`: `Failed to create ES client: 4` is `ERR_NOT_PERMITTED`. Enable the **"extension"** entry in Privacy & Security > Full Disk Access (Step 6). The extension is a different TCC identity from `/Applications/Fleet EDR.app`, so granting the app alone doesn't fix it.
 
 **Full Disk Access grant gets wiped after every reboot.** Probably a TCC-database issue after a macOS point upgrade. Re-add the entries in Privacy & Security. If it recurs on a managed Mac, deploy the TCC profile via MDM instead.
