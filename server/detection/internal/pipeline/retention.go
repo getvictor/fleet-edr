@@ -127,7 +127,10 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 		attribute.Int64("edr.retention.cutoff_ns", cutoff),
 	)
 
-	events, err := r.pruneBatched(ctx, `
+	// Emit each delete's count as soon as that delete returns, before checking its error. pruneBatched reports rows actually deleted even
+	// on a mid-batch failure, and a failure in the second (processes) delete must not suppress the telemetry for the first (events) one,
+	// else a partial-failure run reports zero events pruned when rows were in fact removed.
+	events, eventsErr := r.pruneBatched(ctx, `
 		DELETE FROM events
 		WHERE timestamp_ns < ?
 		  AND NOT EXISTS (
@@ -136,14 +139,18 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 		ORDER BY timestamp_ns
 		LIMIT ?
 	`, cutoff)
-	if err != nil {
-		return events, fmt.Errorf("retention delete events batch: %w", err)
+	span.SetAttributes(attribute.Int64("edr.retention.rows_deleted", events))
+	if r.metrics != nil {
+		r.metrics.RetentionRowsDeleted(ctx, events)
+	}
+	if eventsErr != nil {
+		return events, fmt.Errorf("retention delete events batch: %w", eventsErr)
 	}
 
 	// Completed processes only (exit_time_ns IS NOT NULL): see the type doc for why NULL-exit rows are intentionally left to the
 	// freshness-TTL reconciler. The alerts.process_id FK is ON DELETE RESTRICT, so an alert-referenced row must be skipped or the
 	// batch DELETE errors; the NOT EXISTS guard does that and is index-backed by InnoDB's implicit FK index on alerts.process_id.
-	processes, err := r.pruneBatched(ctx, `
+	processes, procErr := r.pruneBatched(ctx, `
 		DELETE FROM processes
 		WHERE exit_time_ns IS NOT NULL
 		  AND exit_time_ns < ?
@@ -153,18 +160,14 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 		ORDER BY exit_time_ns
 		LIMIT ?
 	`, cutoff)
-	if err != nil {
-		return events + processes, fmt.Errorf("retention delete processes batch: %w", err)
-	}
-
-	span.SetAttributes(
-		attribute.Int64("edr.retention.rows_deleted", events),
-		attribute.Int64("edr.retention.processes.rows_deleted", processes),
-	)
+	span.SetAttributes(attribute.Int64("edr.retention.processes.rows_deleted", processes))
 	if r.metrics != nil {
-		r.metrics.RetentionRowsDeleted(ctx, events)
 		r.metrics.ProcessRetentionRowsDeleted(ctx, processes)
 	}
+	if procErr != nil {
+		return events + processes, fmt.Errorf("retention delete processes batch: %w", procErr)
+	}
+
 	r.logger.InfoContext(ctx, "retention run",
 		attrRetentionDays, r.retentionDays,
 		"edr.retention.cutoff_ns", cutoff,
