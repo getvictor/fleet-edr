@@ -51,12 +51,13 @@ type GaugeSource interface {
 // Recorder is the write surface instrumentation code uses. Every method is safe to call from any goroutine and safe on a nil receiver
 // (methods short-circuit) so call sites don't need defensive `if r != nil` blocks.
 type Recorder struct {
-	eventsIngested       metric.Int64Counter
-	alertsCreated        metric.Int64Counter
-	retentionRowsDeleted metric.Int64Counter
-	processesReconciled  metric.Int64Counter
-	queueDropped         metric.Int64Counter
-	httpRequestDuration  metric.Float64Histogram
+	eventsIngested              metric.Int64Counter
+	alertsCreated               metric.Int64Counter
+	retentionRowsDeleted        metric.Int64Counter
+	processRetentionRowsDeleted metric.Int64Counter
+	processesReconciled         metric.Int64Counter
+	queueDropped                metric.Int64Counter
+	httpRequestDuration         metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
 	enrolledGauge metric.Int64ObservableGauge
@@ -103,6 +104,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.retentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.rows_deleted",
 		metric.WithDescription("Total rows deleted by the event retention job since server start."),
+		metric.WithUnit("{row}"),
+	)
+	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
+		"edr.retention.processes.rows_deleted",
+		metric.WithDescription("Total completed process rows deleted by the retention job since server start."),
 		metric.WithUnit("{row}"),
 	)
 	r.processesReconciled, _ = meter.Int64Counter(
@@ -212,6 +218,15 @@ func (r *Recorder) RetentionRowsDeleted(ctx context.Context, n int64) {
 		return
 	}
 	r.retentionRowsDeleted.Add(ctx, n)
+}
+
+// ProcessRetentionRowsDeleted satisfies api.MetricsRecorder. Counts completed process rows pruned past the retention window, kept
+// separate from RetentionRowsDeleted (event rows) so operators can see process-table churn distinctly.
+func (r *Recorder) ProcessRetentionRowsDeleted(ctx context.Context, n int64) {
+	if r == nil || r.processRetentionRowsDeleted == nil || n <= 0 {
+		return
+	}
+	r.processRetentionRowsDeleted.Add(ctx, n)
 }
 
 // ProcessesTTLReconciled satisfies processttl.MetricsRecorder. A non-zero rate of this indicates the fleet is losing exit events

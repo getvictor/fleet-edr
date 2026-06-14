@@ -79,6 +79,9 @@ type MetricsRecorder interface {
 	// stale-process janitor on every reconciliation pass.
 	ProcessesTTLReconciled(ctx context.Context, n int64)
 	// RetentionRowsDeleted is called by the pipeline's retention
-	// runner on every retention pass.
+	// runner on every retention pass, reporting event rows deleted.
 	RetentionRowsDeleted(ctx context.Context, n int64)
+	// ProcessRetentionRowsDeleted is called by the pipeline's retention runner on every pass with the count of completed process rows
+	// pruned past the retention window (counted separately from event rows).
+	ProcessRetentionRowsDeleted(ctx context.Context, n int64)
 }
