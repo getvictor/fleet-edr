@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -121,7 +122,7 @@ func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 	// map, called per batch is plenty.
 	b.sweepPendingExits()
 
-	var failCount int
+	var transientFailCount int
 	for _, evt := range sorted {
 		var err error
 		switch evt.EventType {
@@ -134,15 +135,39 @@ func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 		case "snapshot_heartbeat":
 			err = b.handleSnapshotHeartbeat(ctx, evt)
 		}
-		if err != nil {
-			failCount++
-			b.logger.WarnContext(ctx, "event processing failed", "event_id", evt.EventID, "type", evt.EventType, "err", err)
+		if err == nil {
+			continue
 		}
+		// A permanent (non-retryable) persistence error, e.g. a value outside a column's range, fails identically on every
+		// retry. Returning it here would make the processor unclaim and re-fetch the whole batch forever, wedging the pipeline
+		// fleet-wide on one poison event (the uid/gid-overflow incident, issue #379). Drop the offending event so the batch
+		// advances; only a transient fault (deadlock, lock-wait timeout, lost connection) fails the batch so it is retried.
+		if permanentError(err) {
+			b.logger.WarnContext(ctx, "event dropped: permanent processing error", "event_id", evt.EventID, "type", evt.EventType, "err", err)
+			continue
+		}
+		transientFailCount++
+		b.logger.WarnContext(ctx, "event processing failed, will retry", "event_id", evt.EventID, "type", evt.EventType, "err", err)
 	}
-	if failCount > 0 {
-		return fmt.Errorf("graph: %d event(s) failed to process", failCount)
+	if transientFailCount > 0 {
+		return fmt.Errorf("graph: %d event(s) failed to process", transientFailCount)
 	}
 	return nil
+}
+
+// permanentError reports whether err is a deterministic per-event failure that recurs on every retry: a payload that cannot be parsed
+// (a JSON syntax or type error, including a number that overflows the target Go type) or a value the database can never store
+// (mysql.IsPermanentDataError). The builder drops such an event so one poison row cannot wedge the batch; any other error is treated
+// as a transient fault and the batch is retried. See issue #379.
+func permanentError(err error) bool {
+	var (
+		syntaxErr *json.SyntaxError
+		typeErr   *json.UnmarshalTypeError
+	)
+	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+		return true
+	}
+	return mysql.IsPermanentDataError(err)
 }
 
 type snapshotHeartbeatPayload struct {
