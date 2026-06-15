@@ -39,4 +39,7 @@ jobs:
         with:
           node-version: 22
       - name: Validate all OpenSpec specs and changes (strict)
-        run: npx -y @fission-ai/openspec@1.3.1 validate --all --strict
+        # --ignore-scripts: npx fetches @fission-ai/openspec at run time; skip the package's install lifecycle scripts so a
+        # compromised dependency can't run arbitrary code in CI (Sonar githubactions:S6505). openspec is pure JS with no
+        # required postinstall, so the CLI still works.
+        run: npx --ignore-scripts -y @fission-ai/openspec@1.3.1 validate --all --strict
