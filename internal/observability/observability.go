@@ -216,19 +216,55 @@ func buildResource(ctx context.Context, opts Options) (*resource.Resource, error
 
 	// The resource detectors below read OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, host, and process info. Merging with the explicit
 	// attributes gives operator-supplied values priority while still picking up free metadata.
-	return resource.New(ctx,
-		// deployment.environment defaults FIRST so the OTEL_RESOURCE_ATTRIBUTES detector below overrides them on conflict (resource.New
-		// merges later options over earlier ones). Emitting both the current semconv key (deployment.environment.name) and the deprecated
-		// deployment.environment unconditionally keeps the attribute present in every SigNoz instance a fleet-edr binary reports to, which
-		// is what lets the config/observability dashboards drive a dynamic environment selector. Fixed to "default" (single-environment
-		// product today); an operator scopes per environment by setting OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<name>.
-		resource.WithAttributes(
-			semconv.DeploymentEnvironmentName("default"),
-			attribute.String("deployment.environment", "default"), // deprecated attribute still consumed by SigNoz
-		),
+	res, err := resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithHost(),
 		resource.WithProcess(),
 		resource.WithAttributes(attrs...),
 	)
+	if err != nil {
+		return nil, err
+	}
+	// Guarantee a consistent deployment environment on the resource. Emitting it unconditionally keeps the attribute present in every
+	// SigNoz instance a fleet-edr binary reports to, which is what lets the config/observability dashboards drive a dynamic environment
+	// selector; withDeploymentEnvironment also reconciles the two keys an operator can set independently via OTEL_RESOURCE_ATTRIBUTES.
+	return withDeploymentEnvironment(res)
+}
+
+// deploymentEnvironmentKey is the deprecated deployment.environment resource attribute. SigNoz and other backends still key on it, so
+// it is set alongside the current semconv deployment.environment.name and kept in lockstep with it (see withDeploymentEnvironment).
+const deploymentEnvironmentKey = attribute.Key("deployment.environment")
+
+// defaultDeploymentEnvironment is the value emitted when the operator sets neither deployment key via OTEL_RESOURCE_ATTRIBUTES.
+const defaultDeploymentEnvironment = "default"
+
+// withDeploymentEnvironment guarantees the resource carries BOTH deployment.environment.name (current semconv) and the deprecated
+// deployment.environment, set to the SAME value. An operator scopes a deployment by setting either key (or both) via
+// OTEL_RESOURCE_ATTRIBUTES, which resource.WithFromEnv turns into the attributes inspected here; WithFromEnv overrides only the keys
+// actually present, so without this reconciliation a single-key override would leave the other key at the default and let the two
+// diverge (a backend reading the semconv key would then disagree with SigNoz, which reads the deprecated one). The canonical value is
+// the operator's .name, else the operator's deprecated key, else "default"; both keys are then set to it.
+func withDeploymentEnvironment(res *resource.Resource) (*resource.Resource, error) {
+	var name, deprecated string
+	for _, kv := range res.Attributes() {
+		switch kv.Key {
+		case semconv.DeploymentEnvironmentNameKey:
+			name = kv.Value.AsString()
+		case deploymentEnvironmentKey:
+			deprecated = kv.Value.AsString()
+		}
+	}
+	env := defaultDeploymentEnvironment
+	switch {
+	case name != "":
+		env = name
+	case deprecated != "":
+		env = deprecated
+	}
+	// resource.Merge lets the second argument win on key conflicts, so the synchronized pair overrides whatever WithFromEnv set. The
+	// override resource is schemaless (empty schema URL), so the merge keeps res's semconv schema URL rather than erroring on a mismatch.
+	return resource.Merge(res, resource.NewSchemaless(
+		semconv.DeploymentEnvironmentName(env),
+		attribute.String("deployment.environment", env),
+	))
 }
