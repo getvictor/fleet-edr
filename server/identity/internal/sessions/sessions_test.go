@@ -146,15 +146,18 @@ func TestGet_UnknownIDReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
+// spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/a-request-after-the-absolute-cap-is-rejected
+// Transitional second marker below: spectrace gates the canonical spec tree, which still carries the pre-reconciliation
+// "12-hours" slug until `openspec archive ui-redirect-on-session-expiry` rewrites the requirement. Keep both markers green
+// across the merge; drop the 12-hours line as part of archiving (see the change's tasks.md).
 // spec:ui-authentication-session/sessions-expire-12-hours-after-issue/a-request-after-the-12-hour-window-is-rejected
 //
 // Pins the expired-session-rejection clause: a session whose absolute cap has elapsed returns
 // ErrNotFound from Get, which the Session middleware translates into 401 on the wire (covered by
-// TestSession_MissingCookieReturns401's same response shape). The spec scenario speaks of a flat 12h
-// window; the impl uses configurable Idle + Absolute timeouts per session class (see
-// sessions.Timeouts in sessions.go). This test uses a 1h cap for speed; the load-bearing contract
-// the spec asserts is "after expiry the request is rejected," which is what the ErrNotFound below
-// pins. The flat-12h-vs-configurable-timeouts difference is the spec/impl drift tracked in #257.
+// TestSession_MissingCookieReturns401's same response shape). The impl uses configurable Idle +
+// Absolute timeouts per session class (see sessions.Timeouts in sessions.go); this test uses a 1h
+// cap for speed. The load-bearing contract is "after the absolute cap the request is rejected,"
+// which is what the ErrNotFound below pins.
 func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	t.Parallel()
 	// Drive the clock backwards so the row we just created is already past its expires_at when Get runs. This is more reliable than
@@ -175,6 +178,8 @@ func TestGet_ExpiredReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
+// spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/a-request-after-the-idle-window-is-rejected
+//
 // TestGet_IdleExpiryReturnsNotFound covers the idle-cap branch: created recently (so absolute hasn't elapsed) but last_seen_at hasn't
 // been touched in longer than Idle. Real-world shape: operator opens a tab, walks away without interacting for the idle window.
 func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
@@ -195,6 +200,8 @@ func TestGet_IdleExpiryReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound)
 }
 
+// spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/break-glass-sessions-use-the-strict-timeout-pair
+//
 // TestGet_BreakglassUsesStrictTimeouts pins the per-class behaviour: a session minted with auth_method="local_password" expires under
 // the break-glass pair, not the normal pair. The Idle here would be inside the break-glass cap if normal applied; under break-glass
 // it's past.
@@ -217,6 +224,8 @@ func TestGet_BreakglassUsesStrictTimeouts(t *testing.T) {
 	require.ErrorIs(t, err, sessions.ErrNotFound, "break-glass session must enforce the strict pair")
 }
 
+// spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/activity-within-the-idle-window-slides-the-session
+//
 // TestTouch_SlidingExtensionWithinAbsoluteCap proves the user-visible behaviour: a continuously-active session stays alive past the
 // idle window because each Touch advances last_seen_at. The absolute cap still wins.
 func TestTouch_SlidingExtensionWithinAbsoluteCap(t *testing.T) {

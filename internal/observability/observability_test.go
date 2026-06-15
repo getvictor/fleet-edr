@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
 
@@ -31,6 +33,62 @@ func TestBuildResource_ServiceInstanceID(t *testing.T) {
 		require.True(t, found, "resource must carry service.instance.id so every emitted span inherits it")
 		assert.Equal(t, "instance-abc", got)
 	})
+}
+
+// deploymentEnvOf extracts the two deployment-environment attribute values (current semconv + deprecated) from a resource.
+func deploymentEnvOf(res *resource.Resource) map[attribute.Key]string {
+	got := map[attribute.Key]string{}
+	for _, kv := range res.Attributes() {
+		if kv.Key == semconv.DeploymentEnvironmentNameKey || kv.Key == deploymentEnvironmentKey {
+			got[kv.Key] = kv.Value.AsString()
+		}
+	}
+	return got
+}
+
+// spec:observability-instrumentation/telemetry-carries-a-deployment-environment-resource-attribute/default-deployment-environment
+//
+// TestBuildResource_DeploymentEnvironment pins that, with no operator override, the telemetry resource carries both the current semconv
+// key (deployment.environment.name) and the deprecated deployment.environment at "default". The attribute lives on the resource, so
+// every span / metric / log inherits it, which is what lets the bundled SigNoz dashboards drive a dynamic environment selector. The
+// operator-override path is exercised by TestWithDeploymentEnvironment (the repo forbids t.Setenv in tests, issue #172).
+func TestBuildResource_DeploymentEnvironment(t *testing.T) {
+	res, err := buildResource(t.Context(), Options{ServiceName: "test-svc"})
+	require.NoError(t, err)
+	got := deploymentEnvOf(res)
+	assert.Equal(t, "default", got[semconv.DeploymentEnvironmentNameKey], "deployment.environment.name defaults to 'default'")
+	assert.Equal(t, "default", got[deploymentEnvironmentKey], "deprecated deployment.environment defaults to 'default'")
+}
+
+// spec:observability-instrumentation/telemetry-carries-a-deployment-environment-resource-attribute/operator-overrides-the-deployment-environment
+//
+// withDeploymentEnvironment keeps deployment.environment.name and the deprecated deployment.environment in lockstep regardless of which
+// key(s) the operator set via OTEL_RESOURCE_ATTRIBUTES (which resource.WithFromEnv turns into the attributes fed here). Driving the
+// normalizer with a hand-built resource pins the operator-override contract (either key alone wins, both end up synchronized, an empty
+// resource falls back to "default") without mutating process env, since t.Setenv is forbidden (issue #172).
+func TestWithDeploymentEnvironment(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []attribute.KeyValue
+		want string
+	}{
+		{"neither key set falls back to default", nil, "default"},
+		{"only the deprecated key set", []attribute.KeyValue{attribute.String("deployment.environment", "staging")}, "staging"},
+		{"only the semconv name set", []attribute.KeyValue{semconv.DeploymentEnvironmentName("staging")}, "staging"},
+		{"both set but divergent prefers the semconv name", []attribute.KeyValue{
+			semconv.DeploymentEnvironmentName("prod"),
+			attribute.String("deployment.environment", "staging"),
+		}, "prod"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := withDeploymentEnvironment(resource.NewSchemaless(tc.in...))
+			require.NoError(t, err)
+			got := deploymentEnvOf(out)
+			assert.Equal(t, tc.want, got[semconv.DeploymentEnvironmentNameKey], "deployment.environment.name")
+			assert.Equal(t, tc.want, got[deploymentEnvironmentKey], "deprecated deployment.environment kept in lockstep")
+		})
+	}
 }
 
 // restoreGlobals captures the current global OTel providers + propagator and registers a cleanup that restores them after the test.
