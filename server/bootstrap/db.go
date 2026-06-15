@@ -51,7 +51,14 @@ func ensureParseTime(dsn string) string {
 // openInstrumentedDB opens the MySQL driver through otelsql so every
 // query emits a span + connection metrics.
 func openInstrumentedDB(dsn string) (*sql.DB, error) {
-	sqldb, err := otelsql.Open("mysql", dsn, otelsql.WithAttributes(semconv.DBSystemNameMySQL))
+	sqldb, err := otelsql.Open("mysql", dsn,
+		otelsql.WithAttributes(semconv.DBSystemNameMySQL),
+		// DisableErrSkip suppresses driver.ErrSkip ("driver: skip fast-path; continue as if unimplemented") from being
+		// recorded as a span exception. It is a benign control-flow sentinel, not a failure: the MySQL driver returns it
+		// frequently because interpolateParams=false (the secure default) makes it fall back to the prepare path rather
+		// than running a parametrized query directly. Recording it just floods traces with non-errors.
+		otelsql.WithSpanOptions(otelsql.SpanOptions{DisableErrSkip: true}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
